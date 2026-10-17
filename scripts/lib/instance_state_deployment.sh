@@ -359,12 +359,25 @@ prepare_test_dormant_ownership_window() {
   local test_source_revision="${4:?reviewed exact revision required}"
   local test_native_state="${5:?existing native instance-state root required}"
   local test_native_legacy="${6:?native legacy source path required}"
+  local test_native_context_sha256=""
   [ -x "${test_native_python}" ] || return 78
   prepare_instance_state_deployment _test_dormant_native_compose test "${channel_env_file}" test-dormant-ownership
 }
 
+_test_dormant_native_python() {
+  local current
+  current="$(cd "${repo_root}" && "${test_native_python}" -m app.instance.runtime deployment-qualify-native \
+    --channel test --source-root "${repo_root}" --expected-revision "${test_source_revision}" \
+    --instance-state-root "${test_native_state}" --host-global-root "${INSTANCE_OWNERSHIP_HOST_STATE_DIR}" \
+    --controller-pid "${controller_pid}" --controller-start-token "${controller_start_token}" \
+    --runtime-uid "${runtime_uid}" --runtime-gid "${runtime_gid}" --native-launcher "${test_native_python}")" || return 78
+  [[ "${current}" = *"\"native_context_sha256\": \"${test_native_context_sha256}\""* ]] || return 78
+  ( cd "${repo_root}" && "${test_native_python}" "$@" )
+}
+
 _test_dormant_native_compose() {
   local -a native_args=()
+  local -a begin_context_args=()
   local found=0 token
   if [ "$1" != run ]; then
     "${test_real_compose_function}" "$@"
@@ -384,6 +397,10 @@ _test_dormant_native_compose() {
   case "$1" in deployment-begin|deployment-prove|deployment-release|deployment-bind-owner-proof) ;;
     *) return 78 ;;
   esac
+  if [ "$1" = deployment-begin ]; then
+    begin_context_args=(--native-source-root "${repo_root}" --native-source-revision "${test_source_revision}"
+      --native-launcher "${test_native_python}" --expected-native-context-sha256 "${test_native_context_sha256}")
+  fi
   for token in "$@"; do
     case "${token}" in
       /app/instance-state) token="${test_native_state}" ;;
@@ -392,7 +409,7 @@ _test_dormant_native_compose() {
     esac
     native_args+=("${token}")
   done
-  ( cd "${repo_root}" && "${test_native_python}" -m app.instance.runtime "${native_args[@]}" ) >/dev/null
+  _test_dormant_native_python -m app.instance.runtime "${native_args[@]}" ${begin_context_args[@]+"${begin_context_args[@]}"} >/dev/null
 }
 
 prepare_instance_state_deployment() {
@@ -424,6 +441,7 @@ prepare_instance_state_deployment() {
   local mvr05_stop_services
   local -a mvr05_stop_service_args
   local mvr05_effective_compose_path mvr05_fence_plan_host_path mvr05_fence_plan_source_path
+  local -a native_inventory_args=()
   if ! legacy_path="$(_instance_state_deployment_effective_legacy_path \
     "${channel}" "${channel_env_file}")"; then
     return 78
@@ -439,11 +457,15 @@ prepare_instance_state_deployment() {
   controller_pid="$$"
   if [ "${preparation_mode}" = test-dormant-ownership ]; then
     controller_start_token="$("${inventory_python}" "${inventory_helper}" controller-token --pid "${controller_pid}")" || return $?
-    ( cd "${repo_root}" && "${inventory_python}" -m app.instance.runtime deployment-qualify-native \
+    local qualification
+    qualification="$(cd "${repo_root}" && "${inventory_python}" -m app.instance.runtime deployment-qualify-native \
         --channel test --source-root "${repo_root}" --expected-revision "${test_source_revision:?reviewed revision required}" \
         --instance-state-root "${test_native_state}" --host-global-root "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?existing ownership root required}" \
         --controller-pid "${controller_pid}" --controller-start-token "${controller_start_token}" \
-        --runtime-uid "${runtime_uid}" --runtime-gid "${runtime_gid}" ) >/dev/null || return $?
+        --runtime-uid "${runtime_uid}" --runtime-gid "${runtime_gid}" --native-launcher "${test_native_python}" )" || return $?
+    test_native_context_sha256="$("${inventory_python}" -c 'import json,sys; print(json.loads(sys.argv[1])["native_context_sha256"])' "${qualification}")" || return 78
+    inventory_python=_test_dormant_native_python
+    native_inventory_args=(--native-host-global-root "${INSTANCE_OWNERSHIP_HOST_STATE_DIR}")
   fi
 
   # The principal floor is an irreversible compatibility boundary, so merely
@@ -715,6 +737,7 @@ PY
   # It writes no proof candidate unless two complete snapshots are identical
   # and empty; there is no shell pipeline for the helper to observe as a writer.
   "${inventory_python}" "${inventory_helper}" prove-quiescent \
+    ${native_inventory_args[@]+"${native_inventory_args[@]}"} \
     --controller-pid "${controller_pid}" \
     --controller-start-token "${controller_start_token}" \
     --output "${inventory_host_path}"

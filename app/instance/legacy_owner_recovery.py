@@ -37,6 +37,7 @@ from app.instance.vault_registry import VaultRegistryStore
 
 _SCHEMA = "agentic-pkm.dev-owner-reattest-backup.v1"
 _PREPARATION = "dormant_ownership_preparation"
+_NATIVE_CONTEXT = "native_execution_context"
 
 
 def _bytes(value: Any) -> bytes:
@@ -70,8 +71,12 @@ def _backup_destination(destination: Path, protected: tuple[Path, ...]) -> Path:
     return absolute
 
 
+class _TestPreparationRefusal(InstanceStatePreflightError):
+    """Redacted explicit TEST-route refusal; ordinary CLI behavior is unchanged."""
+
+
 def _test_refusal() -> InstanceStatePreflightError:
-    return InstanceStatePreflightError("TEST dormant ownership preparation refused")
+    return _TestPreparationRefusal("TEST dormant ownership preparation refused")
 
 
 @dataclass(frozen=True)
@@ -135,12 +140,45 @@ def qualify_test_native_source(
     *, channel: str, source_root: Path, expected_revision: str,
     instance_state_root: Path, host_global_root: Path, controller_pid: int,
     controller_start_token: str, runtime_uid: int, runtime_gid: int,
+    native_launcher: Path | None = None,
 ) -> dict[str, object]:
     """Read-only qualification, not an installation, namespace grant or authority.
 
     The future preparation caller uses this same interpreter/source tree for
     every command; native proofs are produced directly with native paths.
     """
+    context = capture_test_native_context(channel=channel, source_root=source_root,
+        expected_revision=expected_revision, instance_state_root=instance_state_root,
+        host_global_root=host_global_root, controller_pid=controller_pid,
+        controller_start_token=controller_start_token, runtime_uid=runtime_uid,
+        runtime_gid=runtime_gid, native_launcher=native_launcher or Path(sys.executable))
+    return {"channel": "test", "qualified": True, "source_revision": expected_revision,
+        "native_context_sha256": _sha(_bytes(context)), "activation": "inactive_fenced"}
+
+
+def _native_file_identity(path: Path) -> dict[str, object]:
+    path = path.absolute()
+    resolved = path.resolve(strict=True)
+    info = resolved.stat()
+    if not stat.S_ISREG(info.st_mode):
+        raise _test_refusal()
+    # Retain lexical launcher symlinks as well as the actual executable bytes.
+    chain = []
+    for component in (path, *path.parents):
+        value = component.lstat()
+        chain.append([str(component), value.st_dev, value.st_ino, value.st_mode,
+            value.st_uid, value.st_gid, os.readlink(component) if component.is_symlink() else None])
+    return {"path": str(path), "resolved": str(resolved), "chain": chain,
+        "file": [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns], "sha256": _sha(resolved.read_bytes())}
+
+
+def capture_test_native_context(
+    *, channel: str, source_root: Path, expected_revision: str,
+    instance_state_root: Path, host_global_root: Path, controller_pid: int,
+    controller_start_token: str, runtime_uid: int, runtime_gid: int, native_launcher: Path,
+) -> dict[str, Any]:
+    """Private original context, carried only in existing safety/proof formats."""
     inventory = importlib.import_module("scripts.instance_state_writer_inventory")
     roots = (source_root, instance_state_root, host_global_root)
     try:
@@ -148,13 +186,11 @@ def qualify_test_native_source(
             or len(expected_revision) != 40
             or any(c not in "0123456789abcdef" for c in expected_revision)):
             raise _test_refusal()
-        for root in roots:
-            _capture_geometry(root)
+        geometry = [_capture_geometry(root) for root in roots]
         for root in roots[1:]:
             _private_directory(root)
         source = Path(source_root)
-        if not Path(sys.executable).resolve(strict=True).is_file():
-            raise _test_refusal()
+        modules = {}
         for name in ("app.instance.runtime", "app.instance.legacy_owner_recovery",
             "app.instance.ownership_ledger", "app.instance.instance_state",
             "scripts.instance_state_writer_inventory"):
@@ -162,6 +198,7 @@ def qualify_test_native_source(
             origin = Path(str(module.__file__)).resolve(strict=True)
             if origin != source / (name.replace(".", "/") + ".py"):
                 raise _test_refusal()
+            modules[name] = _native_file_identity(origin)
         # Every loaded repository dependency must belong to the reviewed tree,
         # not an editable install or a code-file mount over an unrelated image.
         for name, module in tuple(sys.modules.items()):
@@ -181,10 +218,51 @@ def qualify_test_native_source(
         if inventory.controller_token(controller_pid) != controller_start_token:
             raise _test_refusal()
         namespace = inventory.controller_namespace_digest(controller_pid, roots)
+        context = {"source_root": str(source), "source_revision": expected_revision,
+            "instance_state_root": str(instance_state_root), "host_global_root": str(host_global_root),
+            "geometry": [(str(g.path), g.ancestry) for g in geometry], "modules": modules,
+            "launcher": _native_file_identity(native_launcher),
+            "interpreter": _native_file_identity(Path(sys.executable)),
+            "runtime_uid": runtime_uid, "runtime_gid": runtime_gid,
+            "controller_pid": controller_pid, "controller_start_token": controller_start_token,
+            "controller_namespace_digest": namespace}
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         raise _test_refusal() from exc
-    return {"channel": "test", "qualified": True, "source_revision": expected_revision,
-        "controller_namespace_digest": namespace, "activation": "inactive_fenced"}
+    return json.loads(_bytes(context))
+
+
+def require_test_native_context(context: object) -> dict[str, Any]:
+    try:
+        if not isinstance(context, dict):
+            raise _test_refusal()
+        current = capture_test_native_context(channel="test", source_root=Path(context["source_root"]),
+            expected_revision=context["source_revision"], instance_state_root=Path(context["instance_state_root"]),
+            host_global_root=Path(context["host_global_root"]), controller_pid=context["controller_pid"],
+            controller_start_token=context["controller_start_token"], runtime_uid=context["runtime_uid"],
+            runtime_gid=context["runtime_gid"], native_launcher=Path(context["launcher"]["path"]))
+        if current != context:
+            raise _test_refusal()
+        return current
+    except (KeyError, TypeError, OSError, RuntimeError, ValueError) as exc:
+        raise _test_refusal() from exc
+
+
+def require_native_window(host: Path, *, required: bool = False) -> dict[str, Any] | None:
+    values = [_read_private_json(p).get(_NATIVE_CONTEXT)
+        for p in _reservation_records(host) if os.path.lexists(p)]
+    contexts = [value for value in values if value is not None]
+    if not contexts and not required:
+        return None
+    if not contexts or any(value != contexts[0] for value in values):
+        raise _test_refusal()
+    context = require_test_native_context(contexts[0])
+    if context["host_global_root"] != str(host):
+        raise _test_refusal()
+    for name in ("deployment-quiescence-inventory.json", "deployment-quiescence-proof.json"):
+        path = host / name
+        if os.path.lexists(path) and _read_private_json(path).get(_NATIVE_CONTEXT) != context:
+            raise _test_refusal()
+    return context
 
 
 def _reservation_records(host: Path) -> tuple[Path, ...]:
@@ -262,6 +340,7 @@ def require_completed_preparation(host: Path) -> None:
     No TEST reservation means no changed behavior for ordinary/legacy consumers.
     This authenticates existing evidence; it cannot initialize or recover a pair.
     """
+    require_native_window(host)
     reserved = read_preparation_reservation(host)
     if reserved is None:
         return
@@ -274,6 +353,15 @@ def require_completed_preparation(host: Path) -> None:
             raise _test_refusal()
         op = manifest["dormant_ownership"]
         if op["host_global_root"] != str(host):
+            raise _test_refusal()
+        context = require_native_window(host, required=True)
+        proof_path = host / "deployment-quiescence-proof.json"
+        # The existing authenticated backup retains the original proof bytes;
+        # cleanup may already have unlinked the canonical copy before a crash.
+        original_proof = payloads["deployment-quiescence-proof.json"]
+        if (_sha(original_proof) != op["proof_sha256"]
+            or json.loads(original_proof).get(_NATIVE_CONTEXT) != context
+            or (os.path.lexists(proof_path) and _read_private_bytes(proof_path) != original_proof)):
             raise _test_refusal()
         for name in ("ownership-key.json", "ownership-ledger.json"):
             if _read_private_bytes(host / name) != payloads[name]:
@@ -362,6 +450,9 @@ def initialize_dormant_ownership(
             raise _test_refusal()
         owner_payload = proof.require_canonical_authority(channel_id="test", host_global_root=host,
             owner_receipt_path=owner_receipt_path)
+        context = require_native_window(host, required=True)
+        if context is None or proof.native_execution_context != context or context["instance_state_root"] != str(state):
+            raise _test_refusal()
         require_test_controller(proof, (state, host, content, destination.parent))
         identities = _legacy_owner_identity_evidence(owner_payload)
         owners = owner_payload.get("owners")
@@ -385,7 +476,7 @@ def initialize_dormant_ownership(
         # establishes the association with the one physically attested owner.
         owner = LegacyOwner("test", vault_binding_id, content, identity, ancestors, physical,
             proof.owner_receipt_digest)
-        payloads = {"vault-registry.md": registry_bytes,
+        payloads = {"deployment-quiescence-proof.json": raw_proof, "vault-registry.md": registry_bytes,
             "vault-registry.md.last-good": _read_private_bytes(store.snapshot_path),
             "vault-registry.md.last-good.sha256": _read_private_bytes(store.snapshot_checksum_path),
             "vault-registry.md.legacy-export": _read_private_bytes(store.rollback_export_path)}
@@ -401,6 +492,8 @@ def initialize_dormant_ownership(
         package_geometry: _Geometry | None = None
 
         def recheck() -> None:
+            if require_native_window(host, required=True) != context:
+                raise _test_refusal()
             if any(_capture_geometry(g.path) != g for g in witness):
                 raise _test_refusal()
             if (_read_private_bytes(store.path) != registry_bytes

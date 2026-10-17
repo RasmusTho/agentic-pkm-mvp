@@ -288,7 +288,10 @@ remain refused.
 The existing private backup manifest binds the absent-pair before-image and one authenticated
 prepared epoch. Reservation evidence in the existing TEST deployment safety records fences retries
 to that package, including interrupted directory durability; generic restore and rotation do not
-consume it. Preparation remains `inactive_fenced`. Source support and synthetic fixture proof are
+consume it. The original qualified native source/module and launcher/interpreter identity remains
+bound through the existing proof and safety records, including lock-held initialization retries
+and guarded release; the authenticated backup retains that proof for interrupted cleanup.
+Preparation remains `inactive_fenced`. Source support and synthetic fixture proof are
 not live TEST repair or activation: a future invocation still needs the separately attributable
 operator acknowledgement, qualified native execution, and existing downstream activation gates.
 

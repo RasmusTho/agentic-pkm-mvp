@@ -361,6 +361,14 @@ dead/zombie controller or unavailable view. A default image, code-only mount or 
 is not qualification; this route installs nothing and grants no namespace or access privilege.
 Native proof paths are produced directly, not rewritten from container proofs.
 
+Qualification emits only a redacted context digest. Native begin consumes that original digest;
+the existing private lease, restart fence, inventory, proof and owner binding retain the exact
+source/root/revision/module origins and launcher/resolved-interpreter identity. Every later native
+authority command revalidates that original context, including the separate initializer's lock-held
+fresh and reserved-retry checks and guarded release. Missing, stripped, replaced or changed evidence
+refuses without clearing the pending epoch or fence. The authenticated backup retains the original
+proof bytes so interrupted cleanup cannot replace the qualified context after unlinking its live copy.
+
 Within that held window, the separate explicit `deployment-initialize-dormant-ownership` command
 requires `--channel test`, existing `--instance-state-root` and `--host-global-root`, retained
 `--vault-binding-id`, `--expected-registry-sha256`, canonical `--owner-receipt-path` and its current

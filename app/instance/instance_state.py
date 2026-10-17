@@ -58,6 +58,7 @@ class DeploymentQuiescenceProof:
     controller_start_token: str | None = None
     owner_receipt_digest: str | None = None
     controller_namespace_digest: str | None = None
+    native_execution_context: Mapping[str, object] | None = None
 
     def require_valid(self, *, channel_id: str | None = None) -> None:
         if channel_id is not None and self.channel_id != channel_id:
@@ -82,6 +83,7 @@ class DeploymentQuiescenceProof:
                 or payload.get("phase") != "proved"
                 or payload.get("inventory_digest") != self.inventory_digest
                 or payload.get("all_consumers_stopped") is not True
+                or payload.get("native_execution_context") != self.native_execution_context
                 or (expected_controller is not None and controller != expected_controller)
                 or (
                     self.owner_receipt_digest is not None
@@ -150,6 +152,9 @@ class DeploymentQuiescenceProof:
             inventory_bytes = _read_private_bytes(canonical_inventory)
             inventory = json.loads(inventory_bytes)
             owner_payload = _read_private_json(canonical_receipt)
+            if any(item.get("native_execution_context") != self.native_execution_context
+                for item in (lease, compatibility_block, fence, inventory, owner_payload)):
+                raise ValueError
             controller = {
                 "pid": self.controller_pid,
                 "start_token": self.controller_start_token,

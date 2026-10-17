@@ -1586,6 +1586,7 @@ def _load_deployment_quiescence_proof(path: Path) -> DeploymentQuiescenceProof:
                 else None
             ),
             controller_namespace_digest=payload.get("controller_namespace_digest"),
+            native_execution_context=payload.get("native_execution_context"),
         )
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise InstanceStatePreflightError(
@@ -2171,6 +2172,7 @@ def _compatibility_block_payload(
         "result",
         "controller_namespace_digest",
         "dormant_ownership_preparation",
+        "native_execution_context",
     ):
         if key in lease:
             payload[key] = lease[key]
@@ -2368,6 +2370,7 @@ def _begin_instance_state_deployment(
     legacy_path: Path,
     controller_pid: int,
     controller_start_token: str,
+    native_execution_context: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Install the restart fence before any legacy writer is stopped."""
 
@@ -2375,6 +2378,14 @@ def _begin_instance_state_deployment(
     # reservation before ordinary setup or takeover can erase its safety state.
     with _deployment_admission_locked(host_global_root):
         _require_completed_dormant_ownership_preparation(host_global_root)
+        if native_execution_context is not None:
+            from app.instance.legacy_owner_recovery import require_test_native_context
+            context = require_test_native_context(native_execution_context)
+            if (channel != "test" or context["instance_state_root"] != str(instance_state_root)
+                or context["host_global_root"] != str(host_global_root)
+                or context["controller_pid"] != controller_pid
+                or context["controller_start_token"] != controller_start_token):
+                raise InstanceStatePreflightError("TEST native context changed")
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
     ownership_root = _assert_mount_root(host_global_root, "host-global")
     if controller_pid <= 0 or _CONTROLLER_START_TOKEN_RE.fullmatch(controller_start_token) is None:
@@ -2396,6 +2407,8 @@ def _begin_instance_state_deployment(
     }
     with _deployment_admission_locked(ownership_root):
         _require_completed_dormant_ownership_preparation(ownership_root)
+        if native_execution_context is not None:
+            require_test_native_context(native_execution_context)
         root_lease_path = _legacy_deployment_lease_path(ownership_root)
         root_authority = (
             _read_legacy_deployment_lease(ownership_root)
@@ -2649,6 +2662,8 @@ def _begin_instance_state_deployment(
         }
         if scalar_receipt_resume is not None:
             lease["scalar_roll_forward"] = scalar_receipt_resume
+        if native_execution_context is not None:
+            lease["native_execution_context"] = native_execution_context
         payload: dict[str, object] = {
             "schema": _DEPLOYMENT_FENCE_SCHEMA,
             "channel_id": channel,
@@ -2658,6 +2673,8 @@ def _begin_instance_state_deployment(
             "diagnostic_fingerprint": diagnostic_fingerprint,
         }
         compatibility = _compatibility_block_payload(lease)
+        if native_execution_context is not None:
+            payload["native_execution_context"] = native_execution_context
         if not root_lease_path.exists():
             _write_private_json(root_lease_path, compatibility)
         if lease_path.exists():
@@ -2682,7 +2699,9 @@ def _bind_test_owner_proof(
     owner_receipt_path: Path, expected_owner_receipt_sha256: str,
     quiescence_proof_path: Path,
 ) -> dict[str, object]:
-    from app.instance.legacy_owner_recovery import _capture_geometry, _private_directory, require_test_controller
+    from app.instance.legacy_owner_recovery import (
+        _capture_geometry, _private_directory, require_native_window, require_test_controller,
+    )
     if channel != "test":
         raise InstanceStatePreflightError("TEST owner proof binding refused")
     for root in (instance_state_root, host_global_root):
@@ -2696,6 +2715,8 @@ def _bind_test_owner_proof(
     with _deployment_admission_locked(host_global_root), _producer_transition_locked(layout):
         _require_completed_dormant_ownership_preparation(host_global_root)
         proof = _load_deployment_quiescence_proof(quiescence_proof_path)
+        if proof.native_execution_context != require_native_window(host_global_root, required=True):
+            raise InstanceStatePreflightError("TEST native context changed")
         require_test_controller(proof, (instance_state_root, host_global_root))
         proof.require_valid(channel_id="test")
         inventory = _read_deployment_quiescence_inventory(
@@ -2752,6 +2773,8 @@ def _prove_instance_state_quiescence_locked(
         inventory_bytes, inventory = _read_deployment_quiescence_inventory(
             inventory_file
         )
+        if inventory.get("native_execution_context") != lease.get("native_execution_context"):
+            raise ValueError
         domains = inventory.get("domains")
         controller = lease.get("controller")
         inventory_controller = inventory.get("controller")
@@ -2790,7 +2813,7 @@ def _prove_instance_state_quiescence_locked(
             raise ValueError
         claim_identity = {
             key: lease.get(key)
-            for key in ("channel_id", "nonce", "controller", "legacy_path")
+            for key in ("channel_id", "nonce", "controller", "legacy_path", "native_execution_context")
         }
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise InstanceStatePreflightError("complete two-pass host-wide quiescence inventory is required") from exc
@@ -2825,7 +2848,10 @@ def _prove_instance_state_quiescence_locked(
             if not isinstance(namespace, str) or re.fullmatch(r"[0-9a-f]{64}", namespace) is None:
                 raise InstanceStatePreflightError("controller namespace evidence is invalid")
             lease["controller_namespace_digest"] = namespace
+        from app.instance.legacy_owner_recovery import require_native_window
+        require_native_window(root)
         _replace_private_json(lease_path, lease)
+        require_native_window(root)
         _replace_private_json(
             _legacy_deployment_lease_path(root),
             _compatibility_block_payload(lease),
@@ -2845,10 +2871,17 @@ def _prove_instance_state_quiescence_locked(
         }
         if namespace is not None:
             proof_payload["controller_namespace_digest"] = namespace
+        if lease.get("native_execution_context") is not None:
+            proof_payload["native_execution_context"] = lease["native_execution_context"]
         if proof_path.exists():
+            require_native_window(root)
             _replace_private_json(proof_path, proof_payload)
         else:
+            require_native_window(root)
             _write_private_json(proof_path, proof_payload)
+    native_context = lease.get("native_execution_context")
+    if native_context is not None and not isinstance(native_context, dict):
+        raise InstanceStatePreflightError("TEST native context is invalid")
     return DeploymentQuiescenceProof(
         channel,
         str(lease["nonce"]),
@@ -2857,6 +2890,7 @@ def _prove_instance_state_quiescence_locked(
         int(controller["pid"]),
         str(controller["start_token"]),
         controller_namespace_digest=namespace,
+        native_execution_context=native_context,
     )
 
 
@@ -3187,6 +3221,8 @@ def _bind_legacy_owner_inventory_to_proof(
     }
     if quiescence_proof.controller_namespace_digest is not None:
         binding_fields["controller_namespace_digest"] = quiescence_proof.controller_namespace_digest
+    if quiescence_proof.native_execution_context is not None:
+        binding_fields["native_execution_context"] = quiescence_proof.native_execution_context
     existing_binding = {
         key: payload.get(key)
         for key in (*binding_fields, "receipt_digest")
@@ -3214,10 +3250,15 @@ def _bind_legacy_owner_inventory_to_proof(
             "proved deployment lease is bound to another drained-owner receipt"
         )
     if not existing_binding:
+        from app.instance.legacy_owner_recovery import require_native_window
+        require_native_window(ownership_root)
         _replace_private_json(inventory, bound_payload)
     if existing_lease_digest is None:
+        from app.instance.legacy_owner_recovery import require_native_window
+        require_native_window(ownership_root)
         lease = lease | {"owner_receipt_digest": receipt_digest}
         _replace_private_json(lease_path, lease)
+        require_native_window(ownership_root)
         _replace_private_json(
             _legacy_deployment_lease_path(ownership_root),
             _compatibility_block_payload(lease),
@@ -3240,6 +3281,10 @@ def _bind_legacy_owner_inventory_to_proof(
     }
     if bound_proof.controller_namespace_digest is not None:
         proof_payload["controller_namespace_digest"] = bound_proof.controller_namespace_digest
+    if bound_proof.native_execution_context is not None:
+        proof_payload["native_execution_context"] = bound_proof.native_execution_context
+    from app.instance.legacy_owner_recovery import require_native_window
+    require_native_window(ownership_root)
     _replace_private_json(proof_path, proof_payload)
     bound_proof.require_valid(channel_id=channel)
     return bound_proof
@@ -5245,6 +5290,18 @@ def _principal_command(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from app.instance.legacy_owner_recovery import _TestPreparationRefusal
+    arguments = sys.argv[1:] if argv is None else argv
+    try:
+        return _main(arguments)
+    except _TestPreparationRefusal:
+        if arguments and arguments[0] in {"deployment-begin", "deployment-prove", "deployment-release"}:
+            print(json.dumps({"channel": "test", "outcome": "refused", "prepared": False}))
+            return 1
+        raise
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
     for name in ("deployment-initialize-dormant-ownership", "deployment-bind-owner-proof", "deployment-qualify-native"):
@@ -5259,6 +5316,7 @@ def main(argv: list[str] | None = None) -> int:
             explicit_test.add_argument("--controller-start-token", required=True)
             explicit_test.add_argument("--runtime-uid", type=int, required=True)
             explicit_test.add_argument("--runtime-gid", type=int, required=True)
+            explicit_test.add_argument("--native-launcher", type=Path)
         else:
             explicit_test.add_argument("--owner-receipt-path", type=Path, required=True)
             explicit_test.add_argument("--expected-owner-receipt-sha256", required=True)
@@ -5317,6 +5375,10 @@ def main(argv: list[str] | None = None) -> int:
     begin.add_argument("--legacy-path", type=Path, required=True)
     begin.add_argument("--controller-pid", type=int, required=True)
     begin.add_argument("--controller-start-token", required=True)
+    begin.add_argument("--native-source-root", type=Path)
+    begin.add_argument("--native-source-revision")
+    begin.add_argument("--native-launcher", type=Path)
+    begin.add_argument("--expected-native-context-sha256")
     finish = subparsers.add_parser("deployment-finish")
     finish.add_argument("--channel", required=True)
     finish.add_argument("--instance-state-root", type=Path, required=True)
@@ -5660,19 +5722,33 @@ def main(argv: list[str] | None = None) -> int:
             quiescence_proof_path=args.quiescence_proof_path,
         )
     if args.command == "deployment-begin":
-        print(
-            json.dumps(
-                _begin_instance_state_deployment(
-                    channel=args.channel,
-                    instance_state_root=args.instance_state_root,
-                    host_global_root=args.host_global_root,
-                    legacy_path=args.legacy_path,
-                    controller_pid=args.controller_pid,
-                    controller_start_token=args.controller_start_token,
-                ),
-                sort_keys=True,
-            )
-        )
+        native_context = None
+        native_inputs = (args.native_source_root, args.native_source_revision,
+            args.native_launcher, args.expected_native_context_sha256)
+        if any(value is not None for value in native_inputs):
+            from app.instance.legacy_owner_recovery import capture_test_native_context, _bytes, _sha
+            try:
+                if not all(value is not None for value in native_inputs):
+                    raise InstanceStatePreflightError("TEST native context required")
+                native_context = capture_test_native_context(channel=args.channel,
+                    source_root=args.native_source_root, expected_revision=args.native_source_revision,
+                    instance_state_root=args.instance_state_root, host_global_root=args.host_global_root,
+                    controller_pid=args.controller_pid, controller_start_token=args.controller_start_token,
+                    runtime_uid=os.geteuid(), runtime_gid=os.getegid(), native_launcher=args.native_launcher)
+                if _sha(_bytes(native_context)) != args.expected_native_context_sha256:
+                    raise InstanceStatePreflightError("TEST native context changed")
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError):
+                print(json.dumps({"channel": "test", "outcome": "refused", "prepared": False}))
+                return 1
+        begun = _begin_instance_state_deployment(
+            channel=args.channel, instance_state_root=args.instance_state_root,
+            host_global_root=args.host_global_root, legacy_path=args.legacy_path,
+            controller_pid=args.controller_pid, controller_start_token=args.controller_start_token,
+            native_execution_context=native_context)
+        if native_context is not None:
+            begun = {"channel": "test", "claimed": True, "activation": "inactive_fenced",
+                "native_context_sha256": args.expected_native_context_sha256}
+        print(json.dumps(begun, sort_keys=True))
         return 0
     if args.command == "deployment-finish":
         try:
@@ -5755,6 +5831,10 @@ def main(argv: list[str] | None = None) -> int:
         proof = _prove_instance_state_quiescence(
             channel=args.channel, host_global_root=args.host_global_root, inventory_path=args.inventory_path
         )
+        if proof.native_execution_context is not None:
+            print(json.dumps({"channel": "test", "proved": True, "activation": "inactive_fenced",
+                "inventory_digest": proof.inventory_digest}, sort_keys=True))
+            return 0
         print(
             json.dumps(
                 {
