@@ -211,6 +211,7 @@ class TaskReleaseRequest(BaseModel):
 
 class MaintenanceLeaseInput(LeaseInput):
     model_config = ConfigDict(extra="forbid")
+    repository: str
     lease_kind: Literal["generic"]
     fencing_token: int = Field(strict=True, ge=1)
 

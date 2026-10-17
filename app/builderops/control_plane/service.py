@@ -2138,6 +2138,10 @@ def create_app(
     ) -> dict[str, Any]:
         _enforce_repo_scope(credential, request.envelope.repository)
         try:
+            if canonical_repository(request.lease.repository) != canonical_repository(
+                request.envelope.repository
+            ):
+                raise HTTPException(status_code=403, detail="maintenance lease repository mismatch")
             _assert_durable_payload_safe(
                 {"task_id": task_id, **request.model_dump(mode="json")}, credentials
             )

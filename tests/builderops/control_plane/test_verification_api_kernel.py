@@ -1211,7 +1211,7 @@ def test_terminal_payload_status_correction_enforces_existing_admission(
     body["expected_updated_at"] = args["expected_updated_at"].isoformat()
     body["envelope"] = envelope.as_json()
     body["envelope"].pop("actor")
-    body["lease"] = {k: v for k, v in asdict(args["lease"]).items() if k != "repository"}
+    body["lease"] = asdict(args["lease"])
     body["lease"]["expires_at"] = args["lease"].expires_at.isoformat()
     epoch = control_plane_store.readiness()["authority_epoch"]
     url = f"/v1/tasks/{TASK}/correct-payload-status"
@@ -1239,6 +1239,9 @@ def test_terminal_payload_status_correction_enforces_existing_admission(
     for name in ("reader", "taskonly", "foreign", "otherrepo"):
         assert post(name).status_code == 403
     assert post(pinned=epoch + 1).status_code == 409
+    assert post(document=dict(body, lease=dict(body["lease"], repository="foreign/repo"))).status_code == 403
+    assert post(document=dict(body, lease=dict(body["lease"], repository="invalid"))).status_code == 400
+    assert post(document=dict(body, lease=dict(body["lease"], unknown=True))).status_code == 422
     for extra in (
         {"payload": {}},
         {"to_state": "ready"},

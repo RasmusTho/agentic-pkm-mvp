@@ -836,6 +836,7 @@ def test_terminal_payload_status_correction_cli_binds_exact_request(tmp_path, mo
 
     manifest = _manifest_dir(tmp_path)
     lease = {
+        "repository": "rasmustho/agentic-pkm-mvp",
         "holder": "fixture-writer",
         "resource_id": "payload-status-correction:fixture-task",
         "lease_kind": "generic",
