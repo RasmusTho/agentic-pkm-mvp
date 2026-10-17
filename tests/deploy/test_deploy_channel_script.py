@@ -6790,24 +6790,33 @@ def test_supervised_compose_guard_refusal_has_reserved_status_before_docker(tmp_
     assert not Path(env['FAKE_DEPLOY_EVENT_LOG']).exists()
 
 
-def test_native_embedding_probe_guard_refusal_is_distinct_from_probe_failures(tmp_path, monkeypatch):
+@pytest.mark.parametrize('guarded_call', [
+    'up',
+    'list',
+    'show',
+    'pull',
+    'NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER',
+])
+def test_native_embedding_probe_guard_refusal_is_distinct_from_probe_failures(tmp_path, monkeypatch, guarded_call):
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import PostgresDeployError
 
     root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
     script = SCRIPT.read_text()
     gate = script[script.index('native_source_failure() {'):script.index('native_source_projection_gate() {')]
-    command = (gate + '\naction=deploy\ntarget_sha=' + sha
+    show_failure = '    *ollama\\ show*) return 1 ;;\n' if guarded_call == 'pull' else ''
+    command = ('set -euo pipefail\n' + gate + '\naction=deploy\ntarget_sha=' + sha
                + '\nBWS_DEPLOY_OPERATION_ID=' + env['BWS_DEPLOY_OPERATION_ID']
                + '\nHOST_SECRET_RUNTIME_ENV_FILE_API=' + env['HOST_SECRET_RUNTIME_ENV_FILE_API']
                + '''\ncompose() {
   case "$*" in
     *native-source-embedding-identity.v1*) printf '{"provider":"ollama","model":"nomic-embed-text:latest"}\\n' ;;
-    *NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER*) DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED=1; return 120 ;;
+    *''' + guarded_call + '''*) DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED=1; return 120 ;;
+''' + show_failure + '''
     *) return 0 ;;
   esac
 }\n'''
-               + 'native_source_embedding_preflight_gate\nrc=$?\n'
+               + 'if native_source_embedding_preflight_gate; then exit 0; else rc=$?; fi\n'
                + 'printf "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection\\n" >&2\nexit "$rc"\n')
     emitted = []
     monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
