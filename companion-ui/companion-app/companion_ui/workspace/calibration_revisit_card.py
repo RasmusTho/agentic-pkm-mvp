@@ -134,6 +134,7 @@ def calibration_revisit_card_markup(
             <p class="cal-hint" id="calibration-revisit-dismiss-help">Defers this revisit. Records no outcome.</p>
           </form>
           <div class="cal-alert" data-calibration-feedback hidden></div>
+          <button class="cal-reconcile" type="button" data-calibration-reconcile hidden>Reconcile the same action</button>
           <button class="cal-refresh" type="button" data-calibration-refresh hidden>Retry workspace refresh</button>
         </section>"""
 
@@ -152,8 +153,10 @@ def calibration_revisit_card_script() -> str:
     var answer = card.querySelector('form[data-intent="answer"]');
     var dismiss = card.querySelector('form[data-intent="dismiss"]');
     var feedback = card.querySelector('[data-calibration-feedback]');
+    var reconcile = card.querySelector('[data-calibration-reconcile]');
     var refresh = card.querySelector('[data-calibration-refresh]');
     var committedStatus = '';
+    var uncertainAction = null;
     function setFeedback(message, failure) {{
       if (!feedback) return;
       feedback.hidden = false;
@@ -173,13 +176,55 @@ def calibration_revisit_card_script() -> str:
         }}
       }});
     }}
+    function setFreshMutationsDisabled(value) {{
+      [answer, dismiss].forEach(function(form) {{
+        if (!form) return;
+        form.setAttribute('aria-disabled', value ? 'true' : 'false');
+        Array.prototype.forEach.call(form.querySelectorAll('button'), function(button) {{
+          button.disabled = value;
+          if (value) button.setAttribute('aria-disabled', 'true');
+          else button.removeAttribute('aria-disabled');
+        }});
+        var note = form.querySelector('textarea[name="note"]');
+        if (note) note.readOnly = value;
+      }});
+    }}
+    function canonicalOutcome(data, intent) {{
+      if (intent !== 'answer') return '';
+      var receipt = data && data.receipt;
+      var outcome = receipt && receipt.outcome;
+      if (!outcome || !Object.prototype.hasOwnProperty.call(labels, outcome)) {{
+        throw new Error('The runtime did not return the canonical outcome receipt.');
+      }}
+      return outcome;
+    }}
+    function validateActionResult(result, intent, body) {{
+      var expectedStatus = intent === 'answer' ? 'answered' : 'dismissed';
+      if (!result.ok || !result.data || result.data.status !== expectedStatus ||
+          String(result.data.decision_id) !== String(card.getAttribute('data-decision-id')) ||
+          String(result.data.rung_index) !== String(card.getAttribute('data-rung-index'))) {{
+        throw new Error((result.data && result.data.detail && result.data.detail.message) ||
+          'The runtime returned an unexpected action state.');
+      }}
+      var outcome = canonicalOutcome(result.data, intent);
+      if (intent === 'answer' && body && body.outcome && outcome !== body.outcome) {{
+        // An idempotent replay may return the immutable canonical receipt for
+        // an earlier request.  The server response, never the submitted body,
+        // owns the rendered outcome.
+        card.setAttribute('data-replayed-outcome', outcome);
+      }}
+      return {{status: expectedStatus, outcome: outcome}};
+    }}
     function showCommittedState(status, intent) {{
       committedStatus = status;
+      uncertainAction = null;
       busy = false;
       setBusy(answer, false, '');
       setBusy(dismiss, false, '');
+      setFreshMutationsDisabled(false);
       if (answer) answer.hidden = true;
       if (dismiss) dismiss.hidden = true;
+      if (reconcile) reconcile.hidden = true;
       card.setAttribute('data-state', status);
       card.setAttribute('data-action-status', status);
       setFeedback(
@@ -214,20 +259,69 @@ def calibration_revisit_card_script() -> str:
         setFeedback('Workspace refresh is still unavailable. Retry refresh.', 'degraded');
       }});
     }}
+    function showUncertainAction(action) {{
+      uncertainAction = action;
+      busy = false;
+      setBusy(action.form, false, '');
+      setFreshMutationsDisabled(true);
+      setFeedback('Action acknowledgement is uncertain. Reconcile the same action before trying another choice.', 'uncertain');
+      if (reconcile) {{
+        reconcile.hidden = false;
+        reconcile.disabled = false;
+      }}
+    }}
+    function reconcileSameAction() {{
+      if (!uncertainAction || busy) return;
+      busy = true;
+      if (reconcile) reconcile.disabled = true;
+      setFeedback('Rechecking the same action…', 'uncertain');
+      var action = uncertainAction;
+      fetch(action.url, {{method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(action.body)}})
+        .then(function(response) {{
+          return response.json().catch(function() {{ return {{}}; }}).then(function(data) {{
+            return {{ok: response.ok, data: data}};
+          }});
+        }})
+        .then(function(result) {{
+          var accepted = validateActionResult(result, action.intent, action.body);
+          committedStatus = accepted.status;
+          card.setAttribute('data-outcome', accepted.outcome);
+          return rereadWorkspace().then(function() {{
+            card.hidden = true;
+            window.location.reload();
+          }}, function() {{
+            showCommittedState(accepted.status, action.intent);
+          }});
+        }})
+        .catch(function() {{
+          busy = false;
+          if (reconcile) reconcile.disabled = false;
+          setFreshMutationsDisabled(true);
+          setFeedback('Action acknowledgement is still unavailable. Retry reconciliation.', 'uncertain');
+        }});
+    }}
     function submit(url, body, form, intent) {{
+      if (uncertainAction) {{
+        // A stale or synthetic fresh-choice event cannot replace the
+        // indeterminate action.  Reconcile its original identity and payload.
+        reconcileSameAction();
+        return;
+      }}
       if (busy) return;
       busy = true;
       setBusy(form, true, intent === 'answer' ? 'Recording…' : 'Deferring…');
       fetch(url, {{method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(body || {{}})}})
-        .then(function(response) {{ return response.json().catch(function() {{ return {{}}; }}).then(function(data) {{ return {{ok: response.ok, data: data}}; }}); }})
+        .catch(function(error) {{ error.uncertain = true; throw error; }})
+        .then(function(response) {{
+          return response.json().catch(function(error) {{ error.uncertain = true; throw error; }}).then(function(data) {{
+            return {{ok: response.ok, data: data}};
+          }});
+        }})
         .then(function(result) {{
-          if (!result.ok) throw new Error((result.data && result.data.detail && result.data.detail.message) || 'The runtime did not record this action.');
-          var expectedStatus = intent === 'answer' ? 'answered' : 'dismissed';
-          if (!result.data || result.data.status !== expectedStatus || String(result.data.decision_id) !== String(card.getAttribute('data-decision-id')) || String(result.data.rung_index) !== String(card.getAttribute('data-rung-index'))) {{
-            throw new Error('The runtime returned an unexpected action state.');
-          }}
+          var accepted = validateActionResult(result, intent, body);
+          var expectedStatus = accepted.status;
           committedStatus = expectedStatus;
-          card.setAttribute('data-outcome', intent === 'answer' ? (body.outcome || '') : '');
+          card.setAttribute('data-outcome', accepted.outcome);
           return rereadWorkspace().then(function() {{
             card.hidden = true;
             window.location.reload();
@@ -237,6 +331,10 @@ def calibration_revisit_card_script() -> str:
         }})
         .catch(function(error) {{
           if (committedStatus) return;
+          if (error && error.uncertain) {{
+            showUncertainAction({{url: url, body: JSON.parse(JSON.stringify(body || {{}})), form: form, intent: intent}});
+            return;
+          }}
           busy = false;
           setBusy(form, false, '');
           setFeedback('Nothing durable happened. You can retry this ' + intent + '.', 'failed');
@@ -266,6 +364,7 @@ def calibration_revisit_card_script() -> str:
       submit(dismiss.action, body, dismiss, 'dismiss');
     }});
     if (refresh) refresh.addEventListener('click', retryRefresh);
+    if (reconcile) reconcile.addEventListener('click', reconcileSameAction);
   }})();
   </script>"""
 

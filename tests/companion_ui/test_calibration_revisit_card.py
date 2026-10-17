@@ -117,3 +117,23 @@ def test_failed_refresh_after_durable_action_stays_terminal_and_retryable() -> N
     assert "Retry workspace refresh" in html
     assert "card.setAttribute('data-state', status)" in html
     assert "if (committedStatus) return;" in html
+
+
+def test_lost_ack_reconciles_original_action_and_uses_canonical_receipt() -> None:
+    html = _render(_pending())
+
+    assert 'data-calibration-reconcile' in html
+    assert "Action acknowledgement is uncertain." in html
+    assert "setFreshMutationsDisabled(true)" in html
+    assert "indeterminate action" in html
+    assert "card.setAttribute('data-outcome', accepted.outcome)" in html
+    assert "receipt && receipt.outcome" in html
+    assert "Nothing durable happened. You can retry this ' + intent" in html
+
+
+def test_lost_ack_replay_covers_dismissal_without_outcome() -> None:
+    html = _render(_pending())
+
+    assert "intent !== 'answer'" in html
+    assert "body: JSON.stringify(action.body)" in html
+    assert "Rechecking the same action…" in html
