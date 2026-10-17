@@ -132,8 +132,19 @@ def build_context_pack(
     merge_sha: str,
     read_instructions: Sequence[str],
     probe_id: str = DEFAULT_PROBE_ID,
+    schema_version: int = 1,
 ) -> dict[str, Any]:
     """Build a deterministic pack bound to one accepted source receipt and live target."""
+
+    if type(schema_version) is not int or schema_version not in {1, 2}:
+        raise EpicRehydrationProbeError("unsupported context-pack schema_version")
+    if schema_version == 2:
+        from app.builderops.epic_rehydration_probe_v2 import build_context_pack as build_v2
+
+        return build_v2(source_bytes, source_ref=source_ref, source_observed_at=source_observed_at,
+                        slice_id=slice_id, repository=repository, issue_number=issue_number,
+                        pr_number=pr_number, verified_pr_head_sha=verified_pr_head_sha,
+                        merge_sha=merge_sha, read_instructions=read_instructions, probe_id=probe_id)
 
     raw = _coerce_source_bytes(source_bytes, "source_bytes")
     source = parse_strict_json(raw, field="source_bytes")
@@ -194,6 +205,11 @@ def build_context_pack(
 
 def normalize_context_pack(pack: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a context pack at the pack/CLI boundary."""
+
+    if pack.get("schema_version") == 2:
+        from app.builderops.epic_rehydration_probe_v2 import normalize_context_pack as normalize_v2
+
+        return normalize_v2(pack)
 
     normalized = _strict_object(pack, "context_pack")
     _exact_fields(
@@ -316,6 +332,11 @@ def normalize_rehydrated_observation(
 ) -> dict[str, Any]:
     """Strictly validate the one fresh agent's structured observation."""
 
+    if observation.get("schema_version") == 2:
+        from app.builderops.epic_rehydration_probe_v2 import normalize_rehydrated_observation as normalize_v2
+
+        return normalize_v2(observation, context_pack=context_pack)
+
     normalized = _strict_object(observation, "observation")
     _exact_fields(
         normalized,
@@ -393,8 +414,17 @@ def normalize_rehydrated_observation(
 def compare_rehydrated_observation(
     context_pack: Mapping[str, Any],
     observation: Mapping[str, Any],
+    *,
+    fabrication_audit_ref: str | None = None,
 ) -> dict[str, Any]:
     """Compare one observation without ranking it or producing a quality aggregate."""
+
+    if context_pack.get("schema_version") == 2:
+        from app.builderops.epic_rehydration_probe_v2 import compare_rehydrated_observation as compare_v2
+
+        return compare_v2(context_pack, observation, fabrication_audit_ref=fabrication_audit_ref)
+    if fabrication_audit_ref is not None:
+        raise EpicRehydrationProbeError("independent fabrication audit is only supported in v2")
 
     pack = normalize_context_pack(context_pack)
     obs = normalize_rehydrated_observation(observation, context_pack=pack)
@@ -489,6 +519,12 @@ def build_probe_receipt(
 ) -> dict[str, Any]:
     """Build the durable receipt for exactly one initial shadow probe."""
 
+    if context_pack.get("schema_version") == 2:
+        from app.builderops.epic_rehydration_probe_v2 import build_probe_receipt as build_v2
+
+        return build_v2(context_pack, observation, comparison, evidence_refs=evidence_refs,
+                        telemetry=telemetry, source_observed_at=source_observed_at)
+
     pack = normalize_context_pack(context_pack)
     obs = normalize_rehydrated_observation(observation, context_pack=pack)
     comp = normalize_comparison(comparison, context_pack=pack, observation=obs)
@@ -550,6 +586,11 @@ def normalize_comparison(
     observation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate a comparison receipt and its effect-free boundary."""
+
+    if comparison.get("schema_version") == 2:
+        from app.builderops.epic_rehydration_probe_v2 import normalize_comparison as normalize_v2
+
+        return normalize_v2(comparison, context_pack=context_pack, observation=observation)
 
     normalized = _strict_object(comparison, "comparison")
     _exact_fields(
@@ -617,6 +658,11 @@ def normalize_comparison(
 
 def normalize_probe_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
     """Validate the final receipt's one-probe and no-authority invariants."""
+
+    if receipt.get("schema_version") == 2:
+        from app.builderops.epic_rehydration_probe_v2 import normalize_probe_receipt as normalize_v2
+
+        return normalize_v2(receipt)
 
     normalized = _strict_object(receipt, "probe_receipt")
     _exact_fields(
@@ -1299,11 +1345,13 @@ def _build_parser() -> argparse.ArgumentParser:
     pack.add_argument("--merge-sha", required=True)
     pack.add_argument("--read-instruction", action="append", dest="read_instructions", required=True)
     pack.add_argument("--probe-id", default=DEFAULT_PROBE_ID)
+    pack.add_argument("--schema-version", type=int, choices=(1, 2), default=1)
 
     compare = subparsers.add_parser("compare", help="compare one observation against one context pack")
     compare.add_argument("--pack-file", type=Path, required=True)
     compare.add_argument("--observation-file", type=Path, required=True)
     compare.add_argument("--output", type=Path, required=True)
+    compare.add_argument("--fabrication-audit-file", type=Path)
 
     receipt = subparsers.add_parser("receipt", help="build one durable probe receipt")
     receipt.add_argument("--pack-file", type=Path, required=True)
@@ -1313,6 +1361,11 @@ def _build_parser() -> argparse.ArgumentParser:
     receipt.add_argument("--evidence-file", type=Path, required=True)
     receipt.add_argument("--output", type=Path, required=True)
     receipt.add_argument("--source-observed-at")
+    telemetry = subparsers.add_parser("telemetry", help="derive v2 measurements from retained evidence")
+    telemetry.add_argument("--pack-file", type=Path, required=True)
+    telemetry.add_argument("--observation-file", type=Path, required=True)
+    telemetry.add_argument("--execution-file", type=Path, required=True)
+    telemetry.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -1335,6 +1388,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
                 merge_sha=args.merge_sha,
                 read_instructions=args.read_instructions,
                 probe_id=args.probe_id,
+                schema_version=args.schema_version,
             )
             _write_json_file(args.output, pack)
         elif args.command == "compare":
@@ -1342,13 +1396,31 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             pack = normalize_context_pack(_read_json_file(args.pack_file))
             observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
             _reject_output_alias(args.output, *_context_pack_closure_paths(pack))
-            _write_json_file(args.output, compare_rehydrated_observation(pack, observation))
+            if args.fabrication_audit_file is not None:
+                _reject_output_alias(args.output, args.fabrication_audit_file)
+            _write_json_file(args.output, compare_rehydrated_observation(pack, observation, fabrication_audit_ref=str(args.fabrication_audit_file) if args.fabrication_audit_file else None))
+        elif args.command == "telemetry":
+            from app.builderops.epic_rehydration_probe_v2 import build_telemetry, closure_paths
+
+            pack = normalize_context_pack(_read_json_file(args.pack_file))
+            measured = build_telemetry(pack, _read_json_file(args.observation_file),
+                                       pack_ref=str(args.pack_file), observation_ref=str(args.observation_file),
+                                       execution_ref=str(args.execution_file))
+            _reject_output_alias(args.output, args.pack_file, args.observation_file,
+                                 args.execution_file, *closure_paths(pack, measured))
+            _write_json_file(args.output, measured)
         elif args.command == "receipt":
             evidence_refs = _read_json_file(args.evidence_file)
             normalized_evidence_refs = _normalize_evidence_refs(evidence_refs)
             pack = normalize_context_pack(_read_json_file(args.pack_file))
             observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
             comparison = normalize_comparison(_read_json_file(args.comparison_file), context_pack=pack, observation=observation)
+            telemetry = _read_json_file(args.telemetry_file)
+            extra_paths: tuple[Path, ...] = ()
+            if pack["schema_version"] == 2:
+                from app.builderops.epic_rehydration_probe_v2 import closure_paths
+
+                extra_paths = closure_paths(pack, telemetry)
             _reject_output_alias(
                 args.output,
                 args.pack_file,
@@ -1358,13 +1430,14 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
                 args.evidence_file,
                 *(Path(ref) for ref in normalized_evidence_refs.values()),
                 *_context_pack_closure_paths(pack),
+                *extra_paths,
             )
             receipt = build_probe_receipt(
                 pack,
                 observation,
                 comparison,
                 evidence_refs=normalized_evidence_refs,
-                telemetry=_read_json_file(args.telemetry_file),
+                telemetry=telemetry,
                 source_observed_at=args.source_observed_at,
             )
             _write_json_file(args.output, receipt)
