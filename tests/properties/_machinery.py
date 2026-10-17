@@ -1780,11 +1780,11 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "unchanged to upsert with an atomic absent-only source snapshot; its only producer "
         "repair_missing_vectors uses build_indexed_unit_payload and is classified above."
     ),
-    ("app/objects/__init__.py", 124): (
+    ("app/objects/__init__.py", 132): (
         "transport_passthrough: ObjectStore.save_object facade forwards dict(obj.payload) to the "
         "backing store.put -> store_objects; the caller that builds obj.payload carries episode_ref "
-        "(every save_object caller is itself a classified producer above). Line drifted 121 -> 124 "
-        "when #5921 documented and exported the backend-only facade; the sink behavior is unchanged."
+        "(every save_object caller is itself a classified producer above). Line drifted 124 -> 132 "
+        "when #3324 added binding-aware backend resolution; the sink behavior is unchanged."
     ),
     ("app/stores/memory.py", 98): (
         "transport_passthrough: MemoryObjectStore.put_if_absent delegates the caller-supplied "

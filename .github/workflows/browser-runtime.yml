@@ -431,6 +431,14 @@ jobs:
           python3 scripts/run_jev_browser_advisory.py \
             --output-dir "$COMPANION_UI_STATE_EVIDENCE_DIR/advisory"
 
+      # CAL-03: execute the production rendered Companion rail card against
+      # lost, malformed, non-authoritative, and gateway acknowledgements. The
+      # module is explicitly selected here so ordinary browser CI cannot
+      # report green while these lifecycle regressions are merely collected.
+      - name: Run CAL-03 revisit acknowledgement browser journeys
+        run: |
+          pytest -q tests/companion_ui/test_calibration_revisit_browser.py
+
       - name: Retain Vault Browser state-matrix diagnostics
         if: always()
         uses: actions/upload-artifact@v4

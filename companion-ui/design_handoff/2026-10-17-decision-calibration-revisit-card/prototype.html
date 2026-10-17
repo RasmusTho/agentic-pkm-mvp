@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-density="comfortable" data-focus="v2">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'">
+<title>CAL-03 — Decision calibration revisit card</title>
+<link rel="stylesheet" href="tokens/colors_and_type.no-egress.css">
+<style>
+a{color:var(--accent)}a:hover{color:var(--fg-1)}
+body{padding:var(--space-8) var(--space-6);max-width:76rem;margin:0 auto;display:grid;gap:var(--space-10)}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.doc-head{display:grid;gap:var(--space-2);max-width:48rem}
+.doc-head p{color:var(--fg-2);font-size:var(--text-sm)}
+.sec{display:grid;gap:var(--space-4)}
+.sec-title{font-family:var(--font-ui);font-size:var(--text-sm);font-weight:var(--weight-medium);letter-spacing:var(--tracking-wide);text-transform:uppercase;color:var(--fg-2)}
+.mono-note{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);letter-spacing:var(--tracking-wide)}
+/* buttons — Buttons reference grammar, resting glow removed (glow is a state) */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);min-height:var(--control-height);padding:0 var(--space-4);font-family:var(--font-ui);font-size:var(--text-sm);font-weight:var(--weight-medium);line-height:var(--leading-snug);border-radius:var(--radius-md);border:1px solid transparent;cursor:pointer;transition:background var(--duration-base) var(--ease),border-color var(--duration-base) var(--ease),color var(--duration-base) var(--ease);text-align:center}
+.btn-secondary{background:var(--bg-raised);color:var(--fg-1);border-color:var(--border-strong)}
+.btn-secondary:hover{background:var(--bg-overlay)}
+.btn-ghost{background:transparent;color:var(--fg-2)}
+.btn-ghost:hover{background:var(--bg-raised);color:var(--fg-1)}
+.btn:active{box-shadow:var(--shadow-inset)}
+.btn[aria-disabled="true"]{cursor:default;color:var(--fg-3);background:var(--bg-surface);box-shadow:none}
+.btn[aria-disabled="true"]:hover{background:var(--bg-surface)}
+.btn.is-chosen,.btn.is-chosen:hover{border-color:var(--accent);color:var(--fg-1);background:var(--bg-raised)}
+.btn[aria-pressed="true"]{border-color:var(--accent)}
+/* badge — Badges reference grammar */
+.badge{display:inline-flex;align-items:center;font-family:var(--font-mono);font-size:var(--text-xs);font-weight:var(--weight-medium);padding:0 var(--space-2);border-radius:var(--radius-sm);border:1px solid;letter-spacing:var(--tracking-wide);text-transform:uppercase;line-height:var(--leading-loose);white-space:nowrap}
+.badge-default{background:var(--bg-raised);color:var(--fg-2);border-color:var(--border-strong)}
+.badge-cyan{background:var(--cyan-muted);color:var(--cyan);border-color:var(--cyan-dim)}
+.badge-vault{background:var(--vault-muted);color:var(--vault);border-color:var(--vault-dim)}
+.badge-amber{background:var(--amber-muted);color:var(--amber);border-color:var(--amber-dim)}
+.badge-danger{background:var(--destructive-muted);color:var(--destructive);border-color:var(--destructive-dim)}
+/* card — Cards & surfaces panel grammar */
+.cal{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:var(--space-6);display:grid;gap:var(--space-5);width:100%;max-width:42rem;min-width:0}
+.cal-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-2) var(--space-4)}
+.cal-eyebrow{font-family:var(--font-ui);font-size:var(--text-sm);font-weight:var(--weight-medium);letter-spacing:var(--tracking-wide);text-transform:uppercase;color:var(--fg-2);line-height:var(--leading-snug)}
+.cal-lead{display:grid;gap:var(--space-2)}
+.cal-q{font-family:var(--font-display);font-size:var(--text-xl);font-weight:var(--weight-regular);line-height:var(--leading-tight);letter-spacing:var(--tracking-tight);color:var(--fg-1);text-wrap:pretty;overflow-wrap:anywhere}
+.cal-q:focus-visible{outline-offset:4px}
+.cal-title{font-style:italic}
+.cal-meta{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);letter-spacing:var(--tracking-wide);overflow-wrap:anywhere}
+.cal-body,.cal-result{font-size:var(--text-base);color:var(--fg-1)}
+.cal-hint{font-size:var(--text-sm);color:var(--fg-2)}
+.cal-answer{display:grid;gap:var(--space-5)}
+.field{display:grid;gap:var(--space-1)}
+.label{font-family:var(--font-ui);font-size:var(--text-sm);font-weight:var(--weight-medium);color:var(--fg-2)}
+.label .opt{font-weight:var(--weight-regular)}
+.textarea{font-family:var(--font-ui);font-size:var(--text-base);line-height:var(--leading-normal);color:var(--fg-1);background:var(--bg-raised);border:1px solid var(--border-strong);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);min-height:4.5rem;width:100%;resize:vertical;transition:border-color var(--duration-base) var(--ease)}
+.textarea[readonly]{color:var(--fg-2);background:var(--bg-surface)}
+.picks-set{border:0;display:grid;gap:var(--space-3);min-width:0}
+.picks-set legend{font-family:var(--font-ui);font-size:var(--text-base);font-weight:var(--weight-medium);color:var(--fg-1);margin-bottom:var(--space-3)}
+.picks{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,8.5rem),1fr));gap:var(--space-2)}
+.pick-state{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);letter-spacing:var(--tracking-wide)}
+.cal-foot{border-top:1px solid var(--border);padding-top:var(--space-4);display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-4)}
+.cal-foot .btn{margin-left:calc(-1 * var(--space-4))}
+.cal-alert{background:var(--destructive-muted);border:1px solid var(--destructive-dim);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);display:grid;gap:var(--space-1)}
+.cal-alert p{color:var(--fg-1);font-size:var(--text-sm)}
+.cal-alert .cal-alert-t{color:var(--destructive);font-weight:var(--weight-medium)}
+.cal-quiet{gap:var(--space-2);padding:var(--space-4) var(--space-6)}
+.cal-quiet p{color:var(--fg-2);font-size:var(--text-sm)}
+.cal-quiet .cal-eyebrow:focus-visible{outline-offset:4px}
+.print-only{display:none}
+/* harness */
+.harness{display:grid;grid-template-columns:minmax(0,18rem) minmax(0,1fr);gap:var(--space-8);align-items:start}
+.controls{display:grid;gap:var(--space-5);background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:var(--space-4)}
+.ctl{display:grid;gap:var(--space-2);border:0;min-width:0}
+.ctl legend{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);letter-spacing:var(--tracking-wide);text-transform:uppercase;margin-bottom:var(--space-2)}
+.ctl .row{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+.stage{display:grid;gap:var(--space-4);min-width:0}
+.stage-frame{width:100%;transition:max-width var(--duration-slow) var(--ease)}
+.stage-frame[data-width="narrow"]{max-width:360px}
+.log{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);display:grid;gap:var(--space-1);max-width:42rem;min-height:3rem;overflow-wrap:anywhere;list-style:none}
+.log li{color:var(--fg-1)}
+.log li span{color:var(--fg-2)}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,30rem),1fr));gap:var(--space-8) var(--space-6)}
+.gitem{display:grid;gap:var(--space-2);align-content:start;min-width:0}
+.gitem-narrow{max-width:360px}
+@media (max-width:52rem){.harness{grid-template-columns:minmax(0,1fr)}body{padding:var(--space-6) var(--space-4)}.cal{padding:var(--space-4)}}
+@media print{
+body{background:none;padding:0;gap:var(--space-6)}
+.harness,.log,.no-print,.cal form,.cal-foot,.cal-status{display:none!important}
+.print-only{display:block}
+.cal{background:none;border-color:var(--border-strong);break-inside:avoid;max-width:none}
+.cal,.cal *,.sec-title,.mono-note,.doc-head *{color:var(--fg-inverse)!important}
+.badge,.cal-alert{background:none;border-color:var(--border-strong)}
+}
+</style>
+</head>
+<body>
+<header class="doc-head">
+<span class="sec-title">CAL-03 · issue #3324 · design guidance only</span>
+<h1 class="h2">Decision calibration revisit card</h1>
+<p>Companion UI · Yggdrasil Dark · comfortable · focus v2. All server responses are mocked in this page; no request leaves it. The server declares state; the card only renders it.</p>
+</header>
+<noscript>
+<section class="sec" aria-labelledby="ns-h">
+<h2 id="ns-h" class="sec-title">JavaScript off — server-rendered pending card</h2>
+<section class="cal" data-state="pending" data-decision-id="8f2e-fixture" data-decided-on="2026-06-23" data-rung-days="14" data-degraded="false" aria-labelledby="ns-q">
+<header class="cal-head"><span class="cal-eyebrow">Decision calibration · revisit</span><span class="badge badge-default">Pending</span></header>
+<div class="cal-lead"><h3 id="ns-q" class="cal-q">You decided <span class="cal-title">Postgres as projection, not source of truth</span> on <time datetime="2026-06-23">2026-06-23</time> — did it hold?</h3><p class="cal-meta">Decided 2026-06-23 · 14-day rung · decision 8f2e…</p></div>
+<form class="cal-answer" method="post" action="/companion/calibration/revisits/8f2e-fixture/decision" data-intent="answer">
+<div class="field"><label class="label" for="ns-note">Note <span class="opt">(optional)</span></label><textarea class="textarea" id="ns-note" name="note" aria-describedby="ns-note-h"></textarea><p class="cal-hint" id="ns-note-h">Not required. Sent only with an outcome.</p></div>
+<fieldset class="picks-set" aria-describedby="ns-eff"><legend>Did it hold?</legend>
+<div class="picks"><button class="btn btn-secondary" type="submit" name="outcome" value="held" data-outcome="held">Held</button><button class="btn btn-secondary" type="submit" name="outcome" value="partly_held" data-outcome="partly_held">Partly held</button><button class="btn btn-secondary" type="submit" name="outcome" value="did_not_hold" data-outcome="did_not_hold">Did not hold</button><button class="btn btn-secondary" type="submit" name="outcome" value="unknown_yet" data-outcome="unknown_yet">Not sure yet</button></div>
+<p class="cal-hint" id="ns-eff">A pick records the outcome for this rung. It cannot be changed afterwards.</p></fieldset>
+</form>
+<form class="cal-foot" method="post" action="/companion/calibration/revisits/8f2e-fixture/dismiss" data-intent="dismiss"><button class="btn btn-ghost" type="submit" aria-describedby="ns-dis">Dismiss for now</button><p class="cal-hint" id="ns-dis">Defers this revisit. Records no outcome.</p></form>
+<p class="print-only cal-hint">Outcome pending.</p>
+</section>
+<p class="mono-note">Forms post same-origin to the documented routes; the server responds with a redirect and a re-rendered card (PRG). In this prototype those routes do not exist.</p>
+</section>
+</noscript>
+<section class="sec harness-sec no-print" aria-labelledby="h-live">
+<h2 id="h-live" class="sec-title">Interactive — mocked server</h2>
+<div class="harness">
+<div class="controls" id="controls">
+<fieldset class="ctl"><legend>Server projection</legend><div class="row" data-ctl="projection"><button class="btn btn-secondary" type="button" data-v="pending" aria-pressed="true">Revisit due</button><button class="btn btn-secondary" type="button" data-v="degraded" aria-pressed="false">Degraded</button><button class="btn btn-secondary" type="button" data-v="absent" aria-pressed="false">None</button></div></fieldset>
+<fieldset class="ctl"><legend>Next write result</legend><div class="row" data-ctl="result"><button class="btn btn-secondary" type="button" data-v="ok" aria-pressed="true">Accepted</button><button class="btn btn-secondary" type="button" data-v="failed" aria-pressed="false">Write failed</button><button class="btn btn-secondary" type="button" data-v="blocked" aria-pressed="false">Blocked</button></div></fieldset>
+<fieldset class="ctl"><legend>Width</legend><div class="row" data-ctl="width"><button class="btn btn-secondary" type="button" data-v="wide" aria-pressed="true">Desktop</button><button class="btn btn-secondary" type="button" data-v="narrow" aria-pressed="false">Narrow 360</button></div></fieldset>
+<p class="mono-note">Selecting a projection resets the card to what the server would return.</p>
+</div>
+<div class="stage">
+<div class="stage-frame" id="live-frame" data-width="wide"><div id="live"></div></div>
+<h3 class="sec-title">Mock request log</h3>
+<ul class="log" id="log" aria-label="Mock request log"><li><span>No requests yet.</span></li></ul>
+</div>
+</div>
+<p id="sr-polite" class="vh" role="status" aria-live="polite"></p>
+<p id="sr-assert" class="vh" role="alert" aria-live="assertive"></p>
+</section>
+<section class="sec" aria-labelledby="h-gal">
+<h2 id="h-gal" class="sec-title">State gallery — static renders of each server-declared state</h2>
+<div class="gallery" id="gallery"></div>
+</section>
+<script>
+(function(){
+var FIX={decision_id:"8f2e-fixture",title:"Postgres as projection, not source of truth",decided_on:"2026-06-23",rung_days:14,degraded:false};
+var OUT=[["held","Held"],["partly_held","Partly held"],["did_not_hold","Did not hold"],["unknown_yet","Not sure yet"]];
+var LBL={};OUT.forEach(function(o){LBL[o[0]]=o[1]});
+var BASE="/companion/calibration/revisits/";
+function short(id){return id.length>4?id.slice(0,4)+"…":id}
+function node(tag,cls,text){var n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n}
+function attr(n,k,v){n.setAttribute(k,String(v));return n}
+function badge(k,t){return node("span","badge badge-"+k,t)}
+function head(b){var n=node("header","cal-head");n.append(node("span","cal-eyebrow","Decision calibration · revisit"),b);return n}
+function lead(u,r){var n=node("div","cal-lead"),h=node("h3","cal-q");attr(h,"id",u+"-q");attr(h,"tabindex","-1");h.append(document.createTextNode("You decided "),node("span","cal-title",r.title),document.createTextNode(" on "));var time=node("time",null,r.decided_on);attr(time,"datetime",r.decided_on);h.append(time,document.createTextNode(" — did it hold?"));var p=node("p","cal-meta","Decided "+r.decided_on+" · "+r.rung_days+"-day rung · decision "+short(r.decision_id));n.append(h,p);return n}
+function attrs(n,s){var r=s.rev;attr(n,"data-state",s.state);attr(n,"data-decision-id",r.decision_id);attr(n,"data-decided-on",r.decided_on);attr(n,"data-rung-days",r.rung_days);attr(n,"data-degraded","false");attr(n,"aria-labelledby",s.uid+"-q");return n}
+function render(s){
+var u=s.uid,r=s.rev,root=node("section","cal");
+if(s.state==="absent"){root.className="cal cal-quiet";attr(root,"data-state","absent");attr(root,"aria-labelledby",u+"-q");var ah=node("h3","cal-eyebrow","Decision calibration");attr(ah,"id",u+"-q");attr(ah,"tabindex","-1");root.append(ah,node("p",null,"No revisit due."));return root}
+if(s.state==="degraded"){attr(root,"data-state","degraded");attr(root,"data-degraded","true");attr(root,"aria-labelledby",u+"-q");var dh=node("h3","cal-q","Calibration revisits unavailable.");attr(dh,"id",u+"-q");attr(dh,"tabindex","-1");var dl=node("div","cal-lead");dl.append(dh,node("p","cal-body","Revisit state could not be read. Pending revisits are unknown, not zero."));root.append(head(badge("amber","Unavailable")),dl);return root}
+attrs(root,s);var sa=s.state==="submitting_answer",sd=s.state==="submitting_dismiss",busy=sa||sd,f=s.state==="write_failed"?s.failure:null;
+if(s.state==="answered"){attr(root,"data-outcome",s.outcome);var ar=node("div","cal-lead"),result=node("p","cal-result");result.append(document.createTextNode("Outcome recorded: "),node("strong",null,LBL[s.outcome]),document.createTextNode("."));ar.append(result,node("p","cal-hint","This rung is closed. It cannot be edited or re-answered."));root.append(head(badge("vault","Recorded")),lead(u,r),ar,node("p","cal-hint cal-status",s.rereading?"Re-reading workspace state…":"Workspace state re-read."));return root}
+if(s.state==="dismissed"){var dr=node("div","cal-lead");dr.append(node("p","cal-result","Revisit deferred. No outcome recorded."));root.append(head(badge("default","Deferred")),lead(u,r),dr,node("p","cal-hint cal-status",s.rereading?"Re-reading workspace state…":"Workspace state re-read."));return root}
+if(busy)attr(root,"aria-busy","true");
+var b=sa?badge("cyan","Recording"):sd?badge("cyan","Deferring"):f?badge("danger",f.kind==="blocked"?"Blocked":f.intent==="dismiss"?"Not deferred":"Not recorded"):badge("default","Pending");root.append(head(b),lead(u,r));
+if(f){var t=f.intent==="dismiss"?(f.kind==="blocked"?"Dismissal blocked.":"Dismissal not recorded."):(f.kind==="blocked"?"Answer blocked by the write guard.":"Answer not recorded. The write failed."),alert=node("div","cal-alert");attr(alert,"data-failure",f.kind);attr(alert,"data-intent",f.intent);alert.append(node("p","cal-alert-t",t),node("p",null,"Nothing durable happened. The revisit is still pending."));root.append(alert)}
+var form=node("form","cal-answer"),field=node("div","field"),label=node("label","label","Note ");attr(form,"method","post");attr(form,"action",BASE+r.decision_id+"/decision");attr(form,"data-intent","answer");attr(label,"for",u+"-note");label.append(node("span","opt","(optional)"));var ta=node("textarea","textarea",s.note||"");attr(ta,"id",u+"-note");attr(ta,"name","note");attr(ta,"aria-describedby",u+"-nh");if(busy)attr(ta,"readonly","true");var noteHint=node("p","cal-hint","Not required. Sent only with an outcome.");attr(noteHint,"id",u+"-nh");field.append(label,ta,noteHint);
+var fs=node("fieldset","picks-set"),lg=node("legend",null,"Did it hold?"),picks=node("div","picks");attr(fs,"aria-describedby",u+"-eff");OUT.forEach(function(o){var ch=sa&&s.chosen===o[0],button=node("button","btn btn-secondary"+(ch?" is-chosen":""),o[1]);attr(button,"type","submit");attr(button,"name","outcome");attr(button,"value",o[0]);attr(button,"data-outcome",o[0]);if(busy)attr(button,"aria-disabled","true");if(ch)button.append(node("span","pick-state"," · recording"));picks.append(button)});var effectHint=node("p","cal-hint",sa?"Recording "+LBL[s.chosen]+". Other picks are unavailable until the server responds.":"A pick records the outcome for this rung. It cannot be changed afterwards.");attr(effectHint,"id",u+"-eff");fs.append(lg,picks,effectHint);form.append(field,fs);root.append(form);
+var df=node("form","cal-foot"),db=node("button","btn btn-ghost",sd?"Deferring…":"Dismiss for now");attr(df,"method","post");attr(df,"action",BASE+r.decision_id+"/dismiss");attr(df,"data-intent","dismiss");attr(db,"type","submit");attr(db,"aria-describedby",u+"-dis");if(busy)attr(db,"aria-disabled","true");var dismissHint=node("p","cal-hint",sd?"Deferring this revisit. No outcome will be recorded.":"Defers this revisit. Records no outcome.");attr(dismissHint,"id",u+"-dis");df.append(db,dismissHint);root.append(df,node("p","print-only cal-hint","Outcome pending."));return root;
+}
+/* gallery */
+var G=[
+["Pending",{state:"pending"}],
+["Submitting answer — Partly held",{state:"submitting_answer",chosen:"partly_held",note:"Projection rebuild took 40 min on the full vault."}],
+["Answered — server re-read",{state:"answered",outcome:"partly_held"}],
+["Submitting dismiss",{state:"submitting_dismiss"}],
+["Dismissed — server re-read",{state:"dismissed"}],
+["Write failure — answer",{state:"write_failed",failure:{intent:"answer",kind:"failed"},note:"Projection rebuild took 40 min on the full vault."}],
+["Blocked — answer",{state:"write_failed",failure:{intent:"answer",kind:"blocked"}}],
+["Write failure — dismiss",{state:"write_failed",failure:{intent:"dismiss",kind:"failed"}}],
+["Blocked — dismiss",{state:"write_failed",failure:{intent:"dismiss",kind:"blocked"}}],
+["Degraded / unavailable",{state:"degraded"}],
+["Absent — no current revisit",{state:"absent"}],
+["Narrow 360 — pending",{state:"pending"},1],
+["Narrow 360 — submitting answer",{state:"submitting_answer",chosen:"did_not_hold"},1]
+];
+var gal=document.getElementById("gallery");
+gal.replaceChildren.apply(gal,G.map(function(g,i){var s=Object.assign({rev:FIX,uid:"g"+i},g[1]),item=node("div","gitem"+(g[2]?" gitem-narrow":""));item.append(node("h3","mono-note",String(i+1).padStart(2,"0")+" · "+g[0]+" · data-state=\""+s.state+"\""),render(s));return item}));
+gal.addEventListener("submit",function(e){e.preventDefault();say("Static gallery card. Use the interactive card above to submit.")});
+gal.addEventListener("click",function(e){var b=e.target.closest('[aria-disabled="true"]');if(b)e.preventDefault()});
+/* live */
+var live=document.getElementById("live"),logEl=document.getElementById("log"),pol=document.getElementById("sr-polite"),ast=document.getElementById("sr-assert");
+var S,nextResult="ok",projection="pending",timer=null,logged=false;
+function say(t){pol.textContent="";setTimeout(function(){pol.textContent=t},30)}
+function shout(t){ast.textContent="";setTimeout(function(){ast.textContent=t},30)}
+function log(m,p,body){if(!logged){logEl.replaceChildren();logged=true}var li=node("li"),span=node("span",null,p+(body?" "+JSON.stringify(body):""));li.append(document.createTextNode(m+" "),span);logEl.appendChild(li)}
+function fresh(){clearTimeout(timer);S={uid:"live",rev:FIX,state:projection==="pending"?"pending":projection,note:""}}
+function draw(focusMode){live.replaceChildren(render(S));var el=null;if(focusMode==="outcome"){live.querySelectorAll("[data-outcome]").forEach(function(candidate){if(!el&&candidate.getAttribute("data-outcome")===S.chosen)el=candidate})}else if(focusMode==="question"){el=live.querySelector(".cal-q")}else if(focusMode==="eyebrow"){el=live.querySelector(".cal-eyebrow")}else if(focusMode==="dismiss"){el=live.querySelector(".cal-foot .btn")}if(el)el.focus()}
+function reread(){S.rereading=true;draw("question");timer=setTimeout(function(){log("GET","WorkspaceStateResponse.calibration_revisit → null");S={uid:"live",rev:FIX,state:"absent"};draw("eyebrow");say("Workspace state re-read. No revisit due.")},1400)}
+live.addEventListener("click",function(e){var b=e.target.closest('[aria-disabled="true"]');if(b)e.preventDefault()});
+live.addEventListener("submit",function(e){
+e.preventDefault();
+if(S.state==="submitting_answer"||S.state==="submitting_dismiss")return;
+var form=e.target,intent=form.getAttribute("data-intent"),sub=e.submitter;
+if(sub&&sub.getAttribute("aria-disabled")==="true")return;
+var ta=live.querySelector("textarea");if(ta)S.note=ta.value;
+var res=nextResult;
+if(intent==="answer"){
+var o=sub&&sub.value;if(!LBL[o])return;
+var body={outcome:o};if(S.note.trim())body.note=S.note;
+S.state="submitting_answer";S.chosen=o;draw("outcome");say("Recording outcome: "+LBL[o]+".");
+log("POST",BASE+FIX.decision_id+"/decision",body);
+timer=setTimeout(function(){
+if(res==="ok"){log("200","CAL-01 append accepted (WriteGuard passed)");S.state="answered";S.outcome=o;S.note="";say("Outcome recorded: "+LBL[o]+". This rung is closed. Re-reading workspace state.");reread()}
+else{log(res==="blocked"?"409":"503",res==="blocked"?"WriteGuard blocked — nothing appended":"write failed — nothing appended");S.state="write_failed";S.failure={intent:"answer",kind:res};draw("outcome");S.chosen=null;shout((res==="blocked"?"Answer blocked by the write guard.":"Answer not recorded.")+" Nothing durable happened. The revisit is still pending.")}
+},900);
+}else{
+S.state="submitting_dismiss";draw("dismiss");say("Deferring this revisit. No outcome will be recorded.");
+log("POST",BASE+FIX.decision_id+"/dismiss");
+timer=setTimeout(function(){
+if(res==="ok"){log("200","CAL-02 dismissal ledger appended — no outcome receipt");S.state="dismissed";say("Revisit deferred. No outcome recorded. Re-reading workspace state.");reread()}
+else{log(res==="blocked"?"409":"503","dismissal not written");S.state="write_failed";S.failure={intent:"dismiss",kind:res};draw("dismiss");shout((res==="blocked"?"Dismissal blocked.":"Dismissal not recorded.")+" Nothing durable happened. The revisit is still pending.")}
+},900);
+}
+});
+document.getElementById("controls").addEventListener("click",function(e){
+var b=e.target.closest("button[data-v]");if(!b)return;var row=b.parentNode,k=row.getAttribute("data-ctl"),v=b.getAttribute("data-v");
+row.querySelectorAll("button").forEach(function(x){x.setAttribute("aria-pressed",x===b?"true":"false")});
+if(k==="projection"){projection=v;fresh();draw();log("GET","WorkspaceStateResponse.calibration_revisit → "+(v==="pending"?"fixture":v==="degraded"?"{degraded:true}":"null"))}
+if(k==="result")nextResult=v;
+if(k==="width")document.getElementById("live-frame").setAttribute("data-width",v);
+});
+fresh();draw();
+})();
+</script>
+</body>
+</html>

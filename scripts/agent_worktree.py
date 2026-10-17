@@ -8,6 +8,8 @@ import fcntl
 import json
 import math
 import os
+import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -44,6 +46,15 @@ class WorktreeLifecycleError(RuntimeError):
 
 def _canonical(path: Path) -> Path:
     return Path(path).expanduser().resolve(strict=False)
+
+
+def _same_worktree_path_identity(left: Path | str, right: Path | str) -> bool:
+    """Conservatively match filesystem path aliases used by lifecycle policy."""
+
+    return bool(
+        git_hygiene._path_identities(str(left))
+        & git_hygiene._path_identities(str(right))
+    )
 
 
 def _default_registry_path(cwd: Path) -> Path:
@@ -348,8 +359,22 @@ def _bind_live_generations(
     """Invalidate planning copies that do not match the current checkout generation."""
 
     bound = {key: dict(value) for key, value in records.items()}
+    missing_preserved = [
+        (key, record)
+        for key, record in bound.items()
+        if record.get("status") == "missing_preserved"
+    ]
+    if missing_preserved:
+        live_entries = _live_worktree_entries(cwd)
+        for key, record in missing_preserved:
+            _validate_missing_preserved_binding(
+                cwd,
+                key,
+                record,
+                live_entries=live_entries,
+            )
     for key, record in bound.items():
-        if record.get("status") == "removed":
+        if record.get("status") in {"removed", "missing_preserved"}:
             # A tombstone's checkout is gone by construction, so the probe below
             # always fails and is always caught. No consumer reads a tombstone's
             # generation — `_lifecycle_worktree_paths_for_branch` reads only
@@ -357,6 +382,8 @@ def _bind_live_generations(
             # `status` first — and tombstones are never pruned, so probing them
             # costs one subprocess per removed worktree on every report and
             # janitor run, forever.
+            # `missing_preserved` is also terminal, but its dedicated validator
+            # above requires both filesystem and Git registration absence.
             continue
         generation = record.get("generation")
         if not _valid_generation(generation):
@@ -544,6 +571,108 @@ def _locked_removed_generation_branch_authority(
                     pass
 
 
+def _assert_worktree_path_not_registered(
+    cwd: Path,
+    worktree: Path,
+    *,
+    live_entries: list[dict[str, str]] | None = None,
+) -> None:
+    target = _canonical(worktree)
+    entries = live_entries if live_entries is not None else _live_worktree_entries(cwd)
+    if any(
+        isinstance(entry.get("worktree"), str)
+        and _same_worktree_path_identity(entry["worktree"], target)
+        for entry in entries
+    ):
+        raise WorktreeLifecycleError("worktree path is still registered with Git")
+
+
+@contextmanager
+def _reserve_absent_worktree_path(cwd: Path, worktree: Path) -> Iterator[None]:
+    """Reserve an absent path so a concurrent Git worktree add cannot win."""
+
+    target = _canonical(worktree)
+    if os.path.lexists(target):
+        raise WorktreeLifecycleError("worktree path was recreated")
+    _assert_worktree_path_not_registered(cwd, target)
+
+    missing_parents: list[Path] = []
+    parent = target.parent
+    while not os.path.lexists(parent):
+        missing_parents.append(parent)
+        next_parent = parent.parent
+        if next_parent == parent:
+            raise WorktreeLifecycleError("worktree path parent is unavailable")
+        parent = next_parent
+
+    created_parents: list[Path] = []
+    reservation_identity: tuple[int, int] | None = None
+    try:
+        for missing_parent in reversed(missing_parents):
+            try:
+                missing_parent.mkdir(mode=0o700)
+                created_parents.append(missing_parent)
+            except FileExistsError:
+                if missing_parent.is_symlink() or not missing_parent.is_dir():
+                    raise WorktreeLifecycleError(
+                        "worktree path parent changed during reservation"
+                    )
+        if _canonical(target) != target or os.path.lexists(target):
+            raise WorktreeLifecycleError("worktree path was recreated")
+        try:
+            # Git's worktree-add path check accepts an absent candidate before
+            # it creates the directory. An exclusive file at the target makes
+            # that later mkdir fail even if Git passed its earlier check.
+            descriptor = os.open(
+                target,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+        except FileExistsError as exc:
+            raise WorktreeLifecycleError("worktree path was recreated") from exc
+        try:
+            os.fchmod(descriptor, 0o600)
+            stat_result = os.fstat(descriptor)
+            reservation_identity = (stat_result.st_dev, stat_result.st_ino)
+        finally:
+            os.close(descriptor)
+        current = os.lstat(target)
+        if (
+            (current.st_dev, current.st_ino) != reservation_identity
+            or not stat.S_ISREG(current.st_mode)
+        ):
+            raise WorktreeLifecycleError(
+                "missing-preserved path reservation changed during creation"
+            )
+        _assert_worktree_path_not_registered(cwd, target)
+        yield
+    finally:
+        release_error: WorktreeLifecycleError | None = None
+        if reservation_identity is not None:
+            try:
+                current = os.lstat(target)
+                if (
+                    (current.st_dev, current.st_ino) != reservation_identity
+                    or not stat.S_ISREG(current.st_mode)
+                ):
+                    raise WorktreeLifecycleError(
+                        "missing-preserved path reservation changed before release"
+                    )
+                target.unlink()
+            except (OSError, WorktreeLifecycleError) as exc:
+                release_error = WorktreeLifecycleError(
+                    "missing-preserved path reservation could not be released"
+                )
+                release_error.__cause__ = exc
+        for created_parent in reversed(created_parents):
+            try:
+                created_parent.rmdir()
+            except OSError:
+                pass
+        if release_error is not None:
+            raise release_error
+
+
 def load_lifecycle_records(
     cwd: Path,
     *,
@@ -581,7 +710,14 @@ def _validate_authority_record(key: str, record: object) -> dict[str, object]:
         or not owner.strip()
         or not _valid_generation(record.get("generation"))
         or status
-        not in {"active", "released", "complete", "removal_pending", "removed"}
+        not in {
+            "active",
+            "released",
+            "complete",
+            "removal_pending",
+            "removed",
+            "missing_preserved",
+        }
         or not _valid_authority_timestamp(registered_at)
         or not _valid_authority_timestamp(heartbeat_at)
         or not _valid_authority_timestamp(expires_at)
@@ -602,6 +738,25 @@ def _validate_authority_record(key: str, record: object) -> dict[str, object]:
             raise WorktreeLifecycleError("worktree lifecycle record is invalid")
     if status == "removed" and not _valid_authority_timestamp(record.get("removed_at")):
         raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+    if status == "missing_preserved" and (
+        not _valid_authority_timestamp(record.get("missing_preserved_at"))
+        or record["missing_preserved_at"] < expires_at
+        or record.get("missing_preserved_by") != owner
+        or record.get("missing_preserved_disposition") != "retain-branch"
+        or not isinstance(record.get("missing_preserved_branch_head"), str)
+        or not re.fullmatch(r"[0-9a-f]{40,64}", record["missing_preserved_branch_head"])
+        or any(
+            name in record
+            for name in (
+                "removed_at",
+                "removal_pending_at",
+                "removal_pending_from_status",
+                "released_at",
+                "complete_at",
+            )
+        )
+    ):
+        raise WorktreeLifecycleError("worktree lifecycle record is invalid")
     prior = record.get("prior_bindings", [])
     if not isinstance(prior, list) or len(prior) > MAX_PRIOR_BINDINGS:
         raise WorktreeLifecycleError("worktree lifecycle record is invalid")
@@ -619,6 +774,62 @@ def _validate_authority_record(key: str, record: object) -> dict[str, object]:
             raise WorktreeLifecycleError("worktree lifecycle record is invalid")
         prior_branches.add(binding["branch"])
     return dict(record)
+
+
+def _live_worktree_entries(cwd: Path) -> list[dict[str, str]]:
+    entries = git_hygiene._parse_worktrees(
+        git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
+    )
+    if not entries or any(
+        not isinstance(entry.get("worktree"), str)
+        or not Path(entry["worktree"]).is_absolute()
+        or (
+            "bare" not in entry
+            and (
+                not re.fullmatch(r"[0-9a-f]{40,64}", entry.get("HEAD", ""))
+                or not (
+                    "detached" in entry
+                    or entry.get("branch", "").startswith("refs/heads/")
+                )
+            )
+        )
+        for entry in entries
+    ):
+        raise WorktreeLifecycleError("git worktree census is invalid")
+    return entries
+
+
+def _validate_missing_preserved_binding(
+    cwd: Path,
+    key: str,
+    record: object,
+    *,
+    live_entries: list[dict[str, str]] | None = None,
+) -> dict[str, object]:
+    """Validate a terminal preservation record while its checkout stays absent."""
+
+    validated = _validate_authority_record(key, record)
+    if validated.get("status") != "missing_preserved":
+        return validated
+    canonical = _canonical(Path(key))
+    if str(canonical) != key or os.path.lexists(key):
+        raise WorktreeLifecycleError("missing-preserved lifecycle path was recreated")
+    entries = live_entries if live_entries is not None else _live_worktree_entries(cwd)
+    if any(
+        isinstance(entry.get("worktree"), str)
+        and _same_worktree_path_identity(entry["worktree"], canonical)
+        for entry in entries
+    ):
+        raise WorktreeLifecycleError("missing-preserved Git worktree was recreated")
+    branch = validated.get("branch")
+    if not isinstance(branch, str):
+        raise WorktreeLifecycleError("missing-preserved lifecycle record is invalid")
+    head = git_hygiene.run_git(
+        ["rev-parse", "--verify", f"refs/heads/{branch}"], cwd
+    )
+    if not re.fullmatch(r"[0-9a-f]{40,64}", head):
+        raise WorktreeLifecycleError("missing-preserved branch ref is unavailable")
+    return validated
 
 
 def _select_authority_records(
@@ -732,9 +943,19 @@ def load_lifecycle_authority(
         raise WorktreeLifecycleError("worktree lifecycle generation is unavailable")
     for key, record in bound.items():
         entry = live_by_path.get(key)
+        if record.get("status") == "missing_preserved":
+            _validate_missing_preserved_binding(
+                cwd,
+                key,
+                record,
+                live_entries=live_entries,
+            )
+            if entry is not None:
+                raise WorktreeLifecycleError("preserved lifecycle path is live")
+            continue
         if record.get("status") == "removed":
             if entry is not None:
-                raise WorktreeLifecycleError("removed lifecycle path is live")
+                raise WorktreeLifecycleError("preserved lifecycle path is live")
             continue
         if (
             entry is None
@@ -804,9 +1025,19 @@ def _lifecycle_authority_under_registry_lock(
         raise WorktreeLifecycleError("worktree lifecycle generation is unavailable")
     for key, record in bound.items():
         entry = live_by_path.get(key)
+        if record.get("status") == "missing_preserved":
+            _validate_missing_preserved_binding(
+                cwd,
+                key,
+                record,
+                live_entries=live_entries,
+            )
+            if entry is not None:
+                raise WorktreeLifecycleError("preserved lifecycle path is live")
+            continue
         if record.get("status") == "removed":
             if entry is not None:
-                raise WorktreeLifecycleError("removed lifecycle path is live")
+                raise WorktreeLifecycleError("preserved lifecycle path is live")
             continue
         if (
             entry is None
@@ -862,6 +1093,30 @@ def _assert_registration_available(
     )
     if active_for_other_owner:
         raise WorktreeLifecycleError("worktree has an active lifecycle owner")
+    if record is not None and record.get("status") == "missing_preserved":
+        raise WorktreeLifecycleError(
+            "missing-preserved worktree path cannot be reused"
+        )
+
+
+def _assert_no_missing_preserved_path_alias(
+    worktrees: dict[str, Any], requested: Path
+) -> None:
+    """Reject case/normalisation aliases of terminally preserved paths."""
+
+    requested_identities = git_hygiene._path_identities(str(requested))
+    for key, record in worktrees.items():
+        if not isinstance(record, dict) or record.get("status") != "missing_preserved":
+            continue
+        recorded_path = record.get("path")
+        if not isinstance(key, str) or not isinstance(recorded_path, str):
+            raise WorktreeLifecycleError("missing-preserved lifecycle record is invalid")
+        preserved_identities = git_hygiene._path_identities(key)
+        preserved_identities |= git_hygiene._path_identities(recorded_path)
+        if requested_identities & preserved_identities:
+            raise WorktreeLifecycleError(
+                "missing-preserved worktree path cannot be reused"
+            )
 
 
 def _lifecycle_update_snapshot(
@@ -905,6 +1160,9 @@ def register_worktree(
     requested = _canonical(worktree)
     with _registry_lock(path):
         initial_payload = _read_registry(path)
+        _assert_no_missing_preserved_path_alias(
+            initial_payload["worktrees"], requested
+        )
         initial = initial_payload["worktrees"].get(str(requested))
         initial_record = dict(initial) if isinstance(initial, dict) else None
         _assert_registration_available(initial_record, owner=owner, now=timestamp)
@@ -918,6 +1176,7 @@ def register_worktree(
     generation = _worktree_generation(cwd, canonical, create=True)
     with _locked_registry(path) as payload:
         worktrees = payload["worktrees"]
+        _assert_no_missing_preserved_path_alias(worktrees, canonical)
         existing = worktrees.get(str(canonical))
         current_record = dict(existing) if isinstance(existing, dict) else None
         _assert_registration_available(current_record, owner=owner, now=timestamp)
@@ -1035,6 +1294,118 @@ def _finish_worktree(
         record[f"{status}_at"] = timestamp
         record["expires_at"] = timestamp
         return dict(record)
+
+
+def preserve_missing_worktree(
+    cwd: Path,
+    *,
+    worktree: Path,
+    branch: str,
+    generation: str,
+    owner: str,
+    disposition: str,
+    registry_path: Path | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Record an explicit branch-preserving disposition for one lost checkout."""
+
+    if (
+        not owner
+        or owner != owner.strip()
+        or not branch
+        or branch != branch.strip()
+        or not _valid_generation(generation)
+        or disposition != "retain-branch"
+    ):
+        raise WorktreeLifecycleError("exact missing-worktree disposition is required")
+    if git_hygiene.run_git_result(
+        ["check-ref-format", f"refs/heads/{branch}"], cwd
+    ).returncode != 0:
+        raise WorktreeLifecycleError("missing-worktree branch identity is invalid")
+
+    registry = _canonical(registry_path or _default_registry_path(cwd))
+    requested = _canonical(worktree)
+    key = str(requested)
+    with _registry_lock(registry):
+        payload = _read_registry(registry)
+        value = payload["worktrees"].get(key)
+        snapshot = dict(value) if isinstance(value, dict) else None
+        if snapshot is None:
+            raise WorktreeLifecycleError("matching lifecycle registration is required")
+        validated = _validate_authority_record(key, snapshot)
+        if (
+            validated.get("owner") != owner
+            or validated.get("branch") != branch
+            or validated.get("generation") != generation
+        ):
+            raise WorktreeLifecycleError("missing-worktree lifecycle identity changed")
+        if validated.get("status") == "missing_preserved":
+            if validated.get("missing_preserved_disposition") != disposition:
+                raise WorktreeLifecycleError("missing-worktree disposition changed")
+            return dict(
+                _validate_missing_preserved_binding(cwd, key, validated)
+            )
+        if validated.get("status") != "active":
+            raise WorktreeLifecycleError("expired active lifecycle registration is required")
+
+    initial_now = time.time() if now is None else now
+    if not _valid_authority_timestamp(initial_now):
+        raise WorktreeLifecycleError("missing-worktree disposition time is invalid")
+    if validated.get("expires_at", initial_now + 1) > initial_now:
+        raise WorktreeLifecycleError("active lifecycle registration has not expired")
+    if os.path.lexists(requested):
+        raise WorktreeLifecycleError("missing-worktree path was recreated")
+    _assert_worktree_path_not_registered(cwd, requested)
+    branch_head = git_hygiene.run_git(
+        ["rev-parse", "--verify", f"refs/heads/{branch}"], cwd
+    )
+    if not re.fullmatch(r"[0-9a-f]{40,64}", branch_head):
+        raise WorktreeLifecycleError("missing-worktree branch head is invalid")
+
+    with _registry_lock(registry):
+        payload = _read_registry(registry)
+        current = payload["worktrees"].get(key)
+        if not isinstance(current, dict) or current != snapshot:
+            raise WorktreeLifecycleError("missing-worktree lifecycle authority changed")
+        validated = _validate_authority_record(key, current)
+        final_now = time.time() if now is None else now
+        if not _valid_authority_timestamp(final_now):
+            raise WorktreeLifecycleError("missing-worktree disposition time is invalid")
+        if (
+            validated.get("status") != "active"
+            or validated.get("owner") != owner
+            or validated.get("branch") != branch
+            or validated.get("generation") != generation
+            or validated.get("expires_at", final_now + 1) > final_now
+        ):
+            raise WorktreeLifecycleError("expired active lifecycle registration is required")
+        with _reserve_absent_worktree_path(cwd, requested):
+            current_branch_head = git_hygiene.run_git(
+                ["rev-parse", "--verify", f"refs/heads/{branch}"], cwd
+            )
+            if current_branch_head != branch_head:
+                raise WorktreeLifecycleError("missing-worktree branch head changed")
+            updated = dict(current)
+            updated["status"] = "missing_preserved"
+            updated["missing_preserved_at"] = final_now
+            updated["missing_preserved_by"] = owner
+            updated["missing_preserved_disposition"] = disposition
+            updated["missing_preserved_branch_head"] = branch_head
+            payload["worktrees"][key] = updated
+            _write_registry(registry, payload)
+            readback = _read_registry(registry)["worktrees"].get(key)
+            if readback != updated:
+                raise WorktreeLifecycleError(
+                    "missing-worktree disposition readback changed"
+                )
+            final_branch_head = git_hygiene.run_git(
+                ["rev-parse", "--verify", f"refs/heads/{branch}"], cwd
+            )
+            if final_branch_head != branch_head:
+                raise WorktreeLifecycleError(
+                    "missing-worktree branch head changed during disposition"
+                )
+            return dict(updated)
 
 
 def release_worktree(
@@ -1215,6 +1586,16 @@ def main(argv: list[str] | None = None) -> int:
         operation = subparsers.add_parser(command)
         operation.add_argument("--worktree", required=True)
         operation.add_argument("--owner", required=True)
+    operation = subparsers.add_parser("preserve-missing")
+    operation.add_argument("--worktree", required=True)
+    operation.add_argument("--branch", required=True)
+    operation.add_argument("--generation", required=True)
+    operation.add_argument("--owner", required=True)
+    operation.add_argument(
+        "--disposition",
+        choices=("retain-branch",),
+        required=True,
+    )
     for command in ("report", "janitor"):
         operation = subparsers.add_parser(command)
         operation.add_argument("--mode", choices=("report", "apply"), default="report")
@@ -1260,6 +1641,16 @@ def main(argv: list[str] | None = None) -> int:
                 cwd,
                 worktree=Path(args.worktree),
                 owner=args.owner,
+                registry_path=registry_path,
+            )
+        elif args.command == "preserve-missing":
+            result = preserve_missing_worktree(
+                cwd,
+                worktree=Path(args.worktree),
+                branch=args.branch,
+                generation=args.generation,
+                owner=args.owner,
+                disposition=args.disposition,
                 registry_path=registry_path,
             )
         else:

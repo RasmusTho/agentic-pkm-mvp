@@ -160,6 +160,7 @@ class DevPageState:
     resurface_scarce_count: int | None = None
     resurface_more_held_back: bool = False
     commitments_surface: dict[str, Any] | None = None
+    calibration_revisit: dict[str, Any] | None = None
     reflection_offer: dict[str, Any] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
     suggested_insertions: list[dict[str, Any]] | None = None
@@ -332,6 +333,9 @@ class RealNoteWorkspaceDevPage:
             commitments_payload = raw.get("commitments")
         else:
             commitments_payload = None
+        calibration_revisit_payload = raw.get("calibration_revisit")
+        if not isinstance(calibration_revisit_payload, dict):
+            calibration_revisit_payload = None
         vault_browser_identity = vault_browser.get("vault_identity") or {}
 
         # The runtime echoes artifact_id only when supplied in the request.
@@ -525,6 +529,7 @@ class RealNoteWorkspaceDevPage:
             resurface_scarce_count=_resurface_scarce_count_from_payload(resurface_payload),
             resurface_more_held_back=_resurface_more_held_back_from_payload(resurface_payload),
             commitments_surface=_commitment_surface_from_payload(commitments_payload),
+            calibration_revisit=calibration_revisit_payload,
             reflection_offer=(
                 dict(raw["reflection_offer"])
                 if isinstance(raw.get("reflection_offer"), dict)
@@ -1048,6 +1053,7 @@ class RealNoteWorkspaceDevPage:
             "resurface_scarce_count": self.state.resurface_scarce_count,
             "resurface_more_held_back": self.state.resurface_more_held_back,
             "commitments_surface": self.state.commitments_surface,
+            "calibration_revisit": self.state.calibration_revisit,
             "reflection_offer": self.state.reflection_offer,
             "suggestion_cards": self.state.suggestion_cards or [],
             "suggested_insertions": self.state.suggested_insertions or [],

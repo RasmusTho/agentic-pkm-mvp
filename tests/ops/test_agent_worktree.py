@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import subprocess
 import threading
@@ -192,6 +193,16 @@ def _active_lifecycle_repo(tmp_path: Path):
         now=10,
     )
     return repo, worktree, registry
+
+
+def _lost_active_lifecycle_repo(tmp_path: Path):
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    record = agent_worktree.load_lifecycle_records(
+        repo, registry_path=registry
+    )[str(worktree.resolve())]
+    subprocess.run(["git", "worktree", "remove", str(worktree)], cwd=repo, check=True)
+    assert not os.path.lexists(worktree)
+    return repo, worktree, registry, record
 
 
 def test_load_lifecycle_authority_rejects_missing_or_corrupt_registry(tmp_path) -> None:
@@ -2434,6 +2445,594 @@ def test_janitor_restart_preserves_ordinary_missing_registration(
     )[str(worktree.resolve())]
     assert record["status"] == status
     assert registry_path.read_bytes() == original
+
+
+def test_preserve_missing_worktree_keeps_exact_identity_and_sibling(tmp_path) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    sibling = tmp_path / "sibling"
+    sibling_branch = "codex/sibling"
+    subprocess.run(["git", "branch", sibling_branch], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "worktree", "add", str(sibling), sibling_branch],
+        cwd=repo,
+        check=True,
+    )
+    sibling_record = agent_worktree.register_worktree(
+        repo,
+        worktree=sibling,
+        owner="sibling-owner",
+        registry_path=registry,
+        now=10,
+    )
+    sibling_head = git_hygiene.run_git(["rev-parse", sibling_branch], repo)
+    lost_branch_head = git_hygiene.run_git(["rev-parse", "codex/authority"], repo)
+
+    result = agent_worktree.preserve_missing_worktree(
+        repo,
+        worktree=worktree,
+        branch="codex/authority",
+        generation=original["generation"],
+        owner="authority-owner",
+        disposition="retain-branch",
+        registry_path=registry,
+        now=20_000,
+    )
+
+    assert result["status"] == "missing_preserved"
+    assert result["generation"] == original["generation"]
+    assert result["branch"] == original["branch"]
+    assert result["owner"] == original["owner"]
+    assert result["registered_at"] == original["registered_at"]
+    assert result["heartbeat_at"] == original["heartbeat_at"]
+    assert result["expires_at"] == original["expires_at"]
+    assert result["missing_preserved_by"] == "authority-owner"
+    assert result["missing_preserved_disposition"] == "retain-branch"
+    assert result["missing_preserved_branch_head"] == lost_branch_head
+    assert "removed_at" not in result
+    assert "removal_pending_at" not in result
+    assert not os.path.lexists(worktree)
+    records = agent_worktree.load_lifecycle_records(repo, registry_path=registry)
+    assert records[str(sibling.resolve())] == sibling_record
+    assert git_hygiene.run_git(["rev-parse", "codex/authority"], repo) == lost_branch_head
+    assert git_hygiene.run_git(["rev-parse", sibling_branch], repo) == sibling_head
+    authority = agent_worktree.load_lifecycle_authority(
+        repo,
+        candidate_branch="codex/authority",
+        registry_path=registry,
+    )
+    assert authority[str(worktree.resolve())]["status"] == "missing_preserved"
+
+    before_retry = registry.read_bytes()
+    assert agent_worktree.preserve_missing_worktree(
+        repo,
+        worktree=worktree,
+        branch="codex/authority",
+        generation=original["generation"],
+        owner="authority-owner",
+        disposition="retain-branch",
+        registry_path=registry,
+        now=30_000,
+    ) == result
+    assert registry.read_bytes() == before_retry
+
+
+def test_preserve_missing_worktree_reserves_path_during_registry_write(
+    tmp_path, monkeypatch
+) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    replacement_branch = "codex/replacement"
+    subprocess.run(["git", "branch", replacement_branch], cwd=repo, check=True)
+    write_registry = agent_worktree._write_registry
+    add_results: list[subprocess.CompletedProcess[str]] = []
+
+    def write_with_racing_add(path, payload):
+        record = payload["worktrees"].get(str(worktree.resolve()))
+        if isinstance(record, dict) and record.get("status") == "missing_preserved":
+            assert worktree.is_file()
+            add_results.append(
+                subprocess.run(
+                    ["git", "worktree", "add", str(worktree), replacement_branch],
+                    cwd=repo,
+                    capture_output=True,
+                    text=True,
+                )
+            )
+        write_registry(path, payload)
+
+    monkeypatch.setattr(agent_worktree, "_write_registry", write_with_racing_add)
+    agent_worktree.preserve_missing_worktree(
+        repo,
+        worktree=worktree,
+        branch="codex/authority",
+        generation=original["generation"],
+        owner="authority-owner",
+        disposition="retain-branch",
+        registry_path=registry,
+        now=20_000,
+    )
+
+    assert len(add_results) == 1
+    assert add_results[0].returncode != 0
+    assert not os.path.lexists(worktree)
+    assert git_hygiene.run_git(["rev-parse", replacement_branch], repo)
+
+
+def test_preserve_missing_worktree_blocks_stale_git_path_preflight(
+    tmp_path, monkeypatch
+) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    write_registry = agent_worktree._write_registry
+    checked_absent = threading.Event()
+    attempt_mkdir = threading.Event()
+    mkdir_results: list[str] = []
+    stale_git_thread: threading.Thread | None = None
+    assert_path_not_registered = agent_worktree._assert_worktree_path_not_registered
+
+    def stale_git_add_after_path_preflight() -> None:
+        assert not os.path.lexists(worktree)
+        checked_absent.set()
+        assert attempt_mkdir.wait(2)
+        try:
+            # Git reuses an empty directory if it appears after its initial
+            # path check; the reservation must make this exact step fail.
+            worktree.mkdir(exist_ok=True)
+        except FileExistsError:
+            mkdir_results.append("blocked by exclusive reservation file")
+        else:
+            mkdir_results.append("unexpectedly created target directory")
+
+    def start_stale_git_add_after_preflight(cwd, target, *, live_entries=None):
+        nonlocal stale_git_thread
+        result = assert_path_not_registered(
+            cwd, target, live_entries=live_entries
+        )
+        if stale_git_thread is None:
+            stale_git_thread = threading.Thread(
+                target=stale_git_add_after_path_preflight
+            )
+            stale_git_thread.start()
+            assert checked_absent.wait(2)
+        return result
+
+    def write_registry_while_stale_add_runs(path, payload):
+        record = payload["worktrees"].get(str(worktree.resolve()))
+        if isinstance(record, dict) and record.get("status") == "missing_preserved":
+            assert worktree.is_file()
+            attempt_mkdir.set()
+            assert stale_git_thread is not None
+            stale_git_thread.join(2)
+            assert not stale_git_thread.is_alive()
+            assert mkdir_results == ["blocked by exclusive reservation file"]
+        write_registry(path, payload)
+
+    monkeypatch.setattr(
+        agent_worktree,
+        "_assert_worktree_path_not_registered",
+        start_stale_git_add_after_preflight,
+    )
+    monkeypatch.setattr(
+        agent_worktree, "_write_registry", write_registry_while_stale_add_runs
+    )
+    agent_worktree.preserve_missing_worktree(
+        repo,
+        worktree=worktree,
+        branch="codex/authority",
+        generation=original["generation"],
+        owner="authority-owner",
+        disposition="retain-branch",
+        registry_path=registry,
+        now=20_000,
+    )
+
+    assert mkdir_results == ["blocked by exclusive reservation file"]
+    assert not os.path.lexists(worktree)
+
+
+def test_preserve_missing_worktree_rechecks_registry_snapshot(
+    tmp_path, monkeypatch
+) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    check_path = agent_worktree._assert_worktree_path_not_registered
+
+    def heartbeat_after_preflight(cwd, target, *, live_entries=None):
+        check_path(cwd, target, live_entries=live_entries)
+        payload = agent_worktree._read_registry(registry)
+        record = payload["worktrees"][str(worktree.resolve())]
+        record["heartbeat_at"] += 1
+        record["expires_at"] += 1
+        agent_worktree._write_registry(registry, payload)
+
+    monkeypatch.setattr(
+        agent_worktree,
+        "_assert_worktree_path_not_registered",
+        heartbeat_after_preflight,
+    )
+    with pytest.raises(
+        agent_worktree.WorktreeLifecycleError,
+        match="lifecycle authority changed",
+    ):
+        agent_worktree.preserve_missing_worktree(
+            repo,
+            worktree=worktree,
+            branch="codex/authority",
+            generation=original["generation"],
+            owner="authority-owner",
+            disposition="retain-branch",
+            registry_path=registry,
+            now=20_000,
+        )
+
+    record = agent_worktree.load_lifecycle_records(repo, registry_path=registry)[
+        str(worktree.resolve())
+    ]
+    assert record["status"] == "active"
+    assert record["heartbeat_at"] == original["heartbeat_at"] + 1
+    assert not os.path.lexists(worktree)
+
+
+def test_preserve_missing_worktree_allows_unrelated_lifecycle_update(
+    tmp_path, monkeypatch
+) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    sibling = tmp_path / "sibling"
+    sibling_branch = "codex/sibling"
+    subprocess.run(["git", "branch", sibling_branch], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "worktree", "add", str(sibling), sibling_branch],
+        cwd=repo,
+        check=True,
+    )
+    agent_worktree.register_worktree(
+        repo,
+        worktree=sibling,
+        owner="sibling-owner",
+        registry_path=registry,
+        now=10,
+    )
+    entered_preflight = threading.Event()
+    continue_preflight = threading.Event()
+    errors: list[BaseException] = []
+    check_path = agent_worktree._assert_worktree_path_not_registered
+
+    def block_target_preflight(cwd, target, *, live_entries=None):
+        if target == worktree.resolve():
+            entered_preflight.set()
+            if not continue_preflight.wait(5):
+                raise AssertionError("preflight was not released")
+        return check_path(cwd, target, live_entries=live_entries)
+
+    monkeypatch.setattr(
+        agent_worktree,
+        "_assert_worktree_path_not_registered",
+        block_target_preflight,
+    )
+
+    def preserve() -> None:
+        try:
+            agent_worktree.preserve_missing_worktree(
+                repo,
+                worktree=worktree,
+                branch="codex/authority",
+                generation=original["generation"],
+                owner="authority-owner",
+                disposition="retain-branch",
+                registry_path=registry,
+                now=20_000,
+            )
+        except BaseException as exc:  # surfaced below
+            errors.append(exc)
+
+    worker = threading.Thread(target=preserve)
+    worker.start()
+    assert entered_preflight.wait(2)
+    sibling_record = agent_worktree.heartbeat_worktree(
+        repo,
+        worktree=sibling,
+        owner="sibling-owner",
+        registry_path=registry,
+        now=20,
+    )
+    continue_preflight.set()
+    worker.join(5)
+
+    assert not worker.is_alive()
+    assert errors == []
+    records = agent_worktree.load_lifecycle_records(repo, registry_path=registry)
+    assert records[str(sibling.resolve())] == sibling_record
+    assert records[str(worktree.resolve())]["status"] == "missing_preserved"
+
+
+def test_preserve_missing_worktree_rejects_git_registered_missing_path(
+    tmp_path, monkeypatch
+) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    original_run_git = git_hygiene.run_git
+    root_head = git_hygiene.run_git(["rev-parse", "HEAD"], repo)
+
+    def report_prunable_path(args, cwd):
+        if args == ["worktree", "list", "--porcelain"]:
+            return (
+                f"worktree {repo}\nHEAD {root_head}\nbranch refs/heads/main\n\n"
+                f"worktree {worktree}\nHEAD {root_head}\n"
+                "branch refs/heads/codex/authority\nprunable stale gitdir\n\n"
+            )
+        return original_run_git(args, cwd)
+
+    monkeypatch.setattr(git_hygiene, "run_git", report_prunable_path)
+    before = registry.read_bytes()
+
+    with pytest.raises(
+        agent_worktree.WorktreeLifecycleError,
+        match="still registered with Git",
+    ):
+        agent_worktree.preserve_missing_worktree(
+            repo,
+            worktree=worktree,
+            branch="codex/authority",
+            generation=original["generation"],
+            owner="authority-owner",
+            disposition="retain-branch",
+            registry_path=registry,
+            now=20_000,
+        )
+
+    assert registry.read_bytes() == before
+    assert not os.path.lexists(worktree)
+
+
+def test_preserve_missing_worktree_rejects_casefold_git_path_alias(tmp_path) -> None:
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    original = agent_worktree.load_lifecycle_records(
+        repo, registry_path=registry
+    )[str(worktree.resolve())]
+    intermediate = worktree.with_name("intermediate")
+    alias = worktree.with_name(worktree.name.swapcase())
+    subprocess.run(
+        ["git", "worktree", "move", str(worktree), str(intermediate)],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "worktree", "move", str(intermediate), str(alias)],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    shutil.rmtree(alias)
+    before = registry.read_bytes()
+
+    with pytest.raises(
+        agent_worktree.WorktreeLifecycleError,
+        match="still registered with Git",
+    ):
+        agent_worktree.preserve_missing_worktree(
+            repo,
+            worktree=worktree,
+            branch="codex/authority",
+            generation=original["generation"],
+            owner="authority-owner",
+            disposition="retain-branch",
+            registry_path=registry,
+            now=20_000,
+        )
+
+    assert registry.read_bytes() == before
+
+
+def test_preserve_missing_worktree_rejects_invalid_git_census(
+    tmp_path, monkeypatch
+) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    original_run_git = git_hygiene.run_git
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git",
+        lambda args, cwd: (
+            "not-a-worktree-record\n"
+            if args == ["worktree", "list", "--porcelain"]
+            else original_run_git(args, cwd)
+        ),
+    )
+    before = registry.read_bytes()
+
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="census is invalid"):
+        agent_worktree.preserve_missing_worktree(
+            repo,
+            worktree=worktree,
+            branch="codex/authority",
+            generation=original["generation"],
+            owner="authority-owner",
+            disposition="retain-branch",
+            registry_path=registry,
+            now=20_000,
+        )
+
+    assert registry.read_bytes() == before
+    assert not os.path.lexists(worktree)
+
+
+@pytest.mark.parametrize(
+    ("selector", "error"),
+    (
+        ("owner", "identity changed"),
+        ("branch", "identity changed"),
+        ("generation", "identity changed"),
+        ("unexpired", "has not expired"),
+        ("malformed", "record is invalid"),
+    ),
+)
+def test_preserve_missing_worktree_requires_exact_expired_authority(
+    tmp_path, selector, error
+) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    kwargs = {
+        "worktree": worktree,
+        "branch": "codex/authority",
+        "generation": original["generation"],
+        "owner": "authority-owner",
+        "disposition": "retain-branch",
+        "registry_path": registry,
+        "now": 20_000,
+    }
+    if selector == "owner":
+        kwargs["owner"] = "different-owner"
+    elif selector == "branch":
+        kwargs["branch"] = "codex/other"
+    elif selector == "generation":
+        kwargs["generation"] = "b" * 32
+    elif selector == "unexpired":
+        kwargs["now"] = 10
+    else:
+        payload = json.loads(registry.read_text(encoding="utf-8"))
+        payload["worktrees"][str(worktree.resolve())]["expires_at"] = True
+        agent_worktree._write_registry(registry, payload)
+    before = registry.read_bytes()
+
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match=error):
+        agent_worktree.preserve_missing_worktree(repo, **kwargs)
+
+    assert registry.read_bytes() == before
+    assert not os.path.lexists(worktree)
+
+
+@pytest.mark.parametrize(
+    "recreated_as", ("directory", "file", "dangling_symlink")
+)
+def test_preserve_missing_worktree_rejects_recreated_path(
+    tmp_path, recreated_as
+) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    if recreated_as == "directory":
+        worktree.mkdir()
+    elif recreated_as == "file":
+        worktree.write_text("not a worktree", encoding="utf-8")
+    else:
+        worktree.symlink_to(tmp_path / "dangling-target")
+    before = registry.read_bytes()
+
+    with pytest.raises(agent_worktree.WorktreeLifecycleError):
+        agent_worktree.preserve_missing_worktree(
+            repo,
+            worktree=worktree,
+            branch="codex/authority",
+            generation=original["generation"],
+            owner="authority-owner",
+            disposition="retain-branch",
+            registry_path=registry,
+            now=20_000,
+        )
+
+    assert registry.read_bytes() == before
+
+
+def test_missing_preserved_authority_rejects_recreation_and_registration(
+    tmp_path,
+) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    agent_worktree.preserve_missing_worktree(
+        repo,
+        worktree=worktree,
+        branch="codex/authority",
+        generation=original["generation"],
+        owner="authority-owner",
+        disposition="retain-branch",
+        registry_path=registry,
+        now=20_000,
+    )
+    replacement_branch = "codex/replacement"
+    subprocess.run(
+        ["git", "worktree", "add", "-b", replacement_branch, str(worktree)],
+        cwd=repo,
+        check=True,
+    )
+    before = registry.read_bytes()
+
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="recreated"):
+        agent_worktree.load_lifecycle_authority(
+            repo,
+            candidate_branch="codex/authority",
+            registry_path=registry,
+        )
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="cannot be reused"):
+        agent_worktree.register_worktree(
+            repo,
+            worktree=worktree,
+            owner="authority-owner",
+            registry_path=registry,
+        )
+
+    assert registry.read_bytes() == before
+
+
+def test_register_rejects_casefold_alias_of_missing_preserved_path(tmp_path) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    agent_worktree.preserve_missing_worktree(
+        repo,
+        worktree=worktree,
+        branch="codex/authority",
+        generation=original["generation"],
+        owner="authority-owner",
+        disposition="retain-branch",
+        registry_path=registry,
+        now=20_000,
+    )
+    alias = worktree.with_name(worktree.name.swapcase())
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "codex/alias", str(alias)],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    before = registry.read_bytes()
+
+    with pytest.raises(
+        agent_worktree.WorktreeLifecycleError,
+        match="missing-preserved worktree path cannot be reused",
+    ):
+        agent_worktree.register_worktree(
+            repo,
+            worktree=alias,
+            owner="authority-owner",
+            registry_path=registry,
+            now=21_000,
+        )
+
+    assert registry.read_bytes() == before
+
+
+def test_missing_preserved_authority_rejects_casefold_git_path_alias(
+    tmp_path,
+) -> None:
+    repo, worktree, registry, original = _lost_active_lifecycle_repo(tmp_path)
+    agent_worktree.preserve_missing_worktree(
+        repo,
+        worktree=worktree,
+        branch="codex/authority",
+        generation=original["generation"],
+        owner="authority-owner",
+        disposition="retain-branch",
+        registry_path=registry,
+        now=20_000,
+    )
+    record = agent_worktree.load_lifecycle_records(
+        repo, registry_path=registry
+    )[str(worktree.resolve())]
+    alias = worktree.with_name(worktree.name.swapcase())
+
+    with pytest.raises(
+        agent_worktree.WorktreeLifecycleError,
+        match="missing-preserved Git worktree was recreated",
+    ):
+        agent_worktree._validate_missing_preserved_binding(
+            repo,
+            str(worktree.resolve()),
+            record,
+            live_entries=[{"worktree": str(alias)}],
+        )
 
 
 @pytest.mark.parametrize(
