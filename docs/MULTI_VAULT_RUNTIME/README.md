@@ -295,6 +295,11 @@ Native begin cannot adopt an ordinary claim or change an existing claim's origin
 A released window's validated private census is retired under admission only when every safety
 record and canonical proof is absent; current-window census/proof nonce or context damage refuses
 instead of being treated as prior evidence.
+After exact interrupted cleanup completes, native begin revalidates the original context and
+re-evaluates fresh admission under the same lock before a new nonce or blocker is published.
+It rechecks the original context after retirement's fsync as well. Once native mode is established,
+expected private-input or durability errors produce a fixed redacted refusal, retaining pending
+evidence; ordinary CLI error behavior is unchanged.
 Preparation remains `inactive_fenced`. Source support and synthetic fixture proof are
 not live TEST repair or activation: a future invocation still needs the separately attributable
 operator acknowledgement, qualified native execution, and existing downstream activation gates.

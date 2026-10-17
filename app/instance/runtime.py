@@ -2425,6 +2425,9 @@ def _begin_instance_state_deployment(
                 _complete_instance_state_deployment_cleanup(ownership_root)
                 existing_lease = None
                 root_authority = None
+                if native_execution_context is not None:
+                    require_test_native_context(native_execution_context)
+                    require_native_begin_context(ownership_root, native_execution_context, retire_inventory=True)
             elif (
                 root_authority is not None
                 and root_authority.get("schema")
@@ -2463,6 +2466,9 @@ def _begin_instance_state_deployment(
                 _complete_instance_state_deployment_cleanup(ownership_root)
                 root_authority = None
                 compatibility_resume = False
+                if native_execution_context is not None:
+                    require_test_native_context(native_execution_context)
+                    require_native_begin_context(ownership_root, native_execution_context, retire_inventory=True)
             elif (
                 root_authority.get("phase") != "claimed"
                 or root_authority.get("channel_id") != channel
@@ -2745,7 +2751,9 @@ def _prove_instance_state_quiescence(
     *, channel: str, host_global_root: Path, inventory_path: Path
 ) -> DeploymentQuiescenceProof:
     # Serialize from the first safety read through the last publication write.
-    with _deployment_admission_locked(host_global_root):
+    from app.instance.legacy_owner_recovery import native_operation_refusal
+    with native_operation_refusal(host_global_root) as observe_native, _deployment_admission_locked(host_global_root):
+        observe_native()
         _require_completed_dormant_ownership_preparation(host_global_root)
         return _prove_instance_state_quiescence_locked(
             channel=channel, host_global_root=host_global_root, inventory_path=inventory_path,
@@ -3892,7 +3900,9 @@ def _release_instance_state_deployment_lease(
 
     ownership_root = _assert_mount_root(host_global_root, "host-global")
     controller = {"pid": controller_pid, "start_token": controller_start_token}
-    with _deployment_admission_locked(ownership_root):
+    from app.instance.legacy_owner_recovery import native_operation_refusal
+    with native_operation_refusal(ownership_root) as observe_native, _deployment_admission_locked(ownership_root):
+        observe_native()
         _require_completed_dormant_ownership_preparation(ownership_root)
         lease_path = _deployment_lease_path(ownership_root)
         if not lease_path.exists():
@@ -5807,14 +5817,17 @@ def _main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "deployment-release":
+        from app.instance.legacy_owner_recovery import native_operation_refusal
+        with native_operation_refusal(args.host_global_root):
+            release_result = _release_instance_state_deployment_lease(
+                channel=args.channel,
+                host_global_root=args.host_global_root,
+                controller_pid=args.controller_pid,
+                controller_start_token=args.controller_start_token,
+            )
         print(
             json.dumps(
-                _release_instance_state_deployment_lease(
-                    channel=args.channel,
-                    host_global_root=args.host_global_root,
-                    controller_pid=args.controller_pid,
-                    controller_start_token=args.controller_start_token,
-                ),
+                release_result,
                 sort_keys=True,
             )
         )
@@ -5843,9 +5856,11 @@ def _main(argv: list[str] | None = None) -> int:
         print(json.dumps(receipt, sort_keys=True))
         return 0
     if args.command == "deployment-prove":
-        proof = _prove_instance_state_quiescence(
-            channel=args.channel, host_global_root=args.host_global_root, inventory_path=args.inventory_path
-        )
+        from app.instance.legacy_owner_recovery import native_operation_refusal
+        with native_operation_refusal(args.host_global_root):
+            proof = _prove_instance_state_quiescence(
+                channel=args.channel, host_global_root=args.host_global_root, inventory_path=args.inventory_path
+            )
         if proof.native_execution_context is not None:
             print(json.dumps({"channel": "test", "proved": True, "activation": "inactive_fenced",
                 "inventory_digest": proof.inventory_digest}, sort_keys=True))

@@ -608,7 +608,14 @@ def test_operation_specific_evidence_is_not_a_generic_restore(tmp_path):
     'post_stop_stripped_inventory_nonce', 'post_stop_mutated_inventory_nonce',
     'post_stop_stripped_inventory_context_and_nonce', 'orphaned_proof', 'dangling_proof',
     'dangling_foreign_fence', 'root_only_gap_stripped_context', 'retained_fsync_inventory',
-    'post_bind_mutated_proof_nonce'])
+    'post_bind_mutated_proof_nonce', 'cleanup_next_native_begin', 'cleanup_root_only_next_native_begin',
+    'cleanup_source_drift_next_native_begin', 'retirement_source_drift_inventory',
+    'native_error_inventory_malformed', 'native_error_inventory_unsafe', 'native_error_inventory_dangling',
+    'native_error_proof_malformed', 'native_error_proof_unsafe', 'native_error_proof_dangling',
+    'native_error_missing_inventory', 'native_error_prove_barrier', 'native_error_release_barrier',
+    'native_error_helper_barrier', 'native_error_mirror_malformed', 'native_error_admitted_claim_unlock',
+    'ordinary_error_prove', 'ordinary_error_release_barrier',
+    'ordinary_error_helper_barrier'])
 def test_test_preparation_producer_holds_window_until_explicit_initializer(tmp_path, scenario):
     """Real shell -> native qualify/begin/prove/bind/initialize/release.
 
@@ -666,6 +673,10 @@ if len(sys.argv) > 1 and sys.argv[1].endswith('instance_state_writer_inventory.p
         'source_digest': hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(',', ':')).encode()).hexdigest()}
     inventory._legacy_owner_snapshot = lambda *args, **kwargs: snapshot
     inventory._snapshot = lambda **kwargs: {key: [] for key in ('dev', 'native', 'prod', 'test')}
+    if os.environ['SCENARIO'].endswith('helper_barrier'):
+        def failed_inventory_sync(*args):
+            raise OSError('fixture private durability failure '+os.environ['HOST'])
+        inventory.os.fsync = failed_inventory_sync
     result = inventory.main(sys.argv[2:])
     if sys.argv[2] == 'prove-quiescent' and os.environ['SCENARIO'] == 'post_stop_missing_inventory_context':
         output = Path(sys.argv[sys.argv.index('--output')+1])
@@ -677,6 +688,44 @@ if sys.argv[1:3] == ['-m', 'app.instance.runtime']:
     from app.instance import runtime
     from app.instance import legacy_owner_recovery as recovery
     scenario = os.environ['SCENARIO']
+    if sys.argv[3] == 'deployment-release' and scenario == 'native_error_admitted_claim_unlock':
+        from contextlib import contextmanager
+        original_admission = runtime._deployment_admission_locked
+        @contextmanager
+        def claim_before_admission(host):
+            # A legitimate begin wins after CLI presentation selection but
+            # before release acquires admission; no safety-record fabrication.
+            runtime._deployment_admission_locked = original_admission
+            context = recovery.capture_test_native_context(channel='test',
+                source_root=Path(os.environ['FIXTURE_CODE']), expected_revision=os.environ['REVISION'],
+                instance_state_root=Path(os.environ['STATE']), host_global_root=host,
+                controller_pid=os.getppid(), controller_start_token=inventory.controller_token(os.getppid()),
+                runtime_uid=os.geteuid(), runtime_gid=os.getegid(), native_launcher=Path(os.environ['TEST_PY']))
+            runtime._begin_instance_state_deployment(channel='test', instance_state_root=Path(os.environ['STATE']),
+                host_global_root=host, legacy_path=host/'absent-legacy.md', controller_pid=os.getppid(),
+                controller_start_token=inventory.controller_token(os.getppid()), native_execution_context=context)
+            (Path(os.environ['ERROR_DIR'])/'before.json').write_text(json.dumps(runtime._read_deployment_lease(host)))
+            with original_admission(host):
+                yield
+            # Cleanup has durably removed every mirror before lock exit fails.
+            raise OSError('fixture private admission exit failure '+str(host))
+        runtime._deployment_admission_locked = claim_before_admission
+    if (sys.argv[3] == 'deployment-prove' and scenario == 'native_error_prove_barrier'
+            or sys.argv[3] == 'deployment-release' and scenario.endswith('release_barrier')):
+        def failed_runtime_sync(*args):
+            raise OSError('fixture private durability failure '+os.environ['HOST'])
+        if sys.argv[3] == 'deployment-prove':
+            runtime.os.fsync = failed_runtime_sync
+        else:
+            runtime._fsync_directory = failed_runtime_sync
+    if (sys.argv[3] == 'deployment-begin' and scenario == 'cleanup_source_drift_next_native_begin'
+            and Path(os.environ['HOST'], 'cleanup-injected').exists()):
+        original_cleanup = runtime._complete_instance_state_deployment_cleanup
+        def changed_cleanup(*args, **kwargs):
+            result = original_cleanup(*args, **kwargs)
+            (Path(os.environ['FIXTURE_CODE'])/'late.py').write_text('late=True\n')
+            return result
+        runtime._complete_instance_state_deployment_cleanup = changed_cleanup
     if sys.argv[3] == 'deployment-begin' and scenario in {'ordinary_root_only_claimed', 'root_only_crash_retry', 'root_only_gap_stripped_context'}:
         host = Path(os.environ['HOST'])
         if not (host/'root-only-before.json').exists():
@@ -698,7 +747,7 @@ if sys.argv[1:3] == ['-m', 'app.instance.runtime']:
                 (host/'gap-before.json').write_bytes(path.read_bytes())
             runtime.InstanceStateLayout.ensure = changed_setup
     if (sys.argv[3] == 'deployment-begin' and '--native-source-root' in sys.argv
-            and scenario.startswith('retained_')
+            and scenario.startswith(('retained_', 'retirement_'))
             and Path(os.environ['HOST'], 'deployment-quiescence-inventory.json').exists()):
         host = Path(os.environ['HOST'])
         original_sync = recovery._fsync_directory
@@ -710,6 +759,8 @@ if sys.argv[1:3] == ['-m', 'app.instance.runtime']:
                     raise OSError('fixture retirement durability failure')
             original_sync(path)
             (host/'retirement-synced').touch()
+            if scenario == 'retirement_source_drift_inventory':
+                (Path(os.environ['FIXTURE_CODE'])/'late.py').write_text('late=True\n')
         def first_blocker(path, value):
             if Path(path) == host/'deployment-host-global-lease.json':
                 assert not (host/'deployment-quiescence-inventory.json').exists()
@@ -739,11 +790,12 @@ if sys.argv[1:3] == ['-m', 'app.instance.runtime']:
                     Path(os.environ['HOST'], 'injected').touch()
                     raise OSError('fixture crash after reservation')
             runtime._replace_private_json = interrupted
-    if sys.argv[3] == 'deployment-release' and scenario.startswith('cleanup_retry_'):
+    if sys.argv[3] == 'deployment-release' and scenario.startswith('cleanup_'):
         original_sync = runtime._fsync_directory
         host = Path(os.environ['HOST'])
         def interrupted_cleanup(path):
-            if (Path(path) == host and not (host/'deployment-quiescence-proof.json').exists()
+            crash_path = host/'deployment-public' if scenario == 'cleanup_root_only_next_native_begin' else host
+            if (Path(path) == crash_path and not (host/'deployment-quiescence-proof.json').exists()
                     and not (host/'cleanup-injected').exists()):
                 (host/'cleanup-injected').touch()
                 raise OSError('fixture crash after proof unlink')
@@ -756,6 +808,7 @@ os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
     environment = git_env | {'FIXTURE_CODE': str(candidate), 'FIXTURE_CONTENT': str(content),
         'SCENARIO': scenario, 'EVENTS': str(root / 'events'), 'TEST_PY': str(interpreter),
         'STATE': str(state), 'HOST': str(host), 'REVISION': revision,
+        'ERROR_DIR': str(root / 'errors'),
         'PYTHONHOME': sys.base_prefix, 'RESOLVED_PY': str(resolved_interpreter),
         'REGISTRY_SHA': sha(runtime.registry.path), 'BACKUP': str(root / 'backup'),
         'INSTANCE_OWNERSHIP_HOST_STATE_DIR': str(host), 'LOCAL_UID': str(os.geteuid()),
@@ -788,6 +841,44 @@ fake_compose() {
     *) return 89 ;;
   esac
 }
+if [[ "$SCENARIO" = native_error_* || "$SCENARIO" = ordinary_error_* ]]; then
+  token="$("$TEST_PY" "$FIXTURE_CODE/scripts/instance_state_writer_inventory.py" controller-token --pid "$$")"
+  args=()
+  if [[ "$SCENARIO" = native_error_* ]]; then
+    qualified="$("$TEST_PY" -m app.instance.runtime deployment-qualify-native --channel test --source-root "$FIXTURE_CODE" --expected-revision "$REVISION" --instance-state-root "$STATE" --host-global-root "$HOST" --controller-pid "$$" --controller-start-token "$token" --runtime-uid "$LOCAL_UID" --runtime-gid "$LOCAL_GID" --native-launcher "$TEST_PY")"
+    digest="$("$TEST_PY" -c 'import json,sys; print(json.loads(sys.argv[1])["native_context_sha256"])' "$qualified")"
+    args=(--native-source-root "$FIXTURE_CODE" --native-source-revision "$REVISION" --native-launcher "$TEST_PY" --expected-native-context-sha256 "$digest")
+  fi
+  if [ "$SCENARIO" != native_error_admitted_claim_unlock ]; then
+    "$TEST_PY" -m app.instance.runtime deployment-begin --channel test --instance-state-root "$STATE" --host-global-root "$HOST" --legacy-path "$HOST/absent-legacy.md" --controller-pid "$$" --controller-start-token "$token" ${args[@]+"${args[@]}"}
+  fi
+  mkdir "$ERROR_DIR"
+  if [[ "$SCENARIO" != *_missing_inventory && "$SCENARIO" != *_helper_barrier && "$SCENARIO" != native_error_admitted_claim_unlock ]]; then
+    native=()
+    if [[ "$SCENARIO" = native_error_* ]]; then native=(--native-host-global-root "$HOST"); fi
+    "$TEST_PY" "$FIXTURE_CODE/scripts/instance_state_writer_inventory.py" prove-quiescent --controller-pid "$$" --controller-start-token "$token" --output "$HOST/deployment-quiescence-inventory.json" ${native[@]+"${native[@]}"}
+  fi
+  if [ "$SCENARIO" != native_error_admitted_claim_unlock ]; then
+    "$TEST_PY" -c 'import json,os; from pathlib import Path; h=Path(os.environ["HOST"]); s=os.environ["SCENARIO"]; p=h/("deployment-public/deployment-host-global-lease.json" if "_mirror_" in s else "deployment-quiescence-proof.json" if "_proof_" in s else "deployment-quiescence-inventory.json"); v=json.loads((h/"deployment-public/deployment-host-global-lease.json").read_bytes()); (Path(os.environ["ERROR_DIR"])/"before.json").write_text(json.dumps(v)); p.write_text("{protected-fixture") if s.endswith("malformed") or s=="ordinary_error_prove" else None; p.write_text("{}") if "_proof_" in s and not p.exists() else None; p.chmod(0o644) if s.endswith("unsafe") else p.chmod(0o600) if p.exists() else None; p.unlink(missing_ok=True) if s.endswith("dangling") else None; p.symlink_to(h/"protected-missing-target") if s.endswith("dangling") else None'
+  fi
+  commands="prove release helper"
+  case "$SCENARIO" in
+    *_missing_inventory|*_prove_barrier|ordinary_error_prove) commands=prove ;;
+    *_release_barrier|native_error_admitted_claim_unlock) commands=release ;;
+    *_helper_barrier) commands=helper ;;
+  esac
+  for command in $commands; do
+    case "$command" in
+      prove) call=("$TEST_PY" -m app.instance.runtime deployment-prove --channel test --host-global-root "$HOST" --inventory-path "$HOST/deployment-quiescence-inventory.json") ;;
+      release) call=("$TEST_PY" -m app.instance.runtime deployment-release --channel test --host-global-root "$HOST" --controller-pid "$$" --controller-start-token "$token") ;;
+      helper)
+        call=("$TEST_PY" "$FIXTURE_CODE/scripts/instance_state_writer_inventory.py" prove-quiescent --controller-pid "$$" --controller-start-token "$token" --output "$HOST/deployment-quiescence-inventory.json")
+        if [[ "$SCENARIO" = native_error_* ]]; then call+=(--native-host-global-root "$HOST"); fi ;;
+    esac
+    if "${call[@]}" > "$ERROR_DIR/$command.out" 2> "$ERROR_DIR/$command.err"; then exit 99; fi
+  done
+  exit 0
+fi
 if [[ "$SCENARIO" = ordinary*claimed ]]; then
   old_token="$("$TEST_PY" "$FIXTURE_CODE/scripts/instance_state_writer_inventory.py" controller-token --pid "$$")"
   if [ "$SCENARIO" = ordinary_root_only_claimed ]; then
@@ -807,7 +898,13 @@ case "$SCENARIO" in
   dangling_proof) ln -s "$HOST/absent-proof" "$HOST/deployment-quiescence-proof.json" ;;
   dangling_foreign_fence) ln -s "$HOST/absent-fence" "$HOST/deployment-prod-restart-fence.json" ;;
 esac
-if [[ "$SCENARIO" = retained_*_inventory ]]; then
+if [[ "$SCENARIO" = cleanup*next_native_begin ]]; then
+  old_token="$("$TEST_PY" "$FIXTURE_CODE/scripts/instance_state_writer_inventory.py" controller-token --pid "$$")"
+  prepare_test_dormant_ownership_window fake_compose "$FIXTURE_CODE/.env.test" "$TEST_PY" "$REVISION" "$STATE" "$HOST/absent-legacy.md"
+  if "$TEST_PY" -m app.instance.runtime deployment-release --channel test --host-global-root "$HOST" --controller-pid "$$" --controller-start-token "$old_token"; then exit 98; fi
+  "$TEST_PY" -c 'import json,os; from pathlib import Path; h=Path(os.environ["HOST"]); p=h/"deployment-host-global-lease.json"; v=json.loads(p.read_bytes()); assert v["phase"]=="cleanup"; assert not (h/"deployment-quiescence-proof.json").exists(); assert (h/"deployment-public/deployment-host-global-lease.json").exists() == (os.environ["SCENARIO"]!="cleanup_root_only_next_native_begin"); (h/"cleanup-before.json").write_bytes(p.read_bytes())'
+fi
+if [[ "$SCENARIO" = retained_*_inventory || "$SCENARIO" = retirement_*_inventory ]]; then
   old_token="$("$TEST_PY" "$FIXTURE_CODE/scripts/instance_state_writer_inventory.py" controller-token --pid "$$")"
   if [ "$SCENARIO" = retained_native_inventory ]; then
     prepare_test_dormant_ownership_window fake_compose "$FIXTURE_CODE/.env.test" "$TEST_PY" "$REVISION" "$STATE" "$HOST/absent-legacy.md"
@@ -823,6 +920,9 @@ fi
 prepare_test_dormant_ownership_window fake_compose "$FIXTURE_CODE/.env.test" "$TEST_PY" "$REVISION" "$STATE" "${LEGACY_OVERRIDE:-$HOST/absent-legacy.md}"
 if [ "$SCENARIO" = root_only_crash_retry ]; then
   "$TEST_PY" -c 'import json,os; from pathlib import Path; h=Path(os.environ["HOST"]); old=json.loads((h/"root-only-before.json").read_bytes()); new=json.loads((h/"deployment-public/deployment-host-global-lease.json").read_bytes()); assert old["nonce"]==new["nonce"]; assert old["native_execution_context"]==new["native_execution_context"]'
+fi
+if [[ "$SCENARIO" = cleanup*next_native_begin ]]; then
+  "$TEST_PY" -c 'import json,os; from pathlib import Path; h=Path(os.environ["HOST"]); old=json.loads((h/"cleanup-before.json").read_bytes()); new=json.loads((h/"deployment-public/deployment-host-global-lease.json").read_bytes()); i=json.loads((h/"deployment-quiescence-inventory.json").read_bytes()); assert old["nonce"]!=new["nonce"]==i["deployment_nonce"]; assert old["native_execution_context"]==new["native_execution_context"]==i["native_execution_context"]'
 fi
 case "$SCENARIO" in
   post_bind_source) printf 'late = True\n' > "$FIXTURE_CODE/app/instance/late_review_drift.py" ;;
@@ -870,11 +970,58 @@ release_fixture
     events = (root / 'events').read_text()
     assert runtime.registry.path.read_bytes() == registry_before
     assert (content / 'source.md').read_text() == 'untouched synthetic source\n'
-    if scenario not in {'exact', 'cleanup_retry_exact', 'retained_ordinary_inventory', 'retained_native_inventory', 'root_only_crash_retry'}:
+    if scenario.startswith(('native_error_', 'ordinary_error_')):
+        assert result.returncode == 0, result.stdout + result.stderr
+        errors = list((root / 'errors').glob('*.err'))
+        assert errors
+        for error in errors:
+            output = error.read_text() + error.with_suffix('.out').read_text()
+            if scenario.startswith('native_'):
+                assert 'Traceback' not in output
+                assert str(root) not in output
+                assert 'refused' in output
+            else:
+                assert 'Traceback' in output and str(root) in output
+        before = json.loads((root / 'errors' / 'before.json').read_bytes())
+        if scenario == 'native_error_admitted_claim_unlock':
+            assert before['native_execution_context']
+            assert not rt._deployment_lease_path(host).exists()
+            assert not rt._deployment_fence_path(host, 'test').exists()
+            assert not (host / 'deployment-host-global-lease.json').exists()
+            assert not runtime.ledger.key_path.exists() and not runtime.ledger.path.exists()
+            return
+        after = rt._read_legacy_deployment_lease(host) if '_mirror_' in scenario else rt._read_deployment_lease(host)
+        assert after['nonce'] == before['nonce']
+        assert after.get('native_execution_context') == before.get('native_execution_context')
+        assert (host / 'deployment-host-global-lease.json').exists()
+        assert rt._deployment_fence_path(host, 'test').exists() == (not scenario.endswith('release_barrier'))
+        if scenario.startswith('native_error_'):
+            artifact = host / ('deployment-public/deployment-host-global-lease.json' if '_mirror_' in scenario
+                else 'deployment-quiescence-proof.json' if '_proof_' in scenario
+                else 'deployment-quiescence-inventory.json')
+            if scenario.endswith('malformed'):
+                assert artifact.read_text() == '{protected-fixture'
+            elif scenario.endswith('unsafe'):
+                assert artifact.stat().st_mode & 0o777 == 0o644
+            elif scenario.endswith('dangling'):
+                assert artifact.is_symlink() and os.readlink(artifact) == str(host / 'protected-missing-target')
+            elif scenario.endswith('missing_inventory'):
+                assert not os.path.lexists(artifact)
+        assert not runtime.ledger.key_path.exists() and not runtime.ledger.path.exists()
+        return
+    if scenario not in {'exact', 'cleanup_retry_exact', 'retained_ordinary_inventory', 'retained_native_inventory', 'root_only_crash_retry', 'cleanup_next_native_begin', 'cleanup_root_only_next_native_begin'}:
         assert result.returncode != 0
         if scenario == 'native_begin_symlink_loop':
             assert 'Traceback' not in result.stderr
             assert str(root) not in result.stderr + result.stdout
+        if scenario == 'cleanup_source_drift_next_native_begin':
+            assert events.count('compose:stop') == 1
+            assert not rt._deployment_lease_path(host).exists()
+            assert not rt._deployment_fence_path(host, 'test').exists()
+            assert not (host / 'deployment-host-global-lease.json').exists()
+            assert (host / 'deployment-quiescence-inventory.json').exists()
+            assert not runtime.ledger.key_path.exists() and not runtime.ledger.path.exists()
+            return
         if scenario.startswith(('post_', 'fresh_', 'reserved_', 'cleanup_')):
             assert 'compose:stop' in events
             assert rt._deployment_fence_path(host, 'test').exists() or scenario == 'cleanup_retry_drift'
@@ -890,7 +1037,7 @@ release_fixture
                 assert (host / 'deployment-quiescence-inventory.json').read_bytes() == (host / 'inventory-before.json').read_bytes()
         else:
             assert 'compose:stop' not in events
-            if scenario not in {'native_begin_symlink_loop', 'ordinary_claimed', 'ordinary_root_only_claimed', 'orphaned_proof', 'dangling_proof', 'dangling_foreign_fence', 'root_only_gap_stripped_context', 'retained_fsync_inventory'}:
+            if scenario not in {'native_begin_symlink_loop', 'ordinary_claimed', 'ordinary_root_only_claimed', 'orphaned_proof', 'dangling_proof', 'dangling_foreign_fence', 'root_only_gap_stripped_context', 'retained_fsync_inventory', 'retirement_source_drift_inventory'}:
                 assert 'deployment-begin' not in events
             if scenario.startswith('ordinary_'):
                 for before in host.rglob('*.before'):
@@ -900,6 +1047,10 @@ release_fixture
                 assert (host / 'deployment-host-global-lease.json').read_bytes() == (host / 'gap-before.json').read_bytes()
                 assert not rt._deployment_lease_path(host).exists()
             if scenario == 'retained_fsync_inventory':
+                assert not (host / 'deployment-host-global-lease.json').exists()
+                assert not rt._deployment_lease_path(host).exists()
+                assert not rt._deployment_fence_path(host, 'test').exists()
+            if scenario == 'retirement_source_drift_inventory':
                 assert not (host / 'deployment-host-global-lease.json').exists()
                 assert not rt._deployment_lease_path(host).exists()
                 assert not rt._deployment_fence_path(host, 'test').exists()

@@ -2025,12 +2025,15 @@ def main(argv: list[str] | None = None) -> int:
             print(controller_token(args.pid))
             return 0
         if args.command == "prove-quiescent":
-            prove_quiescent(
-                controller_pid=args.controller_pid,
-                controller_start_token=args.controller_start_token,
-                output=args.output,
-                native_host_global_root=args.native_host_global_root,
-            )
+            from app.instance.legacy_owner_recovery import native_operation_refusal
+            with native_operation_refusal(args.native_host_global_root,
+                required=args.native_host_global_root is not None):
+                prove_quiescent(
+                    controller_pid=args.controller_pid,
+                    controller_start_token=args.controller_start_token,
+                    output=args.output,
+                    native_host_global_root=args.native_host_global_root,
+                )
             return 0
         if args.command == "produce-legacy-owners":
             produce_legacy_owners(

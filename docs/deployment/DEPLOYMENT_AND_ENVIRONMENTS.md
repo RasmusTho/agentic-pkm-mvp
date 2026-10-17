@@ -373,6 +373,12 @@ crash retry, and cannot upgrade an ordinary claim. Only a genuinely fresh begin 
 compatibility, restart-fence, pending-reservation and canonical-proof evidence absent may retire a
 validated private prior-window census; its directory is fsynced before the first new blocker.
 Once claimed, missing or changed census/proof nonce or context refuses and preserves safety state.
+If begin completes interrupted cleanup, it revalidates the original context and repeats fresh
+admission/retirement under the same admission lock before creating a new nonce or root blocker.
+The original context is checked again after retirement's fsync. Native prove/release/inventory
+commands normalize expected private-input and durability errors to fixed redacted refusals, even
+when one safety mirror is damaged or cleanup removes the last mirror. This changes error
+presentation only, preserves remaining evidence, and leaves ordinary CLI errors unchanged.
 
 Within that held window, the separate explicit `deployment-initialize-dormant-ownership` command
 requires `--channel test`, existing `--instance-state-root` and `--host-global-root`, retained

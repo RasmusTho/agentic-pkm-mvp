@@ -17,8 +17,9 @@ import subprocess
 import sys
 import uuid
 from dataclasses import dataclass, replace
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from app.instance.instance_state import (
     DeploymentQuiescenceProof,
@@ -247,7 +248,39 @@ def require_test_native_context(context: object) -> dict[str, Any]:
         raise _test_refusal() from exc
 
 
+@contextmanager
+def native_operation_refusal(host: Path | None, *, required: bool = False) -> Iterator[Callable[[], None]]:
+    """Keep expected private-input/durability errors inside the native envelope.
+
+    Selection is sticky through cleanup: one intact native safety mirror (or
+    explicit native helper mode) suffices even when another mirror is damaged.
+    This only selects error presentation, never authorizes the operation. With
+    no native selection, ordinary exceptions and CLI behavior remain unchanged.
+    """
+    native = required
+    def observe() -> None:
+        nonlocal native
+        for path in _reservation_records(host) if host is not None else ():
+            try:
+                if _read_private_json(path).get(_NATIVE_CONTEXT) is not None:
+                    native = True
+            except (OSError, RuntimeError, ValueError):
+                pass  # The operation still validates every authority read.
+    observe()
+    try:
+        yield observe
+    except (OSError, RuntimeError, ValueError) as exc:
+        if native:
+            raise _test_refusal() from exc
+        raise
+
+
 def require_native_window(host: Path, *, required: bool = False) -> dict[str, Any] | None:
+    with native_operation_refusal(host, required=required):
+        return _require_native_window(host, required=required)
+
+
+def _require_native_window(host: Path, *, required: bool = False) -> dict[str, Any] | None:
     values = [_read_private_json(p).get(_NATIVE_CONTEXT)
         for p in _reservation_records(host) if os.path.lexists(p)]
     contexts = [value for value in values if value is not None]
@@ -326,6 +359,10 @@ def require_native_begin_context(host: Path, context: dict[str, object] | None,
         if retire_inventory:
             inventory_path.unlink()
             _fsync_directory(host)
+    if retire_inventory:
+        # Retirement's durability barrier is itself an observation gap. Never
+        # mint the next nonce/root blocker from a context changed during it.
+        require_test_native_context(context)
 
 
 def _reservation_records(host: Path) -> tuple[Path, ...]:
