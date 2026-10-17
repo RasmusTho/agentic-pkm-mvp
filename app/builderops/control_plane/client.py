@@ -477,6 +477,36 @@ class BuilderOpsControlPlaneClient:
             },
         )
 
+    def correct_task_payload_status(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        task_id: str,
+        lease: Mapping[str, Any],
+        idempotency_key: str,
+        expected_state: str,
+        expected_version: int,
+        expected_updated_at: str,
+        expected_payload_sha256: str,
+        proposal_sha256: str,
+        proposal_ref: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/{API_VERSION}/tasks/{task_id}/correct-payload-status",
+            json_body={
+                "envelope": dict(envelope),
+                "lease": dict(lease),
+                "idempotency_key": idempotency_key,
+                "expected_state": expected_state,
+                "expected_version": expected_version,
+                "expected_updated_at": expected_updated_at,
+                "expected_payload_sha256": expected_payload_sha256,
+                "proposal_sha256": proposal_sha256,
+                "proposal_ref": proposal_ref,
+            },
+        )
+
     def complete_task(
         self,
         *,

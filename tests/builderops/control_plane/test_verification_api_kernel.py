@@ -1878,3 +1878,96 @@ def test_authenticated_status_supplies_launcher_deployment_readback(
 
         with pytest.raises(MergeAuthorityError, match="exact deployed substrate"):
             ledger.require_post_effect_capability()
+
+
+def test_terminal_payload_status_correction_enforces_existing_admission(
+    control_plane_store, envelope, tmp_path
+):
+    from dataclasses import asdict
+    from tests.builderops.control_plane.correction_helpers import correction_setup, TASK
+
+    args, before = correction_setup(control_plane_store, envelope)
+    credentials = []
+    for name, principal, scopes, repos in (
+        (
+            "writer",
+            envelope.actor,
+            ["tasks:write", "leases:write", "status:read", "receipts:read"],
+            [envelope.repository],
+        ),
+        ("reader", "reader", ["status:read", "receipts:read"], [envelope.repository]),
+        ("taskonly", envelope.actor, ["tasks:write"], [envelope.repository]),
+        ("foreign", "foreign", ["tasks:write", "leases:write"], [envelope.repository]),
+        ("otherrepo", envelope.actor, ["tasks:write", "leases:write"], ["foreign/repo"]),
+    ):
+        secret = tmp_path / f"{name}.secret"
+        secret.write_text(f"{name}-value-6175")
+        credentials.append(
+            {
+                "id": name,
+                "principal": principal,
+                "secret_ref": f"host-secret:{name}",
+                "secret_file": str(secret),
+                "scopes": scopes,
+                "repositories": repos,
+                "rotation_generation": 1,
+            }
+        )
+    manifest = tmp_path / "correction-credentials.json"
+    manifest.write_text(json.dumps({"credentials": credentials}))
+    transport = TestClient(
+        create_app(store=control_plane_store, credentials=CredentialRegistry(manifest))
+    )
+    body = {k: v for k, v in args.items() if k not in {"task_id", "envelope", "lease"}}
+    body["expected_updated_at"] = args["expected_updated_at"].isoformat()
+    body["envelope"] = envelope.as_json()
+    body["envelope"].pop("actor")
+    body["lease"] = asdict(args["lease"])
+    body["lease"]["expires_at"] = args["lease"].expires_at.isoformat()
+    epoch = control_plane_store.readiness()["authority_epoch"]
+    url = f"/v1/tasks/{TASK}/correct-payload-status"
+
+    def post(name="writer", document=None, pinned=epoch):
+        return transport.post(
+            url,
+            json=body if document is None else document,
+            headers={
+                "Authorization": f"Bearer {name}-value-6175",
+                "X-BuilderOps-Authority-Epoch": str(pinned),
+            },
+        )
+
+    sdk = BuilderOpsControlPlaneClient(
+        ClientConfig(base_url="http://testserver", token="writer-value-6175"), http_client=transport
+    )
+    # Prove the real generic-lease producer admits this exact resource name.
+    claimed = sdk.claim_lease(
+        envelope=body["envelope"], resource_id=f"payload-status-correction:{TASK}",
+        idempotency_key="maintenance-http-claim",
+    )
+    body["lease"] = claimed["lease"]
+    assert body["lease"]["lease_kind"] == "generic"
+    for name in ("reader", "taskonly", "foreign", "otherrepo"):
+        assert post(name).status_code == 403
+    assert post(pinned=epoch + 1).status_code == 409
+    assert post(document=dict(body, lease=dict(body["lease"], repository="foreign/repo"))).status_code == 403
+    assert post(document=dict(body, lease=dict(body["lease"], repository="invalid"))).status_code == 400
+    assert post(document=dict(body, lease=dict(body["lease"], unknown=True))).status_code == 422
+    for extra in (
+        {"payload": {}},
+        {"to_state": "ready"},
+        {"status": "completed"},
+        {"expected_version": True},
+    ):
+        assert post(document=dict(body, **extra)).status_code == 422
+    assert control_plane_store.get_task(envelope.repository, TASK) == before
+    values = {k: v for k, v in body.items() if k not in {"envelope", "lease"}}
+    result = sdk.correct_task_payload_status(
+        envelope=body["envelope"], lease=body["lease"], task_id=TASK, **values
+    )
+    assert result["correction"]["after_version"] == 4
+    assert result["result"]["recovery_lsn"] != "0/0"
+    assert sdk.get_task(repository=envelope.repository, task_id=TASK)["payload"] == dict(
+        before["payload"], status="completed"
+    )
+    assert post().json()["result"]["replayed"] is True

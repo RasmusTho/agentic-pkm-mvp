@@ -1755,3 +1755,37 @@ def test_operator_source_binding_probe_uses_consumer_read_boundary(managed_sourc
     else:
         assert outcome == 1
         assert json.loads(output) == {'refusal': 'source_binding_probe_refused'}
+
+
+def test_terminal_payload_status_correction_preserves_source_refusal():
+    from app.builderops.devui_sources import _task, SourceReadRefusal
+
+    repository = "rasmustho/agentic-pkm-mvp"
+    task_id = "github-rasmustho--agentic-pkm-mvp-issue-5495"
+    row = {
+        "repository": repository,
+        "task_id": task_id,
+        "state": "completed",
+        "version": 4,
+        "updated_at": "2026-10-17T20:00:00Z",
+        "lease": None,
+        "authority_envelope": {"repository": repository},
+        "payload": {
+            "repo": repository,
+            "task_id": task_id,
+            "issue_number": 5495,
+            "title": "Delivered task",
+            "state": "completed",
+            "status": "ready",
+            "sync_state": {"state": "open", "authority_epoch": 1},
+        },
+    }
+    with pytest.raises(SourceReadRefusal, match="task_payload_invalid"):
+        _task(row, repository=repository)
+    original = json.loads(json.dumps(row))
+    row["payload"]["status"] = "completed"
+    result = _task(row, repository=repository)
+    assert result["status"] == "completed"
+    assert json.loads(result["sync_state"]) == original["payload"]["sync_state"]
+    row["payload"]["status"] = "ready"
+    assert row==original
