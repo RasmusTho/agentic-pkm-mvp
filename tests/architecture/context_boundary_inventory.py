@@ -44,7 +44,12 @@ GLOBAL_RESOLUTION_SYMBOLS = frozenset(
         "active_vault_selection_window",
     }
 )
-GLOBAL_ENV_NAMES = frozenset({"VAULT_ROOT", "VAULT_DIR"})
+# Every process-global environment key that names a vault root (KD-55D38D90BD05):
+# the channel binding, the legacy MCP/CLI roots, the episodes CLI root, and the
+# watcher's boot-time binding.
+GLOBAL_ENV_NAMES = frozenset(
+    {"VAULT_ROOT", "VAULT_DIR", "MCP_VAULT_ROOT", "EPISODES_VAULT_ROOT", "WATCHER_VAULT_PATH"}
+)
 ENV_SYMBOL_PREFIX = "env:"
 
 API_APP_MODULE = "app/api/app.py"
@@ -113,6 +118,12 @@ _RESOLUTION_PRIMITIVE = (
     "shared global-resolution primitive every legacy route delegates to; retired with the "
     "single-binding compatibility selector"
 )
+_ASK_LEGACY_RECALL = (
+    "carrier-free ASK recall journey (MVR-05B4a: run_ask_graph resolves a scoped turn's recall "
+    "sources once from its ActiveContextSet and no graph node resolves a vault; a turn without a "
+    "context -- legacy /api/ask, voice, the smoke CLI -- still reads the process-wide "
+    "single-binding selection once per turn through these named adapters)"
+)
 _CARRIER_NOTE = (
     "agent/MCP carrier resolves its vault from process selection or environment, not from a "
     "request-carried ActiveContextSet"
@@ -120,8 +131,8 @@ _CARRIER_NOTE = (
 _CLI_NOTE = "operator CLI resolves its vault from process environment or selection, not a request"
 
 COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
-    _a("app/agents/ask/graph.py", "_active_recall_vault_id", "get_vault_manager", _CARRIER_NOTE, "05B4"),
-    _a("app/agents/ask/graph.py", "_active_recall_vault_root", "get_vault_manager resolve_optional_vault_root", _CARRIER_NOTE, "05B4"),
+    _a("app/agents/ask/graph.py", "_compatibility_recall_vault_id", "get_vault_manager", _ASK_LEGACY_RECALL, "retained:MVR-06"),
+    _a("app/agents/ask/graph.py", "_compatibility_recall_vault_root", "get_vault_manager resolve_optional_vault_root", _ASK_LEGACY_RECALL, "retained:MVR-06"),
     _a(_COMPANION, "_legacy_companion_vault_manager", "get_vault_manager", _COMPANION_LEGACY_READ, "retained:MVR-06"),
     _a(_COMPANION, "_legacy_configured_vault_root", "resolve_optional_vault_root", _COMPANION_LEGACY_READ, "retained:MVR-06"),
     _a(_COMPANION, "_legacy_vault_root_env_value", "env:VAULT_ROOT", _COMPANION_LEGACY_READ, "retained:MVR-06"),
@@ -191,10 +202,18 @@ def registered_router_modules() -> frozenset[str]:
 
 
 def _python_modules(relative_dir: str) -> frozenset[str]:
+    """Every module under ``relative_dir``, nested packages included (KD-88B6B1EC0D9A).
+
+    Only the directory's own top-level ``__init__.py`` is left out (the gate adds
+    ``app/cli/__init__.py`` explicitly); a nested package's ``__init__.py`` is a
+    module like any other and is scanned.
+    """
+
+    base = ROOT / relative_dir
     return frozenset(
         p.relative_to(ROOT).as_posix()
-        for p in (ROOT / relative_dir).glob("*.py")
-        if p.name != "__init__.py"
+        for p in base.rglob("*.py")
+        if p != base / "__init__.py"
     )
 
 
@@ -291,6 +310,60 @@ def _module_env_tuples(tree: ast.Module) -> dict[str, tuple[str, ...]]:
         if isinstance(target, ast.Name) and names:
             bound[target.id] = names
     return bound
+
+
+def _may_be_environ(node: ast.AST | None, aliases: set[str]) -> bool:
+    """Whether an expression can evaluate to the process environment mapping."""
+
+    if node is None:
+        return False
+    if _is_environ(node) or (isinstance(node, ast.Name) and node.id in aliases):
+        return True
+    if isinstance(node, ast.BoolOp):
+        # ``env = environ_arg or os.environ``
+        return any(_may_be_environ(value, aliases) for value in node.values)
+    if isinstance(node, ast.IfExp):
+        # ``env = mapping if mapping is not None else os.environ``
+        return _may_be_environ(node.body, aliases) or _may_be_environ(node.orelse, aliases)
+    return False
+
+
+def _assigned_environ_aliases(tree: ast.Module, imported: set[str]) -> set[str]:
+    """Names bound to ``os.environ`` by assignment or a parameter default (KD-6BC9153BD3A2).
+
+    ``env = os.environ`` then ``env.get("VAULT_ROOT")`` is the same process-global
+    read as the direct form. Chains (``a = os.environ; b = a``) resolve to a fixed
+    point. Binding is tracked by name across the module, which over-approximates
+    rather than lets an alias escape.
+    """
+
+    aliases = set(imported)
+    while True:
+        before = len(aliases)
+        for node in ast.walk(tree):
+            targets: list[ast.AST] = []
+            value: ast.AST | None = None
+            if isinstance(node, ast.Assign):
+                targets, value = list(node.targets), node.value
+            elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+                targets, value = [node.target], node.value
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                args = node.args
+                positional = [*args.posonlyargs, *args.args]
+                for arg, default in zip(positional[len(positional) - len(args.defaults):], args.defaults):
+                    if _may_be_environ(default, aliases):
+                        aliases.add(arg.arg)
+                for arg, kw_default in zip(args.kwonlyargs, args.kw_defaults):
+                    if _may_be_environ(kw_default, aliases):
+                        aliases.add(arg.arg)
+                continue
+            if value is None or not _may_be_environ(value, aliases):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    aliases.add(target.id)
+        if len(aliases) == before:
+            return aliases
 
 
 class _Scanner(ast.NodeVisitor):
@@ -434,6 +507,15 @@ def scan_source(source: str, filename: str = "<memory>") -> dict[str, frozenset[
     tree = ast.parse(source, filename=filename)
     scanner = _Scanner()
     scanner.env_tuples = _module_env_tuples(tree)
+    imported_environ = {
+        alias.asname
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name == "environ" and alias.asname
+    }
+    for name in _assigned_environ_aliases(tree, imported_environ):
+        scanner.env_aliases[name] = "environ"
     scanner.visit(tree)
     return {scope: frozenset(symbols) for scope, symbols in scanner.found.items()}
 

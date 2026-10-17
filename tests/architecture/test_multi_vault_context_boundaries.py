@@ -200,6 +200,65 @@ def test_detector_sees_structural_forms_not_substrings(source: str, expected: se
     assert set().union(*found.values()) == expected
 
 
+def test_gate_tracks_all_vault_env_keys_nested_modules_and_environ_aliases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """MVR-05B4a closes KD-55D38D90BD05, KD-88B6B1EC0D9A and KD-6BC9153BD3A2."""
+
+    # KD-55D38D90BD05: every process-global vault env key is a recorded read.
+    keys = ("VAULT_ROOT", "VAULT_DIR", "MCP_VAULT_ROOT", "EPISODES_VAULT_ROOT", "WATCHER_VAULT_PATH")
+    assert inventory.GLOBAL_ENV_NAMES == frozenset(keys)
+    for key in keys:
+        found = scan_source(f"import os\ndef f():\n    return os.getenv({key!r})\n")
+        assert found == {"f": frozenset({f"env:{key}"})}, key
+    candidates = scan_source(
+        "import os\nCANDIDATES = ('EPISODES_VAULT_ROOT', 'WATCHER_VAULT_PATH')\n"
+        "def f():\n    for name in CANDIDATES:\n        os.getenv(name)\n"
+    )
+    assert candidates == {"f": frozenset({"env:EPISODES_VAULT_ROOT", "env:WATCHER_VAULT_PATH"})}
+
+    # KD-6BC9153BD3A2: an assigned os.environ alias is still an environment read,
+    # including chains, `or`/conditional fallbacks and parameter defaults.
+    aliased = {
+        "import os\ndef f():\n    env = os.environ\n    return env.get('VAULT_ROOT')\n": "VAULT_ROOT",
+        "import os\nENV = os.environ\ndef f():\n    return ENV['MCP_VAULT_ROOT']\n": "MCP_VAULT_ROOT",
+        "import os\ndef f():\n    a = os.environ\n    b = a\n    return b.get('VAULT_DIR')\n": "VAULT_DIR",
+        "import os\ndef f(m=None):\n    env = m or os.environ\n    return env.get('WATCHER_VAULT_PATH')\n": (
+            "WATCHER_VAULT_PATH"
+        ),
+        "import os\ndef f(m=None):\n    env = m if m is not None else os.environ\n"
+        "    return env.get('EPISODES_VAULT_ROOT')\n": "EPISODES_VAULT_ROOT",
+        "import os\ndef f(env=os.environ):\n    return env.get('VAULT_ROOT')\n": "VAULT_ROOT",
+        "import os\ndef f(*, env=os.environ):\n    return env['VAULT_DIR']\n": "VAULT_DIR",
+        "from os import environ as E\ndef f():\n    env = E\n    return env.get('VAULT_ROOT')\n": "VAULT_ROOT",
+    }
+    for source, key in aliased.items():
+        assert set().union(*scan_source(source).values()) == {f"env:{key}"}, source
+    # A plain mapping that is not the environment is not a process-global read.
+    assert scan_source("def f():\n    env = {}\n    return env.get('VAULT_ROOT')\n") == {}
+
+    # KD-88B6B1EC0D9A: nested route/CLI modules are part of the population and are
+    # classified like top-level ones.
+    fake_root = tmp_path
+    for relative in (
+        "app/api/routes/__init__.py",
+        "app/api/routes/helpers/__init__.py",
+        "app/api/routes/helpers/vault.py",
+        "app/cli/__init__.py",
+        "app/cli/tools/deep.py",
+    ):
+        path = fake_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(inventory, "ROOT", fake_root)
+    assert inventory._python_modules(inventory.API_ROUTES_DIR) == frozenset(
+        {"app/api/routes/helpers/__init__.py", "app/api/routes/helpers/vault.py"}
+    )
+    assert inventory._python_modules(inventory.CLI_DIR) == frozenset({"app/cli/tools/deep.py"})
+    monkeypatch.setattr(inventory, "registered_router_modules", lambda: frozenset())
+    assert "app/api/routes/helpers/vault.py" in inventory.unclassified_route_modules()
+
+
 def test_detector_ignores_import_only_comments_and_docstrings() -> None:
     source = (
         "from x import get_vault_manager\n"
