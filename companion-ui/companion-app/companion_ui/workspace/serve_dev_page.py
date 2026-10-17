@@ -91,6 +91,10 @@ from companion_ui.workspace.capture_modal import (
     capture_modal_markup,
     capture_modal_script,
 )
+from companion_ui.workspace.calibration_revisit_card import (
+    calibration_revisit_card_markup,
+    calibration_revisit_card_script,
+)
 from companion_ui.workspace.entry_state import (
     EntryStateResolution,
     entry_state_attributes,
@@ -3533,6 +3537,14 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
     commitments_mode_html = _render_commitments_mode(
         fields.get("commitments_surface")
     )
+    calibration_revisit_html = (
+        calibration_revisit_card_markup(
+            fields.get("calibration_revisit"),
+            note_path=str(fields.get("note_path") or ""),
+        )
+        if "calibration_revisit" in fields
+        else ""
+    )
     act_mode_html = _render_act_mode(
         proposals=fields.get("panel_proposals") or [],
         response=fields.get("panel_last_response") or {},
@@ -3730,6 +3742,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
     rail_cards_inner = f"""
         {day_start_card_html}
         {reflection_offer_html}
+        {calibration_revisit_html}
         {canvas_lane_html}
         {active_note_body_update_html}
         {suggestion_flow_html}
@@ -11573,6 +11586,11 @@ def render_index_html(
         )
 
     content_section = ""
+    calibration_revisit_script_html = (
+        calibration_revisit_card_script()
+        if fields is not None and "calibration_revisit" in fields
+        else ""
+    )
     # CUIDR-04 (#2447): the relocated runtime/diagnostic telemetry block lives
     # inside the operator drawer (the operator layer). _render_note_section
     # builds it where its derived inputs are in scope and hands it back so the
@@ -13787,6 +13805,77 @@ def render_index_html(
     .rail-state-value, .rail-state-count {{
       color: var(--fg-2);
     }}
+    /* ---- CAL-03 decision calibration revisit card ---- */
+    .calibration-revisit-card {{
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--border-strong);
+      border-left: 3px solid var(--cyan);
+      border-radius: var(--radius-md);
+      background: var(--bg-raised);
+      color: var(--fg-1);
+    }}
+    .calibration-revisit-card.cal-quiet {{
+      border-left-color: var(--fg-3);
+      color: var(--fg-2);
+    }}
+    .cal-head {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }}
+    .cal-eyebrow, .cal-meta, .cal-hint {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.04em;
+    }}
+    .cal-eyebrow {{ text-transform: uppercase; }}
+    .cal-badge, .cal-badge--amber {{
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      color: var(--cyan);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      padding: 1px 6px;
+    }}
+    .cal-badge--amber {{ color: var(--amber); border-color: var(--amber); }}
+    .cal-q {{
+      color: var(--fg-1);
+      font-size: var(--text-sm);
+      font-weight: 500;
+      line-height: 1.35;
+    }}
+    .cal-title {{ color: var(--cyan); }}
+    .cal-pick-group {{ border: 0; display: flex; flex-direction: column; gap: 6px; }}
+    .cal-pick-group legend {{ color: var(--fg-2); font-size: var(--text-xs); margin-bottom: 2px; }}
+    .cal-picks {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }}
+    .cal-pick, .cal-dismiss {{
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      line-height: 1.2;
+      min-height: 34px;
+      padding: 7px 8px;
+      border-radius: var(--radius-sm);
+    }}
+    .cal-pick {{ background: var(--bg-surface); border: 1px solid var(--border-strong); color: var(--fg-1); }}
+    .cal-pick:hover, .cal-pick:focus-visible {{ border-color: var(--cyan); color: var(--cyan); }}
+    .cal-dismiss {{ background: transparent; border: 1px solid var(--border); color: var(--fg-2); }}
+    .cal-dismiss:hover, .cal-dismiss:focus-visible {{ border-color: var(--amber); color: var(--amber); }}
+    .cal-note-label {{ color: var(--fg-2); font-size: var(--text-xs); }}
+    .cal-note {{
+      background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      color: var(--fg-1); font: inherit; min-height: 48px; padding: 6px 8px; resize: vertical;
+    }}
+    .cal-note:focus {{ border-color: var(--border-focus); outline: 1px solid var(--border-focus); }}
+    .cal-alert {{ color: var(--amber); font-size: var(--text-xs); }}
+    .cal-alert[hidden] {{ display: none; }}
+    @media (min-width: 1100px) {{ .cal-picks {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }} }}
+    @media print {{ .cal-pick-group, .cal-note-label, .cal-note, .cal-foot {{ display: none; }} }}
     /* ---- Commitment surface (read-only): Next (warm) / Review (cool) ---- */
     .commitments-mode {{ display: flex; flex-direction: column; gap: 12px; }}
     .commitment-group {{ display: flex; flex-direction: column; gap: 6px; }}
@@ -15780,6 +15869,7 @@ def render_index_html(
   {_panel_apply_script()}
   {panel_palette_script()}
   {memory_review_drawer_script()}
+  {calibration_revisit_script_html}
   {receipts_history_script()}
   {system_map_overlay_script()}
   {guidance_layer_script()}
@@ -17245,6 +17335,10 @@ def make_handler(
             # verbatim by _proxy_error so the drawer renders calm with the
             # candidate still pending.
             re.compile(r"^/api/companion/memory/review-queue/[^/]+/decision$"),
+            # CAL-03 decision-revisit answer and dismiss actions.  Keep the
+            # route distinction explicit so the UI cannot turn a dismissal
+            # into an outcome receipt (or vice versa).
+            re.compile(r"^/api/companion/calibration/revisits/[^/]+/(?:decision|dismiss)$"),
         )
 
         def _post_path_allowed(self, path: str) -> bool:
@@ -17348,8 +17442,35 @@ def make_handler(
             try:
                 payload = json.loads(raw_body.decode("utf-8") or "{}")
             except json.JSONDecodeError:
-                self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
-                return
+                content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                if (
+                    content_type == "application/x-www-form-urlencoded"
+                    and re.fullmatch(
+                        r"/api/companion/calibration/revisits/[^/]+/(?:decision|dismiss)",
+                        parsed.path,
+                    )
+                ):
+                    try:
+                        pairs = parse_qsl(
+                            raw_body.decode("utf-8"),
+                            keep_blank_values=True,
+                            strict_parsing=True,
+                        )
+                    except (UnicodeDecodeError, ValueError):
+                        self._send_json(
+                            400,
+                            {"error": "invalid_form", "message": "Request body must be URL encoded."},
+                        )
+                        return
+                    payload = {key: value for key, value in pairs}
+                    if "rung_index" in payload:
+                        try:
+                            payload["rung_index"] = int(payload["rung_index"])
+                        except ValueError:
+                            pass
+                else:
+                    self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
+                    return
             runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
             timeout_override = self._post_timeout_override(parsed.path)
             try:
