@@ -5,7 +5,10 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-15 (BWS / #5667 status reconciliation and bounded DevUI promotion / #6105; unrelated status entries were not re-audited)
+Last reviewed: 2026-10-17 UTC (manual shadow rehydration / #6174; BWS / #5667 and DevUI / #6105 retain their 2026-10-15 review; unrelated status entries were not re-audited)
+Last verified against (manual shadow rehydration): Issue #6174, the two probe modules and focused
+tests, and `evidence/shadow_rehydration_3798_field_contract.v2.json`; repository/manual-probe
+evidence only, not positive live GitHub/remote-head rehydration or rotation acceptance.
 Last reviewed (Builder execution routing): 2026-10-11
 Last verified against (Builder execution routing): `docs/settings/models/providers.yaml`,
 `.codex/agents/verification-closer.toml`, and the focused provider-census, execution-routing,
@@ -776,6 +779,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   product/runtime truth and never bypass repo authority gates. (ADR-0010's "not implemented" header
   predates this store/CLI/API delivery under the #1500-series follow-ups and is the stale surface to
   reconcile next.)
+- Manual Builder shadow rehydration preserves v1 evidence/API semantics and adds an explicit v2
+  typed field contract, exact retained-chain validation, and provenance-bound packet/response byte,
+  wall-clock and bounded native-event measurements. Missing live evidence and unavailable carrier
+  token/cost/human-effort data remain unknown; no rotation, automatic worker start or changed dispatch
+  is activated. The [dispatcher owner contract](AGENT_ISSUE_DISPATCHER.md#manual-shadow-rehydration-probe)
+  owns the detailed semantics and trust limits.
 - BuilderOps `PromotionIntent` creation validates `target_authority_surface` against the canonical
   promotion target registry shared with the promotion gateway
   (`app/builderops/models.py::PROMOTION_TARGET_SURFACES`): unsupported targets fail before

@@ -1,0 +1,1 @@
+{"head_sha":"7517008c49086e9b2acdc03d753785fced944661","remote":"origin","ref":"refs/heads/main","local_origin_main_sha":"5e8e2a8f9a3a3b899d7c384814378f3636f6bb45","observed_at":"2026-10-17T21:15:38+00:00","source":"actual git ls-remote origin refs/heads/main plus git rev-parse origin/main"}

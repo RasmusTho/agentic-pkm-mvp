@@ -963,6 +963,40 @@ start another agent or alter any delivery authority. Current readiness is theref
 limited to a manually launched single probe with durable source, packet, response, and comparison
 artifacts; it does not demonstrate automatic coordinator rotation or production adoption.
 
+The explicit v2 manual probe adds a packet-carried closed response contract and retains v1 without
+reinterpretation. Checkpoint decision delta, gate invariants and evaluator recommendations are
+separate typed fields; live slice next action is independently observed and explicitly
+`not_comparable` to the recommendation. Issue/PR/CI, repository and dispatcher custody is raw-byte
+bound, with separate external-state dimension results and refresh needs. Missing observations stay
+unknown. Only a separately retained independent auditor attestation with fact evidence can establish
+fabrication for comparison; drift and agent self-report cannot. Standalone comparison/receipt
+consumers rederive semantics as well as verifying the complete retained evidence chain.
+Source repository custody and independent repository reads both require the exact `origin` /
+`refs/heads/main` identity and strict head SHA; a self-consistent foreign source is refused.
+The shared field-aware provenance boundary admits exact retained local live-read envelopes only,
+with target/time/domain checks and canonical-path plus inode exclusion of packet/source custody.
+Checkpoint pointers are confined to checkpoint fields, full v2 observations require packet context,
+and audit facts must agree with their own retained evidence. Reconstruction errors/unknowns stay
+visible alongside independent live facts; custody is not authenticated fetch or upstream truth.
+The original response's exact raw packet binding constrains file-aware replay and byte telemetry;
+equivalent JSON in a differently serialized file is not interchangeable. Probe live reads occur
+after successful admission; independent audit reads have their separate source-to-fact interval.
+Optional-audit joins also require the same exact raw response binding as file-aware comparison,
+telemetry and receipt evidence; equal parsed response objects do not establish that identity.
+Receipt CLI ingestion also binds all three explicit packet/response/comparison file inputs to
+their retained refs unconditionally, including the no-audit path.
+
+Its manual telemetry helper measures exact packet/response bytes, a named UTC wall-clock interval,
+and recorder-attested complete-scope native events. Successful starts, packet/response handoffs,
+admission retries and implementation/review/CI repairs have distinct definitions. Every measurement
+names availability, source, unit and scope; bytes do not estimate tokens, wall time does not estimate
+effort, and absent authoritative carrier tokens/cost or attested human minutes remain unknown.
+Admitted invocation configuration is not engine introspection. The retained
+`shadow_rehydration_3798_field_contract.v2` experiment supports only the bounded manual measurement
+path: no overall score, readiness threshold, automatic rotation, compression, policy, takeover,
+worker launch, or Product/runtime memory change follows from its results. Field, telemetry and
+manual artifact details remain in `docs/AGENT_ISSUE_DISPATCHER.md :: Manual shadow rehydration probe`.
+
 ### Run-state authority
 
 Persisted and dry-run epic run-state is evidence only. It cannot authorize parent closure, GitHub
