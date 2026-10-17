@@ -276,6 +276,22 @@ journal/backup, nor a stale lease may be interpreted as proof of ownership, comp
 effect. Activation must consume the complete convergence receipt; it cannot create ownership or a
 prior effect result by inference.
 
+The explicit TEST-only `deployment-initialize-dormant-ownership` operator seam prepares a fresh
+protected pair for one retained, populated dormant registration when both previous ownership
+artifacts are absent. It requires the retained binding explicitly, exact registry and canonical
+owner-receipt digests, the current native stopped-window proof, physically disjoint private roots
+and backup destination, and acknowledgement of a new ownership epoch. It preserves the registry,
+default selection, retained identities and source bytes; it does not recover lost authority or
+infer prior effects. DEV, PROD, partial/divergent evidence and implicit ordinary-deploy recovery
+remain refused.
+
+The existing private backup manifest binds the absent-pair before-image and one authenticated
+prepared epoch. Reservation evidence in the existing TEST deployment safety records fences retries
+to that package, including interrupted directory durability; generic restore and rotation do not
+consume it. Preparation remains `inactive_fenced`. Source support and synthetic fixture proof are
+not live TEST repair or activation: a future invocation still needs the separately attributable
+operator acknowledgement, qualified native execution, and existing downstream activation gates.
+
 ## Reconciliation — do not duplicate
 
 - **#2566** owns the downstream overlay/UI active-vault switcher. It consumes this runtime seam;

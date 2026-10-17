@@ -829,7 +829,10 @@ class InstanceRegistryRuntime:
 
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
-        with self._bootstrap_locked():
+        # #5937 explicitly authorizes preserving the dormant TEST fence here.
+        # The cutover's independent activation requirements remain unchanged.
+        with _deployment_admission_locked(self.ledger.root), self._bootstrap_locked():
+            _require_completed_dormant_ownership_preparation(self.ledger.root)
             bound_proof = _bind_legacy_owner_inventory_to_proof(
                 inventory_path=inventory_path,
                 quiescence_proof=quiescence_proof,
@@ -1582,6 +1585,7 @@ def _load_deployment_quiescence_proof(path: Path) -> DeploymentQuiescenceProof:
                 if payload.get("owner_receipt_digest") is not None
                 else None
             ),
+            controller_namespace_digest=payload.get("controller_namespace_digest"),
         )
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise InstanceStatePreflightError(
@@ -2165,6 +2169,8 @@ def _compatibility_block_payload(
         "owner_receipt_digest",
         "scalar_roll_forward",
         "result",
+        "controller_namespace_digest",
+        "dormant_ownership_preparation",
     ):
         if key in lease:
             payload[key] = lease[key]
@@ -2178,6 +2184,7 @@ def _require_matching_compatibility_block(
     reconcile_from_previous_phase: bool = False,
     reconcile_dead_claim_controller: bool = False,
 ) -> dict[str, object]:
+    _require_completed_dormant_ownership_preparation(host_global_root)
     current = (
         _read_deployment_lease(host_global_root)
         if lease is None
@@ -2364,6 +2371,10 @@ def _begin_instance_state_deployment(
 ) -> dict[str, object]:
     """Install the restart fence before any legacy writer is stopped."""
 
+    # Owner-authorized source-only #5937 integration: refuse a pending TEST
+    # reservation before ordinary setup or takeover can erase its safety state.
+    with _deployment_admission_locked(host_global_root):
+        _require_completed_dormant_ownership_preparation(host_global_root)
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
     ownership_root = _assert_mount_root(host_global_root, "host-global")
     if controller_pid <= 0 or _CONTROLLER_START_TOKEN_RE.fullmatch(controller_start_token) is None:
@@ -2384,6 +2395,7 @@ def _begin_instance_state_deployment(
         "start_token": controller_start_token,
     }
     with _deployment_admission_locked(ownership_root):
+        _require_completed_dormant_ownership_preparation(ownership_root)
         root_lease_path = _legacy_deployment_lease_path(ownership_root)
         root_authority = (
             _read_legacy_deployment_lease(ownership_root)
@@ -2660,7 +2672,63 @@ def _begin_instance_state_deployment(
         return payload
 
 
+def _require_completed_dormant_ownership_preparation(host_global_root: Path) -> None:
+    from app.instance.legacy_owner_recovery import require_completed_preparation
+    require_completed_preparation(Path(host_global_root))
+
+
+def _bind_test_owner_proof(
+    *, channel: str, instance_state_root: Path, host_global_root: Path,
+    owner_receipt_path: Path, expected_owner_receipt_sha256: str,
+    quiescence_proof_path: Path,
+) -> dict[str, object]:
+    from app.instance.legacy_owner_recovery import _capture_geometry, _private_directory, require_test_controller
+    if channel != "test":
+        raise InstanceStatePreflightError("TEST owner proof binding refused")
+    for root in (instance_state_root, host_global_root):
+        _capture_geometry(root)
+        _private_directory(root)
+    if (owner_receipt_path != host_global_root / "legacy-owner-inventory.json"
+        or quiescence_proof_path != host_global_root / "deployment-quiescence-proof.json"):
+        raise InstanceStatePreflightError("TEST owner proof binding refused")
+    layout = InstanceStateLayout.for_channel(instance_state_root, channel)
+    layout.require_existing()
+    with _deployment_admission_locked(host_global_root), _producer_transition_locked(layout):
+        _require_completed_dormant_ownership_preparation(host_global_root)
+        proof = _load_deployment_quiescence_proof(quiescence_proof_path)
+        require_test_controller(proof, (instance_state_root, host_global_root))
+        proof.require_valid(channel_id="test")
+        inventory = _read_deployment_quiescence_inventory(
+            host_global_root / "deployment-quiescence-inventory.json")[1]
+        if inventory.get("controller_namespace_digest") != proof.controller_namespace_digest:
+            raise InstanceStatePreflightError("TEST controller namespace changed")
+        owners = _load_legacy_owner_inventory_payload(owner_receipt_path,
+            expected_sha256=expected_owner_receipt_sha256)
+        rows = owners.get("owners")
+        if (not isinstance(rows, list) or len(rows) != 1
+            or any(not isinstance(row, dict) or row.get("channel_id") != "test" for row in rows)):
+            raise InstanceStatePreflightError("TEST owner proof binding refused")
+        bound = _bind_legacy_owner_inventory_to_proof(inventory_path=owner_receipt_path,
+            quiescence_proof=proof, channel=channel, host_global_root=host_global_root,
+            expected_sha256=expected_owner_receipt_sha256)
+        bound.require_canonical_authority(channel_id="test", host_global_root=host_global_root,
+            owner_receipt_path=owner_receipt_path)
+        return {"channel": "test", "bound": True, "activation": "inactive_fenced",
+            "owner_receipt_sha256": hashlib.sha256(owner_receipt_path.read_bytes()).hexdigest()}
+
+
 def _prove_instance_state_quiescence(
+    *, channel: str, host_global_root: Path, inventory_path: Path
+) -> DeploymentQuiescenceProof:
+    # Serialize from the first safety read through the last publication write.
+    with _deployment_admission_locked(host_global_root):
+        _require_completed_dormant_ownership_preparation(host_global_root)
+        return _prove_instance_state_quiescence_locked(
+            channel=channel, host_global_root=host_global_root, inventory_path=inventory_path,
+        )
+
+
+def _prove_instance_state_quiescence_locked(
     *, channel: str, host_global_root: Path, inventory_path: Path
 ) -> DeploymentQuiescenceProof:
     """Bind two-pass all-domain stopped inventory evidence to the host lease."""
@@ -2752,6 +2820,11 @@ def _prove_instance_state_quiescence(
             "inventory_digest": digest,
             "all_consumers_stopped": True,
         }
+        namespace = inventory.get("controller_namespace_digest")
+        if namespace is not None:
+            if not isinstance(namespace, str) or re.fullmatch(r"[0-9a-f]{64}", namespace) is None:
+                raise InstanceStatePreflightError("controller namespace evidence is invalid")
+            lease["controller_namespace_digest"] = namespace
         _replace_private_json(lease_path, lease)
         _replace_private_json(
             _legacy_deployment_lease_path(root),
@@ -2770,6 +2843,8 @@ def _prove_instance_state_quiescence(
             "lease_path": str(lease_path),
             "controller": controller,
         }
+        if namespace is not None:
+            proof_payload["controller_namespace_digest"] = namespace
         if proof_path.exists():
             _replace_private_json(proof_path, proof_payload)
         else:
@@ -2781,6 +2856,7 @@ def _prove_instance_state_quiescence(
         lease_path,
         int(controller["pid"]),
         str(controller["start_token"]),
+        controller_namespace_digest=namespace,
     )
 
 
@@ -3042,6 +3118,7 @@ def _bind_legacy_owner_inventory_to_proof(
 ) -> DeploymentQuiescenceProof:
     """Bind the drained-owner receipt to the already-proved deployment lease."""
 
+    _require_completed_dormant_ownership_preparation(host_global_root)
     ownership_root = Path(host_global_root).expanduser().resolve(strict=False)
     inventory = Path(inventory_path).expanduser().resolve(strict=False)
     lease_path = _deployment_lease_path(ownership_root).resolve(strict=False)
@@ -3108,6 +3185,8 @@ def _bind_legacy_owner_inventory_to_proof(
         "controller": controller,
         "quiescence_inventory_digest": quiescence_proof.inventory_digest,
     }
+    if quiescence_proof.controller_namespace_digest is not None:
+        binding_fields["controller_namespace_digest"] = quiescence_proof.controller_namespace_digest
     existing_binding = {
         key: payload.get(key)
         for key in (*binding_fields, "receipt_digest")
@@ -3159,6 +3238,8 @@ def _bind_legacy_owner_inventory_to_proof(
         "controller": expected_controller,
         "owner_receipt_digest": receipt_digest,
     }
+    if bound_proof.controller_namespace_digest is not None:
+        proof_payload["controller_namespace_digest"] = bound_proof.controller_namespace_digest
     _replace_private_json(proof_path, proof_payload)
     bound_proof.require_valid(channel_id=channel)
     return bound_proof
@@ -3758,6 +3839,7 @@ def _release_instance_state_deployment_lease(
     ownership_root = _assert_mount_root(host_global_root, "host-global")
     controller = {"pid": controller_pid, "start_token": controller_start_token}
     with _deployment_admission_locked(ownership_root):
+        _require_completed_dormant_ownership_preparation(ownership_root)
         lease_path = _deployment_lease_path(ownership_root)
         if not lease_path.exists():
             return {"released": False, "reason": "no-active-lease"}
@@ -3860,6 +3942,7 @@ def _complete_instance_state_deployment_cleanup(
 ) -> dict[str, object]:
     """Complete the durable cleanup phase and return its stored receipt."""
 
+    _require_completed_dormant_ownership_preparation(host_global_root)
     ownership_root = Path(host_global_root).expanduser().resolve(strict=False)
     public_path = _deployment_lease_path(ownership_root)
     root_path = _legacy_deployment_lease_path(ownership_root)
@@ -3927,6 +4010,7 @@ def _finish_instance_state_deployment_locked(
 
     from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
+    _require_completed_dormant_ownership_preparation(host_global_root)
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
     ownership_root = _assert_mount_root(host_global_root, "host-global")
     if _deployment_lease_path(ownership_root).exists():
@@ -5163,6 +5247,27 @@ def _principal_command(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
+    for name in ("deployment-initialize-dormant-ownership", "deployment-bind-owner-proof", "deployment-qualify-native"):
+        explicit_test = subparsers.add_parser(name)
+        explicit_test.add_argument("--channel", required=True)
+        explicit_test.add_argument("--instance-state-root", type=Path, required=True)
+        explicit_test.add_argument("--host-global-root", type=Path, required=True)
+        if name == "deployment-qualify-native":
+            explicit_test.add_argument("--source-root", type=Path, required=True)
+            explicit_test.add_argument("--expected-revision", required=True)
+            explicit_test.add_argument("--controller-pid", type=int, required=True)
+            explicit_test.add_argument("--controller-start-token", required=True)
+            explicit_test.add_argument("--runtime-uid", type=int, required=True)
+            explicit_test.add_argument("--runtime-gid", type=int, required=True)
+        else:
+            explicit_test.add_argument("--owner-receipt-path", type=Path, required=True)
+            explicit_test.add_argument("--expected-owner-receipt-sha256", required=True)
+            explicit_test.add_argument("--quiescence-proof-path", type=Path, required=True)
+        if name == "deployment-initialize-dormant-ownership":
+            explicit_test.add_argument("--vault-binding-id", required=True)
+            explicit_test.add_argument("--expected-registry-sha256", required=True)
+            explicit_test.add_argument("--backup-root", type=Path, required=True)
+            explicit_test.add_argument("--acknowledge-new-ownership-epoch", action="store_true")
     read = subparsers.add_parser("read-revision")
     read.add_argument("--registry-path", type=Path, required=True)
     read.add_argument("--consumer", required=True)
@@ -5348,6 +5453,24 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--kind", choices=("human", "agent"), required=True)
             command.add_argument("--label", required=True)
     args = parser.parse_args(argv)
+    if args.command in {"deployment-initialize-dormant-ownership", "deployment-bind-owner-proof", "deployment-qualify-native"}:
+        from app.instance.legacy_owner_recovery import initialize_dormant_ownership, qualify_test_native_source
+        values = vars(args).copy()
+        values.pop("command")
+        try:
+            if args.command == "deployment-bind-owner-proof":
+                test_result = _bind_test_owner_proof(**values)
+            elif args.command == "deployment-qualify-native":
+                test_result = qualify_test_native_source(**values)
+            else:
+                test_result = initialize_dormant_ownership(**values)
+        # Expected pathlib canonicalization failures can be RuntimeError on
+        # supported Python versions; the explicit TEST envelope stays redacted.
+        except (InstanceStatePreflightError, RegistryError, LedgerError, OSError, RuntimeError, ValueError, KeyError, TypeError):
+            print(json.dumps({"channel": "test", "outcome": "refused", "prepared": False}))
+            return 1
+        print(json.dumps(test_result, sort_keys=True))
+        return 0
     if args.command in {
         "default-vault-get",
         "default-vault-set",

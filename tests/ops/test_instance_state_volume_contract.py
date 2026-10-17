@@ -1616,7 +1616,7 @@ def test_quiescence_proof_retries_transient_truncated_inventory(
     assert json.loads(_deployment_lease_path(ownership).read_text())["phase"] == "proved"
 
 
-def test_quiescence_proof_rejects_a_claim_adopted_after_its_first_read(
+def test_quiescence_proof_serializes_claim_adoption_from_its_first_read(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1657,7 +1657,11 @@ def test_quiescence_proof_rejects_a_claim_adopted_after_its_first_read(
     stale_inventory.chmod(0o600)
     entered_after_first_read = threading.Event()
     release_stale_prove = threading.Event()
+    adoption_started = threading.Event()
+    adoption_finished = threading.Event()
     failures: list[BaseException] = []
+    proofs: list[DeploymentQuiescenceProof] = []
+    adoptions: list[dict[str, object]] = []
     original_read = runtime_module._read_deployment_lease
     prove_thread: threading.Thread
     read_count = 0
@@ -1680,41 +1684,62 @@ def test_quiescence_proof_rejects_a_claim_adopted_after_its_first_read(
 
     def stale_prove() -> None:
         try:
-            _prove_instance_state_quiescence(
+            proofs.append(_prove_instance_state_quiescence(
                 channel="prod",
                 host_global_root=ownership,
                 inventory_path=stale_inventory,
-            )
+            ))
         except BaseException as exc:
             failures.append(exc)
 
+    def adopt() -> None:
+        adoption_started.set()
+        try:
+            adoptions.append(_begin_instance_state_deployment(
+                channel="prod",
+                instance_state_root=state,
+                host_global_root=ownership,
+                legacy_path=tmp_path / "legacy.md",
+                controller_pid=456,
+                controller_start_token=f"linux:{'2' * 64}",
+            ))
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            adoption_finished.set()
+
     prove_thread = threading.Thread(target=stale_prove)
+    adopt_thread = threading.Thread(target=adopt)
     prove_thread.start()
-    assert entered_after_first_read.wait(timeout=5)
-    adopted = _begin_instance_state_deployment(
-        channel="prod",
-        instance_state_root=state,
-        host_global_root=ownership,
-        legacy_path=tmp_path / "legacy.md",
-        controller_pid=456,
-        controller_start_token=f"linux:{'2' * 64}",
-    )
-    release_stale_prove.set()
-    prove_thread.join(timeout=5)
+    try:
+        assert entered_after_first_read.wait(timeout=5)
+        # The publication owns admission already, not only at its final write.
+        # This real nonblocking probe deterministically proves the lock while
+        # an ordinary takeover queues behind the paused first read.
+        with (ownership / "deployment-admission.lock").open("rb") as handle:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        adopt_thread.start()
+        assert adoption_started.wait(timeout=5)
+        assert not adoption_finished.is_set()
+    finally:
+        release_stale_prove.set()
+        prove_thread.join(timeout=5)
+        if adopt_thread.ident is not None:
+            adopt_thread.join(timeout=5)
 
     assert not prove_thread.is_alive()
-    assert len(failures) == 1
+    assert not adopt_thread.is_alive()
+    assert len(failures) == len(proofs) == 1
     assert isinstance(failures[0], InstanceStatePreflightError)
-    assert (
-        "root deployment compatibility block does not match"
-        in str(failures[0])
-        or "lease changed before quiescence proof" in str(failures[0])
-    )
+    assert "another host-global deployment lease is active" in str(failures[0])
+    assert not adoptions
+    proofs[0].require_valid(channel_id="prod")
     adopted_lease = json.loads(
         _deployment_lease_path(ownership).read_text(encoding="utf-8")
     )
-    assert adopted_lease["phase"] == "claimed"
-    assert adopted_lease["nonce"] == adopted["deployment_nonce"]
+    assert adopted_lease["phase"] == "proved"
+    assert adopted_lease["nonce"] == first_lease["nonce"]
 
     monkeypatch.setattr(
         runtime_module,
@@ -1725,7 +1750,7 @@ def test_quiescence_proof_rejects_a_claim_adopted_after_its_first_read(
         channel="prod",
         host_global_root=ownership,
     )
-    assert proof.nonce == adopted["deployment_nonce"]
+    assert proof.nonce == first_lease["nonce"]
 
 
 def test_deployment_producer_rejects_inventory_not_revalidated_after_quiescence(
@@ -2140,6 +2165,9 @@ def test_real_deployment_wrapper_probes_all_domains_twice_before_proof() -> None
     assert "instance_state_writer_inventory.py" in producer
     assert "prove-quiescent" in producer
     assert "pgrep" not in producer
+    # Inspect the actual producer calls, not the earlier native facade's
+    # command whitelist containing the same command names.
+    producer = producer.split("prepare_instance_state_deployment() {", 1)[1]
     assert producer.index('stop "${mvr05_stop_service_args[@]}"') < producer.index(
         "deployment-prove"
     )
@@ -3375,6 +3403,7 @@ def test_prove_quiescent_retries_disappearing_linux_pid_with_complete_new_census
     monkeypatch.setattr(writer_inventory, "_read_linux_boot_id", lambda: "boot-fixture")
     monkeypatch.setattr(writer_inventory, "_record_for_pid", lambda *args, **kwargs: controller)
     monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [])
+    monkeypatch.setattr(writer_inventory, "controller_namespace_digest", lambda *args: "b" * 64)
     output = tmp_path / "inventory.json"
 
     assert (
@@ -3394,6 +3423,7 @@ def test_prove_quiescent_retries_disappearing_linux_pid_with_complete_new_census
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["probe_count"] == 2
+    assert payload["controller_namespace_digest"] == "b" * 64
     assert payload["domains"] == {"dev": [], "native": [], "prod": [], "test": []}
     assert payload["snapshot_digests"][0] == payload["snapshot_digests"][1]
     assert len(proc_list_reads) == 3
