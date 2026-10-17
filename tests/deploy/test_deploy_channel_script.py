@@ -4831,7 +4831,10 @@ def _install_bws_identity_guard_fixture(root: Path) -> None:
         "    if not quiesce_owned_container(channel, name, os.environ['BWS_DEPLOY_OPERATION_ID'], os.environ['BWS_DEPLOY_TARGET_REVISION']): return 78\n"
         "    reason = source_terminal_reason(status)\n"
         "    return SOURCE_PROJECTION_FAILURE_CODES[reason] if reason else 0\n"
-        "if __name__ == '__main__': assert sys.argv[1] == 'guard'\n"
+        "if __name__ == '__main__':\n"
+        "    assert sys.argv[1] == 'guard'\n"
+        "    if sys.argv[-1] == 'run' and os.environ.get('FAKE_BWS_COMPOSE_GUARD_RC', '0') != '0':\n"
+        "        raise SystemExit(int(os.environ['FAKE_BWS_COMPOSE_GUARD_RC']))\n"
         "with open(os.environ['FAKE_DEPLOY_EVENT_LOG'], 'a') as stream:\n"
         "    stream.write('bws-guard\\n')\n",
         encoding="utf-8",
@@ -6768,6 +6771,99 @@ def test_native_source_embedding_preflight_failures_are_finitely_attributed(tmp_
     ).encode('ascii')]
     assert 'source-rebuild' not in _deploy_events(env)
     assert not list((root / 'ops/deployments').glob('*.json'))
+
+
+def test_supervised_compose_guard_refusal_has_reserved_status_before_docker(tmp_path):
+    root, env, sha = _native_source_harness(tmp_path, channel='dev', ready=True)
+    env['FAKE_BWS_COMPOSE_GUARD_RC'] = '42'
+    script = root / 'scripts/lib/deploy_channel_compose.sh'
+    result = subprocess.run(
+        ['bash', '-c', 'source "$1"; deploy_channel_compose "$2" dev docker-compose.dev.yml pkm-dev "$3" run',
+         'bash', str(script), str(root), str(root / 'config/deploy/dev.env')],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 120
+    assert not Path(env['FAKE_DEPLOY_EVENT_LOG']).exists()
+
+
+def test_native_embedding_probe_guard_refusal_is_distinct_from_probe_failures(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
+    script = SCRIPT.read_text()
+    gate = script[script.index('native_source_failure() {'):script.index('native_source_projection_gate() {')]
+    command = (gate + '\naction=deploy\ntarget_sha=' + sha
+               + '\nBWS_DEPLOY_OPERATION_ID=' + env['BWS_DEPLOY_OPERATION_ID']
+               + '\nHOST_SECRET_RUNTIME_ENV_FILE_API=' + env['HOST_SECRET_RUNTIME_ENV_FILE_API']
+               + '''\ncompose() {
+  case "$*" in
+    *native-source-embedding-identity.v1*) printf '{"provider":"ollama","model":"nomic-embed-text:latest"}\\n' ;;
+    *NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER*) DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED=1; return 120 ;;
+    *) return 0 ;;
+  esac
+}\n'''
+               + 'native_source_embedding_preflight_gate\nrc=$?\n'
+               + 'printf "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection\\n" >&2\nexit "$rc"\n')
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', '-c', command], cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        'MESSAGE=native deployment failure: stage=source_projection class=embedding_guard_refused\n'
+    ).encode('ascii')]
+    assert not Path(env['FAKE_DEPLOY_EVENT_LOG']).exists()
+
+
+def test_native_embedding_identity_guard_refusal_is_distinct_from_probe_failures(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
+    env['FAKE_BWS_COMPOSE_GUARD_RC'] = '42'
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        'MESSAGE=native deployment failure: stage=source_projection class=embedding_guard_refused\n'
+    ).encode('ascii')]
+    assert 'source-rebuild' not in _deploy_events(env)
+
+
+def test_native_embedding_probe_unmarked_status_120_uses_generic_failure(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
+    script = SCRIPT.read_text()
+    gate = script[script.index('native_source_failure() {'):script.index('native_source_projection_gate() {')]
+    command = (gate + '\naction=deploy\ntarget_sha=' + sha
+               + '\nBWS_DEPLOY_OPERATION_ID=' + env['BWS_DEPLOY_OPERATION_ID']
+               + '\nHOST_SECRET_RUNTIME_ENV_FILE_API=' + env['HOST_SECRET_RUNTIME_ENV_FILE_API']
+               + '''\ncompose() {
+  case "$*" in
+    *native-source-embedding-identity.v1*) printf '{"provider":"ollama","model":"nomic-embed-text:latest"}\\n' ;;
+    *NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER*) return 120 ;;
+    *) return 0 ;;
+  esac
+}\n'''
+               + 'native_source_embedding_preflight_gate\nrc=$?\n'
+               + 'printf "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection\\n" >&2\nexit "$rc"\n')
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', '-c', command], cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        'MESSAGE=native deployment failure: stage=source_projection class=embedding_probe_failed\n'
+    ).encode('ascii')]
 
 
 @pytest.mark.parametrize('changes,ready,reason', [

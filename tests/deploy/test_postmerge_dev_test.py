@@ -269,7 +269,7 @@ def test_native_child_keeps_github_token_outside_deployment(monkeypatch):
 
 @pytest.mark.parametrize('reason', ['embedding_probe_client_failed', 'embedding_probe_identity_mismatch',
     'embedding_probe_generation_failed', 'embedding_probe_vector_invalid', 'embedding_probe_cleanup_failed',
-    'embedding_probe_failed', 'source_worker_timeout'])
+    'embedding_probe_failed', 'embedding_guard_refused', 'source_worker_timeout'])
 @pytest.mark.parametrize('resume', [False, True])
 def test_embedding_probe_subreason_survives_controller_receipt_and_checkpoint(tmp_path, monkeypatch, capsys, resume, reason):
     tmp_path.chmod(0o700)
@@ -296,6 +296,22 @@ def test_embedding_probe_subreason_survives_controller_receipt_and_checkpoint(tm
     checkpoint['outcome']['source_failure'] = 'private payload'
     with pytest.raises(driver.CandidateRefused):
         driver._validate_checkpoint(checkpoint)
+
+
+def test_embedding_guard_refusal_survives_controller_receipt_and_checkpoint(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    receipt = {**_native_receipt('dev', candidate, 'failed'), 'kind': 'deploy', 'stage': 'failed',
+               'source_failure': 'embedding_guard_refused'}
+    monkeypatch.setattr(driver.subprocess, 'run', lambda *a, **kw: SimpleNamespace(
+        returncode=78, stdout=json.dumps(receipt), stderr='private output'))
+    assert driver.native_deploy('dev', candidate) == receipt
+    assert driver.poll(tmp_path, build=lambda: 123, load=lambda _: candidate,
+                       current_main=lambda: SHA) == 78
+    checkpoint = json.loads((tmp_path / 'postmerge-dev-test.json').read_text())
+    assert checkpoint['phase'] == 'failed'
+    assert checkpoint['outcome']['source_failure'] == 'embedding_guard_refused'
+    driver._validate_checkpoint(checkpoint)
 
 
 @pytest.mark.parametrize('reason,terminal', [('private payload', 'failed'), (None, 'failed'),

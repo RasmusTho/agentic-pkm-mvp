@@ -939,9 +939,11 @@ deploy_channel_compose() {
   shift 5
 
   local runtime_env_ref runtime_env_file llm_provider runtime_llm_provider
-  local vault_host_root vault_container_root receipt_host_dir
+  local vault_host_root vault_container_root receipt_host_dir guard_refusal_file="${DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSAL_FILE:-}"
   local model_access_env_file="/etc/yggdrasil/model-access/runtime.env"
   local -a compose_args
+  DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED=0
+  unset DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSAL_FILE
   compose_args=(-f "${root}/docker-compose.yaml" -f "${root}/${compose_overlay}")
 
   _deploy_channel_resolve_runtime_env_file "${root}" "${channel}" "${channel_env_file}"
@@ -1021,7 +1023,15 @@ deploy_channel_compose() {
     export HOST_SECRET_PROVIDER=bws
   fi
   if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
-    (cd "${root}" && "${PYTHON:-python3}" -m app.ops.postgres_deploy_linux guard "${channel}" --compose-command "${1:-}") || return $?
+    # A refused inherited guard is distinct from a Docker/Compose failure.  Do
+    # not expose the guard's private failure status across this shell boundary.
+    (cd "${root}" && "${PYTHON:-python3}" -m app.ops.postgres_deploy_linux guard "${channel}" --compose-command "${1:-}") || {
+      DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED=1
+      if [ -n "${guard_refusal_file}" ]; then
+        printf '1\n' > "${guard_refusal_file}"
+      fi
+      return 120
+    }
     compose_args+=(-f "${root}/docker-compose.bws.yml")
     case "${BWS_DATABASE_TARGET:-}" in
       local) ;;
