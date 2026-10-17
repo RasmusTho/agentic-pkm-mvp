@@ -429,6 +429,29 @@ def test_pre_mutation_refusal_with_exact_absence_retires_pending_checkpoint(tmp_
     assert checkpoint['phase'] == 'passed' and checkpoint['channel'] == 'test'
 
 
+def test_pre_mutation_refusal_preserves_current_main_candidate_for_retry(tmp_path):
+    tmp_path.chmod(0o700)
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    path = tmp_path / 'postmerge-dev-test.json'
+    driver._save_outcome(path, candidate, {
+        'source_sha': candidate.sha, 'image_digest': candidate.digest, 'source_run_id': candidate.run_id,
+        'source_run_attempt': candidate.run_attempt, 'artifact_id': candidate.artifact_id,
+        'channel': 'dev', 'result': 'pending', 'operation_id': candidate.operation_id('dev'),
+    })
+
+    with pytest.raises(driver.CandidateRefused, match='candidate_not_superseded'):
+        driver.poll(
+            tmp_path,
+            resume=lambda *_args: (_ for _ in ()).throw(
+                driver.CandidateRefused('native_terminal_evidence_refused')
+            ),
+            absence=lambda *_args: pytest.fail('current candidate was permanently fenced'),
+            deploy=lambda *_args: pytest.fail('current pending candidate was bypassed'),
+            current_main=lambda: candidate.sha,
+        )
+    assert json.loads(path.read_text())['phase'] == 'pending'
+
+
 @pytest.mark.parametrize('field,value', [
     ('operation_id', str(uuid4())),
     ('candidate_sha', 'c' * 40),

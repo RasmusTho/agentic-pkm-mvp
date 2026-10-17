@@ -236,6 +236,14 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
             except CandidateRefused as error:
                 if str(error) != 'native_terminal_evidence_refused':
                     raise
+                # Absence retirement is only a path past a stale checkpoint.
+                # Fencing the current main candidate would make its immutable
+                # build ineligible for the normal same-ID retry below.
+                main_sha = current_main()
+                if re.fullmatch(r'[0-9a-f]{40}', main_sha) is None:
+                    raise CandidateRefused('current_main_refused')
+                if main_sha == candidate.sha:
+                    raise CandidateRefused('candidate_not_superseded')
                 proof = (absence or native_absence)(checkpoint['channel'], candidate)
                 _require_absence_profile(proof, checkpoint['channel'], candidate)
                 outcome = {
