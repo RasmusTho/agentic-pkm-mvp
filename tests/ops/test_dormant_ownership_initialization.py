@@ -603,7 +603,12 @@ def test_operation_specific_evidence_is_not_a_generic_restore(tmp_path):
     'post_stop_missing_inventory_context', 'fresh_recheck_source', 'reserved_retry_source',
     'reserved_retry_module', 'reserved_retry_interpreter', 'reserved_retry_launcher',
     'reserved_retry_missing_context', 'post_pair_source', 'cleanup_retry_exact', 'cleanup_retry_drift',
-    'retained_ordinary_inventory', 'retained_native_inventory', 'native_begin_symlink_loop'])
+    'retained_ordinary_inventory', 'retained_native_inventory', 'native_begin_symlink_loop',
+    'ordinary_claimed', 'ordinary_root_only_claimed', 'root_only_crash_retry',
+    'post_stop_stripped_inventory_nonce', 'post_stop_mutated_inventory_nonce',
+    'post_stop_stripped_inventory_context_and_nonce', 'orphaned_proof', 'dangling_proof',
+    'dangling_foreign_fence', 'root_only_gap_stripped_context', 'retained_fsync_inventory',
+    'post_bind_mutated_proof_nonce'])
 def test_test_preparation_producer_holds_window_until_explicit_initializer(tmp_path, scenario):
     """Real shell -> native qualify/begin/prove/bind/initialize/release.
 
@@ -672,6 +677,46 @@ if sys.argv[1:3] == ['-m', 'app.instance.runtime']:
     from app.instance import runtime
     from app.instance import legacy_owner_recovery as recovery
     scenario = os.environ['SCENARIO']
+    if sys.argv[3] == 'deployment-begin' and scenario in {'ordinary_root_only_claimed', 'root_only_crash_retry', 'root_only_gap_stripped_context'}:
+        host = Path(os.environ['HOST'])
+        if not (host/'root-only-before.json').exists():
+            original_write = runtime._write_private_json
+            def interrupted_begin(path, value):
+                original_write(path, value)
+                if Path(path) == host/'deployment-host-global-lease.json':
+                    (host/'root-only-before.json').write_text(json.dumps(value))
+                    raise OSError('fixture crash after first root blocker')
+            runtime._write_private_json = interrupted_begin
+        elif scenario == 'root_only_gap_stripped_context':
+            original_ensure = runtime.InstanceStateLayout.ensure
+            def changed_setup(self):
+                original_ensure(self)
+                path = host/'deployment-host-global-lease.json'
+                value = json.loads(path.read_bytes())
+                value.pop('native_execution_context')
+                path.write_text(json.dumps(value))
+                (host/'gap-before.json').write_bytes(path.read_bytes())
+            runtime.InstanceStateLayout.ensure = changed_setup
+    if (sys.argv[3] == 'deployment-begin' and '--native-source-root' in sys.argv
+            and scenario.startswith('retained_')
+            and Path(os.environ['HOST'], 'deployment-quiescence-inventory.json').exists()):
+        host = Path(os.environ['HOST'])
+        original_sync = recovery._fsync_directory
+        original_write = runtime._write_private_json
+        def retirement_sync(path):
+            if Path(path) == host:
+                assert not (host/'deployment-quiescence-inventory.json').exists()
+                if scenario == 'retained_fsync_inventory':
+                    raise OSError('fixture retirement durability failure')
+            original_sync(path)
+            (host/'retirement-synced').touch()
+        def first_blocker(path, value):
+            if Path(path) == host/'deployment-host-global-lease.json':
+                assert not (host/'deployment-quiescence-inventory.json').exists()
+                assert (host/'retirement-synced').exists()
+            original_write(path, value)
+        recovery._fsync_directory = retirement_sync
+        runtime._write_private_json = first_blocker
     if sys.argv[3] == 'deployment-prove' and scenario == 'post_stop_module_origin':
         recovery.__file__ = os.environ['TEST_PY']
     if sys.argv[3] == 'deployment-initialize-dormant-ownership':
@@ -736,12 +781,32 @@ fake_compose() {
         post_stop_launcher) printf '\n# replaced after qualification\n' >> "$TEST_PY" ;;
         post_stop_interpreter) cp "$RESOLVED_PY" "$RESOLVED_PY.new"; mv "$RESOLVED_PY.new" "$RESOLVED_PY" ;;
         post_stop_clean_head) printf 'late=True\n' > "$FIXTURE_CODE/late.py"; git -c user.name=Fixture -c user.email=fixture@example.invalid add late.py; git -c user.name=Fixture -c user.email=fixture@example.invalid -c core.hooksPath=/dev/null commit -qm changed ;;
+        post_stop_*inventory*nonce) "$TEST_PY" -c 'import json,os; from pathlib import Path; h=Path(os.environ["HOST"]); v=json.loads((h/"deployment-public/deployment-host-global-lease.json").read_bytes()); v={"schema":"agentic-pkm.host-deployment-quiescence.v2","native_execution_context":v["native_execution_context"],"deployment_nonce":v["nonce"]}; s=os.environ["SCENARIO"]; v.update(deployment_nonce="0"*32) if "mutated" in s else v.pop("deployment_nonce"); v.pop("native_execution_context") if "context_and" in s else None; p=h/"deployment-quiescence-inventory.json"; p.write_text(json.dumps(v)); p.chmod(0o600); (h/"inventory-before.json").write_bytes(p.read_bytes())' ;;
       esac
       return 0 ;;
     exec) return 0 ;;
     *) return 89 ;;
   esac
 }
+if [[ "$SCENARIO" = ordinary*claimed ]]; then
+  old_token="$("$TEST_PY" "$FIXTURE_CODE/scripts/instance_state_writer_inventory.py" controller-token --pid "$$")"
+  if [ "$SCENARIO" = ordinary_root_only_claimed ]; then
+    if "$TEST_PY" -m app.instance.runtime deployment-begin --channel test --instance-state-root "$STATE" --host-global-root "$HOST" --legacy-path "$HOST/absent-legacy.md" --controller-pid "$$" --controller-start-token "$old_token"; then exit 96; fi
+  else
+    "$TEST_PY" -m app.instance.runtime deployment-begin --channel test --instance-state-root "$STATE" --host-global-root "$HOST" --legacy-path "$HOST/absent-legacy.md" --controller-pid "$$" --controller-start-token "$old_token"
+  fi
+  "$TEST_PY" -c 'import os; from pathlib import Path; h=Path(os.environ["HOST"]); paths=[h/"deployment-host-global-lease.json",h/"deployment-public/deployment-host-global-lease.json",h/"deployment-test-restart-fence.json"]; [(p.with_name(p.name+".before").write_bytes(p.read_bytes())) for p in paths if p.exists()]'
+fi
+if [[ "$SCENARIO" = root_only_* ]]; then
+  if prepare_test_dormant_ownership_window fake_compose "$FIXTURE_CODE/.env.test" "$TEST_PY" "$REVISION" "$STATE" "$HOST/absent-legacy.md"; then exit 97; fi
+  [ -e "$HOST/deployment-host-global-lease.json" ]
+  [ ! -e "$HOST/deployment-public/deployment-host-global-lease.json" ]
+fi
+case "$SCENARIO" in
+  orphaned_proof) printf '{}' > "$HOST/deployment-quiescence-proof.json"; chmod 600 "$HOST/deployment-quiescence-proof.json" ;;
+  dangling_proof) ln -s "$HOST/absent-proof" "$HOST/deployment-quiescence-proof.json" ;;
+  dangling_foreign_fence) ln -s "$HOST/absent-fence" "$HOST/deployment-prod-restart-fence.json" ;;
+esac
 if [[ "$SCENARIO" = retained_*_inventory ]]; then
   old_token="$("$TEST_PY" "$FIXTURE_CODE/scripts/instance_state_writer_inventory.py" controller-token --pid "$$")"
   if [ "$SCENARIO" = retained_native_inventory ]; then
@@ -756,12 +821,16 @@ if [[ "$SCENARIO" = retained_*_inventory ]]; then
   [ ! -e "$HOST/deployment-public/deployment-host-global-lease.json" ]
 fi
 prepare_test_dormant_ownership_window fake_compose "$FIXTURE_CODE/.env.test" "$TEST_PY" "$REVISION" "$STATE" "${LEGACY_OVERRIDE:-$HOST/absent-legacy.md}"
+if [ "$SCENARIO" = root_only_crash_retry ]; then
+  "$TEST_PY" -c 'import json,os; from pathlib import Path; h=Path(os.environ["HOST"]); old=json.loads((h/"root-only-before.json").read_bytes()); new=json.loads((h/"deployment-public/deployment-host-global-lease.json").read_bytes()); assert old["nonce"]==new["nonce"]; assert old["native_execution_context"]==new["native_execution_context"]'
+fi
 case "$SCENARIO" in
   post_bind_source) printf 'late = True\n' > "$FIXTURE_CODE/app/instance/late_review_drift.py" ;;
   post_bind_module) cp "$FIXTURE_CODE/app/instance/legacy_owner_recovery.py" "$FIXTURE_CODE/app/instance/replacement.tmp"; mv "$FIXTURE_CODE/app/instance/replacement.tmp" "$FIXTURE_CODE/app/instance/legacy_owner_recovery.py" ;;
   post_bind_launcher) printf '\n# replaced after binding\n' >> "$TEST_PY" ;;
   post_bind_interpreter) cp "$RESOLVED_PY" "$RESOLVED_PY.new"; mv "$RESOLVED_PY.new" "$RESOLVED_PY" ;;
   post_bind_missing_context|post_bind_mismatched_context) "$TEST_PY" -c 'import json,os; from pathlib import Path; p=Path(os.environ["HOST"])/"deployment-quiescence-proof.json"; v=json.loads(p.read_bytes()); v.pop("native_execution_context") if os.environ["SCENARIO"].endswith("missing_context") else v["native_execution_context"].update(source_revision="0"*40); p.write_text(json.dumps(v))' ;;
+  post_bind_mutated_proof_nonce) "$TEST_PY" -c 'import json,os; from pathlib import Path; p=Path(os.environ["HOST"])/"deployment-quiescence-proof.json"; v=json.loads(p.read_bytes()); v["nonce"]="0"*32; p.write_text(json.dumps(v))' ;;
   post_bind_missing_lease_context|post_bind_missing_owner_context) "$TEST_PY" -c 'import json,os; from pathlib import Path; name="deployment-public/deployment-host-global-lease.json" if "lease" in os.environ["SCENARIO"] else "legacy-owner-inventory.json"; p=Path(os.environ["HOST"])/name; v=json.loads(p.read_bytes()); v.pop("native_execution_context"); p.write_text(json.dumps(v))' ;;
 esac
 "$TEST_PY" -c 'import os; from pathlib import Path; h=Path(os.environ["HOST"]); assert (h/"deployment-test-restart-fence.json").exists(); assert not (h/"ownership-key.json").exists(); assert not (h/"ownership-ledger.json").exists()'
@@ -801,7 +870,7 @@ release_fixture
     events = (root / 'events').read_text()
     assert runtime.registry.path.read_bytes() == registry_before
     assert (content / 'source.md').read_text() == 'untouched synthetic source\n'
-    if scenario not in {'exact', 'cleanup_retry_exact', 'retained_ordinary_inventory', 'retained_native_inventory'}:
+    if scenario not in {'exact', 'cleanup_retry_exact', 'retained_ordinary_inventory', 'retained_native_inventory', 'root_only_crash_retry'}:
         assert result.returncode != 0
         if scenario == 'native_begin_symlink_loop':
             assert 'Traceback' not in result.stderr
@@ -817,10 +886,28 @@ release_fixture
                 assert not (root / 'backup').exists()
             elif scenario not in {'post_pair_source', 'cleanup_retry_drift'}:
                 assert not (root / 'backup').exists()
+            if 'inventory' in scenario and 'nonce' in scenario:
+                assert (host / 'deployment-quiescence-inventory.json').read_bytes() == (host / 'inventory-before.json').read_bytes()
         else:
             assert 'compose:stop' not in events
-            if scenario != 'native_begin_symlink_loop':
+            if scenario not in {'native_begin_symlink_loop', 'ordinary_claimed', 'ordinary_root_only_claimed', 'orphaned_proof', 'dangling_proof', 'dangling_foreign_fence', 'root_only_gap_stripped_context', 'retained_fsync_inventory'}:
                 assert 'deployment-begin' not in events
+            if scenario.startswith('ordinary_'):
+                for before in host.rglob('*.before'):
+                    assert before.with_name(before.name.removesuffix('.before')).read_bytes() == before.read_bytes()
+                assert 'deployment-release' not in events
+            if scenario == 'root_only_gap_stripped_context':
+                assert (host / 'deployment-host-global-lease.json').read_bytes() == (host / 'gap-before.json').read_bytes()
+                assert not rt._deployment_lease_path(host).exists()
+            if scenario == 'retained_fsync_inventory':
+                assert not (host / 'deployment-host-global-lease.json').exists()
+                assert not rt._deployment_lease_path(host).exists()
+                assert not rt._deployment_fence_path(host, 'test').exists()
+            if scenario in {'orphaned_proof', 'dangling_proof', 'dangling_foreign_fence'}:
+                assert not rt._deployment_lease_path(host).exists()
+                assert not (host / 'deployment-host-global-lease.json').exists()
+                artifact = host / ('deployment-prod-restart-fence.json' if scenario == 'dangling_foreign_fence' else 'deployment-quiescence-proof.json')
+                assert os.path.lexists(artifact)
         assert runtime.ledger.key_path.exists() == (scenario in {'post_pair_source', 'cleanup_retry_drift'})
         assert runtime.ledger.path.exists() == (scenario in {'post_pair_source', 'cleanup_retry_drift'})
         return

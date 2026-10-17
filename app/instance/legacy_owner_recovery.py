@@ -264,17 +264,68 @@ def require_native_window(host: Path, *, required: bool = False) -> dict[str, An
     inventory_path = host / "deployment-quiescence-inventory.json"
     if os.path.lexists(inventory_path):
         inventory = _read_private_json(inventory_path)
-        # A released ordinary/previous window leaves an inventory behind. It
-        # cannot veto the next claimed window's producer, nor satisfy its proof.
-        if inventory.get("deployment_nonce") == nonce or lease.get("phase") != "claimed":
-            if inventory.get("deployment_nonce") != nonce or inventory.get(_NATIVE_CONTEXT) != context:
-                raise _test_refusal()
+        if inventory.get("deployment_nonce") != nonce or inventory.get(_NATIVE_CONTEXT) != context:
+            raise _test_refusal()
     proof_path = host / "deployment-quiescence-proof.json"
     if os.path.lexists(proof_path):
         proof = _read_private_json(proof_path)
-        if proof.get("nonce") == nonce and proof.get(_NATIVE_CONTEXT) != context:
+        if proof.get("nonce") != nonce or proof.get(_NATIVE_CONTEXT) != context:
             raise _test_refusal()
     return context
+
+
+def require_native_begin_context(host: Path, context: dict[str, object] | None,
+    *, retire_inventory: bool = False) -> None:
+    """Admission-lock-held native begin; never adopt or upgrade another claim.
+
+    A released window's private census is rebuildable, not authority. Retire it
+    only before the first blocker of a genuinely fresh claim. Once any claim
+    exists, every inventory/proof must instead match its exact original context
+    and nonce, including a root-only crash retry. The caller repeats this check
+    after setup and holds admission through retirement and first publication.
+    """
+    if context is None:
+        if require_native_window(host) is not None:
+            raise _test_refusal()
+        return  # Ordinary begin remains unchanged when no native claim exists.
+    records = _reservation_records(host)
+    fences = tuple(host.glob("deployment-*-restart-fence.json"))
+    if any(path != records[1] for path in fences):
+        raise _test_refusal()
+    if any(os.path.lexists(path) for path in records):
+        if (require_native_window(host, required=True) != context
+            or read_preparation_reservation(host) is not None):
+            raise _test_refusal()
+        return
+    # lexists includes dangling symlinks: missing targets are not absence of
+    # safety evidence. No proof/fence/pending mirror may be retired as census.
+    if fences or os.path.lexists(host / "deployment-quiescence-proof.json"):
+        raise _test_refusal()
+    inventory_path = host / "deployment-quiescence-inventory.json"
+    if os.path.lexists(inventory_path):
+        from app.instance.runtime import _CONTROLLER_START_TOKEN_RE, _QUIESCENCE_INVENTORY_SCHEMA
+        inventory = _read_private_json(inventory_path)
+        domains: dict[str, list[object]] = {name: [] for name in ("dev", "native", "prod", "test")}
+        digest = hashlib.sha256(json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        controller = inventory.get("controller")
+        prior_context = inventory.get(_NATIVE_CONTEXT)
+        prior_nonce = inventory.get("deployment_nonce")
+        if (inventory.get("schema") != _QUIESCENCE_INVENTORY_SCHEMA
+            or inventory.get("inventory_complete") is not True
+            or inventory.get("all_consumers_stopped") is not True
+            or inventory.get("probe_count") != 2 or inventory.get("domains") != domains
+            or inventory.get("snapshot_digests") != [digest, digest]
+            or not isinstance(controller, dict) or type(controller.get("pid")) is not int
+            or controller["pid"] <= 0
+            or _CONTROLLER_START_TOKEN_RE.fullmatch(str(controller.get("start_token") or "")) is None
+            or (prior_context is None and prior_nonce is not None)
+            or (prior_context is not None and (not isinstance(prior_context, dict)
+                or not isinstance(prior_nonce, str) or len(prior_nonce) != 32
+                or any(char not in "0123456789abcdef" for char in prior_nonce)))):
+            raise _test_refusal()
+        if retire_inventory:
+            inventory_path.unlink()
+            _fsync_directory(host)
 
 
 def _reservation_records(host: Path) -> tuple[Path, ...]:

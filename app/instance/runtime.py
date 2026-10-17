@@ -2376,6 +2376,7 @@ def _begin_instance_state_deployment(
 
     # Owner-authorized source-only #5937 integration: refuse a pending TEST
     # reservation before ordinary setup or takeover can erase its safety state.
+    from app.instance.legacy_owner_recovery import require_native_begin_context
     with _deployment_admission_locked(host_global_root):
         _require_completed_dormant_ownership_preparation(host_global_root)
         if native_execution_context is not None:
@@ -2386,6 +2387,7 @@ def _begin_instance_state_deployment(
                 or context["controller_pid"] != controller_pid
                 or context["controller_start_token"] != controller_start_token):
                 raise InstanceStatePreflightError("TEST native context changed")
+        require_native_begin_context(host_global_root, native_execution_context)
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
     ownership_root = _assert_mount_root(host_global_root, "host-global")
     if controller_pid <= 0 or _CONTROLLER_START_TOKEN_RE.fullmatch(controller_start_token) is None:
@@ -2409,6 +2411,7 @@ def _begin_instance_state_deployment(
         _require_completed_dormant_ownership_preparation(ownership_root)
         if native_execution_context is not None:
             require_test_native_context(native_execution_context)
+        require_native_begin_context(ownership_root, native_execution_context, retire_inventory=True)
         root_lease_path = _legacy_deployment_lease_path(ownership_root)
         root_authority = (
             _read_legacy_deployment_lease(ownership_root)

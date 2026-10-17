@@ -4,7 +4,7 @@ State: Active capability specification.
 Temporal class: strategic
 Review cadence: at each MVR child merge or stage-acceptance update
 Source of truth: this document for capability and stage decomposition; live Issues, PRs, and exact-SHA CI for delivery state
-Last reviewed: 2026-10-15
+Last reviewed: 2026-10-17 (TEST dormant preparation context/admission continuity; other sections retain their existing evidence)
 Last verified against: MVR-05A stage acceptance on `origin/main` `2a47ceb6fd3a` ([nightly pg-contracts](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38696096987), 366 passed, zero required skips); exact-head production proof #6051 / PR #6054 ([receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6051#issuecomment-6184628420)); outbox repair #5989 / PR #6057; stage hub #3859 closed; open validation hub #2143
 
 Delivered: MVR-01A/01B/01C (#3853/#3854/#3855) mechanical substrate and authority cutover, MVR-02
@@ -291,6 +291,10 @@ to that package, including interrupted directory durability; generic restore and
 consume it. The original qualified native source/module and launcher/interpreter identity remains
 bound through the existing proof and safety records, including lock-held initialization retries
 and guarded release; the authenticated backup retains that proof for interrupted cleanup.
+Native begin cannot adopt an ordinary claim or change an existing claim's original context.
+A released window's validated private census is retired under admission only when every safety
+record and canonical proof is absent; current-window census/proof nonce or context damage refuses
+instead of being treated as prior evidence.
 Preparation remains `inactive_fenced`. Source support and synthetic fixture proof are
 not live TEST repair or activation: a future invocation still needs the separately attributable
 operator acknowledgement, qualified native execution, and existing downstream activation gates.

@@ -5,7 +5,7 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-10-15 (BWS secret-provisioning section; other deployment sections were not re-audited)
+Last reviewed: 2026-10-17 (TEST dormant preparation context/admission continuity; BWS secret-provisioning review remains 2026-10-15; other deployment sections were not re-audited)
 Last live runtime verification: 2026-10-11 UTC (accepted native DEV/TEST activation, health/version/UI and isolated PostgreSQL verification under #5675; the earlier read-only route checks remain separate, and `prod` was not queried)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903); Issue #5868 and the existing-secret deployment Verify targets, which establish repository behavior only.
 Verification update (2026-10-10): repository support includes post-merge image admission and private-host dev/test orchestration under #5922. Deterministic verification establishes the orchestration, digest and migration boundaries; live activation and functional channel acceptance are recorded separately under #5675.
@@ -368,6 +368,11 @@ authority command revalidates that original context, including the separate init
 fresh and reserved-retry checks and guarded release. Missing, stripped, replaced or changed evidence
 refuses without clearing the pending epoch or fence. The authenticated backup retains the original
 proof bytes so interrupted cleanup cannot replace the qualified context after unlinking its live copy.
+Native begin requires the same persisted context on every existing-claim path, including root-only
+crash retry, and cannot upgrade an ordinary claim. Only a genuinely fresh begin with all lease,
+compatibility, restart-fence, pending-reservation and canonical-proof evidence absent may retire a
+validated private prior-window census; its directory is fsynced before the first new blocker.
+Once claimed, missing or changed census/proof nonce or context refuses and preserves safety state.
 
 Within that held window, the separate explicit `deployment-initialize-dormant-ownership` command
 requires `--channel test`, existing `--instance-state-root` and `--host-global-root`, retained
