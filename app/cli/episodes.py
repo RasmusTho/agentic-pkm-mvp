@@ -55,7 +55,11 @@ def _invocation_vault_root(vault_root: str | None) -> Path:
         )
     except CliVaultContextError as exc:
         raise click.ClickException(str(exc)) from exc
-    assert carrier.root is not None  # a default path is always supplied
+    if carrier.root is None:
+        # A bound instance registry selected no vault; never fall back to ./vault.
+        raise click.ClickException(
+            "no vault is selected: pass --vault-root or set an instance default vault"
+        )
     return carrier.root
 
 

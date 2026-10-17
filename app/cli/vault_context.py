@@ -86,7 +86,15 @@ def _registry_store() -> VaultRegistryStore | None:
     if not raw:
         return None
     path = Path(raw).expanduser().resolve(strict=False)
-    return VaultRegistryStore(path) if path.is_file() else None
+    if not path.is_file():
+        # Only an unset variable selects the legacy compatibility journey. A
+        # configured but missing/unusable registry (broken mount, failed
+        # bootstrap, deleted file) fails closed rather than falling back to the
+        # legacy env or process selection, which could name a different vault.
+        raise CliVaultContextError(
+            f"INSTANCE_VAULT_REGISTRY_PATH is configured but is not a readable registry file: {path}"
+        )
+    return VaultRegistryStore(path)
 
 
 def resolve_cli_vault_context(
@@ -138,9 +146,9 @@ def resolve_cli_vault_context(
                 vault_binding_id=selection.vault_binding_id,
                 provenance=selection.provenance,
             )
-        if default_path is None:
-            return VaultCarrier(source="no_vault", root=None, provenance=selection.provenance)
-        return VaultCarrier(source="compatibility", root=default_path, provenance="cli_default_path")
+        # The registry's authoritative answer is "no vault": a command's legacy
+        # default path never overrides it, or a CWD vault could be read or mutated.
+        return VaultCarrier(source="no_vault", root=None, provenance=selection.provenance)
 
     for name in _POLICY_ENV_KEYS[env_policy]:
         value = legacy.get(name)

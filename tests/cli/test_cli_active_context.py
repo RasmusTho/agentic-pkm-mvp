@@ -320,3 +320,35 @@ def test_cli_resolution_precedence_without_a_registry(
 
     # An explicit option always wins and reads nothing else.
     assert resolve(tmp_path / "x", env_policy="mcp").source == "explicit_selection"
+
+
+def test_bound_registry_no_vault_is_authoritative_over_command_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6168 review: a registry that selects no vault never yields a ./vault default."""
+
+    runtime, _first, _extra, _record = provisioned_instance(tmp_path, set_instance_default=False)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    for key in VAULT_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    resolve = vault_context_module.resolve_cli_vault_context
+
+    carrier = resolve(default_path=Path("vault"))
+
+    assert carrier.is_no_vault
+    assert carrier.root is None
+
+
+def test_configured_but_missing_registry_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6168 review: only an unset registry variable selects the legacy journey."""
+
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(tmp_path / "missing" / "registry.json"))
+    fallback = tmp_path / "legacy"
+    fallback.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(fallback))
+    resolve = vault_context_module.resolve_cli_vault_context
+
+    with pytest.raises(vault_context_module.CliVaultContextError):
+        resolve(env_policy="channel")
