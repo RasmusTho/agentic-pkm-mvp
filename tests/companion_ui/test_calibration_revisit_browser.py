@@ -116,13 +116,34 @@ def _serve_card(
                 # The runtime has committed the action, but the browser sees
                 # no acknowledgement.  The next request must be the exact
                 # identity/payload replay, not a new choice.
-                if acknowledgement_fault == "drop":
+                if acknowledgement_fault in {"drop", "safe_mode_replay_refusal"}:
                     try:
                         self.connection.shutdown(socket.SHUT_RDWR)
                     except OSError:
                         pass
                     self.connection.close()
                     return
+            if acknowledgement_fault == "safe_mode_replay_refusal" and len(posts) == 2:
+                # The first request committed, then the guard entered
+                # safe_mode.  A replay is refused before durable lookup, so
+                # this response cannot prove that the original write was a
+                # no-op.  The following retry represents guard recovery and
+                # returns the canonical receipt.
+                encoded = json.dumps(
+                    {
+                        "detail": {
+                            "error": "writeguard_blocked",
+                            "state": "blocked",
+                            "message": "safe_mode",
+                        }
+                    }
+                ).encode("utf-8")
+                self.send_response(409)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+                return
             if canonical_intent == "answer":
                 response: dict[str, Any] = {
                     "status": "answered",
@@ -239,6 +260,67 @@ def test_dismiss_lost_ack_reconciles_same_identity_without_outcome() -> None:
             card = page.locator('[data-testid="calibration-revisit-card"]')
             assert card.get_attribute("data-outcome") in (None, "")
             assert "Nothing durable happened" not in (page.locator('[data-calibration-feedback]').text_content() or "")
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize("canonical_intent", ("answer", "dismiss"))
+def test_safe_mode_replay_refusal_preserves_uncertain_lineage(
+    canonical_intent: str,
+) -> None:
+    """A replay 409 cannot erase a possibly committed first action."""
+
+    with _serve_card(
+        canonical_intent=canonical_intent,
+        acknowledgement_fault="safe_mode_replay_refusal",
+    ) as (url, posts), sync_playwright() as playwright:
+        browser, page = _launch(playwright, url)
+        try:
+            if canonical_intent == "answer":
+                page.locator('[data-outcome="held"]').click()
+            else:
+                page.locator('[data-intent="dismiss"] button[type="submit"]').click()
+
+            page.locator('[data-calibration-reconcile]').wait_for(state="visible")
+            page.locator('[data-calibration-reconcile]').click()
+            page.locator('[data-calibration-feedback]').wait_for()
+            page.wait_for_function(
+                """() => !document.querySelector('[data-calibration-reconcile]').disabled"""
+            )
+            assert page.locator('[data-calibration-feedback]').get_attribute("data-failure") == "uncertain"
+            assert page.locator('[data-calibration-reconcile]').is_enabled()
+            assert page.locator('[data-outcome="held"]').is_disabled()
+            assert len(posts) == 2
+            assert posts[0] == posts[1]
+            assert "Nothing durable happened" not in (
+                page.locator('[data-calibration-feedback]').text_content() or ""
+            )
+
+            # Try the opposite mutation while the guard recovers.  It must
+            # reconcile the original action instead of replacing its lineage.
+            if canonical_intent == "answer":
+                page.locator('form[data-intent="answer"]').evaluate(
+                    """form => {
+                        const button = form.querySelector('[data-outcome="did_not_hold"]');
+                        form.dispatchEvent(new SubmitEvent('submit', {bubbles: true, cancelable: true, submitter: button}));
+                    }"""
+                )
+            else:
+                page.locator('[data-outcome="held"]').evaluate(
+                    """button => {
+                        const form = button.form;
+                        form.dispatchEvent(new SubmitEvent('submit', {bubbles: true, cancelable: true, submitter: button}));
+                    }"""
+                )
+            expected_state = "answered" if canonical_intent == "answer" else "dismissed"
+            page.locator(f'[data-state="{expected_state}"]').wait_for()
+            assert len(posts) == 3
+            assert posts[0] == posts[1] == posts[2]
+            card = page.locator('[data-testid="calibration-revisit-card"]')
+            if canonical_intent == "answer":
+                assert card.get_attribute("data-outcome") == "held"
+            else:
+                assert card.get_attribute("data-outcome") in (None, "")
         finally:
             browser.close()
 

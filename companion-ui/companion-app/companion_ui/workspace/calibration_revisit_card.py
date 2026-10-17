@@ -321,15 +321,10 @@ def calibration_revisit_card_script() -> str:
           }});
         }})
         .catch(function(error) {{
-          if (error && error.precommitRefusal) {{
-            uncertainAction = null;
-            busy = false;
-            setBusy(action.form, false, '');
-            setFreshMutationsDisabled(false);
-            if (reconcile) reconcile.hidden = true;
-            setFeedback(error.message || ('Nothing durable happened. You can retry this ' + action.intent + '.'), 'failed');
-            return;
-          }}
+          // A pre-commit refusal on a replay cannot prove that the original
+          // acknowledgement failure was a no-op.  The guard may have entered
+          // safe mode after the backend committed, so preserve the original
+          // identity and payload until a canonical response is returned.
           busy = false;
           if (reconcile) reconcile.disabled = false;
           setFreshMutationsDisabled(true);
