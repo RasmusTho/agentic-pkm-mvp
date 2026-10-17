@@ -235,6 +235,12 @@ generation before branch deletion; restart reconciliation completes only a pendi
 never infers removal from an ordinary missing lifecycle record. Broad worktree-metadata pruning
 remains report-only.
 
+An explicit `agent_worktree.py preserve-missing` disposition may move one exact expired active
+generation with an absent checkout to terminal `missing_preserved` state while retaining its branch
+ref and path-to-branch identity. The transition requires the recorded owner and exact generation,
+reserves the absent path through its durable readback, and blocks branch retirement and path reuse;
+it never authorizes cleanup or changes restart reconciliation.
+
 When a selected worktree has already been durably retired as an exact `removed` generation but its
 branch step did not complete, a later targeted apply may resume only that tombstone's bound local
 branch. A non-ancestor branch additionally requires fresh external `MERGED` PR-state and lease

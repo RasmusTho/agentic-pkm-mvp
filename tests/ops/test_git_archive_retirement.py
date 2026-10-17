@@ -182,7 +182,10 @@ def test_rescue_wrapper_rejects_other_namespaces(phase, ref):
         ar.retire_remote_legacy_rescue_branches(root, **kwargs)
 
 
-@pytest.mark.parametrize("activity", ["none", "open_original", "checked_original", "resumable_original"])
+@pytest.mark.parametrize("activity", [
+    "none", "open_original", "checked_original", "resumable_original",
+    "missing_preserved_original",
+])
 def test_rescue_wrapper_checks_original_branch(phase, monkeypatch, activity):
     root, remote, sha, kwargs = phase
     ref = "refs/heads/rescue/old"
@@ -203,6 +206,25 @@ def test_rescue_wrapper_checks_original_branch(phase, monkeypatch, activity):
                 "source_anchor_refs": "[]",
                 "linked_pr": None,
             }}])
+    elif activity == "missing_preserved_original":
+        path = (root.parent / "lost-worktree").resolve()
+        aw._write_registry(aw._default_registry_path(root), {
+            "schema": aw.REGISTRY_SCHEMA,
+            "worktrees": {str(path): {
+                "path": str(path),
+                "branch": "old",
+                "generation": "a" * 32,
+                "owner": "lost-owner",
+                "status": "missing_preserved",
+                "registered_at": 1,
+                "heartbeat_at": 2,
+                "expires_at": 3,
+                "missing_preserved_at": 4,
+                "missing_preserved_by": "lost-owner",
+                "missing_preserved_disposition": "retain-branch",
+                "missing_preserved_branch_head": sha,
+            }},
+        })
     result = ar.retire_remote_legacy_rescue_branches(root, **kwargs)
     assert result["schema"] == ar.RESCUE_SCHEMA
     assert bool(result["deleted"]) == (activity == "none")

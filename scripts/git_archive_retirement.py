@@ -267,8 +267,14 @@ def _rescue_branch_active(cwd: Path, ref: str, registry: Mapping[str, Any],
         try:
             for path, record in registry.items():
                 if record.get("branch") == branch or gh._record_previously_bound(record, branch):
-                    aw._validate_authority_record(path, record)
-                if record.get("branch") == branch and record["expires_at"] > time.time():
+                    if record.get("status") == "missing_preserved":
+                        aw._validate_missing_preserved_binding(cwd, path, record)
+                    else:
+                        aw._validate_authority_record(path, record)
+                if record.get("branch") == branch and (
+                    record.get("status") == "missing_preserved"
+                    or record["expires_at"] > time.time()
+                ):
                     return True
         except (RuntimeError, TypeError, ValueError):
             return True

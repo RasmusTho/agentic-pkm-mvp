@@ -418,7 +418,9 @@ lease check, then keep the rest of execution local and deterministic.
   lifecycle lock spans only that command. It durably records a generation-bound `removal_pending`
   transition before Git removal; successful removal retires the exact generation before branch
   deletion, and restart reconciliation completes only pending transitions. Ordinary missing
-  lifecycle records remain preservation evidence. Broad metadata pruning remains report-only. The compatibility
+  lifecycle records remain preservation evidence. `agent_worktree.py` may mark one exact expired
+  active generation `missing_preserved` after an explicit owner disposition while retaining its branch; this
+  terminal state blocks path reuse and branch retirement and never authorizes cleanup. Broad metadata pruning remains report-only. The compatibility
   `scripts/git_hygiene_janitor.py` entrypoint refuses destructive cleanup. These are scripts, not
   skills.
 

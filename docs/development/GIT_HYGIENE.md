@@ -86,6 +86,20 @@ the path and branch lease identities immediately before deletion and retains
 prior path-to-branch bindings when a path is reused. A report, missing record,
 or missing worktree is never evidence that cleanup is authorized.
 
+An expired `active` record whose checkout is absent remains untouched by
+restart reconciliation. An operator may resolve that exact generation with
+`agent_worktree.py preserve-missing` only by supplying its path, branch,
+generation, recorded owner, and the explicit `retain-branch` disposition. The
+operation requires the branch ref to exist, confirms filesystem and Git
+registration absence, reserves the path across the locked registry write, and
+records `missing_preserved` provenance without changing the original identity,
+timestamps, branch ref, or any recovery bundle. This terminal state preserves
+the branch in automatic and explicit retirement paths, refuses reuse of the path
+including case or Unicode-normalisation aliases, and fails authority reads if
+the path is later recreated. It is not a `removed`
+tombstone and cannot resume cleanup. Ordinary-missing restart reconciliation
+continues to process only a previously durable `removal_pending` transition.
+
 Remote branch disposition is not a broad-janitor action. The bounded
 `targeted_remote_cleanup` production entrypoint accepts at most five caller-supplied
 candidates and requires each to bind the repository, fully qualified source ref,
