@@ -133,6 +133,87 @@ def test_answer_revisit_writes_outcome_receipt_via_writeguard(
     ]
 
 
+def test_retry_replays_the_submitted_rung_instead_of_stamping_next_rung(
+    client: TestClient,
+    vault_note: Path,
+    due: RevisitDue,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    next_rung = RevisitDue(
+        decision_object_id=due.decision_object_id,
+        decision_uuid=due.decision_uuid,
+        title=due.title,
+        decided_on=due.decided_on,
+        rung_index=1,
+        rung_days=30,
+        due_since=due.due_since,
+    )
+    monkeypatch.setattr(companion_module, "due_revisits", lambda **_: [next_rung])
+    monkeypatch.setattr(
+        companion_module,
+        "iter_outcome_receipts",
+        lambda _root: [
+            {
+                "decision_uuid": str(due.decision_uuid),
+                "decision_object_id": str(due.decision_object_id),
+                "rung_index": due.rung_index,
+                "outcome": "held",
+            }
+        ],
+    )
+    monkeypatch.setattr(companion_module, "iter_revisit_dismissals", lambda _root: [])
+
+    def must_not_stamp_next(**_: object) -> dict[str, object]:
+        raise AssertionError("retry must not stamp the next rung")
+
+    monkeypatch.setattr(companion_module, "append_outcome_receipt", must_not_stamp_next)
+    response = client.post(
+        f"/api/companion/calibration/revisits/{due.decision_uuid}/decision",
+        json={
+            "outcome": "held",
+            "rung_index": due.rung_index,
+            "decision_object_id": str(due.decision_object_id),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "answered"
+    assert response.json()["rung_index"] == due.rung_index
+
+
+def test_answer_and_dismiss_arbitrate_one_durable_rung(
+    client: TestClient,
+    vault_note: Path,
+    due: RevisitDue,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(companion_module, "due_revisits", lambda **_: [due])
+    monkeypatch.setattr(companion_module, "iter_outcome_receipts", lambda _root: [])
+    monkeypatch.setattr(
+        companion_module,
+        "iter_revisit_dismissals",
+        lambda _root: [
+            {
+                "decision_uuid": str(due.decision_uuid),
+                "decision_object_id": str(due.decision_object_id),
+                "rung_index": due.rung_index,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        companion_module,
+        "append_outcome_receipt",
+        lambda **_: (_ for _ in ()).throw(AssertionError("answer raced a dismissal")),
+    )
+    response = client.post(
+        f"/api/companion/calibration/revisits/{due.decision_uuid}/decision",
+        json={"outcome": "held", "rung_index": due.rung_index},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "calibration_revisit_already_dismissed"
+
+
 def test_dismiss_defers_without_outcome_receipt(
     client: TestClient,
     vault_note: Path,

@@ -114,7 +114,13 @@ def test_answer_survives_projection_outage(
     decision_uuid = str(uuid.uuid4())
     _write_decision(vault, decision_uuid, project="recovery")
     monkeypatch.setattr(receipts, "_insert_projection", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("down")))
-    with pytest.raises(RuntimeError, match="down"):
-        _append(vault, str(uuid.uuid4()), decision_uuid, 0, "held")
+    receipt = append_outcome_receipt(
+        decision_object_id=str(uuid.uuid4()),
+        decision_uuid=decision_uuid,
+        rung_index=0,
+        outcome="held",
+        vault_root=vault,
+    )
+    assert receipt["projection_state"] == "degraded"
     summary = rebuild_calibration_projection(vault)
     assert summary.inserted == 1

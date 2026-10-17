@@ -3538,7 +3538,10 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         fields.get("commitments_surface")
     )
     calibration_revisit_html = (
-        calibration_revisit_card_markup(fields.get("calibration_revisit"))
+        calibration_revisit_card_markup(
+            fields.get("calibration_revisit"),
+            note_path=str(fields.get("note_path") or ""),
+        )
         if "calibration_revisit" in fields
         else ""
     )
@@ -17439,8 +17442,35 @@ def make_handler(
             try:
                 payload = json.loads(raw_body.decode("utf-8") or "{}")
             except json.JSONDecodeError:
-                self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
-                return
+                content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                if (
+                    content_type == "application/x-www-form-urlencoded"
+                    and re.fullmatch(
+                        r"/api/companion/calibration/revisits/[^/]+/(?:decision|dismiss)",
+                        parsed.path,
+                    )
+                ):
+                    try:
+                        pairs = parse_qsl(
+                            raw_body.decode("utf-8"),
+                            keep_blank_values=True,
+                            strict_parsing=True,
+                        )
+                    except (UnicodeDecodeError, ValueError):
+                        self._send_json(
+                            400,
+                            {"error": "invalid_form", "message": "Request body must be URL encoded."},
+                        )
+                        return
+                    payload = {key: value for key, value in pairs}
+                    if "rung_index" in payload:
+                        try:
+                            payload["rung_index"] = int(payload["rung_index"])
+                        except ValueError:
+                            pass
+                else:
+                    self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
+                    return
             runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
             timeout_override = self._post_timeout_override(parsed.path)
             try:
