@@ -5,7 +5,7 @@ Owner: Yggdrasil Platform and Operations, with Product/Runtime and Builder Syste
 Temporal class: strategic
 Review cadence: after a task merge, BWS account/topology change, or live channel qualification
 Source of truth: this directory for target behavior; issue #5667 is the delivery and acceptance hub
-Last reviewed: 2026-10-15
+Last reviewed: 2026-10-17 (bounded DevUI administration procedure; broader channel acceptance unchanged)
 Last verified against: merged PRs #5683, #5703, #5717, #5725, #5732, #5734, and #6015; #5667 comments #6114638077, #6114724380, and #6114787299. These verify repository delivery, current Free-plan entitlement, both reader scopes, active encrypted reader services on all three channel VMs, the MARR non-prod binding, and the accepted normal-writer model; full integrated channel acceptance remains open.
 
 # Cloud Secret Provisioning
@@ -84,6 +84,68 @@ permission or deployment changes.
 15. Normal deploys require `postgres.password` to be present before any remote deployment-state mutation. The only absent-password exception is BWS-04 first initialization: under the agent-host operation lock, check all other selected identities, acquire the VM per-channel lock as a coordination-only action, and inspect the actual database data directory under that lock. If it is not empty, release the lock and fail without creating a BWS password or changing deployment state. If it is empty, BWS-04 alone may generate and persist one password after BWS-02 has durably recorded the value-free absence tombstone and prepared operation ID. Include that ID in non-secret BWS item metadata, read the item back, and verify it before any deployment-state mutation; then recheck it on the VM before local mutation and Compose. If interrupted after a create may have reached BWS, the same operation ID remains pending. A retry rechecks emptiness and reads the BWS item; exactly one matching item is read and reused. An absent or ambiguous readback leaves the operation indeterminate and must not trigger another create without authoritative proof the prior request did not commit. It does not silently start a new bootstrap operation or replace an existing item. An initialized database with a missing item must import its current role value and cannot use bootstrap.
 
 16. The only direct runtime BWS consumer outside the Linux channel reader contract is `marr-server-dev`. It resolves `dev/typesafe.api-key` from non-prod through the existing `non-prod-reader` identity; its token is held in the MARR host Keychain and used in process memory. Product and Builder callers still receive neither the provider key nor the reader token, and the code-level MARR consumer binding remains mandatory. The accepted #5667 normal-writer model in Fixed constraint 14 governs BWS administration; the accepted broader read scope does not authorize a consumer or agent to use another binding.
+
+## BOB-1 DevUI GitHub token
+
+The separate Builder System binding is `bob-1/devui.github-token` in the existing
+`non-prod` project. It is administered on Demerzel through `scripts/secrets devui`.
+It is never an alias or mirror of `shared/github.token`, and it grants no Product
+channel consumer access. This closed binding lives in `app/ops/bws_secret_admin.py`;
+the existing Product channel and reader-token registries remain unchanged. BOB-1
+receives neither a BWS machine-account token nor an administrator token.
+
+Regenerate the existing GitHub credential `bob-1-devui-read-2026-09` with its
+existing selected repository and read-only permissions. Do not substitute another
+consumer's credential or increase its grants. BWS import changes only the stored
+value; it cannot create, restrict, or inspect GitHub's fine-grained token permissions.
+The operator must preserve those settings when regenerating the credential.
+
+From an up-to-date checkout on Demerzel, using the existing Python environment
+with `bitwarden-sdk` installed:
+
+```bash
+/Users/rasmus/agentic-pkm-mvp/.venv/bin/python scripts/secrets devui preflight
+/Users/rasmus/agentic-pkm-mvp/.venv/bin/python scripts/secrets devui rotate
+```
+
+`rotate` first checks BWS and the actual DevUI binding, then prompts through the
+local terminal with echo disabled. Paste the regenerated token only at that hidden
+prompt. It refuses a terminal that cannot disable echo. No token is placed in a
+shell command, process argument, environment, transcript, or temporary input file.
+An automation that already owns a protected input stream may instead use
+`devui import --stdin`, followed by `devui apply`; never use `echo TOKEN`, a shell
+variable, or a here-document containing the token.
+
+The import uses the existing Demerzel Keychain administrator, host-controller lock,
+protected append-only secret history, and unknown-provider-outcome rules. Apply
+resolves only this BWS item under the same controller lock and sends its value over
+standard input through `bob-1-builder-system` with noninteractive `sudo`. No VM
+password or interactive VM login is needed. The fixed receiver checks the dedicated
+`/run/docker-builderops.sock` engine, the running `builderops-devui-devui-1`
+container, its repository, absence of token environment overrides, and its read-only
+directory mount before writing. It atomically replaces only the active account's
+two `oauth_token` entries in `/opt/builderops/devui-gh/hosts.yml`, preserving its
+root ownership, group, mode `0640`, other accounts, and other hosts. The directory
+bind mount sees the replacement without a container restart.
+
+Before replacement, the candidate must pass repository, Issues, PRs, branches, and
+commit-status GET requests. After replacement, those reads run through `gh` inside
+the same actual DevUI container. A failed container read restores the previous file.
+The value-free terminal receipt is written durably under
+`/opt/builderops/receipts/devui-github-token-<operation-id>.json` and read back over
+SSH before the host controller marks the operation terminal. Success proves those
+reads, not the absence of extra permissions on the externally issued token.
+
+Use `scripts/secrets devui check` for BWS presence without value output. If SSH
+acknowledgement is lost, run `scripts/secrets devui reconcile`: it reads the exact
+pending operation's durable remote receipt without resending the token. If no
+terminal receipt exists, admission remains pending; do not clear the journal or
+repeat import/apply to bypass it. Investigate the bounded operation on BOB-1 before
+recovery. Unknown BWS writes retain the existing stricter import recovery rules.
+
+This procedure changes no other GitHub token, runtime image, Compose configuration,
+Product channel, or BWS reader permission. Live rotation evidence belongs in the
+operation receipt and delivery PR, separately from broader #5667 acceptance.
 
 ## Specification delivery
 
