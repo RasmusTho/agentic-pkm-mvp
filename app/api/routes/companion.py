@@ -84,15 +84,19 @@ from app.domain.commitments import (
     query_next_and_waiting_commitments,
 )
 from app.calibration.scheduler import RevisitDue, due_revisits
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.receipts.outcome_receipt_log import (
     OUTCOME_RECEIPT_WRITE_ACTION,
     OutcomeValue,
     append_outcome_receipt,
+    iter_outcome_receipts,
 )
 from app.receipts.revisit_dismissal_log import (
     REVISIT_DISMISSAL_WRITE_ACTION,
     append_revisit_dismissal,
+    iter_revisit_dismissals,
 )
+from app.receipts.revisit_action_lock import revisit_action_lock
 from app.api.routes.active_context_selection import get_selection_store
 from app.api.routes.ingest_binding import ingest_binding_status
 from app.api.request_active_context import (
@@ -2043,6 +2047,15 @@ class CalibrationRevisitDecisionRequest(BaseModel):
 
     outcome: OutcomeValue
     note: str | None = None
+    rung_index: int | None = Field(default=None, ge=0)
+    decision_object_id: str | None = None
+
+
+class CalibrationRevisitDismissRequest(BaseModel):
+    """Stable displayed rung identity for native and enhanced dismiss forms."""
+
+    rung_index: int | None = Field(default=None, ge=0)
+    decision_object_id: str | None = None
 
 
 class CalibrationRevisitActionResponse(BaseModel):
@@ -3228,7 +3241,18 @@ def _commitment_surface_state(vault_root: Path) -> CommitmentSurfaceState:
     )
 
 
-def _calibration_revisit_state(vault_root: Path) -> CalibrationRevisitState:
+def _companion_vault_binding_id() -> str:
+    """Return the binding that owns the active companion read/write target."""
+
+    scoped = _SCOPED_COMPANION_READ.get()
+    return (scoped.vault_binding_id if scoped is not None else None) or COMPATIBILITY_BINDING_ID
+
+
+def _calibration_revisit_state(
+    vault_root: Path,
+    *,
+    vault_binding_id: str | None = None,
+) -> CalibrationRevisitState:
     """Project CAL-02's due revisit into the workspace response.
 
     The scheduler is a durable read boundary.  Any failure is explicit
@@ -3237,7 +3261,10 @@ def _calibration_revisit_state(vault_root: Path) -> CalibrationRevisitState:
     """
 
     try:
-        due = due_revisits(vault_root=vault_root)
+        due = due_revisits(
+            vault_root=vault_root,
+            vault_binding_id=vault_binding_id or _companion_vault_binding_id(),
+        )
     except Exception as exc:  # pragma: no cover - defensive runtime boundary
         logger.warning("calibration revisit read degraded: %s", exc)
         return CalibrationRevisitState(
@@ -3272,11 +3299,21 @@ def _calibration_revisit_for_decision(
     decision_id: str,
     *,
     vault_root: Path,
-) -> RevisitDue:
-    """Resolve one currently pending revisit for a mutation route."""
+    vault_binding_id: str | None = None,
+    rung_index: int | None = None,
+    decision_object_id: str | None = None,
+) -> RevisitDue | tuple[str, dict[str, Any]]:
+    """Resolve one displayed rung, including an idempotent replay.
+
+    The client carries the rung it rendered.  If a prior answer/dismissal has
+    already advanced the scheduler, return that durable action instead of
+    recomputing the next rung and stamping it accidentally.
+    """
+
+    binding_id = vault_binding_id or _companion_vault_binding_id()
 
     try:
-        due = due_revisits(vault_root=vault_root)
+        due = due_revisits(vault_root=vault_root, vault_binding_id=binding_id)
     except Exception as exc:  # durable read failed before a mutation
         logger.warning("calibration revisit lookup degraded: %s", exc)
         raise HTTPException(
@@ -3286,12 +3323,70 @@ def _calibration_revisit_for_decision(
                 "message": "The pending revisit could not be read; no action was recorded.",
             },
         ) from exc
+    candidate_for_decision: RevisitDue | None = None
     for candidate in due:
         if decision_id in {
             str(candidate.decision_uuid),
             str(candidate.decision_object_id),
         }:
-            return candidate
+            candidate_for_decision = candidate
+            break
+
+    outcomes = iter_outcome_receipts(vault_root)
+    dismissals = iter_revisit_dismissals(vault_root)
+
+    def existing_action() -> tuple[str, dict[str, Any]] | None:
+        if rung_index is None:
+            return None
+        for record in outcomes:
+            if (
+                str(record.get("decision_uuid")) == decision_id
+                and record.get("rung_index") == rung_index
+                and (
+                    decision_object_id is None
+                    or str(record.get("decision_object_id")) == decision_object_id
+                )
+            ):
+                return ("answered", record)
+        for record in dismissals:
+            if (
+                str(record.get("decision_uuid")) == decision_id
+                and record.get("rung_index") == rung_index
+                and (
+                    decision_object_id is None
+                    or str(record.get("decision_object_id")) == decision_object_id
+                )
+            ):
+                return ("dismissed", record)
+        return None
+
+    replay = existing_action()
+    if replay is not None:
+        # A durable action wins even if a stale scheduler projection still
+        # reports the same rung as pending.
+        return replay
+
+    if candidate_for_decision is not None:
+        if decision_object_id is not None and str(candidate_for_decision.decision_object_id) != decision_object_id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "calibration_revisit_stale",
+                    "message": "The displayed revisit no longer identifies the active decision.",
+                },
+            )
+        if rung_index is None or rung_index == candidate_for_decision.rung_index:
+            return candidate_for_decision
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "calibration_revisit_stale",
+                "message": "The displayed revisit rung is no longer pending.",
+            },
+        )
+
+    if replay is not None:
+        return replay
     raise HTTPException(
         status_code=404,
         detail={
@@ -5375,7 +5470,10 @@ def read_companion_workspace(
                 reflection_offer = ReflectionOfferState.model_validate(offer.as_payload())
 
     content_hash = _content_hash(body)
-    calibration_revisit = _calibration_revisit_state(vault_root)
+    calibration_revisit = _calibration_revisit_state(
+        vault_root,
+        vault_binding_id=_companion_vault_binding_id(),
+    )
     selectable_options: list[PanelSelectableOption] = []
     # A recovered identity is read-only: it was never written to the create-once
     # note, so it must not offer checkbox mutation affordances (#5663).
@@ -5438,20 +5536,11 @@ def post_calibration_revisit_decision(
     vault_root = _active_companion_vault_root_or_picker(require_initialized=True)
     if isinstance(vault_root, VaultSelectionRequiredResponse):
         return vault_root
-    pending = _calibration_revisit_for_decision(decision_id, vault_root=vault_root)
-    # Keep the enforcement assertion at this call site.  CAL-01 asserts again
-    # inside its sole production write seam, but the route must not become an
-    # unguarded bypass if that implementation is mocked or replaced.
+    binding_id = _companion_vault_binding_id()
+    # Assert before acquiring the shared lock so a blocked action performs no
+    # path resolution or lock-file I/O at the route boundary.
     try:
         DEFAULT_WRITE_GUARD.assert_writes_allowed(OUTCOME_RECEIPT_WRITE_ACTION)
-        receipt = append_outcome_receipt(
-            decision_object_id=pending.decision_object_id,
-            decision_uuid=pending.decision_uuid,
-            rung_index=pending.rung_index,
-            outcome=req.outcome,
-            note=req.note.strip() if req.note and req.note.strip() else None,
-            vault_root=vault_root,
-        )
     except WritesBlockedError as exc:
         raise HTTPException(
             status_code=409,
@@ -5461,6 +5550,52 @@ def post_calibration_revisit_decision(
                 "message": str(exc),
             },
         ) from exc
+    with revisit_action_lock(vault_root):
+        resolved = _calibration_revisit_for_decision(
+            decision_id,
+            vault_root=vault_root,
+            vault_binding_id=binding_id,
+            rung_index=req.rung_index,
+            decision_object_id=req.decision_object_id,
+        )
+        if isinstance(resolved, tuple):
+            action, receipt = resolved
+            if action != "answered":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "calibration_revisit_already_dismissed",
+                        "message": "This revisit rung was already dismissed.",
+                    },
+                )
+            return CalibrationRevisitActionResponse(
+                status="answered",
+                decision_id=decision_id,
+                rung_index=int(receipt["rung_index"]),
+                receipt=receipt,
+            )
+        pending = resolved
+        try:
+            receipt_kwargs: dict[str, Any] = {
+                "decision_object_id": pending.decision_object_id,
+                "decision_uuid": pending.decision_uuid,
+                "rung_index": pending.rung_index,
+                "outcome": req.outcome,
+                "note": req.note.strip() if req.note and req.note.strip() else None,
+                "vault_root": vault_root,
+            }
+            if binding_id != COMPATIBILITY_BINDING_ID:
+                receipt_kwargs["vault_binding_id"] = binding_id
+            receipt = append_outcome_receipt(**receipt_kwargs)
+        except WritesBlockedError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "writeguard_blocked",
+                    "state": "blocked",
+                    "message": str(exc),
+                },
+            ) from exc
     return CalibrationRevisitActionResponse(
         status="answered",
         decision_id=str(pending.decision_uuid),
@@ -5475,23 +5610,16 @@ def post_calibration_revisit_decision(
 )
 def post_calibration_revisit_dismiss(
     decision_id: str,
+    req: CalibrationRevisitDismissRequest | None = None,
 ) -> CalibrationRevisitActionResponse | VaultSelectionRequiredResponse:
     """Defer one revisit through CAL-02's dismissal ledger only."""
 
     vault_root = _active_companion_vault_root_or_picker(require_initialized=True)
     if isinstance(vault_root, VaultSelectionRequiredResponse):
         return vault_root
-    pending = _calibration_revisit_for_decision(decision_id, vault_root=vault_root)
+    req = req or CalibrationRevisitDismissRequest()
     try:
-        # Keep dismissal independently guarded as well; importantly, this path
-        # never calls ``append_outcome_receipt`` or fabricates an outcome.
         DEFAULT_WRITE_GUARD.assert_writes_allowed(REVISIT_DISMISSAL_WRITE_ACTION)
-        append_revisit_dismissal(
-            decision_object_id=pending.decision_object_id,
-            decision_uuid=pending.decision_uuid,
-            rung_index=pending.rung_index,
-            vault_root=vault_root,
-        )
     except WritesBlockedError as exc:
         raise HTTPException(
             status_code=409,
@@ -5501,6 +5629,48 @@ def post_calibration_revisit_dismiss(
                 "message": str(exc),
             },
         ) from exc
+    with revisit_action_lock(vault_root):
+        resolved = _calibration_revisit_for_decision(
+            decision_id,
+            vault_root=vault_root,
+            vault_binding_id=_companion_vault_binding_id(),
+            rung_index=req.rung_index,
+            decision_object_id=req.decision_object_id,
+        )
+        if isinstance(resolved, tuple):
+            action, receipt = resolved
+            if action != "dismissed":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "calibration_revisit_already_answered",
+                        "message": "This revisit rung already has an outcome receipt.",
+                    },
+                )
+            return CalibrationRevisitActionResponse(
+                status="dismissed",
+                decision_id=decision_id,
+                rung_index=int(receipt["rung_index"]),
+                receipt=None,
+            )
+        pending = resolved
+        try:
+            # This path never calls ``append_outcome_receipt`` or fabricates an outcome.
+            append_revisit_dismissal(
+                decision_object_id=pending.decision_object_id,
+                decision_uuid=pending.decision_uuid,
+                rung_index=pending.rung_index,
+                vault_root=vault_root,
+            )
+        except WritesBlockedError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "writeguard_blocked",
+                    "state": "blocked",
+                    "message": str(exc),
+                },
+            ) from exc
     return CalibrationRevisitActionResponse(
         status="dismissed",
         decision_id=str(pending.decision_uuid),

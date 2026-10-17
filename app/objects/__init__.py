@@ -94,10 +94,18 @@ class ObjectStore:
     canonical store and never fall back to process memory.
     """
 
+    def __init__(self, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> None:
+        self.vault_binding_id = vault_binding_id
+
+    def _binding(self) -> Any:
+        if self.vault_binding_id == COMPATIBILITY_BINDING_ID:
+            return resolve_object_store_port()
+        return resolve_object_store_port(vault_binding_id=self.vault_binding_id)
+
     def get_object(self, object_id: str, *, strict_backend: bool = False) -> DomainObject | None:
         # ``strict_backend`` is retained for signature compatibility; store
         # errors always propagate now.
-        binding = resolve_object_store_port()
+        binding = self._binding()
         if binding.backend == "memory":
             with _MEMORY_STORE_LOCK:
                 return _MEMORY_STORE.get(object_id)
@@ -116,7 +124,7 @@ class ObjectStore:
             trace_id = new_trace_id()
         obj.created_at = _normalize_ts(obj.created_at)
 
-        binding = resolve_object_store_port()
+        binding = self._binding()
         if binding.backend == "memory":
             with _MEMORY_STORE_LOCK:
                 _MEMORY_STORE[obj.uuid] = obj
@@ -161,7 +169,7 @@ class ObjectStore:
         projections that intentionally replace equivalent bytes continue to use ``save_object``.
         """
         obj.created_at = _normalize_ts(obj.created_at)
-        binding = resolve_object_store_port()
+        binding = self._binding()
         if binding.backend == "memory":
             with _MEMORY_STORE_LOCK:
                 if obj.uuid in _MEMORY_STORE:
@@ -182,7 +190,7 @@ class ObjectStore:
         kind: Optional[str] = None,
         limit: int | None = 100,
     ) -> List[DomainObject]:
-        binding = resolve_object_store_port()
+        binding = self._binding()
         if binding.backend == "memory":
             with _MEMORY_STORE_LOCK:
                 return _list_from_memory(kind, limit)
@@ -190,7 +198,7 @@ class ObjectStore:
         return [_to_domain(row if isinstance(row, dict) else dict(row)) for row in rows]
 
     def count_objects(self, kind: Optional[str] = None) -> int:
-        binding = resolve_object_store_port()
+        binding = self._binding()
         if binding.backend == "memory":
             with _MEMORY_STORE_LOCK:
                 values = list(_MEMORY_STORE.values())

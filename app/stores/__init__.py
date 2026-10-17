@@ -131,10 +131,19 @@ def get_object_store() -> ObjectStore:
     return _store_instances()[0]
 
 
-def resolve_object_store_port() -> StorePortBinding:
-    """Resolve the current object-store binding through the PDM StorePort seam."""
+def resolve_object_store_port(*, vault_binding_id: str | None = None) -> StorePortBinding:
+    """Resolve the object store, optionally scoped to an active vault binding."""
     backend = _resolve_backend()
-    store = _store_instances_for_backend(backend)[0]
+    if vault_binding_id is None:
+        store = _store_instances_for_backend(backend)[0]
+    elif backend == "pg":
+        from .pg import PgObjectStore
+
+        store = PgObjectStore(vault_binding_id=vault_binding_id)
+    else:
+        # The explicit memory backend is process-local and has no binding
+        # partition. Keep this argument meaningful for Postgres callers.
+        store = _store_instances_for_backend(backend)[0]
     rebuild_source = str(getattr(store, "rebuild_source", _OBJECT_STORE_REBUILD_SOURCE))
     return StorePortBinding(
         name="object_store",

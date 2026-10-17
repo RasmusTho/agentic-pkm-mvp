@@ -35,23 +35,41 @@ def _surface_state(surface: object) -> str:
         return "absent"
     if bool(surface.get("degraded")) or surface.get("state") == "degraded":
         return "degraded"
+    if surface.get("state") == "empty":
+        return "empty"
     if surface.get("decision_id"):
         return "pending"
     return "absent"
 
 
-def calibration_revisit_card_markup(surface: object) -> str:
+def calibration_revisit_card_markup(
+    surface: object,
+    *,
+    note_path: str = "",
+) -> str:
     """Render one card from a runtime payload or its honest absence."""
 
     state = _surface_state(surface)
     payload = surface if isinstance(surface, dict) else {}
-    if state == "absent":
+    if state == "empty":
         return """
         <section class="cal cal-quiet calibration-revisit-card"
-          data-testid="calibration-revisit-card" data-state="absent"
+          data-testid="calibration-revisit-card" data-state="empty"
           data-degraded="false" aria-labelledby="calibration-revisit-absent-heading">
           <h3 id="calibration-revisit-absent-heading" class="cal-eyebrow" tabindex="-1">Decision calibration</h3>
           <p class="cal-body">No revisit due.</p>
+        </section>"""
+
+    if state == "absent":
+        return """
+        <section class="cal calibration-revisit-card"
+          data-testid="calibration-revisit-card" data-state="absent"
+          data-degraded="true" aria-labelledby="calibration-revisit-unknown-heading">
+          <header class="cal-head"><span class="cal-eyebrow">Decision calibration · revisit</span><span class="cal-badge cal-badge--amber">Unavailable</span></header>
+          <div class="cal-lead">
+            <h3 id="calibration-revisit-unknown-heading" class="cal-q" tabindex="-1">Calibration revisit state unavailable.</h3>
+            <p class="cal-body">The workspace did not provide a readable revisit state. Pending revisits are unknown, not zero.</p>
+          </div>
         </section>"""
 
     if state == "degraded":
@@ -69,6 +87,8 @@ def calibration_revisit_card_markup(surface: object) -> str:
         </section>"""
 
     decision_id = str(payload.get("decision_id") or "")
+    decision_object_id = str(payload.get("decision_object_id") or "")
+    rung_index = _e(payload.get("rung_index") if payload.get("rung_index") is not None else "")
     quoted_id = quote(decision_id, safe="")
     title = _e(payload.get("title") or "Untitled decision")
     decided_on = _e(payload.get("decided_on") or "unknown date")
@@ -86,7 +106,8 @@ def calibration_revisit_card_markup(surface: object) -> str:
     return f"""
         <section class="cal calibration-revisit-card"
           data-testid="calibration-revisit-card" data-state="pending"
-          data-decision-id="{_e(decision_id)}" data-decided-on="{decided_on}"
+          data-decision-id="{_e(decision_id)}" data-decision-object-id="{_e(decision_object_id)}"
+          data-rung-index="{rung_index}" data-note-path="{_e(note_path)}" data-decided-on="{decided_on}"
           data-rung-days="{rung_days}" data-degraded="false"
           aria-labelledby="{heading_id}">
           <header class="cal-head"><span class="cal-eyebrow">Decision calibration · revisit</span><span class="cal-badge">Pending</span></header>
@@ -95,6 +116,8 @@ def calibration_revisit_card_markup(surface: object) -> str:
             <p class="cal-meta">Decided {decided_on} · {rung_days}-day rung</p>
           </div>
           <form class="cal-answer" method="post" action="{_e(answer_action)}" data-intent="answer" aria-labelledby="{heading_id}">
+            <input type="hidden" name="rung_index" value="{rung_index}">
+            <input type="hidden" name="decision_object_id" value="{_e(decision_object_id)}">
             <fieldset class="cal-pick-group">
               <legend>Did it hold?</legend>
               <div class="cal-picks">{picks}</div>
@@ -104,6 +127,8 @@ def calibration_revisit_card_markup(surface: object) -> str:
             <div class="cal-alert" data-calibration-feedback hidden></div>
           </form>
           <form class="cal-foot" method="post" action="{_e(dismiss_action)}" data-intent="dismiss">
+            <input type="hidden" name="rung_index" value="{rung_index}">
+            <input type="hidden" name="decision_object_id" value="{_e(decision_object_id)}">
             <button class="cal-dismiss" type="submit" aria-describedby="calibration-revisit-dismiss-help">Dismiss for now</button>
             <p class="cal-hint" id="calibration-revisit-dismiss-help">Defers this revisit. Records no outcome.</p>
           </form>
@@ -135,8 +160,24 @@ def calibration_revisit_card_script() -> str:
       form.setAttribute('aria-busy', value ? 'true' : 'false');
       Array.prototype.forEach.call(form.querySelectorAll('button'), function(button) {{
         button.disabled = value;
-        if (value && label) button.textContent = label;
+        if (value && label) {{
+          if (!button.getAttribute('data-calibration-label')) button.setAttribute('data-calibration-label', button.textContent || '');
+          button.textContent = label;
+        }} else if (!value && button.getAttribute('data-calibration-label')) {{
+          button.textContent = button.getAttribute('data-calibration-label');
+        }}
       }});
+    }}
+    function rereadWorkspace() {{
+      var notePath = card.getAttribute('data-note-path') || '';
+      var query = notePath ? ('?note_path=' + encodeURIComponent(notePath)) : '';
+      return fetch('/api/companion/workspace' + query, {{headers: {{'Accept': 'application/json'}}}})
+        .then(function(response) {{
+          return response.json().catch(function() {{ return {{}}; }}).then(function(data) {{
+            if (!response.ok || !data || !data.calibration_revisit) throw new Error('Workspace reread unavailable.');
+            return data;
+          }});
+        }});
     }}
     function submit(url, body, form, intent) {{
       if (busy) return;
@@ -146,9 +187,16 @@ def calibration_revisit_card_script() -> str:
         .then(function(response) {{ return response.json().catch(function() {{ return {{}}; }}).then(function(data) {{ return {{ok: response.ok, data: data}}; }}); }})
         .then(function(result) {{
           if (!result.ok) throw new Error((result.data && result.data.detail && result.data.detail.message) || 'The runtime did not record this action.');
-          card.setAttribute('data-state', intent === 'answer' ? 'answered' : 'dismissed');
-          card.setAttribute('data-outcome', intent === 'answer' ? (body.outcome || '') : '');
-          card.hidden = true;
+          var expectedStatus = intent === 'answer' ? 'answered' : 'dismissed';
+          if (!result.data || result.data.status !== expectedStatus || String(result.data.decision_id) !== String(card.getAttribute('data-decision-id')) || String(result.data.rung_index) !== String(card.getAttribute('data-rung-index'))) {{
+            throw new Error('The runtime returned an unexpected action state.');
+          }}
+          return rereadWorkspace().then(function() {{
+            card.setAttribute('data-state', expectedStatus);
+            card.setAttribute('data-outcome', intent === 'answer' ? (body.outcome || '') : '');
+            card.hidden = true;
+            window.location.reload();
+          }});
         }})
         .catch(function(error) {{
           busy = false;
@@ -163,12 +211,21 @@ def calibration_revisit_card_script() -> str:
       if (!outcome || !Object.prototype.hasOwnProperty.call(labels, outcome)) return;
       var note = answer.querySelector('textarea[name="note"]');
       var body = {{outcome: outcome}};
+      var rung = card.getAttribute('data-rung-index');
+      var objectId = card.getAttribute('data-decision-object-id');
+      if (rung !== '') body.rung_index = Number(rung);
+      if (objectId) body.decision_object_id = objectId;
       if (note && note.value.trim()) body.note = note.value.trim();
       submit(answer.action, body, answer, 'answer');
     }});
     if (dismiss) dismiss.addEventListener('submit', function(event) {{
       event.preventDefault();
-      submit(dismiss.action, {{}}, dismiss, 'dismiss');
+      var body = {{}};
+      var rung = card.getAttribute('data-rung-index');
+      var objectId = card.getAttribute('data-decision-object-id');
+      if (rung !== '') body.rung_index = Number(rung);
+      if (objectId) body.decision_object_id = objectId;
+      submit(dismiss.action, body, dismiss, 'dismiss');
     }});
   }})();
   </script>"""

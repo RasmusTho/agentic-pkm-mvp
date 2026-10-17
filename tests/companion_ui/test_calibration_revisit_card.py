@@ -79,6 +79,9 @@ def test_answer_submits_without_typing() -> None:
     assert 'name="outcome" value="unknown_yet"' in html
     assert 'name="note"' in html
     assert "if (note && note.value.trim()) body.note = note.value.trim();" in html
+    assert 'name="rung_index"' in html
+    assert "Workspace reread unavailable." in html
+    assert "result.data.status !== expectedStatus" in html
 
 
 def test_answer_and_dismiss_are_visually_distinct() -> None:
@@ -101,5 +104,6 @@ def test_degraded_or_absent_revisit_renders_safely() -> None:
     assert 'data-state="degraded"' in degraded
     assert "Pending revisits are unknown, not zero." in degraded
     assert 'data-state="absent"' in absent
-    assert "No revisit due." in absent
+    assert "revisit state unavailable" in absent
+    assert "Pending revisits are unknown, not zero." in absent
     assert "pending decisions: 0" not in absent.lower()
