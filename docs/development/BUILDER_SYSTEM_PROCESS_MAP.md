@@ -979,6 +979,8 @@ visible alongside independent live facts; custody is not authenticated fetch or 
 The original response's exact raw packet binding constrains file-aware replay and byte telemetry;
 equivalent JSON in a differently serialized file is not interchangeable. Probe live reads occur
 after successful admission; independent audit reads have their separate source-to-fact interval.
+Optional-audit joins also require the same exact raw response binding as file-aware comparison,
+telemetry and receipt evidence; equal parsed response objects do not establish that identity.
 
 Its manual telemetry helper measures exact packet/response bytes, a named UTC wall-clock interval,
 and recorder-attested complete-scope native events. Successful starts, packet/response handoffs,

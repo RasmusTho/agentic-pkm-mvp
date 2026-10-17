@@ -541,6 +541,50 @@ def _audit_fixture(chain, tmp_path, name="slice_status"):
     return obs, fact, fact_ref, audit, audit_ref, comparison, telemetry, receipt
 
 
+def test_v2_audit_raw_response_identity_is_enforced_at_every_join(chain, tmp_path):
+    obs, _, _, audit, audit_ref, comp, _, original_receipt = _audit_fixture(chain, tmp_path)
+    assert probe.normalize_probe_receipt(original_receipt) == original_receipt
+    alternate = tmp_path / "equal-json-different-response-bytes.json"
+    alternate.write_text(json.dumps(obs, indent=2) + "\n")
+    alternate_binding = v2._bound_ref(str(alternate), obs)
+    assert alternate_binding != audit["observation"]
+    # Telemetry has no hidden knowledge of an audit it never received.
+    telemetry = v2.build_telemetry(chain["pack"], obs, pack_ref=chain["refs"]["context_pack"], observation_ref=str(alternate), execution_ref=chain["execution_ref"])
+    assert v2.normalize_telemetry(telemetry) == telemetry
+    refs = chain["refs"] | {"agent_response": str(alternate)}
+    receipt = deepcopy(original_receipt)
+    receipt.update(observation=alternate_binding, telemetry=telemetry, evidence=refs)
+    for consumer in (
+        lambda: probe.compare_rehydrated_observation(chain["pack"], obs, fabrication_audit_ref=audit_ref, observation_ref=str(alternate)),
+        lambda: probe.normalize_comparison(comp, observation_ref=str(alternate)),
+        lambda: probe.build_probe_receipt(chain["pack"], obs, comp, evidence_refs=refs, telemetry=telemetry),
+        lambda: probe.normalize_probe_receipt(receipt),
+    ):
+        with pytest.raises(probe.EpicRehydrationProbeError, match="joined raw response"):
+            consumer()
+    telemetry_ref = _retain(tmp_path / "alternate-response-telemetry.json", telemetry)
+    refs_ref = _retain(tmp_path / "alternate-response-refs.json", refs)
+    original_refs_ref = _retain(tmp_path / "original-response-refs.json", chain["refs"])
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    commands = [["compare", "--pack-file", refs["context_pack"], "--observation-file", str(alternate), "--fabrication-audit-file", audit_ref]]
+    for evidence_ref in (refs_ref, original_refs_ref):
+        commands.append(["receipt", "--pack-file", refs["context_pack"], "--observation-file", str(alternate), "--comparison-file", refs["comparison_receipt"], "--telemetry-file", telemetry_ref, "--evidence-file", evidence_ref])
+    for index, command in enumerate(commands):
+        output = tmp_path / f"audit-response-join-refused-{index}.json"
+        assert probe.cli_main([*command, "--output", str(output)]) == 2
+        assert not output.exists()
+    assert {path: path.read_bytes() for path in before} == before
+    # A distinct attestation explicitly bound to B is not an implicit reuse of audit A.
+    audit_b = deepcopy(audit)
+    audit_b["observation"] = alternate_binding
+    audit_b_ref = _retain(tmp_path / "audit-explicitly-bound-to-b.json", audit_b)
+    comp_b = probe.compare_rehydrated_observation(chain["pack"], obs, fabrication_audit_ref=audit_b_ref, observation_ref=str(alternate))
+    refs["comparison_receipt"] = _retain(tmp_path / "comparison-explicitly-bound-to-b.json", comp_b)
+    receipt_b = probe.build_probe_receipt(chain["pack"], obs, comp_b, evidence_refs=refs, telemetry=telemetry)
+    assert probe.normalize_probe_receipt(receipt_b) == receipt_b
+    assert {path: path.read_bytes() for path in before} == before
+
+
 @pytest.mark.parametrize("case", ["checkpoint_live_fact", "source_hardlink", "source_fragment", "contrary_payload", "unknown_claim", "alternate_packet"])
 def test_v2_audit_provenance_and_semantic_replay_matrix(chain, tmp_path, case):
     obs, fact, fact_ref, audit, audit_ref, comp, telemetry, receipt = _audit_fixture(chain, tmp_path)

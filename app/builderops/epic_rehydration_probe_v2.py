@@ -440,13 +440,15 @@ def _status(observed: Any, expected: Any) -> str:
     return "match" if v1._json_exact_equal(observed, expected) else "mismatch"
 
 
-def _fabrication_audit(ref: str, pack: Mapping[str, Any], obs: Mapping[str, Any]) -> list[str]:
+def _fabrication_audit(ref: str, pack: Mapping[str, Any], obs: Mapping[str, Any], *, observation_binding: Mapping[str, Any] | None = None) -> list[str]:
     audit = _envelope(_read_bound(_bound_ref(ref)), "epic_rehydration_fabrication_audit", {"context_pack", "observation", "auditor", "independence", "findings"})
     if audit["probe_id"] != pack["probe_id"] or audit["independence"] != "separate_agent_or_human":
         raise Error("fabrication audit must attest independent review of this probe")
     v1._required_string(audit["auditor"], "independent auditor")
     if not v1._json_exact_equal(_read_bound(audit["context_pack"]), pack) or not v1._json_exact_equal(_read_bound(audit["observation"]), obs):
         raise Error("independent fabrication audit is not packet/response-bound")
+    if observation_binding is not None and not v1._json_exact_equal(audit["observation"], observation_binding):
+        raise Error("audit response ref/digest/length differs from the joined raw response")
     _observation_packet(pack, obs, audit["context_pack"]["ref"])
     if type(audit["findings"]) is not list:
         raise Error("audit findings must be a list")
@@ -484,7 +486,7 @@ def _expected_fields(pack: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def compare_rehydrated_observation(context_pack: Mapping[str, Any], observation: Mapping[str, Any], *, fabrication_audit_ref: str | None = None, context_pack_ref: str | None = None) -> dict[str, Any]:
+def compare_rehydrated_observation(context_pack: Mapping[str, Any], observation: Mapping[str, Any], *, fabrication_audit_ref: str | None = None, context_pack_ref: str | None = None, observation_ref: str | None = None) -> dict[str, Any]:
     pack = normalize_context_pack(context_pack)
     obs = normalize_rehydrated_observation(observation, context_pack=pack, context_pack_ref=context_pack_ref)
     expected = _expected_fields(pack)
@@ -504,7 +506,8 @@ def compare_rehydrated_observation(context_pack: Mapping[str, Any], observation:
         if name == "external_state" and type(observed) is dict:
             results[name]["dimensions"] = {key: {"status": _status(observed[key], expected[name][key]), "expected": expected[name][key], "observed": observed[key]} for key in EXTERNAL["properties"]}
     missing = [name for name in COMPARED if _unknown(obs["fields"][name]["value"])]
-    audited_fabrications: Any = UNKNOWN if fabrication_audit_ref is None else _fabrication_audit(fabrication_audit_ref, pack, obs)
+    response_binding = None if observation_ref is None else _bound_ref(observation_ref, obs)
+    audited_fabrications: Any = UNKNOWN if fabrication_audit_ref is None else _fabrication_audit(fabrication_audit_ref, pack, obs, observation_binding=response_binding)
     for name, expectation, forced_status in (
         ("live_slice_next_action", UNKNOWN, "not_comparable"),
         ("missing_claims", missing, None),
@@ -523,7 +526,7 @@ def compare_rehydrated_observation(context_pack: Mapping[str, Any], observation:
     }
 
 
-def normalize_comparison(value: Mapping[str, Any], *, context_pack: Mapping[str, Any] | None = None, observation: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def normalize_comparison(value: Mapping[str, Any], *, context_pack: Mapping[str, Any] | None = None, observation: Mapping[str, Any] | None = None, observation_ref: str | None = None) -> dict[str, Any]:
     comparison = _envelope(value, v1.COMPARISON_SCHEMA_NAME, {"target", "context_pack", "observation", "fabrication_audit", "field_results", "external_refresh", "limitations", "effects"})
     pack = normalize_context_pack(comparison["context_pack"])
     obs = normalize_rehydrated_observation(comparison["observation"], context_pack=pack)
@@ -535,7 +538,7 @@ def normalize_comparison(value: Mapping[str, Any], *, context_pack: Mapping[str,
     if comparison["fabrication_audit"] != UNKNOWN:
         _read_bound(comparison["fabrication_audit"])
         audit_ref = comparison["fabrication_audit"]["ref"]
-    if not v1._json_exact_equal(comparison, compare_rehydrated_observation(pack, obs, fabrication_audit_ref=audit_ref)):
+    if not v1._json_exact_equal(comparison, compare_rehydrated_observation(pack, obs, fabrication_audit_ref=audit_ref, observation_ref=observation_ref)):
         raise Error("comparison is not semantically bound to packet and observation")
     return comparison
 
@@ -639,10 +642,10 @@ def normalize_telemetry(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def build_probe_receipt(context_pack: Mapping[str, Any], observation: Mapping[str, Any], comparison: Mapping[str, Any], *, evidence_refs: Mapping[str, str], telemetry: Mapping[str, Any], source_observed_at: str | None = None) -> dict[str, Any]:
+    refs = v1._normalize_evidence_refs(evidence_refs)
     pack = normalize_context_pack(context_pack)
     obs = normalize_rehydrated_observation(observation, context_pack=pack)
-    comp = normalize_comparison(comparison, context_pack=pack, observation=obs)
-    refs = v1._normalize_evidence_refs(evidence_refs)
+    comp = normalize_comparison(comparison, context_pack=pack, observation=obs, observation_ref=refs["agent_response"])
     measured = normalize_telemetry(telemetry)
     if source_observed_at is not None and source_observed_at != pack["source"]["observed_at"]:
         raise Error("source observed_at is not packet-bound")

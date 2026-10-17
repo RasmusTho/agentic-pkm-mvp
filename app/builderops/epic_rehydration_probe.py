@@ -436,6 +436,7 @@ def compare_rehydrated_observation(
     *,
     fabrication_audit_ref: str | None = None,
     context_pack_ref: str | None = None,
+    observation_ref: str | None = None,
 ) -> dict[str, Any]:
     """Compare one observation without ranking it or producing a quality aggregate."""
 
@@ -443,7 +444,7 @@ def compare_rehydrated_observation(
     if _is_v2(context_pack):
         from app.builderops.epic_rehydration_probe_v2 import compare_rehydrated_observation as compare_v2
 
-        return compare_v2(context_pack, observation, fabrication_audit_ref=fabrication_audit_ref, context_pack_ref=context_pack_ref)
+        return compare_v2(context_pack, observation, fabrication_audit_ref=fabrication_audit_ref, context_pack_ref=context_pack_ref, observation_ref=observation_ref)
     if fabrication_audit_ref is not None:
         raise EpicRehydrationProbeError("independent fabrication audit is only supported in v2")
 
@@ -606,6 +607,7 @@ def normalize_comparison(
     *,
     context_pack: Mapping[str, Any] | None = None,
     observation: Mapping[str, Any] | None = None,
+    observation_ref: str | None = None,
 ) -> dict[str, Any]:
     """Validate a comparison receipt and its effect-free boundary."""
 
@@ -613,7 +615,7 @@ def normalize_comparison(
     if _is_v2(comparison):
         from app.builderops.epic_rehydration_probe_v2 import normalize_comparison as normalize_v2
 
-        return normalize_v2(comparison, context_pack=context_pack, observation=observation)
+        return normalize_v2(comparison, context_pack=context_pack, observation=observation, observation_ref=observation_ref)
 
     normalized = _strict_object(comparison, "comparison")
     _exact_fields(
@@ -1423,7 +1425,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             _reject_output_alias(args.output, *_context_pack_closure_paths(pack))
             if args.fabrication_audit_file is not None:
                 _reject_output_alias(args.output, args.fabrication_audit_file)
-            _write_json_file(args.output, compare_rehydrated_observation(pack, observation, fabrication_audit_ref=str(args.fabrication_audit_file) if args.fabrication_audit_file else None))
+            _write_json_file(args.output, compare_rehydrated_observation(pack, observation, fabrication_audit_ref=str(args.fabrication_audit_file) if args.fabrication_audit_file else None, observation_ref=str(args.observation_file)))
         elif args.command == "telemetry":
             from app.builderops.epic_rehydration_probe_v2 import build_telemetry, closure_paths
 
@@ -1439,7 +1441,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             normalized_evidence_refs = _normalize_evidence_refs(evidence_refs)
             pack = normalize_context_pack(_read_json_file(args.pack_file))
             observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack, context_pack_ref=str(args.pack_file))
-            comparison = normalize_comparison(_read_json_file(args.comparison_file), context_pack=pack, observation=observation)
+            comparison = normalize_comparison(_read_json_file(args.comparison_file), context_pack=pack, observation=observation, observation_ref=str(args.observation_file))
             telemetry = _read_json_file(args.telemetry_file)
             extra_paths: tuple[Path, ...] = ()
             if pack["schema_version"] == 2:

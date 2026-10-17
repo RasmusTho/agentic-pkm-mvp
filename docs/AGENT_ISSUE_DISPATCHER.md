@@ -1337,6 +1337,11 @@ retained payloads, and established checkpoint values must match their exact sour
 An unknown observed claim cannot become fabricated merely because an audit has a known fact. Without
 that audit, fabrication stays unknown. Custody validation does not authenticate the auditor or
 prove external source truth.
+At a file-aware audit/comparison/telemetry/receipt join, the audit and joined response must have
+the same exact `{ref, sha256, bytes_length}`, not merely equal parsed JSON. Public comparison
+functions accept `observation_ref` for that file-aware check; standalone receipt replay supplies
+its retained response ref. Logical comparison without a file ref uses the audit's reopened binding
+as authority. Telemetry alone makes no claim about an audit it was not given.
 
 Comparison retains the original observed value alongside independent live value/evidence support;
 an incorrect reconstruction or unknown remains measurable. It never replaces missing observed
