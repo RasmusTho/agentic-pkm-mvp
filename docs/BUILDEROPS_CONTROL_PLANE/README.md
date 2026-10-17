@@ -882,6 +882,53 @@ Partial-failure examples:
 - If BuilderOps is unavailable, MacBook commands return a typed unavailable/auth error. They do not
   initialize SQLite or fall back to direct GitHub lease simulation.
 
+## Terminal task payload-status correction
+
+Repository support from #6175 adds `POST /v1/tasks/{task_id}/correct-payload-status`,
+`BuilderOpsControlPlaneClient.correct_task_payload_status` and the API-only CLI
+`task-correct-payload-status`. This is a narrow metadata-maintenance operation: an already-completed,
+repo-qualified GitHub Issue task with `payload.state=completed` and `payload.status=ready` may align
+only its redundant payload status to completed. It accepts no arbitrary payload or state patch and
+refuses Issue-delivery/continuation bindings. The ordinary claim/transition/complete guards are
+unchanged; a generic lease does not authorize task lifecycle or effect writes.
+
+The existing principal must have both addressed `tasks:write` and `leases:write` grants and an
+unexpired generic maintenance lease on `task-payload-status:<task_id>`. The service binds its
+holder/actor to the authenticated principal, enforces repository scope and current authority epoch,
+and retains existing durable-secret rejection. The closed request carries exact expected completed
+state, positive integer version, timezone-aware update time, canonical before-payload SHA256,
+reviewed proposal SHA256/reference and an idempotency key. Hashing uses compact sorted-key UTF-8
+JSON with `ensure_ascii=False`; persisted JSONB contains no non-JSON numeric values. A proposal
+reference is an audit binding, not server attestation of human approval or GitHub completion.
+The operator separately verifies current GitHub completion/merge evidence and execution authority.
+
+The store takes the existing recovery fence, idempotency lock, task advisory lock, generic lease
+row lock, task lease row lock and task row lock in that order. Under those locks it rejects active
+task ownership, stale/foreign maintenance fencing, state/version/time/hash or GitHub identity drift.
+It changes only payload.status plus native version (+1), DB-clock update time and the authenticated
+correction envelope. The historical source snapshot, every other payload value, expired task lease
+and task fencing token remain intact. A `task.payload_status_corrected` receipt and the existing
+idempotency result retain old/new versions, timestamps, payload hashes, previous/current envelopes
+and proposal binding atomically. No lifecycle transition or outbox intent is created. No schema
+migration or new ledger is introduced.
+
+Success returns the actual receipt sequence and finalized local recovery LSN. After a lost response,
+replay the exact request with the same key: the persisted result is recovered even if the maintenance
+lease has since expired/released, without a second correction. A different request under that key
+refuses. A caller must not manufacture a new key after an unknown result. The source owner retains
+the authenticated exchange, then independently reads task/status and production DevUI source and
+browser results. Existing task GET does not expose correction transaction evidence. Release the
+exact generic maintenance lease through its existing owner after verified completion; failed or
+unknown cleanup is reconciled through that same lease identity. Do not roll the task back to ready
+or rewind a version to compensate for an observation failure.
+
+Repository implementation and tests do not install this support or apply the task5495 correction
+on VM102. Exact control-plane candidate promotion/rollback, existing writer-grant qualification,
+fresh execution-bound proposal and live apply authority belong to #5181 and remain separate.
+Current-source admission, useful task data, owner acceptance and complete system/source
+qualification are distinct gates. This operation does not refresh a historical `sync_state`,
+transfer owner acceptance to another config, or establish complete qualification.
+
 ## Capability acceptance criteria
 
 - [ ] One authenticated API endpoint on Bob-1 (VM ID `102`) coordinates records, tasks, leases, attempts,

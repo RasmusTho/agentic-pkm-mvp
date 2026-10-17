@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class AuthorityEnvelopeInput(BaseModel):
@@ -207,6 +207,27 @@ class TaskReleaseRequest(BaseModel):
     idempotency_key: str
     request: dict[str, Any] = Field(default_factory=dict)
     expected_version: int = Field(ge=1)
+
+
+class MaintenanceLeaseInput(LeaseInput):
+    model_config = ConfigDict(extra="forbid")
+    lease_kind: Literal["generic"]
+    fencing_token: int = Field(strict=True, ge=1)
+
+
+class TaskPayloadStatusCorrectionRequest(BaseModel):
+    """One same-state correction, never a general task patch."""
+
+    model_config = ConfigDict(extra="forbid")
+    envelope: AuthorityEnvelopeInput
+    lease: MaintenanceLeaseInput
+    idempotency_key: str = Field(min_length=1, max_length=512)
+    expected_state: Literal["completed"]
+    expected_version: int = Field(strict=True, ge=1)
+    expected_updated_at: AwareDatetime
+    expected_payload_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    proposal_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    proposal_ref: str = Field(min_length=1, max_length=512)
 
 
 class TaskTransitionRequest(BaseModel):

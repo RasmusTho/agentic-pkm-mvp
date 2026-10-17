@@ -41,6 +41,7 @@ from app.builderops.control_plane.api_models import (
     TaskHeartbeatRequest,
     TaskReleaseRequest,
     TaskTransitionRequest,
+    TaskPayloadStatusCorrectionRequest,
     RowDerivedPostEffectPendingRequest,
     RowDerivedPostEffectReconcileRequest,
 )
@@ -678,6 +679,7 @@ def create_app(
     # caller-supplied executor or no-op production port is accepted.
     inquiry_workflow = SanctionedModelInquiryWorkflow()
     task_write = _credential_dependency(credentials, rate_limiter, "tasks:write")
+    task_correction_write = _credential_dependency(credentials, rate_limiter, "tasks:write", "leases:write")
     attempt_write = _credential_dependency(credentials, rate_limiter, "attempts:write")
     promotion_write = _credential_dependency(credentials, rate_limiter, "promotions:write")
     receipt_read = _credential_dependency(credentials, rate_limiter, "receipts:read")
@@ -2126,6 +2128,29 @@ def create_app(
         except Exception as exc:
             raise _control_plane_error(exc) from exc
         return {"result": _transition_response(result)}
+
+    @application.post("/v1/tasks/{task_id}/correct-payload-status")
+    async def correct_task_payload_status(
+        task_id: str,
+        request: TaskPayloadStatusCorrectionRequest,
+        credential: Credential = Depends(task_correction_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(
+                {"task_id": task_id, **request.model_dump(mode="json")}, credentials
+            )
+            values = request.model_dump(exclude={"envelope", "lease"})
+            return await run_in_threadpool(
+                store.correct_task_payload_status,
+                task_id=task_id,
+                envelope=_envelope(request.envelope, credential),
+                lease=_lease_from_input(request.envelope.repository, request.lease, credential),
+                **values,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
 
     @application.post("/v1/tasks/complete")
     async def complete_task(
