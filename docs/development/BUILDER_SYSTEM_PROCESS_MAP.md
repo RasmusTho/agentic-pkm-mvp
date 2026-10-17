@@ -932,6 +932,7 @@ Mechanism classification:
 | failed work returns to queue | partially implemented | Dispatcher release/block; GitHub labels for blocked; no automated failed-work requeue from CI | [docs/AGENT_ISSUE_DISPATCHER.md:142-150], [`.codex/skills/issue-to-code/SKILL.md`:176-195] |
 | human exception removed from normal queue | deterministic in labels | `agent:needs-human` normally Backlog and not ready | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27] |
 | epic context-budget observation | deterministic + advisory | At slice boundaries, a versioned run-state receipt records explicit context measurement or `unknown`, checkpoint/digest data, cost inputs, and independent lifecycle/execution/model-tier recommendations. It performs no dispatch, spawn, acceptance, CI, review, merge, or closure mutation. | [`app/builderops/epic_run_context_budget.py`], [`tests/builderops/test_epic_run_context_budget.py`], [docs/AGENT_ISSUE_DISPATCHER.md :: Epic-runner context-budget observation] |
+| manual shadow rehydration probe | deterministic + manual + advisory | One fresh agent receives a strictly source-bound packet and explicit live-read instructions, then returns one provenance-bearing observation. A pure comparison records match/mismatch/unknown and external refresh evidence; no score, threshold, launch, dispatch, lease, CI, review, acceptance, merge, or closure effect is available. | [`app/builderops/epic_rehydration_probe.py`], [`tests/builderops/test_epic_rehydration_probe.py`], [docs/AGENT_ISSUE_DISPATCHER.md :: Manual shadow rehydration probe] |
 
 The context-budget evaluator is measurement infrastructure, not a routing authority. Its
 `checkpoint_rotate` and `thin_worker` values are recommendations on separate axes: delegating a
@@ -951,6 +952,14 @@ delivery path only. It neither rotates/compresses a
 coordinator nor starts workers or parallel execution. Dispatcher lease state, live GitHub Issue/PR
 truth, exact branch/SHA, CI, and review state must still be refreshed and acted on through their
 existing owning workflows.
+
+The manual rehydration probe is a read-only consumer of one accepted evaluator receipt. Its packet
+is evidence, not a coordinator context or dispatch plan: a fresh agent must re-read live Issue/PR/CI,
+repository, and dispatcher surfaces, preserve stale-source refresh needs, and return only the strict
+observation schema. The resulting comparison and probe receipt are rebuildable evidence; they cannot
+start another agent or alter any delivery authority. Current readiness is therefore operationally
+limited to a manually launched single probe with durable source, packet, response, and comparison
+artifacts; it does not demonstrate automatic coordinator rotation or production adoption.
 
 ### Run-state authority
 
