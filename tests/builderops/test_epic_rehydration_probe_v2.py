@@ -36,16 +36,29 @@ def chain(tmp_path):
     source_ref = _retain(tmp_path / "source.json", source)
     kwargs = {"source_ref": source_ref, "source_observed_at": "2026-10-17T20:00:00Z", "slice_id": "issue-3798", "repository": "RasmusTho/agentic-pkm-mvp", "issue_number": 3798, "pr_number": 3803, "verified_pr_head_sha": "a" * 40, "merge_sha": "b" * 40, "read_instructions": ["Read packet only, then live read-only evidence. Return only the contracted observation."], "probe_id": "shadow_rehydration_3798_field_contract", "schema_version": 2}
     pack = probe.build_context_pack(Path(source_ref).read_bytes(), **kwargs)
+    pack_ref = _retain(tmp_path / "pack.json", pack)
+    live_target = {key: pack["target"][key] for key in ("repository", "issue_number", "pr_number")}
+    live_payloads = {
+        "github": {"issue": issue, "pr": pr, "review_threads": {"repository": live_target["repository"], "pr_number": 3803, "nodes": [], "complete": True}},
+        "repository": {"head_sha": "c" * 40, "remote": "origin", "ref": "refs/heads/main"},
+        "dispatcher": {"ok": True, "coordination_mode": "dispatcher-backed", "db_exists": True, "configured_repositories": [live_target["repository"]]},
+    }
+    live_reads = []
+    for kind, payload in live_payloads.items():
+        live_ref = _retain(tmp_path / f"live-read-{kind}.json", {"schema_name": "epic_rehydration_live_read", "schema_version": 2, "probe_id": pack["probe_id"], "kind": kind, "target": live_target, "observed_at": "2026-10-17T20:00:30Z", "availability": "observed", "payload": payload, "unavailable_reason": ""})
+        live_reads.append({"kind": kind, "evidence": v2._bound_ref(live_ref)})
     values = {"slice_status": source["checkpoint"]["slice_status"], "checkpoint_decision_delta": source["checkpoint"]["decision_log_delta"], "checkpoint_gate_invariants": source["gate_invariants"], "open_review_findings": [], "external_state": external, "checkpoint_recommendations": {"recommendations": source["recommendations"], "reasons": source["recommendation_reasons"]}, "live_slice_next_action": {"action": "none", "reason": "slice is already closed and merged"}, "missing_claims": [], "fabricated_claims": "unknown"}
     obs = {"schema_name": probe.OBSERVATION_SCHEMA_NAME, "schema_version": 2, "probe_id": pack["probe_id"], "observed_at": "2026-10-17T20:01:10Z", "target": {key: pack["target"][key] for key in v2.TARGET["properties"]}, "agent": {"admitted_model": "configured-test-capability", "admitted_reasoning_effort": "high", "engine_identity": "unknown", "engine_identity_source": "not-exposed", "start_status": "succeeded", "start_observed_at": "2026-10-17T20:00:10Z"}, "fields": {name: {"value": value, "provenance": [{"kind": "checkpoint" if name.startswith("checkpoint_") else "github", "ref": "retained:independent-observation"}], "notes": []} for name, value in values.items()}, "live_reads": [{"kind": kind, "ref": f"live:{kind}"} for kind in ("github", "repository", "dispatcher")], "limitations": ["usage unavailable"]}
+    obs.update(context_pack=v2._bound_ref(pack_ref), live_reads=live_reads)
+    live_refs = {item["kind"]: item["evidence"]["ref"] for item in live_reads}
     for name, field in obs["fields"].items():
         if name in v2.LIVE_FIELD_KINDS:
-            field["provenance"] = [{"kind": kind, "ref": f"live:{kind}"} for kind in v2.LIVE_FIELD_KINDS[name]]
+            field["provenance"] = [{"kind": kind, "ref": live_refs[kind]} for kind in v2.LIVE_FIELD_KINDS[name]]
         elif name.startswith("checkpoint_"):
-            field["provenance"] = [{"kind": "checkpoint", "ref": f"packet:{pack['probe_id']}#/source/receipt"}]
+            field["provenance"] = [{"kind": "checkpoint", "ref": f"packet:{pack['probe_id']}#{v2.CHECKPOINT_POINTERS[name]}"}]
         else:
-            field["provenance"] = [{"kind": "agent", "ref": "fresh:response"}]
-    refs = {"source_checkpoint": source_ref, "context_pack": _retain(tmp_path / "pack.json", pack), "agent_response": _retain(tmp_path / "response.json", obs)}
+            field["provenance"] = [{"kind": "agent", "ref": f"agent:{pack['probe_id']}"}]
+    refs = {"source_checkpoint": source_ref, "context_pack": pack_ref, "agent_response": _retain(tmp_path / "response.json", obs)}
     log = {"schema_name": "epic_rehydration_execution_log", "schema_version": 2, "probe_id": pack["probe_id"], "clock": {"name": "UTC system wall clock", "unit": "seconds", "scope": "native probe admission request through original response retention"}, "started_at": "2026-10-17T20:00:00Z", "ended_at": "2026-10-17T20:01:12Z", "invocation": obs["agent"], "events_complete": True, "recorder": "test coordinator", "events": [{"id": "start-1", "kind": "agent_start", "at": "2026-10-17T20:00:10Z", "evidence": "native successful admission receipt"}, {"id": "handoff-1", "kind": "handoff", "at": "2026-10-17T20:01:12Z", "evidence": "original response retained"}], "usage": {key: v2._measurement("unknown", unit, "native probe admission request through original response retention", "native carrier unavailable", availability="unknown", reason="not exposed") for key, unit in v2.USAGE_UNITS.items()}}
     execution_ref = _retain(tmp_path / "execution.json", log)
     comparison = probe.compare_rehydrated_observation(pack, obs)
@@ -81,7 +94,7 @@ def test_v2_comparison_preserves_drift_missing_and_unknowns(chain):
     assert fields["external_state"]["observed"]["repository_head"] == "unknown"
     assert fields["missing_claims"]["status"] == "match"
     assert fields["fabricated_claims"]["status"] == "unknown"  # self-report/drift is not independent proof
-    assert comparison["external_refresh"]["refresh_required"] is True
+    assert comparison["external_refresh"]["refresh_required"] is False  # actual live reads are unchanged; the response omitted known data
     assert not {"score", "threshold", "aggregate"} & comparison.keys()
     obs["fields"]["external_state"]["value"]["ci"]["status"] = "red"
     drift = probe.compare_rehydrated_observation(chain["pack"], obs)["field_results"]["external_state"]
@@ -89,7 +102,7 @@ def test_v2_comparison_preserves_drift_missing_and_unknowns(chain):
     assert drift["dimensions"]["repository_head"]["status"] == "unknown"
     assert drift["dimensions"]["ci"]["status"] == "mismatch"
     root = Path(chain["refs"]["context_pack"]).parent
-    fact = {"schema_name": "epic_rehydration_independent_fact", "schema_version": 2, "probe_id": obs["probe_id"], "field": "slice_status", "value": "closed_merged", "provenance": [{"kind": "github", "ref": "independently retained live lifecycle reads"}], "observed_at": obs["observed_at"]}
+    fact = {"schema_name": "epic_rehydration_independent_fact", "schema_version": 2, "probe_id": obs["probe_id"], "field": "slice_status", "value": "closed_merged", "provenance": deepcopy(obs["fields"]["slice_status"]["provenance"]), "observed_at": obs["observed_at"], "live_reads": [item for item in obs["live_reads"] if item["kind"] == "github"]}
     fact_ref = _retain(root / "independent-fact.json", fact)
     _retain(Path(chain["refs"]["agent_response"]), obs)
     audit = {"schema_name": "epic_rehydration_fabrication_audit", "schema_version": 2, "probe_id": obs["probe_id"], "context_pack": v2._bound_ref(chain["refs"]["context_pack"]), "observation": v2._bound_ref(chain["refs"]["agent_response"]), "auditor": "separate-test-auditor", "independence": "separate_agent_or_human", "findings": [{"field": "slice_status", "claimed_value": "in_progress", "established_value": "closed_merged", "evidence": v2._bound_ref(fact_ref), "verdict": "fabricated"}]}
@@ -273,6 +286,228 @@ def test_v2_ci_scope_retains_historical_cancellations_without_current_gate_claim
     value = v2._ci_summary({"statusCheckRollup": [{"name": "smoke", "conclusion": "CANCELLED"}, {"name": "smoke", "conclusion": "SUCCESS"}]})
     assert value == {"status": "red", "scope": v2.CI_SCOPE}
     assert "not_a_current_required_ci_verdict" in value["scope"]
+
+
+def _rebind_chain(chain, observation, tmp_path):
+    """Fault injection updates every changed raw binding, not merely the visible hash."""
+    _retain(Path(chain["refs"]["agent_response"]), observation)
+    comparison = deepcopy(chain["comparison"])
+    comparison["observation"] = observation
+    for name in comparison["field_results"]:
+        comparison["field_results"][name]["provenance"] = observation["fields"][name]["provenance"]
+    _retain(Path(chain["refs"]["comparison_receipt"]), comparison)
+    response_binding = v2._bound_ref(chain["refs"]["agent_response"])
+    telemetry = deepcopy(chain["telemetry"])
+    telemetry["evidence"]["observation"] = response_binding
+    telemetry["measurements"]["response_bytes"].update(value=response_binding["bytes_length"], source=response_binding)
+    receipt = deepcopy(chain["receipt"])
+    receipt.update(observation=response_binding, comparison=v2._bound_ref(chain["refs"]["comparison_receipt"]), telemetry=telemetry)
+    telemetry_ref = _retain(tmp_path / "rebound-telemetry.json", telemetry)
+    evidence_ref = _retain(tmp_path / "rebound-evidence.json", chain["refs"])
+    return comparison, telemetry, receipt, telemetry_ref, evidence_ref
+
+
+def _assert_all_consumers_refuse(chain, bad, tmp_path):
+    comp, telemetry, receipt, telemetry_ref, evidence_ref = _rebind_chain(chain, bad, tmp_path)
+    for consumer in (
+        lambda: probe.normalize_rehydrated_observation(bad, context_pack=chain["pack"]),
+        lambda: probe.compare_rehydrated_observation(chain["pack"], bad),
+        lambda: probe.normalize_comparison(comp),
+        lambda: v2.build_telemetry(chain["pack"], bad, pack_ref=chain["refs"]["context_pack"], observation_ref=chain["refs"]["agent_response"], execution_ref=chain["execution_ref"]),
+        lambda: v2.normalize_telemetry(telemetry),
+        lambda: probe.build_probe_receipt(chain["pack"], bad, comp, evidence_refs=chain["refs"], telemetry=telemetry),
+        lambda: probe.normalize_probe_receipt(receipt),
+    ):
+        with pytest.raises(probe.EpicRehydrationProbeError) as error:
+            consumer()
+        assert "retained evidence digest/length mismatch" not in str(error.value)
+    commands = [
+        ["compare", "--pack-file", chain["refs"]["context_pack"], "--observation-file", chain["refs"]["agent_response"]],
+        ["telemetry", "--pack-file", chain["refs"]["context_pack"], "--observation-file", chain["refs"]["agent_response"], "--execution-file", chain["execution_ref"]],
+        ["receipt", "--pack-file", chain["refs"]["context_pack"], "--observation-file", chain["refs"]["agent_response"], "--comparison-file", chain["refs"]["comparison_receipt"], "--telemetry-file", telemetry_ref, "--evidence-file", evidence_ref],
+    ]
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    for index, command in enumerate(commands):
+        output = tmp_path / f"refusal-output-{index}.json"
+        assert not output.exists()
+        assert probe.cli_main([*command, "--output", str(output)]) == 2
+        assert not output.exists()
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def _replace_github_read(chain, binding):
+    bad = deepcopy(chain["observation"])
+    for read in bad["live_reads"]:
+        if read["kind"] == "github":
+            read["evidence"] = binding
+    for name in v2.LIVE_FIELD_KINDS:
+        for provenance in bad["fields"][name]["provenance"]:
+            if provenance["kind"] == "github":
+                provenance["ref"] = binding["ref"]
+    return bad
+
+
+def test_v2_provenance_alias_matrix_reaches_every_consumer(chain, tmp_path):
+    forbidden = [chain["refs"]["source_checkpoint"], chain["refs"]["context_pack"], *[item["ref"] for item in chain["pack"]["source_custody"].values()]]
+    for index, source_ref in enumerate(forbidden):
+        source = Path(source_ref)
+        symlink = tmp_path / f"source-symlink-{index}.json"
+        symlink.symlink_to(source)
+        hardlink = tmp_path / f"source-hardlink-{index}.json"
+        hardlink.hardlink_to(source)
+        copied = tmp_path / f"source-copy-{index}.json"
+        copied.write_bytes(source.read_bytes())
+        # A '..' spelling and a relative spelling still resolve against repo CWD.
+        import os
+
+        relative = os.path.relpath(source)
+        refs = [str(source), str(source.parent / ".." / source.parent.name / source.name), relative, str(source) + "#/checkpoint", source.as_uri(), str(symlink), str(hardlink), str(copied)]
+        for ref in refs:
+            raw = source.read_bytes()
+            binding = {"ref": ref, "sha256": probe.sha256_bytes(raw), "bytes_length": len(raw)}
+            _assert_all_consumers_refuse(chain, _replace_github_read(chain, binding), tmp_path)
+    for ref in (f"packet:{chain['pack']['probe_id']}#/source/receipt", "source:checkpoint", "live:github", str(tmp_path / "missing.json")):
+        _assert_all_consumers_refuse(chain, _replace_github_read(chain, {"ref": ref, "sha256": "0" * 64, "bytes_length": 1}), tmp_path)
+
+
+def test_v2_live_read_domain_target_and_context_matrix(chain, tmp_path):
+    github = next(item for item in chain["observation"]["live_reads"] if item["kind"] == "github")
+    original = probe.parse_strict_json(Path(github["evidence"]["ref"]).read_bytes())
+    mutations = [
+        lambda value: value.update(kind="repository"),
+        lambda value: value["target"].update(repository="foreign/repo"),
+        lambda value: value["target"].update(issue_number=999),
+        lambda value: value["target"].update(pr_number=999),
+        lambda value: value["payload"]["issue"].update(number=999),
+        lambda value: value["payload"]["pr"].update(number=999),
+        lambda value: value["payload"]["review_threads"].update(pr_number=999),
+        lambda value: value.update(observed_at="2026-10-17T19:59:00Z"),
+        lambda value: value.update(schema_name="epic_rehydration_context_pack"),
+        lambda value: value.update(extra=True),
+    ]
+    for index, mutate in enumerate(mutations):
+        bad_read = deepcopy(original)
+        mutate(bad_read)
+        ref = _retain(tmp_path / f"bad-live-{index}.json", bad_read)
+        _assert_all_consumers_refuse(chain, _replace_github_read(chain, v2._bound_ref(ref)), tmp_path)
+    with pytest.raises(probe.EpicRehydrationProbeError, match="requires context_pack"):
+        probe.normalize_rehydrated_observation(chain["observation"])
+
+
+def test_v2_real_live_drift_unknown_and_identical_reread_are_preserved(chain, tmp_path):
+    obs = deepcopy(chain["observation"])
+    repository = next(item for item in obs["live_reads"] if item["kind"] == "repository")
+    original = probe.parse_strict_json(Path(repository["evidence"]["ref"]).read_bytes())
+    copy_ref = _retain(tmp_path / "genuine-identical-reread.json", original)
+    assert v2._bound_ref(copy_ref)["sha256"] == repository["evidence"]["sha256"]
+    repository["evidence"] = v2._bound_ref(copy_ref)
+    for item in obs["fields"]["external_state"]["provenance"]:
+        if item["kind"] == "repository":
+            item["ref"] = copy_ref
+    assert probe.compare_rehydrated_observation(chain["pack"], obs)["field_results"]["external_state"]["status"] == "match"
+    original["payload"]["head_sha"] = "d" * 40
+    _retain(Path(copy_ref), original)
+    repository["evidence"] = v2._bound_ref(copy_ref)
+    obs["fields"]["external_state"]["value"]["repository_head"] = "d" * 40
+    drift = probe.compare_rehydrated_observation(chain["pack"], obs)
+    assert drift["field_results"]["external_state"]["status"] == "mismatch"
+    assert drift["external_refresh"]["refresh_required"] is True
+    original.update(availability="unavailable", payload="unknown", unavailable_reason="read failed")
+    _retain(Path(copy_ref), original)
+    repository["evidence"] = v2._bound_ref(copy_ref)
+    obs["fields"]["external_state"]["value"]["repository_head"] = "unknown"
+    unknown = probe.compare_rehydrated_observation(chain["pack"], obs)
+    assert unknown["field_results"]["external_state"]["observed"]["repository_head"] == "unknown"
+    assert unknown["external_refresh"]["status"] == "unknown"
+
+
+def _audit_fixture(chain, tmp_path, name="slice_status"):
+    obs = deepcopy(chain["observation"])
+    obs["fields"][name]["value"] = "in_progress" if name == "slice_status" else ["invented checkpoint statement"]
+    obs["fields"]["fabricated_claims"]["value"] = [name]
+    _retain(Path(chain["refs"]["agent_response"]), obs)
+    live_reads = [item for item in obs["live_reads"] if item["kind"] in v2.LIVE_FIELD_KINDS.get(name, ())]
+    fact = {"schema_name": "epic_rehydration_independent_fact", "schema_version": 2, "probe_id": obs["probe_id"], "field": name, "value": deepcopy(chain["observation"]["fields"][name]["value"]), "provenance": deepcopy(obs["fields"][name]["provenance"]), "observed_at": obs["observed_at"], "live_reads": live_reads}
+    fact_ref = _retain(tmp_path / "audit-fact.json", fact)
+    audit = {"schema_name": "epic_rehydration_fabrication_audit", "schema_version": 2, "probe_id": obs["probe_id"], "context_pack": obs["context_pack"], "observation": v2._bound_ref(chain["refs"]["agent_response"]), "auditor": "separate-test-auditor", "independence": "separate_agent_or_human", "findings": [{"field": name, "claimed_value": obs["fields"][name]["value"], "established_value": fact["value"], "evidence": v2._bound_ref(fact_ref), "verdict": "fabricated"}]}
+    audit_ref = _retain(tmp_path / "audit.json", audit)
+    comparison = probe.compare_rehydrated_observation(chain["pack"], obs, fabrication_audit_ref=audit_ref)
+    _retain(Path(chain["refs"]["comparison_receipt"]), comparison)
+    telemetry = v2.build_telemetry(chain["pack"], obs, pack_ref=chain["refs"]["context_pack"], observation_ref=chain["refs"]["agent_response"], execution_ref=chain["execution_ref"])
+    receipt = probe.build_probe_receipt(chain["pack"], obs, comparison, evidence_refs=chain["refs"], telemetry=telemetry)
+    return obs, fact, fact_ref, audit, audit_ref, comparison, telemetry, receipt
+
+
+@pytest.mark.parametrize("case", ["checkpoint_live_fact", "source_hardlink", "source_fragment", "contrary_payload", "unknown_claim"])
+def test_v2_audit_provenance_and_semantic_replay_matrix(chain, tmp_path, case):
+    obs, fact, fact_ref, audit, audit_ref, comp, telemetry, receipt = _audit_fixture(chain, tmp_path)
+    assert comp["field_results"]["fabricated_claims"]["status"] == "match"
+    assert probe.normalize_probe_receipt(receipt) == receipt
+    if case == "checkpoint_live_fact":
+        fact["provenance"] = [{"kind": "checkpoint", "ref": f"packet:{obs['probe_id']}#/source/receipt/checkpoint/slice_status"}]
+        fact["live_reads"] = []
+    elif case in {"source_hardlink", "source_fragment"}:
+        alias = tmp_path / "audit-source-hardlink.json"
+        alias.hardlink_to(chain["refs"]["source_checkpoint"])
+        ref = str(alias) if case == "source_hardlink" else chain["refs"]["source_checkpoint"] + "#/checkpoint/slice_status"
+        raw = Path(chain["refs"]["source_checkpoint"]).read_bytes()
+        binding = {"ref": ref, "sha256": probe.sha256_bytes(raw), "bytes_length": len(raw)}
+        fact["provenance"] = [{"kind": "github", "ref": ref}]
+        fact["live_reads"] = [{"kind": "github", "evidence": binding}]
+    elif case == "contrary_payload":
+        fact["value"] = "blocked"
+        audit["findings"][0]["established_value"] = "blocked"
+    else:
+        obs["fields"]["slice_status"]["value"] = "unknown"
+        _retain(Path(chain["refs"]["agent_response"]), obs)
+        audit["observation"] = v2._bound_ref(chain["refs"]["agent_response"])
+        audit["findings"][0]["claimed_value"] = "unknown"
+        comp["observation"] = obs
+        comp["field_results"]["slice_status"].update(observed="unknown", status="unknown", evidence_support="unknown")
+        telemetry["evidence"]["observation"] = audit["observation"]
+        telemetry["measurements"]["response_bytes"].update(value=audit["observation"]["bytes_length"], source=audit["observation"])
+        receipt["observation"] = audit["observation"]
+    _retain(Path(fact_ref), fact)
+    audit["findings"][0]["evidence"] = v2._bound_ref(fact_ref)
+    _retain(Path(audit_ref), audit)
+    comp["fabrication_audit"] = v2._bound_ref(audit_ref)
+    _retain(Path(chain["refs"]["comparison_receipt"]), comp)
+    receipt.update(comparison=v2._bound_ref(chain["refs"]["comparison_receipt"]), telemetry=telemetry)
+    for consumer in (
+        lambda: probe.compare_rehydrated_observation(chain["pack"], obs, fabrication_audit_ref=audit_ref),
+        lambda: probe.normalize_comparison(comp),
+        lambda: probe.build_probe_receipt(chain["pack"], obs, comp, evidence_refs=chain["refs"], telemetry=telemetry),
+        lambda: probe.normalize_probe_receipt(receipt),
+    ):
+        with pytest.raises(probe.EpicRehydrationProbeError) as error:
+            consumer()
+        assert "retained evidence digest/length mismatch" not in str(error.value)
+    telemetry_ref = _retain(tmp_path / "audit-telemetry.json", telemetry)
+    refs_ref = _retain(tmp_path / "audit-refs.json", chain["refs"])
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    for index, command in enumerate((
+        ["compare", "--pack-file", chain["refs"]["context_pack"], "--observation-file", chain["refs"]["agent_response"], "--fabrication-audit-file", audit_ref],
+        ["receipt", "--pack-file", chain["refs"]["context_pack"], "--observation-file", chain["refs"]["agent_response"], "--comparison-file", chain["refs"]["comparison_receipt"], "--telemetry-file", telemetry_ref, "--evidence-file", refs_ref],
+    )):
+        output = tmp_path / f"audit-must-not-exist-{index}.json"
+        assert probe.cli_main([*command, "--output", str(output)]) == 2
+        assert not output.exists()
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_v2_checkpoint_audit_requires_exact_semantic_pointer(chain, tmp_path):
+    obs, fact, fact_ref, audit, audit_ref, comp, telemetry, receipt = _audit_fixture(chain, tmp_path, "checkpoint_decision_delta")
+    assert probe.normalize_probe_receipt(receipt) == receipt
+    fact["provenance"][0]["ref"] = f"packet:{obs['probe_id']}#/source/receipt/gate_invariants"
+    _retain(Path(fact_ref), fact)
+    audit["findings"][0]["evidence"] = v2._bound_ref(fact_ref)
+    _retain(Path(audit_ref), audit)
+    comp["fabrication_audit"] = v2._bound_ref(audit_ref)
+    _retain(Path(chain["refs"]["comparison_receipt"]), comp)
+    receipt["comparison"] = v2._bound_ref(chain["refs"]["comparison_receipt"])
+    for consumer in (lambda: probe.compare_rehydrated_observation(chain["pack"], obs, fabrication_audit_ref=audit_ref), lambda: probe.normalize_comparison(comp), lambda: probe.normalize_probe_receipt(receipt)):
+        with pytest.raises(probe.EpicRehydrationProbeError, match="exact field-specific"):
+            consumer()
 
 
 def test_v1_evidence_remains_compatible():

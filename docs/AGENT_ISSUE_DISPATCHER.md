@@ -1251,17 +1251,48 @@ are typed facts. Checkpoint facts may cite the packet; live facts must come from
 reads. Missing evidence is the literal `unknown`, not a checkpoint-filled observation. All schema
 keys are mandatory; an unavailable field uses `unknown` rather than omitting its key. Live-field
 provenance must include its required GitHub/repository/dispatcher kinds and bind each reference
-to declared independent `live_reads`; checkpoint custody cannot stand in for those reads.
-Checkpoint fields instead cite `packet:<probe-id>#<source-pointer>`. The CI dimension carries its
+to declared independent `live_reads`. Each declared read is `{kind, evidence}` where evidence is
+the existing exact-byte `{ref, sha256, bytes_length}` binding to a regular local file. The packet
+carries `live_read_contract`: a closed `epic_rehydration_live_read.v2` envelope declaring probe,
+kind, repository/Issue/PR target, UTC observation time, availability, payload and unavailable reason.
+The GitHub payload retains Issue/PR objects and complete-or-incomplete review-thread facts;
+repository payload names the observed `origin` main SHA, and dispatcher payload retains status.
+Unavailable reads retain an explicit unknown payload and reason, not checkpoint-filled values.
+Raw upstream GitHub/dispatcher payload objects retain their upstream fields; the manual envelopes,
+bindings, review-thread projection and repository projection have closed schemas.
+
+One field-aware admission predicate is shared by observations and independent audit facts.
+It classifies references before filesystem use: arbitrary URI/opaque strings and query/fragment
+references are refused for live evidence. Local relative paths resolve from repository CWD;
+final-component symlinks are refused, parent paths are canonicalized, and packet/source/all custody
+files are excluded by both canonical path and device/inode identity. Renamed copies of packet or
+source JSON do not satisfy the live-read envelope. A genuinely independent unchanged reread may
+have identical bytes/hash; content equality alone is not grounds for refusal. This is the declared
+single trusted operator/fresh observer boundary, not authenticated fetch, auditor identity or
+upstream-truth verification. Full v2 observation admission requires the packet context and its
+exact retained-file binding; there is no context-free proof path. V1 admission stays unchanged.
+
+Checkpoint fields instead cite the exact field-specific `packet:<probe-id>#<source-pointer>`
+listed in the carried contract. Such pointers are admitted only for `checkpoint_*` semantics,
+never a live fact. Agent missing/fabricated reporting uses `agent:<probe-id>` and holds no live
+evidence authority. The CI dimension carries its
 scope explicitly: all returned PR status-rollup entries, including historical duplicates and
 cancellations. It is not a current required-CI verdict or merge gate; the original rollup stays
 retained. External dimensions retain separate results, including simultaneous drift and unknowns. Live next action
 is `not_comparable` to a checkpoint recommendation. Missing-claim reporting is checked against
 actually unavailable observed fields. Fabrication is never inferred from drift or self-report:
 the optional `compare --fabrication-audit-file` requires a separate auditor's explicit fabrication
-attestation, exact packet/response bindings and separately retained typed fact evidence. Without
+attestation, exact packet/response bindings and separately retained typed fact evidence. The same
+provenance predicate validates those facts; established live values are rederived from their own
+retained payloads, and established checkpoint values must match their exact source projection.
+An unknown observed claim cannot become fabricated merely because an audit has a known fact. Without
 that audit, fabrication stays unknown. Custody validation does not authenticate the auditor or
 prove external source truth.
+
+Comparison retains the original observed value alongside independent live value/evidence support;
+an incorrect reconstruction or unknown remains measurable. It never replaces missing observed
+fields with independent or checkpoint facts. External refresh compares independent live state to
+the checkpoint, separately from an agent's mistaken summary of that state.
 
 V2 additionally hashes the exact retained Issue/PR, dispatcher and repository JSON custody files.
 The evaluator marker names `dispatcher_status_ref`, `repository_status_ref`, and a

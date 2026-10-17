@@ -971,6 +971,11 @@ bound, with separate external-state dimension results and refresh needs. Missing
 unknown. Only a separately retained independent auditor attestation with fact evidence can establish
 fabrication for comparison; drift and agent self-report cannot. Standalone comparison/receipt
 consumers rederive semantics as well as verifying the complete retained evidence chain.
+The shared field-aware provenance boundary admits exact retained local live-read envelopes only,
+with target/time/domain checks and canonical-path plus inode exclusion of packet/source custody.
+Checkpoint pointers are confined to checkpoint fields, full v2 observations require packet context,
+and audit facts must agree with their own retained evidence. Reconstruction errors/unknowns stay
+visible alongside independent live facts; custody is not authenticated fetch or upstream truth.
 
 Its manual telemetry helper measures exact packet/response bytes, a named UTC wall-clock interval,
 and recorder-attested complete-scope native events. Successful starts, packet/response handoffs,
