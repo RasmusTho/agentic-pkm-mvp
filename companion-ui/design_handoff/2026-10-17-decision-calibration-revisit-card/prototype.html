@@ -189,8 +189,8 @@ function say(t){pol.textContent="";setTimeout(function(){pol.textContent=t},30)}
 function shout(t){ast.textContent="";setTimeout(function(){ast.textContent=t},30)}
 function log(m,p,body){if(!logged){logEl.replaceChildren();logged=true}var li=node("li"),span=node("span",null,p+(body?" "+JSON.stringify(body):""));li.append(document.createTextNode(m+" "),span);logEl.appendChild(li)}
 function fresh(){clearTimeout(timer);S={uid:"live",rev:FIX,state:projection==="pending"?"pending":projection,note:""}}
-function draw(sel){live.replaceChildren(render(S));if(sel){var el=live.querySelector(sel);if(el)el.focus()}}
-function reread(){S.rereading=true;draw(".cal-q");timer=setTimeout(function(){log("GET","WorkspaceStateResponse.calibration_revisit → null");S={uid:"live",rev:FIX,state:"absent"};draw(".cal-eyebrow");say("Workspace state re-read. No revisit due.")},1400)}
+function draw(focusMode){live.replaceChildren(render(S));var el=null;if(focusMode==="outcome"){live.querySelectorAll("[data-outcome]").forEach(function(candidate){if(!el&&candidate.getAttribute("data-outcome")===S.chosen)el=candidate})}else if(focusMode==="question"){el=live.querySelector(".cal-q")}else if(focusMode==="eyebrow"){el=live.querySelector(".cal-eyebrow")}else if(focusMode==="dismiss"){el=live.querySelector(".cal-foot .btn")}if(el)el.focus()}
+function reread(){S.rereading=true;draw("question");timer=setTimeout(function(){log("GET","WorkspaceStateResponse.calibration_revisit → null");S={uid:"live",rev:FIX,state:"absent"};draw("eyebrow");say("Workspace state re-read. No revisit due.")},1400)}
 live.addEventListener("click",function(e){var b=e.target.closest('[aria-disabled="true"]');if(b)e.preventDefault()});
 live.addEventListener("submit",function(e){
 e.preventDefault();
@@ -202,18 +202,18 @@ var res=nextResult;
 if(intent==="answer"){
 var o=sub&&sub.value;if(!LBL[o])return;
 var body={outcome:o};if(S.note.trim())body.note=S.note;
-S.state="submitting_answer";S.chosen=o;draw('[data-outcome="'+o+'"]');say("Recording outcome: "+LBL[o]+".");
+S.state="submitting_answer";S.chosen=o;draw("outcome");say("Recording outcome: "+LBL[o]+".");
 log("POST",BASE+FIX.decision_id+"/decision",body);
 timer=setTimeout(function(){
 if(res==="ok"){log("200","CAL-01 append accepted (WriteGuard passed)");S.state="answered";S.outcome=o;S.note="";say("Outcome recorded: "+LBL[o]+". This rung is closed. Re-reading workspace state.");reread()}
-else{log(res==="blocked"?"409":"503",res==="blocked"?"WriteGuard blocked — nothing appended":"write failed — nothing appended");S.state="write_failed";S.failure={intent:"answer",kind:res};S.chosen=null;draw('[data-outcome="'+o+'"]');shout((res==="blocked"?"Answer blocked by the write guard.":"Answer not recorded.")+" Nothing durable happened. The revisit is still pending.")}
+else{log(res==="blocked"?"409":"503",res==="blocked"?"WriteGuard blocked — nothing appended":"write failed — nothing appended");S.state="write_failed";S.failure={intent:"answer",kind:res};S.chosen=null;draw("outcome");shout((res==="blocked"?"Answer blocked by the write guard.":"Answer not recorded.")+" Nothing durable happened. The revisit is still pending.")}
 },900);
 }else{
-S.state="submitting_dismiss";draw('.cal-foot .btn');say("Deferring this revisit. No outcome will be recorded.");
+S.state="submitting_dismiss";draw("dismiss");say("Deferring this revisit. No outcome will be recorded.");
 log("POST",BASE+FIX.decision_id+"/dismiss");
 timer=setTimeout(function(){
 if(res==="ok"){log("200","CAL-02 dismissal ledger appended — no outcome receipt");S.state="dismissed";say("Revisit deferred. No outcome recorded. Re-reading workspace state.");reread()}
-else{log(res==="blocked"?"409":"503","dismissal not written");S.state="write_failed";S.failure={intent:"dismiss",kind:res};draw('.cal-foot .btn');shout((res==="blocked"?"Dismissal blocked.":"Dismissal not recorded.")+" Nothing durable happened. The revisit is still pending.")}
+else{log(res==="blocked"?"409":"503","dismissal not written");S.state="write_failed";S.failure={intent:"dismiss",kind:res};draw("dismiss");shout((res==="blocked"?"Dismissal blocked.":"Dismissal not recorded.")+" Nothing durable happened. The revisit is still pending.")}
 },900);
 }
 });

@@ -5,7 +5,8 @@
 - Design system: `Yggdrasil Design System`
 - Design-system ID: `f2b13410-af14-4875-8029-445352123f57`
 - Exact token-sheet SHA-256: `edbc81c77209b5274b26b5e827191f95595f20d6bc5a97a17f7dd8751a774ba2`
-- Reviewed payload SHA-256: `8efac4fa45fc4984ca0440b4afb8e021a0a2be0d54e54788b1450797a75e8b29`
+- Original independently reviewed payload SHA-256: `8efac4fa45fc4984ca0440b4afb8e021a0a2be0d54e54788b1450797a75e8b29`
+- Candidate payload SHA-256 after security delta: `d63b0489154fb3c2d32ac6d9ae0055e0f224abaa0ab8f2d3f7198c8a39e14349`
 - Payload digest command: `find . -type f ! -name CROSSING_B_REVIEW.md -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256`
 - Payload scope: the ten generated files present before this receipt was added; this receipt and archive-index entry are excluded from the payload digest.
 - Reviewer identity: `Codex /root/cal03_crossing_b_review`
@@ -16,6 +17,17 @@
 - Crossing: B / PROMOTE
 - Findings: none
 - Supersedes payload SHA-256: `56df885b049545c3c78851b2a331e4a0a47a85557ad341d50535a93ac2bf9245`
+
+## Security delta
+
+After the independent receipt above, CodeQL alert #154 (`js/xss-through-dom`, high) identified
+the prototype's generated-markup sink and a DOM-derived focus selector. The prototype now builds
+the same card and gallery with DOM APIs and `textContent`, and focuses outcome controls by
+comparing their static `data-outcome` attributes rather than constructing a CSS selector from
+the submitter value. No visual states, routes, authority boundaries, or token inputs changed.
+The candidate digest above is recomputed with the receipt excluded. This author-authored security
+delta requires an independent Crossing-B delta re-review before the refreshed hash can be treated
+as a passing receipt.
 
 The reviewer independently recomputed the final payload digest. Nine files were
 byte-identical to the prior reviewed payload; only `state-gallery.md` changed.
