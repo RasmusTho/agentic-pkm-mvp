@@ -198,15 +198,42 @@ def calibration_revisit_card_script() -> str:
       }}
       return outcome;
     }}
+    function precommitRefusal(result) {{
+      var detail = result && result.data && result.data.detail;
+      var code = detail && typeof detail === 'object' ? detail.error : '';
+      return !!(result && !result.ok && result.status >= 400 && result.status < 500 &&
+        ['writeguard_blocked', 'calibration_revisit_identity_required',
+          'calibration_revisit_stale'].indexOf(code) !== -1);
+    }}
+    function uncertainResult(result) {{
+      var detail = result && result.data && result.data.detail;
+      var message = detail && typeof detail === 'object' ? detail.message : '';
+      var error = new Error(message || 'The runtime acknowledgement was not authoritative.');
+      error.uncertain = true;
+      return error;
+    }}
     function validateActionResult(result, intent, body) {{
+      if (precommitRefusal(result)) {{
+        var detail = result.data && result.data.detail;
+        var refusal = new Error(detail && detail.message || 'The runtime refused this action before writing.');
+        refusal.precommitRefusal = true;
+        throw refusal;
+      }}
       var expectedStatus = intent === 'answer' ? 'answered' : 'dismissed';
-      if (!result.ok || !result.data || result.data.status !== expectedStatus ||
+      if (!result || !result.ok || !result.data || result.data.status !== expectedStatus ||
           String(result.data.decision_id) !== String(card.getAttribute('data-decision-id')) ||
           String(result.data.rung_index) !== String(card.getAttribute('data-rung-index'))) {{
-        throw new Error((result.data && result.data.detail && result.data.detail.message) ||
-          'The runtime returned an unexpected action state.');
+        throw uncertainResult(result);
       }}
-      var outcome = canonicalOutcome(result.data, intent);
+      var outcome;
+      try {{
+        outcome = canonicalOutcome(result.data, intent);
+      }} catch (error) {{
+        throw uncertainResult(result);
+      }}
+      if (intent === 'dismiss' && result.data.receipt !== null) {{
+        throw uncertainResult(result);
+      }}
       if (intent === 'answer' && body && body.outcome && outcome !== body.outcome) {{
         // An idempotent replay may return the immutable canonical receipt for
         // an earlier request.  The server response, never the submitted body,
@@ -279,7 +306,7 @@ def calibration_revisit_card_script() -> str:
       fetch(action.url, {{method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(action.body)}})
         .then(function(response) {{
           return response.json().catch(function() {{ return {{}}; }}).then(function(data) {{
-            return {{ok: response.ok, data: data}};
+            return {{ok: response.ok, status: response.status, data: data}};
           }});
         }})
         .then(function(result) {{
@@ -293,7 +320,16 @@ def calibration_revisit_card_script() -> str:
             showCommittedState(accepted.status, action.intent);
           }});
         }})
-        .catch(function() {{
+        .catch(function(error) {{
+          if (error && error.precommitRefusal) {{
+            uncertainAction = null;
+            busy = false;
+            setBusy(action.form, false, '');
+            setFreshMutationsDisabled(false);
+            if (reconcile) reconcile.hidden = true;
+            setFeedback(error.message || ('Nothing durable happened. You can retry this ' + action.intent + '.'), 'failed');
+            return;
+          }}
           busy = false;
           if (reconcile) reconcile.disabled = false;
           setFreshMutationsDisabled(true);
@@ -314,7 +350,7 @@ def calibration_revisit_card_script() -> str:
         .catch(function(error) {{ error.uncertain = true; throw error; }})
         .then(function(response) {{
           return response.json().catch(function(error) {{ error.uncertain = true; throw error; }}).then(function(data) {{
-            return {{ok: response.ok, data: data}};
+            return {{ok: response.ok, status: response.status, data: data}};
           }});
         }})
         .then(function(result) {{
@@ -331,13 +367,21 @@ def calibration_revisit_card_script() -> str:
         }})
         .catch(function(error) {{
           if (committedStatus) return;
+          if (error && error.precommitRefusal) {{
+            busy = false;
+            setBusy(form, false, '');
+            setFreshMutationsDisabled(false);
+            setFeedback(error.message || ('Nothing durable happened. You can retry this ' + intent + '.'), 'failed');
+            return;
+          }}
           if (error && error.uncertain) {{
             showUncertainAction({{url: url, body: JSON.parse(JSON.stringify(body || {{}})), form: form, intent: intent}});
             return;
           }}
-          busy = false;
-          setBusy(form, false, '');
-          setFeedback('Nothing durable happened. You can retry this ' + intent + '.', 'failed');
+          // Every unclassified failure is still indeterminate.  Only the
+          // explicitly authenticated pre-commit refusal branch above may
+          // claim that no durable write occurred or re-enable fresh actions.
+          showUncertainAction({{url: url, body: JSON.parse(JSON.stringify(body || {{}})), form: form, intent: intent}});
         }});
     }}
     if (answer) answer.addEventListener('submit', function(event) {{
