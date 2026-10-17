@@ -391,8 +391,10 @@ producer set — so 05A2 through 05A8 run in listed order, each `agent:blocked` 
 until that predecessor is merged and reconciled on `origin/main`. Every merge posts a child receipt
 to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup. 05A itself is a stage
 hub: it posts the MVR-05A stage receipt once every 05A child has merged, and it is never picked up
-directly. The 05B children 05B0 through 05B5 run serially on the same terms. 05B (#3860) is their
-stage hub; unlike 05A it is also the stage closer, picked up only after every 05B child has merged.
+directly. The mergeable 05B children 05B0–05B3, 05B4a–05B4c and 05B5 run serially on the same
+terms. 05B4 (#6139) is a sub-hub with no deliverable of its own: it is reconciled and closed once
+05B4c has merged, never merged itself. 05B (#3860) is the stage hub; unlike 05A it is also the stage
+closer, picked up only after every mergeable 05B child has merged and the #6139 sub-hub is closed.
 
 ## Cross-Task Invariants / Interaction Safety
 

@@ -444,8 +444,10 @@ proof exposes is repaired before more consumers depend on it), then the ratcheti
 (so every later child proves progress by shrinking one allowlist), then three consumer-migration
 children split by carrier family, then client activation once every server surface the client
 calls accepts the carrier. The compatibility-adapter allowlist that MVR-05B1 introduces is the
-shared artifact: 05B2–05B4c each remove the entries they migrate, and the hub records the final
-retained adapters with their retiring owner.
+shared artifact: the children that migrate allowlisted resolvers (05B2, 05B3 and 05B4a) each
+remove the entries they migrate; 05B4b and 05B4c restore binding-aware projections and stores that
+have no allowlist entries, and prove progress through their own acceptance criteria instead. The hub
+records the final retained adapters with their retiring owner.
 
 Order is serial, on the same terms as 05A and `README.md :: Implementation tasks`: each child is
 `agent:blocked` on its predecessor until that predecessor has merged and been reconciled on
