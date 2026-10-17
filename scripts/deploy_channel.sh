@@ -1473,7 +1473,7 @@ native_source_embedding_preflight_gate() {
     return 0
   fi
 
-  local operation="${BWS_DEPLOY_OPERATION_ID:-}" identity_json identity_result
+  local operation="${BWS_DEPLOY_OPERATION_ID:-}" identity_json identity_result guard_refusal_file
   local provider="" model="" identity_command probe_command probe_status=0 probe_reason service_ready=0 attempt
   [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure embedding_context_invalid; return 78; }
   [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure embedding_context_invalid; return 78; }
@@ -1482,11 +1482,22 @@ native_source_embedding_preflight_gate() {
     [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || { native_source_failure embedding_context_invalid; return 78; }
 
   identity_command='import json; from app.components.llm.router import LLMRouter, LLMTaskIntent; route = LLMRouter().route(LLMTaskIntent(task_kind="embed", strict_identity_required=True)); identity = route.embedding_identity; assert identity is not None; print(json.dumps({"contract": "native-source-embedding-identity.v1", "provider": identity.provider, "model": identity.model}, separators=(",", ":")))'
-  identity_json="$(DEPLOY_NATIVE_SOURCE_EMBEDDING_IDENTITY_OUTPUT=1 compose run --rm --no-deps -T \
-    --entrypoint python api -c "${identity_command}" 2>/dev/null)" || {
+  guard_refusal_file="$(umask 077; mktemp "${TMPDIR:-/tmp}/native-embedding-guard.XXXXXX")" || {
     native_source_failure embedding_identity_unavailable
     return 78
   }
+  identity_json="$(DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSAL_FILE="${guard_refusal_file}"
+    DEPLOY_NATIVE_SOURCE_EMBEDDING_IDENTITY_OUTPUT=1 \
+      compose run --rm --no-deps -T --entrypoint python api -c "${identity_command}" 2>/dev/null)" || {
+    if [ -s "${guard_refusal_file}" ]; then
+      native_source_failure embedding_guard_refused
+    else
+      native_source_failure embedding_identity_unavailable
+    fi
+    rm -f -- "${guard_refusal_file}"
+    return 78
+  }
+  rm -f -- "${guard_refusal_file}"
   identity_result="$(
     NATIVE_SOURCE_EMBEDDING_IDENTITY_JSON="${identity_json}" "${PYTHON}" - 2>/dev/null <<'PY'
 import json
@@ -1556,6 +1567,13 @@ PY
       --entrypoint python api -c "${probe_command}" >/dev/null 2>&1 || probe_status=$?
   if [ "${probe_status}" != 0 ]; then
     case "${probe_status}" in
+      120)
+        if [ "${DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED:-0}" = "1" ]; then
+          probe_reason=embedding_guard_refused
+        else
+          probe_reason=embedding_probe_failed
+        fi
+        ;;
       114) probe_reason=embedding_probe_client_failed ;;
       115) probe_reason=embedding_probe_identity_mismatch ;;
       116) probe_reason=embedding_probe_generation_failed ;;
