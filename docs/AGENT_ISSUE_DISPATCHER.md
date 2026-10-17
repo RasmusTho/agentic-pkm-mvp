@@ -1314,6 +1314,12 @@ have identical bytes/hash; content equality alone is not grounds for refusal. Th
 single trusted operator/fresh observer boundary, not authenticated fetch, auditor identity or
 upstream-truth verification. Full v2 observation admission requires the packet context and its
 exact retained-file binding; there is no context-free proof path. V1 admission stays unchanged.
+The response's packet `{ref, sha256, bytes_length}` is also the exact binding required by file-aware
+comparison, telemetry, receipt and audit consumers; a different formatting of equal JSON is not
+the packet observed by that response. Fresh probe reads must be timestamped at/after successful
+agent admission and at/before the response. The agent waits for recorded admission metadata before
+live capture. Separate audit reads instead fall between source checkpoint and independent fact
+observation; they are not asserted to be reads by the probe agent.
 
 Checkpoint fields instead cite the exact field-specific `packet:<probe-id>#<source-pointer>`
 listed in the carried contract. Such pointers are admitted only for `checkpoint_*` semantics,
@@ -1345,6 +1351,8 @@ before building the packet. V2 consumers reuse the v1 source/identity guards, re
 version mixtures, and rederive comparisons from the complete typed chain even during standalone
 receipt consumption. Duplicate JSON keys, extra/missing keys, coercion, non-finite values and
 coherently rehashed semantic corruption fail closed. No result authorizes a lifecycle action.
+V2 source custody requires exact integer Issue/PR identities; all carried SHA values have their
+exact hexadecimal length, excluding terminal whitespace. This does not reinterpret v1 artifacts.
 
 The manual `telemetry` command derives measurements; callers cannot supply trusted totals:
 

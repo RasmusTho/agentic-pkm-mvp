@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from copy import deepcopy
 from pathlib import Path
 
@@ -307,7 +308,7 @@ def _rebind_chain(chain, observation, tmp_path):
     return comparison, telemetry, receipt, telemetry_ref, evidence_ref
 
 
-def _assert_all_consumers_refuse(chain, bad, tmp_path):
+def _assert_all_consumers_refuse(chain, bad, tmp_path, *, match=None):
     comp, telemetry, receipt, telemetry_ref, evidence_ref = _rebind_chain(chain, bad, tmp_path)
     for consumer in (
         lambda: probe.normalize_rehydrated_observation(bad, context_pack=chain["pack"]),
@@ -318,7 +319,7 @@ def _assert_all_consumers_refuse(chain, bad, tmp_path):
         lambda: probe.build_probe_receipt(chain["pack"], bad, comp, evidence_refs=chain["refs"], telemetry=telemetry),
         lambda: probe.normalize_probe_receipt(receipt),
     ):
-        with pytest.raises(probe.EpicRehydrationProbeError) as error:
+        with pytest.raises(probe.EpicRehydrationProbeError, match=match) as error:
             consumer()
         assert "retained evidence digest/length mismatch" not in str(error.value)
     commands = [
@@ -421,12 +422,114 @@ def test_v2_real_live_drift_unknown_and_identical_reread_are_preserved(chain, tm
     assert unknown["external_refresh"]["status"] == "unknown"
 
 
+def test_v2_exact_observer_packet_bytes_bind_every_file_consumer(chain, tmp_path):
+    alternate = tmp_path / "same-packet-different-bytes.json"
+    alternate.write_text(json.dumps(chain["pack"], indent=2) + "\n")
+    binding = v2._bound_ref(str(alternate), chain["pack"])
+    assert binding["sha256"] != chain["observation"]["context_pack"]["sha256"]
+    assert binding["bytes_length"] != chain["observation"]["context_pack"]["bytes_length"]
+    telemetry = deepcopy(chain["telemetry"])
+    telemetry["evidence"]["context_pack"] = binding
+    telemetry["measurements"]["packet_bytes"].update(value=binding["bytes_length"], source=binding)
+    refs = chain["refs"] | {"context_pack": str(alternate)}
+    receipt = deepcopy(chain["receipt"])
+    receipt.update(context_pack=binding, evidence=refs, telemetry=telemetry)
+    for consumer in (
+        lambda: probe.normalize_rehydrated_observation(chain["observation"], context_pack=chain["pack"], context_pack_ref=str(alternate)),
+        lambda: probe.compare_rehydrated_observation(chain["pack"], chain["observation"], context_pack_ref=str(alternate)),
+        lambda: v2.build_telemetry(chain["pack"], chain["observation"], pack_ref=str(alternate), observation_ref=refs["agent_response"], execution_ref=chain["execution_ref"]),
+        lambda: v2.normalize_telemetry(telemetry),
+        lambda: probe.build_probe_receipt(chain["pack"], chain["observation"], chain["comparison"], evidence_refs=refs, telemetry=chain["telemetry"]),
+        lambda: probe.normalize_probe_receipt(receipt),
+    ):
+        with pytest.raises(probe.EpicRehydrationProbeError, match="observer's exact raw packet"):
+            consumer()
+    telemetry_ref = _retain(tmp_path / "alternate-telemetry.json", telemetry)
+    refs_ref = _retain(tmp_path / "alternate-refs.json", refs)
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    for index, command in enumerate((
+        ["compare", "--pack-file", str(alternate), "--observation-file", refs["agent_response"]],
+        ["telemetry", "--pack-file", str(alternate), "--observation-file", refs["agent_response"], "--execution-file", chain["execution_ref"]],
+        ["receipt", "--pack-file", str(alternate), "--observation-file", refs["agent_response"], "--comparison-file", refs["comparison_receipt"], "--telemetry-file", telemetry_ref, "--evidence-file", refs_ref],
+    )):
+        output = tmp_path / f"alternate-refused-{index}.json"
+        assert probe.cli_main([*command, "--output", str(output)]) == 2
+        assert not output.exists()
+    assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize("kind", ["github", "repository", "dispatcher"])
+@pytest.mark.parametrize("at", ["2026-10-17T20:00:05Z", "2026-10-17T20:01:11Z"])
+def test_v2_probe_reads_are_after_admission_and_before_response(chain, tmp_path, kind, at):
+    bad = deepcopy(chain["observation"])
+    item = next(item for item in bad["live_reads"] if item["kind"] == kind)
+    read = probe.parse_strict_json(Path(item["evidence"]["ref"]).read_bytes())
+    read["observed_at"] = at
+    _retain(Path(item["evidence"]["ref"]), read)
+    item["evidence"] = v2._bound_ref(item["evidence"]["ref"])
+    _assert_all_consumers_refuse(chain, bad, tmp_path, match="admitted observation interval")
+
+
+@pytest.mark.parametrize("kind,number", [("issue", 3798.0), ("pr", 3803.0)])
+def test_v2_source_custody_identities_are_exact_integers(chain, tmp_path, kind, number):
+    bad_chain = deepcopy(chain)
+    pack = bad_chain["pack"]
+    custody_ref = pack["source_custody"][kind]["ref"]
+    custody = probe.parse_strict_json(Path(custody_ref).read_bytes())
+    custody["number"] = number
+    _retain(Path(custody_ref), custody)
+    pack["source_custody"][kind] = v2._bound_ref(custody_ref)
+    marker = pack["source"]["receipt"]["checkpoint"]["external_state"]["marker"]
+    marker["probe_external_state"][kind] = f"{number}:{custody['state'].lower()}"
+    pack["source"]["external_state_marker"] = deepcopy(marker)
+    _retain(Path(bad_chain["refs"]["source_checkpoint"]), pack["source"]["receipt"])
+    source_binding = v2._bound_ref(bad_chain["refs"]["source_checkpoint"])
+    pack["source"].update(bytes_sha256=source_binding["sha256"], bytes_length=source_binding["bytes_length"])
+    _retain(Path(bad_chain["refs"]["context_pack"]), pack)
+    packet_binding = v2._bound_ref(bad_chain["refs"]["context_pack"])
+    obs = deepcopy(bad_chain["observation"])
+    obs["context_pack"] = packet_binding
+    bad_chain["comparison"]["context_pack"] = pack
+    bad_chain["comparison"]["field_results"]["external_state"]["expected"] = marker["probe_external_state"]
+    bad_chain["telemetry"]["evidence"]["context_pack"] = packet_binding
+    bad_chain["telemetry"]["measurements"]["packet_bytes"].update(value=packet_binding["bytes_length"], source=packet_binding)
+    bad_chain["receipt"].update(context_pack=packet_binding, source_checkpoint=pack["source"])
+    with pytest.raises(probe.EpicRehydrationProbeError, match="exact integer"):
+        probe.normalize_context_pack(pack)
+    with pytest.raises(probe.EpicRehydrationProbeError, match="exact integer"):
+        probe.build_context_pack(Path(bad_chain["refs"]["source_checkpoint"]).read_bytes(), **chain["kwargs"])
+    _assert_all_consumers_refuse(bad_chain, obs, tmp_path, match="exact integer")
+    kwargs = chain["kwargs"]
+    output = tmp_path / "source-number-refused.json"
+    assert probe.cli_main(["build-pack", "--source-file", kwargs["source_ref"], "--source-ref", kwargs["source_ref"], "--source-observed-at", kwargs["source_observed_at"], "--slice-id", kwargs["slice_id"], "--repository", kwargs["repository"], "--issue-number", "3798", "--pr-number", "3803", "--verified-pr-head-sha", "a" * 40, "--merge-sha", "b" * 40, "--read-instruction", "packet-only", "--probe-id", kwargs["probe_id"], "--schema-version", "2", "--output", str(output)]) == 2
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("kind,key", [("repository", "head_sha"), ("github", "headRefOid"), ("github", "mergeCommit")])
+def test_v2_live_sha_newlines_fail_all_consumers(chain, tmp_path, kind, key):
+    bad = deepcopy(chain["observation"])
+    item = next(item for item in bad["live_reads"] if item["kind"] == kind)
+    read = probe.parse_strict_json(Path(item["evidence"]["ref"]).read_bytes())
+    payload = read["payload"] if kind == "repository" else read["payload"]["pr"]
+    if key == "mergeCommit":
+        payload[key]["oid"] += "\n"
+    else:
+        payload[key] += "\n"
+    _retain(Path(item["evidence"]["ref"]), read)
+    item["evidence"] = v2._bound_ref(item["evidence"]["ref"])
+    _assert_all_consumers_refuse(chain, bad, tmp_path, match="violates v2 contract")
+    for shape, length in ((v2.SHA, 40), (v2.BINDING["properties"]["sha256"], 64)):
+        for suffix in ("\n", "\r\n", " ", "g"):
+            with pytest.raises(probe.EpicRehydrationProbeError):
+                v2._validate("c" * length + suffix, shape, "carried digest")
+
+
 def _audit_fixture(chain, tmp_path, name="slice_status"):
     obs = deepcopy(chain["observation"])
     obs["fields"][name]["value"] = "in_progress" if name == "slice_status" else ["invented checkpoint statement"]
     obs["fields"]["fabricated_claims"]["value"] = [name]
     _retain(Path(chain["refs"]["agent_response"]), obs)
-    live_reads = [item for item in obs["live_reads"] if item["kind"] in v2.LIVE_FIELD_KINDS.get(name, ())]
+    live_reads = deepcopy([item for item in obs["live_reads"] if item["kind"] in v2.LIVE_FIELD_KINDS.get(name, ())])
     fact = {"schema_name": "epic_rehydration_independent_fact", "schema_version": 2, "probe_id": obs["probe_id"], "field": name, "value": deepcopy(chain["observation"]["fields"][name]["value"]), "provenance": deepcopy(obs["fields"][name]["provenance"]), "observed_at": obs["observed_at"], "live_reads": live_reads}
     fact_ref = _retain(tmp_path / "audit-fact.json", fact)
     audit = {"schema_name": "epic_rehydration_fabrication_audit", "schema_version": 2, "probe_id": obs["probe_id"], "context_pack": obs["context_pack"], "observation": v2._bound_ref(chain["refs"]["agent_response"]), "auditor": "separate-test-auditor", "independence": "separate_agent_or_human", "findings": [{"field": name, "claimed_value": obs["fields"][name]["value"], "established_value": fact["value"], "evidence": v2._bound_ref(fact_ref), "verdict": "fabricated"}]}
@@ -438,7 +541,7 @@ def _audit_fixture(chain, tmp_path, name="slice_status"):
     return obs, fact, fact_ref, audit, audit_ref, comparison, telemetry, receipt
 
 
-@pytest.mark.parametrize("case", ["checkpoint_live_fact", "source_hardlink", "source_fragment", "contrary_payload", "unknown_claim"])
+@pytest.mark.parametrize("case", ["checkpoint_live_fact", "source_hardlink", "source_fragment", "contrary_payload", "unknown_claim", "alternate_packet"])
 def test_v2_audit_provenance_and_semantic_replay_matrix(chain, tmp_path, case):
     obs, fact, fact_ref, audit, audit_ref, comp, telemetry, receipt = _audit_fixture(chain, tmp_path)
     assert comp["field_results"]["fabricated_claims"]["status"] == "match"
@@ -457,6 +560,10 @@ def test_v2_audit_provenance_and_semantic_replay_matrix(chain, tmp_path, case):
     elif case == "contrary_payload":
         fact["value"] = "blocked"
         audit["findings"][0]["established_value"] = "blocked"
+    elif case == "alternate_packet":
+        alternate = tmp_path / "audit-alternate-packet.json"
+        alternate.write_text(json.dumps(chain["pack"], indent=2) + "\n")
+        audit["context_pack"] = v2._bound_ref(str(alternate))
     else:
         obs["fields"]["slice_status"]["value"] = "unknown"
         _retain(Path(chain["refs"]["agent_response"]), obs)
@@ -493,6 +600,28 @@ def test_v2_audit_provenance_and_semantic_replay_matrix(chain, tmp_path, case):
         assert probe.cli_main([*command, "--output", str(output)]) == 2
         assert not output.exists()
     assert {path: path.read_bytes() for path in before} == before
+
+
+def test_v2_separate_audit_read_chronology_is_source_to_fact_not_probe_admission(chain, tmp_path):
+    obs, fact, fact_ref, audit, audit_ref, comp, _, _ = _audit_fixture(chain, tmp_path)
+    item = fact["live_reads"][0]
+    read = probe.parse_strict_json(Path(item["evidence"]["ref"]).read_bytes())
+    read_ref = str(tmp_path / "separate-auditor-live-read.json")
+    fact["provenance"][0]["ref"] = read_ref
+    for at, valid in (("2026-10-17T20:00:05Z", True), ("2026-10-17T19:59:59Z", False), ("2026-10-17T20:01:11Z", False)):
+        read["observed_at"] = at
+        _retain(Path(read_ref), read)
+        item["evidence"] = v2._bound_ref(read_ref)
+        _retain(Path(fact_ref), fact)
+        audit["findings"][0]["evidence"] = v2._bound_ref(fact_ref)
+        _retain(Path(audit_ref), audit)
+        comp["fabrication_audit"] = v2._bound_ref(audit_ref)
+        if valid:
+            assert probe.compare_rehydrated_observation(chain["pack"], obs, fabrication_audit_ref=audit_ref)["field_results"]["fabricated_claims"]["status"] == "match"
+            assert probe.normalize_comparison(comp) == comp
+        else:
+            with pytest.raises(probe.EpicRehydrationProbeError, match="admitted observation interval"):
+                probe.normalize_comparison(comp)
 
 
 def test_v2_checkpoint_audit_requires_exact_semantic_pointer(chain, tmp_path):

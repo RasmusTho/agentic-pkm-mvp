@@ -976,6 +976,9 @@ with target/time/domain checks and canonical-path plus inode exclusion of packet
 Checkpoint pointers are confined to checkpoint fields, full v2 observations require packet context,
 and audit facts must agree with their own retained evidence. Reconstruction errors/unknowns stay
 visible alongside independent live facts; custody is not authenticated fetch or upstream truth.
+The original response's exact raw packet binding constrains file-aware replay and byte telemetry;
+equivalent JSON in a differently serialized file is not interchangeable. Probe live reads occur
+after successful admission; independent audit reads have their separate source-to-fact interval.
 
 Its manual telemetry helper measures exact packet/response bytes, a named UTC wall-clock interval,
 and recorder-attested complete-scope native events. Successful starts, packet/response handoffs,

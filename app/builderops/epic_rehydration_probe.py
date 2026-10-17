@@ -346,6 +346,7 @@ def normalize_rehydrated_observation(
     observation: Mapping[str, Any],
     *,
     context_pack: Mapping[str, Any] | None = None,
+    context_pack_ref: str | None = None,
 ) -> dict[str, Any]:
     """Strictly validate the one fresh agent's structured observation."""
 
@@ -353,7 +354,7 @@ def normalize_rehydrated_observation(
     if _is_v2(observation):
         from app.builderops.epic_rehydration_probe_v2 import normalize_rehydrated_observation as normalize_v2
 
-        return normalize_v2(observation, context_pack=context_pack)
+        return normalize_v2(observation, context_pack=context_pack, context_pack_ref=context_pack_ref)
 
     normalized = _strict_object(observation, "observation")
     _exact_fields(
@@ -434,6 +435,7 @@ def compare_rehydrated_observation(
     observation: Mapping[str, Any],
     *,
     fabrication_audit_ref: str | None = None,
+    context_pack_ref: str | None = None,
 ) -> dict[str, Any]:
     """Compare one observation without ranking it or producing a quality aggregate."""
 
@@ -441,7 +443,7 @@ def compare_rehydrated_observation(
     if _is_v2(context_pack):
         from app.builderops.epic_rehydration_probe_v2 import compare_rehydrated_observation as compare_v2
 
-        return compare_v2(context_pack, observation, fabrication_audit_ref=fabrication_audit_ref)
+        return compare_v2(context_pack, observation, fabrication_audit_ref=fabrication_audit_ref, context_pack_ref=context_pack_ref)
     if fabrication_audit_ref is not None:
         raise EpicRehydrationProbeError("independent fabrication audit is only supported in v2")
 
@@ -1417,7 +1419,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "compare":
             _reject_output_alias(args.output, args.pack_file, args.observation_file)
             pack = normalize_context_pack(_read_json_file(args.pack_file))
-            observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
+            observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack, context_pack_ref=str(args.pack_file))
             _reject_output_alias(args.output, *_context_pack_closure_paths(pack))
             if args.fabrication_audit_file is not None:
                 _reject_output_alias(args.output, args.fabrication_audit_file)
@@ -1436,7 +1438,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             evidence_refs = _read_json_file(args.evidence_file)
             normalized_evidence_refs = _normalize_evidence_refs(evidence_refs)
             pack = normalize_context_pack(_read_json_file(args.pack_file))
-            observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
+            observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack, context_pack_ref=str(args.pack_file))
             comparison = normalize_comparison(_read_json_file(args.comparison_file), context_pack=pack, observation=observation)
             telemetry = _read_json_file(args.telemetry_file)
             extra_paths: tuple[Path, ...] = ()

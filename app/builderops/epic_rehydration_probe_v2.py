@@ -40,7 +40,7 @@ PROVENANCE: dict[str, Any] = {
 }
 STRING = {"type": "string", "minLength": 1}
 STRINGS = {"type": "array", "items": STRING}
-SHA = {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+SHA = {"type": "string", "pattern": "^[0-9a-f]{40}$", "minLength": 40, "maxLength": 40}
 
 
 def obj(properties: dict[str, Any]) -> dict[str, Any]:
@@ -93,7 +93,7 @@ AGENT = obj({"admitted_model": STRING, "admitted_reasoning_effort": STRING,
              "engine_identity": STRING, "engine_identity_source": STRING,
              "start_status": {"const": "succeeded"}, "start_observed_at": STRING})
 TARGET = obj({"repository": STRING, "issue_number": {"type": "integer", "minimum": 1}, "pr_number": {"type": "integer", "minimum": 1}, "verified_pr_head_sha": SHA, "merge_sha": SHA})
-BINDING = obj({"ref": STRING, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "bytes_length": {"type": "integer", "minimum": 1}})
+BINDING = obj({"ref": STRING, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "minLength": 64, "maxLength": 64}, "bytes_length": {"type": "integer", "minimum": 1}})
 LIVE_READS = {"type": "array", "items": obj({"kind": {"enum": ["github", "repository", "dispatcher"]}, "evidence": BINDING})}
 LIVE_READ_CONTRACT = obj({
     "schema_name": {"const": "epic_rehydration_live_read"}, "schema_version": {"type": "integer", "const": 2},
@@ -123,7 +123,8 @@ RESPONSE_CONTRACT = obj({
     "fields": obj({name: _field_contract(name, shape) for name, shape in FIELD_SHAPES.items()}),
     "live_reads": LIVE_READS, "limitations": STRINGS,
 })
-RESPONSE_CONTRACT["properties"]["live_reads"]["description"] = "Exactly one github, repository and dispatcher local live-read evidence binding. Local paths resolve from repository CWD; URI/fragment refs and final symlinks are refused. Evidence must satisfy the carried live_read_contract and exclude packet/source/custody canonical paths and device/inode identities. This binds trusted recorder attestation, not authenticated fetch truth."
+RESPONSE_CONTRACT["properties"]["live_reads"]["description"] = "Exactly one github, repository and dispatcher local live-read evidence binding, observed at/after this agent's successful admission and at/before this response. Local paths resolve from repository CWD; URI/fragment refs and final symlinks are refused. Evidence must satisfy the carried live_read_contract and exclude packet/source/custody canonical paths and device/inode identities. This binds trusted recorder attestation, not authenticated fetch truth."
+RESPONSE_CONTRACT["properties"]["context_pack"]["description"] = "Exact raw packet binding used by this observer. File-aware comparison, telemetry, receipt and audit consumers require this same ref, SHA256 and byte length, not another serialization of equivalent JSON."
 RESPONSE_CONTRACT["live_read_contract"] = LIVE_READ_CONTRACT
 RESPONSE_CONTRACT["checkpoint_pointers"] = CHECKPOINT_POINTERS
 FIELD_MEANINGS = {
@@ -183,6 +184,15 @@ def _read_bound(binding: Any) -> dict[str, Any]:
     return v1._read_json_file(Path(record["ref"]))
 
 
+def _observation_packet(pack: Mapping[str, Any], observation: Mapping[str, Any], ref: str | None = None) -> dict[str, Any]:
+    binding = observation["context_pack"]
+    if not v1._json_exact_equal(_read_bound(binding), pack):
+        raise Error("observation packet binding is not context-pack bound")
+    if ref is not None and not v1._json_exact_equal(binding, _bound_ref(ref, pack)):
+        raise Error("packet ref/digest/length differs from the observer's exact raw packet")
+    return binding
+
+
 def _local_evidence_path(ref: Any) -> Path:
     """Classify before treating a string as a filesystem path; no opaque fallback."""
     text = v1._required_string(ref, "local live evidence ref")
@@ -195,7 +205,7 @@ def _local_evidence_path(ref: Any) -> Path:
     return path.resolve(strict=True)
 
 
-def _independent_read(binding: Any, *, kind: str, pack: Mapping[str, Any], packet_binding: Mapping[str, Any], observed_at: str) -> dict[str, Any]:
+def _independent_read(binding: Any, *, kind: str, pack: Mapping[str, Any], packet_binding: Mapping[str, Any], observed_at: str, earliest_at: str | None = None) -> dict[str, Any]:
     record = _exact(binding, {"ref", "sha256", "bytes_length"}, "live evidence binding")
     candidate = _local_evidence_path(record["ref"])
     excluded = (*closure_paths(pack), Path(packet_binding["ref"]))
@@ -208,8 +218,9 @@ def _independent_read(binding: Any, *, kind: str, pack: Mapping[str, Any], packe
     target = {key: pack["target"][key] for key in ("repository", "issue_number", "pr_number")}
     if read["kind"] != kind or read["probe_id"] != pack["probe_id"] or not v1._json_exact_equal(read["target"], target):
         raise Error("live read domain/target/probe identity mismatch")
-    if not _timestamp(pack["source"]["observed_at"]) <= _timestamp(read["observed_at"]) <= _timestamp(observed_at):
-        raise Error("live read observation time is outside source-to-response interval")
+    lower_bound = max(_timestamp(pack["source"]["observed_at"]), _timestamp(earliest_at or pack["source"]["observed_at"]))
+    if not lower_bound <= _timestamp(read["observed_at"]) <= _timestamp(observed_at):
+        raise Error("live read observation time is outside its admitted observation interval")
     if read["availability"] == "unavailable":
         if read["payload"] != UNKNOWN:
             raise Error("unavailable live read must have unknown payload")
@@ -251,7 +262,7 @@ def _independent_read(binding: Any, *, kind: str, pack: Mapping[str, Any], packe
     return read
 
 
-def _admit_provenance(name: str, provenance: Any, live_reads: Any, *, pack: Mapping[str, Any], packet_binding: Mapping[str, Any], observed_at: str) -> dict[str, Any]:
+def _admit_provenance(name: str, provenance: Any, live_reads: Any, *, pack: Mapping[str, Any], packet_binding: Mapping[str, Any], observed_at: str, earliest_at: str | None = None) -> dict[str, Any]:
     """One field-aware admission boundary for observations and independent audit facts."""
     _validate(provenance, _field_contract(name, FIELD_SHAPES[name])["properties"]["provenance"], f"{name} provenance")
     _validate(live_reads, LIVE_READS, "live read bindings")
@@ -272,7 +283,7 @@ def _admit_provenance(name: str, provenance: Any, live_reads: Any, *, pack: Mapp
         kind = item["kind"]
         if kind in reads:
             raise Error("duplicate live read kind")
-        reads[kind] = _independent_read(item["evidence"], kind=kind, pack=pack, packet_binding=packet_binding, observed_at=observed_at)
+        reads[kind] = _independent_read(item["evidence"], kind=kind, pack=pack, packet_binding=packet_binding, observed_at=observed_at, earliest_at=earliest_at)
     if not required.issubset(reads):
         raise Error("live field lacks all required independently retained read domains")
     refs = {(item["kind"], item["evidence"]["ref"]) for item in live_reads}
@@ -347,6 +358,9 @@ def _source_external(pack: Mapping[str, Any]) -> dict[str, Any]:
     custody = pack["source_custody"]
     issue, pr, dispatcher, repository = (_read_bound(custody[key]) for key in ("issue", "pr", "dispatcher", "repository"))
     target = pack["target"]
+    for value, key in ((issue, "issue_number"), (pr, "pr_number")):
+        if type(value.get("number")) is not int or value["number"] != target[key]:
+            raise Error("v2 source custody requires exact integer Issue/PR identity")
     if issue.get("url") != f"https://github.com/{target['repository']}/issues/{target['issue_number']}" or pr.get("url") != f"https://github.com/{target['repository']}/pull/{target['pr_number']}":
         raise Error("v2 source custody URLs must identify the exact target")
     issue_state = v1._required_string(issue.get("state"), "custody issue.state").lower()
@@ -393,14 +407,13 @@ def normalize_context_pack(value: Mapping[str, Any]) -> dict[str, Any]:
     return pack
 
 
-def normalize_rehydrated_observation(value: Mapping[str, Any], *, context_pack: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def normalize_rehydrated_observation(value: Mapping[str, Any], *, context_pack: Mapping[str, Any] | None = None, context_pack_ref: str | None = None) -> dict[str, Any]:
     observation = v1._strict_object(value, "v2 observation")
     _validate(observation, RESPONSE_CONTRACT, "observation")
     if context_pack is None:
         raise Error("v2 observation admission requires context_pack")
     pack = normalize_context_pack(context_pack)
-    if not v1._json_exact_equal(_read_bound(observation["context_pack"]), pack):
-        raise Error("observation packet binding is not context-pack bound")
+    _observation_packet(pack, observation, context_pack_ref)
     _timestamp(observation["observed_at"])
     _timestamp(observation["agent"]["start_observed_at"])
     if _timestamp(observation["observed_at"]) < _timestamp(observation["agent"]["start_observed_at"]):
@@ -410,7 +423,7 @@ def normalize_rehydrated_observation(value: Mapping[str, Any], *, context_pack: 
     if len(observation["live_reads"]) != 3 or {item["kind"] for item in observation["live_reads"]} != {"github", "repository", "dispatcher"}:
         raise Error("observation requires exactly three distinct live read domains")
     for name, field in observation["fields"].items():
-        _admit_provenance(name, field["provenance"], observation["live_reads"] if name in LIVE_FIELD_KINDS else [], pack=pack, packet_binding=observation["context_pack"], observed_at=observation["observed_at"])
+        _admit_provenance(name, field["provenance"], observation["live_reads"] if name in LIVE_FIELD_KINDS else [], pack=pack, packet_binding=observation["context_pack"], observed_at=observation["observed_at"], earliest_at=observation["agent"]["start_observed_at"])
     return observation
 
 
@@ -434,6 +447,7 @@ def _fabrication_audit(ref: str, pack: Mapping[str, Any], obs: Mapping[str, Any]
     v1._required_string(audit["auditor"], "independent auditor")
     if not v1._json_exact_equal(_read_bound(audit["context_pack"]), pack) or not v1._json_exact_equal(_read_bound(audit["observation"]), obs):
         raise Error("independent fabrication audit is not packet/response-bound")
+    _observation_packet(pack, obs, audit["context_pack"]["ref"])
     if type(audit["findings"]) is not list:
         raise Error("audit findings must be a list")
     names = []
@@ -449,7 +463,8 @@ def _fabrication_audit(ref: str, pack: Mapping[str, Any], obs: Mapping[str, Any]
         _timestamp(evidence["observed_at"])
         if evidence["probe_id"] != pack["probe_id"] or evidence["field"] != name or not v1._json_exact_equal(evidence["value"], finding["established_value"]):
             raise Error("audited fact is not independent-evidence bound")
-        reads = _admit_provenance(name, evidence["provenance"], evidence["live_reads"], pack=pack, packet_binding=audit["context_pack"], observed_at=evidence["observed_at"])
+        # Separate audit reads are source-to-fact bound, not this probe agent's reads.
+        reads = _admit_provenance(name, evidence["provenance"], evidence["live_reads"], pack=pack, packet_binding=audit["context_pack"], observed_at=evidence["observed_at"], earliest_at=pack["source"]["observed_at"])
         established = _expected_fields(pack)[name] if name in CHECKPOINT_POINTERS else _live_facts(reads)[name]
         if not v1._json_exact_equal(evidence["value"], established):
             raise Error("audit established fact contradicts its own retained evidence")
@@ -469,11 +484,11 @@ def _expected_fields(pack: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def compare_rehydrated_observation(context_pack: Mapping[str, Any], observation: Mapping[str, Any], *, fabrication_audit_ref: str | None = None) -> dict[str, Any]:
+def compare_rehydrated_observation(context_pack: Mapping[str, Any], observation: Mapping[str, Any], *, fabrication_audit_ref: str | None = None, context_pack_ref: str | None = None) -> dict[str, Any]:
     pack = normalize_context_pack(context_pack)
-    obs = normalize_rehydrated_observation(observation, context_pack=pack)
+    obs = normalize_rehydrated_observation(observation, context_pack=pack, context_pack_ref=context_pack_ref)
     expected = _expected_fields(pack)
-    live = _live_facts(_admit_provenance("external_state", obs["fields"]["external_state"]["provenance"], obs["live_reads"], pack=pack, packet_binding=obs["context_pack"], observed_at=obs["observed_at"]))
+    live = _live_facts(_admit_provenance("external_state", obs["fields"]["external_state"]["provenance"], obs["live_reads"], pack=pack, packet_binding=obs["context_pack"], observed_at=obs["observed_at"], earliest_at=obs["agent"]["start_observed_at"]))
     results = {}
     for name in COMPARED:
         field = obs["fields"][name]
@@ -599,7 +614,7 @@ def _execution_log(value: Mapping[str, Any], pack: Mapping[str, Any], obs: Mappi
 
 def build_telemetry(context_pack: Mapping[str, Any], observation: Mapping[str, Any], *, pack_ref: str, observation_ref: str, execution_ref: str) -> dict[str, Any]:
     pack = normalize_context_pack(context_pack)
-    obs = normalize_rehydrated_observation(observation, context_pack=pack)
+    obs = normalize_rehydrated_observation(observation, context_pack=pack, context_pack_ref=pack_ref)
     bindings = {"context_pack": _bound_ref(pack_ref, pack), "observation": _bound_ref(observation_ref, obs), "execution": _bound_ref(execution_ref)}
     log = _execution_log(_read_bound(bindings["execution"]), pack, obs)
     scope = log["clock"]["scope"]
@@ -635,6 +650,7 @@ def build_probe_receipt(context_pack: Mapping[str, Any], observation: Mapping[st
     if refs["source_checkpoint"] != pack["source"]["source_ref"]:
         raise Error("source ref differs from packet custody")
     bindings = {"context_pack": _bound_ref(refs["context_pack"], pack), "observation": _bound_ref(refs["agent_response"], obs), "comparison": _bound_ref(refs["comparison_receipt"], comp)}
+    _observation_packet(pack, obs, refs["context_pack"])
     if measured["probe_id"] != pack["probe_id"] or measured["evidence"]["context_pack"] != bindings["context_pack"] or measured["evidence"]["observation"] != bindings["observation"]:
         raise Error("telemetry is not bound to receipt chain")
     return {"schema_name": v1.PROBE_RECEIPT_SCHEMA_NAME, "schema_version": 2, "probe_id": pack["probe_id"], "mode": "one_manual_read_only", "source_checkpoint": deepcopy(pack["source"]), **bindings, "target": pack["target"], "agent": obs["agent"], "telemetry": measured, "evidence": refs, "effects": {key: [] for key in v1._EFFECT_CATEGORIES}, "limitations": comp["limitations"]}
