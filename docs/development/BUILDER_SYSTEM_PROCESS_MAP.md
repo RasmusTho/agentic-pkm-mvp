@@ -971,6 +971,8 @@ bound, with separate external-state dimension results and refresh needs. Missing
 unknown. Only a separately retained independent auditor attestation with fact evidence can establish
 fabrication for comparison; drift and agent self-report cannot. Standalone comparison/receipt
 consumers rederive semantics as well as verifying the complete retained evidence chain.
+Source repository custody and independent repository reads both require the exact `origin` /
+`refs/heads/main` identity and strict head SHA; a self-consistent foreign source is refused.
 The shared field-aware provenance boundary admits exact retained local live-read envelopes only,
 with target/time/domain checks and canonical-path plus inode exclusion of packet/source custody.
 Checkpoint pointers are confined to checkpoint fields, full v2 observations require packet context,

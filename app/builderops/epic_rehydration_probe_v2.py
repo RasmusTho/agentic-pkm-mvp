@@ -357,6 +357,9 @@ def _ci_summary(pr: Mapping[str, Any]) -> dict[str, str]:
 def _source_external(pack: Mapping[str, Any]) -> dict[str, Any]:
     custody = pack["source_custody"]
     issue, pr, dispatcher, repository = (_read_bound(custody[key]) for key in ("issue", "pr", "dispatcher", "repository"))
+    # Raw source captures may retain diagnostic metadata, but their repository
+    # identity must satisfy the same origin/main contract as independent reads.
+    _validate({key: repository.get(key) for key in LIVE_PAYLOADS["repository"]["properties"]}, LIVE_PAYLOADS["repository"], "source repository custody")
     target = pack["target"]
     for value, key in ((issue, "issue_number"), (pr, "pr_number")):
         if type(value.get("number")) is not int or value["number"] != target[key]:

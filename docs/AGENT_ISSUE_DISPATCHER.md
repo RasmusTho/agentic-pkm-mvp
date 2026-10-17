@@ -1359,8 +1359,11 @@ before building the packet. V2 consumers reuse the v1 source/identity guards, re
 version mixtures, and rederive comparisons from the complete typed chain even during standalone
 receipt consumption. Duplicate JSON keys, extra/missing keys, coercion, non-finite values and
 coherently rehashed semantic corruption fail closed. No result authorizes a lifecycle action.
-V2 source custody requires exact integer Issue/PR identities; all carried SHA values have their
-exact hexadecimal length, excluding terminal whitespace. This does not reinterpret v1 artifacts.
+V2 source custody requires exact integer Issue/PR identities. Its retained repository capture must
+name `remote: origin` and `ref: refs/heads/main`, using the same repository identity schema as live
+reads; producer diagnostic metadata remains raw-byte bound but cannot substitute a different remote
+or branch. All carried SHA values have their exact hexadecimal length, excluding terminal
+whitespace. This does not reinterpret v1 artifacts.
 
 The manual `telemetry` command derives measurements; callers cannot supply trusted totals:
 

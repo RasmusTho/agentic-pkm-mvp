@@ -24,7 +24,7 @@ def chain(tmp_path):
     _retain(tmp_path / "live-issue-3798.json", issue)
     _retain(tmp_path / "live-pr-3803.json", pr)
     dispatcher = _retain(tmp_path / "dispatcher.json", {"coordination_mode": "dispatcher-backed", "db_exists": True, "configured_repositories": ["RasmusTho/agentic-pkm-mvp"]})
-    repository = _retain(tmp_path / "repository.json", {"head_sha": "c" * 40})
+    repository = _retain(tmp_path / "repository.json", {"head_sha": "c" * 40, "remote": "origin", "ref": "refs/heads/main"})
     external = {"issue": "3798:closed", "pr": "3803:merged", "pr_head_sha": "a" * 40, "merge_sha": "b" * 40, "repository_head": "c" * 40, "ci": {"status": "green", "scope": v2.CI_SCOPE}, "dispatcher": {"coordination_mode": "dispatcher-backed", "db_exists": True}}
     source = evaluate_slice_boundary_context_budget(
         slice_id="issue-3798", slice_status="closed_merged", decision_log_delta=["retain advisory-only boundary"],
@@ -175,7 +175,7 @@ def test_v2_serialized_consumers_bind_complete_evidence_chain(chain):
     # Source custody corruption fails even if all digest bindings are recomputed.
     bad_pack = deepcopy(chain["pack"])
     repository_ref = bad_pack["source_custody"]["repository"]["ref"]
-    _retain(Path(repository_ref), {"head_sha": "d" * 40})
+    _retain(Path(repository_ref), {"head_sha": "d" * 40, "remote": "origin", "ref": "refs/heads/main"})
     bad_pack["source_custody"]["repository"] = v2._bound_ref(repository_ref)
     with pytest.raises(probe.EpicRehydrationProbeError):
         probe.normalize_context_pack(bad_pack)
@@ -468,6 +468,64 @@ def test_v2_probe_reads_are_after_admission_and_before_response(chain, tmp_path,
     _retain(Path(item["evidence"]["ref"]), read)
     item["evidence"] = v2._bound_ref(item["evidence"]["ref"])
     _assert_all_consumers_refuse(chain, bad, tmp_path, match="admitted observation interval")
+
+
+@pytest.mark.parametrize("key,mode,value", [
+    ("remote", "replace", "upstream"),
+    ("ref", "replace", "refs/heads/feature"),
+    ("remote", "remove", None),
+    ("ref", "remove", None),
+    ("remote", "replace", None),
+    ("ref", "replace", None),
+    ("remote", "replace", True),
+    ("ref", "replace", 42),
+    ("remote", "replace", "origin\n"),
+    ("ref", "replace", "refs/heads/main\n"),
+    ("remote", "replace", " origin"),
+    ("ref", "replace", "refs/heads/main "),
+])
+def test_v2_source_repository_identity_binds_all_consumers(chain, tmp_path, key, mode, value):
+    import subprocess
+    import sys
+
+    bad_chain = deepcopy(chain)
+    pack = bad_chain["pack"]
+    ref = pack["source_custody"]["repository"]["ref"]
+    repository = probe.parse_strict_json(Path(ref).read_bytes())
+    if mode == "remove":
+        repository.pop(key)
+    else:
+        repository[key] = value
+    _retain(Path(ref), repository)
+    pack["source_custody"]["repository"] = v2._bound_ref(ref)
+    _retain(Path(bad_chain["refs"]["context_pack"]), pack)
+    packet_binding = v2._bound_ref(bad_chain["refs"]["context_pack"])
+    obs = deepcopy(bad_chain["observation"])
+    obs["context_pack"] = packet_binding
+    bad_chain["comparison"]["context_pack"] = pack
+    bad_chain["telemetry"]["evidence"]["context_pack"] = packet_binding
+    bad_chain["telemetry"]["measurements"]["packet_bytes"].update(value=packet_binding["bytes_length"], source=packet_binding)
+    bad_chain["receipt"]["context_pack"] = packet_binding
+    with pytest.raises(probe.EpicRehydrationProbeError, match="source repository custody"):
+        probe.normalize_context_pack(pack)
+    with pytest.raises(probe.EpicRehydrationProbeError, match="source repository custody"):
+        probe.build_context_pack(Path(bad_chain["refs"]["source_checkpoint"]).read_bytes(), **bad_chain["kwargs"])
+    _assert_all_consumers_refuse(bad_chain, obs, tmp_path, match="source repository custody")
+    kwargs, refs = bad_chain["kwargs"], bad_chain["refs"]
+    commands = [
+        ["build-pack", "--source-file", kwargs["source_ref"], "--source-ref", kwargs["source_ref"], "--source-observed-at", kwargs["source_observed_at"], "--slice-id", kwargs["slice_id"], "--repository", kwargs["repository"], "--issue-number", "3798", "--pr-number", "3803", "--verified-pr-head-sha", "a" * 40, "--merge-sha", "b" * 40, "--read-instruction", "packet-only", "--probe-id", kwargs["probe_id"], "--schema-version", "2"],
+        ["compare", "--pack-file", refs["context_pack"], "--observation-file", refs["agent_response"]],
+        ["telemetry", "--pack-file", refs["context_pack"], "--observation-file", refs["agent_response"], "--execution-file", bad_chain["execution_ref"]],
+        ["receipt", "--pack-file", refs["context_pack"], "--observation-file", refs["agent_response"], "--comparison-file", refs["comparison_receipt"], "--telemetry-file", str(tmp_path / "rebound-telemetry.json"), "--evidence-file", str(tmp_path / "rebound-evidence.json")],
+    ]
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    for index, command in enumerate(commands):
+        output = tmp_path / f"source-identity-subprocess-{index}.json"
+        result = subprocess.run([sys.executable, "-m", "app.builderops.epic_rehydration_probe", *command, "--output", str(output)], capture_output=True, text=True)
+        assert result.returncode == 2, result.stderr
+        assert "source repository custody" in result.stdout + result.stderr
+        assert not output.exists()
+    assert {path: path.read_bytes() for path in before} == before
 
 
 @pytest.mark.parametrize("kind,number", [("issue", 3798.0), ("pr", 3803.0)])
