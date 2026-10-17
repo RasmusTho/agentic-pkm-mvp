@@ -16,7 +16,7 @@ from app.ops.host_secret_controller import HostSecretAdmissionError, HostSecretC
 from app.ops.secret_admin import SecretAdmin, main
 
 TOKEN = 'github_pat_fake_devui_canary_12345678901234567890'
-OLD = 'ghp_old_devui_canary_12345678901234567890'
+OLD = 'ghp_' + 'o' * 36
 
 
 class Provider:

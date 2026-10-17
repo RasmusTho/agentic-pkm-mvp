@@ -1,4 +1,4 @@
-"""Demerzel-only BWS handoff to the existing BOB-1 DevUI gh config.
+"""Admin-host BWS handoff to the existing BOB-1 DevUI gh config.
 
 No VM BWS account, token environment, arbitrary target, or container recreation.
 Unknown SSH outcomes stay pending until an exact durable remote receipt is read.
@@ -229,7 +229,7 @@ def run_devui(action: str, *, source: TextIO, stdin_requested: bool,
         raise SecretAdminError()
     if admin is None:
         # Existing discovery reads value-free channel metadata, then the admin
-        # bearer directly from Demerzel's login Keychain through Security.framework.
+        # bearer from the admin host's login Keychain through Security.framework.
         from app.ops.postgres_deploy_host import _configured_host_admin
         admin = SecretAdmin(_configured_host_admin())
     if action == 'rotate':
@@ -261,18 +261,25 @@ def run_devui(action: str, *, source: TextIO, stdin_requested: bool,
         with admin.controller.admit('check', DEVUI_TARGET) as op:
             try:
                 copy = admin.provider.read('non-prod', DEVUI_IDENTITY)
-                status = 'missing' if copy is None else (
-                    'ok' if valid_devui_token(copy.value) else 'invalid')
                 if action == 'preflight':
                     data = _remote('preflight')
                     if data.get('status') != 'ready':
                         raise SecretAdminError()
-                print(json.dumps({'secret': DEVUI_IDENTITY, 'status': status,
-                                  'runtime': 'ready' if action == 'preflight' else 'unchecked'}))
+                # Only literal status payloads cross the output boundary. Keep
+                # both credential values and provider objects out of diagnostics.
+                if copy is None:
+                    print('{"status":"missing"}')
+                    valid = False
+                elif valid_devui_token(copy.value):
+                    print('{"status":"ok"}')
+                    valid = True
+                else:
+                    print('{"status":"invalid"}')
+                    valid = False
             finally:
                 op.finish(TerminalEvidence(op.operation_id, op.kind, op.target,
                                            'committed', 'read-complete'))
-        return 0 if status == 'ok' or action == 'preflight' else 1
+        return 0 if valid or action == 'preflight' else 1
     if action != 'apply':
         raise SecretAdminError()
     with admin.controller.deploy_operation(DEVUI_TARGET) as (op, pending):

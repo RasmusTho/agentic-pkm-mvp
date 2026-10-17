@@ -101,11 +101,12 @@ value; it cannot create, restrict, or inspect GitHub's fine-grained token permis
 The operator must preserve those settings when regenerating the credential.
 
 From an up-to-date checkout on Demerzel, using the existing Python environment
-with `bitwarden-sdk` installed:
+with `bitwarden-sdk` installed (for example, the operator checkout's
+`.venv/bin/python`):
 
 ```bash
-/Users/rasmus/agentic-pkm-mvp/.venv/bin/python scripts/secrets devui preflight
-/Users/rasmus/agentic-pkm-mvp/.venv/bin/python scripts/secrets devui rotate
+python scripts/secrets devui preflight
+python scripts/secrets devui rotate
 ```
 
 `rotate` first checks BWS and the actual DevUI binding, then prompts through the
