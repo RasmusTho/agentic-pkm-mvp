@@ -1896,7 +1896,9 @@ def test_post_merge_heavy_workflow_runs_selector_heavy_targets() -> None:
     workflow = yaml.safe_load(POST_MERGE_HEAVY_WORKFLOW.read_text(encoding="utf-8"))
     triggers = workflow[True]  # PyYAML parses the bare `on:` key as boolean True.
 
-    assert triggers["push"]["branches"] == ["main"]
+    # The VM verdict replaced the per-push run (#6158); the GitHub-hosted job
+    # is the watchdog/manual fallback.
+    assert "push" not in triggers
     assert triggers["schedule"]
     assert "workflow_dispatch" in triggers
     assert workflow["concurrency"]["cancel-in-progress"] is False
@@ -1932,7 +1934,7 @@ def test_post_merge_heavy_alert_body_passes_readiness_validation(tmp_path: Path)
 
     workflow = yaml.safe_load(POST_MERGE_HEAVY_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["alert"]
-    assert job["needs"] == "heavy-tests"
+    assert "heavy-tests" in job["needs"]
     assert "always()" in job["if"] and "cancelled" in job["if"]
     assert job["permissions"]["issues"] == "write"
     script = job["steps"][-1]["run"]

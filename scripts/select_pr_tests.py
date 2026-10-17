@@ -244,9 +244,9 @@ E2E_OWNER_BY_FILE["tests/e2e/test_panel_llm_e2e.py"] = "promotion_panel"
 GENERIC_PR_EXCLUDED_TARGETS = frozenset({"tests/e2e/test_panel_llm_e2e.py"})
 
 # Heavy test targets run on the PR path only when the PR changes a source they
-# exercise; otherwise the post-merge/nightly heavy-tests workflow
-# (.github/workflows/post-merge-heavy-tests.yml) runs them on main and files a
-# high-priority alert Issue when red (#6154, owner decision 2026-10-16). Admit
+# exercise; otherwise they run after merge on the ygg `test` VM, and
+# .github/workflows/post-merge-heavy-tests.yml records the verdict and files a
+# high-priority alert Issue when it is red or missing (#6154, #6158). Admit
 # a target here only with a timing receipt. `tests/deploy` was ~1497 s of PR
 # #6134's 2287 s unit step and timed out PR #6152, because ops_deploy owns all
 # of `scripts/` and any script change unioned it in. A changed test module
@@ -283,6 +283,8 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "app/instance/settings_rebind_runtime_capability.json",
         "app/ops/__init__.py",
         "app/ops/bws_secret_reader.py",
+        "app/ops/heavy_acceptance.py",
+        "app/ops/heavy_acceptance_runner.py",
         "app/ops/host_secret_bootstrap.py",
         "app/ops/host_secret_contract.py",
         "app/ops/host_secret_controller.py",
@@ -320,6 +322,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "scripts/install_bws_deploy_runtime.sh",
         "scripts/install_postmerge_controller.py",
         "scripts/instance_state_writer_inventory.py",
+        "scripts/post_merge_heavy_tests_verdict.py",
         "scripts/postgres_deploy_service.py",
         "scripts/postgres_entrypoint.sh",
         "scripts/postmerge_dev_test.py",
