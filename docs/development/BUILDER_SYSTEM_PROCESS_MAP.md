@@ -956,7 +956,9 @@ existing owning workflows.
 The manual rehydration probe is a read-only consumer of one accepted evaluator receipt. Its packet
 is evidence, not a coordinator context or dispatch plan: a fresh agent must re-read live Issue/PR/CI,
 repository, and dispatcher surfaces, preserve stale-source refresh needs, and return only the strict
-observation schema. The resulting comparison and probe receipt are rebuildable evidence; they cannot
+observation schema. Receipt digests bind exact retained JSON bytes (after strict parse equality), and
+external refresh compares one normalized marker projection on both source and live sides. The resulting
+comparison and probe receipt are rebuildable evidence; they cannot
 start another agent or alter any delivery authority. Current readiness is therefore operationally
 limited to a manually launched single probe with durable source, packet, response, and comparison
 artifacts; it does not demonstrate automatic coordinator rotation or production adoption.

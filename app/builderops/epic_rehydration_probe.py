@@ -255,6 +255,15 @@ def normalize_context_pack(pack: Mapping[str, Any]) -> dict[str, Any]:
     expected_marker = source_receipt["checkpoint"]["external_state"]["marker"]
     if not _json_exact_equal(source["external_state_marker"], expected_marker):
         raise EpicRehydrationProbeError("context_pack source marker is not source-bound")
+    if "observed_at" in expected_marker:
+        marker_observed_at = _required_string(
+            expected_marker["observed_at"],
+            "context_pack.source.external_state_marker.observed_at",
+        )
+        if source["observed_at"] != marker_observed_at:
+            raise EpicRehydrationProbeError(
+                "context_pack source observed_at is not source-marker bound"
+            )
     if source["origin"] != "actual_live_evaluator_checkpoint":
         raise EpicRehydrationProbeError("context_pack source origin must be an actual evaluator checkpoint")
 
@@ -275,6 +284,7 @@ def normalize_context_pack(pack: Mapping[str, Any]) -> dict[str, Any]:
     if target["slice_id"] != source_receipt["slice_id"]:
         raise EpicRehydrationProbeError("context_pack target slice_id is not source-bound")
     _validate_target_against_source_marker(target, source["external_state_marker"])
+    _validate_target_against_source_custody(target, source["source_ref"])
 
     normalized["read_instructions"] = _string_list(
         normalized["read_instructions"], "context_pack.read_instructions", non_empty=True
@@ -383,6 +393,7 @@ def compare_rehydrated_observation(
     pack = normalize_context_pack(context_pack)
     obs = normalize_rehydrated_observation(observation, context_pack=pack)
     source = pack["source"]["receipt"]
+    source_marker = source["checkpoint"]["external_state"]["marker"]
     expected: dict[str, Any] = {
         "slice_status": source["checkpoint"]["slice_status"],
         "decisions_and_invariants": {
@@ -390,7 +401,11 @@ def compare_rehydrated_observation(
             "gate_invariants": source["gate_invariants"],
         },
         "open_review_findings": source["checkpoint"]["open_review_findings"],
-        "external_state": source["checkpoint"]["external_state"],
+        # The source checkpoint stores an envelope (changed/previous/refresh) while
+        # the fresh agent reports the live state projection.  Compare the same
+        # marker projection on both sides so envelope metadata cannot manufacture
+        # a refresh requirement.
+        "external_state": _external_marker_projection(source_marker, source_marker),
         "recommended_next_action": {
             "recommendations": source["recommendations"],
             "reasons": source["recommendation_reasons"],
@@ -399,6 +414,8 @@ def compare_rehydrated_observation(
     field_results: dict[str, Any] = {}
     for name in _COMPARED_FIELDS:
         observed_value = obs["fields"][name]["value"]
+        if name == "external_state":
+            observed_value = _external_marker_projection(observed_value, source_marker)
         status = _comparison_status(observed_value, expected[name])
         field_results[name] = {
             "status": status,
@@ -443,8 +460,8 @@ def compare_rehydrated_observation(
         "external_refresh": {
             "status": external_state["status"],
             "refresh_required": external_state["status"] != "match",
-            "source_marker": pack["source"]["external_state_marker"],
-            "observed_marker": obs["fields"]["external_state"]["value"],
+            "source_marker": expected["external_state"],
+            "observed_marker": field_results["external_state"]["observed"],
             "provenance": obs["fields"]["external_state"]["provenance"],
         },
         "live_truth_precedence": list(_LIVE_TRUTH_PRECEDENCE),
@@ -492,15 +509,15 @@ def build_probe_receipt(
             "bytes_sha256": pack["source"]["bytes_sha256"],
         },
         "context_pack": {
-            "sha256": sha256_bytes(canonical_json_bytes(pack)),
+            "sha256": _evidence_digest(refs["context_pack"], pack),
             "ref": refs["context_pack"],
         },
         "observation": {
-            "sha256": sha256_bytes(canonical_json_bytes(obs)),
+            "sha256": _evidence_digest(refs["agent_response"], obs),
             "ref": refs["agent_response"],
         },
         "comparison": {
-            "sha256": sha256_bytes(canonical_json_bytes(comp)),
+            "sha256": _evidence_digest(refs["comparison_receipt"], comp),
             "ref": refs["comparison_receipt"],
         },
         "target": pack["target"],
@@ -654,6 +671,24 @@ def normalize_probe_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
     if normalized["telemetry"]["probe_count"] != 1 or normalized["telemetry"]["agent_starts"] != 1:
         raise EpicRehydrationProbeError("probe receipt telemetry must describe exactly one probe and agent start")
     normalized["evidence"] = _normalize_evidence_refs(normalized["evidence"])
+    evidence_field_for_key = {
+        "context_pack": "context_pack",
+        "observation": "agent_response",
+        "comparison": "comparison_receipt",
+    }
+    for key, evidence_key in evidence_field_for_key.items():
+        item = normalized[key]
+        ref = normalized["evidence"][evidence_key]
+        if item["ref"] != ref:
+            raise EpicRehydrationProbeError(
+                f"probe_receipt.{key}.ref is not bound to evidence.{evidence_key}"
+            )
+        _validate_evidence_digest(ref, item["sha256"], f"probe_receipt.{key}")
+    _validate_evidence_digest(
+        normalized["evidence"]["source_checkpoint"],
+        source["bytes_sha256"],
+        "probe_receipt.source_checkpoint",
+    )
     normalized["limitations"] = _string_list(normalized["limitations"], "probe_receipt.limitations")
     normalized["effects"] = _normalize_effects(normalized["effects"], "probe_receipt.effects")
     return normalized
@@ -760,10 +795,91 @@ def _normalize_evidence_refs(value: Mapping[str, Any]) -> dict[str, str]:
     return {key: _required_string(obj[key], f"evidence_refs.{key}") for key in sorted(expected)}
 
 
+def _evidence_digest(ref: str, value: Mapping[str, Any]) -> str:
+    """Hash retained bytes only after proving they parse to the supplied value."""
+
+    path = Path(ref)
+    try:
+        if not path.is_file():
+            raise EpicRehydrationProbeError(f"evidence ref is not a retained file: {ref}")
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise EpicRehydrationProbeError(f"unable to read evidence ref: {ref}") from exc
+    parsed = parse_strict_json(raw, field=ref)
+    if not _json_exact_equal(parsed, value):
+        raise EpicRehydrationProbeError(
+            f"evidence ref content does not match supplied normalized value: {ref}"
+        )
+    return sha256_bytes(raw)
+
+
+def _validate_evidence_digest(ref: str, digest: str, field: str) -> None:
+    """Reject a receipt whose retained local evidence bytes changed after hashing."""
+
+    path = Path(ref)
+    try:
+        if not path.is_file():
+            raise EpicRehydrationProbeError(f"{field} ref is not a retained file: {ref}")
+        raw = path.read_bytes()
+        parse_strict_json(raw, field=ref)
+        actual = sha256_bytes(raw)
+        if actual != digest:
+            raise EpicRehydrationProbeError(
+                f"{field} digest does not match retained evidence bytes: {ref}"
+            )
+    except OSError as exc:
+        raise EpicRehydrationProbeError(f"unable to read {field} evidence: {ref}") from exc
+
+
 def _comparison_status(observed: Any, expected: Any) -> str:
     if observed == UNKNOWN:
         return "unknown"
     return "match" if _json_exact_equal(observed, expected) else "mismatch"
+
+
+def _external_marker_projection(
+    value: Any, fallback_marker: Mapping[str, Any]
+) -> dict[str, Any] | str:
+    """Project envelope or rich live state into one comparable checkpoint marker."""
+
+    if value == UNKNOWN:
+        return UNKNOWN
+    if type(value) is not dict:
+        return UNKNOWN
+    raw: Any = value.get("marker", value)
+    if type(raw) is not dict:
+        return UNKNOWN
+
+    def pick(*keys: str, fallback: Any = UNKNOWN) -> Any:
+        for key in keys:
+            if key in raw:
+                return raw[key]
+        return fallback
+
+    projected = {
+        "issue": pick("issue", fallback=fallback_marker.get("issue", UNKNOWN)),
+        "pr": pick("pr", fallback=fallback_marker.get("pr", UNKNOWN)),
+        "pr_head_sha": pick(
+            "pr_head_sha",
+            "head_sha",
+            "pr_head",
+            fallback=fallback_marker.get("pr_head_sha", fallback_marker.get("head_sha", UNKNOWN)),
+        ),
+        "merge_sha": pick("merge_sha", fallback=fallback_marker.get("merge_sha", UNKNOWN)),
+    }
+    rich_live_state = any(key in raw for key in ("origin_main", "pr_head", "dispatcher"))
+    repository_head = pick(
+        "repository_head",
+        "origin_main",
+        fallback=(fallback_marker.get("repository_head", UNKNOWN) if not rich_live_state else UNKNOWN),
+    )
+    if repository_head != UNKNOWN:
+        projected["repository_head"] = repository_head
+    elif rich_live_state:
+        return UNKNOWN
+    if any(item == UNKNOWN for item in projected.values()):
+        return UNKNOWN
+    return projected
 
 
 def _coerce_source_bytes(value: bytes | str, field: str) -> bytes:
@@ -811,6 +927,89 @@ def _validate_target_against_source_marker(
         raise EpicRehydrationProbeError("context_pack target head is foreign to the source marker")
     if _required_string(marker.get("merge_sha"), "source marker.merge_sha") != target["merge_sha"]:
         raise EpicRehydrationProbeError("context_pack target merge is foreign to the source marker")
+    marker_repository = marker.get("repository")
+    if marker_repository is not None and marker_repository != target["repository"]:
+        raise EpicRehydrationProbeError("context_pack target repository is foreign to the source marker")
+    dispatcher_ref = marker.get("dispatcher_status_ref")
+    if dispatcher_ref is not None:
+        dispatcher_path = Path(
+            _required_string(dispatcher_ref, "source marker.dispatcher_status_ref")
+        )
+        try:
+            if not dispatcher_path.is_file():
+                raise EpicRehydrationProbeError(
+                    "source marker dispatcher status ref is not retained"
+                )
+            dispatcher = parse_strict_json(
+                dispatcher_path.read_bytes(), field=str(dispatcher_path)
+            )
+            configured = dispatcher.get("configured_repositories")
+            if configured is not None:
+                if type(configured) is not list or any(
+                    type(item) is not str for item in configured
+                ):
+                    raise EpicRehydrationProbeError(
+                        "source dispatcher configured_repositories is malformed"
+                    )
+                if target["repository"] not in configured:
+                    raise EpicRehydrationProbeError(
+                        "context_pack target repository is not dispatcher-configured"
+                    )
+        except OSError as exc:
+            raise EpicRehydrationProbeError(
+                "unable to read source marker dispatcher status"
+            ) from exc
+
+
+def _validate_target_against_source_custody(
+    target: Mapping[str, Any], source_ref: str
+) -> None:
+    """Bind a local accepted checkpoint to its retained live Issue/PR evidence.
+
+    The original receipt schema predates an explicit repository field.  When its
+    retained source file has the adjacent live custody files, those independently
+    captured URLs and SHAs provide the repository binding without rewriting the
+    admitted packet. URI refs have no local custody to inspect and therefore do
+    not claim repository attribution; production packets must use a retained file.
+    """
+
+    source_path = Path(source_ref)
+    if ":" in source_ref and not source_ref.startswith(("./", "/")):
+        # URI-like refs are accepted by the pure API only as an explicit
+        # unsupported-custody limitation; local production refs must fail loud.
+        return
+    if not source_path.is_file():
+        raise EpicRehydrationProbeError(
+            "local source ref does not provide retained source custody"
+        )
+    issue_path = source_path.with_name(f"live-issue-{target['issue_number']}.json")
+    pr_path = source_path.with_name(f"live-pr-{target['pr_number']}.json")
+    if not issue_path.is_file() or not pr_path.is_file():
+        raise EpicRehydrationProbeError(
+            "source custody is incomplete for a local checkpoint ref"
+        )
+    try:
+        issue = parse_strict_json(issue_path.read_bytes(), field=str(issue_path))
+        pr = parse_strict_json(pr_path.read_bytes(), field=str(pr_path))
+    except OSError as exc:
+        raise EpicRehydrationProbeError("unable to read source custody evidence") from exc
+
+    issue_url = _required_string(issue.get("url"), "source custody issue.url")
+    pr_url = _required_string(pr.get("url"), "source custody pr.url")
+    repository = target["repository"]
+    issue_prefix = f"https://github.com/{repository}/issues/{target['issue_number']}"
+    pr_prefix = f"https://github.com/{repository}/pull/{target['pr_number']}"
+    if not issue_url.startswith(issue_prefix) or not pr_url.startswith(pr_prefix):
+        raise EpicRehydrationProbeError(
+            "context_pack target repository is foreign to retained source custody"
+        )
+    if issue.get("number") != target["issue_number"] or pr.get("number") != target["pr_number"]:
+        raise EpicRehydrationProbeError("source custody Issue/PR numbers are not target-bound")
+    if pr.get("headRefOid") != target["verified_pr_head_sha"]:
+        raise EpicRehydrationProbeError("source custody PR head is not target-bound")
+    merge_commit = pr.get("mergeCommit")
+    if type(merge_commit) is not dict or merge_commit.get("oid") != target["merge_sha"]:
+        raise EpicRehydrationProbeError("source custody PR merge is not target-bound")
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -1009,6 +1208,8 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
             _write_json_file(args.output, compare_rehydrated_observation(pack, observation))
         elif args.command == "receipt":
+            evidence_refs = _read_json_file(args.evidence_file)
+            normalized_evidence_refs = _normalize_evidence_refs(evidence_refs)
             _reject_output_alias(
                 args.output,
                 args.pack_file,
@@ -1016,6 +1217,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
                 args.comparison_file,
                 args.telemetry_file,
                 args.evidence_file,
+                *(Path(ref) for ref in normalized_evidence_refs.values()),
             )
             pack = normalize_context_pack(_read_json_file(args.pack_file))
             observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
@@ -1024,7 +1226,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
                 pack,
                 observation,
                 comparison,
-                evidence_refs=_read_json_file(args.evidence_file),
+                evidence_refs=normalized_evidence_refs,
                 telemetry=_read_json_file(args.telemetry_file),
                 source_observed_at=args.source_observed_at,
             )

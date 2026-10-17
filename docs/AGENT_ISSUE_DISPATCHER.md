@@ -1220,7 +1220,10 @@ Issue/PR and verified head/merge SHAs, and carries explicit live-read instructio
 agent must receive only that packet and the packet's instructions; it returns one strict
 `epic_rehydrated_observation.v1` object with provenance for every field. The comparison receipt
 preserves match, mismatch, and unknown results plus refresh, missing-claim, and fabricated-claim
-evidence without a quality aggregate.
+evidence without a quality aggregate. Retained packet, observation, comparison, and source
+custody refs are hashed as their exact JSON bytes and validated against the parsed normalized
+objects; external refresh compares the source marker projection to the same live marker
+projection, not the checkpoint envelope.
 
 The `build-pack`, `compare`, and `receipt` subcommands write only operator-selected local JSON
 evidence. They do not import dispatcher, GitHub, lease, or agent-launch adapters and enumerate

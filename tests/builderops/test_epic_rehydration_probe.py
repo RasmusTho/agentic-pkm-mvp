@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import subprocess
 import sys
 from copy import deepcopy
@@ -15,6 +16,7 @@ from app.builderops.epic_rehydration_probe import (
     canonical_json_bytes,
     compare_rehydrated_observation,
     normalize_context_pack,
+    normalize_probe_receipt,
     normalize_rehydrated_observation,
     parse_strict_json,
 )
@@ -34,6 +36,7 @@ def _source_receipt() -> dict[str, object]:
             "pr": "3803:merged",
             "head_sha": "a" * 40,
             "merge_sha": "b" * 40,
+            "observed_at": "2026-10-17T20:00:00Z",
             "ci": "green",
         },
         context_measurement={"value": "unknown", "unit": "tokens", "source": "not-recorded"},
@@ -124,6 +127,14 @@ def test_strict_boundaries_reject_invalid_input() -> None:
     malformed["target"]["issue_number"] = 9999  # type: ignore[index]
     with pytest.raises(EpicRehydrationProbeError):
         normalize_context_pack(malformed)
+    malformed = deepcopy(_pack())
+    malformed["source"]["observed_at"] = "2099-01-01T00:00:00Z"  # type: ignore[index]
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_context_pack(malformed)
+    live_pack = json.loads(Path("evidence/context-pack.json").read_text(encoding="utf-8"))
+    live_pack["target"]["repository"] = "Unrelated/foreign-repository"
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_context_pack(live_pack)
     malformed_observation = _observation(_pack())
     malformed_observation["fields"]["slice_status"]["value"] = {}  # type: ignore[index]
     with pytest.raises(EpicRehydrationProbeError):
@@ -163,19 +174,29 @@ def test_comparison_preserves_field_mismatches_and_unknowns() -> None:
     assert "status" not in mismatch and "score" not in mismatch
 
 
-def test_probe_receipt_preserves_telemetry_and_agent_provenance() -> None:
+def test_probe_receipt_preserves_telemetry_and_agent_provenance(tmp_path: Path) -> None:
     pack = _pack()
     observation = _observation(pack)
     comparison = compare_rehydrated_observation(pack, observation)
+    refs = {
+        "source_checkpoint": tmp_path / "source.json",
+        "context_pack": tmp_path / "pack.json",
+        "agent_response": tmp_path / "response.json",
+        "comparison_receipt": tmp_path / "comparison.json",
+    }
+    refs["source_checkpoint"].write_bytes(canonical_json_bytes(_source_receipt()))
+    refs["context_pack"].write_bytes(canonical_json_bytes(pack))
+    refs["agent_response"].write_bytes(canonical_json_bytes(observation))
+    refs["comparison_receipt"].write_bytes(canonical_json_bytes(comparison))
     receipt = build_probe_receipt(
         pack,
         observation,
         comparison,
         evidence_refs={
-            "source_checkpoint": "evidence/source.json",
-            "context_pack": "evidence/packet.json",
-            "agent_response": "evidence/response.json",
-            "comparison_receipt": "evidence/comparison.json",
+            "source_checkpoint": str(refs["source_checkpoint"]),
+            "context_pack": str(refs["context_pack"]),
+            "agent_response": str(refs["agent_response"]),
+            "comparison_receipt": str(refs["comparison_receipt"]),
         },
         telemetry={
             "probe_count": 1,
@@ -199,10 +220,10 @@ def test_probe_receipt_preserves_telemetry_and_agent_provenance() -> None:
             observation,
             comparison,
             evidence_refs={
-                "source_checkpoint": "evidence/source.json",
-                "context_pack": "evidence/packet.json",
-                "agent_response": "evidence/response.json",
-                "comparison_receipt": "evidence/comparison.json",
+                "source_checkpoint": str(refs["source_checkpoint"]),
+                "context_pack": str(refs["context_pack"]),
+                "agent_response": str(refs["agent_response"]),
+                "comparison_receipt": str(refs["comparison_receipt"]),
             },
             telemetry={
                 "probe_count": 1,
@@ -216,6 +237,44 @@ def test_probe_receipt_preserves_telemetry_and_agent_provenance() -> None:
             },
             source_observed_at="2026-10-18T20:00:00Z",
         )
+
+
+def test_probe_receipt_binds_retained_evidence_bytes(tmp_path: Path) -> None:
+    pack = _pack()
+    observation = _observation(pack)
+    comparison = compare_rehydrated_observation(pack, observation)
+    refs = {
+        "source_checkpoint": tmp_path / "source.json",
+        "context_pack": tmp_path / "pack.json",
+        "agent_response": tmp_path / "response.json",
+        "comparison_receipt": tmp_path / "comparison.json",
+    }
+    refs["source_checkpoint"].write_bytes(canonical_json_bytes(_source_receipt()))
+    refs["context_pack"].write_bytes(canonical_json_bytes(pack) + b"\n")
+    refs["agent_response"].write_bytes(canonical_json_bytes(observation) + b"\n")
+    refs["comparison_receipt"].write_bytes(canonical_json_bytes(comparison) + b"\n")
+    receipt = build_probe_receipt(
+        pack,
+        observation,
+        comparison,
+        evidence_refs={key: str(value) for key, value in refs.items()},
+        telemetry={
+            "probe_count": 1,
+            "agent_starts": 1,
+            "repairs": {"implementation": 0, "ci": 0, "review": 0},
+            "handoffs": 0,
+            "context_tokens": "unknown",
+            "model_cost_usd": "unknown",
+            "elapsed_minutes": "unknown",
+            "human_minutes": "unknown",
+        },
+    )
+    import hashlib
+
+    assert receipt["context_pack"]["sha256"] == hashlib.sha256(refs["context_pack"].read_bytes()).hexdigest()  # type: ignore[index]
+    refs["context_pack"].write_bytes(b"tampered")
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_probe_receipt(receipt)
 
 
 def test_manual_probe_has_no_authority_effects(tmp_path: Path) -> None:
@@ -259,3 +318,62 @@ def test_manual_probe_has_no_authority_effects(tmp_path: Path) -> None:
     )
     assert aliased.returncode == 2
     assert pack_path.read_bytes() == before
+
+    comparison_path = tmp_path / "comparison.json"
+    comparison_path.write_bytes(
+        canonical_json_bytes(compare_rehydrated_observation(_pack(), _observation(_pack())))
+    )
+    telemetry_path = tmp_path / "telemetry.json"
+    telemetry_path.write_bytes(
+        canonical_json_bytes(
+            {
+                "probe_count": 1,
+                "agent_starts": 1,
+                "repairs": {"implementation": 0, "ci": 0, "review": 0},
+                "handoffs": 0,
+                "context_tokens": "unknown",
+                "model_cost_usd": "unknown",
+                "elapsed_minutes": "unknown",
+                "human_minutes": "unknown",
+            }
+        )
+    )
+    source_path = tmp_path / "source.json"
+    source_path.write_bytes(canonical_json_bytes(_source_receipt()))
+    refs_path = tmp_path / "refs.json"
+    refs_path.write_bytes(
+        canonical_json_bytes(
+            {
+                "source_checkpoint": str(source_path),
+                "context_pack": str(pack_path),
+                "agent_response": str(observation_path),
+                "comparison_receipt": str(comparison_path),
+            }
+        )
+    )
+    source_before = source_path.read_bytes()
+    transitive_alias = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.builderops.epic_rehydration_probe",
+            "receipt",
+            "--pack-file",
+            str(pack_path),
+            "--observation-file",
+            str(observation_path),
+            "--comparison-file",
+            str(comparison_path),
+            "--telemetry-file",
+            str(telemetry_path),
+            "--evidence-file",
+            str(refs_path),
+            "--output",
+            str(source_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert transitive_alias.returncode == 2
+    assert source_path.read_bytes() == source_before
