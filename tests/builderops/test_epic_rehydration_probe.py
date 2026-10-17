@@ -55,7 +55,7 @@ def _pack() -> dict[str, object]:
     source = canonical_json_bytes(_source_receipt())
     return build_context_pack(
         source,
-        source_ref="live:github:#3798/pr:#3803/run-state",
+        source_ref="tests/builderops/fixtures/rehydration-source-checkpoint.json",
         source_observed_at="2026-10-17T20:00:00Z",
         slice_id="issue-3798",
         repository="RasmusTho/agentic-pkm-mvp",
@@ -135,6 +135,10 @@ def test_strict_boundaries_reject_invalid_input() -> None:
     live_pack["target"]["repository"] = "Unrelated/foreign-repository"
     with pytest.raises(EpicRehydrationProbeError):
         normalize_context_pack(live_pack)
+    unsupported_ref_pack = deepcopy(_pack())
+    unsupported_ref_pack["source"]["source_ref"] = "live:github:#3798"  # type: ignore[index]
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_context_pack(unsupported_ref_pack)
     malformed_observation = _observation(_pack())
     malformed_observation["fields"]["slice_status"]["value"] = {}  # type: ignore[index]
     with pytest.raises(EpicRehydrationProbeError):

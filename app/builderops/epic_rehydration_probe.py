@@ -975,9 +975,9 @@ def _validate_target_against_source_custody(
 
     source_path = Path(source_ref)
     if ":" in source_ref and not source_ref.startswith(("./", "/")):
-        # URI-like refs are accepted by the pure API only as an explicit
-        # unsupported-custody limitation; local production refs must fail loud.
-        return
+        raise EpicRehydrationProbeError(
+            "source_ref must be a retained local custody file, not a URI"
+        )
     if not source_path.is_file():
         raise EpicRehydrationProbeError(
             "local source ref does not provide retained source custody"
