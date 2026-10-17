@@ -11,9 +11,9 @@ Last verified against (SCREEN-06 host controls): Issue #3342, `app/heimdal/scree
 `app/heimdal/retention.py`, `app/api/routes/heimdal_screen.py`,
 `tests/heimdal/test_screen_control_receipts.py`, `tests/heimdal/test_screen_control_settings.py`,
 and `tests/heimdal/test_screen_frame_retention.py`. Scoped control reads fail closed until the
-surface is vault-bound. If the settings source is missing, host capture remains degraded/paused;
-retention cleanup may use only a durable last-accepted bound. Actual native capture/indicator
-agreement remains Bifrost #72, #3341, and parent #3340 acceptance.
+surface is vault-bound. If the settings source is missing, host capture remains degraded/paused and
+screen retention currently refuses cleanup even when a durable last-accepted bound exists. Actual
+native capture/indicator agreement remains Bifrost #72, #3341, and parent #3340 acceptance.
 Last reviewed (Builder execution routing): 2026-10-11
 Last verified against (Builder execution routing): `docs/settings/models/providers.yaml`,
 `.codex/agents/verification-closer.toml`, and the focused provider-census, execution-routing,
