@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
@@ -754,6 +754,15 @@ class BuilderOpsVerificationLedger:
         snapshot = self._snapshot(run_id)
         lease = self._assert_lease(snapshot, holder, lease_id)
         run = update(_run_from_snapshot(snapshot))
+        if operation == "terminal" and run.status == "completed":
+            native = self._native_pending_effect(snapshot)
+            if native is not None:
+                receipt = run.terminal_receipt or {}
+                if (native.get("native_merge_identity_conflict") is not False
+                        or native.get("native_merge_response_sha") is None
+                        or receipt.get("merge_commit_sha") != native.get("native_merge_response_sha")
+                        or receipt.get("operation_key") != native.get("operation_key")):
+                    raise ValueError("native terminal CAS lacks exact captured merge authority")
         payload = _payload_for(snapshot, run)
         idempotency_key = (
             f"verification-{operation}:{run_id}:{snapshot['version']}:"
@@ -1915,6 +1924,10 @@ class BuilderOpsVerificationLedger:
                         "task_id": run_id,
                         "head_sha": effect_payload.get("head_sha"),
                         "payload": effect_payload,
+                        **({"native_merge_response_sha": None, "native_merge_identity_conflict": False,
+                            "native_merge_effect_refusal": None}
+                           if (effect_type == "github.merge" and isinstance(effect_payload.get("verified_merge_prepared"), Mapping)
+                               and cast(Mapping[str, object], effect_payload["verified_merge_prepared"]).get("contract") == "native_single_closer_gate.v1") else {}),
                     },
                     **(
                         {
@@ -2060,11 +2073,16 @@ class BuilderOpsVerificationLedger:
         run_id: str,
         effect_type: str,
         expected_payload: Mapping[str, object] | None = None,
+        force_current_fence: bool = False,
     ) -> Mapping[str, object]:
         if self.effect_outbox is None:
             raise ValueError("verification effect outbox is unavailable")
         retained = self._effect_claims.get(operation_key)
-        if retained is not None and effect_type == "github.merge":
+        if (
+            not force_current_fence
+            and retained is not None
+            and effect_type == "github.merge"
+        ):
             expiry = datetime.fromisoformat(str(retained["expires_at"]).replace("Z", "+00:00"))
             if expiry > datetime.now(timezone.utc):
                 self._validate_effect_claim(retained, operation_key=operation_key, run_id=run_id,
@@ -2099,6 +2117,137 @@ class BuilderOpsVerificationLedger:
             self.post_effect_deployment = observed if isinstance(observed, Mapping) else None
         require_post_effect_deployment(self.post_effect_deployment, status)
 
+    def _native_pending_effect(self, snapshot: Mapping[str, object], operation_key: str | None = None) -> Mapping[str, object] | None:
+        pending = _snapshot_payload(snapshot).get("pending_privileged_effect")
+        payload = pending.get("payload") if isinstance(pending, Mapping) else None
+        gate = payload.get("verified_merge_prepared") if isinstance(payload, Mapping) else None
+        if not isinstance(gate, Mapping) or gate.get("contract") != "native_single_closer_gate.v1":
+            return None
+        run = _run_from_snapshot(snapshot)
+        assert isinstance(pending, Mapping)
+        assert isinstance(payload, Mapping)
+        response = pending.get("native_merge_response_sha")
+        if (pending.get("effect_type") != "github.merge" or pending.get("task_id") != run.run_id
+                or pending.get("head_sha") != run.current_head_sha
+                or (operation_key is not None and pending.get("operation_key") != operation_key)
+                or payload.get("repository") != self.repository or payload.get("pr_number") != run.pr_number
+                or payload.get("head_sha") != run.current_head_sha
+                or gate.get("run_id") != run.run_id or gate.get("head_sha") != run.current_head_sha
+                or gate.get("closing_issues") != list(run.closing_authority)
+                or run.closing_authority != (run.request.get("linked_issue"),) or run.supporting_authority
+                or "native_merge_response_sha" not in pending
+                or type(pending.get("native_merge_identity_conflict")) is not bool
+                or pending.get("native_merge_effect_refusal") not in {
+                    None,
+                    "final_effect_fence_refused",
+                }
+                or (response is not None and (not isinstance(response, str) or re.fullmatch(r"[0-9a-f]{40}", response) is None))):
+            raise ValueError("native pending intent identity or observation is malformed")
+        return pending
+
+    def _record_native_merge_observation(self, run_id: str, operation_key: str, *,
+                                        holder: str, lease_id: str, response_sha: str | None = None,
+                                        conflict: bool = False,
+                                        refusal: str | None = None) -> None:
+        if sum((response_sha is not None, conflict, refusal is not None)) != 1:
+            raise ValueError("native observation requires exactly one result")
+        if refusal not in {None, "final_effect_fence_refused"}:
+            raise ValueError("native effect refusal is unsupported")
+        for attempt in range(3):
+            snapshot = self._snapshot(run_id)
+            lease = self._assert_lease(snapshot, holder, lease_id)
+            pending = self._native_pending_effect(snapshot, operation_key)
+            if pending is None:
+                raise ValueError("native observation requires exact prearmed task intent")
+            next_pending = dict(pending)
+            if conflict:
+                next_pending["native_merge_identity_conflict"] = True
+            elif refusal is not None:
+                if (
+                    pending["native_merge_identity_conflict"] is True
+                    or pending["native_merge_response_sha"] is not None
+                    or pending["native_merge_effect_refusal"] not in {None, refusal}
+                ):
+                    raise ValueError(
+                        "native effect refusal cannot replace captured identity"
+                    )
+                next_pending["native_merge_effect_refusal"] = refusal
+            else:
+                if (pending["native_merge_identity_conflict"] is True
+                        or pending["native_merge_effect_refusal"] is not None
+                        or not isinstance(response_sha, str)
+                        or re.fullmatch(r"[0-9a-f]{40}", response_sha) is None
+                        or pending["native_merge_response_sha"] not in {None, response_sha}):
+                    raise ValueError("native response cannot replace captured identity or refusal")
+                next_pending["native_merge_response_sha"] = response_sha
+            if next_pending == dict(pending):
+                return
+            document = dict(_snapshot_payload(snapshot))
+            document["pending_privileged_effect"] = next_pending
+            try:
+                self.client.transition_task(envelope=self.envelope, task_id=run_id, to_state="claimed",
+                    idempotency_key=f"verification-native-observation:{operation_key}:{_digest(next_pending)[:16]}",
+                    request=document, lease=lease, expected_states=("claimed",),
+                    expected_version=_required_int(snapshot.get("version"), "task version"))
+            except Exception as exc:
+                readback = self._snapshot(run_id)
+                self._assert_lease(readback, holder, lease_id)
+                observed = self._native_pending_effect(readback, operation_key)
+                if observed == next_pending:
+                    return
+                if conflict and attempt < 2:
+                    continue
+                if (
+                    not conflict
+                    and isinstance(observed, Mapping)
+                    and (
+                        observed.get("native_merge_identity_conflict") is True
+                        or observed.get("native_merge_effect_refusal") is not None
+                    )
+                ):
+                    raise ValueError(
+                        "native response cannot replace captured identity or refusal"
+                    ) from exc
+                raise
+            readback = self._snapshot(run_id)
+            self._assert_lease(readback, holder, lease_id)
+            if self._native_pending_effect(readback, operation_key) == next_pending:
+                return
+            if not conflict or attempt == 2:
+                raise ValueError("native observation did not persist exactly")
+        raise ValueError("native conflict observation did not converge")
+
+    def record_native_merge_response(self, run_id: str, operation_key: str, *, response_sha: str,
+                                     holder: str, lease_id: str) -> None:
+        self._record_native_merge_observation(run_id, operation_key, response_sha=response_sha,
+                                             holder=holder, lease_id=lease_id)
+
+    def record_native_merge_conflict(self, run_id: str, operation_key: str, *, holder: str, lease_id: str) -> None:
+        self._record_native_merge_observation(run_id, operation_key, conflict=True, holder=holder, lease_id=lease_id)
+
+    def record_native_merge_effect_refusal(
+        self,
+        run_id: str,
+        operation_key: str,
+        *,
+        holder: str,
+        lease_id: str,
+    ) -> None:
+        self._record_native_merge_observation(
+            run_id,
+            operation_key,
+            refusal="final_effect_fence_refused",
+            holder=holder,
+            lease_id=lease_id,
+        )
+
+    def _require_native_merge_readback(self, run_id: str, operation_key: str, merge_sha: object) -> None:
+        native = self._native_pending_effect(self._snapshot(run_id), operation_key)
+        if native is not None and (native["native_merge_identity_conflict"] is not False
+                                  or native["native_merge_response_sha"] is None
+                                  or native["native_merge_response_sha"] != merge_sha):
+            raise ValueError("native readback lacks unchanged captured response authority")
+
     def prepare_merge_readback(self, operation_key: str) -> Mapping[str, object]:
         """Fence readback after an attempted effect without replaying its transport."""
         self.require_post_effect_capability()
@@ -2113,6 +2262,7 @@ class BuilderOpsVerificationLedger:
 
     def finish_merge_readback(self, operation_key: str, evidence: Mapping[str, object]) -> None:
         claim = self.effect_claim(operation_key)
+        self._require_native_merge_readback(str(claim["task_id"]), operation_key, evidence.get("merge_commit_sha"))
         closed = {key: evidence[key] for key in (
             "merged", "head_sha", "merge_commit_sha", "merge_commit_title", "merge_commit_message"
         )}
@@ -2125,6 +2275,7 @@ class BuilderOpsVerificationLedger:
         """Complete a marker interrupted after ordinary reconciliation committed."""
         self.require_post_effect_capability()
         row = self.client.get_outbox_status(repository=self.repository, operation_key=operation_key)
+        self._require_native_merge_readback(str(row["task_id"]), operation_key, evidence.get("merge_commit_sha"))
         if row.get("post_effect_phase") not in {"pending", "reconciled"}:
             raise ValueError("persisted merge readback lacks a pending post-effect identity")
         closed = {key: evidence[key] for key in (
@@ -2146,6 +2297,10 @@ class BuilderOpsVerificationLedger:
                 or row.get("post_effect_observed_applied") is not True or row.get("post_effect_terminal_unknown") is not False
                 or row.get("status") != "succeeded"):
             raise ValueError("post-effect projection requires exact persisted applied merge authority")
+        if isinstance(payload.get("verified_merge_prepared"), Mapping) and payload["verified_merge_prepared"].get("contract") == "native_single_closer_gate.v1":
+            if self._native_pending_effect(self._snapshot(run_id), operation_key) is None:
+                raise ValueError("native projection requires retained task-bound observation")
+            self._require_native_merge_readback(run_id, operation_key, evidence.get("merge_commit_sha"))
         assert self.post_effect_deployment is not None
         deployed = self.post_effect_deployment["deployment_receipt"]
         assert isinstance(deployed, Mapping)

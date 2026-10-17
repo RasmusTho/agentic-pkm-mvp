@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import subprocess
+from copy import deepcopy
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -12,6 +14,7 @@ import pytest
 
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verification_agent_loop import VerificationAgentLoop
+from app.dispatcher.verification_consumer import GhCliVerificationSource, VerificationConsumer, delivered_live_truth_rejection
 from app.dispatcher.verification_github import (
     GitHubProtectedRepositoryAuthority,
     _latest_github_result,
@@ -19,6 +22,8 @@ from app.dispatcher.verification_github import (
 )
 from app.dispatcher.verification_merge import (
     MergeAuthorityError,
+    MergeEffectNotStarted,
+    MergeIdentityConflict,
     ProtectedDeliveryManifest,
     VerificationMergeExecutor,
 )
@@ -42,10 +47,610 @@ from tests.dispatcher.verification_helpers import (
 )
 
 BASE = "b" * 40
-MECHANISM_PATH_SHA = hashlib.sha256(
-    b"app/dispatcher/verification_agent_loop.py"
-).hexdigest()
+NATIVE_BODY = "Governing-Issue: #3603\nFixes #3603\nFinal-Review-Rounds: 1\n"
+MECHANISM_PATH_SHA = hashlib.sha256(b"app/dispatcher/verification_agent_loop.py").hexdigest()
 NEXT_BASE = "c" * 40
+
+
+def native_authority(*, body=NATIVE_BODY, closers=(3603,), state="open", drift=None,
+                     merge_status=200, pagination=None, threads=(), comments=(),
+                     returned_sha=None, post_merge_body=None, pr_number=3603):
+    pull = {
+        "number": pr_number,
+        "state": "open",
+        "merged": False,
+        "merged_at": None,
+        "draft": False,
+        "title": "Native delivery",
+        "body": body,
+        "head": {"sha": HEAD},
+        "base": {"sha": BASE, "ref": "main", "repo": {"full_name": REPO}},
+        "html_url": f"https://github.com/{REPO}/pull/{pr_number}",
+    }
+    issue = {"number": 3603, "state": state, "body": "contract",
+             "updated_at": "2026-10-11T00:00:00Z", "repository_url": f"https://api.github.com/repos/{REPO}"}
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.url.path.endswith("/comments"):
+            return httpx.Response(200, json=list(comments))
+        if request.method == "PUT":
+            if merge_status != 200:
+                return httpx.Response(merge_status, json={"message": "expected head conflict"})
+            pull.update(merged=True, state="closed", merged_at="2026-10-11T00:00:00Z",
+                        merge_commit_sha="d" * 40, merged_by={"login": "RasmusTho"})
+            issue["state"] = "closed"
+            if post_merge_body is not None:
+                pull["body"] = post_merge_body
+            return httpx.Response(200, json={"merged": True, "sha": returned_sha or "d" * 40})
+        if request.url.path.endswith("/commits/" + "d" * 40):
+            return httpx.Response(200, json={"commit": {"message":
+                fixed_verified_merge_commit_title(pr_number) + "\n\n" + FIXED_VERIFIED_MERGE_COMMIT_MESSAGE}})
+        if request.url.path == "/graphql":
+            if "reviewThreads" in json.loads(request.content)["query"]:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": list(threads),
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "closingIssuesReferences": {
+                                    "nodes": [
+                                        {"number": n, "repository": {"nameWithOwner": REPO}}
+                                        for n in closers
+                                    ],
+                                    "pageInfo": pagination or {"hasNextPage": False, "endCursor": None},
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+        if request.url.path.endswith(f"/pulls/{pr_number}"):
+            current = dict(pull)
+            if drift and len([c for c in calls if c.url.path.endswith(f"/pulls/{pr_number}")]) > 1:
+                current.update(drift)
+            return httpx.Response(200, json=current)
+        if "/issues/" in request.url.path:
+            if request.method == "PATCH":
+                issue["state"] = "open"
+            return httpx.Response(200, json={**issue, "number": int(request.url.path.rsplit("/", 1)[1])})
+        return httpx.Response(200, json={"default_branch": "main", "full_name": REPO})
+
+    authority = GitHubProtectedRepositoryAuthority(
+        "test-token",
+        http_client=httpx.Client(
+            base_url="https://api.github.com", transport=httpx.MockTransport(handler)
+        ),
+    )
+    return authority, calls
+
+
+def native_executor(*, merge_status=200, phase="reconciled", returned_sha=None,
+                    post_merge_body=None, closure_numbers=(3603,), unrelated_closure=False,
+                    pr_number=3603):
+    configured_request = deepcopy(request())
+    if pr_number != 3603:
+        from scripts.build_verification_dispatch_request import _idempotency_key
+        configured_request["pr_number"] = pr_number
+        configured_request["live_truth"]["pr_number"] = pr_number
+        configured_request["evidence_pack"]["pr_number"] = pr_number
+        configured_request["evidence_pack"]["artifact_name"] = f"pr-evidence-pack-{pr_number}"
+        configured_request["artifact_provenance"]["artifact_name"] = f"verification-dispatch-{pr_number}-{HEAD}"
+        configured_request["idempotency_key"] = _idempotency_key(repository=REPO, pr_number=pr_number,
+            head_sha=HEAD, stage=configured_request["stage"])
+    ledger, run, outbox = claimed_run(request_override=configured_request)
+    authority, calls = native_authority(merge_status=merge_status, returned_sha=returned_sha,
+                                      post_merge_body=post_merge_body, pr_number=pr_number)
+    manifest = RepositoryAuthority().delivery_manifest(REPO.lower(), BASE)
+    authority.protected_base_sha = lambda repository: BASE
+    authority.delivery_manifest = lambda repository, base: manifest
+    authority.required_gates = lambda *args: {key: True for key in ("ci", "review", "protection", "scope", "current_head")}
+    root = f"https://api.github.com/repos/{REPO}"
+    closed_at = "2026-10-11T00:00:01Z"
+    def closure_runner(command, **kwargs):
+        assert outbox.post_effect_phase in {"pending", "reconciled"}
+        endpoint = command[2]
+        if endpoint == "graphql":
+            payload = {"data": {"nodes": [{"__typename": "Issue", "id": f"I_native_{n}",
+                "number": n, "repository": {"nameWithOwner": REPO}, "state": "CLOSED",
+                "closedAt": closed_at, "timelineItems": {"nodes": [{"__typename": "ClosedEvent",
+                    "createdAt": closed_at, "actor": {"login": "RasmusTho"}, "closer": {
+                        "__typename": "PullRequest", "number": 3602 if unrelated_closure and n != 3603 else pr_number, "repository": {"nameWithOwner": REPO},
+                        "mergeCommit": {"oid": "d" * 40}}}]}} for n in closure_numbers]}}
+        elif "/issues/events?" in endpoint:
+            payload = [{"id": index + 1, "url": f"{root}/issues/events/{index+1}",
+                "event": "closed", "created_at": closed_at, "commit_id": None, "commit_url": None,
+                "issue": {"number": n, "repository_url": root, "url": f"{root}/issues/{n}",
+                    "events_url": f"{root}/issues/{n}/events"}} for index, n in enumerate(closure_numbers)]
+        else:
+            n = int(endpoint.rsplit("/", 1)[1])
+            payload = {"number": n, "node_id": f"I_native_{n}", "repository_url": root,
+                       "url": f"{root}/issues/{n}"}
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+    authority.closure_source = GhCliVerificationSource(closure_runner)
+    original_status = outbox.status
+    def status(operation_key):
+        result = original_status(operation_key)
+        return {**result, "post_effect_phase": phase if outbox.post_effect_phase == "reconciled" else outbox.post_effect_phase,
+                "post_effect_evidence": outbox.post_effect_evidence,
+                "post_effect_observed_applied": True, "post_effect_terminal_unknown": False,
+                "post_effect_fencing_token": 1, "post_effect_intent_lsn": "0/10", "post_effect_claim_lsn": "0/20",
+                "post_effect_claim_receipt_sequence": 2, "post_effect_receipt_sequence": 3}
+    outbox.status = status
+    credentials = Credentials()
+    credentials.resolve = lambda **kwargs: "test-host-token"
+    return VerificationMergeExecutor(ledger, outbox, authority, credentials), run, outbox, calls
+
+
+@pytest.mark.parametrize("gate", ["ci", "review", "protection", "scope", "current_head", "threads"])
+def test_single_closer_route_retains_ci_review_and_thread_gates(gate):
+    ledger, run, outbox = claimed_run()
+    repository = RepositoryAuthority()
+    repository.gates[gate] = False
+    with pytest.raises(MergeAuthorityError):
+        VerificationMergeExecutor(ledger, outbox, repository, Credentials()).execute(
+            run, holder="verification-host", lease_id=run.lease_id
+        )
+    assert "merge" not in repository.calls
+
+
+@pytest.mark.parametrize(
+    "closers,state", [((3603,), "open"), ((3603, 3604), "open"), ((), "open"), ((3603,), "closed")]
+)
+def test_single_closer_route_requires_exactly_one_sole_open_governing_issue(closers, state):
+    authority, _ = native_authority(closers=closers, state=state)
+    gate = authority.native_single_closer_prepared(REPO, 3603, run_id="run", head_sha=HEAD)
+    assert (gate is not None) == (closers == (3603,) and state == "open")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "Refs #3604",
+        "Parent: #3604",
+        "Fixes #3604",
+        f"Parent: https://github.com/{REPO}/issues/3604",
+        f"Refs https://github.com/{REPO}/issues/3604",
+        f"Refs https://api.github.com/repos/{REPO}/issues/3604",
+        f"Refs {REPO}#3604",
+    ],
+)
+def test_single_closer_route_rejects_parent_or_supporting_issue(extra):
+    authority, _ = native_authority(body=NATIVE_BODY + extra)
+    assert authority.native_single_closer_prepared(REPO, 3603, run_id="run", head_sha=HEAD) is None
+
+
+def test_full_path_legacy_route_remains_verified_merge():
+    ledger, run, outbox = claimed_run()
+    repository = RepositoryAuthority()
+    receipt = VerificationMergeExecutor(ledger, outbox, repository, Credentials()).execute(
+        run, holder="verification-host", lease_id=run.lease_id
+    )
+    assert receipt.outcome == "merged"
+    assert repository.last_merge["expected_body_edit"]["node_id"] == "UCE_test_latest"
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        {"head": {"sha": "e" * 40}},
+        {"base": {"sha": "e" * 40}},
+        {"title": "Changed"},
+        {"body": NATIVE_BODY + " "},
+        "pagination", "409", "phase",
+    ],
+)
+def test_single_closer_route_rejects_final_snapshot_drift_phase_or_head_409(drift):
+    if drift == "409":
+        test_native_single_closer_expected_head_409_stays_pending_without_retry()
+        return
+    if drift == "phase":
+        test_native_single_closer_phase_drift_blocks_terminal_delivery()
+        return
+    if drift == "pagination":
+        test_native_single_closer_pagination_never_grants_partial_authority({"hasNextPage": True, "endCursor": None})
+        return
+    authority, calls = native_authority(drift=drift)
+    with pytest.raises(MergeAuthorityError):
+        authority.native_single_closer_prepared(REPO, 3603, run_id="run", head_sha=HEAD)
+    assert not any(c.method == "PUT" for c in calls)
+
+
+def test_single_closer_route_merges_exact_head_after_durable_reconciliation():
+    executor, run, outbox, calls = native_executor()
+    receipt = executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert receipt.outcome == "merged"
+    effect = [c for c in calls if c.method == "PUT"]
+    assert len(effect) == 1
+    payload = json.loads(effect[0].content)
+    assert payload["sha"] == HEAD
+    assert payload["commit_message"] == FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
+    assert receipt.readback["post_effect_authority"]["phase"] == "reconciled"
+    assert outbox.calls.index("post-effect-pending") < outbox.calls.index("reconcile")
+    replay = executor.recover(run)
+    assert replay.outcome == "merged"
+    assert len([c for c in calls if c.method == "PUT"]) == 1
+
+
+def test_native_single_closer_expected_head_409_stays_pending_without_retry():
+    executor, run, outbox, calls = native_executor(merge_status=409)
+    receipt = executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert receipt.outcome == "retry_after_readback"
+    assert outbox.post_effect_phase == "pending"
+    assert len([c for c in calls if c.method == "PUT"]) == 1
+    executor.recover(run)
+    assert len([c for c in calls if c.method == "PUT"]) == 1
+
+
+def test_native_single_closer_phase_drift_blocks_terminal_delivery():
+    executor, run, _, _ = native_executor(phase="pending")
+    with pytest.raises((ValueError, MergeAuthorityError)):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+
+
+def test_native_single_closer_body_drift_still_compensates_exact_pr_closure():
+    executor, run, _, calls = native_executor(post_merge_body=NATIVE_BODY + "Fixes #3604\n",
+                                            closure_numbers=(3603, 3604))
+    with pytest.raises(MergeAuthorityError):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert len([c for c in calls if c.method == "PUT"]) == 1
+    assert any(c.method == "PATCH" and c.url.path.endswith("/issues/3604") for c in calls)
+
+
+def test_native_single_closer_returned_sha_conflict_never_returns_merged():
+    executor, run, outbox, calls = native_executor(returned_sha="e" * 40)
+    with pytest.raises(MergeIdentityConflict):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert len([c for c in calls if c.method == "PUT"]) == 1
+    assert outbox.state == "unknown"
+    assert outbox.post_effect_phase == "pending"
+    with pytest.raises(MergeAuthorityError):
+        executor.recover(run)
+    assert len([c for c in calls if c.method == "PUT"]) == 1
+
+
+def test_native_single_closer_return_conflict_still_compensates_raced_closer():
+    executor, run, outbox, calls = native_executor(returned_sha="e" * 40,
+        post_merge_body=NATIVE_BODY + "Fixes #3604\n", closure_numbers=(3603, 3604))
+    with pytest.raises(MergeAuthorityError):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert any(c.method == "PATCH" and c.url.path.endswith("/issues/3604") for c in calls)
+    assert outbox.state == "unknown"
+    with pytest.raises(MergeAuthorityError):
+        executor.recover(run)
+    assert len([c for c in calls if c.method == "PUT"]) == 1
+
+
+def test_native_single_closer_never_reopens_unrelated_pr_closure():
+    executor, run, _, calls = native_executor(closure_numbers=(3603, 3604), unrelated_closure=True)
+    receipt = executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert receipt.outcome == "merged"
+    assert receipt.readback["native_closure"]["observed_closing_issues"] == [3603]
+    assert not any(c.method == "PATCH" for c in calls)
+
+
+def test_native_single_closer_conflict_survives_supported_kernel_and_crash():
+    from app.builderops.control_plane.store import _assert_terminal_unknown_model_evidence
+    executor, run, outbox, calls = native_executor(returned_sha="e" * 40)
+    original_reconcile = outbox.reconcile
+    def reconcile(claim, *, observed_applied, terminal_unknown=False, evidence):
+        if terminal_unknown:
+            _assert_terminal_unknown_model_evidence(effect_type="github.merge", effect_payload={},
+                task_payload={}, evidence=evidence)
+        return original_reconcile(claim, observed_applied=observed_applied,
+            terminal_unknown=terminal_unknown, evidence=evidence)
+    outbox.reconcile = reconcile
+    original_compensation = executor.repository.native_single_closer_reconcile
+    crashed = False
+    def crash_once(*args, **kwargs):
+        nonlocal crashed
+        if not crashed:
+            crashed = True
+            raise SystemExit("crash after durable native conflict before compensation")
+        return original_compensation(*args, **kwargs)
+    executor.repository.native_single_closer_reconcile = crash_once
+    with pytest.raises(SystemExit):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert executor.ledger.pending_effect_binding(run.run_id)["native_merge_identity_conflict"] is True
+    with pytest.raises(MergeAuthorityError, match="governed repair"):
+        executor.recover(run)
+    assert len([c for c in calls if c.method == "PUT"]) == 1
+
+
+def test_native_single_closer_conflict_recovery_finishes_exact_compensation_without_replay():
+    executor, run, _, calls = native_executor(
+        returned_sha="e" * 40,
+        post_merge_body=NATIVE_BODY + "Fixes #3604\n",
+        closure_numbers=(3603, 3604),
+    )
+    original = executor.repository.native_single_closer_reconcile
+    attempts = 0
+
+    def interrupt_once(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise SystemExit("crash before exact closure compensation")
+        return original(*args, **kwargs)
+
+    executor.repository.native_single_closer_reconcile = interrupt_once
+    with pytest.raises(SystemExit):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    with pytest.raises(MergeAuthorityError, match="governed repair"):
+        executor.recover(run)
+    assert attempts == 2
+    assert any(c.method == "PATCH" and c.url.path.endswith("/issues/3604") for c in calls)
+    assert len([c for c in calls if c.method == "PUT"]) == 1
+
+
+def test_native_single_closer_post_reconciliation_sha_conflict_is_permanent():
+    executor, run, _, calls = native_executor()
+    original = executor.repository.merge_readback
+    merge_shas = iter(("d" * 40, "e" * 40, "d" * 40))
+
+    def changing_readback(*args, **kwargs):
+        return {**original(*args, **kwargs), "merge_commit_sha": next(merge_shas)}
+
+    executor.repository.merge_readback = changing_readback
+    with pytest.raises(MergeAuthorityError, match="contradicted"):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert executor.ledger.pending_effect_binding(run.run_id)["native_merge_identity_conflict"] is True
+    with pytest.raises(MergeAuthorityError, match="governed repair"):
+        executor.recover(run)
+    assert len([c for c in calls if c.method == "PUT"]) == 1
+
+
+def test_native_single_closer_terminal_consumer_and_merged_recovery_use_durable_authority():
+    from tests.dispatcher.test_verification_consumer import GREEN, Auth
+    executor, run, _, _ = native_executor(pr_number=3605)
+    executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    pr = executor.repository._pull(REPO, run.pr_number)
+    comment_targets = []
+    class NativeTruth:
+        def pull_request(self, repository, number): return pr
+        def checks(self, repository, head): return GREEN
+        def issue_contract(self, repository, number):
+            issue = executor.repository.issue_delivery_source(repository, number)
+            return {"number": number, "repository": repository, "state": issue["state"],
+                    "body_sha256": hashlib.sha256(issue["body"].encode()).hexdigest()}
+        def merge_commit(self, repository, sha):
+            return {"repository": repository, "sha": sha, "message":
+                fixed_verified_merge_commit_title(run.pr_number) + "\n\n" + FIXED_VERIFIED_MERGE_COMMIT_MESSAGE}
+        def pull_request_comments(self, repository, number):
+            comment_targets.append(number)
+            if number == run.pr_number: return []
+            assert number == run.closing_authority[0]
+            return [{"author_association": "OWNER", "body": f"post-merge owner-doc check: PR #{run.pr_number}; updated in PR"}]
+        def issue_set_closure_evidence(self, *args, **kwargs):
+            return executor.repository.closure_source.issue_set_closure_evidence(*args, **kwargs)
+    consumer = VerificationConsumer(executor.ledger, NativeTruth(), Auth(), object(), holder="verification-host")
+    budget = executor.ledger.repair_budget_projection(run.run_id)
+    evidence = consumer._read_delivery_evidence(run, pr, expected_repair_budget=budget)
+    assert delivered_live_truth_rejection(run, pr, GREEN, evidence,
+        expected_head_sha=HEAD, expected_repair_budget=budget, native_admission=consumer._native_delivery_admitted) is None
+    assert run.closing_authority[0] in comment_targets and run.pr_number != run.closing_authority[0]
+    assert delivered_live_truth_rejection(run, pr, GREEN, evidence,
+        expected_head_sha=HEAD, expected_repair_budget=budget) == "merge_authority_missing"
+    pack, retained_budget = consumer._merged_recovery_pack(run, pr, GREEN)
+    assert pack["merge_recovery"]["phase"] == "reconciled"
+    assert retained_budget == budget
+    evidence["native_merge"]["post_effect_authority"]["phase"] = "pending"
+    assert delivered_live_truth_rejection(run, pr, GREEN, evidence,
+        expected_head_sha=HEAD, expected_repair_budget=budget, native_admission=consumer._native_delivery_admitted) is not None
+
+
+@pytest.mark.parametrize("page", [{"hasNextPage": True, "endCursor": None},
+                                 {"hasNextPage": True, "endCursor": "repeated"}])
+def test_native_single_closer_pagination_never_grants_partial_authority(page):
+    authority, calls = native_authority(pagination=page)
+    with pytest.raises(MergeAuthorityError):
+        authority.native_single_closer_prepared(REPO, 3603, run_id="run", head_sha=HEAD)
+    assert not any(c.method == "PUT" for c in calls)
+
+
+def test_native_single_closer_retains_inflight_verified_merge():
+    authority, _ = native_authority(comments=({"id": 1, "body": "verified issue-set merge authority:"},))
+    assert authority.native_single_closer_prepared(REPO, 3603, run_id="run", head_sha=HEAD) is None
+
+
+@pytest.mark.parametrize("threads", [({"id": "thread", "isResolved": False},),
+                                     ({"id": "thread", "isResolved": True}, {"id": "thread", "isResolved": True})])
+def test_native_single_closer_rejects_unresolved_or_duplicate_thread(threads):
+    authority, calls = native_authority(threads=threads)
+    with pytest.raises(MergeAuthorityError):
+        authority.native_single_closer_prepared(REPO, 3603, run_id="run", head_sha=HEAD)
+    assert not any(c.method == "PUT" for c in calls)
+
+
+def test_native_single_closer_rejects_deployment_drift_before_effect():
+    executor, run, outbox, calls = native_executor()
+    original = executor.ledger.require_post_effect_capability
+    reads = 0
+    def preflight():
+        nonlocal reads
+        original()
+        reads += 1
+        if reads > 2:
+            executor.ledger.post_effect_deployment["deployment_receipt"]["source_sha"] = "f" * 40
+    executor.ledger.require_post_effect_capability = preflight
+    with pytest.raises(MergeAuthorityError):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert not any(c.method == "PUT" for c in calls)
+
+
+def test_native_single_closer_revalidates_effect_fence_after_final_reread():
+    executor, run, outbox, calls = native_executor()
+    original = executor.repository.native_single_closer_prepared
+    rereads = 0
+
+    def expire_effect_fence(*args, **kwargs):
+        nonlocal rereads
+        gate = original(*args, **kwargs)
+        rereads += 1
+        if rereads == 4:
+            outbox.effect_eligible = False
+        return gate
+
+    executor.repository.native_single_closer_prepared = expire_effect_fence
+    with pytest.raises(MergeEffectNotStarted, match="final outbox effect fence"):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert "revalidate-effect" in outbox.calls
+    assert not any(c.method == "PUT" for c in calls)
+    assert outbox.state == "succeeded"
+    assert outbox.evidence == {
+        "base_sha": BASE,
+        "head_sha": HEAD,
+        "manifest_blob_sha": "blob-1",
+        "reason": "native_effect_fence_refused",
+        "outcome": "terminal_no_effect",
+    }
+    pending = executor.ledger.pending_effect_binding(run.run_id)
+    assert pending is not None
+    assert pending["native_merge_effect_refusal"] == "final_effect_fence_refused"
+
+    restarted_ledger = BuilderOpsVerificationLedger(
+        executor.ledger.client,
+        repository=REPO,
+        effect_outbox=outbox,
+        post_effect_deployment=deployed_post_effect(),
+    )
+    restarted = VerificationMergeExecutor(
+        restarted_ledger,
+        outbox,
+        executor.repository,
+        executor.credentials,
+    )
+    receipt = restarted.execute(
+        run,
+        holder="verification-host",
+        lease_id=run.lease_id,
+    )
+    assert receipt.outcome == "terminal_no_effect"
+    assert not any(c.method == "PUT" for c in calls)
+
+
+def test_native_effect_refusal_survives_takeover_until_readback_fence_recovers():
+    executor, run, outbox, calls = native_executor()
+    original_prepared = executor.repository.native_single_closer_prepared
+    rereads = 0
+
+    def refuse_final_fence(*args, **kwargs):
+        nonlocal rereads
+        gate = original_prepared(*args, **kwargs)
+        rereads += 1
+        if rereads == 4:
+            outbox.effect_eligible = False
+        return gate
+
+    executor.repository.native_single_closer_prepared = refuse_final_fence
+    original_mark_unknown = outbox.mark_unknown
+    original_recover = outbox.recover
+
+    def stale_claim(*args, **kwargs):
+        raise RuntimeError("stale claim")
+
+    def active_takeover(*args, **kwargs):
+        raise RuntimeError("active takeover")
+
+    outbox.mark_unknown = stale_claim
+    outbox.recover = active_takeover
+    with pytest.raises(
+        MergeAuthorityError,
+        match="durable no-effect reconciliation is pending",
+    ):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    pending = executor.ledger.pending_effect_binding(run.run_id)
+    assert pending is not None
+    assert pending["native_merge_effect_refusal"] == "final_effect_fence_refused"
+    assert outbox.state == "claimed"
+    assert not any(c.method == "PUT" for c in calls)
+
+    restarted_ledger = BuilderOpsVerificationLedger(
+        executor.ledger.client,
+        repository=REPO,
+        effect_outbox=outbox,
+        post_effect_deployment=deployed_post_effect(),
+    )
+    restarted = VerificationMergeExecutor(
+        restarted_ledger,
+        outbox,
+        executor.repository,
+        executor.credentials,
+    )
+    with pytest.raises(
+        MergeAuthorityError,
+        match="could not acquire current readback-only fence",
+    ):
+        restarted.execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id,
+        )
+
+    outbox.mark_unknown = original_mark_unknown
+    outbox.recover = original_recover
+    receipt = restarted.execute(
+        run,
+        holder="verification-host",
+        lease_id=run.lease_id,
+    )
+    assert receipt.outcome == "terminal_no_effect"
+    assert outbox.evidence is not None
+    assert outbox.evidence["outcome"] == "terminal_no_effect"
+    assert outbox.evidence["reason"] == "native_effect_fence_refused"
+    assert not any(c.method == "PUT" for c in calls)
+
+
+def test_single_closer_route_reopens_unexpected_pr_attributed_closure():
+    authority, calls = native_authority()
+
+    class ClosureSource:
+        def issue_set_closure_evidence(self, *args, **kwargs):
+            return {
+                "closure_scan_complete": True,
+                "observed_closing_issues": [3603, 3604],
+                "issue_evidence": [
+                    {
+                        "number": n,
+                        "state": "closed",
+                        "closed_by_delivery": True,
+                        "closed_by_pull_requests": [3603],
+                    }
+                    for n in (3603, 3604)
+                ],
+            }
+
+    authority.closure_source = ClosureSource()
+    with pytest.raises(MergeAuthorityError):
+        authority.native_single_closer_reconcile(
+            REPO,
+            3603,
+            closing_issue=3603,
+            readback={
+                "merged_at": "2026-10-11T00:00:00Z",
+                "merge_commit_sha": "d" * 40,
+                "actor_login": "RasmusTho",
+            },
+            credential="test-token",
+        )
+    assert any(c.method == "PATCH" and json.loads(c.content) == {"state": "open"} for c in calls)
 
 
 def deployed_post_effect():
@@ -284,6 +889,7 @@ class Outbox:
         self.intent_payload_override = None
         self.post_effect_phase = None
         self.post_effect_evidence = None
+        self.effect_eligible = True
 
     def _payload(self):
         if self.intent_payload_override is not None:
@@ -313,6 +919,28 @@ class Outbox:
     def recover(self, operation_key: str):
         self.calls.append("recover")
         return self.claim(operation_key)
+
+    def revalidate_effect(self, claim):
+        self.calls.append("revalidate-effect")
+        refreshed = {
+            key: claim[key]
+            for key in (
+                "repository",
+                "operation_key",
+                "worker_id",
+                "fencing_token",
+                "intent_lsn",
+                "claim_lsn",
+                "receipt_sequence",
+                "expires_at",
+                "task_id",
+                "effect_type",
+            )
+        }
+        refreshed["expires_at"] = str(refreshed["expires_at"]).replace(
+            "+00:00", "Z"
+        )
+        return refreshed | {"effect_eligible": self.effect_eligible}
 
     def status(self, operation_key: str):
         self.calls.append("status")
@@ -438,11 +1066,12 @@ def claimed_run(
     effect_type: str = "github.merge",
     *,
     api: FakeBuilderOpsClient | None = None,
+    request_override=None,
 ):
     api = api or FakeBuilderOpsClient()
     ledger = BuilderOpsVerificationLedger(api, repository=REPO, post_effect_deployment=deployed_post_effect())
     api.status = deployed_status
-    run = ledger.ingest(request())
+    run = ledger.ingest(request_override or request())
     claimed = ledger.claim(run.run_id, "verification-host")
     assert claimed.lease_id is not None
     ledger.record_attempt(
@@ -2428,9 +3057,7 @@ def test_mandatory_behavioral_check_rejects_legacy_status_substitution(
                 },
             )
         if path.endswith(f"/commits/{HEAD}/check-runs"):
-            return httpx.Response(
-                200, json={"total_count": 0, "check_runs": []}
-            )
+            return httpx.Response(200, json={"total_count": 0, "check_runs": []})
         if path.endswith(f"/commits/{HEAD}/status"):
             return httpx.Response(
                 200,
@@ -2451,9 +3078,7 @@ def test_mandatory_behavioral_check_rejects_legacy_status_substitution(
                 },
             )
         if path.endswith("/actions/runs"):
-            return httpx.Response(
-                200, json={"total_count": 0, "workflow_runs": []}
-            )
+            return httpx.Response(200, json={"total_count": 0, "workflow_runs": []})
         if path.endswith("/branches/main/protection"):
             return httpx.Response(
                 200,
@@ -2522,9 +3147,7 @@ def test_live_adapter_uses_only_latest_required_rerun(
                 if required_kind == "check"
                 else []
             )
-            return httpx.Response(
-                200, json={"total_count": len(rows), "check_runs": rows}
-            )
+            return httpx.Response(200, json={"total_count": len(rows), "check_runs": rows})
         if path.endswith(f"/commits/{HEAD}/status"):
             statuses = (
                 [
@@ -2549,19 +3172,13 @@ def test_live_adapter_uses_only_latest_required_rerun(
                 json={"total_count": len(statuses), "statuses": statuses},
             )
         if path.endswith("/actions/runs"):
-            return httpx.Response(
-                200, json={"total_count": 0, "workflow_runs": []}
-            )
+            return httpx.Response(200, json={"total_count": 0, "workflow_runs": []})
         if path.endswith("/branches/main/protection"):
             return httpx.Response(
                 200,
                 json={
                     "required_status_checks": {
-                        "contexts": (
-                            ["rerun-required"]
-                            if required_kind == "status"
-                            else []
-                        ),
+                        "contexts": (["rerun-required"] if required_kind == "status" else []),
                         "checks": (
                             [{"context": "rerun-required", "app_id": 7}]
                             if required_kind == "check"
@@ -2633,9 +3250,7 @@ def test_required_behavioral_check_requires_authenticated_success(
                 },
             )
         if path.endswith(f"/commits/{HEAD}/status"):
-            return httpx.Response(
-                200, json={"total_count": 0, "statuses": []}
-            )
+            return httpx.Response(200, json={"total_count": 0, "statuses": []})
         if path.endswith("/actions/runs"):
             return httpx.Response(
                 200,
@@ -2686,11 +3301,18 @@ def test_required_behavioral_check_requires_authenticated_success(
 
 def test_post_effect_consumer_activation_requires_exact_deployed_substrate():
     from app.dispatcher.verification_merge import require_post_effect_deployment
+
     deployment = deployed_post_effect()
     require_post_effect_deployment(deployment, deployed_status())
     with pytest.raises(MergeAuthorityError):
         require_post_effect_deployment(None, deployed_status())
-    for key in ("source_sha", "image_digest", "schema_version", "authority_epoch", "post_effect_capability"):
+    for key in (
+        "source_sha",
+        "image_digest",
+        "schema_version",
+        "authority_epoch",
+        "post_effect_capability",
+    ):
         drifted = {**deployed_status(), key: None}
         with pytest.raises(MergeAuthorityError):
             require_post_effect_deployment(deployment, drifted)
@@ -2699,7 +3321,8 @@ def test_post_effect_consumer_activation_requires_exact_deployed_substrate():
     authority = RepositoryAuthority()
     with pytest.raises(MergeAuthorityError, match="deployed substrate"):
         VerificationMergeExecutor(ledger, outbox, authority, Credentials()).execute(
-            run, holder="verification-host", lease_id=run.lease_id)
+            run, holder="verification-host", lease_id=run.lease_id
+        )
     assert "merge" not in authority.calls
     assert outbox.state == "missing"
 
@@ -2707,8 +3330,10 @@ def test_post_effect_consumer_activation_requires_exact_deployed_substrate():
 def test_merge_recovery_persists_pending_before_no_phase_readback_without_replay():
     ledger, run, outbox = claimed_run()
     authority = RepositoryAuthority(base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 3)
+
     def crash_before_pending(operation_key):
         raise SystemExit("post-transport crash before pending")
+
     ledger.prepare_merge_readback = crash_before_pending
     executor = VerificationMergeExecutor(ledger, outbox, authority, Credentials())
     with pytest.raises(SystemExit, match="post-transport"):
@@ -2716,12 +3341,18 @@ def test_merge_recovery_persists_pending_before_no_phase_readback_without_replay
     assert authority.calls.count("merge") == 1
     assert outbox.post_effect_phase is None
     original = authority.merge_readback
+
     def readback(repository, pr_number):
         assert outbox.post_effect_phase == "pending"
         return original(repository, pr_number)
+
     authority.merge_readback = readback
-    restarted = BuilderOpsVerificationLedger(ledger.client, repository=REPO, effect_outbox=outbox,
-                                             post_effect_deployment=deployed_post_effect())
+    restarted = BuilderOpsVerificationLedger(
+        ledger.client,
+        repository=REPO,
+        effect_outbox=outbox,
+        post_effect_deployment=deployed_post_effect(),
+    )
     receipt = VerificationMergeExecutor(restarted, outbox, authority, Credentials()).recover(run)
     assert receipt.outcome == "merged"
     assert authority.calls.count("merge") == 1
@@ -2730,8 +3361,9 @@ def test_merge_recovery_persists_pending_before_no_phase_readback_without_replay
 
 def test_merge_recovery_keeps_transient_negative_pending_until_exact_positive_readback():
     ledger, run, outbox = claimed_run()
-    authority = RepositoryAuthority(base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 5,
-                                    transport_error=True, merged=False)
+    authority = RepositoryAuthority(
+        base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 5, transport_error=True, merged=False
+    )
     executor = VerificationMergeExecutor(ledger, outbox, authority, Credentials())
     first = executor.execute(run, holder="verification-host", lease_id=run.lease_id)
     assert first.outcome == "retry_after_readback"
@@ -2750,14 +3382,18 @@ def test_merge_recovery_keeps_transient_negative_pending_until_exact_positive_re
 
 def test_merge_recovery_rejects_non_authoritative_terminal_negative_readback():
     ledger, run, outbox = claimed_run()
-    authority = RepositoryAuthority(base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 3,
-                                    transport_error=True, merged=False)
+    authority = RepositoryAuthority(
+        base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 3, transport_error=True, merged=False
+    )
     executor = VerificationMergeExecutor(ledger, outbox, authority, Credentials())
     executor.execute(run, holder="verification-host", lease_id=run.lease_id)
     authority.gates = {"ci": False}
     authority.head = "f" * 40
     original = authority.merge_readback
-    authority.merge_readback = lambda *args: {**original(*args), "outcome": "terminal_no_effect_after_recovery"}
+    authority.merge_readback = lambda *args: {
+        **original(*args),
+        "outcome": "terminal_no_effect_after_recovery",
+    }
     assert executor.recover(run).outcome == "retry_after_readback"
     assert outbox.post_effect_phase == "pending"
     assert outbox.evidence is None
@@ -2765,12 +3401,17 @@ def test_merge_recovery_rejects_non_authoritative_terminal_negative_readback():
 
 def test_retained_terminal_negative_after_recovery_cannot_grant_terminal_authority():
     ledger, run, outbox = claimed_run()
-    authority = RepositoryAuthority(base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 3,
-                                    transport_error=True, merged=False)
+    authority = RepositoryAuthority(
+        base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 3, transport_error=True, merged=False
+    )
     executor = VerificationMergeExecutor(ledger, outbox, authority, Credentials())
     first = executor.execute(run, holder="verification-host", lease_id=run.lease_id)
     outbox.state = "succeeded"
-    outbox.evidence = {"merged": False, "head_sha": HEAD, "outcome": "terminal_no_effect_after_recovery"}
+    outbox.evidence = {
+        "merged": False,
+        "head_sha": HEAD,
+        "outcome": "terminal_no_effect_after_recovery",
+    }
     with pytest.raises(MergeAuthorityError, match="not authoritative terminal"):
         executor.recover(run)
     assert first.operation_key
@@ -2779,18 +3420,24 @@ def test_retained_terminal_negative_after_recovery_cannot_grant_terminal_authori
 
 def test_execute_retained_negative_merge_is_readback_only_without_replay():
     ledger, run, outbox = claimed_run()
-    authority = RepositoryAuthority(base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 4,
-                                    transport_error=True, merged=False)
+    authority = RepositoryAuthority(
+        base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 4, transport_error=True, merged=False
+    )
     executor = VerificationMergeExecutor(ledger, outbox, authority, Credentials())
     first = executor.execute(run, holder="verification-host", lease_id=run.lease_id)
     outbox.state = "pending"
     outbox.post_effect_phase = None
     outbox.evidence = {"merged": False, "head_sha": HEAD, "outcome": "retry_after_readback"}
     authority.merged = True
-    restarted = BuilderOpsVerificationLedger(ledger.client, repository=REPO, effect_outbox=outbox,
-                                             post_effect_deployment=deployed_post_effect())
+    restarted = BuilderOpsVerificationLedger(
+        ledger.client,
+        repository=REPO,
+        effect_outbox=outbox,
+        post_effect_deployment=deployed_post_effect(),
+    )
     final = VerificationMergeExecutor(restarted, outbox, authority, Credentials()).execute(
-        run, holder="verification-host", lease_id=run.lease_id)
+        run, holder="verification-host", lease_id=run.lease_id
+    )
     assert final.outcome == "merged"
     assert final.operation_key == first.operation_key
     assert authority.calls.count("merge") == 1
