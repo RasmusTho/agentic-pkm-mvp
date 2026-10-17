@@ -476,11 +476,14 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "to 973. #3336 adds the process-local selection window above the "
         "unchanged guarded site, moving it to 991."
     ),
-    ("app/vault/settings_service.py", 629): (
-        "guarded: SettingsService.update_setting asserts "
+    ("app/vault/settings_service.py", 730): (
+        "guarded for runtime-gating definitions: SettingsService.update_setting asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
-        "earlier in the same method before persist=True reaches this write. "
-        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 -> 617 -> 629 (site unchanged); re-pinned per this census's "
+        "earlier in the same method before persist=True reaches this write; other settings "
+        "are intentionally outside the runtime-gating guard. The screen-control path now "
+        "uses the versioned write_note_from_absolute port instead. "
+        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 -> 617 -> 629 -> 730 as #3342 "
+        "added the versioned screen-control source write; re-pinned per this census's "
         "own directly-related-repair convention when YSS-01 (#3916) added the "
         "youtubeSync.* SettingDefinitions and the scaffold action constant, "
         "then MARR-11 (#5794) added a clone-local model-profile definition "
@@ -517,10 +520,11 @@ WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "#3336 adds the process-local selection window above the unchanged "
         "bootstrap site, moving it to 771."
     ),
-    ("app/vault/settings_service.py", 708): (
+    ("app/vault/settings_service.py", 857): (
         "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) before the O_EXCL scaffold call. "
-        "Line moved by the MARR-11 (#5794) model-profile SettingDefinition."
+        "Line moved 708 -> 857 when #3342 added screen-control source version checks "
+        "and its governed write path before this unchanged helper."
     ),
 }
 

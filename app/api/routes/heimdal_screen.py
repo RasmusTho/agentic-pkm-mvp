@@ -3,15 +3,24 @@ from typing import Any
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from app.api.compatibility_mutation import reject_scoped_vault_mutation, seal_vault_mutation
-from app.api.request_active_context import refuse_carrier_until_binding_aware
+from app.api.compatibility_mutation import (
+    reject_scoped_vault_mutation,
+    require_compatibility_write_root,
+    seal_vault_mutation,
+)
+from app.api.request_active_context import (
+    refuse_carrier_until_binding_aware,
+    route_read_vault_root_or_selection_required,
+)
+from app.api.routes.vault_resolution import compatibility_vault_root_or_selection_required
 from app.auth import api_key_header, resolve_auth_subject
 from app.heimdal.screen_capture import ingest_screen_bundle
 from app.heimdal.screen_control import screen_control_status
 from app.settings.models import SCREEN_CONTROL_KEYS
-from app.vault.manager import get_vault_manager
+from app.vault.manager import VaultManager
 from app.vault.settings_service import SettingsService, SettingsWriteError
 
 # MVR-05B3: the vault-bound Heimdal ingress carries the pre-05C mutation seal.
@@ -34,22 +43,37 @@ class ScreenControlWrite(BaseModel):
 
 @router.get(
     "/control",
+    response_model=None,
     dependencies=[Depends(_control_actor), Depends(refuse_carrier_until_binding_aware)],
 )
 def read_screen_control(
     app_id: str | None = None, scopes: list[str] = Query(default=[]),
-) -> dict[str, Any]:
-    return screen_control_status(get_vault_manager().context, app_id=app_id, scopes=scopes)
+) -> dict[str, Any] | JSONResponse:
+    vault_root = route_read_vault_root_or_selection_required()
+    if isinstance(vault_root, JSONResponse):
+        return vault_root
+    context = VaultManager().validate_vault(vault_root, heal_identity=False)
+    return screen_control_status(context, app_id=app_id, scopes=scopes)
 
 
-@router.put("/control", dependencies=[Depends(reject_scoped_vault_mutation)])
+@router.put(
+    "/control",
+    response_model=None,
+    dependencies=[Depends(reject_scoped_vault_mutation)],
+)
 def write_screen_control(
-    change: ScreenControlWrite, actor: str = Depends(_control_actor),
-) -> dict[str, Any]:
+    change: ScreenControlWrite,
+    request: Request,
+    actor: str = Depends(_control_actor),
+) -> dict[str, Any] | JSONResponse:
     if change.key not in SCREEN_CONTROL_KEYS:
         raise HTTPException(status_code=422, detail="unknown screen control")
-    manager = get_vault_manager()
-    context = manager.context
+    vault_root = compatibility_vault_root_or_selection_required(require_initialized=True)
+    if isinstance(vault_root, JSONResponse):
+        return vault_root
+    require_compatibility_write_root(request, vault_root)
+    manager = VaultManager()
+    context = manager.validate_vault(vault_root, heal_identity=False)
     permissions = manager.permissions_for_context(context)
     if not permissions.allow_writes_to_vault or not permissions.allow_shared_settings_edits:
         raise HTTPException(status_code=403, detail="screen control writes require shared-settings authority")

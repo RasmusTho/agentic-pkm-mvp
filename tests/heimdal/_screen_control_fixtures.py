@@ -27,7 +27,8 @@ def screen_env(tmp_path, monkeypatch):
     root = tmp_path / "vault"
     manager = VaultManager()
     context = manager.initialize_vault(root, machine_role="testNode", remember=False).context
-    monkeypatch.setattr(heimdal_screen, "get_vault_manager", lambda: manager)
+    monkeypatch.setattr(heimdal_screen, "route_read_vault_root_or_selection_required", lambda: root)
+    monkeypatch.setattr(heimdal_screen, "compatibility_vault_root_or_selection_required", lambda **_kwargs: root)
     monkeypatch.setattr(companion, "get_vault_manager", lambda: manager)
     reset_memory_consent_ledger()
     reset_memory_raw_store()
