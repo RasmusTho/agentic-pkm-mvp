@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 import os
+import re
 import sys
 from typing import Any, Protocol
 from uuid import UUID
@@ -17,6 +18,14 @@ from app.ops.host_secret_bootstrap import _security_framework_keychain_lookup
 from app.ops.host_secret_contract import (
     BWS_IDENTITIES, CHANNEL_PROJECTS, KARAKEEP_SECRETS,
 )
+
+DEVUI_TARGET = 'bob-1'
+DEVUI_SECRET = 'devui.github-token'
+DEVUI_IDENTITY = DEVUI_TARGET + '/' + DEVUI_SECRET
+
+
+def valid_devui_token(value: str) -> bool:
+    return bool(re.fullmatch(r'(?:github_pat_|ghp_)[A-Za-z0-9_]{20,255}', value))
 
 
 class SecretAdminError(RuntimeError):
@@ -111,6 +120,9 @@ class BwsSecretAdmin:
         return client
 
     def _scope(self, project: str, identity: str) -> str:
+        # Separate Builder System credential: never aliases shared/github.token.
+        if identity == DEVUI_IDENTITY and project == 'non-prod':
+            return self.config.projects()[project]
         prefix, _, logical = identity.partition('/')
         scope = BWS_IDENTITIES.get(logical)
         if logical in KARAKEEP_SECRETS and prefix not in {'dev', 'test'}:
