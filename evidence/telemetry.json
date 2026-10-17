@@ -1,1 +1,1 @@
-{"agent_starts":1,"context_tokens":"unknown","elapsed_minutes":"unknown","handoffs":0,"human_minutes":"unknown","model_cost_usd":"unknown","probe_count":1,"repairs":{"ci":0,"implementation":1,"review":0}}
+{"agent_starts":1,"context_tokens":"unknown","elapsed_minutes":"unknown","handoffs":2,"human_minutes":"unknown","model_cost_usd":"unknown","probe_count":1,"repairs":{"ci":0,"implementation":1,"review":0}}
