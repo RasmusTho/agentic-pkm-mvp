@@ -57,9 +57,15 @@ def test_verdict_mode_and_watchdog_fail_loud() -> None:
     # Off-main or malformed verdicts are refused, never recorded as green.
     with pytest.raises(verdict.VerdictRefused):
         verdict.resolve("workflow_dispatch", INPUTS, "f" * 40, "o/r", api=_api(compare_status="diverged"))
+
+    def unknown(_path):
+        raise RuntimeError("404")
+
+    with pytest.raises(verdict.VerdictRefused, match="unknown"):
+        verdict.resolve("workflow_dispatch", INPUTS, "f" * 40, "o/r", api=unknown)
     for broken in ({"sha": "abc"}, {"verdict": "green"}, {"operation_id": "x"}, {"counts": "selected=1; rm"},
                    {"verdict": "refused"}, {"failures": "tests/a.py::t"}, {"reason": "Bad Reason"},
-                   {"failures": "x\ny", "verdict": "failed"}):
+                   {"failures": "x\ny", "verdict": "failed"}, {"failures": "@owner", "verdict": "failed"}):
         with pytest.raises(verdict.VerdictRefused):
             verdict.validate_verdict({**INPUTS, **broken})
 
@@ -102,6 +108,7 @@ def test_workflow_records_status_and_keeps_rolling_alert() -> None:
     assert triggers["schedule"] and set(triggers["workflow_dispatch"]["inputs"]) == {
         "sha", "verdict", "operation_id", "counts", "reason", "failures"}
     assert workflow["concurrency"]["cancel-in-progress"] is False
+    assert "github.event.inputs.sha" in workflow["concurrency"]["group"]
     assert workflow["permissions"] == {"contents": "read"}
     jobs = workflow["jobs"]
 

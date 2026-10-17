@@ -31,7 +31,7 @@ FALLBACK_CONTEXT = "post-merge-heavy-tests/fallback"
 GRACE = timedelta(hours=6)
 VERDICTS = ("passed", "failed", "refused")
 _COUNTS = re.compile(r"(?:(?:selected|passed|failed|skipped|docker_skipped)=\d{1,7} ?){0,5}")
-_FAILURES = re.compile(r"[A-Za-z0-9_./:\[\]@+=, -]{0,1000}")
+_FAILURES = re.compile(r"[A-Za-z0-9_./:\[\]?+=, -]{0,1000}")
 
 
 class VerdictRefused(ValueError):
@@ -101,8 +101,11 @@ def resolve(event: str, inputs: dict[str, str], github_sha: str, repo: str, *,
             api: Callable[[str], Any] = _gh, now: datetime | None = None) -> Resolution:
     if event == "workflow_dispatch" and inputs.get("verdict"):
         resolution = validate_verdict(inputs)
-        compare = api(f"repos/{repo}/compare/{resolution.sha}...main")
-        if compare.get("status") not in {"identical", "ahead"}:
+        try:
+            compare = api(f"repos/{repo}/compare/{resolution.sha}...main")
+        except Exception:
+            raise VerdictRefused("verdict SHA is unknown") from None
+        if not isinstance(compare, dict) or compare.get("status") not in {"identical", "ahead"}:
             raise VerdictRefused("verdict SHA is not on main")
         return resolution
     if event == "workflow_dispatch":

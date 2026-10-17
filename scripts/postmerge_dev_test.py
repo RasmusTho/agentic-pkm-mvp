@@ -22,6 +22,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Callable
 from uuid import NAMESPACE_URL, UUID, uuid5
 from zipfile import ZipFile
@@ -363,15 +364,20 @@ def native_heavy(candidate: Candidate) -> dict[str, Any]:
 def dispatch_verdict(candidate: Candidate, heavy: dict[str, Any]) -> None:
     """Send the bounded verdict to the fail-loud GitHub workflow (Actions write only)."""
     counts = ' '.join(f'{key}={heavy[key]}' for key in HEAVY_COUNTS if key in heavy)
+    # Node IDs may hold any character; mask what the workflow's bounded input
+    # grammar refuses so a red verdict keeps its failing tests, never a ping.
+    failures = re.sub(r'[^A-Za-z0-9_./:\[\]+=, -]', '?', ','.join(heavy.get('failures', [])))[:1000]
     fields = {'sha': candidate.sha, 'verdict': heavy['result'], 'operation_id': candidate.operation_id('test'),
-              'counts': counts, 'reason': heavy.get('reason', ''),
-              'failures': ','.join(heavy.get('failures', []))[:1000]}
+              'counts': counts, 'reason': heavy.get('reason', ''), 'failures': failures}
     command = ['gh', 'workflow', 'run', HEAVY_WORKFLOW, '--repo', REPOSITORY, '--ref', 'main']
     for key, value in fields.items():
         command += ['-f', f'{key}={value}']
-    result = subprocess.run(command, capture_output=True, timeout=60, check=False)
-    if result.returncode:
-        raise CandidateRefused('heavy_dispatch_failed')
+    for attempt in range(3):
+        if subprocess.run(command, capture_output=True, timeout=60, check=False).returncode == 0:
+            return
+        if attempt < 2:
+            time.sleep(20)
+    raise CandidateRefused('heavy_dispatch_failed')
 
 
 def heavy_verdict(path: Path, checkpoint: dict[str, Any], *,

@@ -39,10 +39,11 @@ on:
         required: false
         default: ""
 
-# Never cancel a started run: every host verdict must reach its status and
-# alert, and a started fallback run must reach a verdict.
+# Never cancel a started run. Host verdicts are grouped per SHA, so a verdict
+# never displaces a pending verdict for another commit; watchdog and manual
+# runs share one group.
 concurrency:
-  group: post-merge-heavy-tests
+  group: post-merge-heavy-tests-${{ github.event.inputs.sha || 'watchdog' }}
   cancel-in-progress: false
 
 permissions:

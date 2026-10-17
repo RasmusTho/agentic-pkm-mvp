@@ -164,7 +164,7 @@ class HeavyAcceptanceRunner:
         container = self._docker(
             'create', '--name', self.name + '-tests', *labels,
             '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-            '--security-opt', 'no-new-privileges', '--no-healthcheck', '--user', '0:0', '--workdir', '/work',
+            '--security-opt', 'no-new-privileges', '--pids-limit', '4096', '--no-healthcheck', '--user', '0:0', '--workdir', '/work',
             '--tmpfs', '/tmp:rw,nosuid,nodev,size=2g',
             '--mount', f'type=bind,src={work},dst=/work',
             '--mount', f'type=bind,src={manifest},dst=/heavy-manifest.json,readonly',

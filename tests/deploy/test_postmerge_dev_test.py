@@ -789,7 +789,8 @@ def test_heavy_verdict_dispatch_payload_is_bounded(monkeypatch):
 
     monkeypatch.setattr(driver.subprocess, 'run', run)
     driver.dispatch_verdict(candidate, dict(HEAVY_PASSED, result='failed', failed=1,
-                                            failures=['tests/deploy/test_a.py::test_' + 'x' * 190] * 20))
+                                            failures=['tests/deploy/test_b.py::test_c[<lambda>@x]']
+                                            + ['tests/deploy/test_a.py::test_' + 'x' * 190] * 19))
     argv, kwargs = calls[0]
     assert argv[:8] == ['gh', 'workflow', 'run', driver.HEAVY_WORKFLOW, '--repo', driver.REPOSITORY,
                         '--ref', 'main']
@@ -799,6 +800,7 @@ def test_heavy_verdict_dispatch_payload_is_bounded(monkeypatch):
     assert fields['operation_id'] == candidate.operation_id('test')
     assert fields['counts'] == 'selected=500 passed=490 failed=1 skipped=10 docker_skipped=0'
     assert len(fields['failures']) <= 1000
+    assert fields['failures'].startswith('tests/deploy/test_b.py::test_c[?lambda??x]')
     # Only the bounded verdict crosses; no deployment environment is forwarded.
     assert 'env' not in kwargs
 
