@@ -76,6 +76,39 @@ def test_screen_control_refuses_authorized_scoped_session_before_legacy_read(
     assert response.json()["detail"]["capability"] == "mvr05b4_binding_aware_read"
 
 
+@pytest.mark.parametrize(
+    ("header", "value"),
+    [
+        ("X-Active-Context-Session", ""),
+        ("X-Active-Context-Session", "unknown-session"),
+        ("X-Active-Context-Override", "unknown-override"),
+    ],
+)
+def test_screen_control_refuses_unresolved_scoped_carrier_before_legacy_read(
+    instance, client, monkeypatch, header, value
+) -> None:
+    """Blank or unresolved carriers cannot downgrade to the process-selected vault."""
+    from pathlib import Path
+
+    import app.vault.manager as vault_manager_module
+    from app.api.routes import heimdal_screen
+    from app.vault.manager import VaultManager
+
+    _runtime, first, _second = instance
+    manager = VaultManager()
+    manager.select_vault(Path(first.path), remember=False)
+    monkeypatch.setattr(vault_manager_module, "_GLOBAL_MANAGER", manager)
+    monkeypatch.setattr(
+        heimdal_screen,
+        "screen_control_status",
+        lambda *_args, **_kwargs: pytest.fail("unresolved scoped request read process-selected controls"),
+    )
+
+    response = client.get("/api/heimdal/screen/control", headers={header: value})
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["capability"] == "mvr05b4_binding_aware_read"
+
+
 def test_two_sessions_use_distinct_vaults_without_cross_talk(instance, client, monkeypatch) -> None:
     """Two real scoped API reads hold shared fences concurrently and stay isolated."""
 
