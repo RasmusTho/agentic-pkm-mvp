@@ -585,6 +585,48 @@ def test_v2_audit_raw_response_identity_is_enforced_at_every_join(chain, tmp_pat
     assert {path: path.read_bytes() for path in before} == before
 
 
+@pytest.mark.parametrize("audited", [False, True])
+def test_v2_receipt_cli_inputs_join_exact_raw_refs_with_or_without_audit(chain, tmp_path, audited):
+    if audited:
+        obs, _, _, audit, _, comp, telemetry, _ = _audit_fixture(chain, tmp_path)
+    else:
+        obs, comp, telemetry = chain["observation"], chain["comparison"], chain["telemetry"]
+    response_b = tmp_path / "input-response-b.json"
+    comparison_b = tmp_path / "input-comparison-b.json"
+    response_b.write_text(json.dumps(obs, indent=2) + "\n")
+    comparison_b.write_text(json.dumps(comp, indent=2) + "\n")
+    assert probe.parse_strict_json(response_b.read_bytes()) == obs
+    assert probe.parse_strict_json(comparison_b.read_bytes()) == comp
+    assert v2._bound_ref(str(response_b))["sha256"] != v2._bound_ref(chain["refs"]["agent_response"])["sha256"]
+    assert v2._bound_ref(str(comparison_b))["sha256"] != v2._bound_ref(chain["refs"]["comparison_receipt"])["sha256"]
+    telemetry_a_ref = _retain(tmp_path / "input-telemetry-a.json", telemetry)
+    refs_a_ref = _retain(tmp_path / "input-refs-a.json", chain["refs"])
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    for index, (response, comparison) in enumerate(((str(response_b), chain["refs"]["comparison_receipt"]), (chain["refs"]["agent_response"], str(comparison_b)))):
+        output = tmp_path / f"file-join-refused-{index}.json"
+        assert probe.cli_main(["receipt", "--pack-file", chain["refs"]["context_pack"], "--observation-file", response, "--comparison-file", comparison, "--telemetry-file", telemetry_a_ref, "--evidence-file", refs_a_ref, "--output", str(output)]) == 2
+        assert not output.exists()
+    assert {path: path.read_bytes() for path in before} == before
+    if audited:
+        audit_b = deepcopy(audit)
+        audit_b["observation"] = v2._bound_ref(str(response_b))
+        audit_b_ref = _retain(tmp_path / "input-audit-b.json", audit_b)
+        comp_b = probe.compare_rehydrated_observation(chain["pack"], obs, fabrication_audit_ref=audit_b_ref, observation_ref=str(response_b))
+        comparison_b = tmp_path / "input-comparison-explicit-b.json"
+        comparison_b.write_text(json.dumps(comp_b, indent=2) + "\n")
+    telemetry_b = v2.build_telemetry(chain["pack"], obs, pack_ref=chain["refs"]["context_pack"], observation_ref=str(response_b), execution_ref=chain["execution_ref"])
+    telemetry_b_ref = _retain(tmp_path / "input-telemetry-b.json", telemetry_b)
+    refs_b = chain["refs"] | {"agent_response": str(response_b), "comparison_receipt": str(comparison_b)}
+    refs_b_ref = _retain(tmp_path / "input-refs-b.json", refs_b)
+    output_b = tmp_path / "file-join-valid-b.json"
+    assert probe.cli_main(["receipt", "--pack-file", refs_b["context_pack"], "--observation-file", str(response_b), "--comparison-file", str(comparison_b), "--telemetry-file", telemetry_b_ref, "--evidence-file", refs_b_ref, "--output", str(output_b)]) == 0
+    receipt_b = probe.parse_strict_json(output_b.read_bytes())
+    assert probe.normalize_probe_receipt(receipt_b) == receipt_b
+    assert receipt_b["observation"] == v2._bound_ref(str(response_b))
+    assert receipt_b["comparison"] == v2._bound_ref(str(comparison_b))
+    assert {path: path.read_bytes() for path in before} == before
+
+
 @pytest.mark.parametrize("case", ["checkpoint_live_fact", "source_hardlink", "source_fragment", "contrary_payload", "unknown_claim", "alternate_packet"])
 def test_v2_audit_provenance_and_semantic_replay_matrix(chain, tmp_path, case):
     obs, fact, fact_ref, audit, audit_ref, comp, telemetry, receipt = _audit_fixture(chain, tmp_path)

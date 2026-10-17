@@ -1445,8 +1445,15 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             telemetry = _read_json_file(args.telemetry_file)
             extra_paths: tuple[Path, ...] = ()
             if pack["schema_version"] == 2:
-                from app.builderops.epic_rehydration_probe_v2 import closure_paths
+                from app.builderops.epic_rehydration_probe_v2 import _bound_ref, closure_paths
 
+                for key, path, normalized in (
+                    ("context_pack", args.pack_file, pack),
+                    ("agent_response", args.observation_file, observation),
+                    ("comparison_receipt", args.comparison_file, comparison),
+                ):
+                    if not _json_exact_equal(_bound_ref(str(path), normalized), _bound_ref(normalized_evidence_refs[key], normalized)):
+                        raise EpicRehydrationProbeError(f"receipt CLI {key} input differs from its retained raw binding")
                 extra_paths = closure_paths(pack, telemetry)
             _reject_output_alias(
                 args.output,

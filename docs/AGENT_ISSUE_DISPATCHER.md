@@ -1342,6 +1342,9 @@ the same exact `{ref, sha256, bytes_length}`, not merely equal parsed JSON. Publ
 functions accept `observation_ref` for that file-aware check; standalone receipt replay supplies
 its retained response ref. Logical comparison without a file ref uses the audit's reopened binding
 as authority. Telemetry alone makes no claim about an audit it was not given.
+The v2 receipt CLI unconditionally joins its explicit packet/response/comparison file inputs to
+their retained refs, with or without audit. Use the same serialized ref spelling: equal JSON in
+a separately formatted or differently named file does not establish the exact raw input binding.
 
 Comparison retains the original observed value alongside independent live value/evidence support;
 an incorrect reconstruction or unknown remains measurable. It never replaces missing observed
