@@ -26,7 +26,7 @@ class HostSecretAdmissionError(RuntimeError):
 
 
 _KINDS = {"check", "import", "token-push", "deploy", "bootstrap"}
-_TARGETS = {"dev", "test", "prod", "shared"}
+_TARGETS = {"dev", "test", "prod", "shared", "bob-1"}
 _TERMINAL_SOURCES = {
     "check": "read-complete",
     "import": "provider-terminal",
@@ -344,6 +344,7 @@ class HostSecretController:
             or target not in _TARGETS
             or kind == "token-push"
             or (target == "shared" and kind not in {"check", "import"})
+            or (target == "bob-1" and kind not in {"check", "import", "deploy"})
         ):
             raise HostSecretAdmissionError()
         with self._locked_journal() as descriptor:
@@ -403,7 +404,7 @@ class HostSecretController:
         self, target: str
     ) -> Iterator[tuple[HostSecretOperation, dict[str, str | bool | None] | None]]:
         """Start or resume one same-ID VM token push under the shared host lock."""
-        if target not in _TARGETS - {"shared"}:
+        if target not in _TARGETS - {"shared", "bob-1"}:
             raise HostSecretAdmissionError()
         with self._locked_journal(wait=True) as descriptor:
             pending = self._pending(descriptor)
