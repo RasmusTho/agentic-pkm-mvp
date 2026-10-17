@@ -83,6 +83,16 @@ from app.domain.commitments import (
     CommitmentRecord,
     query_next_and_waiting_commitments,
 )
+from app.calibration.scheduler import RevisitDue, due_revisits
+from app.receipts.outcome_receipt_log import (
+    OUTCOME_RECEIPT_WRITE_ACTION,
+    OutcomeValue,
+    append_outcome_receipt,
+)
+from app.receipts.revisit_dismissal_log import (
+    REVISIT_DISMISSAL_WRITE_ACTION,
+    append_revisit_dismissal,
+)
 from app.api.routes.active_context_selection import get_selection_store
 from app.api.routes.ingest_binding import ingest_binding_status
 from app.api.request_active_context import (
@@ -1937,6 +1947,32 @@ class RuntimeState(BaseModel):
     commitments: CommitmentSurfaceState = Field(default_factory=CommitmentSurfaceState)
 
 
+CALIBRATION_REVISIT_SOURCE = "calibration.scheduler"
+
+
+class CalibrationRevisitState(BaseModel):
+    """Read-only projection of the next due decision revisit.
+
+    ``state`` distinguishes a healthy empty result from a degraded read.  The
+    latter is intentionally not represented as ``decision_id=None`` alone: an
+    unavailable scheduler must never look like confident zero pending work.
+    """
+
+    state: Literal["pending", "empty", "degraded"] = "empty"
+    decision_id: str | None = None
+    decision_object_id: str | None = None
+    title: str | None = None
+    decided_on: str | None = None
+    rung_index: int | None = None
+    rung_days: int | None = None
+    due_since: str | None = None
+    degraded: bool = False
+    degraded_reason: str | None = None
+    read_only: bool = True
+    authority_role: Literal["derived"] = "derived"
+    source: str = CALIBRATION_REVISIT_SOURCE
+
+
 class CanvasState(BaseModel):
     session_id: str | None
     session_state: str | None
@@ -1999,6 +2035,21 @@ class WorkspaceStateResponse(BaseModel):
     suggestions: SuggestionsState
     guards: GuardState
     reflection_offer: ReflectionOfferState | None = None
+    calibration_revisit: CalibrationRevisitState = Field(default_factory=CalibrationRevisitState)
+
+
+class CalibrationRevisitDecisionRequest(BaseModel):
+    """The four visual-pick outcomes accepted by the revisit card."""
+
+    outcome: OutcomeValue
+    note: str | None = None
+
+
+class CalibrationRevisitActionResponse(BaseModel):
+    status: Literal["answered", "dismissed"]
+    decision_id: str
+    rung_index: int
+    receipt: dict[str, Any] | None = None
 
 
 class ReflectionStartRequest(BaseModel):
@@ -3174,6 +3225,79 @@ def _commitment_surface_state(vault_root: Path) -> CommitmentSurfaceState:
         # Read-time freshness for the "as of …" footer. Stamped only on a healthy
         # read; a degraded read returns above with as_of left None.
         as_of=now.isoformat(timespec="seconds"),
+    )
+
+
+def _calibration_revisit_state(vault_root: Path) -> CalibrationRevisitState:
+    """Project CAL-02's due revisit into the workspace response.
+
+    The scheduler is a durable read boundary.  Any failure is explicit
+    ``degraded`` state so the Companion UI cannot silently present an empty
+    card when it was unable to inspect the vault or receipt ledgers.
+    """
+
+    try:
+        due = due_revisits(vault_root=vault_root)
+    except Exception as exc:  # pragma: no cover - defensive runtime boundary
+        logger.warning("calibration revisit read degraded: %s", exc)
+        return CalibrationRevisitState(
+            state="degraded",
+            degraded=True,
+            degraded_reason="scheduler_unavailable",
+        )
+
+    if not due:
+        return CalibrationRevisitState(state="empty")
+
+    # CAL-02 normally returns one due rung per decision.  Keep the response
+    # deterministic if several decisions are due by selecting the oldest
+    # rung first and using the durable UUID as a stable tie-breaker.
+    pending = min(
+        due,
+        key=lambda item: (item.due_since, str(item.decision_uuid)),
+    )
+    return CalibrationRevisitState(
+        state="pending",
+        decision_id=str(pending.decision_uuid),
+        decision_object_id=str(pending.decision_object_id),
+        title=pending.title,
+        decided_on=pending.decided_on.isoformat(),
+        rung_index=pending.rung_index,
+        rung_days=pending.rung_days,
+        due_since=pending.due_since.isoformat(),
+    )
+
+
+def _calibration_revisit_for_decision(
+    decision_id: str,
+    *,
+    vault_root: Path,
+) -> RevisitDue:
+    """Resolve one currently pending revisit for a mutation route."""
+
+    try:
+        due = due_revisits(vault_root=vault_root)
+    except Exception as exc:  # durable read failed before a mutation
+        logger.warning("calibration revisit lookup degraded: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "calibration_revisit_unavailable",
+                "message": "The pending revisit could not be read; no action was recorded.",
+            },
+        ) from exc
+    for candidate in due:
+        if decision_id in {
+            str(candidate.decision_uuid),
+            str(candidate.decision_object_id),
+        }:
+            return candidate
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error": "calibration_revisit_not_found",
+            "message": "No pending revisit exists for this decision.",
+        },
     )
 
 
@@ -5251,6 +5375,7 @@ def read_companion_workspace(
                 reflection_offer = ReflectionOfferState.model_validate(offer.as_payload())
 
     content_hash = _content_hash(body)
+    calibration_revisit = _calibration_revisit_state(vault_root)
     selectable_options: list[PanelSelectableOption] = []
     # A recovered identity is read-only: it was never written to the create-once
     # note, so it must not offer checkbox mutation affordances (#5663).
@@ -5296,6 +5421,94 @@ def read_companion_workspace(
             workspace_update=workspace_update,
         ),
         reflection_offer=reflection_offer,
+        calibration_revisit=calibration_revisit,
+    )
+
+
+@router.post(
+    "/calibration/revisits/{decision_id}/decision",
+    response_model=CalibrationRevisitActionResponse | VaultSelectionRequiredResponse,
+)
+def post_calibration_revisit_decision(
+    decision_id: str,
+    req: CalibrationRevisitDecisionRequest,
+) -> CalibrationRevisitActionResponse | VaultSelectionRequiredResponse:
+    """Record one visual-pick outcome through CAL-01's governed write path."""
+
+    vault_root = _active_companion_vault_root_or_picker(require_initialized=True)
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
+    pending = _calibration_revisit_for_decision(decision_id, vault_root=vault_root)
+    # Keep the enforcement assertion at this call site.  CAL-01 asserts again
+    # inside its sole production write seam, but the route must not become an
+    # unguarded bypass if that implementation is mocked or replaced.
+    try:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed(OUTCOME_RECEIPT_WRITE_ACTION)
+        receipt = append_outcome_receipt(
+            decision_object_id=pending.decision_object_id,
+            decision_uuid=pending.decision_uuid,
+            rung_index=pending.rung_index,
+            outcome=req.outcome,
+            note=req.note.strip() if req.note and req.note.strip() else None,
+            vault_root=vault_root,
+        )
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "writeguard_blocked",
+                "state": "blocked",
+                "message": str(exc),
+            },
+        ) from exc
+    return CalibrationRevisitActionResponse(
+        status="answered",
+        decision_id=str(pending.decision_uuid),
+        rung_index=pending.rung_index,
+        receipt=receipt,
+    )
+
+
+@router.post(
+    "/calibration/revisits/{decision_id}/dismiss",
+    response_model=CalibrationRevisitActionResponse | VaultSelectionRequiredResponse,
+)
+def post_calibration_revisit_dismiss(
+    decision_id: str,
+) -> CalibrationRevisitActionResponse | VaultSelectionRequiredResponse:
+    """Defer one revisit through CAL-02's dismissal ledger only."""
+
+    vault_root = _active_companion_vault_root_or_picker(require_initialized=True)
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
+    pending = _calibration_revisit_for_decision(decision_id, vault_root=vault_root)
+    try:
+        # Keep dismissal independently guarded as well; importantly, this path
+        # never calls ``append_outcome_receipt`` or fabricates an outcome.
+        DEFAULT_WRITE_GUARD.assert_writes_allowed(REVISIT_DISMISSAL_WRITE_ACTION)
+        append_revisit_dismissal(
+            decision_object_id=pending.decision_object_id,
+            decision_uuid=pending.decision_uuid,
+            rung_index=pending.rung_index,
+            vault_root=vault_root,
+        )
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "writeguard_blocked",
+                "state": "blocked",
+                "message": str(exc),
+            },
+        ) from exc
+    return CalibrationRevisitActionResponse(
+        status="dismissed",
+        decision_id=str(pending.decision_uuid),
+        rung_index=pending.rung_index,
+        # Dismissal is a CAL-02 ledger marker, never an outcome receipt.  Keep
+        # the response field explicit so callers cannot mistake this action for
+        # an answered calibration rung.
+        receipt=None,
     )
 
 
