@@ -70,10 +70,16 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 # against the FastAPI type silently misses every real part.
 from starlette.datastructures import UploadFile
 
-from app.api.compatibility_mutation import seal_vault_mutation
+from app.api.compatibility_mutation import require_compatibility_write_root, seal_vault_mutation
 from app.api.request_active_context import refuse_carrier_until_binding_aware
 from app.events.models import new_trace_id
-from app.heimdal import media_ingress, media_receipts, meeting_ledger, raw_liveness
+from app.heimdal import (
+    media_ingress,
+    media_receipts,
+    meeting_finalization,
+    meeting_ledger,
+    raw_liveness,
+)
 from app.heimdal.consent_ledger import ConsentRefusedError
 from app.heimdal.media_ingress import (
     MediaAdmissionError,
@@ -495,6 +501,16 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
         key: value for key, value in (parsed.model_extra or {}).items() if key not in reserved
     }
 
+    if parsed.session_id is not None:
+        # A meeting segment can re-finalize the closed session into
+        # HEIMDAL_MEETING_VAULT_ROOT: prove that target against the sealed
+        # compatibility binding before admission, like meeting close does.
+        try:
+            meeting_root = meeting_finalization.configured_meeting_vault_root()
+        except meeting_finalization.MeetingFinalizationError:
+            meeting_root = None
+        if meeting_root is not None:
+            require_compatibility_write_root(request, meeting_root)
     try:
         admission = media_ingress.admit_media_bytes(
             media_bytes,

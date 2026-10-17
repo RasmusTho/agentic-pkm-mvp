@@ -290,3 +290,48 @@ def test_voice_route_takes_the_selection_lock_before_the_write_window() -> None:
     selection = source.index("compatibility_selection_window()")
     window = source.index("compatibility_write_target_window(request)")
     assert selection < window
+
+
+def test_checkbox_projection_proves_its_own_root_against_the_sealed_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6159 review: /panel/checkbox-projection resolves its own root; it must be the binding."""
+
+    import app.panel.checkbox_projection as projection_module
+    from app.panel.checkbox_projection import CheckboxProjectionHTTPError, CheckboxProjectionRequest
+
+    stale_a, sealed_b = tmp_path / "a", tmp_path / "b"
+    initialize_test_vault(stale_a)
+    initialize_test_vault(sealed_b)
+    (stale_a / "note.md").write_text("- [ ] task\n", encoding="utf-8")
+    monkeypatch.setattr(projection_module, "resolve_optional_vault_root", lambda: stale_a)
+    fields = CheckboxProjectionRequest.model_fields
+    payload = {
+        "note_path": "note.md",
+        "expected_content_hash": "0" * 64,
+        "idempotency_key": "kp-1",
+    }
+    for name, field in fields.items():
+        if name not in payload and field.is_required():
+            payload[name] = "x" if field.annotation is str else 0
+    request = CheckboxProjectionRequest.model_validate(payload)
+
+    with pytest.raises(CheckboxProjectionHTTPError) as exc:
+        projection_module._service.project(request, sealed_root=sealed_b)
+
+    assert exc.value.status_code == 409
+    assert exc.value.response.block_reason == "capability_not_ready"
+    assert (stale_a / "note.md").read_text(encoding="utf-8") == "- [ ] task\n"
+
+
+def test_meeting_segment_admission_proves_the_meeting_root_first() -> None:
+    """#6159 review: a meeting segment may re-finalize into the meeting root; prove it first."""
+
+    import inspect
+
+    from app.api.routes import heimdal_capture as capture_routes
+
+    source = inspect.getsource(capture_routes.admit_media)
+    assert source.index("require_compatibility_write_root(request, meeting_root)") < source.index(
+        "media_ingress.admit_media_bytes("
+    )

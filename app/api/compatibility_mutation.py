@@ -352,6 +352,12 @@ def require_compatibility_write_root(request: Request, root: Path) -> None:
         raise _capability_not_ready()
 
 
+def capability_not_ready() -> HTTPException:
+    """The structured pre-05C refusal, for routes that fail closed themselves."""
+
+    return _capability_not_ready()
+
+
 def require_compatibility_write_target(request: Request, target: Path) -> None:
     """Fail closed when a route writes a path outside the sealed binding root.
 
@@ -411,6 +417,7 @@ __all__ = [
     "HEADER_ACTIVE_CONTEXT_SESSION",
     "HEADER_COMPATIBILITY_PRECONDITION",
     "CompatibilityMutationProof",
+    "capability_not_ready",
     "compatibility_selector_bridge",
     "compatibility_write_target_window",
     "is_compatibility_selector_bridge",
