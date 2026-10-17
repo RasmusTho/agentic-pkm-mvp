@@ -410,3 +410,23 @@ def test_migrated_write_route_rejects_stripped_precondition_without_legacy_downg
     legacy = client.post("/api/companion/capture", json={"text": "truly legacy"})
     assert legacy.status_code == 200, legacy.text
     assert "truly legacy" in _inbox_text(root_a)
+
+
+def test_settings_update_is_sealed_when_another_process_moved_the_binding(tmp_path, monkeypatch) -> None:
+    """#6159 review: /vault/settings writes A before any rebind, so it must prove A first."""
+
+    client, runtime, first, second = _setup(tmp_path, monkeypatch)
+    root_a, root_b = Path(first.path), Path(second.path)
+    _other_process_moves_compatibility_picker(tmp_path, root_b)
+    assert SettingsRebindStore(runtime.registry).compatibility_binding_id() == second.vault_binding_id
+    assert vault_manager_module.get_vault_manager().context.active_vault_path == str(root_a)
+    before = _tree(root_a, root_b)
+
+    response = client.post(
+        "/api/companion/vault/settings",
+        json={"key": "enableAutoIndexing", "value": False},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == _CAPABILITY_NOT_READY
+    assert _tree(root_a, root_b) == before

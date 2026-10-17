@@ -90,9 +90,11 @@ from app.api.request_active_context import (
     resolve_optional_scoped_read_context,
 )
 from app.instance.errors import RegistryError
+from app.api.routes.vault_resolution import compatibility_selection_window
 from app.api.compatibility_mutation import (
     HEADER_COMPATIBILITY_PRECONDITION,
     compatibility_selector_bridge,
+    compatibility_write_target_window,
     make_vault_mutation_seal,
     reject_scoped_vault_mutation,
     require_compatibility_mutation,
@@ -1801,23 +1803,33 @@ def read_companion_vault_settings() -> VaultSettingsResponse:
 @compatibility_selector_bridge
 def update_companion_vault_setting(req: VaultSettingUpdateRequest) -> VaultSettingUpdateResponse:
     manager = get_vault_manager()
-    context = manager.context
-    if context.status != "selected" or not context.active_vault_path:
-        raise HTTPException(
-            status_code=409,
-            detail=f"settings writes require a selected initialized vault; current status is {context.status}",
-        )
-    service = SettingsService()
-    definition = service.registry.get(req.key)
-    if definition is None:
-        raise HTTPException(status_code=404, detail=f"unknown setting: {req.key}")
-    blocked_reason = _setting_blocked_reason(definition, context)
-    if blocked_reason:
-        raise HTTPException(status_code=403, detail=blocked_reason)
-    try:
-        updated, _receipt = service.update_setting(context, req.key, req.value, surface="api", actor="human")
-    except SettingsWriteError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # The settings write lands on the process-selected vault *before* the reload
+    # below rebinds anything, so it is a legacy write like any other: pin the
+    # selection and prove it is the durable compatibility binding (selection lock
+    # first, then the shared ingress window -- the /vault/select order), and
+    # release both before select_vault takes the ingress lock exclusively.
+    with compatibility_selection_window(), compatibility_write_target_window(
+        None, selected_root=_legacy_companion_selected_root
+    ):
+        context = manager.context
+        if context.status != "selected" or not context.active_vault_path:
+            raise HTTPException(
+                status_code=409,
+                detail=f"settings writes require a selected initialized vault; current status is {context.status}",
+            )
+        service = SettingsService()
+        definition = service.registry.get(req.key)
+        if definition is None:
+            raise HTTPException(status_code=404, detail=f"unknown setting: {req.key}")
+        blocked_reason = _setting_blocked_reason(definition, context)
+        if blocked_reason:
+            raise HTTPException(status_code=403, detail=blocked_reason)
+        try:
+            updated, _receipt = service.update_setting(
+                context, req.key, req.value, surface="api", actor="human"
+            )
+        except SettingsWriteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     refreshed = manager.select_vault(Path(context.active_vault_path), remember=False)
     return VaultSettingUpdateResponse(
         updated=_setting_value_response(updated),
