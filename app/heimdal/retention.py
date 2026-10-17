@@ -320,8 +320,8 @@ def resolve_screen_frame_retention_minutes(
         raise RetentionWindowMissingError("No vault root configured for screen_frame_retention_minutes")
     del settings_dir  # compatibility argument; never a second screen-policy source
     context = VaultManager().validate_vault(root)
-    if context.status != "selected" or not (root / "settings" / "screen_control.md").is_file():
-        raise RetentionWindowMissingError("screen retention requires initialized settings/screen_control.md")
+    if context.status != "selected":
+        raise RetentionWindowMissingError("screen retention requires an initialized vault")
     resolution = resolve_screen_controls(context)
     if resolution.errors and "screen_frame_retention_minutes" not in resolution.accepted_keys:
         raise RetentionWindowMissingError("screen retention has no last-valid acceptance: " + "; ".join(resolution.errors))
