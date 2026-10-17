@@ -142,9 +142,9 @@ loss. The rebuildability review in #5258 records the exact impact and fresh-boot
 
 ## Related
 
-- `docs/DECISION_CALIBRATION/README.md` — delivered extension of this architecture pattern over the
-  owner's `decision_record` artifacts: scheduled revisits, separate append-only outcome receipts, a
-  Companion answer/dismiss surface, and a hazard-safe rebuildable calibration profile
+- `docs/DECISION_CALIBRATION/README.md` — capability specification for extending this architecture
+  pattern over the owner's `decision_record` artifacts: scheduled revisits, separate append-only
+  outcome receipts, a Companion answer/dismiss surface, and a hazard-safe rebuildable calibration profile
 - `app/services/decisions.py`, `app/stores/decisions.py` (writers); `app/jobs/backfill.py`, the SQL
   `latest_decision` view (readers)
 - `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md` (rule 4 — the grounding), `MIRROR_RECEIPT_DECISION.md`
