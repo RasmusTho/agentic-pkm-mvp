@@ -1,0 +1,130 @@
+name: Post-merge heavy tests
+
+# Heavy test targets that scripts/select_pr_tests.py defers from the required
+# PR check `Unit tests (not pg)` (#6154, owner decision 2026-10-16) run here on
+# every push to main and nightly. This is their authoritative signal: a red run
+# opens or updates one rolling `type:bug` + `prio:high` alert Issue, and the
+# next green run closes it. It is intentionally not a required PR check.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+# Never cancel a started run: main is cumulative, so the newest pending run
+# replaces older pending ones while every started run reaches a verdict.
+concurrency:
+  group: post-merge-heavy-tests
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  heavy-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            dev-requirements.txt
+            pyproject.toml
+            mimer-mcp-sidecar/requirements.txt
+            mimer-mcp-sidecar/pyproject.toml
+
+      - name: Resolve heavy targets from the PR selector
+        id: targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          targets="$(python scripts/select_pr_tests.py --print-heavy-targets)"
+          if [[ -z "$targets" ]]; then
+            echo "No heavy targets resolved; refusing a vacuous green run" >&2
+            exit 1
+          fi
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r dev-requirements.txt
+          pip install --requirement mimer-mcp-sidecar/requirements.txt
+          pip install --no-deps --editable mimer-mcp-sidecar
+
+      - name: Run heavy not-pg tests
+        shell: bash
+        timeout-minutes: 60
+        env:
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+          PYTHONUNBUFFERED: "1"
+          HEAVY_TARGETS: ${{ steps.targets.outputs.targets }}
+        run: |
+          set -o pipefail
+          marker="$(python -c 'import sys; sys.path.insert(0, "scripts"); import select_pr_tests as s; print(s.PR_MARKER_EXPRESSION)')"
+          # shellcheck disable=SC2086
+          pytest -q -m "$marker" $HEAVY_TARGETS -vv --tb=short --durations=30 | tee pytest-heavy.log
+
+      - name: Upload heavy test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-heavy-logs
+          path: pytest-heavy.log
+
+  alert:
+    # Fail loud: route every red or broken run (not a cancelled one) to the
+    # rolling alert Issue; close it again on green.
+    needs: heavy-tests
+    # Only main owns the rolling alert; a dispatch from another branch must not
+    # open or close it.
+    if: always() && needs.heavy-tests.result != 'cancelled' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Open, update, or close the heavy-tests alert Issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RESULT: ${{ needs.heavy-tests.result }}
+          TARGETS: ${{ needs.heavy-tests.outputs.targets || 'unresolved' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="$(python -c 'import sys; sys.path.insert(0, "scripts"); import post_merge_heavy_tests_alert as a; print(a.ALERT_TITLE)')"
+          export ALERT_TITLE="$title"
+          existing="$(gh issue list --repo "$REPO" --state open --label type:bug --limit 200 \
+            --json number,title --jq '.[] | select(.title == env.ALERT_TITLE) | .number' | head -n 1)"
+          if [[ "$RESULT" == "success" ]]; then
+            if [[ -n "$existing" ]]; then
+              gh issue close "$existing" --repo "$REPO" \
+                --comment "Post-merge heavy tests are green again on \`main\` at \`$GITHUB_SHA\`: $RUN_URL"
+            fi
+            exit 0
+          fi
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --repo "$REPO" \
+              --body "Still red (\`$RESULT\`) on \`main\` at \`$GITHUB_SHA\`: $RUN_URL"
+          else
+            python scripts/post_merge_heavy_tests_alert.py --sha "$GITHUB_SHA" --run-url "$RUN_URL" \
+              --targets "$TARGETS" --output alert.md
+            labels="$(python -c 'import sys; sys.path.insert(0, "scripts"); import post_merge_heavy_tests_alert as a; print(",".join(a.ALERT_LABELS))')"
+            gh issue create --repo "$REPO" --title "$title" --body-file alert.md --label "$labels"
+          fi
+          echo "Post-merge heavy tests were $RESULT at $GITHUB_SHA: $RUN_URL" >&2
+          exit 1

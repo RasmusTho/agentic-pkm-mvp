@@ -472,7 +472,7 @@ def test_raising_poll_still_backs_off(last_attempt) -> None:
     # lets its backoff apply -- reproduced at 6 polls over 6 minutes against a
     # 3600s cadence before this was fixed.
     registry = _Registry(
-        [_Binding("playlist-1", collection_kind="playlist", poll_interval_seconds=3600, last_attempt_at=last_attempt)]
+        [_Binding("playlist-1", collection_kind="inbox_playlist", poll_interval_seconds=3600, last_attempt_at=last_attempt)]
     )
     attempts: list[str] = []
 

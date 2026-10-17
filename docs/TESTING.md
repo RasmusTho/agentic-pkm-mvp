@@ -497,6 +497,7 @@ Current implementation:
   Product dependencies, and excludes only the explicitly qualified `eval` marker from the default
   memory lane; the ten deterministic SV/EN checks remain in that lane and the two live checks stay
   opt-in.
+- `.github/workflows/post-merge-heavy-tests.yml` — the heavy targets `scripts/select_pr_tests.py` defers from `Unit tests (not pg)` (today `tests/deploy`, unless the PR changes a file it reads directly), run on every push to `main`, nightly at 03:30 UTC, and on dispatch. A red run opens or updates one `type:bug` + `prio:high` alert Issue, and the next green run closes it. It is not a required PR check. See `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`.
 - `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
 
 Post-merge image admission is implemented by `.github/workflows/postmerge-dev-test.yml`; the existing

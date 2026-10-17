@@ -386,6 +386,25 @@ class DormantSettingsRebindReconciler:
         if record.phase == "no_lifecycle":
             return RebindCycle(record=record, mode="no_lifecycle", receipt=None)
         if not cfg.enable:
+            # A configured watcher idle after a completed CLEAR reconciles the next
+            # selection exactly as a freshly started configured watcher would: it
+            # adopts its own configured root and refuses -- still idle, scanning
+            # nothing -- any other candidate.
+            rearm = self._rearm_configured_watcher(snapshot, record, cfg)
+            if rearm == "refused":
+                logger.warning(
+                    "settings rebind watcher refused first selection revision=%s: "
+                    "candidate is not the configured watcher root",
+                    record.desired_revision,
+                )
+                return RebindCycle(record=record, mode="refused", receipt=None)
+        if not cfg.enable:
+            if record.phase == "committed" and record.candidate_binding_id is None:
+                # A completed no-target handoff (MVR-02 default CLEAR) is what turned
+                # this watcher idle; it is stable state, not a revision to reconcile.
+                receipt = self._load_matching_receipt(record)
+                if receipt is not None and receipt.stage == "completed":
+                    return RebindCycle(record=record, mode="stable", receipt=receipt)
             if record.phase != "prepared":
                 raise RegistryError(
                     "disabled watcher encountered a committed settings rebind revision"
@@ -421,6 +440,7 @@ class DormantSettingsRebindReconciler:
             raise RegistryError("settings rebind watcher prior binding is missing")
         self._validate_record_bindings(record)
         if record.phase == "prepared":
+            self._resume_completed_prior_root(snapshot, record, cfg)
             self._validate_old_root(snapshot, record, cfg)
             receipt = self._load_matching_receipt(record)
             if receipt is not None and receipt.stage != "acknowledged":
@@ -440,6 +460,7 @@ class DormantSettingsRebindReconciler:
             # completing a transition.  A completed receipt is stable state,
             # not another old-root transition to validate on the next tick.
             return RebindCycle(record=record, mode="stable", receipt=receipt)
+        self._resume_completed_prior_root(snapshot, record, cfg)
         self._validate_old_root(snapshot, record, cfg)
         _rebind_fault_point("commit")
         return RebindCycle(record=record, mode="committed", receipt=receipt)
@@ -477,9 +498,9 @@ class DormantSettingsRebindReconciler:
             receipt = SettingsRebindWatcherReceipt(
                 desired_revision=cycle.record.desired_revision,
                 prior_binding_id=cycle.record.prior_binding_id,
-                candidate_binding_id=self._required_binding(
-                    cycle.record.candidate_binding_id, name="candidate"
-                ),
+                # ``None`` is a no-target handoff (an MVR-02 default CLEAR): the old
+                # root is still bracketed and drained, then the watcher resumes idle.
+                candidate_binding_id=cycle.record.candidate_binding_id,
                 stage="acknowledged",
                 buffer=observations,
                 acknowledgement=RebindScanReceipt(
@@ -572,6 +593,139 @@ class DormantSettingsRebindReconciler:
         ):
             raise RegistryError("settings rebind watcher receipt does not match durable authority")
         return receipt
+
+    def _rearm_configured_watcher(
+        self,
+        snapshot: RegistrySnapshot,
+        record: SettingsRebindRecord,
+        cfg: RegistryConfig,
+    ) -> str | None:
+        """Re-arm a configured watcher that went idle after a completed CLEAR.
+
+        The foreground activation derives "a watcher exists" from the deployment
+        configuration (``WATCHER_ENABLE`` plus ``WATCHER_VAULT_PATH``). After a completed
+        no-target handoff the long-lived loop turns itself idle in memory; if it then
+        answered the next prepared selection with ``no_lifecycle``, the API would wait for
+        a receipt that is never written. A freshly started configured watcher adopts a
+        first selection only of its own configured root and refuses any other, so this
+        returns ``"rearmed"`` (enabled on the configured root) only when the prepared
+        candidate *is* that root, ``"refused"`` for a configured watcher and any other
+        candidate (the caller stays idle and scans nothing), and ``None`` when no
+        configured watcher applies.
+        """
+
+        if record.phase != "prepared" or record.prior_binding_id is not None:
+            return None
+        enabled = (os.getenv("WATCHER_ENABLE") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        configured_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
+        if not enabled or not configured_raw:
+            return None
+        configured_root = Path(configured_raw).expanduser()
+        candidate = (
+            snapshot.registrations.get(record.candidate_binding_id)
+            if record.candidate_binding_id is not None
+            else None
+        )
+        if candidate is None:
+            return "refused"
+        try:
+            configured_identity = resolve_filesystem_root_identity(configured_root)
+            if not same_filesystem_root(
+                configured_identity,
+                resolve_filesystem_root_identity(candidate.path),
+            ):
+                return "refused"
+        except FilesystemIdentityError:
+            return "refused"
+        if not configured_identity.materialized:
+            # Two identical missing canonical paths compare equal, but an unmounted
+            # root cannot be scanned: stay refused and idle rather than re-arm a loop
+            # whose next tick would raise before candidate-policy validation.
+            return "refused"
+        try:
+            # Identity proves which root, not that watching it is allowed: run the
+            # full candidate policy before any scan rather than in finish_cycle.
+            validate_settings_rebind_candidate_root(Path(candidate.path))
+        except RegistryError:
+            return "refused"
+        cfg.enable = True
+        cfg.vault_path = configured_root
+        return "rearmed"
+
+    def _resume_completed_prior_root(
+        self,
+        snapshot: RegistrySnapshot,
+        record: SettingsRebindRecord,
+        cfg: RegistryConfig,
+    ) -> None:
+        """Resume the old root this watcher durably adopted before a restart.
+
+        A watcher process boots from its environment root. After it completed an earlier
+        handoff, the root it actually observes is that handoff's candidate, which the
+        in-memory loop config carries but a restarted process does not. Without this, a
+        restart during a later prepared or committed revision compares the stale boot root
+        against the durable prior binding and can never acknowledge or drain it -- and a
+        committed revision cannot be cancelled, so it would stay stuck.
+
+        Only the durable watcher history may move the root: the most recent *completed*
+        receipt must name the record's prior binding as its candidate, so the adopted root
+        is always the durable prior binding itself. Later revisions were cancelled (which
+        restores that binding) or ran as ``no_lifecycle``; in either case the bracket opens
+        on the durable prior root. Anything else keeps the boot root and lets
+        ``_validate_old_root`` refuse as before.
+        """
+
+        prior = record.prior_binding_id
+        if prior is None:
+            return
+        registration = snapshot.registrations.get(prior)
+        if registration is None:
+            return
+        try:
+            if same_filesystem_root(
+                resolve_filesystem_root_identity(cfg.vault_path),
+                resolve_filesystem_root_identity(registration.path),
+            ):
+                return
+        except FilesystemIdentityError:
+            pass
+        completed = self._latest_completed_receipt(before=record.desired_revision)
+        if completed is None or completed.candidate_binding_id != prior:
+            return
+        cfg.vault_path = validate_settings_rebind_candidate_root(Path(registration.path))
+
+    def cleared_before(self, record: SettingsRebindRecord) -> bool:
+        """Return True when durable watcher history ends in a completed CLEAR.
+
+        A first selection prepared after a completed no-target handoff has no prior
+        binding, so the boot env root names the cleared vault. A restarted process must
+        stay idle on it -- no startup ingestion, no scan -- exactly as the long-lived loop
+        that completed the CLEAR does.
+        """
+
+        if record.prior_binding_id is not None:
+            return False
+        completed = self._latest_completed_receipt(before=record.desired_revision)
+        return completed is not None and completed.candidate_binding_id is None
+
+    def _latest_completed_receipt(
+        self,
+        *,
+        before: int,
+    ) -> SettingsRebindWatcherReceipt | None:
+        for revision in range(before - 1, 0, -1):
+            path = settings_rebind_watcher_receipt_path(self.state_dir, revision)
+            if not path.exists():
+                continue
+            receipt = load_settings_rebind_watcher_receipt(path)
+            if receipt.stage == "completed":
+                return receipt
+        return None
 
     @staticmethod
     def _validate_old_root(

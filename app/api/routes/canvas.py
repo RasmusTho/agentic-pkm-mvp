@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
@@ -37,10 +37,13 @@ from app.components.llm.intent_classifier import (
 )
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.api.routes.vault_resolution import (
-    active_vault_root_or_selection_required,
-    resolve_active_vault_root,
+    compatibility_vault_root,
+    compatibility_vault_root_or_selection_required,
 )
-from app.api.compatibility_mutation import reject_scoped_vault_mutation
+from app.api.compatibility_mutation import (
+    require_compatibility_write_root,
+    seal_vault_mutation,
+)
 from app.reasoning.facade import ReasoningModeFacade, get_reasoning_mode_facade
 from app.orientation.leave_point_cursor import capture_leave_point_cursor
 from app.panel.canvas_pipeline import CanvasPanelPipeline
@@ -48,14 +51,31 @@ from app.panel.confirmation import _proposal_store as _panel_proposal_store
 
 logger = logging.getLogger(__name__)
 
+# In-memory session registry — process lifetime only.
+_sessions: dict[str, SessionLog] = {}
+
+
+def _seal_canvas_session_target(request: Request) -> None:
+    """Every canvas route is a vault-bound mutation (MVR-05B3 pre-05C seal).
+
+    ``seal_vault_mutation`` proves the process selection is the sole
+    compatibility binding. A session route writes the root its session was
+    opened on, so that pinned root must be the same binding: a session opened
+    before the compatibility picker moved fails ``capability_not_ready`` rather
+    than writing the previous binding.
+    """
+
+    session_id = request.path_params.get("session_id")
+    session = _sessions.get(session_id) if isinstance(session_id, str) else None
+    if session is not None and session.vault_root is not None:
+        require_compatibility_write_root(request, session.vault_root.expanduser().resolve())
+
+
 router = APIRouter(
     prefix="/canvas",
     tags=["canvas"],
-    dependencies=[Depends(reject_scoped_vault_mutation)],
+    dependencies=[Depends(seal_vault_mutation), Depends(_seal_canvas_session_target)],
 )
-
-# In-memory session registry — process lifetime only.
-_sessions: dict[str, SessionLog] = {}
 
 
 @dataclass(frozen=True)
@@ -80,7 +100,7 @@ def _require_canvas() -> None:
 
 
 def _get_vault_root() -> Path:
-    return resolve_active_vault_root()
+    return compatibility_vault_root()
 
 
 def _get_vault_root_or_picker(
@@ -88,7 +108,7 @@ def _get_vault_root_or_picker(
     requested_note_path: str | None = None,
     require_initialized: bool = True,
 ) -> Path | JSONResponse:
-    return active_vault_root_or_selection_required(
+    return compatibility_vault_root_or_selection_required(
         requested_note_path=requested_note_path,
         require_initialized=require_initialized,
     )

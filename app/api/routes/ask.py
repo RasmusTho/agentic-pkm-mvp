@@ -11,13 +11,20 @@ from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, Field
 
 from app.agents.ask.graph import run_ask_graph
-from app.api.request_active_context import require_scoped_read_context
-from app.api.compatibility_mutation import reject_scoped_vault_mutation
+from app.api.request_active_context import (
+    reject_carrier_on_legacy_read,
+    require_scoped_read_context,
+)
+from app.api.compatibility_mutation import (
+    compatibility_write_target_window,
+    seal_vault_mutation,
+    seals_write_window_inside,
+)
 from app.api.routes.vault_resolution import (
     NoSelectedVaultError,
     SelectedVaultUninitializedError,
-    active_vault_selection_window,
-    resolve_active_vault_root,
+    compatibility_selection_window,
+    compatibility_vault_root,
 )
 from app.config.paths import VaultRootMisconfiguredError
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_effect_window
@@ -43,7 +50,7 @@ _VOICE_SESSIONS: dict[Path, VoiceSessions] = {}
 
 def _voice_sessions_for_selected_vault() -> VoiceSessions | None:
     try:
-        root = resolve_active_vault_root(require_initialized=True)
+        root = compatibility_vault_root(require_initialized=True)
     except (NoSelectedVaultError, SelectedVaultUninitializedError, VaultRootMisconfiguredError):
         return None
     service = _VOICE_SESSIONS.get(root)
@@ -251,7 +258,11 @@ def _to_source(hit: Any) -> AskSource:
 _is_return_orientation_question = is_return_orientation_question
 
 
-@router.post("/ask", response_model=AskResponse)
+@router.post(
+    "/ask",
+    response_model=AskResponse,
+    dependencies=[Depends(reject_carrier_on_legacy_read)],
+)
 def ask(
     req: AskRequest,
     request: Request,
@@ -374,8 +385,9 @@ def _run_ask(
 @router.post(
     "/ask/voice",
     response_model=VoiceAskResponse,
-    dependencies=[Depends(reject_scoped_vault_mutation)],
+    dependencies=[Depends(seal_vault_mutation)],
 )
+@seals_write_window_inside
 async def ask_voice(
     request: Request,
     audio: UploadFile = File(...),
@@ -438,7 +450,9 @@ async def ask_voice(
     # The synchronous selection endpoint runs in a worker thread. Pin its
     # actual manager selection through retrieval and transcript publication.
     # Release before derived TTS work so speech cannot hold the selector.
-    with active_vault_selection_window():
+    # Lock order matches /vault/select: selection lock first, then the shared
+    # compatibility write window (the router seal does not hold it here).
+    with compatibility_selection_window(), compatibility_write_target_window(request):
         sessions = _voice_sessions_for_selected_vault()
         question = transcript
         if session_id is not None and sessions is None:

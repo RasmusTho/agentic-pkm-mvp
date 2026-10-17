@@ -2701,6 +2701,7 @@ def run_registry_forever(
 ) -> None:
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
+    idle_without_binding = False
     with _compatibility_watcher_window(reconciler):
         _adopt_idle_selected_binding(cfg, reconciler)
         startup_rebind_cycle = (
@@ -2712,20 +2713,34 @@ def run_registry_forever(
             # ingestion or the first scan, so restart cannot observe old-root work.
             if startup_rebind_cycle.record.candidate_binding_id is None:
                 cfg.enable = False
+                idle_without_binding = True
             else:
                 cfg.vault_path = reconciler.candidate_vault_path(startup_rebind_cycle.record)
+        elif (
+            startup_rebind_cycle is not None
+            and startup_rebind_cycle.mode == "refused"
+            and reconciler is not None
+            and reconciler.cleared_before(startup_rebind_cycle.record)
+        ):
+            # A restart during a post-CLEAR selection of another root: the boot env root
+            # is the cleared vault, so stay idle exactly like the long-lived loop.
+            cfg.enable = False
+            idle_without_binding = True
         # `watcher run` is the production entrypoint.  Compile its bound vault at
         # boot just as API and worker do; the registry config is authoritative for
         # this process and need not depend on VAULT_ROOT being set separately.
-        try:
-            from app.settings.ingestion import ingest_settings
+        # A durably cleared binding has no vault to compile: the boot env root is
+        # the cleared vault, so recompiling it would resurrect its settings.
+        if not idle_without_binding:
+            try:
+                from app.settings.ingestion import ingest_settings
 
-            ingest_settings(
-                reason="registry_watcher_startup",
-                vault_root=cfg.vault_path,
-            )
-        except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
-            logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)
+                ingest_settings(
+                    reason="registry_watcher_startup",
+                    vault_root=cfg.vault_path,
+                )
+            except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
+                logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)
     states = {
         spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
         for spec in cfg.specs

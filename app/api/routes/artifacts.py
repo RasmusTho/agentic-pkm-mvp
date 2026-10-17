@@ -16,7 +16,12 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.api.routes.vault_resolution import active_vault_root_or_selection_required
+from app.api.request_active_context import (
+    current_scoped_route_read,
+    route_read_vault_root_or_selection_required,
+    scoped_note_path_owned_by_binding,
+    scoped_route_read,
+)
 from app.text.helpers import content_hash, extract_title
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
@@ -76,17 +81,29 @@ def _resolve_and_validate(
 
 
 @router.get("/note", response_model=ArtifactNoteResponse)
+@scoped_route_read
 def read_artifact_note(
     note_path: str = Query(..., description="Vault-relative path to the note (absolute paths are rejected)"),
     artifact_id: Optional[str] = Query(None, description="Artifact UUID; echoed back in response"),
 ) -> ArtifactNoteResponse | JSONResponse:
-    vault_root = active_vault_root_or_selection_required(
+    # MVR-05B3: a carrier-bearing request reads its own bound binding; only a
+    # carrier-free request resolves the legacy process selection.
+    vault_root = route_read_vault_root_or_selection_required(
         requested_note_path=note_path,
     )
     if isinstance(vault_root, JSONResponse):
         return vault_root
 
     resolved = _resolve_and_validate(note_path, vault_root)
+
+    scoped = current_scoped_route_read()
+    if scoped is not None and not scoped_note_path_owned_by_binding(scoped, resolved):
+        # A note owned by an initialized nested child vault is not served through
+        # the parent binding: not-found, as if the child subtree did not exist.
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "note_not_found", "note_path": note_path},
+        )
 
     if not resolved.exists() or not resolved.is_file():
         raise HTTPException(
