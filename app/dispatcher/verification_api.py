@@ -2225,6 +2225,63 @@ class BuilderOpsVerificationLedger:
     def record_native_merge_conflict(self, run_id: str, operation_key: str, *, holder: str, lease_id: str) -> None:
         self._record_native_merge_observation(run_id, operation_key, conflict=True, holder=holder, lease_id=lease_id)
 
+    def authorize_native_merge_compensation(
+        self,
+        run_id: str,
+        operation_key: str,
+        *,
+        holder: str,
+        lease_id: str,
+    ) -> None:
+        """Acquire fresh database-clock authority for one compensation write."""
+
+        snapshot = self._snapshot(run_id)
+        lease = self._assert_lease(snapshot, holder, lease_id)
+        pending = self._native_pending_effect(snapshot, operation_key)
+        if (
+            pending is None
+            or pending.get("native_merge_identity_conflict") is not True
+        ):
+            raise ValueError(
+                "native compensation requires an exact durable conflict"
+            )
+        version = _required_int(snapshot.get("version"), "task version")
+        document = dict(_snapshot_payload(snapshot))
+        response = self.client.transition_task(
+            envelope=self.envelope,
+            task_id=run_id,
+            to_state="claimed",
+            idempotency_key=(
+                "verification-native-compensation-authority:"
+                f"{operation_key}:{version}"
+            ),
+            request=document,
+            lease=lease,
+            expected_states=("claimed",),
+            expected_version=version,
+        )
+        result = response.get("result") if isinstance(response, Mapping) else None
+        if (
+            not isinstance(result, Mapping)
+            or result.get("task_id") != run_id
+            or result.get("state") != "claimed"
+            or result.get("operation_key") is not None
+            or result.get("replayed") is not False
+        ):
+            raise ValueError(
+                "native compensation authority was not freshly committed"
+            )
+        readback = self._snapshot(run_id)
+        self._assert_lease(readback, holder, lease_id)
+        if (
+            _required_int(readback.get("version"), "task version")
+            != version + 1
+            or self._native_pending_effect(readback, operation_key) != pending
+        ):
+            raise ValueError(
+                "native compensation authority did not read back exactly"
+            )
+
     def record_native_merge_effect_refusal(
         self,
         run_id: str,

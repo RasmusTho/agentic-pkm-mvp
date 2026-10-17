@@ -654,6 +654,19 @@ class VerificationMergeExecutor:
             or persisted.get("native_merge_identity_conflict") is not True
         ):
             raise MergeAuthorityError("native closure conflict was not durable")
+        authorizer = getattr(
+            self.ledger, "authorize_native_merge_compensation", None
+        )
+        if not callable(authorizer):
+            raise MergeAuthorityError(
+                "native compensation authority writer is unavailable"
+            )
+        authorizer(
+            run.run_id,
+            operation_key,
+            holder=run.claimed_by,
+            lease_id=run.lease_id,
+        )
 
     def _native_compensation(self, run: VerificationRun, readback: Mapping[str, object]) -> Mapping[str, object]:
         pending = self.ledger.pending_effect_binding(run.run_id)

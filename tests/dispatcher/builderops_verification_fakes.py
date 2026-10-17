@@ -81,6 +81,7 @@ class FakeBuilderOpsClient:
                 "task_id": task_id,
                 "state": values["to_state"],
                 "operation_key": operation_key,
+                "replayed": False,
             }
         }
 
