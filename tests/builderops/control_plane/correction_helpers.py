@@ -1,7 +1,6 @@
 """Real transaction setup for the narrow terminal metadata regression."""
 
 from dataclasses import replace
-from datetime import datetime
 
 from app.builderops.control_plane.store import _hash
 
@@ -56,7 +55,7 @@ def correction_setup(store, envelope):
         "idempotency_key": "correction-6175",
         "expected_state": "completed",
         "expected_version": 3,
-        "expected_updated_at": datetime.fromisoformat(row["updated_at"].replace("Z", "+00:00")),
+        "expected_updated_at": row["updated_at"],
         "expected_payload_sha256": "sha256:" + _hash(row["payload"]),
         "proposal_sha256": "sha256:" + "a" * 64,
         "proposal_ref": "github:issue:5181:comment:6240522962",
