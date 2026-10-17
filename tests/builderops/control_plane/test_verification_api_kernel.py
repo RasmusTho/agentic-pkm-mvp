@@ -1226,6 +1226,16 @@ def test_terminal_payload_status_correction_enforces_existing_admission(
             },
         )
 
+    sdk = BuilderOpsControlPlaneClient(
+        ClientConfig(base_url="http://testserver", token="writer-value-6175"), http_client=transport
+    )
+    # Prove the real generic-lease producer admits this exact resource name.
+    claimed = sdk.claim_lease(
+        envelope=body["envelope"], resource_id=f"payload-status-correction:{TASK}",
+        idempotency_key="maintenance-http-claim",
+    )
+    body["lease"] = claimed["lease"]
+    assert body["lease"]["lease_kind"] == "generic"
     for name in ("reader", "taskonly", "foreign", "otherrepo"):
         assert post(name).status_code == 403
     assert post(pinned=epoch + 1).status_code == 409
@@ -1237,9 +1247,6 @@ def test_terminal_payload_status_correction_enforces_existing_admission(
     ):
         assert post(document=dict(body, **extra)).status_code == 422
     assert control_plane_store.get_task(envelope.repository, TASK) == before
-    sdk = BuilderOpsControlPlaneClient(
-        ClientConfig(base_url="http://testserver", token="writer-value-6175"), http_client=transport
-    )
     values = {k: v for k, v in body.items() if k not in {"envelope", "lease"}}
     result = sdk.correct_task_payload_status(
         envelope=body["envelope"], lease=body["lease"], task_id=TASK, **values

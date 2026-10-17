@@ -43,7 +43,7 @@ def correction_setup(store, envelope):
     row = store.get_task(envelope.repository, TASK)
     _, lease = store.claim_lease(
         envelope=envelope,
-        resource_id=f"task-payload-status:{TASK}",
+        resource_id=f"payload-status-correction:{TASK}",
         holder=envelope.actor,
         idempotency_key="maintenance-claim",
         request={},

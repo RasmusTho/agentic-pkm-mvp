@@ -893,7 +893,7 @@ refuses Issue-delivery/continuation bindings. The ordinary claim/transition/comp
 unchanged; a generic lease does not authorize task lifecycle or effect writes.
 
 The existing principal must have both addressed `tasks:write` and `leases:write` grants and an
-unexpired generic maintenance lease on `task-payload-status:<task_id>`. The service binds its
+unexpired generic maintenance lease on `payload-status-correction:<task_id>`. The service binds its
 holder/actor to the authenticated principal, enforces repository scope and current authority epoch,
 and retains existing durable-secret rejection. The closed request carries exact expected completed
 state, positive integer version, timezone-aware update time, canonical before-payload SHA256,

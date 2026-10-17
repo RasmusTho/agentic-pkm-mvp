@@ -837,7 +837,7 @@ def test_terminal_payload_status_correction_cli_binds_exact_request(tmp_path, mo
     manifest = _manifest_dir(tmp_path)
     lease = {
         "holder": "fixture-writer",
-        "resource_id": "task-payload-status:fixture-task",
+        "resource_id": "payload-status-correction:fixture-task",
         "lease_kind": "generic",
         "fencing_token": 1,
         "expires_at": "2026-10-17T20:00:00Z",

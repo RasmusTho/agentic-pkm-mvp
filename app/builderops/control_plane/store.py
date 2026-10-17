@@ -2367,7 +2367,7 @@ class PostgresBuilderOpsStore:
         if (
             lease.lease_kind != "generic"
             or lease.repository != envelope.repository
-            or lease.resource_id != f"task-payload-status:{task_id}"
+            or lease.resource_id != f"payload-status-correction:{task_id}"
             or lease.holder != envelope.actor
         ):
             raise LeaseRequired("correction requires addressed principal's maintenance lease")
