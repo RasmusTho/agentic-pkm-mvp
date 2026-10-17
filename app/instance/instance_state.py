@@ -155,6 +155,8 @@ class DeploymentQuiescenceProof:
             if any(item.get("native_execution_context") != self.native_execution_context
                 for item in (lease, compatibility_block, fence, inventory, owner_payload)):
                 raise ValueError
+            if self.native_execution_context is not None and inventory.get("deployment_nonce") != self.nonce:
+                raise ValueError
             controller = {
                 "pid": self.controller_pid,
                 "start_token": self.controller_start_token,

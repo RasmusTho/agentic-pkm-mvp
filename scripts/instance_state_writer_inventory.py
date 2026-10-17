@@ -1933,9 +1933,12 @@ def prove_quiescent(
     native_host_global_root: Path | None = None,
 ) -> None:
     context = None
+    nonce = None
     if native_host_global_root is not None:
         from app.instance.legacy_owner_recovery import require_native_window
+        from app.instance.runtime import _read_deployment_lease
         context = require_native_window(native_host_global_root, required=True)
+        nonce = _read_deployment_lease(native_host_global_root)["nonce"]
     if TOKEN_RE.fullmatch(controller_start_token) is None or controller_start_token.startswith("docker:"):
         raise InventoryError("controller start identity is invalid")
     first = _snapshot(
@@ -1954,7 +1957,8 @@ def prove_quiescent(
         raise InventoryError("host-wide writer inventory is live or racing")
     digests = [_canonical_digest(first), _canonical_digest(second)]
     if native_host_global_root is not None:
-        if require_native_window(native_host_global_root, required=True) != context:
+        if (require_native_window(native_host_global_root, required=True) != context
+            or _read_deployment_lease(native_host_global_root).get("nonce") != nonce):
             raise InventoryError("TEST native context changed")
     _write_inventory(
         output,
@@ -1970,7 +1974,7 @@ def prove_quiescent(
             "controller_namespace_digest": controller_namespace_digest(controller_pid),
             "domains": first,
             "snapshot_digests": digests,
-            **({"native_execution_context": context} if context is not None else {}),
+            **({"native_execution_context": context, "deployment_nonce": nonce} if context is not None else {}),
         },
     )
 

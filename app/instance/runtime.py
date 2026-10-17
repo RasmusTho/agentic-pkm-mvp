@@ -2773,6 +2773,12 @@ def _prove_instance_state_quiescence_locked(
         inventory_bytes, inventory = _read_deployment_quiescence_inventory(
             inventory_file
         )
+        if lease.get("native_execution_context") is not None and (
+            inventory.get("native_execution_context") != lease["native_execution_context"]
+            or inventory.get("deployment_nonce") != lease.get("nonce")
+        ):
+            from app.instance.legacy_owner_recovery import _test_refusal
+            raise _test_refusal()
         if inventory.get("native_execution_context") != lease.get("native_execution_context"):
             raise ValueError
         domains = inventory.get("domains")
@@ -5740,11 +5746,17 @@ def _main(argv: list[str] | None = None) -> int:
             except (OSError, RuntimeError, ValueError, KeyError, TypeError):
                 print(json.dumps({"channel": "test", "outcome": "refused", "prepared": False}))
                 return 1
-        begun = _begin_instance_state_deployment(
-            channel=args.channel, instance_state_root=args.instance_state_root,
-            host_global_root=args.host_global_root, legacy_path=args.legacy_path,
-            controller_pid=args.controller_pid, controller_start_token=args.controller_start_token,
-            native_execution_context=native_context)
+        try:
+            begun = _begin_instance_state_deployment(
+                channel=args.channel, instance_state_root=args.instance_state_root,
+                host_global_root=args.host_global_root, legacy_path=args.legacy_path,
+                controller_pid=args.controller_pid, controller_start_token=args.controller_start_token,
+                native_execution_context=native_context)
+        except (OSError, RuntimeError, ValueError):
+            if native_context is None:
+                raise
+            print(json.dumps({"channel": "test", "outcome": "refused", "prepared": False}))
+            return 1
         if native_context is not None:
             begun = {"channel": "test", "claimed": True, "activation": "inactive_fenced",
                 "native_context_sha256": args.expected_native_context_sha256}

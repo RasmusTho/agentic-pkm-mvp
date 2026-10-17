@@ -60,6 +60,7 @@ def fixture(tmp_path: Path, controller_pid: int | None = None):
         'all_consumers_stopped': True, 'probe_count': 2, 'controller': controller,
         'controller_namespace_digest': namespace, 'domains': domains,
         'native_execution_context': context,
+        'deployment_nonce': rt._read_deployment_lease(host)['nonce'],
         'snapshot_digests': [empty, empty],
     })
     rt._prove_instance_state_quiescence(channel='test', host_global_root=host,
@@ -601,7 +602,8 @@ def test_operation_specific_evidence_is_not_a_generic_restore(tmp_path):
     'post_bind_mismatched_context', 'post_bind_missing_lease_context', 'post_bind_missing_owner_context',
     'post_stop_missing_inventory_context', 'fresh_recheck_source', 'reserved_retry_source',
     'reserved_retry_module', 'reserved_retry_interpreter', 'reserved_retry_launcher',
-    'reserved_retry_missing_context', 'post_pair_source', 'cleanup_retry_exact', 'cleanup_retry_drift'])
+    'reserved_retry_missing_context', 'post_pair_source', 'cleanup_retry_exact', 'cleanup_retry_drift',
+    'retained_ordinary_inventory', 'retained_native_inventory', 'native_begin_symlink_loop'])
 def test_test_preparation_producer_holds_window_until_explicit_initializer(tmp_path, scenario):
     """Real shell -> native qualify/begin/prove/bind/initialize/release.
 
@@ -714,6 +716,10 @@ os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
         'INSTANCE_OWNERSHIP_HOST_STATE_DIR': str(host), 'LOCAL_UID': str(os.geteuid()),
         'LOCAL_GID': str(os.getegid()), 'MVR03_PRINCIPAL_CUTOVER': '0',
         'INSTANCE_STATE_RESTORE_PATH': '', 'INSTANCE_LEGACY_OWNER_INVENTORY_PATH': '/app/instance-ownership/legacy-owner-inventory.json'}
+    if scenario == 'native_begin_symlink_loop':
+        loop = root / 'protected-legacy-loop'
+        loop.symlink_to(loop)
+        environment['LEGACY_OVERRIDE'] = str(loop)
     if scenario == 'runtime_uid':
         environment['LOCAL_UID'] = str(os.geteuid() + 1)
     script = r'''
@@ -736,7 +742,20 @@ fake_compose() {
     *) return 89 ;;
   esac
 }
-prepare_test_dormant_ownership_window fake_compose "$FIXTURE_CODE/.env.test" "$TEST_PY" "$REVISION" "$STATE" "$HOST/absent-legacy.md"
+if [[ "$SCENARIO" = retained_*_inventory ]]; then
+  old_token="$("$TEST_PY" "$FIXTURE_CODE/scripts/instance_state_writer_inventory.py" controller-token --pid "$$")"
+  if [ "$SCENARIO" = retained_native_inventory ]; then
+    prepare_test_dormant_ownership_window fake_compose "$FIXTURE_CODE/.env.test" "$TEST_PY" "$REVISION" "$STATE" "$HOST/absent-legacy.md"
+  else
+    "$TEST_PY" -m app.instance.runtime deployment-begin --channel test --instance-state-root "$STATE" --host-global-root "$HOST" --legacy-path "$HOST/absent-legacy.md" --controller-pid "$$" --controller-start-token "$old_token" >/dev/null
+    "$TEST_PY" "$FIXTURE_CODE/scripts/instance_state_writer_inventory.py" prove-quiescent --controller-pid "$$" --controller-start-token "$old_token" --output "$HOST/deployment-quiescence-inventory.json"
+    "$TEST_PY" -m app.instance.runtime deployment-prove --channel test --host-global-root "$HOST" --inventory-path "$HOST/deployment-quiescence-inventory.json" >/dev/null
+  fi
+  "$TEST_PY" -m app.instance.runtime deployment-release --channel test --host-global-root "$HOST" --controller-pid "$$" --controller-start-token "$old_token" >/dev/null
+  [ -e "$HOST/deployment-quiescence-inventory.json" ]
+  [ ! -e "$HOST/deployment-public/deployment-host-global-lease.json" ]
+fi
+prepare_test_dormant_ownership_window fake_compose "$FIXTURE_CODE/.env.test" "$TEST_PY" "$REVISION" "$STATE" "${LEGACY_OVERRIDE:-$HOST/absent-legacy.md}"
 case "$SCENARIO" in
   post_bind_source) printf 'late = True\n' > "$FIXTURE_CODE/app/instance/late_review_drift.py" ;;
   post_bind_module) cp "$FIXTURE_CODE/app/instance/legacy_owner_recovery.py" "$FIXTURE_CODE/app/instance/replacement.tmp"; mv "$FIXTURE_CODE/app/instance/replacement.tmp" "$FIXTURE_CODE/app/instance/legacy_owner_recovery.py" ;;
@@ -782,8 +801,11 @@ release_fixture
     events = (root / 'events').read_text()
     assert runtime.registry.path.read_bytes() == registry_before
     assert (content / 'source.md').read_text() == 'untouched synthetic source\n'
-    if scenario not in {'exact', 'cleanup_retry_exact'}:
+    if scenario not in {'exact', 'cleanup_retry_exact', 'retained_ordinary_inventory', 'retained_native_inventory'}:
         assert result.returncode != 0
+        if scenario == 'native_begin_symlink_loop':
+            assert 'Traceback' not in result.stderr
+            assert str(root) not in result.stderr + result.stdout
         if scenario.startswith(('post_', 'fresh_', 'reserved_', 'cleanup_')):
             assert 'compose:stop' in events
             assert rt._deployment_fence_path(host, 'test').exists() or scenario == 'cleanup_retry_drift'
@@ -796,7 +818,9 @@ release_fixture
             elif scenario not in {'post_pair_source', 'cleanup_retry_drift'}:
                 assert not (root / 'backup').exists()
         else:
-            assert 'compose:stop' not in events and 'deployment-begin' not in events
+            assert 'compose:stop' not in events
+            if scenario != 'native_begin_symlink_loop':
+                assert 'deployment-begin' not in events
         assert runtime.ledger.key_path.exists() == (scenario in {'post_pair_source', 'cleanup_retry_drift'})
         assert runtime.ledger.path.exists() == (scenario in {'post_pair_source', 'cleanup_retry_drift'})
         return

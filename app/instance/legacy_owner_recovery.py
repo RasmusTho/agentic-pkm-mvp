@@ -258,9 +258,21 @@ def require_native_window(host: Path, *, required: bool = False) -> dict[str, An
     context = require_test_native_context(contexts[0])
     if context["host_global_root"] != str(host):
         raise _test_refusal()
-    for name in ("deployment-quiescence-inventory.json", "deployment-quiescence-proof.json"):
-        path = host / name
-        if os.path.lexists(path) and _read_private_json(path).get(_NATIVE_CONTEXT) != context:
+    public, _, compatibility = _reservation_records(host)
+    lease = _read_private_json(public if os.path.lexists(public) else compatibility)
+    nonce = lease.get("nonce")
+    inventory_path = host / "deployment-quiescence-inventory.json"
+    if os.path.lexists(inventory_path):
+        inventory = _read_private_json(inventory_path)
+        # A released ordinary/previous window leaves an inventory behind. It
+        # cannot veto the next claimed window's producer, nor satisfy its proof.
+        if inventory.get("deployment_nonce") == nonce or lease.get("phase") != "claimed":
+            if inventory.get("deployment_nonce") != nonce or inventory.get(_NATIVE_CONTEXT) != context:
+                raise _test_refusal()
+    proof_path = host / "deployment-quiescence-proof.json"
+    if os.path.lexists(proof_path):
+        proof = _read_private_json(proof_path)
+        if proof.get("nonce") == nonce and proof.get(_NATIVE_CONTEXT) != context:
             raise _test_refusal()
     return context
 
