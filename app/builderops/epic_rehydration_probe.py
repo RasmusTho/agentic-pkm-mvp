@@ -249,6 +249,12 @@ def normalize_context_pack(pack: Mapping[str, Any]) -> dict[str, Any]:
     _validate_source_bytes_binding(
         source["bytes_sha256"], source["bytes_length"], source_receipt
     )
+    _validate_source_ref_binding(
+        source["source_ref"],
+        source["bytes_sha256"],
+        source["bytes_length"],
+        source_receipt,
+    )
     source["external_state_marker"] = _strict_object(
         source["external_state_marker"], "context_pack.source.external_state_marker"
     )
@@ -415,7 +421,9 @@ def compare_rehydrated_observation(
     for name in _COMPARED_FIELDS:
         observed_value = obs["fields"][name]["value"]
         if name == "external_state":
-            observed_value = _external_marker_projection(observed_value, source_marker)
+            # A live observation is authoritative only for fields it actually read.
+            # Missing fields remain unknown; checkpoint values must never fill them.
+            observed_value = _external_marker_projection(observed_value)
         status = _comparison_status(observed_value, expected[name])
         field_results[name] = {
             "status": status,
@@ -838,7 +846,7 @@ def _comparison_status(observed: Any, expected: Any) -> str:
 
 
 def _external_marker_projection(
-    value: Any, fallback_marker: Mapping[str, Any]
+    value: Any, fallback_marker: Mapping[str, Any] | None = None
 ) -> dict[str, Any] | str:
     """Project envelope or rich live state into one comparable checkpoint marker."""
 
@@ -856,22 +864,30 @@ def _external_marker_projection(
                 return raw[key]
         return fallback
 
+    def fallback(*keys: str) -> Any:
+        if fallback_marker is None:
+            return UNKNOWN
+        for key in keys:
+            if key in fallback_marker:
+                return fallback_marker[key]
+        return UNKNOWN
+
     projected = {
-        "issue": pick("issue", fallback=fallback_marker.get("issue", UNKNOWN)),
-        "pr": pick("pr", fallback=fallback_marker.get("pr", UNKNOWN)),
+        "issue": pick("issue", fallback=fallback("issue")),
+        "pr": pick("pr", fallback=fallback("pr")),
         "pr_head_sha": pick(
             "pr_head_sha",
             "head_sha",
             "pr_head",
-            fallback=fallback_marker.get("pr_head_sha", fallback_marker.get("head_sha", UNKNOWN)),
+            fallback=fallback("pr_head_sha", "head_sha"),
         ),
-        "merge_sha": pick("merge_sha", fallback=fallback_marker.get("merge_sha", UNKNOWN)),
+        "merge_sha": pick("merge_sha", fallback=fallback("merge_sha")),
     }
     rich_live_state = any(key in raw for key in ("origin_main", "pr_head", "dispatcher"))
     repository_head = pick(
         "repository_head",
         "origin_main",
-        fallback=(fallback_marker.get("repository_head", UNKNOWN) if not rich_live_state else UNKNOWN),
+        fallback=(UNKNOWN if rich_live_state else fallback("repository_head")),
     )
     if repository_head != UNKNOWN:
         projected["repository_head"] = repository_head
@@ -905,6 +921,41 @@ def _validate_source_bytes_binding(
     ):
         raise EpicRehydrationProbeError(
             "context_pack source bytes_sha256/bytes_length do not bind the accepted receipt bytes"
+        )
+
+
+def _validate_source_ref_binding(
+    source_ref: str,
+    digest: str,
+    length: int,
+    receipt: Mapping[str, Any],
+) -> None:
+    """Require the retained source ref to contain the exact supplied receipt bytes."""
+
+    source_path = Path(source_ref)
+    if source_path.is_symlink() or not source_path.is_file():
+        raise EpicRehydrationProbeError(
+            "context_pack source_ref must be a retained regular source file"
+        )
+    try:
+        raw = source_path.read_bytes()
+    except OSError as exc:
+        raise EpicRehydrationProbeError(
+            "unable to read context_pack source_ref custody"
+        ) from exc
+    if len(raw) != length or sha256_bytes(raw) != digest:
+        raise EpicRehydrationProbeError(
+            "context_pack source_ref bytes do not match source digest/length"
+        )
+    try:
+        parsed = parse_strict_json(raw, field=source_ref)
+    except EpicRehydrationProbeError as exc:
+        raise EpicRehydrationProbeError(
+            "context_pack source_ref is not strict JSON custody"
+        ) from exc
+    if not _json_exact_equal(parsed, receipt):
+        raise EpicRehydrationProbeError(
+            "context_pack source_ref object does not match the supplied source receipt"
         )
 
 
@@ -1010,6 +1061,26 @@ def _validate_target_against_source_custody(
     merge_commit = pr.get("mergeCommit")
     if type(merge_commit) is not dict or merge_commit.get("oid") != target["merge_sha"]:
         raise EpicRehydrationProbeError("source custody PR merge is not target-bound")
+
+
+def _context_pack_closure_paths(pack: Mapping[str, Any]) -> tuple[Path, ...]:
+    """Return every retained custody file transitively referenced by a pack."""
+
+    source = pack["source"]
+    source_path = Path(source["source_ref"])
+    paths: list[Path] = [source_path]
+    marker = source["external_state_marker"]
+    dispatcher_ref = marker.get("dispatcher_status_ref")
+    if dispatcher_ref is not None:
+        paths.append(Path(_required_string(dispatcher_ref, "source marker.dispatcher_status_ref")))
+    target = pack["target"]
+    paths.extend(
+        (
+            source_path.with_name(f"live-issue-{target['issue_number']}.json"),
+            source_path.with_name(f"live-pr-{target['pr_number']}.json"),
+        )
+    )
+    return tuple(paths)
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -1125,7 +1196,20 @@ def _read_json_file(path: Path) -> dict[str, Any]:
 
 
 def _write_json_file(path: Path, value: Mapping[str, Any]) -> None:
-    path.write_bytes(canonical_json_bytes(value) + b"\n")
+    """Create a new output only; never overwrite evidence or custody files."""
+
+    if path.exists() or path.is_symlink():
+        raise EpicRehydrationProbeError(
+            f"output path already exists and will not be overwritten: {path}"
+        )
+    payload = canonical_json_bytes(value) + b"\n"
+    try:
+        with path.open("xb") as handle:
+            handle.write(payload)
+    except FileExistsError as exc:
+        raise EpicRehydrationProbeError(
+            f"output path appeared during creation and will not be overwritten: {path}"
+        ) from exc
 
 
 def _reject_output_alias(output: Path, *inputs: Path) -> None:
@@ -1206,10 +1290,14 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             _reject_output_alias(args.output, args.pack_file, args.observation_file)
             pack = normalize_context_pack(_read_json_file(args.pack_file))
             observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
+            _reject_output_alias(args.output, *_context_pack_closure_paths(pack))
             _write_json_file(args.output, compare_rehydrated_observation(pack, observation))
         elif args.command == "receipt":
             evidence_refs = _read_json_file(args.evidence_file)
             normalized_evidence_refs = _normalize_evidence_refs(evidence_refs)
+            pack = normalize_context_pack(_read_json_file(args.pack_file))
+            observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
+            comparison = normalize_comparison(_read_json_file(args.comparison_file), context_pack=pack, observation=observation)
             _reject_output_alias(
                 args.output,
                 args.pack_file,
@@ -1218,10 +1306,8 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
                 args.telemetry_file,
                 args.evidence_file,
                 *(Path(ref) for ref in normalized_evidence_refs.values()),
+                *_context_pack_closure_paths(pack),
             )
-            pack = normalize_context_pack(_read_json_file(args.pack_file))
-            observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
-            comparison = normalize_comparison(_read_json_file(args.comparison_file), context_pack=pack, observation=observation)
             receipt = build_probe_receipt(
                 pack,
                 observation,

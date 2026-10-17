@@ -51,8 +51,12 @@ def _source_receipt() -> dict[str, object]:
     )
 
 
+def _source_bytes() -> bytes:
+    return Path("tests/builderops/fixtures/rehydration-source-checkpoint.json").read_bytes()
+
+
 def _pack() -> dict[str, object]:
-    source = canonical_json_bytes(_source_receipt())
+    source = _source_bytes()
     return build_context_pack(
         source,
         source_ref="tests/builderops/fixtures/rehydration-source-checkpoint.json",
@@ -100,7 +104,7 @@ def test_context_pack_is_deterministic_and_source_bound() -> None:
     first = _pack()
     second = _pack()
     assert first == second
-    assert first["source"]["bytes_sha256"] == __import__("hashlib").sha256(canonical_json_bytes(_source_receipt())).hexdigest()  # type: ignore[index]
+    assert first["source"]["bytes_sha256"] == __import__("hashlib").sha256(_source_bytes()).hexdigest()  # type: ignore[index]
     assert first["source"]["origin"] == "actual_live_evaluator_checkpoint"  # type: ignore[index]
     assert first["effects"] == {category: [] for category in ("dispatch", "leases", "ci", "review", "acceptance", "merge", "closure", "agent_start")}
     assert first["live_truth_precedence"][0] == "live_github_issue_pr_ci"  # type: ignore[index]
@@ -135,10 +139,24 @@ def test_strict_boundaries_reject_invalid_input() -> None:
     live_pack["target"]["repository"] = "Unrelated/foreign-repository"
     with pytest.raises(EpicRehydrationProbeError):
         normalize_context_pack(live_pack)
+    for foreign_source_ref in ("evidence/context-pack.json", "evidence/telemetry.json"):
+        swapped_source_pack = json.loads(Path("evidence/context-pack.json").read_text(encoding="utf-8"))
+        swapped_source_pack["source"]["source_ref"] = foreign_source_ref
+        with pytest.raises(EpicRehydrationProbeError):
+            normalize_context_pack(swapped_source_pack)
     unsupported_ref_pack = deepcopy(_pack())
     unsupported_ref_pack["source"]["source_ref"] = "live:github:#3798"  # type: ignore[index]
     with pytest.raises(EpicRehydrationProbeError):
         normalize_context_pack(unsupported_ref_pack)
+    for invalid_source_ref in (
+        "tests/builderops/fixtures/missing-source.json",
+        "tests/builderops/fixtures/live-issue-3798.json",
+        "tests/builderops/fixtures",
+    ):
+        invalid_source_pack = deepcopy(_pack())
+        invalid_source_pack["source"]["source_ref"] = invalid_source_ref  # type: ignore[index]
+        with pytest.raises(EpicRehydrationProbeError):
+            normalize_context_pack(invalid_source_pack)
     malformed_observation = _observation(_pack())
     malformed_observation["fields"]["slice_status"]["value"] = {}  # type: ignore[index]
     with pytest.raises(EpicRehydrationProbeError):
@@ -178,6 +196,36 @@ def test_comparison_preserves_field_mismatches_and_unknowns() -> None:
     assert "status" not in mismatch and "score" not in mismatch
 
 
+def test_external_projection_never_fills_sparse_live_observations() -> None:
+    pack = _pack()
+    source_marker = pack["source"]["external_state_marker"]  # type: ignore[index]
+    for sparse in (
+        {},
+        {"merge_sha": source_marker["merge_sha"]},  # type: ignore[index]
+        {"origin_main": "a" * 40},
+    ):
+        observation = _observation(pack)
+        observation["fields"]["external_state"]["value"] = sparse  # type: ignore[index]
+        comparison = compare_rehydrated_observation(pack, observation)
+        assert comparison["field_results"]["external_state"]["status"] == "unknown"  # type: ignore[index]
+        assert comparison["external_refresh"]["refresh_required"] is True  # type: ignore[index]
+
+    complete = _observation(pack)
+    complete["fields"]["external_state"]["value"] = {  # type: ignore[index]
+        "issue": "3798:closed",
+        "pr": "3803:merged",
+        "pr_head_sha": "a" * 40,
+        "merge_sha": "b" * 40,
+    }
+    matched = compare_rehydrated_observation(pack, complete)
+    assert matched["field_results"]["external_state"]["status"] == "match"  # type: ignore[index]
+
+    drifted = deepcopy(complete)
+    drifted["fields"]["external_state"]["value"]["merge_sha"] = "c" * 40  # type: ignore[index]
+    drift = compare_rehydrated_observation(pack, drifted)
+    assert drift["field_results"]["external_state"]["status"] == "mismatch"  # type: ignore[index]
+
+
 def test_probe_receipt_preserves_telemetry_and_agent_provenance(tmp_path: Path) -> None:
     pack = _pack()
     observation = _observation(pack)
@@ -188,7 +236,7 @@ def test_probe_receipt_preserves_telemetry_and_agent_provenance(tmp_path: Path) 
         "agent_response": tmp_path / "response.json",
         "comparison_receipt": tmp_path / "comparison.json",
     }
-    refs["source_checkpoint"].write_bytes(canonical_json_bytes(_source_receipt()))
+    refs["source_checkpoint"].write_bytes(_source_bytes())
     refs["context_pack"].write_bytes(canonical_json_bytes(pack))
     refs["agent_response"].write_bytes(canonical_json_bytes(observation))
     refs["comparison_receipt"].write_bytes(canonical_json_bytes(comparison))
@@ -253,7 +301,7 @@ def test_probe_receipt_binds_retained_evidence_bytes(tmp_path: Path) -> None:
         "agent_response": tmp_path / "response.json",
         "comparison_receipt": tmp_path / "comparison.json",
     }
-    refs["source_checkpoint"].write_bytes(canonical_json_bytes(_source_receipt()))
+    refs["source_checkpoint"].write_bytes(_source_bytes())
     refs["context_pack"].write_bytes(canonical_json_bytes(pack) + b"\n")
     refs["agent_response"].write_bytes(canonical_json_bytes(observation) + b"\n")
     refs["comparison_receipt"].write_bytes(canonical_json_bytes(comparison) + b"\n")
@@ -323,6 +371,106 @@ def test_manual_probe_has_no_authority_effects(tmp_path: Path) -> None:
     assert aliased.returncode == 2
     assert pack_path.read_bytes() == before
 
+    existing_output = tmp_path / "existing-output.json"
+    existing_output.write_bytes(b"sentinel")
+    refused_existing = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.builderops.epic_rehydration_probe",
+            "compare",
+            "--pack-file",
+            str(pack_path),
+            "--observation-file",
+            str(observation_path),
+            "--output",
+            str(existing_output),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert refused_existing.returncode == 2
+    assert existing_output.read_bytes() == b"sentinel"
+
+    build_existing = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.builderops.epic_rehydration_probe",
+            "build-pack",
+            "--source-file",
+            "tests/builderops/fixtures/rehydration-source-checkpoint.json",
+            "--output",
+            str(existing_output),
+            "--source-ref",
+            "tests/builderops/fixtures/rehydration-source-checkpoint.json",
+            "--source-observed-at",
+            "2026-10-17T20:00:00Z",
+            "--slice-id",
+            "issue-3798",
+            "--repository",
+            "RasmusTho/agentic-pkm-mvp",
+            "--issue-number",
+            "3798",
+            "--pr-number",
+            "3803",
+            "--verified-pr-head-sha",
+            "a" * 40,
+            "--merge-sha",
+            "b" * 40,
+            "--read-instruction",
+            "Read only.",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert build_existing.returncode == 2
+    assert existing_output.read_bytes() == b"sentinel"
+
+    distinct_output = tmp_path / "new-comparison.json"
+    created = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.builderops.epic_rehydration_probe",
+            "compare",
+            "--pack-file",
+            str(pack_path),
+            "--observation-file",
+            str(observation_path),
+            "--output",
+            str(distinct_output),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert created.returncode == 0
+    assert distinct_output.is_file()
+
+    compare_source_before = Path(_pack()["source"]["source_ref"]).read_bytes()  # type: ignore[index]
+    compare_transitive_alias = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.builderops.epic_rehydration_probe",
+            "compare",
+            "--pack-file",
+            str(pack_path),
+            "--observation-file",
+            str(observation_path),
+            "--output",
+            str(Path(_pack()["source"]["source_ref"])),  # type: ignore[index]
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert compare_transitive_alias.returncode == 2
+    assert Path(_pack()["source"]["source_ref"]).read_bytes() == compare_source_before  # type: ignore[index]
+
     comparison_path = tmp_path / "comparison.json"
     comparison_path.write_bytes(
         canonical_json_bytes(compare_rehydrated_observation(_pack(), _observation(_pack())))
@@ -343,7 +491,7 @@ def test_manual_probe_has_no_authority_effects(tmp_path: Path) -> None:
         )
     )
     source_path = tmp_path / "source.json"
-    source_path.write_bytes(canonical_json_bytes(_source_receipt()))
+    source_path.write_bytes(_source_bytes())
     refs_path = tmp_path / "refs.json"
     refs_path.write_bytes(
         canonical_json_bytes(
