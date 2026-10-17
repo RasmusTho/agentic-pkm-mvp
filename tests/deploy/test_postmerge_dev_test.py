@@ -23,6 +23,19 @@ SHA = 'a' * 40
 DIGEST = 'sha256:' + 'b' * 64
 ROOT = Path(__file__).resolve().parents[2]
 
+HEAVY_PASSED = {'result': 'passed', 'failures': [], 'selected': 500, 'passed': 490, 'failed': 0,
+                'skipped': 10, 'docker_skipped': 0}
+
+
+@pytest.fixture(autouse=True)
+def _no_live_heavy_transport(monkeypatch):
+    # A committed TEST candidate triggers the heavy step on the next tick; keep
+    # tests off the real SSH launcher and GitHub dispatch.
+    sent = []
+    monkeypatch.setattr(driver, 'native_heavy', lambda candidate: dict(HEAVY_PASSED))
+    monkeypatch.setattr(driver, 'dispatch_verdict', lambda candidate, heavy: sent.append((candidate, heavy)))
+    return sent
+
 
 def _native_receipt(channel, candidate, result='committed'):
     operation_id = candidate.operation_id(channel)
@@ -326,6 +339,7 @@ def test_controller_checkpoint_deduplicates_and_resumes_same_candidate(tmp_path)
     assert calls == [('dev', candidate), ('test', candidate)]
     checkpoint = tmp_path / 'postmerge-dev-test.json'
     stored = json.loads(checkpoint.read_text())
+    assert stored.pop('heavy')['dispatch'] == 'sent'
     stored['channel'] = stored['outcome']['channel'] = 'dev'
     stored['outcome'].update(_native_receipt('dev', candidate))
     stored['outcome'].pop('terminal_result')
@@ -687,3 +701,126 @@ raise SystemExit(entry['main'](['--checkout', '/reviewed/tooling', '--python', '
                             env={key: value for key, value in os.environ.items() if key != 'PYTHONPATH'},
                             capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def _committed_test(tmp_path, candidate):
+    tmp_path.chmod(0o700)
+    options = {'build': lambda: 123, 'load': lambda _run: candidate,
+               'deploy': lambda channel, received: _native_receipt(channel, received),
+               'current_main': lambda: candidate.sha}
+    assert driver.poll(tmp_path, **options) == 0
+    stored = json.loads((tmp_path / 'postmerge-dev-test.json').read_text())
+    assert (stored['phase'], stored['channel']) == ('passed', 'test') and 'heavy' not in stored
+    return options
+
+
+def test_controller_dispatches_one_heavy_verdict_per_candidate(tmp_path):
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    options = _committed_test(tmp_path, candidate)
+    runs, sent = [], []
+
+    def run(received):
+        runs.append(received)
+        return dict(HEAVY_PASSED, result='failed', failed=2, failures=['tests/deploy/test_a.py::test_x'])
+
+    heavy = {'heavy': run, 'dispatch': lambda received, verdict: sent.append((received, dict(verdict)))}
+    assert driver.poll(tmp_path, **options, **heavy) == 0
+    assert runs == [candidate]
+    assert [(c, v['result'], v['failures']) for c, v in sent] == [
+        (candidate, 'failed', ['tests/deploy/test_a.py::test_x'])]
+    stored = json.loads((tmp_path / 'postmerge-dev-test.json').read_text())
+    assert stored['heavy']['dispatch'] == 'sent'
+    # Restart: the recorded dispatch is never repeated and no rerun starts.
+    assert driver.poll(tmp_path, **options, **heavy) == 0
+    assert len(runs) == 1 and len(sent) == 1
+
+
+def test_controller_heavy_resume_and_dispatch_failure_never_stall(tmp_path):
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    options = _committed_test(tmp_path, candidate)
+    checkpoint = tmp_path / 'postmerge-dev-test.json'
+    stored = json.loads(checkpoint.read_text())
+    # A crash after the VM run but before dispatch resumes with the recorded
+    # verdict instead of re-running the suite.
+    stored['heavy'] = dict(HEAVY_PASSED)
+    driver._atomic_checkpoint(checkpoint, stored)
+    sent = []
+    assert driver.poll(tmp_path, **options, heavy=lambda _c: pytest.fail('heavy rerun'),
+                       dispatch=lambda c, v: sent.append(v['result'])) == 0
+    assert sent == ['passed']
+    # A failed dispatch is recorded once and the next candidate still deploys;
+    # the workflow watchdog surfaces the missing verdict.
+    stored = json.loads(checkpoint.read_text())
+    del stored['heavy']
+    driver._atomic_checkpoint(checkpoint, stored)
+
+    def broken(_candidate, _verdict):
+        raise driver.CandidateRefused('heavy_dispatch_failed')
+
+    assert driver.poll(tmp_path, **options, dispatch=broken) == 78
+    assert json.loads(checkpoint.read_text())['heavy']['dispatch'] == 'failed'
+    next_candidate = driver.Candidate('c' * 40, 'sha256:' + 'd' * 64, 124, 1, 457)
+    deployed = []
+    assert driver.poll(tmp_path, build=lambda: 124, load=lambda _run: next_candidate,
+                       deploy=lambda ch, c: deployed.append(ch) or _native_receipt(ch, c),
+                       current_main=lambda: next_candidate.sha, dispatch=broken) == 0
+    assert deployed == ['dev', 'test']
+
+
+def test_controller_refuses_tampered_heavy_checkpoint(tmp_path):
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    options = _committed_test(tmp_path, candidate)
+    checkpoint = tmp_path / 'postmerge-dev-test.json'
+    stored = json.loads(checkpoint.read_text())
+    stored['heavy'] = dict(HEAVY_PASSED, failures=['bad\nline'])
+    driver._atomic_checkpoint(checkpoint, stored)
+    with pytest.raises(driver.CandidateRefused, match='checkpoint_refused'):
+        driver.poll(tmp_path, **options)
+
+
+def test_heavy_verdict_dispatch_payload_is_bounded(monkeypatch):
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    monkeypatch.undo()
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+
+    monkeypatch.setattr(driver.subprocess, 'run', run)
+    driver.dispatch_verdict(candidate, dict(HEAVY_PASSED, result='failed', failed=1,
+                                            failures=['tests/deploy/test_b.py::test_c[<lambda>@x]']
+                                            + ['tests/deploy/test_a.py::test_' + 'x' * 190] * 19))
+    argv, kwargs = calls[0]
+    assert argv[:8] == ['gh', 'workflow', 'run', driver.HEAVY_WORKFLOW, '--repo', driver.REPOSITORY,
+                        '--ref', 'main']
+    fields = dict(argv[i + 1].split('=', 1) for i in range(8, len(argv), 2))
+    assert set(fields) == {'sha', 'verdict', 'operation_id', 'counts', 'reason', 'failures'}
+    assert fields['sha'] == SHA and fields['verdict'] == 'failed'
+    assert fields['operation_id'] == candidate.operation_id('test')
+    assert fields['counts'] == 'selected=500 passed=490 failed=1 skipped=10 docker_skipped=0'
+    assert len(fields['failures']) <= 1000
+    assert fields['failures'].startswith('tests/deploy/test_b.py::test_c[?lambda??x]')
+    # Only the bounded verdict crosses; no deployment environment is forwarded.
+    assert 'env' not in kwargs
+
+    def ssh(argv, **kwargs):
+        calls.append((argv, kwargs))
+        receipt = {'profile_version': 'postmerge-heavy.v1', 'result': 'passed', 'source_sha': SHA,
+                   'image_digest': DIGEST, 'channel': 'test', 'operation_id': candidate.operation_id('test'),
+                   'targets': ['tests/deploy'], 'report_hash': '0' * 64, **{k: v for k, v in HEAVY_PASSED.items()
+                                                                          if k != 'result'}}
+        return SimpleNamespace(returncode=0, stdout='noise\n' + json.dumps(receipt) + '\n', stderr='')
+
+    monkeypatch.setattr(driver.subprocess, 'run', ssh)
+    monkeypatch.setenv('GH_TOKEN', 'not-forwarded')
+    assert driver.native_heavy(candidate) == HEAVY_PASSED
+    argv, kwargs = calls[-1]
+    assert argv[-4] == '/usr/local/libexec/yggdrasil-bws-deploy' and 'ygg-test' in argv
+    assert argv[-3:] == ['qualify-heavy', 'test', candidate.operation_id('test')]
+    assert 'GH_TOKEN' not in kwargs['env']
+    # A foreign or malformed receipt is a refused verdict, never a pass.
+    monkeypatch.setattr(driver.subprocess, 'run', lambda argv, **kw: SimpleNamespace(
+        returncode=0, stdout=json.dumps({'profile_version': 'postmerge-heavy.v1', 'result': 'passed',
+                                         'source_sha': 'c' * 40}), stderr=''))
+    assert driver.native_heavy(candidate)['result'] == 'refused'
