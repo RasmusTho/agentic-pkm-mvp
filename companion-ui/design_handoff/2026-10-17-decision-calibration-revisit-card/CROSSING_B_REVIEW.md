@@ -5,18 +5,18 @@
 - Design system: `Yggdrasil Design System`
 - Design-system ID: `f2b13410-af14-4875-8029-445352123f57`
 - Exact token-sheet SHA-256: `edbc81c77209b5274b26b5e827191f95595f20d6bc5a97a17f7dd8751a774ba2`
-- Original independently reviewed payload SHA-256: `8efac4fa45fc4984ca0440b4afb8e021a0a2be0d54e54788b1450797a75e8b29`
-- Candidate payload SHA-256 after security delta: `086543c84ee24997220aadf4874c5a4771e776fa78d7e79edc36c1747381b6bd`
+- Reviewed payload SHA-256: `086543c84ee24997220aadf4874c5a4771e776fa78d7e79edc36c1747381b6bd`
+- Historical prior reviewed payload SHA-256: `8efac4fa45fc4984ca0440b4afb8e021a0a2be0d54e54788b1450797a75e8b29`
 - Payload digest command: `find . -type f ! -name CROSSING_B_REVIEW.md -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256`
 - Payload scope: the ten generated files present before this receipt was added; this receipt and archive-index entry are excluded from the payload digest.
 - Reviewer identity: `Codex /root/cal03_crossing_b_review`
 - Independent from author: yes
-- Independence basis: separate fresh read-only review and final-delta review; no package or project edits
-- Reviewed at: `2026-10-17T18:52:49Z`
+- Independence basis: fresh read-only security-delta review with browser execution; no package or project edits
+- Reviewed at: `2026-10-17T19:19:51Z`
 - Verdict: pass
 - Crossing: B / PROMOTE
 - Findings: none
-- Supersedes payload SHA-256: `56df885b049545c3c78851b2a331e4a0a47a85557ad341d50535a93ac2bf9245`
+- Supersedes payload SHA-256: `d63b0489154fb3c2d32ac6d9ae0055e0f224abaa0ab8f2d3f7198c8a39e14349`
 
 ## Security delta
 
@@ -25,19 +25,17 @@ the prototype's generated-markup sink and a DOM-derived focus selector. The prot
 the same card and gallery with DOM APIs and `textContent`, and focuses outcome controls by
 comparing their static `data-outcome` attributes rather than constructing a CSS selector from
 the submitter value. No visual states, routes, authority boundaries, or token inputs changed.
-The candidate digest above is recomputed with the receipt excluded. This author-authored security
-delta required an independent Crossing-B delta re-review. The candidate was then corrected for
-three delta-review findings: restored the note, outcome, and dismissal hint IDs used by
-`aria-describedby`; retained the submitted outcome through failure-state focus restoration; and
-restored the `<strong>` wrapper for the recorded outcome label. The current candidate digest
-includes those corrections and still requires independent re-review before it can be treated as a
-passing receipt.
+The reviewed digest above is recomputed with the receipt excluded. The independent replacement
+review executed the security delta in a browser and confirmed no missing `aria-describedby`
+targets, the `<strong>` recorded-outcome label, write-failure focus retention, unchanged failure
+copy, and no dynamic HTML sinks or selectors. This replacement receipt supersedes the rejected
+candidate `d63b0489154fb3c2d32ac6d9ae0055e0f224abaa0ab8f2d3f7198c8a39e14349` and is authoritative
+for Crossing B / PROMOTE.
 
-The reviewer independently recomputed the final payload digest. Nine files were
-byte-identical to the prior reviewed payload; only `state-gallery.md` changed.
-That change corrected V3 to match the observed 200%-zoom behavior and removed an
-unsupported forced-one-column assertion without changing scope, authority,
-states, or interaction contracts.
+The historical review recorded nine files byte-identical to its prior reviewed payload; only
+`state-gallery.md` changed. The replacement reviewer independently recomputed the current digest
+after the bounded security and accessibility delta without changing scope, authority, states, or
+interaction contracts.
 
 Independent execution evidence covered desktop, 360px narrow layout, effective
 200% reflow, keyboard order and focus, accessible names and optional-note
