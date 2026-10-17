@@ -35,7 +35,8 @@ def _api(compare_status: str = "ahead", commits=(), statuses=None):
             sha = path.split("/commits/")[1].split("/")[0]
             return [{"context": c} for c in statuses.get(sha, ())]
         if "/commits?" in path:
-            return list(commits)
+            page = int(path.rsplit("page=", 1)[1])
+            return list(commits)[(page - 1) * 100: page * 100]
         raise AssertionError(path)
 
     return api
@@ -87,6 +88,11 @@ def test_verdict_mode_and_watchdog_fail_loud() -> None:
     # An earlier fallback for that commit is not rerun every hour.
     done = _api(commits=commits, statuses={"b" * 40: {verdict.FALLBACK_CONTEXT}})
     assert verdict.resolve("schedule", {}, "", "o/r", api=done, now=NOW).mode == "noop"
+    # A busy main (more than one page inside the grace period) still reaches
+    # the due commit instead of a silent noop.
+    busy = [_commit(f"{i:040x}", 0.01 * i) for i in range(1, 251)] + [_commit(SHA, 9)]
+    paged = verdict.resolve("schedule", {}, "", "o/r", api=_api(commits=busy), now=NOW)
+    assert (paged.mode, paged.sha) == ("fallback", SHA)
 
 
 def test_verdict_cli_routes_refusal_to_red_mode(tmp_path: Path) -> None:

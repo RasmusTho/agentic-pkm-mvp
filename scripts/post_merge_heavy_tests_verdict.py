@@ -29,6 +29,7 @@ from typing import Any, Callable
 YGG_CONTEXT = "post-merge-heavy-tests/ygg"
 FALLBACK_CONTEXT = "post-merge-heavy-tests/fallback"
 GRACE = timedelta(hours=6)
+MAX_PAGES = 10
 VERDICTS = ("passed", "failed", "refused")
 _COUNTS = re.compile(r"(?:(?:selected|passed|failed|skipped|docker_skipped)=\d{1,7} ?){0,5}")
 _FAILURES = re.compile(r"[A-Za-z0-9_./:\[\]?+=, -]{0,1000}")
@@ -112,12 +113,22 @@ def resolve(event: str, inputs: dict[str, str], github_sha: str, repo: str, *,
         return Resolution("fallback", github_sha, "manual GitHub-hosted heavy run")
     if event != "schedule":
         raise VerdictRefused(f"unsupported event {event}")
-    commits = api(f"repos/{repo}/commits?sha=main&per_page=50")
+    # Page until a commit older than the grace period appears: a busy main
+    # must not hide the due commit beyond the first page.
+    commits: list[dict[str, Any]] = []
+    current = now or datetime.now(timezone.utc)
+    for page in range(1, MAX_PAGES + 1):
+        batch = api(f"repos/{repo}/commits?sha=main&per_page=100&page={page}")
+        commits.extend(batch)
+        if not batch or any(current - _date(c) >= GRACE for c in batch):
+            break
+    else:
+        raise VerdictRefused("no main commit older than the grace period within the page limit")
 
     def contexts(sha: str) -> set[str]:
         return {row["context"] for row in api(f"repos/{repo}/commits/{sha}/statuses?per_page=100")}
 
-    return watchdog(commits, contexts, now or datetime.now(timezone.utc))
+    return watchdog(commits, contexts, current)
 
 
 def main() -> int:

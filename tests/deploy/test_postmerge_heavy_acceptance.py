@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-import tarfile
 from uuid import uuid4
 
 import pytest
@@ -88,23 +86,23 @@ class _FakeDocker:
         self.output = output
         self.container = None
         self.created: list[str] = []
-        archive = io.BytesIO()
-        with tarfile.open(fileobj=archive, mode='w') as tar:
-            for name, content in {'scripts/' + SELECTOR_NAME: b'x = 1\n', 'tests/deploy/test_a.py': b''}.items():
-                info = tarfile.TarInfo(name)
-                info.size = len(content)
-                tar.addfile(info, io.BytesIO(content))
-        self.archive = archive.getvalue()
         self.repository = repository
 
     def __call__(self, argv, *, timeout=60):
         self.calls.append(argv)
         if argv[0] == 'git':
-            command = argv[5:]
+            command, where = argv[5:], Path(argv[4])
             if command[:1] == ['rev-parse']:
-                return (SHA if command[1].endswith('^{commit}') else 'e' * 40).encode() + b'\n'
-            if command[:1] == ['archive']:
-                return self.archive
+                return (SHA if command[1] in {SHA + '^{commit}', 'HEAD'} else 'e' * 40).encode() + b'\n'
+            if command[:1] == ['fetch']:
+                assert command[-2:] == ['file://' + str(self.repository), SHA] and '--depth' in command
+                return b''
+            if command[:1] == ['checkout']:
+                (where / 'scripts').mkdir()
+                (where / 'scripts' / SELECTOR_NAME).write_text('x = 1\n')
+                return b''
+            if command[:1] in (['init'], ['status']):
+                return b''
         command = argv[1:]
         if command[:2] == ['image', 'inspect']:
             return json.dumps([{'Id': 'sha256:' + 'f' * 64, 'RepoDigests': [heavy_image_digest()],

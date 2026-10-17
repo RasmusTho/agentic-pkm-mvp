@@ -1,15 +1,14 @@
 """Disposable heavy-test effects on the ygg `test` VM (#6158).
 
 The candidate runs in the admitted image with a network-none namespace, a
-read-only root, dropped capabilities and a writable scratch copy of the exact
-candidate tree at `/work`. The host Docker CLI and compose plugin are mounted
+read-only root, dropped capabilities and a writable depth-1 Git checkout of
+the exact candidate SHA at `/work`. The host Docker CLI and compose plugin are mounted
 read-only without a socket so `docker compose config` tests execute instead of
 skipping. Docker and Git object access stay in the trusted VM worker.
 """
 from __future__ import annotations
 
 import fcntl
-import io
 import json
 import os
 from pathlib import Path
@@ -17,7 +16,6 @@ import re
 import shutil
 import stat
 import subprocess
-import tarfile
 from typing import Any
 
 from app.ops.heavy_acceptance import (
@@ -118,12 +116,23 @@ class HeavyAcceptanceRunner:
         tree = self._git('rev-parse', revision + '^{tree}').decode().strip()
         if re.fullmatch(r'[0-9a-f]{40}', tree) is None:
             raise HeavyAcceptanceError('heavy_candidate_missing')
+        # A depth-1 checkout of the exact SHA, like the GitHub-hosted run's
+        # `actions/checkout`: suites that read the candidate's own Git
+        # metadata (`git rev-parse HEAD`) see the candidate, not a bare tree.
         work = self.directory / 'work'
         work.mkdir(mode=0o700)
-        archive = self._git('archive', '--format=tar', revision)
-        with tarfile.open(fileobj=io.BytesIO(archive)) as archived:
-            # The data filter refuses absolute, escaping and device members.
-            archived.extractall(work, filter='data')
+
+        def git(*arguments: str, timeout: int = 60) -> bytes:
+            return _command(['git', '-c', 'safe.directory=' + str(work), '-C', str(work), *arguments],
+                            timeout=timeout)
+
+        git('init', '-q')
+        git('fetch', '-q', '--depth', '1', '--no-tags', 'file://' + str(self.repository), revision, timeout=300)
+        git('checkout', '-q', '--detach', revision)
+        if (git('rev-parse', 'HEAD').decode().strip() != revision
+            or git('rev-parse', 'HEAD^{tree}').decode().strip() != tree
+            or git('status', '--porcelain').strip()):
+            raise HeavyAcceptanceError('heavy_candidate_missing')
         if not (work / 'scripts/select_pr_tests.py').is_file():
             raise HeavyAcceptanceError('heavy_selector_unavailable')
         return work, tree
