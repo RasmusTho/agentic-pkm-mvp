@@ -230,6 +230,13 @@ def test_companion_remote_screen_write_requires_server_derived_authentication(sc
         )
         assert response.status_code == 200
         assert screen_rows(screen_env)[-1].actor == SUBJECT_API_KEY_CREDENTIAL
+        response = client.put(
+            "/api/heimdal/screen/control", headers={"X-API-Key": "screen-test-key"},
+            json={"key": "screen_excluded_scopes", "value": ["private"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["receipt"]["actor"] == SUBJECT_API_KEY_CREDENTIAL
+        assert screen_rows(screen_env)[-1].actor == SUBJECT_API_KEY_CREDENTIAL
 
 
 def test_read_only_role_cannot_change_screen_controls(screen_env):

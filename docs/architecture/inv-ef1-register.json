@@ -1731,6 +1731,13 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/contracts/HEIMDAL_SCREEN_CLIENT_CONTRACT.md",
+      "category": "iv",
+      "why_load_bearing": "The host/client contract names the Bifrost #72 dependency so readers can distinguish host controls from pending native-client acceptance; it does not claim client integration or live capture is accepted.",
+      "disposition": "stay",
+      "issue": "#3342"
+    },
+    {
       "artifact": "docs/contracts/MIMER_CLIENT_CONTRACT.md",
       "category": "ii",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",

@@ -64,8 +64,9 @@ def read_screen_control(
 def write_screen_control(
     change: ScreenControlWrite,
     request: Request,
-    actor: str = Depends(_control_actor),
+    api_key: str | None = Depends(api_key_header),
 ) -> dict[str, Any] | JSONResponse:
+    actor = resolve_auth_subject(request, api_key)
     if change.key not in SCREEN_CONTROL_KEYS:
         raise HTTPException(status_code=422, detail="unknown screen control")
     vault_root = compatibility_vault_root_or_selection_required(require_initialized=True)
