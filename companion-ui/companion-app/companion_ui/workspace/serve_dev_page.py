@@ -17439,6 +17439,7 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
+            native_calibration_form = False
             try:
                 payload = json.loads(raw_body.decode("utf-8") or "{}")
             except json.JSONDecodeError:
@@ -17468,14 +17469,19 @@ def make_handler(
                             payload["rung_index"] = int(payload["rung_index"])
                         except ValueError:
                             pass
+                    native_calibration_form = True
                 else:
                     self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
                     return
             runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
             timeout_override = self._post_timeout_override(parsed.path)
+            note_path = str(payload.get("note_path") or "")
+            runtime_payload = dict(payload)
+            if native_calibration_form:
+                runtime_payload.pop("note_path", None)
             try:
                 forwarded_headers = self._forwarded_client_headers(parsed.path)
-                post_kwargs: dict = {"json": payload}
+                post_kwargs: dict = {"json": runtime_payload}
                 if forwarded_headers:
                     post_kwargs["headers"] = forwarded_headers
                 if timeout_override is not None:
@@ -17493,6 +17499,26 @@ def make_handler(
                     api_base_url=self._api_base_url,
                     note_path=str(payload.get("note_path") or ""),
                 )
+            if native_calibration_form:
+                expected_status = "answered" if parsed.path.endswith("/decision") else "dismissed"
+                if not isinstance(data, dict) or data.get("status") != expected_status:
+                    self._send_json(
+                        409,
+                        {
+                            "error": "unexpected_action_response",
+                            "message": "The runtime did not confirm the requested calibration action.",
+                        },
+                    )
+                    return
+                location = "/workspace"
+                if note_path:
+                    location += "?note_path=" + quote(note_path, safe="")
+                self.send_response(303)
+                self.send_header("Location", location)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             presentation = _panel_confirmation_presentation(data, payload) if parsed.path == "/api/panel/confirm" else None
             if presentation is not None:
                 self._send_json(200, data, confirmation_header=presentation)

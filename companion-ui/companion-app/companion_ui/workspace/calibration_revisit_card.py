@@ -118,20 +118,23 @@ def calibration_revisit_card_markup(
           <form class="cal-answer" method="post" action="{_e(answer_action)}" data-intent="answer" aria-labelledby="{heading_id}">
             <input type="hidden" name="rung_index" value="{rung_index}">
             <input type="hidden" name="decision_object_id" value="{_e(decision_object_id)}">
+            <input type="hidden" name="note_path" value="{_e(note_path)}">
             <fieldset class="cal-pick-group">
               <legend>Did it hold?</legend>
               <div class="cal-picks">{picks}</div>
             </fieldset>
             <label class="cal-note-label" for="calibration-revisit-note">Note (optional)</label>
             <textarea id="calibration-revisit-note" class="cal-note" name="note" rows="2" placeholder="Optional context"></textarea>
-            <div class="cal-alert" data-calibration-feedback hidden></div>
           </form>
           <form class="cal-foot" method="post" action="{_e(dismiss_action)}" data-intent="dismiss">
             <input type="hidden" name="rung_index" value="{rung_index}">
             <input type="hidden" name="decision_object_id" value="{_e(decision_object_id)}">
+            <input type="hidden" name="note_path" value="{_e(note_path)}">
             <button class="cal-dismiss" type="submit" aria-describedby="calibration-revisit-dismiss-help">Dismiss for now</button>
             <p class="cal-hint" id="calibration-revisit-dismiss-help">Defers this revisit. Records no outcome.</p>
           </form>
+          <div class="cal-alert" data-calibration-feedback hidden></div>
+          <button class="cal-refresh" type="button" data-calibration-refresh hidden>Retry workspace refresh</button>
         </section>"""
 
 
@@ -149,6 +152,8 @@ def calibration_revisit_card_script() -> str:
     var answer = card.querySelector('form[data-intent="answer"]');
     var dismiss = card.querySelector('form[data-intent="dismiss"]');
     var feedback = card.querySelector('[data-calibration-feedback]');
+    var refresh = card.querySelector('[data-calibration-refresh]');
+    var committedStatus = '';
     function setFeedback(message, failure) {{
       if (!feedback) return;
       feedback.hidden = false;
@@ -168,6 +173,26 @@ def calibration_revisit_card_script() -> str:
         }}
       }});
     }}
+    function showCommittedState(status, intent) {{
+      committedStatus = status;
+      busy = false;
+      setBusy(answer, false, '');
+      setBusy(dismiss, false, '');
+      if (answer) answer.hidden = true;
+      if (dismiss) dismiss.hidden = true;
+      card.setAttribute('data-state', status);
+      card.setAttribute('data-action-status', status);
+      setFeedback(
+        intent === 'answer'
+          ? 'Answer recorded, but workspace refresh is unavailable. Retry refresh.'
+          : 'Revisit deferred, but workspace refresh is unavailable. Retry refresh.',
+        'degraded'
+      );
+      if (refresh) {{
+        refresh.hidden = false;
+        refresh.disabled = false;
+      }}
+    }}
     function rereadWorkspace() {{
       var notePath = card.getAttribute('data-note-path') || '';
       var query = notePath ? ('?note_path=' + encodeURIComponent(notePath)) : '';
@@ -178,6 +203,16 @@ def calibration_revisit_card_script() -> str:
             return data;
           }});
         }});
+    }}
+    function retryRefresh() {{
+      if (!refresh || !committedStatus) return;
+      refresh.disabled = true;
+      rereadWorkspace().then(function() {{
+        window.location.reload();
+      }}).catch(function() {{
+        refresh.disabled = false;
+        setFeedback('Workspace refresh is still unavailable. Retry refresh.', 'degraded');
+      }});
     }}
     function submit(url, body, form, intent) {{
       if (busy) return;
@@ -191,14 +226,17 @@ def calibration_revisit_card_script() -> str:
           if (!result.data || result.data.status !== expectedStatus || String(result.data.decision_id) !== String(card.getAttribute('data-decision-id')) || String(result.data.rung_index) !== String(card.getAttribute('data-rung-index'))) {{
             throw new Error('The runtime returned an unexpected action state.');
           }}
+          committedStatus = expectedStatus;
+          card.setAttribute('data-outcome', intent === 'answer' ? (body.outcome || '') : '');
           return rereadWorkspace().then(function() {{
-            card.setAttribute('data-state', expectedStatus);
-            card.setAttribute('data-outcome', intent === 'answer' ? (body.outcome || '') : '');
             card.hidden = true;
             window.location.reload();
+          }}, function() {{
+            showCommittedState(expectedStatus, intent);
           }});
         }})
         .catch(function(error) {{
+          if (committedStatus) return;
           busy = false;
           setBusy(form, false, '');
           setFeedback('Nothing durable happened. You can retry this ' + intent + '.', 'failed');
@@ -227,6 +265,7 @@ def calibration_revisit_card_script() -> str:
       if (objectId) body.decision_object_id = objectId;
       submit(dismiss.action, body, dismiss, 'dismiss');
     }});
+    if (refresh) refresh.addEventListener('click', retryRefresh);
   }})();
   </script>"""
 

@@ -128,17 +128,18 @@ def due_revisits(
     dismissal_reader: ReceiptReader = iter_revisit_dismissals,
 ) -> list[RevisitDue]:
     """Return the one pending revisit, if any, for each ingested decision record."""
-    # Restrict the compatibility fallback to decision records.  The previous
-    # million-row all-kind scan made every workspace load proportional to the
-    # entire store and could inspect unrelated artifacts.  Scoped callers pass
-    # the active binding so Postgres cannot leak another vault's decisions; no
-    # arbitrary row cap is introduced that could turn an old pending decision
-    # into a false empty state.
+    # Decisions are ingested as ordinary ``note`` objects; the semantic
+    # decision-record contract lives in payload.frontmatter.artifact_class.
+    # The previous million-row all-kind scan made every workspace load
+    # proportional to the entire store and could inspect unrelated artifacts.
+    # Scoped callers pass the active binding so Postgres cannot leak another
+    # vault's decisions; no arbitrary row cap is introduced that could turn an
+    # old pending decision into a false empty state.
     candidates = (
         decisions
         if decisions is not None
         else ObjectStore(vault_binding_id=vault_binding_id).list_objects(
-            kind="decision_record", limit=None
+            kind="note", limit=None
         )
     )
     outcomes = outcome_reader(vault_root)

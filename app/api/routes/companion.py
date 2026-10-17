@@ -3375,6 +3375,19 @@ def _calibration_revisit_for_decision(
                     "message": "The displayed revisit no longer identifies the active decision.",
                 },
             )
+        # The original Issue body keeps rung_index optional for the first
+        # native form submission.  Once the ladder has advanced, however, an
+        # identity-free retry cannot distinguish "retry rung 0" from "answer
+        # the newly due rung 1".  Fail closed and require the displayed
+        # identity rather than silently stamping the next rung.
+        if rung_index is None and candidate_for_decision.rung_index > 0:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "calibration_revisit_identity_required",
+                    "message": "The displayed rung identity is required to retry this revisit.",
+                },
+            )
         if rung_index is None or rung_index == candidate_for_decision.rung_index:
             return candidate_for_decision
         raise HTTPException(

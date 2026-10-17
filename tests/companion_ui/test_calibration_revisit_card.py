@@ -107,3 +107,13 @@ def test_degraded_or_absent_revisit_renders_safely() -> None:
     assert "revisit state unavailable" in absent
     assert "Pending revisits are unknown, not zero." in absent
     assert "pending decisions: 0" not in absent.lower()
+
+
+def test_failed_refresh_after_durable_action_stays_terminal_and_retryable() -> None:
+    html = _render(_pending())
+
+    assert "committedStatus = expectedStatus" in html
+    assert "Answer recorded, but workspace refresh is unavailable." in html
+    assert "Retry workspace refresh" in html
+    assert "card.setAttribute('data-state', status)" in html
+    assert "if (committedStatus) return;" in html

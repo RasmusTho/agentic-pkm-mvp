@@ -181,6 +181,51 @@ def test_retry_replays_the_submitted_rung_instead_of_stamping_next_rung(
     assert response.json()["rung_index"] == due.rung_index
 
 
+def test_omitted_rung_retry_cannot_stamp_the_next_rung(
+    client: TestClient,
+    vault_note: Path,
+    due: RevisitDue,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    next_rung = RevisitDue(
+        decision_object_id=due.decision_object_id,
+        decision_uuid=due.decision_uuid,
+        title=due.title,
+        decided_on=due.decided_on,
+        rung_index=1,
+        rung_days=30,
+        due_since=due.due_since,
+    )
+    due_calls = iter(([due], [next_rung]))
+    monkeypatch.setattr(companion_module, "due_revisits", lambda **_: next(due_calls))
+    records: list[dict[str, object]] = []
+    monkeypatch.setattr(companion_module, "iter_outcome_receipts", lambda _root: records)
+    monkeypatch.setattr(companion_module, "iter_revisit_dismissals", lambda _root: [])
+    monkeypatch.setattr(companion_module.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _: None)
+
+    def append(**kwargs: object) -> dict[str, object]:
+        record = {
+            "decision_uuid": str(kwargs["decision_uuid"]),
+            "decision_object_id": str(kwargs["decision_object_id"]),
+            "rung_index": kwargs["rung_index"],
+            "outcome": kwargs["outcome"],
+        }
+        records.append(record)
+        return record
+
+    monkeypatch.setattr(companion_module, "append_outcome_receipt", append)
+    path = f"/api/companion/calibration/revisits/{due.decision_uuid}/decision"
+
+    first = client.post(path, json={"outcome": "held"})
+    second = client.post(path, json={"outcome": "held"})
+
+    assert first.status_code == 200
+    assert first.json()["rung_index"] == 0
+    assert second.status_code == 409
+    assert second.json()["detail"]["error"] == "calibration_revisit_identity_required"
+    assert [record["rung_index"] for record in records] == [0]
+
+
 def test_answer_and_dismiss_arbitrate_one_durable_rung(
     client: TestClient,
     vault_note: Path,
