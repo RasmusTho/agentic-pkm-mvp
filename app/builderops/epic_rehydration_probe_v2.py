@@ -30,7 +30,7 @@ EVENT_DEFINITIONS = {
     "ci_repair": "A code/test correction responding to CI failure within this probe scope.",
 }
 USAGE_UNITS = {"input_tokens": "tokens", "output_tokens": "tokens", "model_cost_usd": "USD", "human_minutes": "minutes"}
-PROVENANCE = {
+PROVENANCE: dict[str, Any] = {
     "type": "array", "minItems": 1,
     "items": {
         "type": "object", "additionalProperties": False, "required": ["kind", "ref"],
@@ -50,9 +50,11 @@ def maybe(shape: dict[str, Any]) -> dict[str, Any]:
     return {"anyOf": [{"const": UNKNOWN}, shape]}
 
 
+CI_SCOPE = "all_returned_pr_rollup_entries_including_historical_duplicates_not_a_current_required_ci_verdict"
+CI = obj({"status": {"enum": ["green", "pending", "red", UNKNOWN]}, "scope": {"const": CI_SCOPE}})
 EXTERNAL = obj({
     "issue": maybe(STRING), "pr": maybe(STRING), "pr_head_sha": maybe(SHA),
-    "merge_sha": maybe(SHA), "repository_head": maybe(SHA), "ci": {"enum": ["green", "pending", "red", UNKNOWN]},
+    "merge_sha": maybe(SHA), "repository_head": maybe(SHA), "ci": CI,
     "dispatcher": maybe(obj({"coordination_mode": STRING, "db_exists": {"type": "boolean"}})),
 })
 FIELD_SHAPES = {
@@ -70,6 +72,22 @@ FIELD_SHAPES = {
     "fabricated_claims": maybe(STRINGS),
 }
 COMPARED = tuple(FIELD_SHAPES)[:6]
+LIVE_FIELD_KINDS = {"slice_status": ("github",), "open_review_findings": ("github",), "external_state": ("github", "repository", "dispatcher"), "live_slice_next_action": ("github",)}
+
+
+def _provenance_contract(kinds: tuple[str, ...], *, require_each: bool = False) -> dict[str, Any]:
+    schema = deepcopy(PROVENANCE)
+    schema["items"]["properties"]["kind"] = {"enum": list(kinds)}
+    if require_each:
+        schema["allOf"] = [{"contains": {"properties": {"kind": {"const": kind}}}} for kind in kinds]
+    return schema
+
+
+def _field_contract(name: str, shape: dict[str, Any]) -> dict[str, Any]:
+    kinds = LIVE_FIELD_KINDS.get(name, ("checkpoint",) if name.startswith("checkpoint_") else ("agent",))
+    return obj({"value": shape, "provenance": _provenance_contract(kinds, require_each=True), "notes": STRINGS})
+
+
 AGENT = obj({"admitted_model": STRING, "admitted_reasoning_effort": STRING,
              "engine_identity": STRING, "engine_identity_source": STRING,
              "start_status": {"const": "succeeded"}, "start_observed_at": STRING})
@@ -77,9 +95,22 @@ TARGET = obj({"repository": STRING, "issue_number": {"type": "integer", "minimum
 RESPONSE_CONTRACT = obj({
     "schema_name": {"const": v1.OBSERVATION_SCHEMA_NAME}, "schema_version": {"type": "integer", "const": 2},
     "probe_id": STRING, "observed_at": STRING, "target": TARGET, "agent": AGENT,
-    "fields": obj({name: obj({"value": shape, "provenance": PROVENANCE, "notes": STRINGS}) for name, shape in FIELD_SHAPES.items()}),
-    "live_reads": PROVENANCE, "limitations": STRINGS,
+    "fields": obj({name: _field_contract(name, shape) for name, shape in FIELD_SHAPES.items()}),
+    "live_reads": _provenance_contract(("github", "repository", "dispatcher"), require_each=True), "limitations": STRINGS,
 })
+FIELD_MEANINGS = {
+    "slice_status": "Independently observed live slice lifecycle; closed_merged means Issue CLOSED and PR MERGED. Never copy status from the checkpoint without a live read.",
+    "checkpoint_decision_delta": "Exact ordered decision_log_delta strings from this packet's accepted source checkpoint, not a paraphrase or a live decision.",
+    "checkpoint_gate_invariants": "Exact gate_invariants object declared by this packet's source checkpoint; not proof that a live gate passed.",
+    "open_review_findings": "Independently read unresolved review-thread URLs; [] requires a complete live thread read, unavailable evidence is unknown.",
+    "external_state": "Independent live projections: lower-case number:state Issue/PR strings, exact SHAs, named-scope CI rollup classification, dispatcher mode/DB availability. Never inherit missing dimensions from source.",
+    "checkpoint_recommendations": "Exact source recommendations and ordered recommendation_reasons, not the live slice's next action.",
+    "live_slice_next_action": "Independently grounded action/reason for this live slice; intentionally not comparable to checkpoint evaluator recommendations.",
+    "missing_claims": "Ordered comparable field names whose observation is unknown or has an unknown dimension; not JSON keys omitted from this strict response.",
+    "fabricated_claims": "Unknown unless an independent auditor establishes field names with separately retained facts; mismatch and self-report alone are not fabrication proof.",
+}
+for _name, _meaning in FIELD_MEANINGS.items():
+    RESPONSE_CONTRACT["properties"]["fields"]["properties"][_name]["description"] = _meaning
 _Validator = validators.extend(Draft202012Validator, type_checker=Draft202012Validator.TYPE_CHECKER.redefine("integer", lambda checker, instance: type(instance) is int))
 
 
@@ -148,21 +179,26 @@ def _custody(pack: Mapping[str, Any]) -> dict[str, Any]:
     return {key: _bound_ref(ref) for key, ref in refs.items()}
 
 
-def _ci_summary(pr: Mapping[str, Any]) -> str:
+def _ci_summary(pr: Mapping[str, Any]) -> dict[str, str]:
     checks = pr.get("statusCheckRollup")
     if type(checks) is not list or not checks:
-        return UNKNOWN
+        return {"status": UNKNOWN, "scope": CI_SCOPE}
     states = [item.get("conclusion") or item.get("state") or item.get("status") for item in checks if type(item) is dict]
     if len(states) != len(checks):
         raise Error("malformed source check rollup")
     if any(state in {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"} for state in states):
-        return "red"
-    return "green" if all(state in {"SUCCESS", "SKIPPED", "NEUTRAL"} for state in states) else "pending"
+        status = "red"
+    else:
+        status = "green" if all(state in {"SUCCESS", "SKIPPED", "NEUTRAL"} for state in states) else "pending"
+    return {"status": status, "scope": CI_SCOPE}
 
 
 def _source_external(pack: Mapping[str, Any]) -> dict[str, Any]:
     custody = pack["source_custody"]
     issue, pr, dispatcher, repository = (_read_bound(custody[key]) for key in ("issue", "pr", "dispatcher", "repository"))
+    target = pack["target"]
+    if issue.get("url") != f"https://github.com/{target['repository']}/issues/{target['issue_number']}" or pr.get("url") != f"https://github.com/{target['repository']}/pull/{target['pr_number']}":
+        raise Error("v2 source custody URLs must identify the exact target")
     issue_state = v1._required_string(issue.get("state"), "custody issue.state").lower()
     pr_state = v1._required_string(pr.get("state"), "custody pr.state").lower()
     result = {
@@ -179,6 +215,10 @@ def _source_external(pack: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def build_context_pack(source_bytes: bytes | str, **kwargs: Any) -> dict[str, Any]:
+    if "schema_version" in kwargs:
+        version = kwargs.pop("schema_version")
+        if type(version) is not int or version != 2:
+            raise Error("v2 builder requires explicit version 2")
     pack = v1.build_context_pack(source_bytes, **kwargs)
     pack.update(schema_version=2, response_contract=deepcopy(RESPONSE_CONTRACT))
     pack["source_custody"] = _custody(pack)
@@ -192,17 +232,27 @@ def normalize_context_pack(value: Mapping[str, Any]) -> dict[str, Any]:
     base = {key: val for key, val in pack.items() if key not in {"response_contract", "source_custody"}}
     base["schema_version"] = 1
     v1.normalize_context_pack(base)
+    _timestamp(pack["source"]["observed_at"])
     if not v1._json_exact_equal(pack["response_contract"], RESPONSE_CONTRACT):
         raise Error("v2 response field contract is not supported")
     if not v1._json_exact_equal(pack["source_custody"], _custody(pack)):
         raise Error("v2 source custody is not source-bound")
     _source_external(pack)
+    for name, value in _expected_fields(pack).items():
+        _validate(value, FIELD_SHAPES[name], f"source.{name}")
     return pack
 
 
 def normalize_rehydrated_observation(value: Mapping[str, Any], *, context_pack: Mapping[str, Any] | None = None) -> dict[str, Any]:
     observation = v1._strict_object(value, "v2 observation")
     _validate(observation, RESPONSE_CONTRACT, "observation")
+    live_reads = {(item["kind"], item["ref"]) for item in observation["live_reads"]}
+    for name in LIVE_FIELD_KINDS:
+        if any((item["kind"], item["ref"]) not in live_reads for item in observation["fields"][name]["provenance"]):
+            raise Error(f"{name} provenance is not bound to declared independent live reads")
+    for name in FIELD_SHAPES:
+        if name.startswith("checkpoint_") and any(not item["ref"].startswith(f"packet:{observation['probe_id']}#") for item in observation["fields"][name]["provenance"]):
+            raise Error("checkpoint provenance must identify this packet's source fields")
     _timestamp(observation["observed_at"])
     _timestamp(observation["agent"]["start_observed_at"])
     if _timestamp(observation["observed_at"]) < _timestamp(observation["agent"]["start_observed_at"]):
@@ -211,6 +261,9 @@ def normalize_rehydrated_observation(value: Mapping[str, Any], *, context_pack: 
         pack = normalize_context_pack(context_pack)
         if observation["probe_id"] != pack["probe_id"] or not v1._json_exact_equal(observation["target"], {key: pack["target"][key] for key in TARGET["properties"]}):
             raise Error("v2 observation identity is not context-pack bound")
+        custody_paths = {Path(item["ref"]).resolve() for item in pack["source_custody"].values()} | {Path(pack["source"]["source_ref"]).resolve()}
+        if any(Path(item["ref"]).resolve() in custody_paths for item in observation["live_reads"]):
+            raise Error("retained checkpoint custody cannot masquerade as an independent live read")
     return observation
 
 
@@ -254,11 +307,9 @@ def _fabrication_audit(ref: str, pack: Mapping[str, Any], obs: Mapping[str, Any]
     return names
 
 
-def compare_rehydrated_observation(context_pack: Mapping[str, Any], observation: Mapping[str, Any], *, fabrication_audit_ref: str | None = None) -> dict[str, Any]:
-    pack = normalize_context_pack(context_pack)
-    obs = normalize_rehydrated_observation(observation, context_pack=pack)
+def _expected_fields(pack: Mapping[str, Any]) -> dict[str, Any]:
     source = pack["source"]["receipt"]
-    expected = {
+    return {
         "slice_status": source["checkpoint"]["slice_status"],
         "checkpoint_decision_delta": source["checkpoint"]["decision_log_delta"],
         "checkpoint_gate_invariants": source["gate_invariants"],
@@ -266,6 +317,12 @@ def compare_rehydrated_observation(context_pack: Mapping[str, Any], observation:
         "external_state": _source_external(pack),
         "checkpoint_recommendations": {"recommendations": source["recommendations"], "reasons": source["recommendation_reasons"]},
     }
+
+
+def compare_rehydrated_observation(context_pack: Mapping[str, Any], observation: Mapping[str, Any], *, fabrication_audit_ref: str | None = None) -> dict[str, Any]:
+    pack = normalize_context_pack(context_pack)
+    obs = normalize_rehydrated_observation(observation, context_pack=pack)
+    expected = _expected_fields(pack)
     results = {}
     for name in COMPARED:
         field = obs["fields"][name]
@@ -354,7 +411,8 @@ def _execution_log(value: Mapping[str, Any], pack: Mapping[str, Any], obs: Mappi
     starts = [event for event in events if event["kind"] == "agent_start"]
     if len(starts) != 1 or _timestamp(starts[0]["at"]) != _timestamp(obs["agent"]["start_observed_at"]):
         raise Error("one observation-bound successful agent_start is required")
-    if any(event["kind"] == "admission_retry" and _timestamp(event["at"]) > _timestamp(starts[0]["at"]) for event in events):
+    start_index = events.index(starts[0])
+    if any(event["kind"] == "admission_retry" for event in events[start_index + 1:]):
         raise Error("admission retry cannot follow the successful probe admission")
     usage = _exact(log["usage"], set(USAGE_UNITS), "execution usage")
     for key, unit in USAGE_UNITS.items():
@@ -367,10 +425,13 @@ def _execution_log(value: Mapping[str, Any], pack: Mapping[str, Any], obs: Mappi
             v1._required_string(item["source"], "unavailable usage source")
             v1._required_string(item["reason"], "unavailable usage reason")
         elif item["availability"] in {"measured", "attested"}:
-            authority = _read_bound(item["source"])
+            authority = _envelope(_read_bound(item["source"]), "epic_rehydration_usage_authority", {"authority", "metric", "value", "unit", "scope", "observed_at", "source"})
             authority_kind = "human_attestation" if key == "human_minutes" else "carrier_usage_receipt"
-            if authority.get("authority") != authority_kind or authority.get("probe_id") != pack["probe_id"] or not v1._json_exact_equal(authority.get(key), item["value"]):
+            if authority["authority"] != authority_kind or authority["probe_id"] != pack["probe_id"] or authority["metric"] != key or authority["unit"] != unit or authority["scope"] != clock["scope"] or not v1._json_exact_equal(authority["value"], item["value"]):
                 raise Error("known usage is not authoritative-receipt bound")
+            _timestamp(authority["observed_at"])
+            v1._required_string(authority["source"], "usage authority source")
+            v1._required_string(item["reason"], "known usage evidence explanation")
             v1._unknown_or_finite_non_negative(item["value"], key)
             if item["value"] == UNKNOWN or (key.endswith("tokens") and type(item["value"]) is not int):
                 raise Error("known usage must have a measured value in the declared unit")

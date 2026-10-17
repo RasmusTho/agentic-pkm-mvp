@@ -119,6 +119,23 @@ def sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _is_v2(value: Any) -> bool:
+    return type(value) is dict and value.get("schema_version") == 2
+
+
+def _require_same_version(*values: Mapping[str, Any] | None) -> None:
+    versions = []
+    for value in values:
+        if value is not None:
+            obj = _strict_object(value, "versioned artifact")
+            version = obj.get("schema_version")
+            if type(version) is not int or version not in {1, 2}:
+                raise EpicRehydrationProbeError("unsupported versioned artifact schema_version")
+            versions.append(version)
+    if len(set(versions)) > 1:
+        raise EpicRehydrationProbeError("unsupported mixed probe schema versions")
+
+
 def build_context_pack(
     source_bytes: bytes | str,
     *,
@@ -206,7 +223,7 @@ def build_context_pack(
 def normalize_context_pack(pack: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a context pack at the pack/CLI boundary."""
 
-    if pack.get("schema_version") == 2:
+    if _is_v2(pack):
         from app.builderops.epic_rehydration_probe_v2 import normalize_context_pack as normalize_v2
 
         return normalize_v2(pack)
@@ -332,7 +349,8 @@ def normalize_rehydrated_observation(
 ) -> dict[str, Any]:
     """Strictly validate the one fresh agent's structured observation."""
 
-    if observation.get("schema_version") == 2:
+    _require_same_version(observation, context_pack)
+    if _is_v2(observation):
         from app.builderops.epic_rehydration_probe_v2 import normalize_rehydrated_observation as normalize_v2
 
         return normalize_v2(observation, context_pack=context_pack)
@@ -419,7 +437,8 @@ def compare_rehydrated_observation(
 ) -> dict[str, Any]:
     """Compare one observation without ranking it or producing a quality aggregate."""
 
-    if context_pack.get("schema_version") == 2:
+    _require_same_version(context_pack, observation)
+    if _is_v2(context_pack):
         from app.builderops.epic_rehydration_probe_v2 import compare_rehydrated_observation as compare_v2
 
         return compare_v2(context_pack, observation, fabrication_audit_ref=fabrication_audit_ref)
@@ -519,7 +538,8 @@ def build_probe_receipt(
 ) -> dict[str, Any]:
     """Build the durable receipt for exactly one initial shadow probe."""
 
-    if context_pack.get("schema_version") == 2:
+    _require_same_version(context_pack, observation, comparison)
+    if _is_v2(context_pack):
         from app.builderops.epic_rehydration_probe_v2 import build_probe_receipt as build_v2
 
         return build_v2(context_pack, observation, comparison, evidence_refs=evidence_refs,
@@ -587,7 +607,8 @@ def normalize_comparison(
 ) -> dict[str, Any]:
     """Validate a comparison receipt and its effect-free boundary."""
 
-    if comparison.get("schema_version") == 2:
+    _require_same_version(comparison, context_pack, observation)
+    if _is_v2(comparison):
         from app.builderops.epic_rehydration_probe_v2 import normalize_comparison as normalize_v2
 
         return normalize_v2(comparison, context_pack=context_pack, observation=observation)
@@ -659,7 +680,7 @@ def normalize_comparison(
 def normalize_probe_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
     """Validate the final receipt's one-probe and no-authority invariants."""
 
-    if receipt.get("schema_version") == 2:
+    if _is_v2(receipt):
         from app.builderops.epic_rehydration_probe_v2 import normalize_probe_receipt as normalize_v2
 
         return normalize_v2(receipt)
@@ -752,6 +773,7 @@ def normalize_probe_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
     # and recursing back into this validator.
     refs = normalized["evidence"]
     pack = normalize_context_pack(_read_json_file(Path(refs["context_pack"])))
+    _require_same_version(normalized, pack)
     observation = normalize_rehydrated_observation(
         _read_json_file(Path(refs["agent_response"])), context_pack=pack
     )
@@ -760,6 +782,7 @@ def normalize_probe_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
         context_pack=pack,
         observation=observation,
     )
+    _require_same_version(normalized, observation, comparison)
     for key, value in (
         ("context_pack", pack),
         ("observation", observation),

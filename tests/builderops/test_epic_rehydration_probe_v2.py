@@ -24,7 +24,7 @@ def chain(tmp_path):
     _retain(tmp_path / "live-pr-3803.json", pr)
     dispatcher = _retain(tmp_path / "dispatcher.json", {"coordination_mode": "dispatcher-backed", "db_exists": True, "configured_repositories": ["RasmusTho/agentic-pkm-mvp"]})
     repository = _retain(tmp_path / "repository.json", {"head_sha": "c" * 40})
-    external = {"issue": "3798:closed", "pr": "3803:merged", "pr_head_sha": "a" * 40, "merge_sha": "b" * 40, "repository_head": "c" * 40, "ci": "green", "dispatcher": {"coordination_mode": "dispatcher-backed", "db_exists": True}}
+    external = {"issue": "3798:closed", "pr": "3803:merged", "pr_head_sha": "a" * 40, "merge_sha": "b" * 40, "repository_head": "c" * 40, "ci": {"status": "green", "scope": v2.CI_SCOPE}, "dispatcher": {"coordination_mode": "dispatcher-backed", "db_exists": True}}
     source = evaluate_slice_boundary_context_budget(
         slice_id="issue-3798", slice_status="closed_merged", decision_log_delta=["retain advisory-only boundary"],
         open_review_findings=[], external_state_marker={"issue": "3798:closed", "pr": "3803:merged", "pr_head_sha": "a" * 40, "merge_sha": "b" * 40, "observed_at": "2026-10-17T20:00:00Z", "dispatcher_status_ref": dispatcher, "repository_status_ref": repository, "probe_external_state": external},
@@ -38,6 +38,13 @@ def chain(tmp_path):
     pack = probe.build_context_pack(Path(source_ref).read_bytes(), **kwargs)
     values = {"slice_status": source["checkpoint"]["slice_status"], "checkpoint_decision_delta": source["checkpoint"]["decision_log_delta"], "checkpoint_gate_invariants": source["gate_invariants"], "open_review_findings": [], "external_state": external, "checkpoint_recommendations": {"recommendations": source["recommendations"], "reasons": source["recommendation_reasons"]}, "live_slice_next_action": {"action": "none", "reason": "slice is already closed and merged"}, "missing_claims": [], "fabricated_claims": "unknown"}
     obs = {"schema_name": probe.OBSERVATION_SCHEMA_NAME, "schema_version": 2, "probe_id": pack["probe_id"], "observed_at": "2026-10-17T20:01:10Z", "target": {key: pack["target"][key] for key in v2.TARGET["properties"]}, "agent": {"admitted_model": "configured-test-capability", "admitted_reasoning_effort": "high", "engine_identity": "unknown", "engine_identity_source": "not-exposed", "start_status": "succeeded", "start_observed_at": "2026-10-17T20:00:10Z"}, "fields": {name: {"value": value, "provenance": [{"kind": "checkpoint" if name.startswith("checkpoint_") else "github", "ref": "retained:independent-observation"}], "notes": []} for name, value in values.items()}, "live_reads": [{"kind": kind, "ref": f"live:{kind}"} for kind in ("github", "repository", "dispatcher")], "limitations": ["usage unavailable"]}
+    for name, field in obs["fields"].items():
+        if name in v2.LIVE_FIELD_KINDS:
+            field["provenance"] = [{"kind": kind, "ref": f"live:{kind}"} for kind in v2.LIVE_FIELD_KINDS[name]]
+        elif name.startswith("checkpoint_"):
+            field["provenance"] = [{"kind": "checkpoint", "ref": f"packet:{pack['probe_id']}#/source/receipt"}]
+        else:
+            field["provenance"] = [{"kind": "agent", "ref": "fresh:response"}]
     refs = {"source_checkpoint": source_ref, "context_pack": _retain(tmp_path / "pack.json", pack), "agent_response": _retain(tmp_path / "response.json", obs)}
     log = {"schema_name": "epic_rehydration_execution_log", "schema_version": 2, "probe_id": pack["probe_id"], "clock": {"name": "UTC system wall clock", "unit": "seconds", "scope": "native probe admission request through original response retention"}, "started_at": "2026-10-17T20:00:00Z", "ended_at": "2026-10-17T20:01:12Z", "invocation": obs["agent"], "events_complete": True, "recorder": "test coordinator", "events": [{"id": "start-1", "kind": "agent_start", "at": "2026-10-17T20:00:10Z", "evidence": "native successful admission receipt"}, {"id": "handoff-1", "kind": "handoff", "at": "2026-10-17T20:01:12Z", "evidence": "original response retained"}], "usage": {key: v2._measurement("unknown", unit, "native probe admission request through original response retention", "native carrier unavailable", availability="unknown", reason="not exposed") for key, unit in v2.USAGE_UNITS.items()}}
     execution_ref = _retain(tmp_path / "execution.json", log)
@@ -76,7 +83,7 @@ def test_v2_comparison_preserves_drift_missing_and_unknowns(chain):
     assert fields["fabricated_claims"]["status"] == "unknown"  # self-report/drift is not independent proof
     assert comparison["external_refresh"]["refresh_required"] is True
     assert not {"score", "threshold", "aggregate"} & comparison.keys()
-    obs["fields"]["external_state"]["value"]["ci"] = "red"
+    obs["fields"]["external_state"]["value"]["ci"]["status"] = "red"
     drift = probe.compare_rehydrated_observation(chain["pack"], obs)["field_results"]["external_state"]
     assert drift["status"] == "mismatch"
     assert drift["dimensions"]["repository_head"]["status"] == "unknown"
@@ -158,6 +165,114 @@ def test_v2_serialized_consumers_bind_complete_evidence_chain(chain):
     bad_pack["source_custody"]["repository"] = v2._bound_ref(repository_ref)
     with pytest.raises(probe.EpicRehydrationProbeError):
         probe.normalize_context_pack(bad_pack)
+
+
+def test_v2_version_provenance_and_source_contract_matrix(chain, tmp_path):
+    pack, obs, comp = chain["pack"], chain["observation"], chain["comparison"]
+    old_pack = probe.parse_strict_json(Path("evidence/context-pack.json").read_bytes())
+    old_obs = probe.parse_strict_json(Path("evidence/agent-response.json").read_bytes())
+    old_comp = probe.parse_strict_json(Path("evidence/comparison.json").read_bytes())
+    old_obs["target"] = deepcopy(obs["target"])
+    old_obs["probe_id"] = obs["probe_id"]
+    old_comp["target"] = deepcopy(pack["target"])
+    old_comp["probe_id"] = pack["probe_id"]
+    assert probe.normalize_rehydrated_observation(old_obs) == old_obs
+    assert probe.normalize_comparison(old_comp) == old_comp
+    for consumer in (
+        lambda: probe.normalize_rehydrated_observation(old_obs, context_pack=pack),
+        lambda: probe.normalize_rehydrated_observation(obs, context_pack=old_pack),
+        lambda: probe.normalize_comparison(old_comp, context_pack=pack),
+        lambda: probe.normalize_comparison(comp, context_pack=old_pack),
+        lambda: probe.normalize_comparison(comp, observation=old_obs),
+        lambda: probe.compare_rehydrated_observation(pack, old_obs),
+        lambda: probe.compare_rehydrated_observation(old_pack, obs),
+        lambda: probe.build_probe_receipt(pack, obs, old_comp, evidence_refs=chain["refs"], telemetry=chain["telemetry"]),
+    ):
+        with pytest.raises(probe.EpicRehydrationProbeError, match="mixed probe schema versions"):
+            consumer()
+    old_ref = _retain(tmp_path / "old-response.json", old_obs)
+    assert probe.cli_main(["compare", "--pack-file", chain["refs"]["context_pack"], "--observation-file", old_ref, "--output", str(tmp_path / "must-not-exist.json")]) == 2
+    assert not (tmp_path / "must-not-exist.json").exists()
+    for field_name in v2.LIVE_FIELD_KINDS:
+        bad = deepcopy(obs)
+        bad["fields"][field_name]["provenance"] = [{"kind": "checkpoint", "ref": f"packet:{pack['probe_id']}#/source/receipt"}]
+        with pytest.raises(probe.EpicRehydrationProbeError):
+            probe.normalize_rehydrated_observation(bad, context_pack=pack)
+        with pytest.raises(probe.EpicRehydrationProbeError):
+            probe.compare_rehydrated_observation(pack, bad)
+        # The same forgery must fail a standalone comparison, even after substitution.
+        bad_comp = deepcopy(comp)
+        bad_comp["observation"] = bad
+        with pytest.raises(probe.EpicRehydrationProbeError):
+            probe.normalize_comparison(bad_comp)
+        _retain(Path(chain["refs"]["agent_response"]), bad)
+        _retain(Path(chain["refs"]["comparison_receipt"]), bad_comp)
+        bad_receipt = deepcopy(chain["receipt"])
+        bad_receipt["observation"] = v2._bound_ref(chain["refs"]["agent_response"])
+        bad_receipt["comparison"] = v2._bound_ref(chain["refs"]["comparison_receipt"])
+        bad_receipt["telemetry"]["evidence"]["observation"] = bad_receipt["observation"]
+        with pytest.raises(probe.EpicRehydrationProbeError):
+            probe.normalize_probe_receipt(bad_receipt)
+        _retain(Path(chain["refs"]["agent_response"]), obs)
+        _retain(Path(chain["refs"]["comparison_receipt"]), comp)
+    bad = deepcopy(obs)
+    bad["live_reads"] = [{"kind": "checkpoint", "ref": "packet:source"}]
+    with pytest.raises(probe.EpicRehydrationProbeError):
+        probe.normalize_rehydrated_observation(bad)
+    bad = deepcopy(obs)
+    bad["fields"]["slice_status"]["provenance"][0]["ref"] = "undeclared:read"
+    with pytest.raises(probe.EpicRehydrationProbeError):
+        probe.normalize_rehydrated_observation(bad)
+    source = deepcopy(pack["source"]["receipt"])
+    source["checkpoint"]["decision_log_delta"] = [42]
+    source_ref = _retain(tmp_path / "bad-source.json", source)
+    kwargs = chain["kwargs"] | {"source_ref": source_ref}
+    with pytest.raises(probe.EpicRehydrationProbeError):
+        probe.build_context_pack(Path(source_ref).read_bytes(), **kwargs)
+    for consumer in (probe.normalize_context_pack, probe.normalize_rehydrated_observation, probe.normalize_comparison, probe.normalize_probe_receipt):
+        with pytest.raises(probe.EpicRehydrationProbeError):
+            consumer([])
+
+
+def test_v2_known_usage_and_equal_tick_event_order_are_strict(chain):
+    log = deepcopy(chain["log"])
+    log["events"].insert(1, {"id": "retry-after-success", "kind": "admission_retry", "at": log["events"][0]["at"], "evidence": "rejected invocation retried after success at same clock tick"})
+    _retain(Path(chain["execution_ref"]), log)
+    with pytest.raises(probe.EpicRehydrationProbeError):
+        v2.build_telemetry(chain["pack"], chain["observation"], pack_ref=chain["refs"]["context_pack"], observation_ref=chain["refs"]["agent_response"], execution_ref=chain["execution_ref"])
+    log["events"][0], log["events"][1] = log["events"][1], log["events"][0]
+    _retain(Path(chain["execution_ref"]), log)
+    measured = v2.build_telemetry(chain["pack"], chain["observation"], pack_ref=chain["refs"]["context_pack"], observation_ref=chain["refs"]["agent_response"], execution_ref=chain["execution_ref"])
+    assert measured["measurements"]["admission_retry"]["value"] == 1
+    root = Path(chain["execution_ref"]).parent
+    authority = {"schema_name": "epic_rehydration_usage_authority", "schema_version": 2, "probe_id": log["probe_id"], "authority": "carrier_usage_receipt", "metric": "input_tokens", "value": 123, "unit": "tokens", "scope": log["clock"]["scope"], "observed_at": log["ended_at"], "source": "retained native authoritative receipt"}
+    authority_ref = _retain(root / "usage-authority.json", authority)
+    log["usage"]["input_tokens"] = v2._measurement(123, "tokens", log["clock"]["scope"], v2._bound_ref(authority_ref), reason="native authoritative usage receipt")
+    _retain(Path(chain["execution_ref"]), log)
+    measured = v2.build_telemetry(chain["pack"], chain["observation"], pack_ref=chain["refs"]["context_pack"], observation_ref=chain["refs"]["agent_response"], execution_ref=chain["execution_ref"])
+    assert v2.normalize_telemetry(measured)["measurements"]["input_tokens"]["value"] == 123
+    for updates in ({"schema_version": 999}, {"unit": "bytes"}, {"scope": "foreign"}, {"unsupported": True}, {"value": True}, {"metric": "output_tokens"}, {"probe_id": "foreign"}):
+        _retain(Path(authority_ref), authority | updates)
+        bad_log = deepcopy(log)
+        bad_log["usage"]["input_tokens"]["source"] = v2._bound_ref(authority_ref)
+        _retain(Path(chain["execution_ref"]), bad_log)
+        with pytest.raises(probe.EpicRehydrationProbeError):
+            v2.build_telemetry(chain["pack"], chain["observation"], pack_ref=chain["refs"]["context_pack"], observation_ref=chain["refs"]["agent_response"], execution_ref=chain["execution_ref"])
+        bad_measured = deepcopy(measured)
+        bad_measured["evidence"]["execution"] = v2._bound_ref(chain["execution_ref"])
+        bad_measured["measurements"]["input_tokens"] = bad_log["usage"]["input_tokens"]
+        with pytest.raises(probe.EpicRehydrationProbeError):
+            v2.normalize_telemetry(bad_measured)
+        bad_receipt = deepcopy(chain["receipt"])
+        bad_receipt["telemetry"] = bad_measured
+        with pytest.raises(probe.EpicRehydrationProbeError):
+            probe.normalize_probe_receipt(bad_receipt)
+
+
+def test_v2_ci_scope_retains_historical_cancellations_without_current_gate_claim():
+    value = v2._ci_summary({"statusCheckRollup": [{"name": "smoke", "conclusion": "CANCELLED"}, {"name": "smoke", "conclusion": "SUCCESS"}]})
+    assert value == {"status": "red", "scope": v2.CI_SCOPE}
+    assert "not_a_current_required_ci_verdict" in value["scope"]
 
 
 def test_v1_evidence_remains_compatible():

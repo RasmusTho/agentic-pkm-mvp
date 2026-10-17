@@ -1249,8 +1249,13 @@ of comparing different representations or meanings. Status, open findings, and t
 external projection (Issue, PR, head/merge SHA, CI, repository head, and dispatcher mode/DB state)
 are typed facts. Checkpoint facts may cite the packet; live facts must come from independent live
 reads. Missing evidence is the literal `unknown`, not a checkpoint-filled observation. All schema
-keys are mandatory; an unavailable field uses `unknown` rather than omitting its key. External
-dimensions retain separate results, including simultaneous drift and unknowns. Live next action
+keys are mandatory; an unavailable field uses `unknown` rather than omitting its key. Live-field
+provenance must include its required GitHub/repository/dispatcher kinds and bind each reference
+to declared independent `live_reads`; checkpoint custody cannot stand in for those reads.
+Checkpoint fields instead cite `packet:<probe-id>#<source-pointer>`. The CI dimension carries its
+scope explicitly: all returned PR status-rollup entries, including historical duplicates and
+cancellations. It is not a current required-CI verdict or merge gate; the original rollup stays
+retained. External dimensions retain separate results, including simultaneous drift and unknowns. Live next action
 is `not_comparable` to a checkpoint recommendation. Missing-claim reporting is checked against
 actually unavailable observed fields. Fabrication is never inferred from drift or self-report:
 the optional `compare --fabrication-audit-file` requires a separate auditor's explicit fabrication
@@ -1284,13 +1289,17 @@ after rejection and must precede that successful admission. `handoff` counts fro
 original-response transfers. `implementation_repair`, `review_repair`, and `ci_repair` count
 code/test corrections after their respective failure within the declared probe scope, not native
 admission retries or historical delivery repairs. Zero counts require the recorder's complete-scope
-attestation. The native admitted model/reasoning is recorded separately from engine introspection.
+attestation. Admission retries must precede success in event order even at equal clock ticks.
+The native admitted model/reasoning is recorded separately from engine introspection.
 
 `usage` has `input_tokens`, `output_tokens`, `model_cost_usd`, and `human_minutes`; each measurement
 has `availability`, `value`, `unit`, `scope`, `source`, and `reason`. Unavailable values are
 `availability=unknown`, `value=unknown`, with the unavailable source/reason named. A known carrier
 value requires a retained `carrier_usage_receipt`, and human effort requires a retained
-`human_attestation`; the exact source bytes, probe identity and value are checked. This does not
+`human_attestation`; the exact source bytes, probe identity and value are checked. A strict
+`epic_rehydration_usage_authority.v2` envelope binds `authority`, `metric`, `value`, `unit`, `scope`,
+UTC `observed_at`, and nonempty `source`, with no extra fields; arbitrary dictionaries are not
+accepted as measurement authority. This does not
 add billing integration or independently authenticate an operator-retained receipt. Units are
 tokens/tokens/USD/minutes respectively. The helper derives actual packet/response bytes, UTC
 elapsed seconds, and event counts from retained evidence and cross-binds all measurements again at
