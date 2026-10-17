@@ -65,7 +65,7 @@ def actual_api(tmp_path, monkeypatch):
     observed = client.get('/__native_web_identity')
     assert observed.status_code == 200, observed.text
     data = observed.json()['identity']['fixture']
-    assert companion.get_memory_review_queue().pending_count == len(fixture.CANDIDATE_IDS)
+    assert companion.get_memory_review_queue(None, None).pending_count == len(fixture.CANDIDATE_IDS)
     assert {entry.candidate_id for entry in companion._MEMORY_CANDIDATE_REVIEW_QUEUE.pending()} == set(fixture.CANDIDATE_IDS)
     yield client, vault, data
     client.close()

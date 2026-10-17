@@ -649,6 +649,16 @@ remote continuation/transport, recovery control action, live Start or human acce
 See [FCA-ID-HOST-CANDIDATE](BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-host-candidate--protected-candidate-and-continuation-contract).
 Repository-only proof does not update the live-runtime verification date or close parent #5399.
 
+### DevUI GitHub token rotation on BOB-1
+
+Use `scripts/secrets devui rotate` from an up-to-date checkout on Demerzel to
+replace DevUI's dedicated GitHub credential through Bitwarden and hidden local
+terminal input. The fixed `bob-1-builder-system` SSH handoff needs no VM password
+and verifies reads inside the actual DevUI container. Preserve the existing
+read-only token settings; this binding does not update `shared/github.token`.
+The [DevUI secret procedure](CLOUD_SECRET_PROVISIONING/README.md#bob-1-devui-github-token)
+owns interpreter setup, preflight, exact paths, durable receipts, and recovery.
+
 ### BuilderOps cockpit live GitHub plane (#4484)
 - The cockpit's `github-live` source reads GitHub REST from **inside the `api` container** via the
   `gh` CLI, which the runtime image installs (`Dockerfile`, runtime-stage apt layer) alongside

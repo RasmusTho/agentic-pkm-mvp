@@ -19,7 +19,9 @@ from typing import Any, Never, TextIO
 from uuid import UUID, uuid4
 
 from app.ops.bws_secret_admin import (
+    DEVUI_IDENTITY, DEVUI_SECRET, DEVUI_TARGET,
     PrecommitRejection, SecretAdminError, SecretAdminProvider, SecretCopy, configured_admin,
+    valid_devui_token,
 )
 from app.ops.bws_token_push import TokenPushAdmin, load_token_push_targets
 from app.ops.host_secret_bootstrap import validate_secret_value
@@ -131,6 +133,8 @@ class SecretAdmin:
         self.contract = contract or load_host_secret_contract()
 
     def _identity(self, channel: str, secret: str) -> tuple[str, tuple[str, ...]]:
+        if (channel, secret) == (DEVUI_TARGET, DEVUI_SECRET):
+            return DEVUI_IDENTITY, ('non-prod',)
         if channel not in CHANNEL_PROJECTS or secret not in BWS_IDENTITIES:
             raise SecretAdminError()
         if secret == 'typesafe.api-key' and channel != 'dev':
@@ -142,6 +146,8 @@ class SecretAdmin:
         return channel + '/' + secret, (CHANNEL_PROJECTS[channel],)
 
     def _kind(self, secret: str) -> str:
+        if secret == DEVUI_SECRET:
+            return 'token'
         return 'password' if secret == 'postgres.password' else self.contract.kind_for(secret)
 
     def check_selected(self, operation: HostSecretOperation, channel: str,
@@ -210,6 +216,8 @@ class SecretAdmin:
             # not strip or truncate an existing database credential into a new one.
             value = source.read()
             if not isinstance(value, str) or not validate_secret_value(self._kind(secret), value):
+                raise SecretAdminError()
+            if secret == DEVUI_SECRET and not valid_devui_token(value):
                 raise SecretAdminError()
             target = 'shared' if len(projects) == 2 else channel
             with self.controller.import_operation(target) as (operation, was_sent):
@@ -327,6 +335,9 @@ def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
     try:
         parser = _ValueFreeParser(prog='secrets')
         sub = parser.add_subparsers(dest='command', required=True)
+        devui = sub.add_parser('devui')
+        devui.add_argument('action', choices=('check', 'preflight', 'import', 'apply', 'reconcile', 'rotate'))
+        devui.add_argument('--stdin', action='store_true')
         check = sub.add_parser('check')
         check.add_argument('channel', choices=tuple(CHANNEL_PROJECTS))
         check.add_argument('--consumer', action='append', required=True)
@@ -341,6 +352,10 @@ def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
             if command == 'import':
                 cmd.add_argument('--stdin', action='store_true', required=True)
         args = parser.parse_args(argv)
+        if args.command == 'devui':
+            from app.ops.devui_secret import run_devui
+            return run_devui(args.action, source=stdin or sys.stdin,
+                             stdin_requested=args.stdin, admin=admin)
         if args.command == 'push-token':
             target = load_token_push_targets().get(args.vm)
             if target is None:
