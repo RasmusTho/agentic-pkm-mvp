@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import subprocess
 import sys
@@ -98,6 +99,39 @@ def _observation(pack: dict[str, object], *, unknown_external: bool = False) -> 
         "live_reads": [{"kind": "github", "ref": "live:#3798,#3803"}, {"kind": "repository", "ref": "live:origin/main"}, {"kind": "dispatcher", "ref": "live:status"}],
         "limitations": ["Token, cost, elapsed time, and human minutes were not measured."],
     }
+
+
+def _receipt_fixture(tmp_path: Path) -> tuple[dict[str, object], dict[str, Path], dict[str, object], dict[str, object], dict[str, object]]:
+    pack = _pack()
+    observation = _observation(pack)
+    comparison = compare_rehydrated_observation(pack, observation)
+    refs = {
+        "source_checkpoint": tmp_path / "source.json",
+        "context_pack": tmp_path / "pack.json",
+        "agent_response": tmp_path / "response.json",
+        "comparison_receipt": tmp_path / "comparison.json",
+    }
+    refs["source_checkpoint"].write_bytes(_source_bytes())
+    refs["context_pack"].write_bytes(canonical_json_bytes(pack))
+    refs["agent_response"].write_bytes(canonical_json_bytes(observation))
+    refs["comparison_receipt"].write_bytes(canonical_json_bytes(comparison))
+    receipt = build_probe_receipt(
+        pack,
+        observation,
+        comparison,
+        evidence_refs={key: str(value) for key, value in refs.items()},
+        telemetry={
+            "probe_count": 1,
+            "agent_starts": 1,
+            "repairs": {"implementation": 0, "ci": 0, "review": 0},
+            "handoffs": 2,
+            "context_tokens": "unknown",
+            "model_cost_usd": "unknown",
+            "elapsed_minutes": "unknown",
+            "human_minutes": "unknown",
+        },
+    )
+    return receipt, refs, pack, observation, comparison
 
 
 def test_context_pack_is_deterministic_and_source_bound() -> None:
@@ -327,6 +361,84 @@ def test_probe_receipt_binds_retained_evidence_bytes(tmp_path: Path) -> None:
     refs["context_pack"].write_bytes(b"tampered")
     with pytest.raises(EpicRehydrationProbeError):
         normalize_probe_receipt(receipt)
+
+
+def test_standalone_receipt_reconstructs_and_cross_binds_retained_chain(tmp_path: Path) -> None:
+    receipt, refs, pack, observation, comparison = _receipt_fixture(tmp_path)
+    assert normalize_probe_receipt(receipt) == receipt
+
+    mutations = {
+        "target": lambda item: item["target"].__setitem__("repository", "foreign/repo"),
+        "source": lambda item: item["source_checkpoint"].__setitem__("source_ref", "missing.json"),
+        "agent": lambda item: item["agent"].__setitem__("model", "foreign-model"),
+        "probe": lambda item: item.__setitem__("probe_id", "foreign-probe"),
+        "limitations": lambda item: item["limitations"].append("unrecorded limitation"),
+    }
+    for name, mutate in mutations.items():
+        mutated = deepcopy(receipt)
+        mutate(mutated)
+        with pytest.raises(EpicRehydrationProbeError, match="bound|context-pack|observation"):
+            normalize_probe_receipt(mutated)
+
+    wrong_pack = deepcopy(pack)
+    wrong_pack["source"]["source_ref"] = str(tmp_path / "missing-source.json")  # type: ignore[index]
+    wrong_pack_path = tmp_path / "wrong-pack.json"
+    wrong_pack_bytes = canonical_json_bytes(wrong_pack)
+    wrong_pack_path.write_bytes(wrong_pack_bytes)
+    wrong_pack_receipt = deepcopy(receipt)
+    wrong_pack_receipt["context_pack"] = {  # type: ignore[index]
+        "ref": str(wrong_pack_path),
+        "sha256": hashlib.sha256(wrong_pack_bytes).hexdigest(),
+    }
+    wrong_pack_receipt["evidence"]["context_pack"] = str(wrong_pack_path)  # type: ignore[index]
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_probe_receipt(wrong_pack_receipt)
+
+    changed_observation = deepcopy(observation)
+    changed_observation["fields"]["slice_status"]["value"] = "changed"  # type: ignore[index]
+    changed_observation_path = tmp_path / "changed-observation.json"
+    changed_observation_bytes = canonical_json_bytes(changed_observation)
+    changed_observation_path.write_bytes(changed_observation_bytes)
+    stale_comparison_receipt = deepcopy(receipt)
+    stale_comparison_receipt["observation"] = {  # type: ignore[index]
+        "ref": str(changed_observation_path),
+        "sha256": hashlib.sha256(changed_observation_bytes).hexdigest(),
+    }
+    stale_comparison_receipt["evidence"]["agent_response"] = str(changed_observation_path)  # type: ignore[index]
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_probe_receipt(stale_comparison_receipt)
+
+    changed_comparison = deepcopy(comparison)
+    changed_comparison["external_refresh"]["refresh_required"] = True  # type: ignore[index]
+    changed_comparison_path = tmp_path / "changed-comparison.json"
+    changed_comparison_bytes = canonical_json_bytes(changed_comparison)
+    changed_comparison_path.write_bytes(changed_comparison_bytes)
+    stale_comparison = deepcopy(receipt)
+    stale_comparison["comparison"] = {  # type: ignore[index]
+        "ref": str(changed_comparison_path),
+        "sha256": hashlib.sha256(changed_comparison_bytes).hexdigest(),
+    }
+    stale_comparison["evidence"]["comparison_receipt"] = str(changed_comparison_path)  # type: ignore[index]
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_probe_receipt(stale_comparison)
+
+    malformed_observation_path = tmp_path / "malformed-observation.json"
+    malformed_observation_bytes = canonical_json_bytes({"unexpected": "object"})
+    malformed_observation_path.write_bytes(malformed_observation_bytes)
+    malformed_receipt = deepcopy(receipt)
+    malformed_receipt["observation"] = {  # type: ignore[index]
+        "ref": str(malformed_observation_path),
+        "sha256": hashlib.sha256(malformed_observation_bytes).hexdigest(),
+    }
+    malformed_receipt["evidence"]["agent_response"] = str(malformed_observation_path)  # type: ignore[index]
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_probe_receipt(malformed_receipt)
+
+    source_copy = tmp_path / "source-copy.json"
+    source_copy.write_bytes(refs["source_checkpoint"].read_bytes())
+    copied_source_receipt = deepcopy(receipt)
+    copied_source_receipt["evidence"]["source_checkpoint"] = str(source_copy)  # type: ignore[index]
+    assert normalize_probe_receipt(copied_source_receipt) == copied_source_receipt
 
 
 def test_manual_probe_has_no_authority_effects(tmp_path: Path) -> None:

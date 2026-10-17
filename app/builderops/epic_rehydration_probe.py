@@ -699,6 +699,57 @@ def normalize_probe_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
     )
     normalized["limitations"] = _string_list(normalized["limitations"], "probe_receipt.limitations")
     normalized["effects"] = _normalize_effects(normalized["effects"], "probe_receipt.effects")
+
+    # Standalone receipt consumers must reconstruct and cross-bind the retained chain.  The
+    # earlier hash checks prove only that files exist; these reads also prove that each file's
+    # normalized object is the object named by this receipt, without calling build_probe_receipt
+    # and recursing back into this validator.
+    refs = normalized["evidence"]
+    pack = normalize_context_pack(_read_json_file(Path(refs["context_pack"])))
+    observation = normalize_rehydrated_observation(
+        _read_json_file(Path(refs["agent_response"])), context_pack=pack
+    )
+    comparison = normalize_comparison(
+        _read_json_file(Path(refs["comparison_receipt"])),
+        context_pack=pack,
+        observation=observation,
+    )
+    for key, value in (
+        ("context_pack", pack),
+        ("observation", observation),
+        ("comparison", comparison),
+    ):
+        item = normalized[key]
+        actual_digest = _evidence_digest(item["ref"], value)
+        if actual_digest != item["sha256"]:
+            raise EpicRehydrationProbeError(
+                f"probe_receipt.{key} digest is not bound to its normalized retained object"
+            )
+
+    _validate_source_ref_binding(
+        refs["source_checkpoint"],
+        pack["source"]["bytes_sha256"],
+        pack["source"]["bytes_length"],
+        pack["source"]["receipt"],
+    )
+    expected_source = {
+        "origin": pack["source"]["origin"],
+        "observed_at": pack["source"]["observed_at"],
+        "source_ref": pack["source"]["source_ref"],
+        "bytes_sha256": pack["source"]["bytes_sha256"],
+    }
+    if not _json_exact_equal(source, expected_source):
+        raise EpicRehydrationProbeError(
+            "probe receipt source checkpoint is not context-pack bound"
+        )
+    if normalized["probe_id"] != pack["probe_id"]:
+        raise EpicRehydrationProbeError("probe receipt probe_id is not context-pack bound")
+    if not _json_exact_equal(target, pack["target"]):
+        raise EpicRehydrationProbeError("probe receipt target is not context-pack bound")
+    if not _json_exact_equal(agent, observation["agent"]):
+        raise EpicRehydrationProbeError("probe receipt agent is not observation-bound")
+    if normalized["limitations"] != observation["limitations"]:
+        raise EpicRehydrationProbeError("probe receipt limitations are not observation-bound")
     return normalized
 
 

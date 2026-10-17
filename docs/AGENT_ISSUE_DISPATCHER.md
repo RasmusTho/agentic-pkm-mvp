@@ -1237,7 +1237,9 @@ projection is `match` and a complete drift is `mismatch`. The operator must firs
 checkpoint through the existing evaluator, read live GitHub, repository, and dispatcher truth, and
 accept/pin that receipt in run-state. A July serialization, fixture, stale source, automatic
 rotation, worker launch, or later lifecycle action is outside this manual shadow behavior.
-Unmeasured token, cost, elapsed-time, and human-minute values remain `unknown`.
+Standalone receipt deserialization reconstructs the retained pack, observation, comparison, and source
+chain and cross-binds their normalized objects and metadata before accepting any receipt. Unmeasured
+token, cost, elapsed-time, and human-minute values remain `unknown`.
 
 When a PR is locally validated but GitHub Actions are still pending, coordinators may separate the
 implementation handoff from terminal closure with a CI-monitor handoff record:
