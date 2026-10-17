@@ -39,6 +39,7 @@ from app.model_access.executor_network_policy import (
 )
 from app.model_access.health_observer import PRODUCT_HEALTH_OBSERVER
 from app.cli.settings_explain import mask_dsn
+from app.cli.vault_context import CliVaultContextError, resolve_cli_vault_context
 from app.observability.log import span, with_trace_id
 from app.version import get_runtime_version
 from app.runtime.health_probe import _watcher_runtime_status, _worker_runtime_status
@@ -1210,8 +1211,25 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
     return actions
 
 
-def _check_companion_diagnostics() -> Dict[str, Any]:
-    vault_root = Path(os.getenv("VAULT_ROOT") or "vault").expanduser()
+def _health_vault_root(explicit: Path | None = None) -> Path | None:
+    """The one vault root a health run inspects (MVR-05B4a), or ``None`` when unresolvable.
+
+    Health is a diagnostic: a misconfigured or unbound vault is reported by the
+    vault checks, not raised here.
+    """
+
+    try:
+        return resolve_cli_vault_context(
+            explicit, env_policy="channel", default_path=Path("vault")
+        ).root
+    except CliVaultContextError:
+        return None
+
+
+def _check_companion_diagnostics(vault_root: Path | None = None) -> Dict[str, Any]:
+    if vault_root is None:
+        return _result(True, "companion diagnostics skipped (no vault)", data={"skipped": True})
+    vault_root = vault_root.expanduser()
     try:
         summary = companion_diagnostics_summary(vault_root)
     except Exception as exc:
@@ -1329,7 +1347,11 @@ def run_health(
         _check_llm_providers(checks["llm_router"]), required=False
     )
     checks["embedding_index"] = _annotate_required(_check_embedding_index(), required=True)
-    checks["companion_diagnostics"] = _annotate_required(_check_companion_diagnostics(), required=False)
+    # Resolved once for this run; no check below re-reads the vault environment.
+    health_vault_root = _health_vault_root(kwargs.get("vault_root"))
+    checks["companion_diagnostics"] = _annotate_required(
+        _check_companion_diagnostics(vault_root=health_vault_root), required=False
+    )
     checks["youtube_sync"] = _annotate_required(
         _check_youtube_sync(vault_context=kwargs.get("vault_context")), required=False
     )

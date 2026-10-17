@@ -320,7 +320,7 @@ def test_recall_node_uses_request_bound_scope(monkeypatch) -> None:
 
     monkeypatch.setattr(ask_graph, "retrieve_relevant_promoted", lambda *a, **k: [])
     monkeypatch.setattr(ask_graph, "retrieve_relevant_provisional", _spy_provisional)
-    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: Path("/nonexistent-vault"))
+    monkeypatch.setattr(ask_graph, "_compatibility_recall_vault_root", lambda: Path("/nonexistent-vault"))
 
     state = ask_graph._recall_node(  # noqa: SLF001 - production node proof
         AgentState(query="stateful workflow engine", active_scope="private"),

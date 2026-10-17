@@ -15,7 +15,11 @@ from app.briefing.trigger import (
     scheduled_briefing_tick,
 )
 from app.briefing.config import BRIEFING_TIMEZONE
-from app.vault.manager import get_vault_manager
+from app.cli.vault_context import (
+    CliVaultContextError,
+    carrier_vault_context,
+    resolve_cli_vault_context,
+)
 from app.vault.manager import VaultContext
 
 
@@ -67,12 +71,15 @@ def _emit(result: BriefingTriggerResult, *, as_json: bool) -> None:
 
 
 def _resolve_vault_context(vault_root: Path | None) -> VaultContext:
-    manager = get_vault_manager()
-    if vault_root is not None:
-        return manager.validate_vault(vault_root.expanduser())
-    if manager.context.status == "selected" and manager.context.active_vault_path:
-        return manager.context
-    return manager.load_last_active()
+    """This invocation's one vault context: the option, else the picker's selection."""
+
+    try:
+        carrier = resolve_cli_vault_context(
+            vault_root, env_policy="none", use_process_selection=True
+        )
+    except CliVaultContextError as exc:
+        raise click.ClickException(str(exc)) from exc
+    return carrier_vault_context(carrier)
 
 
 __all__ = ["briefing_group"]

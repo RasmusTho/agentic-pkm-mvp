@@ -260,7 +260,7 @@ def test_recall_path_invokes_low_trust_guards(
             excluded=(),
         ),
     )
-    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(ask_graph, "_compatibility_recall_vault_root", lambda: tmp_path)
     monkeypatch.setattr(ask_graph, "_resolve_domain_scope", lambda: "scope-personal")
     monkeypatch.setenv("PROVISIONAL_RECALL_RECEIPTS_PATH", str(tmp_path / "recall.jsonl"))
 
@@ -300,7 +300,7 @@ def test_provisional_memory_cannot_reach_action_authority(
             excluded=(),
         ),
     )
-    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(ask_graph, "_compatibility_recall_vault_root", lambda: tmp_path)
     monkeypatch.setattr(ask_graph, "_resolve_domain_scope", lambda: "scope-personal")
     receipt_path = tmp_path / "action-recall.jsonl"
     monkeypatch.setenv("PROVISIONAL_RECALL_RECEIPTS_PATH", str(receipt_path))
@@ -347,7 +347,7 @@ def test_cited_provisional_memory_reaches_production_proposal_context(
             excluded=(),
         ),
     )
-    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(ask_graph, "_compatibility_recall_vault_root", lambda: tmp_path)
     monkeypatch.setattr(ask_graph, "_resolve_domain_scope", lambda: "scope-personal")
     receipt_path = tmp_path / "proposal-recall.jsonl"
     monkeypatch.setenv("PROVISIONAL_RECALL_RECEIPTS_PATH", str(receipt_path))

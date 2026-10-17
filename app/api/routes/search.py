@@ -12,7 +12,7 @@ from app.api.request_active_context import (
     require_scoped_read_context,
 )
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_effect_window
-from app.instance.context_settings import resolve_context_settings
+from app.instance.context_settings import IncompatibleBindingSettingsError, resolve_context_settings
 from app.instance.vault_registry import VaultRegistryStore
 from app.observability.tracer import start_span
 from app.retrieval.capability import RetrievalRequest, retrieve
@@ -96,5 +96,7 @@ async def search_scoped(
                     ][:10]
                 }
                 return JSONResponse(content=results)
+    except IncompatibleBindingSettingsError as exc:
+        raise HTTPException(status_code=409, detail="incompatible_binding_settings") from exc
     except ContextBoundReadError as exc:
         raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc

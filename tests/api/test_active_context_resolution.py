@@ -89,6 +89,14 @@ def _create(client: TestClient, binding_ids: list[str]) -> dict:
     return response.json()
 
 
+def build_selection_service_for(runtime, record) -> ActiveContextSelectionService:
+    return ActiveContextSelectionService(
+        registry_store=runtime.registry,
+        principal_record=record,
+        selection_store=ContextSelectionStore(),
+    )
+
+
 def _service_resolver(runtime, record):
     """A resolver over live registry truth, matching what the request path builds."""
 
@@ -201,13 +209,46 @@ def test_request_uses_one_context_generation_end_to_end(
 ) -> None:
     """MVR-05B seals the HTTP scope carrier behind one immutable snapshot."""
 
-    _runtime, first, second, _record = instance
+    runtime, first, second, _record = instance
     session = _create(client, [first.vault_binding_id])
     override = _create(client, [second.vault_binding_id])
     observed: dict[str, object] = {}
 
+    # Count every production resolution and capture the GOV inputs it receives.
+    resolutions: list[dict[str, object]] = []
+    real_resolve = ActiveContextSelectionService.resolve_request_context
+
+    def _spy_resolve(self, **kwargs):  # type: ignore[no-untyped-def]
+        result = real_resolve(self, **kwargs)
+        resolutions.append({**kwargs, "snapshot": result.snapshot})
+        return result
+
+    monkeypatch.setattr(ActiveContextSelectionService, "resolve_request_context", _spy_resolve)
+
+    # Mutable global selection is never consulted again once the request resolved.
+    import app.vault.manager as vault_manager_module
+
+    monkeypatch.setattr(
+        vault_manager_module,
+        "get_vault_manager",
+        lambda: pytest.fail("a scoped request consulted the process-global selection"),
+    )
+
+    from app.instance.binding_effect_lease import BindingEffectLeaseManager
+
+    leases = BindingEffectLeaseManager.for_runtime(
+        registry_store=runtime.registry,
+        state_root=runtime.registry.path.parent / "binding-effect-leases",
+        ownership_root=runtime.ledger.root,
+    )
+
     def _fake_ask(*_args, **kwargs):  # type: ignore[no-untyped-def]
         observed.update(kwargs)
+        # The request's own binding is held under its shared effect lease, by the
+        # binding's active ownership lease, for the whole graph run.
+        binding_id = kwargs["active_context"].binding_ids[0]
+        observed["shared_holders"] = len(leases.persisted_state(binding_id)["sharedHolders"])
+        observed["owner"] = leases.active_owner(binding_id)
         return SimpleNamespace(answer="resolved", hits=[])
 
     monkeypatch.setattr(ask_routes, "run_ask_graph", _fake_ask)
@@ -229,6 +270,30 @@ def test_request_uses_one_context_generation_end_to_end(
     # The supplied scope cannot reach retrieval. The override selection wins,
     # and the current policy derives the canonical server scope.
     assert observed["active_scope"] == "default"
+
+    # Exactly one resolution for the request, and the graph received that very object.
+    (resolution,) = resolutions
+    snapshot = resolution["snapshot"]
+    assert observed["active_context"] is snapshot
+    assert snapshot.binding_ids == (second.vault_binding_id,)
+    assert snapshot.generation == 1
+    # Cognitive dimensions are preserved on the propagated snapshot, server-derived.
+    derived = build_selection_service_for(runtime, _record).derive("trusted_loopback")
+    assert snapshot.workspace == derived.workspace
+    assert snapshot.scope == derived.scope
+    assert snapshot.sphere_memberships == derived.sphere_memberships
+    assert snapshot.situated_identity == derived.situated_identity
+    assert snapshot.principal_context == derived.principal
+    # Action / write class / permission travel separately to GOV, not on the context.
+    assert resolution["action"] == ACTION_SELECTION_INSPECT
+    assert resolution["write_class"] == WRITE_CLASS_READ
+    assert resolution["required_permission"] == PERMISSION_SELECTION_READ
+    assert not {"action", "write_class", "required_permission"} & set(vars(snapshot))
+    # Active ownership lease evidence: the binding was held while the graph ran.
+    assert observed["shared_holders"] == 1
+    assert observed["owner"] is not None
+    assert observed["owner"].vault_binding_id == second.vault_binding_id
+    assert len(leases.persisted_state(second.vault_binding_id)["sharedHolders"]) == 0
 
 
 def test_ask_route_refuses_invalid_override_without_falling_back_to_session(
@@ -843,11 +908,66 @@ def test_instance_identity_never_substitutes_for_principal_context(instance, cli
         companion_proxy_configured=False,
     )
     assert other_posture.subjects() == ("trusted_loopback",)
-def test_request_override_header_outranks_session_without_mutating_it() -> None:
-    """The resolver contract keeps override precedence explicit and request-local."""
-    from pathlib import Path
+def test_request_override_header_outranks_session_without_mutating_it(
+    instance, client, monkeypatch
+) -> None:
+    """Production `/api/ask/scoped`: the override wins for exactly one request.
 
-    source = (Path(__file__).resolve().parents[2] / "app/instance/active_context_service.py").read_text()
-    assert "override_bearer" in source
-    assert "session_bearer" in source
-    assert "override_bearer if override_bearer is not None else session_bearer" in source
+    The retained session is neither rebound nor advanced, the next session-only
+    request resolves the session's own binding, and an invalid (or blank)
+    explicit override fails closed instead of using the valid session.
+    """
+
+    _runtime, first, second, _record = instance
+    session = _create(client, [first.vault_binding_id])
+    override = _create(client, [second.vault_binding_id])
+    session_id = session["context_selection_id"]
+    seen: list[ActiveContextSetV1] = []
+
+    def _fake_ask(*_args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(kwargs["active_context"])
+        return SimpleNamespace(answer="resolved", hits=[])
+
+    monkeypatch.setattr(ask_routes, "run_ask_graph", _fake_ask)
+    monkeypatch.setattr(ask_routes, "_ensure_hybrid_store_loaded", lambda: None)
+    ask_routes._HYBRID_WARMED = True
+    try:
+        overridden = client.post(
+            "/api/ask/scoped",
+            json={"question": "override?"},
+            headers={
+                "X-Active-Context-Session": session_id,
+                "X-Active-Context-Override": override["context_selection_id"],
+            },
+        )
+        assert overridden.status_code == 200, overridden.text
+        assert seen[-1].binding_ids == (second.vault_binding_id,)
+
+        # The retained session is unchanged by the one-request override.
+        retained = client.get(SELECTION_URL, headers={"X-Active-Context-Session": session_id})
+        assert retained.status_code == 200, retained.text
+        assert retained.json()["context"]["vault_binding_ids"] == [first.vault_binding_id]
+        assert retained.json()["context"]["generation"] == session["context"]["generation"]
+
+        # The next request without the override resolves the session's own binding.
+        plain = client.post(
+            "/api/ask/scoped",
+            json={"question": "session?"},
+            headers={"X-Active-Context-Session": session_id},
+        )
+        assert plain.status_code == 200, plain.text
+        assert seen[-1].binding_ids == (first.vault_binding_id,)
+
+        # An invalid or blank explicit override never falls back to the valid session.
+        calls = len(seen)
+        for bad in ("unknown-override-bearer", ""):
+            refused = client.post(
+                "/api/ask/scoped",
+                json={"question": "fallback?"},
+                headers={"X-Active-Context-Session": session_id, "X-Active-Context-Override": bad},
+            )
+            assert refused.status_code in {401, 409}, refused.text
+            assert "unknown-override-bearer" not in refused.text
+        assert len(seen) == calls
+    finally:
+        ask_routes._HYBRID_WARMED = False

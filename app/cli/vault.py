@@ -13,7 +13,8 @@ from pathlib import Path
 
 import click
 
-from app.vault.manager import get_vault_manager
+from app.cli.vault_context import resolve_cli_vault_context
+from app.vault.manager import VaultManager
 from app.vault.promotion_preflight import vault_settings_preflight
 
 _ROLES = ["primary", "satellite", "automationNode", "testNode", "readOnlySatellite"]
@@ -38,8 +39,12 @@ def vault() -> None:
 def vault_init(vault_path: str, vault_name: str | None, machine_role: str, remember: bool) -> None:
     """Scaffold vault-settings files (idempotent) and select the vault."""
 
-    result = get_vault_manager().initialize_vault(
-        Path(vault_path),
+    # The required --path is this invocation's one explicit context (MVR-05B4a);
+    # initializing it never consults the process-selected vault.
+    carrier = resolve_cli_vault_context(vault_path)
+    assert carrier.root is not None  # --path is required and non-blank
+    result = VaultManager().initialize_vault(
+        carrier.root,
         vault_name=vault_name,
         machine_role=machine_role,  # type: ignore[arg-type]
         remember=remember,

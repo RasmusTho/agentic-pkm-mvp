@@ -2,7 +2,7 @@
 
 Two residuals from the 2026-06-18 terminal review-thread audit (#2148):
 
-1. ``_active_recall_vault_root`` (app/agents/ask/graph.py) read only the live
+1. ``_compatibility_recall_vault_root`` (app/agents/ask/graph.py) read only the live
    ``VaultManager.context``. After an API restart the manager boots with an
    empty no-vault context; the persisted last-active vault is materialized only
    on demand. So ASK recall silently fell back to ``VAULT_ROOT`` (or ``None``)
@@ -75,7 +75,7 @@ def test_recall_vault_lazily_loads_persisted_vault_after_restart(tmp_path: Path,
     manager = _RestartedVaultManager(_selected(persisted_root))
     monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
 
-    resolved = ask_graph._active_recall_vault_root()
+    resolved = ask_graph._compatibility_recall_vault_root()
 
     assert manager.load_last_active_calls == 1
     assert resolved == persisted_root.resolve()
@@ -93,7 +93,7 @@ def test_recall_vault_prefers_explicit_env_over_last_active(tmp_path: Path, monk
     manager = _RestartedVaultManager(_selected(persisted_root))
     monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
 
-    resolved = ask_graph._active_recall_vault_root()
+    resolved = ask_graph._compatibility_recall_vault_root()
 
     assert manager.load_last_active_calls == 0
     assert resolved == env_root.resolve()
@@ -113,7 +113,7 @@ def test_recall_vault_prefers_scoped_test_env_over_last_active(tmp_path: Path, m
     manager = _RestartedVaultManager(_selected(persisted_root))
     monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
 
-    resolved = ask_graph._active_recall_vault_root()
+    resolved = ask_graph._compatibility_recall_vault_root()
 
     assert manager.load_last_active_calls == 0
     assert resolved == scoped_root.resolve()
@@ -136,7 +136,7 @@ def test_recall_vault_does_not_reload_when_already_selected(tmp_path: Path, monk
     manager = _LiveManager()
     monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
 
-    resolved = ask_graph._active_recall_vault_root()
+    resolved = ask_graph._compatibility_recall_vault_root()
 
     assert resolved == selected_root.resolve()
     assert manager.load_last_active_calls == 0
@@ -161,7 +161,7 @@ def test_recall_vault_uses_selected_when_env_root_is_missing(tmp_path: Path, mon
     manager = _LiveManager()
     monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
 
-    resolved = ask_graph._active_recall_vault_root()
+    resolved = ask_graph._compatibility_recall_vault_root()
 
     assert resolved == selected_root.resolve()
     assert manager.load_last_active_calls == 0
@@ -183,7 +183,7 @@ def test_recall_vault_falls_back_to_env_when_no_persisted_vault(tmp_path: Path, 
 
     monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: _NoVaultManager())
 
-    resolved = ask_graph._active_recall_vault_root()
+    resolved = ask_graph._compatibility_recall_vault_root()
 
     assert resolved == env_root.resolve()
 
@@ -198,8 +198,8 @@ def test_recall_vault_id_loads_matching_persisted_binding_for_env_root(
     manager = _RestartedVaultManager(_selected(env_root))
     monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
 
-    resolved = ask_graph._active_recall_vault_root()
-    vault_id = ask_graph._active_recall_vault_id(resolved)
+    resolved = ask_graph._compatibility_recall_vault_root()
+    vault_id = ask_graph._compatibility_recall_vault_id(resolved)
 
     assert resolved == env_root.resolve()
     assert vault_id == "vault-persisted"
@@ -223,7 +223,7 @@ def test_recall_vault_id_rejects_stale_selected_id_for_env_root(
     monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
     setattr(manager, ask_graph._ASK_LAST_ACTIVE_LOADED_ATTR, True)
 
-    vault_id = ask_graph._active_recall_vault_id(env_root)
+    vault_id = ask_graph._compatibility_recall_vault_id(env_root)
 
     assert vault_id == f"path:{env_root.resolve()}"
 
