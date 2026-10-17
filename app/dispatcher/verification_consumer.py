@@ -4337,6 +4337,24 @@ class VerificationConsumer:
         self.host_fenced_merge = callable(
             getattr(ledger, "mark_merge_ready", None)
         )
+        self._native_conflict_recovery: (
+            Callable[[VerificationRun], object] | None
+        ) = None
+
+    def bind_native_conflict_recovery(
+        self,
+        recovery: Callable[[VerificationRun], object],
+    ) -> None:
+        """Bind the one same-ledger executor recovery path used after merge."""
+
+        if not callable(recovery):
+            raise ValueError("native conflict recovery callback is unavailable")
+        if (
+            self._native_conflict_recovery is not None
+            and self._native_conflict_recovery != recovery
+        ):
+            raise ValueError("native conflict recovery callback is already bound")
+        self._native_conflict_recovery = recovery
 
     @staticmethod
     def _lease_is_live(run: VerificationRun) -> bool:
@@ -4517,6 +4535,105 @@ class VerificationConsumer:
             actor_login=actor_login,
         )
         return {**evidence, **dict(closure)}
+
+    @staticmethod
+    def _late_native_closure_targets(
+        run: VerificationRun,
+        evidence: Mapping[str, object],
+    ) -> tuple[int, ...]:
+        """Return only exact-PR unexpected closures eligible for compensation."""
+
+        if (
+            not isinstance(evidence.get("native_merge"), Mapping)
+            or evidence.get("closure_scan_complete") is not True
+        ):
+            return ()
+        observed = evidence.get("observed_closing_issues")
+        issue_evidence = evidence.get("issue_evidence")
+        if not isinstance(observed, list) or not isinstance(issue_evidence, list):
+            return ()
+        rows = [item for item in issue_evidence if isinstance(item, Mapping)]
+        try:
+            reconciliation = plan_post_merge_reconciliation(
+                pr_number=run.pr_number,
+                authenticated_closing_issues=run.closing_authority,
+                observed_closing_issues=observed,
+                issue_evidence=rows,
+            )
+        except ValueError:
+            # Malformed or incomplete evidence keeps the existing rejection
+            # path but cannot acquire compensation authority.
+            return ()
+        targets = reconciliation["reopen_unauthorized"]
+        by_number = {item.get("number"): item for item in rows}
+        if any(
+            by_number[number].get("state") != "closed"
+            or by_number[number].get("closed_by_delivery") is not True
+            or by_number[number].get("closed_by_pull_requests")
+            != [run.pr_number]
+            for number in targets
+        ):
+            raise ValueError(
+                "native closure compensation attribution is incomplete"
+            )
+        return tuple(targets)
+
+    def _refuse_late_native_closure(
+        self,
+        run: VerificationRun,
+        evidence: Mapping[str, object],
+    ) -> tuple[tuple[int, ...], str | None]:
+        """Persist refusal before delegating bounded compensation to recovery."""
+
+        targets = self._late_native_closure_targets(run, evidence)
+        if not targets:
+            return (), None
+        native = evidence.get("native_merge")
+        operation_key = (
+            native.get("operation_key")
+            if isinstance(native, Mapping)
+            else None
+        )
+        if (
+            not isinstance(operation_key, str)
+            or not run.claimed_by
+            or not run.lease_id
+        ):
+            raise ValueError(
+                "late native closure lacks current operation ownership"
+            )
+        writer = getattr(self.ledger, "record_native_merge_conflict", None)
+        if not callable(writer):
+            raise ValueError("native refusal writer is unavailable")
+        writer(
+            run.run_id,
+            operation_key,
+            holder=run.claimed_by,
+            lease_id=run.lease_id,
+        )
+        pending_reader = getattr(self.ledger, "pending_effect_binding", None)
+        pending = (
+            pending_reader(run.run_id)
+            if callable(pending_reader)
+            else None
+        )
+        if (
+            not isinstance(pending, Mapping)
+            or pending.get("operation_key") != operation_key
+            or pending.get("native_merge_identity_conflict") is not True
+        ):
+            raise ValueError("late native closure refusal was not durable")
+
+        if self._native_conflict_recovery is None:
+            return targets, "native_conflict_recovery_unavailable"
+        try:
+            # The executor recovery path reauthenticates the complete retained
+            # operation, performs a fresh database-clock/version-bound task CAS
+            # before credential resolution and every PATCH, and never replays PUT.
+            self._native_conflict_recovery(run)
+        except Exception as exc:
+            return targets, type(exc).__name__
+        return targets, "native_conflict_recovery_returned"
 
     def _merged_recovery_pack(
         self,
@@ -4815,6 +4932,24 @@ class VerificationConsumer:
             live_checks = self.truth.checks(claimed.repository, claimed.current_head_sha)
             evidence = self._read_delivery_evidence(claimed, live_pr,
                 expected_repair_budget=self.ledger.repair_budget_projection(claimed.run_id))
+            late_targets, recovery_result = self._refuse_late_native_closure(
+                claimed,
+                evidence,
+            )
+            if late_targets:
+                return self.ledger.backoff(
+                    claimed.run_id,
+                    {
+                        "outcome": "blocked",
+                        "reason": "unauthorized_closure",
+                        "native_merge_identity_conflict": True,
+                        "reopen_unauthorized": list(late_targets),
+                        "native_conflict_recovery": recovery_result,
+                    },
+                    _retry_at(),
+                    holder=self.holder,
+                    lease_id=claimed.lease_id or "",
+                )
             rejection = delivered_live_truth_rejection(claimed, live_pr, live_checks, evidence,
                 expected_head_sha=claimed.current_head_sha,
                 expected_repair_budget=authority_repair_budget, native_admission=self._native_delivery_admitted)

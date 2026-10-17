@@ -67,8 +67,7 @@ def native_authority(*, body=NATIVE_BODY, closers=(3603,), state="open", drift=N
         "base": {"sha": BASE, "ref": "main", "repo": {"full_name": REPO}},
         "html_url": f"https://github.com/{REPO}/pull/{pr_number}",
     }
-    issue = {"number": 3603, "state": state, "body": "contract",
-             "updated_at": "2026-10-11T00:00:00Z", "repository_url": f"https://api.github.com/repos/{REPO}"}
+    issue_states = {3603: state}
     calls = []
 
     def handler(request):
@@ -80,7 +79,7 @@ def native_authority(*, body=NATIVE_BODY, closers=(3603,), state="open", drift=N
                 return httpx.Response(merge_status, json={"message": "expected head conflict"})
             pull.update(merged=True, state="closed", merged_at="2026-10-11T00:00:00Z",
                         merge_commit_sha="d" * 40, merged_by={"login": "RasmusTho"})
-            issue["state"] = "closed"
+            issue_states[3603] = "closed"
             if post_merge_body is not None:
                 pull["body"] = post_merge_body
             return httpx.Response(200, json={"merged": True, "sha": returned_sha or "d" * 40})
@@ -128,9 +127,16 @@ def native_authority(*, body=NATIVE_BODY, closers=(3603,), state="open", drift=N
                 current.update(drift)
             return httpx.Response(200, json=current)
         if "/issues/" in request.url.path:
+            number = int(request.url.path.rsplit("/", 1)[1])
             if request.method == "PATCH":
-                issue["state"] = "open"
-            return httpx.Response(200, json={**issue, "number": int(request.url.path.rsplit("/", 1)[1])})
+                issue_states[number] = "open"
+            return httpx.Response(200, json={
+                "number": number,
+                "state": issue_states.get(number, "closed"),
+                "body": "contract",
+                "updated_at": "2026-10-11T00:00:00Z",
+                "repository_url": f"https://api.github.com/repos/{REPO}",
+            })
         return httpx.Response(200, json={"default_branch": "main", "full_name": REPO})
 
     authority = GitHubProtectedRepositoryAuthority(
@@ -702,6 +708,270 @@ def test_native_single_closer_terminal_consumer_and_merged_recovery_use_durable_
     evidence["native_merge"]["post_effect_authority"]["phase"] = "pending"
     assert delivered_live_truth_rejection(run, pr, GREEN, evidence,
         expected_head_sha=HEAD, expected_repair_budget=budget, native_admission=consumer._native_delivery_admitted) is not None
+
+
+def test_native_consumer_final_scan_persists_refusal_and_recovers_compensation():
+    from tests.dispatcher.test_verification_consumer import GREEN, Auth
+
+    executor, run, _, calls = native_executor(pr_number=3605)
+
+    class ClosureSource:
+        mode = "clean"
+
+        def issue_set_closure_evidence(self, *args, **kwargs):
+            numbers = (3603, 3604) if self.mode == "late-conflict" else (3603,)
+            return {
+                "closure_scan_complete": True,
+                "observed_closing_issues": list(numbers),
+                "issue_evidence": [
+                    {
+                        "number": number,
+                        "state": "closed",
+                        "closed_by_delivery": True,
+                        "closed_by_pull_requests": [run.pr_number],
+                    }
+                    for number in numbers
+                ],
+            }
+
+    closure_source = ClosureSource()
+    executor.repository.closure_source = closure_source
+    executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert len([call for call in calls if call.method == "PUT"]) == 1
+
+    comment_targets = []
+
+    class NativeTruth:
+        def pull_request(self, repository, number):
+            return executor.repository._pull(REPO, run.pr_number)
+
+        def checks(self, repository, head):
+            return GREEN
+
+        def issue_contract(self, repository, number):
+            issue = executor.repository.issue_delivery_source(repository, number)
+            return {
+                "number": number,
+                "repository": repository,
+                "state": issue["state"],
+                "body_sha256": hashlib.sha256(issue["body"].encode()).hexdigest(),
+            }
+
+        def merge_commit(self, repository, sha):
+            return {
+                "repository": repository,
+                "sha": sha,
+                "message": fixed_verified_merge_commit_title(run.pr_number)
+                + "\n\n"
+                + FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+            }
+
+        def pull_request_comments(self, repository, number):
+            comment_targets.append(number)
+            if number == run.pr_number:
+                return []
+            assert number == run.closing_authority[0]
+            return [
+                {
+                    "author_association": "OWNER",
+                    "body": (
+                        f"post-merge owner-doc check: PR #{run.pr_number}; "
+                        "updated in PR"
+                    ),
+                }
+            ]
+
+        def issue_set_closure_evidence(self, *args, **kwargs):
+            return closure_source.issue_set_closure_evidence(*args, **kwargs)
+
+    api = executor.ledger.client
+    api.tasks[run.run_id]["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    closure_source.mode = "late-conflict"
+    consumer = VerificationConsumer(
+        executor.ledger,
+        NativeTruth(),
+        Auth(),
+        object(),
+        holder="consumer-recovery-host",
+    )
+    callback_observations = []
+
+    def recover_conflict(claimed):
+        callback_observations.append(
+            executor.ledger.pending_effect_binding(claimed.run_id)[
+                "native_merge_identity_conflict"
+            ]
+        )
+        return executor.recover(claimed)
+
+    consumer.bind_native_conflict_recovery(recover_conflict)
+    recoverable = executor.ledger.get(run.run_id)
+    assert recoverable is not None
+    blocked = consumer._recover_merged_run(
+        recoverable,
+        consumer.truth.pull_request(REPO, run.pr_number),
+    )
+
+    assert blocked.status == "backoff"
+    assert blocked.terminal_receipt["reason"] == "unauthorized_closure"
+    assert blocked.terminal_receipt["reopen_unauthorized"] == [3604]
+    assert callback_observations == [True]
+    assert executor.ledger.pending_effect_binding(run.run_id)[
+        "native_merge_identity_conflict"
+    ] is True
+    assert len([call for call in calls if call.method == "PUT"]) == 1
+    assert len([
+        call for call in calls
+        if call.method == "PATCH" and call.url.path.endswith("/issues/3604")
+    ]) == 1
+    assert not any(
+        call.method == "PATCH" and call.url.path.endswith("/issues/3603")
+        for call in calls
+    )
+    assert executor.repository.issue_delivery_source(REPO, 3603)["state"] == "closed"
+    assert executor.repository.issue_delivery_source(REPO, 3604)["state"] == "open"
+
+    # A fresh consumer sees a clean post-compensation scan. The durable flag,
+    # rather than incidental governing-Issue drift, must still refuse delivery.
+    api.tasks[run.run_id]["payload"]["run"]["retry_after"] = (
+        "2000-01-01T00:00:00+00:00"
+    )
+    closure_source.mode = "clean"
+    restarted_ledger = BuilderOpsVerificationLedger(
+        api,
+        repository=REPO,
+        effect_outbox=executor.outbox,
+        post_effect_deployment=deployed_post_effect(),
+    )
+    restarted = VerificationConsumer(
+        restarted_ledger,
+        NativeTruth(),
+        Auth(),
+        object(),
+        holder="restarted-consumer-host",
+    )
+    restarted.bind_native_conflict_recovery(
+        VerificationMergeExecutor(
+            restarted_ledger,
+            executor.outbox,
+            executor.repository,
+            executor.credentials,
+        ).recover
+    )
+    restarted_run = restarted_ledger.get(run.run_id)
+    assert restarted_run is not None
+    with pytest.raises(
+        ValueError,
+        match="native delivery task/outbox/review authority is incomplete",
+    ):
+        restarted._recover_merged_run(
+            restarted_run,
+            restarted.truth.pull_request(REPO, run.pr_number),
+        )
+
+    refused = restarted_ledger.get(run.run_id)
+    assert refused is not None and refused.status != "completed"
+    assert executor.ledger.pending_effect_binding(run.run_id)[
+        "native_merge_identity_conflict"
+    ] is True
+    assert len([call for call in calls if call.method == "PUT"]) == 1
+
+
+@pytest.mark.parametrize("callback_mode", ["absent", "raises"])
+def test_native_consumer_late_closure_retains_refusal_when_recovery_unavailable(
+    callback_mode,
+):
+    from tests.dispatcher.test_verification_consumer import Auth
+
+    executor, run, _, calls = native_executor(pr_number=3605)
+    executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    pending = executor.ledger.pending_effect_binding(run.run_id)
+    consumer = VerificationConsumer(
+        executor.ledger,
+        object(),
+        Auth(),
+        object(),
+        holder="verification-host",
+    )
+    callback_observations = []
+    if callback_mode == "raises":
+        def failing_callback(current):
+            callback_observations.append(
+                executor.ledger.pending_effect_binding(current.run_id)[
+                    "native_merge_identity_conflict"
+                ]
+            )
+            raise RuntimeError("simulated recovery outage")
+
+        consumer.bind_native_conflict_recovery(failing_callback)
+    evidence = {
+        "native_merge": {"operation_key": pending["operation_key"]},
+        "closure_scan_complete": True,
+        "observed_closing_issues": [3603, 3604],
+        "issue_evidence": [
+            {
+                "number": 3603,
+                "state": "closed",
+                "closed_by_delivery": True,
+                "closed_by_pull_requests": [run.pr_number],
+            },
+            {
+                "number": 3604,
+                "state": "closed",
+                "closed_by_delivery": True,
+                "closed_by_pull_requests": [run.pr_number],
+            },
+        ],
+    }
+
+    targets, outcome = consumer._refuse_late_native_closure(run, evidence)
+
+    assert targets == (3604,)
+    assert outcome == (
+        "native_conflict_recovery_unavailable"
+        if callback_mode == "absent"
+        else "RuntimeError"
+    )
+    assert callback_observations == ([True] if callback_mode == "raises" else [])
+    assert executor.ledger.pending_effect_binding(run.run_id)[
+        "native_merge_identity_conflict"
+    ] is True
+    assert not any(call.method == "PATCH" for call in calls)
+
+
+def test_native_consumer_never_lends_refusal_to_non_native_evidence():
+    executor, run, _, _ = native_executor(pr_number=3605)
+    consumer = VerificationConsumer(
+        executor.ledger,
+        object(),
+        object(),
+        object(),
+        holder="verification-host",
+    )
+    evidence = {
+        "closure_scan_complete": True,
+        "observed_closing_issues": [3603, 3604],
+        "issue_evidence": [],
+    }
+
+    assert consumer._late_native_closure_targets(run, evidence) == ()
+
+    malformed_native_evidence = {
+        **evidence,
+        "native_merge": {"operation_key": "operation-3605"},
+        "issue_evidence": [
+            {
+                "number": 3603,
+                "state": "closed",
+                "closed_by_delivery": True,
+                "closed_by_pull_requests": [run.pr_number],
+            },
+        ],
+    }
+    assert consumer._late_native_closure_targets(
+        run,
+        malformed_native_evidence,
+    ) == ()
 
 
 @pytest.mark.parametrize("page", [{"hasNextPage": True, "endCursor": None},

@@ -438,9 +438,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   remains the sole durable writer fence. One serialized final reread precedes REST merge with the
   exact expected head SHA and fixed non-closing title/message; expected-head conflict is not a retry
   authorization. Returned and fetched merge SHAs must agree, and the fetched commit text must match.
-  A contradictory returned identity preserves the existing outbox terminal-unknown/dead-letter
-  refusal, permits only exact-attributed defensive compensation, and requires governed repair;
-  generic transport recovery cannot turn that contradiction into a successful merge receipt.
+  A contradictory returned identity durably preserves the task's operation-bound
+  `native_merge_identity_conflict` refusal. Depending on the discovery point, the outbox may remain
+  pending or unknown, or may already be succeeded; the refusal does not rewrite it into a terminal
+  dead-letter. Only exact-attributed defensive compensation is permitted, and governed repair is
+  required; generic transport recovery cannot turn that contradiction into a successful merge receipt.
 - Before returning a native merge receipt, the executor requires the same operation's authenticated
   #4897 reconciled post-effect authority and unchanged deployed identity. It reuses bounded repository
   event enumeration and exact PR/repository/merge-SHA closure attribution, verifies the sole closer
@@ -453,6 +455,17 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   never another merge. A merge receipt is not terminal delivery:
   PR-specific owner-doc receipts and the governing verification workflow's final lifecycle/readback
   gates still apply. Repository delivery of this integration does not claim deployment.
+- The native consumer's final merged-recovery scan is another producer of that same refusal. If the
+  freshly claimed consumer observes a complete unexpected-closure record attributed to the exact
+  PR/repository/merge SHA after the executor's earlier scan was clean, it persists the existing
+  operation-bound conflict before delegating compensation to the same-ledger executor recovery path.
+  A missing or failed callback cannot clear the conflict or admit a later clean scan; unrelated PR
+  closures, manual closes, open references, and incomplete attribution receive no compensation
+  authority. The fresh database-clock/version-bound task transition is a compensation-only recovery
+  fence before credential resolution and each reopen write. An ordinary clean executor scan may
+  resolve the protected credential while determining that no compensation is needed, but it cannot
+  perform a reopen write without the per-write fence above; this narrower ordering is not additional
+  write authority.
 
 - Verification dispatch request v3 binds one non-empty, sorted set of at most 10 closing issues and
   one authenticated `final_review_rounds` value to
