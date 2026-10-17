@@ -35,6 +35,22 @@ These slices implement the bounded capability described by this directory. They 
 memory a hidden source of truth and do not allow unreviewed memory to authorize writes. Delivery
 evidence for each slice is recorded under [Relationship to GitHub Issues](#relationship-to-github-issues).
 
+The shipped semantic-memory materialization path preserves the recorded human promotion decision as
+its approval input. Before creating the exact HKA note, MEM asks GOV for and validates a
+reviewer-, action-, write-class-, and target-bound DecisionToken. HKA then returns its create-once
+mutation receipt, and GOV records a distinct AuthorityReceipt before the promotion becomes terminal.
+Retries reconcile those durable facts by the stable materialization identity without rewriting the
+artifact or historical receipts. The owned receipt-source marker reserves the exact target before
+HKA and clears that reservation only after the applied promotion receipt is durable; an uncertain
+retry with a remaining reservation requires explicit remediation without choosing another path. An
+active marker version requires the reservation map itself, so losing that field also fails closed;
+a field-less legacy marker is upgraded only at safe initialization after its required receipt history
+is complete. An
+artifact without its durable governed mutation receipt is not enough to reconstruct authority and
+requires explicit remediation. This applies only to reviewed
+semantic-memory promotion; it does not ship recall activation, forgetting, non-semantic promotion,
+or broader multi-vault target behavior.
+
 ## Relationship to the Contract
 
 `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` defines what agent memory is, what it is not,

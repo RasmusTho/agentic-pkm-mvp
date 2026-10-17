@@ -4,8 +4,10 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 import yaml
@@ -18,6 +20,7 @@ BROWSER_WORKFLOW = WORKFLOWS_DIR / "browser-runtime.yml"
 IMAGE_WORKFLOW = WORKFLOWS_DIR / "app-image-build.yml"
 IMPORT_LINTER_WORKFLOW = WORKFLOWS_DIR / "import-linter.yaml"
 INTEGRATION_NIGHTLY_WORKFLOW = WORKFLOWS_DIR / "integration-nightly.yaml"
+RELEASE_UAT_WORKFLOW = WORKFLOWS_DIR / "release-uat.yaml"
 ARCHITECTURE_CI_WORKFLOW = WORKFLOWS_DIR / "architecture-ci.yaml"
 FAILURE_CONTEXT_WORKFLOW = WORKFLOWS_DIR / "pr-ci-failure-context.yml"
 OVERVIEW_JOURNEY_MODULE = "tests/companion_ui/test_devui_overview_journeys.py"
@@ -103,6 +106,129 @@ def _python_heredoc(script: str) -> str:
     return match.group("body")
 
 
+CI_FITNESS_CALLERS = (
+    (CI_SMOKE_WORKFLOW, "smoke", "Fitness report (QAS-003/QAS-010)", "Verify CI summary lines"),
+    (INTEGRATION_NIGHTLY_WORKFLOW, "full-suite", "Fitness report", "Verify CI gates"),
+    (RELEASE_UAT_WORKFLOW, "uat-gate", "Fitness report", "Verify CI gates"),
+)
+CI_FITNESS_NODE = (
+    "tests/fitness/test_ci_fitness.py::"
+    "test_ci_report_entrypoint_uses_scoped_product_gateway_fixture"
+)
+
+
+def _run_ci_fitness_workflow(tmp_path: Path, caller: tuple, *, failure: str = ""):
+    """Execute the real producer and parser over disposable copies of the seed inputs."""
+    workflow_path, job_name, report_name, verify_name = caller
+    job = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))["jobs"][job_name]
+    report_step = next(step for step in job["steps"] if step.get("name") == report_name)
+    verify_step = next(step for step in job["steps"] if step.get("name") == verify_name)
+    for relative in (
+        "conftest.py", "pytest.ini", "tests/conftest.py", "tests/fitness/test_ci_fitness.py",
+        "ops/quality/baselines.yaml",
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / relative, destination)
+    shutil.copytree(REPO_ROOT / "data/golden", tmp_path / "data/golden")
+    for name in ("app", "llm_contract", "docs", "config", "configs", "companion-ui"):
+        source = REPO_ROOT / name
+        if source.exists():
+            (tmp_path / name).symlink_to(source, target_is_directory=True)
+    (tmp_path / "tmp").mkdir()
+    environment = {
+        "PATH": f"{Path(sys.executable).parent}:{os.defpath}",
+        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "STORE_BACKEND": "memory",
+        "LLM_PROVIDER": "mock",
+        "REASONING_PROVIDER": "mock",
+        "PLANNER_PROVIDER": "mock",
+        "REASONING_ENABLE": "1",
+        "INDEX_PERSIST_PATH": str(tmp_path / "tmp/index.jsonl"),
+    }
+    diarization = tmp_path / "data/golden/diarization_sample.jsonl"
+    if failure == "missing_metric":
+        diarization.unlink()
+    elif failure == "malformed_metric":
+        diarization.write_text("{invalid metric input\n", encoding="utf-8")
+    elif failure == "failed_gate":
+        (tmp_path / "data/golden/relations.json").write_text(
+            '{"promoted": []}', encoding="utf-8"
+        )
+    elif failure == "missing_thresholds":
+        environment["THRESHOLDS_PATH"] = str(tmp_path / "missing-thresholds.yaml")
+    result = subprocess.run(
+        ["bash", "-c", report_step["run"] + "\n" + verify_step["run"]],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60,
+    )
+    log = (tmp_path / "tmp/ci_summary.log").read_text(encoding="utf-8")
+    return result, log, job, report_step
+
+
+@pytest.mark.parametrize("caller", CI_FITNESS_CALLERS, ids=("smoke", "nightly", "release-uat"))
+def test_ci_fitness_callers_use_the_scoped_functional_producer(tmp_path: Path, caller: tuple) -> None:
+    from app.fitness.report import SUMMARY_LABELS, parse_summary_lines
+
+    discovered = set()
+    for workflow_path in WORKFLOWS_DIR.iterdir():
+        if workflow_path.suffix not in {".yaml", ".yml"}:
+            continue
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        for job_name, job_definition in workflow.get("jobs", {}).items():
+            for step in job_definition.get("steps", []):
+                command = step.get("run", "")
+                if CI_FITNESS_NODE in command or re.search(
+                    r"\bpython(?:3)?\s+-m\s+app\.fitness\.report\b", command
+                ):
+                    discovered.add((workflow_path, job_name, step.get("name")))
+    assert discovered == {
+        (path, job_name, report_name)
+        for path, job_name, report_name, _verify_name in CI_FITNESS_CALLERS
+    }
+    result, log, job, report_step = _run_ci_fitness_workflow(tmp_path, caller)
+    assert report_step.get("shell") == "bash"
+    assert "set -euo pipefail" in report_step["run"]
+    assert "python -m pytest -q -s" in report_step["run"]
+    assert CI_FITNESS_NODE in report_step["run"]
+    assert "2>&1 | tee tmp/ci_summary.log" in report_step["run"]
+    assert "continue-on-error" not in report_step
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in log
+    assert "CI gates status: true" in result.stdout
+    parsed = parse_summary_lines(log.splitlines(), required=SUMMARY_LABELS)
+    assert set(parsed) == set(SUMMARY_LABELS)
+    assert parsed["GATES"]["ok"] is True
+    uploads = [step for step in job["steps"] if step.get("uses") == "actions/upload-artifact@v4"]
+    assert any(
+        step.get("if") == "always()" and "tmp/ci_summary.log" in step["with"]["path"]
+        for step in uploads
+    )
+
+
+@pytest.mark.parametrize("caller", CI_FITNESS_CALLERS, ids=("smoke", "nightly", "release-uat"))
+@pytest.mark.parametrize(
+    ("failure", "cause"),
+    (
+        ("missing_metric", "DIA_P95"),
+        ("malformed_metric", "JSONDecodeError"),
+        ("failed_gate", "REL_COV,REL_VAL"),
+        ("missing_thresholds", "FileNotFoundError"),
+    ),
+)
+def test_ci_fitness_producer_propagates_report_failure(
+    tmp_path: Path, caller: tuple, failure: str, cause: str
+) -> None:
+    result, log, _job, _step = _run_ci_fitness_workflow(tmp_path, caller, failure=failure)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert cause in log
+    assert "app/fitness/" in log
+    assert "1 failed" in log
+    assert "CI gates status:" not in result.stdout
+    assert "CI SUMMARY GATES ok=true" not in log
+
+
 def _unit_tests_job_text() -> str:
     workflow = _smoke_text()
     return workflow[
@@ -130,7 +256,7 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
 
     assert "Select subsystem-scoped pytest targets" in job
     assert "scripts/select_pr_tests.py" in job
-    assert "steps.select-tests.outputs.pytest_args }} --durations=20" in job
+    assert "steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20" in job
     assert "Run shared not-pg unit tests in process shards" in job
     assert "xargs -r -n 1 -P 4 bash -c" in job
     assert "tests/invariants/test_vault_multiwriter.py" in job
@@ -140,7 +266,7 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
     assert "tests/eval/test_classification_golden.py" in job
 
 
-def _run_full_suite_workflow(tmp_path: Path, *, failing_shard: str = ""):
+def _run_full_suite_workflow(tmp_path: Path, *, failing_shard: str = "", mode: str = "success"):
     """Execute the checked-in shell with a fake pytest, including nested tests."""
     files = (
         "tests/alpha/test_root.py", "tests/alpha/nested/test_child.py",
@@ -160,16 +286,34 @@ def _run_full_suite_workflow(tmp_path: Path, *, failing_shard: str = ""):
         f"#!{sys.executable}\n" + r'''
 import os
 from pathlib import Path
+import signal
 import sys
+import time
 args = sys.argv[1:]
 targets = [arg for arg in args if arg.startswith("tests/")]
 ignored = {arg.split("=", 1)[1] for arg in args if arg.startswith("--ignore=")}
+assert os.environ["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+active = Path("active")
+active.mkdir(exist_ok=True)
+token = active / str(os.getpid())
+if targets[0] == "tests/ops":
+    assert not list(active.iterdir()), "serial boundary overlapped parallel pytest"
+else:
+    token.touch()
+    time.sleep(0.05)
 for target in targets:
     path = Path(target)
     files = sorted(path.rglob("test_*.py")) if path.is_dir() else [path]
     for file in files:
         if str(file) not in ignored:
             print(f"EXECUTED {file}")
+if os.environ.get("MODE") == "incomplete" and targets[0] == "tests/alpha":
+    print("PARTIAL synthetic regression", flush=True)
+    token.unlink()
+    os.kill(os.getppid(), signal.SIGKILL)
+    sys.exit(1)
+if token.exists():
+    token.unlink()
 if targets[0] == os.environ.get("FAILING_SHARD"):
     print("FAILED synthetic regression")
     sys.exit(1)
@@ -184,6 +328,7 @@ print("1 passed")
     result = subprocess.run(
         ["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
         env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             **step["env"], "GITHUB_SHA": "fixture-sha", "MODE": mode,
              "RUNNER_TEMP": str(tmp_path / "runner"), "FAILING_SHARD": failing_shard},
         timeout=30,
     )
@@ -204,6 +349,25 @@ def test_full_suite_shards_cover_test_files_once(tmp_path: Path) -> None:
                              "tests/invariants/test_vault_multiwriter.py"]
 
 
+def test_required_unit_full_suite_phase_budget_preserves_complete_coverage(tmp_path: Path) -> None:
+    result, _files, job = _run_full_suite_workflow(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    step = next(s for s in job["steps"] if s.get("name") ==
+                "Run shared not-pg unit tests in process shards")
+    # Two measured 35-minute cancellations followed successful parallel shards;
+    # the slowest observed parallel phase alone took nearly 31 minutes.
+    assert step["timeout-minutes"] == 60
+    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert "xargs -r -n 1 -P 4 bash -c" in step["run"]
+    receipt = json.loads((tmp_path / "runner/pytest-not-pg-shards/phase-margin.json").read_text())
+    assert receipt["schema"] == "required-unit-phase-margin.v1"
+    assert receipt["github_sha"] == "fixture-sha"
+    assert receipt["outer_budget_seconds"] == step["timeout-minutes"] * 60
+    assert receipt["per_test_timeout_seconds"] == 120
+    assert receipt["phase"] == "complete" and receipt["exit_status"] == 0
+    assert receipt["total_seconds"] >= receipt["parallel_seconds"] + receipt["serial_seconds"]
+
+
 @pytest.mark.parametrize(
     "step_name",
     ["Run shared not-pg unit tests in process shards", "Run scoped not-pg unit tests"],
@@ -219,17 +383,416 @@ def test_not_pg_steps_have_room_for_selected_coverage(step_name: str) -> None:
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
 
 
-def test_full_suite_shards_retain_failure_logs(tmp_path: Path) -> None:
-    result, _files, job = _run_full_suite_workflow(tmp_path, failing_shard="tests/alpha")
+def test_scoped_unit_budget_preserves_selected_coverage() -> None:
+    job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
+    step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
+    assert step["timeout-minutes"] == 60
+    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert step["if"] == (
+        "steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'"
+    )
+    assert step["shell"] == "bash"
+    assert "continue-on-error" not in step
+    assert step["run"] == (
+        "set -o pipefail\n"
+        'echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"\n'
+        'echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"\n'
+        "pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20 | tee pytest-not-pg.log\n"
+    )
+
+
+
+@pytest.mark.parametrize("pytest_exit", [0, 7])
+def test_scoped_unit_budget_preserves_selected_command_and_failure(
+    tmp_path: Path, pytest_exit: int,
+) -> None:
+    job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
+    step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
+    assert step["timeout-minutes"] == 60
+    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert step["env"]["PYTHONUNBUFFERED"] == "1"
+    selected = "-q -m 'not pg and not eval' tests/governance tests/scripts/test_publication.py"
+    script = step["run"].replace("${{ steps.select-tests.outputs.pytest_args }}", selected)
+    script = re.sub(r"\$\{\{.*?\}\}", "fixture", script)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import json
+import os
+from pathlib import Path
+import sys
+import time
+Path("invocation.json").write_text(json.dumps({
+    "args": sys.argv[1:], "watchdog": os.environ["PYTEST_ADDOPTS"],
+    "unbuffered": os.environ["PYTHONUNBUFFERED"],
+}))
+outcome = "FAILED" if int(os.environ["FIXTURE_PYTEST_EXIT"]) else "PASSED"
+print(f"tests/fixture.py::test_scoped_result {outcome}")
+if outcome == "FAILED":
+    print("tests/fixture.py:7: AssertionError: scoped diagnostic")
+deadline = time.monotonic() + 5
+while not Path("release").exists() and time.monotonic() < deadline:
+    time.sleep(0.01)
+sys.exit(int(os.environ["FIXTURE_PYTEST_EXIT"]))
+''', encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    process = subprocess.Popen(
+        ["bash", "-c", script], cwd=tmp_path, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True,
+        env={**os.environ, **step["env"], "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             "FIXTURE_PYTEST_EXIT": str(pytest_exit)},
+    )
+    log_path = tmp_path / "pytest-not-pg.log"
+    expected_node = "tests/fixture.py::test_scoped_result " + ("FAILED" if pytest_exit else "PASSED")
+    try:
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            if log_path.exists() and expected_node in log_path.read_text():
+                break
+            time.sleep(0.01)
+        # Node evidence reaches tee before pytest completes, even through a pipe.
+        assert process.poll() is None
+        assert expected_node in log_path.read_text()
+    finally:
+        (tmp_path / "release").touch()
+        stdout, stderr = process.communicate(timeout=10)
+    assert process.returncode == pytest_exit, stdout + stderr
+    invocation = json.loads((tmp_path / "invocation.json").read_text())
+    assert invocation == {
+        "args": ["-q", "-m", "not pg and not eval", "tests/governance",
+                 "tests/scripts/test_publication.py", "-vv", "--tb=short", "--durations=20"],
+        "watchdog": "--timeout=120 --timeout-method=thread", "unbuffered": "1",
+    }
+    log = log_path.read_text()
+    assert expected_node in log
+    if pytest_exit:
+        assert "AssertionError: scoped diagnostic" in log
+    assert log in stdout
+
+
+@pytest.mark.parametrize("mode", ["shard-failure", "incomplete", "serial-failure"])
+def test_full_suite_shards_retain_failure_logs(tmp_path: Path, mode: str) -> None:
+    failing_shard = "tests/ops" if mode == "serial-failure" else "tests/alpha"
+    result, _files, job = _run_full_suite_workflow(tmp_path, failing_shard=failing_shard, mode=mode)
     assert result.returncode == 1
-    assert "SHARD FAILED (1): tests/alpha" in result.stderr
     shard_root = tmp_path / "runner" / "pytest-not-pg-shards"
-    assert "FAILED synthetic regression" in (shard_root / "logs/tests_alpha.log").read_text()
-    assert "1 tests/alpha" in (shard_root / "status").read_text()
-    assert "FAILED synthetic regression" in (tmp_path / "pytest-not-pg.log").read_text()
+    receipt = json.loads((shard_root / "phase-margin.json").read_text())
+    assert receipt["exit_status"] == 1
+    assert receipt["phase"] != "complete"
+    if mode == "incomplete":
+        assert "Process-shard runner incomplete" in result.stderr
+        assert "PARTIAL synthetic regression" in (shard_root / "logs/tests_alpha.log").read_text()
+        assert "tests/alpha" not in (shard_root / "status").read_text()
+    elif mode == "shard-failure":
+        assert "SHARD FAILED (1): tests/alpha" in result.stderr
+        assert "FAILED synthetic regression" in (shard_root / "logs/tests_alpha.log").read_text()
+        assert "1 tests/alpha" in (shard_root / "status").read_text()
+        assert "FAILED synthetic regression" in (tmp_path / "pytest-not-pg.log").read_text()
+    else:
+        assert receipt["phase"] == "serial"
+        assert "FAILED synthetic regression" in (tmp_path / "pytest-not-pg.log").read_text()
     upload = next(s for s in job["steps"] if s.get("name") == "Upload process shard logs")
     assert "always()" in upload["if"]
     assert "${{ runner.temp }}/pytest-not-pg-shards/" in upload["with"]["path"]
+
+
+def _run_nightly_suite_workflow(tmp_path: Path, *, mode: str = "success"):
+    """Run the actual nightly shell against finite, isolated pytest populations."""
+    population = {
+        "tests/alpha/test_root.py": [],
+        "tests/alpha/nested/test_pg.py": ["pg"],
+        "tests/beta/deep/test_child.py": [],
+        "tests/deploy/test_deploy_channel_script.py": [],
+        "tests/deploy/test_short.py": ["e2e"],
+        "tests/deploy/nested/test_child.py": [],
+        "tests/deploy/nested/child_test.py": ["pg"],
+        "tests/deploy/test_optin_only.py": ["eval"],
+        "tests/gamma/test_llm.py": ["alpha_llm"],
+        "tests/test_standalone.py": ["e2e"],
+        "tests/standalone_test.py": ["eval"],
+        "tests/ops/test_host.py": [],
+        "tests/ops/nested/test_host_child.py": ["human_uat"],
+        "tests/invariants/test_vault_multiwriter.py": [],
+        "tests/invariants/test_other.py": [],
+        "tests/e2e/test_root.py": ["e2e"],
+        "tests/e2e/nested/test_child.py": [],
+    }
+    for marker in (
+        "alpha_llm_live", "panel_llm_e2e", "eval", "browser_runtime",
+        "human_uat", "uat_integrated_runtime",
+    ):
+        population[f"tests/optin/test_{marker}.py"] = [marker]
+    if mode == "empty-inventory":
+        population = {}
+    elif mode == "empty-selection":
+        population = {name: ["pg"] for name in population}
+    for name in population:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    deploy_helpers = tmp_path / "tests/deploy/helpers"
+    deploy_helpers.mkdir(parents=True, exist_ok=True)
+    (deploy_helpers / "support.py").touch()
+    (tmp_path / "population.json").write_text(json.dumps(population), encoding="utf-8")
+    (tmp_path / "tmp").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_python = bin_dir / "python"
+    fake_python.write_text(
+        f"#!{sys.executable}\n" + r'''
+import fcntl
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+import xml.etree.ElementTree as ET
+from _pytest.mark.expression import Expression
+
+args = sys.argv[1:]
+if Path(sys.argv[0]).name != "pytest" and args[:2] not in (["-m", "pytest"], ["-u", "-m"]):
+    os.execv(sys.executable, [sys.executable, *args])
+population = json.loads(Path("population.json").read_text())
+targets = [arg for arg in args if arg.startswith("tests/")] or ["tests"]
+ignored = {arg.split("=", 1)[1] for arg in args if arg.startswith("--ignore=")}
+marker = args[args.index("-m", args.index("pytest") + 1 if "pytest" in args else 0) + 1]
+expression = Expression.compile(marker)
+selected = [name for name, markers in population.items()
+            if any(name == target or name.startswith(target + "/") for target in targets)
+            and name not in ignored and expression.evaluate(lambda name, **_: name in markers)]
+phase = "serial" if "tests/ops" in targets else "parallel"
+active = Path("active")
+active.mkdir(exist_ok=True)
+identity = active / str(os.getpid())
+def record(event):
+    with Path("fixture.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for child in active.iterdir():
+            try:
+                os.kill(int(child.name), 0)
+            except ProcessLookupError:
+                child.unlink()
+        if event == "start" and phase == "parallel":
+            identity.touch()
+        elif event == "finish":
+            identity.unlink(missing_ok=True)
+        with Path("events.jsonl").open("a") as events:
+            events.write(json.dumps({"event": event, "phase": phase, "targets": targets,
+                                     "active": len(list(active.iterdir())), "args": args,
+                                     "marker": marker,
+                                     "addopts": os.getenv("PYTEST_ADDOPTS"),
+                                     "unbuffered": os.getenv("PYTHONUNBUFFERED")}) + "\n")
+record("start")
+print(f"NODE START {targets[0]}::test_synthetic", flush=True)
+mode = os.environ["NIGHTLY_FIXTURE_MODE"]
+if targets[0] == "tests/alpha":
+    if mode == "terminated":
+        os.kill(os.getpid(), signal.SIGTERM)
+    if mode == "unreported":
+        os.kill(os.getppid(), signal.SIGTERM)
+    if mode == "incomplete":
+        record("finish")
+        sys.exit(0)
+if targets[0] == "tests/deploy/test_deploy_channel_script.py" and mode == "deploy-file-incomplete":
+    record("finish")
+    sys.exit(0)
+time.sleep(0.1)
+failed = (mode == "failure" and targets[0] == "tests/alpha"
+          or mode == "deploy-file-failure" and targets[0] == "tests/deploy/test_deploy_channel_script.py"
+          or mode == "serial-failure" and targets[0] == "tests/ops")
+for name in selected:
+    print(f"EXECUTED {name}", flush=True)
+    print(f"{name}::test_synthetic {'FAILED' if failed else 'PASSED'}", flush=True)
+if failed:
+    print("AssertionError: synthetic regression", flush=True)
+report = next((arg.split("=", 1)[1] for arg in args if arg.startswith("--junitxml=")), None)
+if report:
+    count = len(selected) + (mode == "miscount" and targets[0] == "tests/alpha")
+    suite = ET.Element("testsuite", tests=str(count), failures=str(len(selected) if failed else 0),
+                       errors="0", skipped="0")
+    for name in selected:
+        case = ET.SubElement(suite, "testcase", classname=name, name="test_synthetic")
+        if failed:
+            ET.SubElement(case, "failure").text = "synthetic regression"
+    ET.ElementTree(suite).write(report)
+print(f"{len(selected)} {'failed' if failed else 'passed'}" if selected else "no tests ran", flush=True)
+print("slowest durations: 0.01s test_synthetic", flush=True)
+record("finish")
+sys.exit(1 if failed else 0 if selected else 5)
+''', encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    (bin_dir / "pytest").symlink_to(fake_python)
+    job = yaml.safe_load(INTEGRATION_NIGHTLY_WORKFLOW.read_text())["jobs"]["full-suite"]
+    step = next(s for s in job["steps"] if s.get("name") == "Full test suite (memory, not pg)")
+    result = subprocess.run(
+        ["bash", "-c", step["run"]], cwd=tmp_path, capture_output=True, text=True,
+        env={**os.environ, **step.get("env", {}),
+             "PATH": f"{bin_dir}:{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path / "runner"),
+             "NIGHTLY_FIXTURE_MODE": mode}, timeout=30,
+    )
+    return result, population, job, step
+
+
+def test_nightly_suite_shards_preserve_the_full_marker_inventory(tmp_path: Path) -> None:
+    result, population, job, step = _run_nightly_suite_workflow(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    executed = re.findall(r"^EXECUTED (.+)$", (tmp_path / "tmp/nightly-pytest.log").read_text(), re.MULTILINE)
+    expected = [
+        name for name, markers in population.items()
+        if not {"pg", "alpha_llm", "eval"}.intersection(markers)
+    ]
+    assert sorted(executed) == sorted(expected)
+    shards = (tmp_path / "runner/pytest-nightly-shards/shards").read_text().splitlines()
+    expected_shards = {name if name.startswith("tests/deploy/") or name.count("/") == 1
+                       else "/".join(name.split("/")[:2])
+                       for name in population if not name.startswith("tests/ops/")}
+    assert set(shards) == expected_shards and len(shards) == len(expected_shards)
+    assert shards[0] == "tests/deploy/test_deploy_channel_script.py"
+    assert shards[1:] == sorted(set(shards[1:]))
+    assert "tests/deploy" not in shards
+    status = (tmp_path / "runner/pytest-nightly-shards/status").read_text().splitlines()
+    for deselected in ("tests/deploy/nested/child_test.py", "tests/deploy/test_optin_only.py"):
+        assert f"5 {deselected}" in status
+        report = tmp_path / "runner/pytest-nightly-shards/logs" / (deselected.replace("/", "_") + ".xml")
+        assert 'tests="0"' in report.read_text()
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    for event in events:
+        assert event["marker"] == "not pg and not alpha_llm and not eval"
+        assert "-v" in event["args"] and "--tb=short" in event["args"]
+        assert "--import-mode=importlib" in event["args"] and "--durations=30" in event["args"]
+        assert event["addopts"] == "--timeout=120 --timeout-method=thread"
+        assert event["unbuffered"] == "1"
+    assert step["timeout-minutes"] == 50 and job["timeout-minutes"] == 60
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in job.get("env", {})
+
+
+def test_nightly_memory_producer_respects_qualified_eval_lane() -> None:
+    job = yaml.safe_load(INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["full-suite"]
+    checkout = next(step for step in job["steps"] if step.get("name") == "Checkout")
+    install = next(
+        step for step in job["steps"] if step.get("name") == "Install standalone sidecar test dependencies"
+    )
+    suite = next(step for step in job["steps"] if step.get("name") == "Full test suite (memory, not pg)")
+
+    assert job["env"]["PYTHON"] == "python"
+    assert checkout["with"] == {"fetch-depth": 0}
+    assert install["run"] == (
+        "pip install --requirement mimer-mcp-sidecar/requirements.txt\n"
+        "pip install --no-deps --editable mimer-mcp-sidecar\n"
+    )
+    assert "marker='not pg and not alpha_llm and not eval'" in suite["run"]
+
+    def collect(marker: str) -> list[str]:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-p",
+                "pytest_timeout",
+                "-p",
+                "pytest_asyncio.plugin",
+                "-p",
+                "anyio.pytest_plugin",
+                "--collect-only",
+                "-q",
+                "tests/evals/test_sv_en_retrieval_eval.py",
+                "-m",
+                marker,
+            ],
+            cwd=REPO_ROOT,
+            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        prefix = "tests/evals/test_sv_en_retrieval_eval.py::"
+        return [line for line in result.stdout.splitlines() if line.startswith(prefix)]
+
+    deterministic = collect("not eval")
+    qualified_live = collect("eval")
+    assert len(deterministic) == 10
+    assert len(qualified_live) == 2
+    assert set(deterministic).isdisjoint(qualified_live)
+
+
+@pytest.mark.parametrize("mode", ["failure", "serial-failure", "terminated", "unreported",
+                                  "incomplete", "miscount", "empty-selection", "empty-inventory",
+                                  "deploy-file-failure", "deploy-file-incomplete"])
+def test_nightly_suite_failed_and_incomplete_shards_fail_closed(tmp_path: Path, mode: str) -> None:
+    result, _population, job, _step = _run_nightly_suite_workflow(tmp_path, mode=mode)
+    assert result.returncode != 0, result.stdout + result.stderr
+    root = tmp_path / "runner/pytest-nightly-shards"
+    assert (root / "shards").exists() and (root / "status").exists()
+    if mode not in {"empty-inventory", "empty-selection"}:
+        assert "NODE START tests/alpha::test_synthetic" in (root / "logs/tests_alpha.log").read_text()
+        assert "0 tests/beta" in (root / "status").read_text()
+    if mode not in {"empty-inventory", "unreported"}:
+        assert "host-sensitive" in (root / "status").read_text()
+        events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+        serial = [event for event in events if event["phase"] == "serial" and event["event"] == "start"]
+        assert len(serial) == 1 and serial[0]["active"] == 0
+    elif mode == "unreported":
+        events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+        assert not any(event["phase"] == "serial" for event in events)
+    if mode == "failure":
+        assert "AssertionError: synthetic regression" in (root / "logs/tests_alpha.log").read_text()
+        assert "1 tests/alpha" in (root / "status").read_text()
+        assert "AssertionError: synthetic regression" in result.stderr
+    elif mode == "deploy-file-failure":
+        assert "1 tests/deploy/test_deploy_channel_script.py" in (root / "status").read_text()
+        assert "AssertionError: synthetic regression" in (
+            root / "logs/tests_deploy_test_deploy_channel_script.py.log"
+        ).read_text()
+        assert "AssertionError: synthetic regression" in result.stderr
+    elif mode == "deploy-file-incomplete":
+        assert "0 tests/deploy/test_deploy_channel_script.py" in (root / "status").read_text()
+        assert not (root / "logs/tests_deploy_test_deploy_channel_script.py.xml").exists()
+        assert "incomplete" in result.stderr
+    elif mode == "serial-failure":
+        assert "1 host-sensitive" in (root / "status").read_text()
+        assert "AssertionError: synthetic regression" in (root / "logs/host-sensitive.log").read_text()
+        assert "AssertionError: synthetic regression" in result.stderr
+    elif mode == "terminated":
+        assert "143 tests/alpha" in (root / "status").read_text()
+    elif mode == "unreported":
+        assert "tests/alpha" not in (root / "status").read_text()
+        assert "incomplete" in result.stderr
+    elif mode in {"incomplete", "miscount"}:
+        assert "0 tests/alpha" in (root / "status").read_text()
+        assert "incomplete" in result.stderr
+    upload = next(s for s in job["steps"] if s.get("name") == "Upload test log")
+    assert upload["if"] == "always()"
+    assert "${{ runner.temp }}/pytest-nightly-shards/" in upload["with"]["path"]
+
+
+def test_nightly_suite_keeps_host_sensitive_tests_serial(tmp_path: Path) -> None:
+    result, _population, job, step = _run_nightly_suite_workflow(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    starts = [event for event in events if event["event"] == "start"]
+    parallel = [event for event in starts if event["phase"] == "parallel"]
+    assert 1 < max(event["active"] for event in parallel) <= 4
+    serial = [event for event in starts if event["phase"] == "serial"]
+    assert len(serial) == 1 and serial[0]["active"] == 0
+    assert serial[0]["targets"] == ["tests/ops", "tests/invariants/test_vault_multiwriter.py"]
+    first_serial = events.index(serial[0])
+    assert all(event["phase"] == "parallel" for event in events[:first_serial])
+    assert sum(event["event"] == "finish" for event in events[:first_serial]) == len(parallel)
+    assert job["strategy"]["fail-fast"] is False
+    assert job["strategy"]["matrix"]["include"] == [
+        {"python-version": "3.12", "experimental": False},
+        {"python-version": "3.13", "experimental": True},
+    ]
+    assert job["continue-on-error"] == step["continue-on-error"] == "${{ matrix.experimental }}"
+    workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text()
+    assert '- cron: "0 2 * * *"' in workflow and "workflow_dispatch:" in workflow
 
 
 def test_pg_contracts_have_bounded_diagnostics() -> None:
@@ -259,7 +822,7 @@ def test_ci_smoke_installs_acl_tools_for_linux_acl_fixture() -> None:
 
 
 def test_pg_acceptance_handoff_preserves_required_coverage() -> None:
-    from app.ops.pg_acceptance import SELECTORS, pytest_arguments
+    from app.ops.pg_acceptance import NIGHTLY_SELECTORS, SELECTORS, pytest_arguments
 
     # Accepted PR coverage at the handoff. New selectors may add coverage;
     # neither a permanent test count nor another manual stage gate is added.
@@ -336,9 +899,10 @@ def test_pg_acceptance_handoff_preserves_required_coverage() -> None:
     assert "pr-index-pg-contracts" not in jobs
     assert pytest_arguments()[pytest_arguments().index('-m') + 1] == 'pg'
     nightly = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
-    assert "tests/migrations/test_heimdal_raw_representation_migration.py" in nightly
-    assert "tests/heimdal/test_entity_review_operation_journal.py" in nightly
-    assert "tests/migrations/test_entity_review_operation_journal_schema_parity.py" in nightly
+    assert "python -m app.ops.pg_acceptance --ci --nightly" in nightly
+    assert "tests/migrations/test_heimdal_raw_representation_migration.py" in NIGHTLY_SELECTORS
+    assert "tests/heimdal/test_entity_review_operation_journal.py" in NIGHTLY_SELECTORS
+    assert "tests/migrations/test_entity_review_operation_journal_schema_parity.py" in NIGHTLY_SELECTORS
 
 
 def test_pr_ci_fetches_base_ref_before_diff_selection() -> None:
@@ -1349,7 +1913,7 @@ def test_deduplicated_contract_checks_preserve_failure_and_trigger_coverage() ->
     # pytest target in the scoped Unit tests lane.
     assert "tests/architecture" in unit_job
     assert "Run scoped not-pg unit tests" in unit_job
-    assert "pytest ${{ steps.select-tests.outputs.pytest_args }} --durations=20" in unit_job
+    assert "pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20" in unit_job
 
 
 def test_ci_smoke_validates_openapi_and_contract_surfaces() -> None:
@@ -1386,6 +1950,35 @@ def test_integration_nightly_keeps_k6_and_pg_contract_lanes_nightly_only() -> No
     assert '- cron: "0 2 * * *"' in nightly
     # k6 must not leak onto the PR path.
     assert "k6 run" not in _smoke_text()
+
+
+def test_k6_search_uses_migrated_canonical_fixture() -> None:
+    workflow = yaml.safe_load(INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["k6-search"]
+    steps = {step.get("name"): step for step in job["steps"] if "name" in step}
+    names = list(steps)
+
+    assert job["services"]["db"]["image"] == "pgvector/pgvector:pg16"
+    assert job["services"]["db"]["env"]["POSTGRES_DB"] == "k6_search"
+    assert job["env"]["STORE_BACKEND"] == "pg"
+    assert job["env"]["EMBED_PROFILE"] == "deterministic"
+    assert names.index("Prepare pgvector extension") < names.index("Apply migrations")
+    assert names.index("Apply migrations") < names.index("Bootstrap database")
+    assert names.index("Bootstrap database") < names.index("Seed search fixture")
+    assert "scripts.k6_search_fixture prepare-extension" in steps["Prepare pgvector extension"]["run"]
+    assert "alembic upgrade head" in steps["Apply migrations"]["run"]
+    assert "bootstrap()" in steps["Bootstrap database"]["run"]
+    assert "scripts.k6_search_fixture seed" in steps["Seed search fixture"]["run"]
+    assert "objects_embeddings" not in str(job)
+    assert "STORE_SCHEMA_AUTOCREATE" not in str(job)
+    assert job["env"]["K6_FIXTURE_MANIFEST"] == "/tmp/k6-search.json"
+    for name in ("Seed search fixture", "Wait for API readiness", "Warm up search endpoint"):
+        assert '"$K6_FIXTURE_MANIFEST"' in steps[name]["run"]
+    assert "scripts.k6_search_fixture probe" in steps["Wait for API readiness"]["run"]
+    assert "--wait-seconds 90" in steps["Wait for API readiness"]["run"]
+    assert "scripts.k6_search_fixture probe" in steps["Warm up search endpoint"]["run"]
+    assert "k6 run scripts/k6_search.js" in steps["Run k6 smoke"]["run"]
+    assert "workflow_dispatch" in INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
 
 
 def test_architecture_ci_is_stripped_to_unique_dispatch_only_jobs() -> None:
@@ -1444,13 +2037,16 @@ def test_integration_nightly_prepares_pgvector_before_migrations() -> None:
 
 
 def test_integration_nightly_runs_yss01_pg_contract_targets() -> None:
+    from app.ops.pg_acceptance import NIGHTLY_SELECTORS
+
     workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
     pg_contracts = workflow[
         workflow.index("pg-contracts:") : workflow.index("  k6-search:")
     ]
 
-    assert "tests/knowledge_acquisition/test_source_registry_pg.py::test_pg_backend_contract" in pg_contracts
+    assert "python -m app.ops.pg_acceptance --ci --nightly" in pg_contracts
+    assert "tests/knowledge_acquisition/test_source_registry_pg.py::test_pg_backend_contract" in NIGHTLY_SELECTORS
     assert (
         "tests/migrations/test_yss01_source_registry_schema_parity.py::"
         "test_yss01_migration_bootstrap_parity_and_legacy_repair"
-    ) in pg_contracts
+    ) in NIGHTLY_SELECTORS

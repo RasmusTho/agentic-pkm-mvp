@@ -53,31 +53,45 @@ class SessionLogWriter:
         self._now_fn = now_fn or datetime.now
         self._uuid_fn = uuid_fn or (lambda: str(uuid4()))
 
-    def open_session(self, note_path: Path, session_label: str) -> SessionLog:
+    def open_session(self, note_path: Path | None, session_label: str) -> SessionLog:
         # This must precede UUID healing as well as the session write: healing a
         # legacy note can itself write frontmatter.
         DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
-        note_uuid = ensure_note_uuid(note_path, vault_root=self._vault_root)
+        # Voice conversations have no human-note anchor. Do not create or heal
+        # a note merely to persist their mechanical chat transcript.
+        note_uuid = (
+            ensure_note_uuid(note_path, vault_root=self._vault_root)
+            if note_path is not None
+            else None
+        )
         now = self._now_fn()
         # Keep the standard-library basename sanitizer visible at the path
         # construction boundary. ``_slugify`` already removes separators, but
         # this explicit fence also lets static analysis prove that owner input
         # cannot control a path outside the generated chat namespace.
-        note_slug = os.path.basename(_slugify(note_path.stem))
+        note_slug = os.path.basename(_slugify(note_path.stem)) if note_path is not None else "voice"
         label_slug = os.path.basename(_slugify(session_label))
         ts_file = now.strftime("%Y-%m-%dT%H-%M")
         ts_frontmatter = now.strftime("%Y-%m-%dT%H:%M")
         session_id = self._uuid_fn()
 
-        log_rel_path = Path(".chats") / note_slug / f"{ts_file}-{label_slug}.md"
+        filename = f"{ts_file}-{label_slug}.md"
+        if note_path is None:
+            # A fresh voice session must not collide with another session in
+            # the same minute. The server, never the caller, mints this id.
+            filename = f"{ts_file}-{label_slug}-{_slugify(session_id)}.md"
+        log_rel_path = Path(".chats") / note_slug / filename
         log_path = self._vault_root / log_rel_path
 
-        note_title = note_path.stem
+        note_fields = (
+            f'note: "[[{note_path.stem}]]"\nnote_uuid: {note_uuid}\n'
+            if note_path is not None
+            else "source: voice\n"
+        )
         frontmatter = (
             "---\n"
             "type: chat-session\n"
-            f'note: "[[{note_title}]]"\n'
-            f"note_uuid: {note_uuid}\n"
+            f"{note_fields}"
             f"date: {ts_frontmatter}\n"
             f"session_id: {session_id}\n"
             f"role_message_format: {ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1}\n"
@@ -126,13 +140,34 @@ class SessionLogWriter:
         return SessionLog(
             log_path=log_path,
             session_id=session_id,
-            note_path=note_path,
+            note_path=note_path if note_path is not None else log_path,
             label=label_slug,
             vault_root=self._vault_root,
             note_uuid=note_uuid,
         )
 
-    def append_turn(self, session: SessionLog, user_prompt: str, change_summary: str) -> None:
+    def append_turn(
+        self,
+        session: SessionLog,
+        user_prompt: str,
+        change_summary: str,
+        *,
+        timestamp: datetime | None = None,
+    ) -> None:
+        if timestamp is not None:
+            # The same observation time belongs to both halves of the turn.
+            # Quoting protects the framing from model/user-authored Markdown
+            # (including a forged session-close delimiter).
+            observed_at = timestamp.isoformat()
+            question = _quote_turn_content(user_prompt)
+            answer = _quote_turn_content(change_summary)
+            _append_to_open_session(
+                session,
+                f"**User:** [{observed_at}]\n{question}\n"
+                f"**Change:** [{observed_at}]\n{answer}\n\n",
+            )
+            return
+        # Preserve historical canvas callers and their User/Change text shape.
         _append_to_open_session(
             session,
             f"**User:** {user_prompt}\n**Change:** {change_summary}\n\n",
@@ -281,6 +316,11 @@ def _session_log_relative_path(session: SessionLog) -> str:
     if vault_root is None:
         raise ValueError("SessionLog.vault_root is required for durable chat writes")
     return session.log_path.relative_to(vault_root).as_posix()
+
+
+def _quote_turn_content(content: str) -> str:
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+    return "\n".join(f"> {line}" if line else ">" for line in normalized.split("\n"))
 
 
 def _slugify(value: str) -> str:

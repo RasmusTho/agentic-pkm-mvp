@@ -28,12 +28,15 @@ from __future__ import annotations
 
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from app.context_dimensions import ContextDimensions
 from app.episodes import closure, segmenter, stream_registry as sr
+from app.episodes.screen_stream import OBSERVATION_TOPIC, SCREEN_CONSUMER_ID, SCREEN_STREAM_ID
+from app.heimdal.observation_log import ObservationRow
 from app.write_guard import WriteGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -314,6 +317,19 @@ def test_registry_matches_readme_inventory() -> None:
         assert registry.by_status(status), f"expected at least one {status!r} entry"
 
 
+def test_screen_stream_registered_live() -> None:
+    registry = sr.load_registry()
+    entry = registry.get(SCREEN_STREAM_ID)
+    assert entry is not None
+    assert entry.status == sr.STATUS_LIVE
+    assert entry.transport == "module:app.heimdal.observation_log"
+    assert entry.consent_class == "heimdal_gated"
+    assert entry.cadence == "continuous"
+    assert entry.owner_constituent == "Heimdal"
+    assert set(entry.dimensions_fed) == set(sr.DIMENSIONS)
+    assert segmenter.resolve_stream_adapter(entry) is not None
+
+
 # ---------------------------------------------------------------------------
 # AC5 (enforcement): the segmenter entrypoint enumerates via the registry only
 # ---------------------------------------------------------------------------
@@ -369,6 +385,7 @@ def test_engine_consumes_only_registered_streams(
     )
 
     assert set(result["consumed"]) == {entry.stream_id for entry in registry.live_entries()}
+    assert SCREEN_STREAM_ID in result["consumed"]
 
     # swap in a fixture registry: the entrypoint must reflect *that* registry's
     # live entries exactly, never a value baked into the segmenter module
@@ -408,6 +425,66 @@ def test_engine_consumes_only_registered_streams(
 
     with pytest.raises(sr.UnregisteredStreamError):
         segmenter.run_segmenter_stub(stream_ids=["not.a.registered.stream"], registry=fixture_registry)
+
+    # Exercise the screen stream through its default production adapter with
+    # only that registered source enabled. The earlier empty-adapter pass
+    # proves registry enumeration; this pass proves a published screen span
+    # is normalized and folded at the same entrypoint.
+    screen_entry = registry.get(SCREEN_STREAM_ID)
+    assert screen_entry is not None
+    screen_registry = sr.StreamRegistry(entries={SCREEN_STREAM_ID: screen_entry})
+    screen_row = ObservationRow(
+        id="log:screen-registry-case",
+        topic=OBSERVATION_TOPIC,
+        idempotency_key="key:screen-registry-case",
+        envelope={
+            "event": OBSERVATION_TOPIC,
+            "payload": {
+                "observation_id": "screen-registry-case",
+                "modality": "screen",
+                "observed_at_start": "2026-07-11T08:00:00Z",
+                "observed_at_end": "2026-07-11T08:00:30Z",
+                "scope_hint": "work",
+                "attributions": [{"mention_id": "operator", "resolution": "resolved"}],
+                "content_structure": {
+                    "span": {
+                        "dimensions": {
+                            "app": "Obsidian",
+                            "window": "Project notes",
+                            "scope": "work",
+                            "goal": "review project notes",
+                        }
+                    }
+                },
+                "confidence": {
+                    "attribution": {"score": 1.0, "calibration": "by_construction"},
+                    "activity_summary": {"score": 0.8, "calibration": "heuristic"},
+                    "entity_mention": {"score": 0.7, "calibration": "heuristic"},
+                },
+                "provenance": {"content_identity": "content:screen-registry-case", "capture_chain": ["capture:1"]},
+                "consent": {"grant_ref": "consent:screen:grant-1"},
+            },
+        },
+        created_at=datetime(2026, 7, 11, 8, 1, tzinfo=timezone.utc),
+        sequence=1,
+    )
+    screen_cursor_advances: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(segmenter, "read_observations_for_consumer", lambda consumer_id, **kwargs: [screen_row])
+    monkeypatch.setattr(
+        segmenter,
+        "advance_cursor_for_consumer",
+        lambda consumer_id, rows: screen_cursor_advances.append((consumer_id, [row.id for row in rows])),
+    )
+    monkeypatch.setattr(segmenter.engine_state, "set_state", lambda key, value: None)
+    monkeypatch.setattr(segmenter.engine_state, "delete_state", lambda key: None)
+    screen_result = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=screen_registry,
+        write_guard=WriteGuard(lambda: {"state": "healthy", "reason": None}),
+    )
+    assert screen_result["consumed"] == {SCREEN_STREAM_ID: 1}
+    assert screen_result["open_segments"] == 1
+    assert screen_cursor_advances == [(SCREEN_CONSUMER_ID, [screen_row.id])]
 
 
 # ---------------------------------------------------------------------------

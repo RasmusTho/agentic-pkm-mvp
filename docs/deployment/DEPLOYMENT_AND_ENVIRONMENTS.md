@@ -5,12 +5,13 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-10-11
+Last reviewed: 2026-10-15 (BWS secret-provisioning section; other deployment sections were not re-audited)
 Last live runtime verification: 2026-10-11 UTC (accepted native DEV/TEST activation, health/version/UI and isolated PostgreSQL verification under #5675; the earlier read-only route checks remain separate, and `prod` was not queried)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903); Issue #5868 and the existing-secret deployment Verify targets, which establish repository behavior only.
 Verification update (2026-10-10): repository support includes post-merge image admission and private-host dev/test orchestration under #5922. Deterministic verification establishes the orchestration, digest and migration boundaries; live activation and functional channel acceptance are recorded separately under #5675.
 Verification update (2026-10-11): the accepted full controller flow committed DEV and TEST at one immutable candidate from `main` at `216ef75e9a2ea009e547e96497a0bb2532b9a379`, each 547/547 selected PG tests, with the current shared profile, health/version/UI, matching native/stream envelopes and exact owned cleanup/lock readback. The [actual receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) establishes the PG coverage handoff. Permanent controller installed/loaded source, runtime and checkpoint are recorded separately on #5675 after reviewed-main installation; native PG/smoke does not establish production eligibility.
-Verification update (2026-09-29): BWS-03/#5679's encrypted reader-token push command was delivered by PR #5732 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`). This establishes repository support only; live VM installation and qualification remain separate gates under #5667.
+Verification update (2026-09-29): BWS-03/#5679's encrypted reader-token push command was delivered by PR #5732 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`). At that point this established repository support only; see the 2026-10-15 #5667 update below for the later component-specific live receipts and the remaining integrated acceptance gate.
+Verification update (2026-10-15): #5667 comments [#6114638077](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114638077) and [#6114724380](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114724380) verify the current Free-plan entitlement, both existing reader tokens' access to both projects, active encrypted reader services and matching receipts on ygg-dev, ygg-test, and ygg-prod, the exact MARR non-prod binding, and retirement of the unused generic helper/token. Comment [#6114787299](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) accepts the Demerzel normal-writer model and same-user bearer residual. These component receipts do not establish the complete target/action-bound DEV/TEST/PROD deployment/runtime acceptance; #5667 remains open for that parent gate.
 
 ## Why this document exists
 
@@ -36,6 +37,13 @@ headroom, and Linux alert installation belong in a deployment profile such as
 `docs/deployment/profiles/TARS_PROXMOX.md`; they are not generic deployment facts.
 
 ## Complete Dev System placement and admission
+
+The separately owner-authorized [bounded manual DevUI component promotion](../BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#bounded-manual-devui-component-promotion)
+in #6105 installs only the existing read-only DevUI component through its fixed engine/project,
+attestation, image/config, rollback and browser-smoke boundary. It never runs Product channel
+promotion, control-plane migrations or source/credential provisioning, and its component record
+cannot satisfy complete-system qualification or owner acceptance. The full-system contract below
+is unchanged; a component installation is reported with its exact limits.
 
 The portable deployment contract admits a selected setup profile; it does not choose a host. The
 TARS/Proxmox profile selects TARS VM `bob-1` (VM ID `102`, formerly referred to as `vm102`) as the
@@ -252,6 +260,55 @@ Separate checkouts and all three channel projects therefore mount the same ledge
 create a checkout-relative substitute.
 Every consumer rejects any active host-global deployment lease, including a lease owned by another
 channel, before reading or mutating channel state.
+
+The native host controller supports an explicit manual DEV/TEST MVR-01C authority cutover via
+`python -m app.ops.postgres_deploy_host <channel> <candidate-sha> --existing-secrets-only`
+with all three `--authority-cutover-binding`, `--authority-cutover-root`, and
+`--authority-cutover-ownership-root` inputs. Supply only an already-qualified binding, its exact
+existing host source and ownership-state root under the applicable nonprod mandate. These inputs
+are protected values, retained in the existing root-private deployment request rather than public
+receipts. An optional `--operation-id` binds reconnects to that exact manual request; it does not
+grant setup or migration authority. The existing explicit forward-only acknowledgment, when
+applicable, remains a separate operator input and is never inferred from cutover selection.
+
+Before effects, native admission checks the configured pin/runtime source, actual existing
+API/worker/watcher and applicable Heimdal writer mounts, channel instance-state volume,
+initialized registry identities and authenticated physical ownership. The public instance runtime
+readiness facade reads existing registry and ownership state with read-only locks, without
+initialization, restoration, key recovery or permission changes. Missing, conflicting, pending or uninitialized
+proof refuses; this route cannot discover, select, transfer or initialize a vault. The immutable
+plan binds the selection and ownership source to the channel, candidate and operation before the
+worker prepares. Each inherited Compose guard rechecks the request and selected configuration.
+Native workers discard ambient MVR-01C binding/root variables and supply only the frozen request
+to the existing public stopped-window producer. That producer retains the actual all-owner
+inventory, drained-writer proof, rollback guards, deployment lease and finalization order.
+
+Docker optional unset environment entries may be bare valid keys; duplicates, malformed entries,
+and missing or conflicting required channel/source selectors refuse. Stopped content writers receive
+identical proof. The canonical SQL/representation-only `migrate` producer is excluded from content
+mount proof only when its migration-runner ownership, exact `run_migrations.sh` command, working
+directory and absent entrypoint match, with no mounts except the optional managed read-only database
+password file. A changed command, code/content/registry mount or foreign secret mount refuses rather
+than gaining an exemption by service name or container state. This classification leaves the later
+complete owner inventory and writer drain unchanged.
+
+Qualification accepts the existing same-path content mount and the legacy `/app/vault` alias only
+when each writer's selectors match its actual mount of that exact host source. It does not rebind
+another vault. Docker's protected host volume ancestry need not be traversable to the runtime UID:
+the root supervisor opens the already-qualified instance-state directory and passes that existing
+directory descriptor to the separate runtime-UID proof child. The child reads the current private
+registry in that view, with no ancestry permission/group widening, additional mount, initialization
+or ownership recovery. Registry directory ownership/mode and identity are checked at the boundary;
+missing or changed views refuse. Proof output stays private and never establishes cutover completion.
+
+PROD, automatic and secret-bootstrap cutover requests are refused. Ordinary and automatic native
+requests retain their existing wire shape and defaults. Join, status, lost-acknowledgment recovery
+and supervisor restart require the same retained inputs. Interrupted nonterminal cutover remains
+pending with its operation evidence and admission lock; healthy services or a quiescent census
+cannot turn it into a failed or completed receipt, trigger replay, or authorize cleanup. A changed
+binding, source, ownership-state root, channel or candidate cannot reuse the operation. Repository
+support does not establish live Karakeep acceptance; the parent coordinator owns subsequent
+qualified DEV/TEST operation and acceptance evidence.
 
 Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` invoke
 `scripts/lib/instance_state_deployment.sh`. Before the first init or any lease/fence mutation, the
@@ -639,6 +696,59 @@ See [CI Roles](../TESTING.md#ci-roles) for the fixed wrapper/fixture proof bound
 Historical Mac mini paths in that TTS contract do not override the current TARS native deployment
 and its governed runtime-env binding.
 
+The fixed TEST-only journaling extension is separate from the two web pilots:
+
+```sh
+sudo /opt/yggdrasil/bws-deploy-runtime/bin/python -m app.ops.postgres_deploy_linux \
+  qualify-journaling test <committed-native-operation-uuid>
+```
+
+The exact current committed request, mandatory PG proof and admitted SHA/digest are prerequisites.
+No other channel or caller-controlled command, profile, selector, path, provider or budget is
+admitted. The canonical disposable source producers and exact #5988 wrapper run from the admitted
+image without a host Product overlay or deterministic conftests. Actual Product model access uses
+the existing protected four-key `/etc/yggdrasil/model-access/runtime.env` and existing mTLS
+certificates; it provisions no account, model or credential. Unsupported/public/DNS endpoints,
+missing references or actual provider failure refuse. A bounded native TLS byte relay makes only
+the selected private IPv4 endpoint reachable on disposable loopback while preserving the Product
+endpoint/model/TLS identity and network-none containment. There is no host socket or arbitrary
+candidate egress. Each certificate snapshot is private, readonly and operation-owned.
+The alias is bound through the exact owned Docker namespace descriptor/inode rather than a PID
+pathname. Canonical settings compilation/ingestion precedes model admission. Actual model calls,
+including both drafts, must have successful remote preflight/responses and undegraded cognition;
+a preflight flag or usable provider-failure collation cannot produce qualified PASS.
+
+All ten original scenarios, finite observed Product effects, synthetic-actor candidate identity,
+guarded receipt and unchanged accepted-primary bytes must pass. Complete original report/JUnit
+artifacts are retained privately outside the vault under `native-journaling-results/`; the separate
+terminal receipt records operation/generation/source/image, fixture/actor, wrapper and hashes,
+bounded transport and exact cleanup. Partial evidence or drift is a refusal, never acceptance.
+Unknown cleanup retains admission; recover through the same-operation inode/flock seam, preserving
+foreign resources and re-reading exact owned IDs before cleanup and a fresh generation. This
+does not rewrite `postmerge-pg.v1`, `native-web-pilots.v1`, Daily/Deep reports or channel health.
+The original guarded review outbox is retained alongside report/JUnit and receipt-hash-bound.
+Terminal evidence uses complete/fsynced atomic no-overwrite publication; publication failure
+leaves no consumable PASS artifact. Complete owner-preparing proofs recover the exact prior
+generation across pre-rename crashes. Unknown relay worker exit remains unknown cleanup even
+after container removal, preserving admission for same-operation recovery. Journaling refusals
+have independent profile and cleanup attribution.
+An exact operation/generation-bound private relay proof records Linux boot/PID/start-time before
+listener effects. Interrupted teardown and fresh-runner retries preserve admission while that
+native owner remains live or unknown; only proved departure permits recovery, never a PID kill.
+Deadline exhaustion cannot accept late PASS logs. Terminal publication owns durable interruption
+invalidation and has no fallible sync or temporary cleanup after its acknowledgement.
+The existing shared channel-lock owner inode also records the fixed qualifier/profile before
+effects. Unknown cleanup can be retried only by that same profile; the other qualifier and generic
+deployment recovery cannot retire its admission. Legacy empty-owner recovery proves opposite-profile
+resource absence under the inode/flock before adoption, and never adopts a fresh replacement inode.
+Foreign, mismatched or partial owner bytes refuse without mutation.
+
+Repository delivery proves this mechanism only. The parent #3347 owner must invoke it after merge
+against the admitted TEST image and post the redaction-safe all-PASS or attributable refusal
+receipt there. Only actual all-PASS permits the still-gated delivered-capability owner-doc
+promotion and closure of #3347; this slice does neither acceptance nor production promotion.
+See [Testing](../TESTING.md#fixed-disposable-product-web-qualification) for evidence meaning.
+
 ### PR validation is not artifact publication (current policy)
 
 The `App Image Build` GitHub workflow has two deliberately different paths:
@@ -787,6 +897,34 @@ does not establish a usable answer path.
 
 The deploy procedure is the same shape for every channel; only the pin target and the migration-ack posture differ (`prod` is the strictest). It assumes the build-once/promote model above.
 
+For BWS deploys, the target image's native-source embedding dependency is preflighted before the
+migration writer drain. A strict Product embedding route selects the current provider/model; the
+redacted Compose handoff exposes only those two fields. If Ollama is selected, the deploy starts the
+existing channel Ollama service, verifies or pulls that exact model, and probes the Product
+embedding client once with the fixed text `Yggdrasil deployment preflight`. The probe does not read
+or send vault notes and does not select a fallback. If readiness fails, the deploy exits at
+`source_projection` before draining writers or stopping/recreating app services, and attempts to
+restore the prior channel pins and remove only a migration marker created by that attempt. If that
+compensation fails, the deploy exits closed while preserving recovery snapshots and the pending
+marker. The Ollama service may remain running and its model cache may remain populated. This
+preflight leaves the source-backed
+repair operation below unchanged; that operation still runs after migrations.
+
+The probe's fixed child exit statuses 114–118 map respectively to
+`embedding_probe_client_failed`, `embedding_probe_identity_mismatch`,
+`embedding_probe_generation_failed`, `embedding_probe_vector_invalid`, and
+`embedding_probe_cleanup_failed`; unknown exits retain `embedding_probe_failed`.
+This probe-only status namespace is separate from source-worker checkpoints: worker exits
+114–119 or other unsupported statuses retain generic worker failure, never probe attribution.
+Only these allowlisted reasons cross the supervised wrapper into the native operation journal,
+same-operation reconciliation and post-merge controller checkpoint. Cleanup is attempted for an
+acquired client, with the original failure taking precedence. Child output, exceptions, responses,
+endpoints, paths, credentials, source identity and probe content remain private.
+There is no provider substitution or identity fallback, no replay of terminal operations, and no
+authorization to start TEST/journaling acceptance or mutate Product/vector/vault data.
+The remote Product client requests checked network-router cleanup only for this probe; normal
+best-effort close behavior and existing vector acceptance/conversion rules remain unchanged.
+
 Repository support for native BWS source recovery (#5918) adds one fixed API-consumer one-shot
 after instance-state finalization and migrations, before ordinary API/worker/watcher/capture/UI
 recreation. The candidate image must contain `scripts/start_api.sh`'s source-only mode and
@@ -806,12 +944,158 @@ With the ordinary write-capable services stopped, the producer freshly checks Pr
 An explicitly unbound API retains its no-vault picker posture without a SourceAction. For a
 configured missing, inaccessible or invalid root, the canonical resolver refuses before any
 SourceWrite; it cannot select a foreign root or turn the configured error into an unbound API.
-For a selected vault, an already usable projection skips source replay; otherwise the existing
-`vault-alpha-ingest --max-notes 0 --force --source-backed-rebuild --json` SourceAction reconstructs
-the complete selected inventory. All six counters must be present nonnegative integers,
-`scanned == ingested`, and errors/malformed/locked/invalid counts must be zero. A fresh Product
-readiness check and the existing strict index doctor must then pass. Missing summaries, partial
-work, refused context or an unready index fail the operation; child streams stay private.
+For a selected vault, an already usable Product projection with no missing vector rows skips source
+replay. A Product-ready projection with missing vectors also runs the existing
+`vault-alpha-ingest --max-notes 0 --force --source-backed-rebuild --json` SourceAction; the numeric
+`unembedded_object_count` and `non_vector_issue_count` from the read-only index doctor distinguish
+this case: replay is eligible only when missing vectors are the sole index issue. An unrecognized
+diagnosis fails closed. Otherwise that SourceAction reconstructs the complete selected inventory.
+All six counters must be present nonnegative integers, `scanned == ingested`, and
+errors/malformed/locked/invalid counts must be zero. A fresh Product readiness check and the
+existing strict index doctor must then pass with zero missing vectors. Other index problems remain
+blocking and do not trigger an unrelated source replay. Missing summaries, partial work, refused
+context or an unready index fail the operation; child streams stay private.
+After retained-source replay, a fresh non-strict doctor may identify a remaining vector-only gap
+outside that inventory. The same supervised, stopped-writer SourceAction then invokes
+`index repair-missing --json` across canonical ObjectStore rows in the selected binding. Only
+provenance-complete admitted vault notes with canonical text are eligible: vault origin, a retained
+replay recipe/generation matching stored meaning, non-draft review state, and supported existing
+trust metadata are preserved, not upgraded. Candidate-only, untrusted, malformed and incomplete
+rows remain absent and refuse the operation. The repair uses the configured embedding identity,
+locks and rechecks the source snapshot, and inserts vector plus provenance atomically with
+`ON CONFLICT DO NOTHING`. It never resets, overwrites or deletes an existing vector or Product
+object. Embedding/write failures retain only the existing finite redacted failure classes; the
+strict final doctor still proves whole-binding coverage before any service activation. Repository
+delivery does not substitute for parent-owned live DEV/TEST acceptance.
+Admission also requires the complete source frontmatter captured by canonical producers; negative
+markers at every persisted level remain binding. Legacy rows lacking that snapshot fail closed,
+even when body replay provenance is complete. Missing-only repair cannot invent omitted authority
+or read raw sources to fill it. Before that repair, stopped-writer native recovery invokes the
+separate `index reconcile-legacy --json` stage. It resolves only the stored locator beneath the
+active vault through the hardened source adapter, re-proves current profile/source admission and
+unambiguous canonical identity, and checks every applicable canonical producer inventory. An alpha-selected source
+prepares its evidence-complete vault-alpha projection without source, companion or outbox writes;
+embedding generation precedes atomic compare-and-swap Product replacement plus absent-only vector
+insertion. A currently excluded source may instead retire only its exact stale rebuildable mirror,
+with derived vector state absent; source files, canonical objects, receipts and accepted history
+remain untouched. Producer applicability uses the same strict configuration and inventory reader as
+the default native registry and optional legacy entrypoints, not an assumption that the registry is
+alpha-gated. Native registry activation, selected root, configured event specs and effective scope
+come from its ordinary loader's read-only mode: persisted vault identities are required and the
+normal settings identity-heal seam is denied. Recovery drains its actual incremental scanner using memory-only
+state and prepares claimed sources through the ordinary registry worker/indexer payload factories.
+No source heal, companion, event or ordinary store-write path is invoked. The supported native
+Compose graph shares the governed runtime-env and selected-root binding across API/worker/watcher;
+no environment synthesis is used as applicability evidence. Missing, unknown, contradictory or
+drifting enabled-producer configuration refuses the legacy transition. Registry claims use the
+native recipe; otherwise applicable alpha or optional filesystem recipes remain available.
+For the optional `scripts/fs_watcher.py` entrypoint, `FS_WATCHER_ENABLE` unset/false means disabled;
+true requires an explicit absolute existing `VAULT_DIR`, matching the active root when overlapping.
+No default path or presence of `VAULT_DIR` enables that writer. Enabled filesystem sources prepare
+only when their existing UUID form is preserved by the actual filesystem adapter; id-only or
+encoded UUIDs refuse without healing. Uniqueness covers the union of enabled producer inventories,
+including nested-vault files in the legacy filesystem inventory. Applicable filesystem sources
+use vault-sync's canonical payload path; excluded sources are not laundered through alpha.
+An enabled filesystem root different from the active root (nested, parent or disjoint) refuses
+recovery rather than implying Product isolation: vault-sync still owns the compatibility binding.
+Native registry claims also prove identity preservation against the ordinary worker's inbox-heal
+selector; an id-only inbox source refuses without healing or borrowing another producer's recipe.
+For sources excluded from every producer, exact retirement also accepts an already persisted
+valid companion UUID matching both the legacy row and canonical Product mapping. Hardened source
+and companion snapshots, unique source claims (excluding only metadata sidecars outside every
+producer inventory), including actual producer-emitted deterministic/fallback identities as
+duplicate-denial claims only, unambiguous companion
+evidence and all existing profile/history/relation/CAS fences remain mandatory.
+The persisted companion observation must bind the exact current source in the active root;
+hash/title discovery alone cannot authorize a moved/reused or foreign source observation.
+Replacement still requires explicit producer-preserved frontmatter identity. Invalid declarations and unpersisted
+path/fingerprint-only fallbacks never authorize retirement or replacement. No source healing,
+identity synthesis/normalization, metadata write or acceptance authority is introduced.
+Identity refusals retain five finite remediation classes: `legacy_identity_persistence_refused`,
+`legacy_identity_mismatch_refused`, `legacy_identity_ambiguous_refused`,
+`legacy_identity_producer_refused` and `legacy_identity_canonical_refused` (worker exits 109–113).
+They distinguish absent/invalid persistence, stored/source mismatch, duplicate/ambiguous claims,
+producer preservation/heal mismatch and canonical Product disagreement respectively. The private
+CLI, bootstrap, deploy diagnostic and operation journal preserve only those fixed classes through
+cleanup and same-operation terminal reconciliation; unexpected/private failures remain generic
+and fail closed. The legacy generic identity class remains accepted for older worker evidence.
+Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
+History dependencies, candidate/staging or untrusted material, changed sources,
+redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again
+alongside forward/reverse canonical identity and binding-wide canonical source-locator checks,
+inside the transaction, including after writes, so partial writes roll back; existing vectors
+never get overwritten. Only finite counts/refusal classes cross the private CLI boundary. Missing-only
+repair, fresh Product readiness and the strict whole-binding final doctor still follow, before service activation. This is
+repository support, not a claim that legacy live DEV/TEST gaps or parent acceptance have converged.
+Source-backed replay counts a vector-producer exception as an error, not an ingested note,
+and returns a nonzero result with numeric counters. The private native consumer validates
+that bounded result and retains only the fixed `embedding_generation_failed` (exit 80),
+`vector_index_write_failed` (exit 81), or legacy/mixed `vector_projection_failed` (exit 79)
+reason. Generation uses the configured document-embedding route; recovery resolves the durable
+index without the ordinary no-op compatibility fallback. Its binding must match the object
+producer, and the upsert still enforces provider/model/dimension/normalization identity and stamps
+provenance in the same vector write. The deploy producer reports `source_projection` with that
+reason after exact-operation cleanup; the real supervised wrapper validates the single exact
+allowlisted marker and sends only that finite class to the native journal. Missing, malformed,
+duplicate, unknown or injected markers retain `command_failed` (ambiguous stages remain `unknown`).
+No exception text, source path, note content or child stream is forwarded. Ordinary ingest
+retains its existing best-effort vector behavior. A retry uses the same configured embedding
+identity and full selected inventory; the final strict doctor must independently prove zero
+missing vectors before candidate activation. This repository repair does not establish live
+DEV or TEST acceptance.
+Native source diagnostics also classify embedding context, identity availability/validation,
+service availability/readiness, configured-model availability/readiness and the fixed probe as
+`embedding_context_invalid`, `embedding_identity_unavailable`, `embedding_identity_invalid`,
+`embedding_service_unavailable`, `embedding_service_not_ready`, `embedding_model_unavailable`,
+`embedding_model_not_ready` and `embedding_probe_failed`. The private bootstrap maps fixed
+exit codes 82–89 to `source_preflight_failed`, `source_readiness_failed`, `source_command_failed`,
+`source_summary_invalid`, `source_post_rebuild_failed`, `source_doctor_failed`,
+`source_settings_failed` and `source_worker_failed`. Writer-stop and exact-operation cleanup
+failures are `source_writer_stop_failed` and `source_quiescence_failed`. Supervised timeouts
+and TERM/INT are distinct `source_worker_timeout` and `source_worker_terminated`; an exact owned
+container's validated Docker `OOMKilled=true` is `source_worker_oom`. Other unknown nonzero
+exits remain `source_worker_failed`; exit 137 alone does not establish OOM.
+Observer result codes 96–98 are not worker evidence: a raw worker exit in that range remains
+unknown. A validated stopped worker checkpoint takes precedence over a generic Compose transport
+failure; only supervised timeout/INT/TERM retain transport precedence. Unexpected observer-process
+exits never prove quiescence or admit runtime-writer restart.
+The source one-shot is not auto-removed. Under the inherited current-operation lock/guard,
+the wrapper validates its exact name, Compose labels, operation and revision, proves stoppage,
+reads only bounded exit status and OOM boolean, and durably fsyncs the fixed `source_failure`
+on the existing operation journal before removal. An evidence-write or cleanup failure preserves
+the container/admission rather than declaring successful cleanup. The field survives failed-state
+reconciliation and same-ID reads without worker replay; old receipts without it remain valid.
+The DEV-to-TEST controller accepts only an allowlisted failed-receipt class and preserves it in
+fresh and resumed failure outcomes/checkpoints; malformed or success-attached metadata refuses.
+Missing container state never turns a zero status into success. Foreign, drifted or ambiguous
+resources remain untouched. No Docker error text, logs or untrusted metadata is retained.
+The supervisor accepts these reasons only with one exact `source_projection` stage and one
+exact allowlisted reason marker. Other stages or malformed, duplicate, injected or unknown
+markers retain `command_failed`. These content-free reasons identify checkpoints, not root
+causes or repair authority: they never authorize source replay, semantic fallback, data/vector
+mutation or candidate activation. Raw stdout/stderr suppression, candidate/operation binding,
+compensation and no-replay semantics are unchanged.
+Repository tests establish attribution only. Parent #3347 owns the fresh exact-main DEV-to-TEST
+retry and TEST journaling acceptance after reviewed host convergence; these classifications neither
+identify the previous live root cause nor establish that acceptance.
+Legacy reconciliation additionally preserves the finite classes `legacy_producer_policy_refused`
+(exit 90), `legacy_source_refused` (91), `legacy_admission_refused` (92),
+`legacy_identity_refused` (93), `legacy_race_refused` (94), and `legacy_write_failed` (95).
+Remediation-specific legacy admission reasons use fixed native exits 99–108, respectively:
+`legacy_candidate_refused`, `legacy_authority_refused`, `legacy_trust_refused`,
+`legacy_origin_refused`, `legacy_payload_shape_refused`, `legacy_system_path_refused`,
+`legacy_profile_refused`, `legacy_dependency_shape_refused`, `legacy_retained_history_refused`,
+and `legacy_relation_retention_refused`. Their meanings are owned by
+[embedding operational guardrails](../EMBEDDINGS.md#operational-guardrails).
+Each survives operation-bound journal retention, cleanup and same-operation terminal reconciliation;
+unexpected/private failures retain the generic fail-closed classification. These diagnostics grant
+no repair, admission, retirement or acceptance authority, and cannot authorize rewriting protected
+history or replaying a failed operation. Parent-owned fresh DEV-to-TEST acceptance remains separate.
+The CLI's private exit remains 79 with an allowlisted JSON reason; bootstrap maps that reason to
+the fixed native code, and the deploy wrapper/supervisor retains only its exact allowlisted marker.
+Provider generation retains `embedding_generation_failed`. These classifications expose no source
+paths, IDs, content, metadata values, embeddings or provider diagnostics. Fresh Product readiness
+and strict index doctor remain mandatory after reconciliation and missing-only repair, before activation.
 Ordinary service recreation and the existing final Data health, version, UI and receipt gates
 still follow this step. Ordinary API startup clears the selector and retains migration→uvicorn.
 
@@ -874,8 +1158,10 @@ The empty-data exception is bound to the effective managed `db:5432` target and 
 BWS-04 adds a governed Linux adapter around the existing channel deploy, migration, writer, and
 pin machinery. It does not authorize a live deploy or replace promotion/migration acknowledgement.
 Mac Keychain deployment remains unchanged. BWS-03 / #5679's repository token-push command was
-delivered by PR #5732; parent #5667 stays open for live VM installation, existing-host migration,
-and channel qualification. The [2026-10-11 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) separately accepts
+delivered by PR #5732; the #5667 receipts #6114638077 and #6114724380 verify active encrypted
+reader credentials and matching receipts on all three channel VMs and retirement of the unused
+generic helper/token. Parent #5667 stays open for complete integrated channel deployment/runtime
+acceptance. Any future existing-host migration requires separate authorization. The [2026-10-11 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) separately accepts
 Demerzel login Keychain admin-token custody plus `scripts/secrets` as the sole supported normal
 writer, with human Organization Owner break-glass and deliberate same-user bearer use as an accepted
 residual. No separate writer daemon or shared fencing is required for this one-owner setup; reassess
@@ -889,17 +1175,18 @@ prove BWS permissions, token installation, host cleanup, deployment, or live cha
 
 | Journey stage | Actual producer / entrypoint | Required preconditions and coupling | Checked-in evidence and remaining gap |
 | --- | --- | --- | --- |
-| Identity and selected-consumer preflight | `scripts/secrets check <dev\|test> --consumer <name>`; `python3 -m app.ops.host_secret_bootstrap --provider bws --check --channel <dev\|test> --consumer <name>` | Explicit channel and provider; `config/secrets/host_secret_contract.json` allowlist; reader credential at the declared systemd credential path; selected project/consumer binding; no child command for `--check`. | `tests/ops/test_secret_admin.py` selected-set/optional/malformed checks and `tests/ops/test_host_secret_bootstrap.py` scoped identity, token-file, redaction, and lock tests. Live reader permissions and MARR binding remain #5667. |
+| Identity and selected-consumer preflight | `scripts/secrets check <dev\|test> --consumer <name>`; `python3 -m app.ops.host_secret_bootstrap --provider bws --check --channel <dev\|test> --consumer <name>` | Explicit channel and provider; `config/secrets/host_secret_contract.json` allowlist; reader credential at the declared systemd credential path; selected project/consumer binding; no child command for `--check`. | `tests/ops/test_secret_admin.py` selected-set/optional/malformed checks and `tests/ops/test_host_secret_bootstrap.py` scoped identity, token-file, redaction, and lock tests. The live receipt #6114638077 verifies both existing reader scopes and the exact MARR binding; integrated channel acceptance remains #5667. |
 | Normal writer / missing-copy recovery | `scripts/secrets import <channel> <secret> --stdin`; `SecretAdmin.import_stdin` through `HostSecretController` | Value arrives only on stdin; the controller lock is held; both project pre-states or absence tombstones and the prepared operation record are fsynced before the first provider write; shared values are read back before terminal commit. | `tests/ops/test_secret_admin.py` stdin, parity, history, partial-failure, and unknown-outcome tests. The normal-writer and human break-glass model is accepted by the 2026-10-11 #5667 owner receipt; operation-specific live evidence remains required. |
-| VM reader-token recovery | `scripts/secrets push-token <vm>`; the `bws_token_push` actions (`token-push-inspect`, `token-push`, `token-push-worker`, `token-push-status`) via the installed `yggdrasil-bws-deploy` launcher | Existing target mapping; root-owned supervised launcher and systemd credential contract; stdin-only token handoff; same operation ID, generation, per-channel lock, and durable remote terminal receipt; no SSH-session ownership assumption. | `tests/deploy/test_secret_token_push.py` covers stdin/redaction, generation, lock, worker, systemd binding, and terminality. Live encrypted credential installation and VM qualification remain #5667. |
+| VM reader-token recovery | `scripts/secrets push-token <vm>`; the `bws_token_push` actions (`token-push-inspect`, `token-push`, `token-push-worker`, `token-push-status`) via the installed `yggdrasil-bws-deploy` launcher | Existing target mapping; root-owned supervised launcher and systemd credential contract; stdin-only token handoff; same operation ID, generation, per-channel lock, and durable remote terminal receipt; no SSH-session ownership assumption. | `tests/deploy/test_secret_token_push.py` covers stdin/redaction, generation, lock, worker, systemd binding, and terminality. The live receipt #6114638077 verifies active encrypted reader services and matching pointers on all three channel VMs; integrated deployment/runtime acceptance remains #5667. |
 | Existing-password dev/test deployment | `python3 -m app.ops.postgres_deploy_host <channel> <revision> --existing-secrets-only` | Existing selected PostgreSQL password must pass host and VM checks before remote or local mutation; request mode is journal-bound before RPC; no BWS bootstrap is allowed; promotion/migration acknowledgement and target identity still come from this document and release-channel owners. | `tests/deploy/test_deploy_channel_script.py` and `tests/deploy/test_deploy_channel.py` cover preflight ordering, file-backed secret use, and target coupling. Live VM/Compose readiness remains #4913 and #5667. |
 | Interrupted existing-secrets-only deployment | `python3 -m app.ops.postgres_deploy_host <channel> <exact-request-revision> --existing-secrets-only --reconcile-pending [--ack-forward-only]` | Use the revision and forward-only acknowledgement from the exact persisted request. The authenticated same-ID RPC refuses a live worker, mismatched request or receipt, held channel lock, malformed lock state, or non-quiescent Compose state, including a still-running `migrate` or `instance-state-init` one-shot. It records `failed` only after the worker ended and the existing lock is acquired; reconciliation changes no pin, migration marker, container, database, vault, or BWS value. | `tests/deploy/test_deploy_channel_script.py::test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescence`, `::test_failed_bws_activation_reconciliation_preserves_ambiguous_state`, `::test_linux_quiescence_waits_for_one_shot_compose_services`, and `::test_host_reconciles_matching_failed_bws_deploy_receipt` cover the receipt and refusal boundaries. |
 | First initialization / recovery | The same host entrypoint without `--existing-secrets-only`, supervised by `scripts/postgres_deploy_service.py` and `app.ops.postgres_deploy_linux` | Only an actually empty managed database directory qualifies; agent-host and VM locks are acquired in order; absence tombstone and prepared ID are durable; one generated value is written and marker/readback verified before deployment-state mutation. The host config JSON is opened as a root-owned regular `0600` file with `O_NOFOLLOW` and a single-link check; its configured runtime-env reference must be absolute and regular. Pending-marker parsing rejects symlinked, non-regular, unreadable, or malformed markers on the Linux preflight, while an absent marker is the documented no-pending baseline. Generated runtime env is published through a private temporary file and rename. The managed root/data paths must be absolute and non-symlinked; the source directory must be an absolute root-owned `0700` tmpfs path, and the password source must be root-owned `0440` with the configured service group; the file-backed consumer map must match. | `tests/deploy/test_deploy_channel.py::test_postgres_secret_source_uses_root_only_tmpfs_and_service_gid`, `::test_postgres_secret_is_readable_by_configured_non_root_service_user`, `::test_bws_runtime_export_produces_only_credential_free_database_defaults`, and `tests/ops/test_host_secret_bootstrap.py::test_runtime_secret_reader_rejects_unsafe_files` cover related source/runtime-file protections; `::test_missing_bws_access_token_file_fails_before_provider_request` covers token-file fail-closed behavior. No focused test currently exercises the Linux host-config JSON, pending-marker symlink branches, or atomic runtime-env publication; that qualification gap remains with #5667/#4913. |
 | Channel wrapper / end-to-end acceptance | `scripts/deploy_channel.sh <channel>` with `scripts/export_runtime_env.sh` and the BWS guard | Request-bound candidate and migration acknowledgement; explicit channel environment; `/etc/yggdrasil/bws-deploy/<channel>.json`; selected capture-watch/raw-migration consumers; BWS guard before temporary state, pin, or Docker mutation; first healthy release and rollback receipts remain authoritative. | `tests/deploy/test_deploy_channel_script.py` and `tests/deploy/test_deploy_channel.py` cover ordering and failure isolation. Startup receipt and immutable target coupling remain #4913; TARS host/executor qualification remains #5052. |
 
-The concrete qualification follow-ups are therefore existing authorities: #5667 owns BWS
-entitlement, live permissions, the accepted normal-writer residual and reassessment triggers, VM token installation, and
-channel qualification; #4913 owns startup/target receipt gating and first-healthy-release/rollback
+The concrete qualification follow-ups are therefore existing authorities: #5667 owns the remaining
+integrated channel deployment/runtime acceptance and reassessment of the accepted normal-writer
+residual; its receipts already verify entitlement, existing reader scopes, MARR binding, and active
+VM reader credentials. #4913 owns startup/target receipt gating and first-healthy-release/rollback
 acceptance; #5052 owns the TARS host and Linux executor boundary. No new registry, dashboard, or
 duplicate implementation issue is needed. The request-bound migration acknowledgment at
 `816cb6f3a3569e145d28701851fc2b067cf7c627` remains a prerequisite and is not replaced by this map.

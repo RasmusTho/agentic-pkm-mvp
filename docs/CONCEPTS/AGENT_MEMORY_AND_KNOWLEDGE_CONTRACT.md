@@ -413,9 +413,10 @@ Current runtime now ships the Durable Memory and Recall subset:
 - review decisions persist as vault-scoped receipts/traces and survive restart;
 - the review queue reconciles against terminal persisted decisions while pending candidates remain
   runtime-only;
-- promote-to-semantic decisions materialize an agent-promoted vault artifact only through
-  `proposal -> WriteGuard -> receipt -> artifact`, and become terminal only after materialization
-  succeeds;
+- promote-to-semantic decisions materialize an agent-promoted vault artifact only after a
+  human-review GOV DecisionToken and WriteGuard preflight authorize the exact target; HKA then
+  performs the create-once write and returns its mutation receipt, followed by the applied
+  promotion receipt and GOV AuthorityReceipt before the decision becomes terminal;
 - blocked or failed materialization records a failed-attempt receipt and keeps the promotion
   actionable;
 - guarded recall invokes the memory authority guard, emits a recall receipt, and does not persist

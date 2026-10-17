@@ -87,6 +87,22 @@ def test_companion_ui_change_selects_companion_and_api_targets() -> None:
     assert "not panel_llm_e2e" in selection.pytest_args
 
 
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "app/api/routes/capture.py",
+        "app/agents/ask/graph.py",
+        "app/mcp/vault_tools.py",
+    ],
+)
+def test_guarded_request_entrypoints_always_run_the_context_boundary_gate(changed: str) -> None:
+    """#6136 review: a guarded entrypoint change cannot skip the MVR-05B boundary gate."""
+
+    selection = select_tests([changed])
+
+    assert "tests/architecture/test_multi_vault_context_boundaries.py" in selection.targets
+
+
 def test_mimer_mcp_adapter_selects_semantic_and_existing_http_contract_tests() -> None:
     selection = select_tests(["app/mimer_mcp/server.py"])
 
@@ -1253,7 +1269,10 @@ def test_mixed_ops_deploy_and_architecture_test_keeps_ops_targets() -> None:
     assert "tests/builderops" in selection.targets
     assert "tests/dispatcher" in selection.targets
     assert "tests/ops" in selection.targets
-    assert "tests/deploy" in selection.targets
+    # The heavy deploy suite is deferred to the post-merge heavy-tests
+    # workflow: the selector is not a deploy-channel source (#6154).
+    assert "tests/deploy" not in selection.targets
+    assert selection.deferred_targets == ("tests/deploy",)
 
 
 def test_mixed_docs_and_review_gate_test_keeps_ops_targets() -> None:
@@ -1757,3 +1776,216 @@ def test_github_output_exposes_text_only_runtime_gate_decision(tmp_path: Path) -
     fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
     assert fields["runtime_checks"] == "false"
     assert fields["pytest_args"]
+
+
+# --- Heavy-target deferral (#6154) -------------------------------------------
+
+POST_MERGE_HEAVY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "post-merge-heavy-tests.yml"
+
+
+@pytest.mark.parametrize("paths", [
+    ["scripts/select_pr_tests.py"],
+    ["scripts/select_pr_tests.py", "docs/development/PR_HOT_PATH.md", "AGENTS.md"],
+    ["scripts/validate_issue_readiness.py", ".github/workflows/issue-pr-governance.yml"],
+    ["tests/scripts/test_select_pr_tests.py"],
+])
+def test_selector_change_defers_heavy_deploy_suite(paths: list[str]) -> None:
+    selection = select_tests(paths)
+
+    assert selection.full_suite is False
+    assert not any(t == "tests/deploy" or t.startswith("tests/deploy/") for t in selection.targets)
+    assert selection.deferred_targets == ("tests/deploy",)
+    assert "tests/ops" in selection.targets or "tests/scripts" in selection.targets
+
+
+def test_selector_reports_deferred_targets_to_github_output(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    result = subprocess.run([
+        sys.executable, "scripts/select_pr_tests.py", "--changed-file", "scripts/select_pr_tests.py",
+        "--github-output", str(output),
+    ], cwd=REPO_ROOT, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert "deferred_targets=tests/deploy" in result.stdout
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert fields["deferred_targets"] == "tests/deploy"
+    assert "tests/deploy" not in fields["pytest_args"]
+
+
+@pytest.mark.parametrize("path", [
+    "scripts/deploy_channel.sh",
+    "scripts/lib/deploy_channel_compose.sh",
+    "config/deploy/prod.env",
+    "app/release_channels/prepare_promotion.py",
+    "ops/scalar-rollback/nginx.conf",
+    "tests/deploy/conftest.py",
+    "docker-compose.test.yml",
+    "requirements.txt",
+    "Dockerfile",
+])
+def test_deploy_trigger_keeps_heavy_deploy_suite_on_pr_path(path: str) -> None:
+    selection = select_tests([path])
+
+    assert selection.deferred_targets == ()
+    # Full-suite inputs (compose, requirements) run all of tests/ without an
+    # --ignore; unowned paths fail selection closed before any deferral.
+    assert (
+        "tests/deploy" in selection.targets
+        or (selection.full_suite and "--ignore=tests/deploy" not in selection.pytest_args)
+        or selection.unowned_paths == (path,)
+    )
+
+
+def test_changed_heavy_test_file_still_runs_on_pr_path() -> None:
+    changed = "tests/deploy/test_deploy_channel.py"
+    selection = select_tests([changed])
+
+    assert changed in selection.targets
+    assert "tests/deploy" not in selection.targets
+    assert selection.deferred_targets == ("tests/deploy",)
+
+
+def test_full_suite_selection_ignores_deferred_heavy_targets() -> None:
+    selection = select_tests(["pyproject.toml"])
+
+    assert selection.full_suite is True
+    assert selection.deferred_targets == ("tests/deploy",)
+    assert "--ignore=tests/deploy" in selection.pytest_args
+    assert "tests/deploy" not in select_tests(["pyproject.toml", "scripts/deploy_channel.sh"]).deferred_targets
+
+
+def test_deploy_heavy_triggers_cover_scripts_referenced_by_deploy_tests() -> None:
+    # Census: every repo file tests/deploy reads directly (scripts, compose
+    # files, requirements, Dockerfile, deploy config, app/ modules by path)
+    # must keep the heavy deploy suite on the PR path, or a change to that
+    # input would merge before the post-merge heavy run sees it.
+    import re
+
+    triggers = selector.HEAVY_PR_DEFERRED_TARGETS["tests/deploy"]
+    literal = re.compile(r"[\"']([A-Za-z0-9_./][A-Za-z0-9_./@+=,-]*)[\"']")
+    joined = re.compile(r'"([A-Za-z0-9_.@+=,-]+)"\s*/\s*"([A-Za-z0-9_.@+=,-]+)"')
+    single = re.compile(r'/\s*"([A-Za-z0-9_.@+=,-]+)"')
+    referenced: set[str] = set()
+    for test_file in (REPO_ROOT / "tests" / "deploy").rglob("*.py"):
+        text = test_file.read_text(encoding="utf-8")
+        referenced.update(match.group(1).removeprefix("./") for match in literal.finditer(text))
+        referenced.update(f"{a}/{b}" for a, b in joined.findall(text))
+        referenced.update(single.findall(text))
+    existing = {
+        path for path in referenced
+        if path and not path.startswith(("/", "tests/")) and path != ".git"
+        and (REPO_ROOT / path).is_file()
+    }
+
+    for required in (
+        "scripts/deploy_channel.sh", "docker-compose.test.yml", "requirements.txt", "Dockerfile",
+        "config/systemd/yggdrasil-bws-deploy@.service",
+    ):
+        assert required in existing, f"census no longer sees {required}"
+    uncovered = sorted(
+        path for path in existing
+        if path not in triggers
+        and not any(t.endswith("/") and path.startswith(t) for t in triggers)
+    )
+    assert uncovered == []
+
+
+def test_post_merge_heavy_workflow_runs_selector_heavy_targets() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(POST_MERGE_HEAVY_WORKFLOW.read_text(encoding="utf-8"))
+    triggers = workflow[True]  # PyYAML parses the bare `on:` key as boolean True.
+
+    assert triggers["push"]["branches"] == ["main"]
+    assert triggers["schedule"]
+    assert "workflow_dispatch" in triggers
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+    heavy = workflow["jobs"]["heavy-tests"]
+    text = POST_MERGE_HEAVY_WORKFLOW.read_text(encoding="utf-8")
+    assert "scripts/select_pr_tests.py --print-heavy-targets" in text
+    assert "refusing a vacuous green run" in text
+    run_step = next(s for s in heavy["steps"] if s.get("name") == "Run heavy not-pg tests")
+    assert run_step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert "set -o pipefail" in run_step["run"]
+    assert "PR_MARKER_EXPRESSION" in run_step["run"]
+
+    result = subprocess.run(
+        [sys.executable, "scripts/select_pr_tests.py", "--print-heavy-targets"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.split() == list(selector.HEAVY_PR_DEFERRED_TARGETS)
+
+
+def test_post_merge_heavy_alert_body_passes_readiness_validation(tmp_path: Path) -> None:
+    import yaml
+
+    import scripts.post_merge_heavy_tests_alert as alert
+    from scripts.validate_issue_readiness import classify_issue_body
+
+    body = alert.render_alert_body(
+        sha="0123abc", run_url="https://github.com/o/r/actions/runs/1", targets="tests/deploy"
+    )
+    report = classify_issue_body(body, labels=list(alert.ALERT_LABELS))
+    assert report.readiness_classification == "ready_candidate", report
+    assert {"type:bug", "prio:high"} <= set(alert.ALERT_LABELS)
+    assert "0123abc" in body and "tests/deploy" in body
+
+    workflow = yaml.safe_load(POST_MERGE_HEAVY_WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["alert"]
+    assert job["needs"] == "heavy-tests"
+    assert "always()" in job["if"] and "cancelled" in job["if"]
+    assert job["permissions"]["issues"] == "write"
+    script = job["steps"][-1]["run"]
+    assert "gh issue create" in script and "scripts/post_merge_heavy_tests_alert.py" in script
+    assert "gh issue comment" in script and "gh issue close" in script
+    # A red run must also leave the workflow red, never a quietly green alert job.
+    assert script.rstrip().endswith("exit 1")
+
+
+def test_full_suite_lane_skips_deferred_heavy_shards(tmp_path: Path) -> None:
+    import os
+    import re
+
+    import yaml
+
+    for name in ("tests/alpha/test_a.py", "tests/deploy/test_heavy.py", "tests/ops/test_host.py",
+                 "tests/invariants/test_vault_multiwriter.py"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).touch()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_python = bin_dir / "python"
+    fake_python.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        "print('RAN ' + ' '.join(a for a in sys.argv[1:] if a.startswith('tests/')))\n"
+        "print('1 passed')\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    smoke = yaml.safe_load((REPO_ROOT / ".github/workflows/ci-smoke.yaml").read_text(encoding="utf-8"))
+    step = next(s for s in smoke["jobs"]["pr-unit-tests-not-pg"]["steps"]
+                if s.get("name") == "Run shared not-pg unit tests in process shards")
+    assert step["env"]["DEFERRED_TARGETS"] == "${{ steps.select-tests.outputs.deferred_targets }}"
+    script = re.sub(r"\$\{\{.*?\}\}", "fixture", step["run"])
+    result = subprocess.run(
+        ["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=30,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", **step["env"],
+             "DEFERRED_TARGETS": "tests/deploy", "RUNNER_TEMP": str(tmp_path / "runner")},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SHARD DEFERRED to post-merge heavy tests: tests/deploy" in result.stderr
+    assert "SHARD FINISHED (0): tests/alpha" in result.stdout
+    assert "tests/deploy" not in (tmp_path / "runner/pytest-not-pg-shards/shards").read_text()
+
+
+def test_owner_docs_describe_heavy_target_deferral() -> None:
+    strategy = (REPO_ROOT / "docs/development/TEST_STRATEGY_HOT_PATH.md").read_text(encoding="utf-8")
+    testing = (REPO_ROOT / "docs/TESTING.md").read_text(encoding="utf-8")
+    hot_path = (REPO_ROOT / "docs/development/PR_HOT_PATH.md").read_text(encoding="utf-8")
+
+    assert "## Post-merge heavy tests" in strategy
+    for doc in (strategy, testing, hot_path):
+        assert "post-merge-heavy-tests.yml" in doc
+    assert "HEAVY_PR_DEFERRED_TARGETS" in strategy
+    assert "prio:high" in strategy

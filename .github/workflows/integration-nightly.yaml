@@ -61,7 +61,8 @@ jobs:
 
   full-suite:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Reserve setup and upload time around the measured full-suite envelope.
+    timeout-minutes: 60
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -73,6 +74,9 @@ jobs:
             experimental: true
     env:
       PYTHONPATH: ${{ github.workspace }}
+      # Keep nested Make/bootstrap producers on the matrix interpreter.  The
+      # Makefile otherwise prefers a host-installed python3.12 on 3.13 runs.
+      PYTHON: python
       STORE_BACKEND: memory
       LLM_PROVIDER: mock
       REASONING_PROVIDER: mock
@@ -86,6 +90,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Provenance, promotion-fixture and review-gate tests inspect the
+          # candidate's historical objects and parent; shallow tips cannot
+          # provide that evidence.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -114,20 +123,162 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
 
+      - name: Install standalone sidecar test dependencies
+        run: |
+          pip install --requirement mimer-mcp-sidecar/requirements.txt
+          pip install --no-deps --editable mimer-mcp-sidecar
+
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
       - name: Full test suite (memory, not pg)
-        timeout-minutes: 20
+        # Complete current-source runs take about 40 minutes; retain finite
+        # headroom for runner variability without relaxing the test watchdog.
+        # Timeout or incomplete results remain failed full-suite evidence.
+        timeout-minutes: 50
         continue-on-error: ${{ matrix.experimental }}
         shell: bash
+        env:
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+          PYTHONUNBUFFERED: "1"
         run: |
-          set -o pipefail
-          pytest -q \
-            -m "not pg and not alpha_llm" \
-            --import-mode=importlib \
-            --durations=30 \
-            | tee tmp/nightly-pytest.log
+          set -euo pipefail
+          marker='not pg and not alpha_llm and not eval'
+          # Reuse the PR process-isolation pattern, retaining nightly E2E and
+          # its original marker selection. Partial logs outlive a cancelled step.
+          shard_root="$RUNNER_TEMP/pytest-nightly-shards"
+          log_dir="$shard_root/logs"
+          shard_list="$shard_root/shards"
+          status_file="$shard_root/status"
+          mkdir -p "$log_dir"
+          : > "$status_file"
+          : > tmp/nightly-pytest.log
+          find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print |
+            while IFS= read -r path; do
+              case "$path" in
+                tests/deploy/*) printf '%s\n' "$path" ;;
+                tests/*/*)
+                  relative="${path#tests/}"
+                  printf 'tests/%s\n' "${relative%%/*}"
+                  ;;
+                tests/*) printf '%s\n' "$path" ;;
+              esac
+            done |
+            LC_ALL=C sort -u |
+            while IFS= read -r shard; do
+              [[ "$shard" == tests/ops ]] || printf '%s\n' "$shard"
+            done |
+            # This measured long-running file starts with the first workers.
+            # It remains in the same discovered inventory as every other file.
+            awk '
+              $0 == "tests/deploy/test_deploy_channel_script.py" { first = $0; next }
+              { remaining[++count] = $0 }
+              END {
+                if (first != "") print first
+                for (i = 1; i <= count; i++) print remaining[i]
+              }
+            ' > "$shard_list"
+          if [[ ! -s "$shard_list" ]]; then
+            echo "No collectible nightly process shards discovered" >&2
+            exit 1
+          fi
+
+          # Require one completed status and consistent JUnit result per shard.
+          # Exit 5 is valid only for a fully deselected shard; an empty whole
+          # selection, missing/duplicate status, or missing result fails closed.
+          validate_shards() {
+            python - "$shard_root" "$1" "$2" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = Path(sys.argv[1])
+          phase = sys.argv[2]
+          expected = (root / "shards").read_text().splitlines()
+          if phase == "complete":
+              expected.append("host-sensitive")
+          logs = {shard: root / "logs" / (shard.replace("/", "_") + ".log") for shard in expected}
+          aggregate = "".join(path.read_text() for path in logs.values() if path.exists())
+          Path("tmp/nightly-pytest.log").write_text(aggregate)
+          rows = [line.split(" ", 1) for line in (root / "status").read_text().splitlines()]
+          if (int(sys.argv[3]) != 0 or any(len(row) != 2 for row in rows)
+                  or len(rows) != len(expected) or {row[1] for row in rows} != set(expected)):
+              raise SystemExit(f"Nightly process runner incomplete: expected={len(expected)} actual={len(rows)} launcher={sys.argv[3]}")
+          failed = False
+          selected = 0
+          for raw_rc, shard in rows:
+              log = logs[shard]
+              try:
+                  rc = int(raw_rc)
+                  text = log.read_text()
+                  report = ET.parse(log.with_suffix(".xml")).getroot()
+                  suites = list(report.iter("testsuite"))
+                  cases = list(report.iter("testcase"))
+                  declared = sum(int(suite.attrib["tests"]) for suite in suites)
+                  if not suites or declared != len(cases):
+                      raise ValueError("JUnit result count differs from testcase inventory")
+                  selected += declared
+                  result_failed = any(case.find("failure") is not None or case.find("error") is not None for case in cases)
+                  empty = (rc == 5 and declared == 0 and not re.search(r"FAILED|ERROR", text)
+                           and re.search(r"no tests ran|[0-9]+ deselected", text))
+                  if (rc != 0 and not empty) or result_failed:
+                      print(f"SHARD FAILED ({rc}): {shard}\n{text}", file=sys.stderr)
+                      failed = True
+              except (OSError, ValueError, KeyError, ET.ParseError) as exc:
+                  print(f"Nightly shard result incomplete: {shard} (exit={raw_rc}): {exc}", file=sys.stderr)
+                  if log.exists():
+                      print(log.read_text(), file=sys.stderr)
+                  failed = True
+          if phase == "complete" and selected == 0:
+              print("Nightly selection executed no test results", file=sys.stderr)
+              failed = True
+          print(f"Nightly {phase}: shards={len(rows)} reported_tests={selected}")
+          raise SystemExit(1 if failed else 0)
+          PY
+          }
+
+          export marker log_dir status_file
+          set +e
+          while IFS= read -r shard; do printf '%s\0' "$shard"; done < "$shard_list" |
+            xargs -0 -r -n 1 -P 4 bash -c '
+              shard="$1"
+              safe="${shard//\//_}"
+              started=$SECONDS
+              echo "SHARD START: $shard"
+              python -u -m pytest -v -m "$marker" "$shard" \
+                --import-mode=importlib --durations=30 --tb=short \
+                --junitxml="$log_dir/$safe.xml" \
+                --ignore=tests/invariants/test_vault_multiwriter.py > "$log_dir/$safe.log" 2>&1
+              rc=$?
+              echo "SHARD FINISHED ($rc): $shard in $((SECONDS - started))s"
+              printf "%s %s\n" "$rc" "$shard" >> "$status_file"
+              exit 0
+            ' _
+          xargs_status=$?
+          set -e
+          if (( xargs_status != 0 )); then
+            # An interrupted launcher cannot prove that its pytest children
+            # exited. Retain incomplete evidence without starting the serial lane.
+            validate_shards parallel "$xargs_status"
+            exit 1
+          fi
+
+          # xargs has waited for every parallel process. Only now run tests
+          # that inspect host/process-global state or exact descriptor counts.
+          # Ordinary parallel failures remain in status; run the serial coverage
+          # before validating both phases together, as the original nightly did.
+          started=$SECONDS
+          set +e
+          python -u -m pytest -v -m "$marker" \
+            tests/ops tests/invariants/test_vault_multiwriter.py \
+            --import-mode=importlib --durations=30 --tb=short \
+            --junitxml="$log_dir/host-sensitive.xml" > "$log_dir/host-sensitive.log" 2>&1
+          rc=$?
+          set -e
+          echo "SHARD FINISHED ($rc): host-sensitive in $((SECONDS - started))s"
+          printf "%s host-sensitive\n" "$rc" >> "$status_file"
+          validate_shards complete 0
 
       - name: Report canary runtime
         run: |
@@ -145,8 +296,12 @@ jobs:
             tests/fitness/test_runtime_contract.py
 
       - name: Fitness report
+        shell: bash
         run: |
-          python -m app.fitness.report | tee tmp/ci_summary.log
+          set -euo pipefail
+          python -m pytest -q -s -m "not pg" \
+            tests/fitness/test_ci_fitness.py::test_ci_report_entrypoint_uses_scoped_product_gateway_fixture \
+            2>&1 | tee tmp/ci_summary.log
 
       - name: Verify CI gates
         run: |
@@ -169,7 +324,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nightly-pytest-log-py${{ matrix.python-version }}
-          path: tmp/nightly-pytest.log
+          path: |
+            tmp/nightly-pytest.log
+            tmp/ci_summary.log
+            ${{ runner.temp }}/pytest-nightly-shards/
 
   pg-contracts:
     runs-on: ubuntu-latest
@@ -231,61 +389,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          pytest -c /dev/null --rootdir=. -q \
-            tests/int/test_pg_backend.py \
-            tests/api/test_status_store_pg.py \
-            tests/indexer/test_outbox_roundtrip_pg.py \
-            tests/indexer/test_mixed_identity_detection.py \
-            tests/cli/test_index_doctor_mixed.py \
-            tests/cli/test_index_rebuild_cli.py \
-            tests/cli/test_index_reconcile.py \
-            tests/index/test_identity_migration.py \
-            tests/index/test_provenance_stamp.py \
-            tests/knowledge_acquisition/test_source_registry_pg.py::test_pg_backend_contract \
-            tests/heimdal/test_entity_review_operation_journal.py \
-            tests/migrations/test_entity_review_operation_journal_schema_parity.py \
-            tests/migrations/test_file_state_adoption.py \
-            tests/migrations/test_objects_adoption.py \
-            tests/heimdal/test_trigger_ownership_pg.py \
-            tests/migrations/test_heimdal_raw_representation_migration.py \
-            tests/migrations/test_legacy_objects_fk_migration.py \
-            tests/migrations/test_store_schema_parity.py \
-            tests/migrations/test_multi_vault_ingest_projection_keys.py \
-            tests/store/test_membership_store.py \
-            tests/migrations/test_ingest_schema_parity.py \
-            tests/migrations/test_multi_vault_replay_projection_backfill.py \
-            tests/migrations/test_replay_schema_parity.py \
-            tests/migrations/test_mvr05a_residual_binding_keys.py \
-            tests/migrations/test_decisions_fk_set_null.py \
-            tests/integration/test_decisions_rebuild_from_log_only.py \
-            tests/integration/test_multi_vault_projection_isolation.py \
-            tests/episodes/test_episode_projection.py \
-            tests/integration/test_vault_sync_atomicity.py \
-            tests/ingest/test_vault_root_ingest_pg.py \
-            tests/invariants/test_retrieval_spine_invariants.py \
-            tests/jobs/test_decisions_export.py \
-            tests/jobs/test_decisions_projection_rebuild.py \
-            tests/jobs/test_multi_vault_decisions_rebuild_scope.py \
-            tests/jobs/test_calibration_projection_rebuild.py \
-            tests/integration/test_calibration_rebuild_from_log_only.py \
-            tests/stores/test_decisions_fk_semantics.py \
-            tests/stores/test_ensure_tables_assert_only.py \
-            tests/stores/test_multi_vault_store_reset_scope.py \
-            tests/stores/test_pg_truncate_reset.py \
-            tests/stores/test_pg_vector_index.py \
-            tests/stores/test_store_contract_pg.py \
-            tests/stores/test_vector_generation_identity.py \
-            tests/services/test_audit_writer.py \
-            tests/migrations/test_outbox_schema_parity.py \
-            tests/migrations/test_multi_vault_outbox_upgrade.py \
-            tests/services/test_multi_vault_outbox_dual_key_dedup.py \
-            tests/migrations/test_yss01_source_registry_schema_parity.py::test_yss01_migration_bootstrap_parity_and_legacy_repair \
-            tests/services/test_outbox_bootstrap_assert_only.py \
-            tests/instance/test_file_state_binding_key.py \
-            tests/services/test_vault_sync_binding_scope.py \
-            tests/integration/test_single_vault_compatibility.py \
-            -m "pg" \
-            --tb=short \
+          python -m app.ops.pg_acceptance --ci --nightly \
             | tee tmp/nightly-pg-contracts.log
 
       - name: Upload PG lane log
@@ -303,11 +407,11 @@ jobs:
     timeout-minutes: 20
     services:
       db:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
-          POSTGRES_DB: app_test
+          POSTGRES_DB: k6_search
         ports:
           - 5432:5432
         options: >-
@@ -316,8 +420,12 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://app:app@localhost:5432/app_test
+      DATABASE_URL: postgresql://app:app@localhost:5432/k6_search
       PYTHONPATH: ${{ github.workspace }}
+      STORE_BACKEND: pg
+      EMBED_PROFILE: deterministic
+      K6_FIXTURE_MANIFEST: /tmp/k6-search.json
+      BASE_URL: http://localhost:8000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -328,6 +436,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
+      - name: Prepare pgvector extension
+        run: python -m scripts.k6_search_fixture prepare-extension
+      - name: Apply migrations
+        run: alembic upgrade head
       - name: Bootstrap database
         run: |
           python - <<'PY'
@@ -336,44 +448,17 @@ jobs:
           PY
       - name: Seed search fixture
         run: |
-          python - <<'PY'
-          import os
-          import psycopg
-          from app.services.embedding import deterministic_embedding
-
-          dsn = os.environ['DATABASE_URL']
-          sample_id = '11111111-1111-1111-1111-111111111111'
-          payload = 'smoke content for k6 search'
-          with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
-              cur.execute(
-                  "insert into objects(uuid,title,review_state,content,path) values(%s,%s,%s,%s,%s) on conflict (uuid) do update set title=excluded.title, review_state=excluded.review_state, content=excluded.content, path=excluded.path",
-                  (sample_id, 'Smoke note', 'inbox', payload, 'Notes/smoke.md'),
-              )
-              vec = deterministic_embedding(payload)
-              cur.execute(
-                  "insert into objects_embeddings(uuid, dim, vector) values(%s,%s,%s) on conflict (uuid) do update set dim=excluded.dim, vector=excluded.vector",
-                  (sample_id, len(vec), vec),
-              )
-          PY
+          python -m scripts.k6_search_fixture seed --manifest "$K6_FIXTURE_MANIFEST"
       - name: Start API
         run: nohup python -m uvicorn app.api.app:app --host 0.0.0.0 --port 8000 >/tmp/api.log 2>&1 &
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
       - name: Wait for API readiness
         run: |
-          deadline=$((SECONDS+90))
-          while [ $SECONDS -lt $deadline ]; do
-            if curl -fsS http://localhost:8000/docs >/dev/null 2>&1; then
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "API did not become ready"
-          cat /tmp/api.log || true
-          exit 1
+          python -m scripts.k6_search_fixture probe --base-url "$BASE_URL" --manifest "$K6_FIXTURE_MANIFEST" --wait-seconds 90
       - name: Warm up search endpoint
         run: |
-          curl -fsS -H "x-trace-id: warmup-k6" "http://localhost:8000/search?q=smoke"
+          python -m scripts.k6_search_fixture probe --base-url "$BASE_URL" --manifest "$K6_FIXTURE_MANIFEST"
       - name: Install k6
         run: |
           sudo apt-get update
@@ -384,5 +469,4 @@ jobs:
           sudo apt-get install -y k6
       - name: Run k6 smoke
         run: |
-          export BASE_URL="http://localhost:8000"
           k6 run scripts/k6_search.js

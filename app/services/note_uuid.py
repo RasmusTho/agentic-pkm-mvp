@@ -43,6 +43,29 @@ def is_read_only_derived_artifact(frontmatter: dict[str, object]) -> bool:
     )
 
 
+def inbox_uuid_heal_applies(note_path: Path, vault_root: Path) -> bool:
+    """The ordinary watched-note worker's UUID-heal selection, without effects."""
+    from app.vault.paths import get_vault_inbox_dir_rel
+    try:
+        relative = note_path.relative_to(vault_root)
+    except Exception:
+        return False
+    inbox = Path(get_vault_inbox_dir_rel(vault_root))
+    return relative.is_relative_to(inbox)
+
+
+def resolve_read_only_derived_uuid(
+    path: Path, *, vault_root: Path | str, preferred_uuid: str | None = None,
+) -> str:
+    """Pure identity decision used after the caller proves a UUID-less derived note.
+
+    This is a producer claim, not persisted source/recovery authority. No note
+    is read, healed or written by this resolver.
+    """
+    relative = path.resolve().relative_to(Path(vault_root).expanduser().resolve())
+    return str(preferred_uuid or "").strip() or str(uuid.uuid5(VAULT_NOTE_UUID_NAMESPACE, relative.as_posix()))
+
+
 def ensure_note_uuid(
     path: Path,
     *,
@@ -63,9 +86,7 @@ def ensure_note_uuid(
         # No rewrite. The caller's resolved identity, else the same path-derived
         # recovery identity vault-alpha ingest uses, keeps every re-ingest of
         # the note on one stable object.
-        return candidate or str(
-            uuid.uuid5(VAULT_NOTE_UUID_NAMESPACE, resolved.relative_to(root).as_posix())
-        )
+        return resolve_read_only_derived_uuid(resolved, vault_root=root, preferred_uuid=candidate)
     if not candidate:
         candidate = _new_note_uuid()
     frontmatter["uuid"] = candidate
@@ -80,4 +101,4 @@ def ensure_note_uuid(
     return candidate
 
 
-__all__ = ["VAULT_NOTE_UUID_NAMESPACE", "ensure_note_uuid", "is_read_only_derived_artifact"]
+__all__ = ["VAULT_NOTE_UUID_NAMESPACE", "ensure_note_uuid", "is_read_only_derived_artifact", "resolve_read_only_derived_uuid"]

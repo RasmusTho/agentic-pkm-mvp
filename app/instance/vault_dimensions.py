@@ -105,6 +105,9 @@ FORBIDDEN_DIMENSION_FIELDS = frozenset(
 REASON_DIMENSION_UNKNOWN = "dimension_unknown"
 REASON_MEMBER_UNREGISTERED = "dimension_member_unregistered"
 REASON_MEMBER_UNAUTHORIZED = "dimension_member_unauthorized"
+#: KD-0F9089B13719: a stored dimension whose membership is (or has been repaired down to)
+#: empty is an invalid selection, never an empty or no-vault context.
+REASON_DIMENSION_EMPTY = "dimension_empty"
 
 
 class VaultDimensionError(RegistryError):
@@ -491,6 +494,12 @@ class VaultDimensionService:
         dimension = dimensions.get(target)
         if dimension is None:
             raise DimensionResolutionError(REASON_DIMENSION_UNKNOWN, dimension_id=target)
+        if not dimension.members:
+            # KD-0F9089B13719 (standing ruling on #3859): resolving a zero-member dimension
+            # fails closed. Returning an empty set would hand the caller a context that is
+            # indistinguishable from ordinary no-vault, which is exactly the silent
+            # narrowing the invalid-selection contract forbids.
+            raise DimensionResolutionError(REASON_DIMENSION_EMPTY, dimension_id=target)
 
         members: list[ResolvedMember] = []
         verdicts: list[BindingVerdict] = []
@@ -837,6 +846,7 @@ __all__ = [
     "MAX_DIMENSIONS",
     "MAX_DISPLAY_NAME_LENGTH",
     "MAX_MEMBERS",
+    "REASON_DIMENSION_EMPTY",
     "REASON_DIMENSION_UNKNOWN",
     "REASON_MEMBER_UNAUTHORIZED",
     "REASON_MEMBER_UNREGISTERED",

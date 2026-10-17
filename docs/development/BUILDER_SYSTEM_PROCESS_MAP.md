@@ -567,6 +567,38 @@ evidence; this statement is a planning hypothesis, not measured proof.
 
 ### Future measurement posture
 
+The finite #5857 evaluation is now recorded in
+[`GOVERNANCE_PROPORTIONALITY.md :: Implementation and evaluation`](GOVERNANCE_PROPORTIONALITY.md#implementation-and-evaluation).
+It compares the first twenty ordinary accepted deliveries whose final-head CI follows #5862's
+2026-10-09T05:47:04Z core cutoff with twenty prior deliveries matched by risk/artifact/proof
+environment. The pre-core cohort is partially already improved, including first-wave #5833;
+this is an observational comparison, not an untreated control or causal estimate.
+
+The post/pre medians are 40.05/33.93 minutes from the observed ready label (17/14 rows available),
+19.89/10.35 minutes from PR open, and 5.14/4.28 minutes of accepted CI Smoke attempt feedback.
+CI Smoke has 32/29 observed attempts, five/two failed attempts followed by documented corrections,
+and 329.00/279.90 deduplicated runner-job minutes. These exclude other workflows and local checks;
+job duration is not billing or CPU usage, and scheduling delay does not isolate pure runner queue.
+The test/CI stratum has lower integration time and no post-core failed attempt, while text-governance
+repairs and implementation/browser proof increase other measures. The <=10-minute CI Smoke goal
+holds for 15/20 post-core and 18/20 prior rows; a 50% lead-time or cost saving is not established.
+
+A common 24-hour window has no observed governing-Issue reopen (17/15 Issues), but pre-core
+#5827's remaining host-controller fixture dependence required #5830/#5833 after its accepted
+host-independence claim. No corresponding post-core defect is identified in the inspected receipts;
+a complete incident/escaped-defect count remains unknown. Total delivery tokens, billing, active
+human labour, owner-intervention count, context reloads and coordination/control calls also remain
+unknown. #6009 exposes only partial advisory telemetry (3,259 input / 667 output tokens), not total
+PR cost. Review declarations, commit/run counts, quota notices and wall-clock time are named proxies
+or recovery evidence and cannot fill those unknowns.
+
+Continue native delivery and affected proof; #5836 already separates native review rounds 0/1
+from automatic executor dispatch. Use the finite inventory for #5858 to retire only proven-unused
+legacy branches/references, retaining explicit executor/in-flight/release and native post-merge
+consumers. If none is safely removable, record the concrete retention/migration evidence. The evaluation adds no meter, dashboard, ledger or permanent evidence
+schema. Its source PR/run identities, exclusions, formulas and recommendation live in the existing
+proportionality owner above; the architecture's future measurement policy below remains in force.
+
 Total Cost of Development (TCD) is the north-star decision model: minimize expected cost per
 accepted delivery, including human attention, rework, defects, delay, coordination, context, tools,
 and model capability. This architecture does **not** require token metering, human-time tracking, a
@@ -762,6 +794,7 @@ Read-only GitHub evidence used:
 | CI workflows | implemented | `.github/workflows/**` | Automated checks and projections | PR/push/schedule/manual | Check runs/artifacts/comments | GitHub Actions | `gh workflow list`; [`.github/workflows/ci-smoke.yaml`:4-13], [`.github/workflows/import-linter.yaml`:14-33] |
 | CI failure context collector | implemented (artifact-only) | `.github/workflows/pr-ci-failure-context.yml`, `scripts/collect_ci_failure_context.py` | Build a bounded context pack for failed PR-triggered runs from CI Smoke, Issue and PR Governance, import-linter, architecture-ci, settings-ci, harness-selfverify, Companion UI Browser Runtime, and App Image Build | Failed allow-listed workflow-run metadata and downloaded logs | JSON/Markdown context artifact; no rerun or repair | GitHub Actions artifact upload only | [PR #3222](https://github.com/RasmusTho/agentic-pkm-mvp/pull/3222), [`.github/workflows/pr-ci-failure-context.yml`:1-62], [scripts/collect_ci_failure_context.py:1-537] |
 | verification dispatch producer | implemented (artifact-only) | `.github/workflows/verification-dispatch-request.yml`, `scripts/build_verification_dispatch_request.py` | Emit one versioned, idempotent request after successful `CI Smoke` for the current PR head | Completed `CI Smoke` workflow run plus live PR snapshot carrying exactly one explicit `Governing-Issue`, exact closing identities, authenticated `Final-Review-Rounds`, then that issue's live snapshot; non-governing references remain supporting evidence | `verification_dispatch_request.v3` JSON/Markdown artifact | GitHub Actions artifact upload only; ambiguous or mismatched governing/closing authority emits no request; no agent, merge, issue, label, comment, or dispatcher mutation | [issue #3602](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3602), [`.github/workflows/verification-dispatch-request.yml`], [scripts/build_verification_dispatch_request.py] |
+| post-merge closure request producer | implemented (artifact-only) | `.github/workflows/post-merge-closure-dispatch.yml`, `.github/workflows/post-merge-closure-reconcile.yml`, `scripts/build_closure_dispatch_request.py`, `scripts/reconcile_post_merge_closure.py` | Emit one bounded, idempotent closure request for a merged PR and recover missed merge events from a finite read-only window | Exact repository, PR number, merge SHA, existing post-merge classification link, and bounded recovery cursor/window | `closure_dispatch_request.v1` JSON/Markdown plus pending/continuation recovery artifact | GitHub Actions read permissions and artifact upload only; malformed, foreign, unmerged, or ambiguous evidence emits no terminal claim; no issue, label, project, comment, branch, agent, model, host, or consumer mutation | [issue #6113](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6113), [#3604](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3604), [`docs/AUTONOMOUS_PR_CLOSURE/DISPATCH_AND_RECONCILE_POST_MERGE_CLOSURE.md`] |
 | Demerzel verification consumer / merge executor | implemented in repo; installed-main acceptance pending | `app/dispatcher/verification_consumer.py`, `app/dispatcher/verification_api.py`, `app/dispatcher/verification_merge.py` | Consume authenticated current-head requests through BuilderOps API/PostgreSQL/outbox; separate uncredentialed review-only `verified` authority from host-fenced merge or safe no-merge | Current request, API task lease, exact issue sets/head, clean-review anchor/round count/repair budget, protected-base manifest, host credential generation, authenticated PR-workflow check suites | `builderops_merge_ready.v1`, task-bound outbox operation binding the fixed non-closing merge text, exact GitHub commit readback | Review child has no ambient GitHub mutation path; only the host executor may resolve the scoped credential and invoke an injected conditional/merge-queue transport; push/manual suites cannot mask failed PR checks, and missing API, fence, manifest, fixed merge text, transport, or readback fails closed | [issue #3603](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3603), [`docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md`], [`app/dispatcher/verification_api.py`], [`app/dispatcher/verification_merge.py`] |
 | CI repair orchestrator | implicit | `pr-integration`, escalation docs | Repair CI when triggered | CI failure | Fix or block | Agent PR commits | [`.codex/skills/pr-integration/SKILL.md`:50-67] |
 | PR publisher | implemented | `publish-pr` skill | Branch, commit, push, PR | Local validated diff | PR | Git/GitHub | [`.codex/skills/publish-pr/SKILL.md`:29-37], [`.codex/skills/publish-pr/SKILL.md`:53-159] |

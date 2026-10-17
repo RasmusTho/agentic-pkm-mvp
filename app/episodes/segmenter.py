@@ -50,12 +50,12 @@ ADR-0051 commitment 2, ADR-0054 §3):
   emits a ``segmentation: proposed`` Episode note per closed segment (AC5, via
   ``app.episodes.store.write_episode_note`` -- the ERE-02 guarded seam),
   persists updated open-segment state, advances each stream's cursor, and
-  ONLY THEN deletes closed-segment state -- a crash at any point means the
-  next tick reprocesses/reconverges, deduped by fold-by-key (retained
-  ``signal_ids`` ledgers) plus a deterministic, START-INDEPENDENT
-  ``episode_id`` per closed segment (a retried emission never double-writes
-  a note, AC2 / INV-ERE-F), even when only ONE of the two cursors advanced
-  before the crash.
+  ONLY THEN deletes closed-segment state. Before folding, the tick admits
+  only exact ``(scope, provenance_ref)`` identities not already represented
+  by a schema-valid canonical Episode note or current open state. That
+  source-backed replay gate is necessary because independent stream cursors
+  can commit one at a time; per-open-segment ``signal_ids`` alone cannot
+  protect rows from a prior segment after a goal-shift replacement.
 - **Projection sync on creation** (#3532, ERE-02 follow-up, mirrors
   ``app.episodes.closure._sync_projection_closed`` / ``app.episodes.recut._sync_projection_row``
   for this same projection family): until this fix, NO production path ever inserted a row into
@@ -72,10 +72,11 @@ ADR-0051 commitment 2, ADR-0054 §3):
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Mapping, Protocol, Sequence, runtime_checkable
@@ -86,6 +87,10 @@ from app.db.replay_projection_schema import assert_replay_projection_schema
 from app.episodes import cross_scope_fusion, engine_state
 from app.episodes.assignment import (
     ArtifactCandidate,
+    AssignmentDecision,
+    BASIS_PROVENANCE,
+    EpisodeBoundsRecord,
+    PROVENANCE_CONFIDENCE,
     artifact_candidates_from_signals,
     commit_assignment_diff,
     compute_assignments,
@@ -110,8 +115,16 @@ from app.episodes.calendar_stream import (
     slugify_summary,
 )
 from app.episodes.ids import EPISODE_ID_PREFIX
-from app.episodes.notes import episode_note_rel_path, parse_validated_episode_note
+from app.episodes.notes import EPISODE_NOTES_DIR, episode_note_rel_path, parse_validated_episode_note
 from app.episodes.store import write_episode_note
+from app.episodes.screen_stream import (
+    SCREEN_CONSUMER_ID,
+    SCREEN_STREAM_ID,
+    ScreenSignalContractError,
+    observation_modality,
+    screen_dimensions,
+    screen_observation_to_signal_contract,
+)
 from app.jobs.episodes_projection import EPISODES_TABLE, row_tuple
 from app.knowledge.write_ops import read_create_once_winner_relative, write_note_relative
 from app.knowledge.errors import KnowledgeWriteConflict
@@ -227,6 +240,9 @@ class ReadResult:
 
     rows: Sequence[Any]
     degraded: Sequence[str] = ()
+    #: Rows whose positions must be acknowledged even when the adapter filters
+    #: them from its normalized stream (e.g. a modality-filtered Heimdal cursor).
+    advance_rows: Sequence[Any] | None = None
 
 
 @runtime_checkable
@@ -311,6 +327,9 @@ class SegmentationSignal:
     observed_at_end: datetime | None = None
     protagonists: tuple[str, ...] = ()
     goal: tuple[str, ...] = ()
+    #: Original screen dimensions are retained on the normalized signal as
+    #: evidence. The segmentation core does not reinterpret app/window values.
+    screen_dimensions: Mapping[str, str] = field(default_factory=dict)
     #: ADR-0054 seam: Heimdal's per-session boundary hint.
     heimdal_session_id: str | None = None
     causal_break: bool = False
@@ -608,6 +627,9 @@ def _signal_from_heimdal_row(row: ObservationRow) -> SegmentationSignal | None:
     unreachable for schema-validated observations)."""
     payload = row.envelope.get("payload")
     payload = payload if isinstance(payload, Mapping) else {}
+    modality = payload.get("modality")
+    if modality not in (None, "speech"):
+        return None
     observation_id = _observation_id_of(row, payload)
 
     observed_at = _parse_observation_time(payload.get("observed_at_start"))
@@ -651,6 +673,45 @@ def _signal_from_heimdal_row(row: ObservationRow) -> SegmentationSignal | None:
         goal=(),
         heimdal_session_id=session_id,
         causal_break=causal_break,
+    )
+
+
+def _signal_from_screen_row(row: ObservationRow) -> SegmentationSignal | None:
+    """Normalize one already-published screen span without merging boundaries."""
+    contract = screen_observation_to_signal_contract(row)
+    if contract is None:
+        return None
+    payload = row.envelope.get("payload")
+    assert isinstance(payload, Mapping)
+    values = screen_dimensions(row)
+    scope = contract.scope_binding.scope if contract.scope_binding is not None else _DEFAULT_SCOPE
+    observed_at = _parse_dt(contract.observed_at_start)
+    observed_at_end = _parse_dt(contract.observed_at_end) if contract.observed_at_end else None
+    attributions = payload.get("attributions")
+    protagonists = tuple(
+        sorted(
+            {
+                str(item["mention_id"])
+                for item in (attributions if isinstance(attributions, list) else [])
+                if isinstance(item, Mapping)
+                and item.get("resolution") == "resolved"
+                and item.get("mention_id")
+            }
+        )
+    )
+    goal = (values["goal"],) if values.get("goal") else ()
+    supersedes = payload.get("supersedes")
+    return SegmentationSignal(
+        stream_id=SCREEN_STREAM_ID,
+        signal_id=contract.signal_id,
+        observed_at=observed_at,
+        observed_at_end=observed_at_end,
+        scope=scope,
+        provenance_ref=contract.provenance_ref,
+        protagonists=protagonists,
+        goal=goal,
+        screen_dimensions=dict(values),
+        causal_break=isinstance(supersedes, str) and bool(supersedes.strip()),
     )
 
 
@@ -770,7 +831,9 @@ def _signal_from_calendar_row(
 
 class _HeimdalStreamAdapter:
     def read(self, ctx: TickContext) -> ReadResult:
-        return ReadResult(read_observations_for_consumer(ctx.consumer_id, limit=ctx.limit))
+        batch = read_observations_for_consumer(ctx.consumer_id, limit=ctx.limit)
+        rows = [row for row in batch if observation_modality(row) in (None, "speech")]
+        return ReadResult(rows=rows, advance_rows=batch)
 
     def normalize(self, row: Any, ctx: TickContext) -> SegmentationSignal | None:
         return _signal_from_heimdal_row(row)
@@ -778,6 +841,35 @@ class _HeimdalStreamAdapter:
     def advance_cursor(self, rows: Sequence[Any], ctx: TickContext) -> None:
         if rows:
             advance_cursor_for_consumer(ctx.consumer_id, list(rows))
+
+
+class _ScreenStreamAdapter:
+    def read(self, ctx: TickContext) -> ReadResult:
+        batch = read_observations_for_consumer(SCREEN_CONSUMER_ID, limit=ctx.limit)
+        rows: list[ObservationRow] = []
+        degraded: list[str] = []
+        for row in batch:
+            try:
+                contract = screen_observation_to_signal_contract(row)
+            except ScreenSignalContractError as exc:
+                payload = row.envelope.get("payload")
+                payload = payload if isinstance(payload, Mapping) else {}
+                observation_id = _observation_id_of(
+                    row,
+                    payload,
+                )
+                degraded.append(f"screen:{observation_id}:refused:{exc.reason}")
+                continue
+            if contract is not None:
+                rows.append(row)
+        return ReadResult(rows=rows, degraded=degraded, advance_rows=batch)
+
+    def normalize(self, row: Any, ctx: TickContext) -> SegmentationSignal | None:
+        return _signal_from_screen_row(row)
+
+    def advance_cursor(self, rows: Sequence[Any], ctx: TickContext) -> None:
+        if rows:
+            advance_cursor_for_consumer(SCREEN_CONSUMER_ID, list(rows))
 
 
 class _VaultActivityStreamAdapter:
@@ -826,6 +918,7 @@ def _calendar_consumed_signal_key(scope: str, signal_id: str) -> str:
 
 _STREAM_ADAPTERS: Final[Mapping[str, StreamAdapter]] = {
     HEIMDAL_STREAM_ID: _HeimdalStreamAdapter(),
+    SCREEN_STREAM_ID: _ScreenStreamAdapter(),
     VAULT_ACTIVITY_STREAM_ID: _VaultActivityStreamAdapter(),
     CALENDAR_STREAM_ID: _CalendarStreamAdapter(),
 }
@@ -865,6 +958,98 @@ def _deterministic_episode_id(closed: ClosedSegment) -> str:
     """
     basis = "|".join((closed.scope, closed.derived_from[0] if closed.derived_from else ""))
     return f"{EPISODE_ID_PREFIX}{uuid.uuid5(_EPISODE_ID_NAMESPACE, basis)}"
+
+
+class EpisodeReplayAdmissionError(RuntimeError):
+    """Canonical Episode evidence could not be read safely for replay admission."""
+
+
+@dataclass(frozen=True)
+class _CanonicalEpisodeNoteIndex:
+    by_id: Mapping[str, Mapping[str, Any]]
+    provenance_by_scope: frozenset[tuple[str, str]]
+    episode_ids_by_scope_provenance: Mapping[tuple[str, str], tuple[str, ...]]
+    bounds_by_id: Mapping[str, EpisodeBoundsRecord]
+
+
+def _read_canonical_episode_note_index(*, vault_root: Path) -> _CanonicalEpisodeNoteIndex:
+    """Read schema-valid canonical notes used to recognize already-emitted source rows.
+
+    The vault note is the episode source of record; the PostgreSQL projection is
+    intentionally best-effort and cannot decide whether an unacknowledged input
+    was already emitted. A malformed/unreadable note must stop this tick before
+    cursor advancement rather than turn missing evidence into a processed-row
+    decision.
+    """
+    notes_dir = vault_root / EPISODE_NOTES_DIR
+    empty = _CanonicalEpisodeNoteIndex(
+        by_id={},
+        provenance_by_scope=frozenset(),
+        episode_ids_by_scope_provenance={},
+        bounds_by_id={},
+    )
+    try:
+        with os.scandir(notes_dir) as entries:
+            paths = sorted(
+                notes_dir / entry.name
+                for entry in entries
+                if entry.name.startswith(EPISODE_ID_PREFIX) and entry.name.endswith(".md")
+            )
+    except FileNotFoundError:
+        # A vault without an Episode-note directory has no canonical notes yet.
+        return empty
+    except OSError as exc:
+        raise EpisodeReplayAdmissionError(f"could not enumerate canonical episode notes in {notes_dir}") from exc
+
+    by_id: dict[str, Mapping[str, Any]] = {}
+    provenance: set[tuple[str, str]] = set()
+    episode_ids_by_scope_provenance: dict[tuple[str, str], list[str]] = {}
+    bounds_by_id: dict[str, EpisodeBoundsRecord] = {}
+    for path in paths:
+        try:
+            fields = parse_validated_episode_note(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise EpisodeReplayAdmissionError(
+                f"canonical episode note cannot be validated for replay admission: {path}"
+            ) from exc
+
+        episode_id = fields.get("episode_id")
+        if not isinstance(episode_id, str) or path.name != f"{episode_id}.md":
+            raise EpisodeReplayAdmissionError(
+                f"canonical episode note identity does not match its path: {path}"
+            )
+        scope = fields["scope"]
+        derived_from = tuple(fields.get("derived_from") or ())
+        for provenance_ref in derived_from:
+            scope_provenance = (scope, provenance_ref)
+            provenance.add(scope_provenance)
+            episode_ids_by_scope_provenance.setdefault(scope_provenance, []).append(episode_id)
+
+        time_fields = fields["time"]
+        try:
+            start = _parse_dt(time_fields["start"])
+            end = _parse_dt(time_fields["end"]) if time_fields.get("end") else None
+        except (KeyError, TypeError, ValueError) as exc:
+            raise EpisodeReplayAdmissionError(
+                f"canonical episode note has unusable bounds for replay admission: {path}"
+            ) from exc
+        by_id[episode_id] = fields
+        bounds_by_id[episode_id] = EpisodeBoundsRecord(
+            episode_id=episode_id,
+            scope=scope,
+            start=start,
+            end=end,
+            derived_from=derived_from,
+        )
+
+    return _CanonicalEpisodeNoteIndex(
+        by_id=by_id,
+        provenance_by_scope=frozenset(provenance),
+        episode_ids_by_scope_provenance={
+            key: tuple(episode_ids) for key, episode_ids in episode_ids_by_scope_provenance.items()
+        },
+        bounds_by_id=bounds_by_id,
+    )
 
 
 def _sync_new_episode_row(fields: Mapping[str, Any], note_path: str) -> None:
@@ -1250,14 +1435,14 @@ def run_segmentation_tick(
 
     Crash-safe ordering (INV-ERE-F): emit -> assign -> close quiesced
     episodes (ERE-06) -> persist open state -> advance cursors -> delete
-    closed-segment state LAST. A crash between the
-    two cursor advances replays only one stream, but the closed segment's
-    retained ``signal_ids`` ledger dedups the replayed rows and the
-    deterministic, start-independent episode id skips the already-written
-    note -- the tick reconverges instead of double-proposing.
+    closed-segment state LAST. Independent cursors can commit one at a time;
+    before folding, replay admission checks exact ``(scope, provenance_ref)``
+    membership in the current open state and schema-valid canonical Episode
+    notes. Durable note provenance therefore prevents a replayed source row
+    from crossing a replacement boundary and minting a different episode id.
 
     Assignment (ERE-05, #3180) runs AFTER segmentation, over the SAME
-    delta-window ``signals`` this tick already folded (no second stream
+    delta-window ``signals`` this tick already read (no second stream
     read): every signal is a candidate artifact, matched against both this
     tick's freshly closed segments (in-memory -- not yet reflected in the
     ``episodes`` PG projection) and already-persisted episodes for the
@@ -1298,6 +1483,7 @@ def run_segmentation_tick(
         assert adapter is not None  # narrowed by the fail-loud correspondence guard above
         read_result = adapter.read(ctx)
         rows = list(read_result.rows)
+        advance_rows = list(read_result.advance_rows if read_result.advance_rows is not None else rows)
         consumed[entry.stream_id] = len(rows)
         degraded.extend(read_result.degraded)
         for row in rows:
@@ -1308,12 +1494,55 @@ def run_segmentation_tick(
                 )
             else:
                 signals.append(signal)
-        pending_cursor_advances.append((adapter, rows))
+        pending_cursor_advances.append((adapter, advance_rows))
 
     open_state = engine_state.all_state_with_prefix(_OPEN_SEGMENT_KEY_PREFIX)
     open_segments = {
         key[len(_OPEN_SEGMENT_KEY_PREFIX) :]: OpenSegment.from_state(value) for key, value in open_state.items()
     }
+
+    canonical_notes = (
+        _read_canonical_episode_note_index(vault_root=root)
+        if signals or open_segments
+        else _CanonicalEpisodeNoteIndex(
+            by_id={},
+            provenance_by_scope=frozenset(),
+            episode_ids_by_scope_provenance={},
+            bounds_by_id={},
+        )
+    )
+    retired_open_scopes: set[str] = set()
+    projection_retry_episode_ids: set[str] = set()
+    for scope, segment in list(open_segments.items()):
+        deterministic_id = _deterministic_episode_id(_close(segment))
+        note = canonical_notes.by_id.get(deterministic_id)
+        if note is None:
+            continue
+        if note.get("scope") != scope:
+            raise EpisodeReplayAdmissionError(
+                f"canonical episode {deterministic_id} conflicts with open scope {scope!r}"
+            )
+        # A prior note write may have completed before state replacement or
+        # closed-state cleanup. Retire that stale open record only after every
+        # cursor commit succeeds below.
+        del open_segments[scope]
+        retired_open_scopes.add(scope)
+        projection_retry_episode_ids.add(deterministic_id)
+
+    # Replay admission can bypass _emit_proposal's existing-note convergence
+    # hook. Request the same bounded, detached projection retry for each
+    # canonical note whose exact source identity is being admitted here.
+    for signal in signals:
+        projection_retry_episode_ids.update(
+            canonical_notes.episode_ids_by_scope_provenance.get(
+                (signal.scope, signal.provenance_ref), ()
+            )
+        )
+    for episode_id in sorted(projection_retry_episode_ids):
+        _retry_existing_episode_projection_sync(
+            vault_root=root,
+            rel_path=episode_note_rel_path(episode_id),
+        )
 
     # Calendar deliberately re-polls its fixed window.  Unlike the cursor-backed
     # streams, an event that belonged to a segment deleted after closure has no
@@ -1331,6 +1560,20 @@ def run_segmentation_tick(
     ]
     if CALENDAR_STREAM_ID in consumed:
         consumed[CALENDAR_STREAM_ID] -= signals_before_calendar_boundary - len(signals)
+
+    represented_provenance = set(canonical_notes.provenance_by_scope)
+    for scope, segment in open_segments.items():
+        represented_provenance.update((scope, ref) for ref in segment.derived_from)
+    # Keep every valid read signal in `signals` for assignment and cursor
+    # acknowledgment. Only exact source identities already represented by a
+    # canonical note or the current open segment are withheld from the pure
+    # segmentation fold. Timestamp overlap is deliberately not an admission
+    # key: a genuinely new signal within old bounds remains eligible.
+    fold_signals = [
+        signal
+        for signal in signals
+        if (signal.scope, signal.provenance_ref) not in represented_provenance
+    ]
 
     # Per-scope READ-POSITION frontier for THIS tick: scope -> max
     # `observed_at` (the START of the latest signal consumed for that scope),
@@ -1351,13 +1594,13 @@ def run_segmentation_tick(
     # durably -- per-scope-from-this-batch is sufficient, so there is no
     # stream-watermark row family to persist.
     scope_frontiers: dict[str, datetime] = {}
-    for signal in signals:
+    for signal in fold_signals:
         current = scope_frontiers.get(signal.scope)
         if current is None or signal.observed_at > current:
             scope_frontiers[signal.scope] = signal.observed_at
 
     updated_open, closed_segments = fold_signals_into_segments(
-        signals, open_segments=open_segments, frontiers=scope_frontiers
+        fold_signals, open_segments=open_segments, frontiers=scope_frontiers
     )
 
     # ERE-08 (#3183) cross-scope fusion gate: split-per-scope by default (ERE-04 already
@@ -1414,8 +1657,14 @@ def run_segmentation_tick(
         # stale projection row for the same id -- the projection is a rebuildable index that has
         # not yet been refreshed with this tick's own emissions.
         episodes_by_id = {e.episode_id: e for e in persisted_episodes}
+        episodes_by_id.update(
+            {
+                episode_id: episode
+                for episode_id, episode in canonical_notes.bounds_by_id.items()
+                if episode.scope in touched_scopes
+            }
+        )
         episodes_by_id.update({e.episode_id: e for e in fresh_episodes})
-        decisions = compute_assignments(artifacts, list(episodes_by_id.values()))
 
         # Review round 1 CONFIRMED (Finding 3, AC6 correction reachability): a binding keyed only
         # by THIS tick's artifact_refs can never surface a PRIOR-tick binding whose artifact does
@@ -1425,7 +1674,33 @@ def run_segmentation_tick(
         # episodes for the touched scopes) so diff_assignments' to_correct can see, and correct,
         # stale bindings even when their artifact never reappears as a signal.
         existing_bindings = dict(read_existing_bindings({a.artifact_ref for a in artifacts}))
-        existing_bindings.update(read_existing_bindings_for_episodes(episodes_by_id.keys()))
+        episode_bindings = read_existing_bindings_for_episodes(episodes_by_id.keys())
+        existing_bindings.update(episode_bindings)
+        decisions_by_key = {
+            (decision.artifact_ref, decision.episode_id): decision
+            for decision in compute_assignments(artifacts, list(episodes_by_id.values()))
+        }
+        # A canonical note's exact provenance continues to support its
+        # existing provenance binding even when the source row is absent from
+        # this tick's independent cursor batch. Reconstruct only that strong
+        # decision from note + ledger evidence; time-overlap bindings still
+        # need a current artifact observation to remain supported.
+        for (artifact_ref, episode_id), binding in episode_bindings.items():
+            episode = episodes_by_id.get(episode_id)
+            if (
+                episode is not None
+                and binding.get("scope") == episode.scope
+                and binding.get("basis") == BASIS_PROVENANCE
+                and artifact_ref in episode.derived_from
+            ):
+                decisions_by_key[(artifact_ref, episode_id)] = AssignmentDecision(
+                    artifact_ref=artifact_ref,
+                    episode_id=episode_id,
+                    scope=episode.scope,
+                    basis=BASIS_PROVENANCE,
+                    confidence=PROVENANCE_CONFIDENCE,
+                )
+        decisions = list(decisions_by_key.values())
 
         to_insert, to_correct = diff_assignments(existing_bindings, decisions)
         assignment_summary = commit_assignment_diff(
@@ -1463,12 +1738,12 @@ def run_segmentation_tick(
         engine_state.set_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}", segment.to_state())
 
     # Advance cursors only after proposals and open state are durable; delete
-    # closed-segment state LAST. A crash between the two advances leaves the
-    # closed segment's signal_ids ledger in place, so the one-stream replay
-    # on the next tick folds to no-ops and the deterministic, start-independent
-    # episode id skips the existing note (never a second partial proposal --
-    # widening the resurrected segment's start on replay does not change its
-    # id, so the "never a duplicate" guarantee holds).
+    # closed-segment state LAST. A crash between two advances may leave one
+    # stream's rows unread. On retry, exact provenance already carried by a
+    # canonical note or current open state is removed before fold/shift
+    # detection, so it cannot replace the start ref and produce a second id.
+    # Stale open state whose deterministic id already has a canonical note is
+    # retired only after all cursor commits succeed.
     # Known residual (documented, accepted): a crash in the narrow window
     # between the final cursor advance and the closed-state delete leaves an
     # already-emitted segment's state loadable for one more tick; a genuinely
@@ -1479,7 +1754,7 @@ def run_segmentation_tick(
     for adapter, rows in pending_cursor_advances:
         adapter.advance_cursor(rows, ctx)
 
-    closed_scopes = {c.scope for c in closed_segments} - set(updated_open)
+    closed_scopes = ({c.scope for c in closed_segments} | retired_open_scopes) - set(updated_open)
     for scope in closed_scopes:
         engine_state.delete_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}")
 

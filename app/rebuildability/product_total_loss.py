@@ -9,7 +9,9 @@ recipe are all present and agree with the current retained note.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
@@ -161,6 +163,41 @@ def parse_markdown_text(raw_text: str) -> tuple[dict[str, Any], str]:
 
     frontmatter, body, _error = parse_bounded_frontmatter(raw_text)
     return frontmatter, body.strip()
+
+
+def capture_source_frontmatter(raw_text: str) -> dict[str, Any] | None:
+    """Capture complete admission metadata, never normalize parse loss to empty proof.
+
+    Ordinary Markdown parsing retains its compatibility posture. Repair evidence
+    is stricter: an unterminated, malformed or non-mapping header is unknown.
+    """
+    lines = raw_text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return {}
+    closing = next((i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None)
+    if closing is None:
+        return None
+    try:
+        captured = yaml.safe_load("".join(lines[1:closing]))
+    except yaml.YAMLError:
+        return None
+    if captured is None:
+        return {}
+    if not isinstance(captured, dict):
+        return None
+
+    def json_scalar(value: Any) -> str:
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        raise TypeError("unsupported source metadata")
+
+    try:
+        # YAML timestamps are ordinary source metadata, not permission to make
+        # producer writes fail JSON serialization. Other unsupported/cyclic
+        # values remain unknown admission, never a fabricated empty snapshot.
+        return json.loads(json.dumps(captured, default=json_scalar, allow_nan=False))
+    except (TypeError, ValueError):
+        return None
 
 
 def _canonical_object_ids_for_sources(vault_uuids: Iterable[str]) -> dict[str, str]:

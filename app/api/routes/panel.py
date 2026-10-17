@@ -11,7 +11,7 @@ runtime-declared Panel checkbox option to the canonical checked Markdown state.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 import app.panel.confirmation as confirm_module
 import app.panel.checkbox_projection as checkbox_projection_module
@@ -27,17 +27,33 @@ from app.panel.confirmation import (
     SameTurnExecutionError,
     UnknownProposalError,
 )
-from app.api.compatibility_mutation import reject_scoped_vault_mutation
+from app.api.compatibility_mutation import (
+    capability_not_ready,
+    require_compatibility_write_target,
+    seal_vault_mutation,
+)
 
 router = APIRouter(
     prefix="/panel",
     tags=["panel"],
-    dependencies=[Depends(reject_scoped_vault_mutation)],
+    dependencies=[Depends(seal_vault_mutation)],
 )
 
 
 @router.post("/confirm", response_model=ConfirmResponse)
-async def panel_confirm(request: ConfirmRequest) -> ConfirmResponse:
+async def panel_confirm(request: ConfirmRequest, http_request: Request) -> ConfirmResponse:
+    # A staged proposal names its own note file (absolute, or relative to the
+    # process VAULT_ROOT), which need not be the sealed compatibility binding:
+    # prove the real target before any confirm/reject effect.
+    target = confirm_module.staged_proposal_note_file(request.proposal_id)
+    if target is not None:
+        require_compatibility_write_target(http_request, target)
+    elif getattr(http_request.state, "compatibility_write_root", None) is not None and (
+        confirm_module._service._proposals.get(request.proposal_id) is not None
+    ):
+        # A staged proposal whose note file cannot be resolved has no provable
+        # target under the seal: fail closed rather than let confirm run.
+        raise capability_not_ready()
     try:
         return confirm_module._service.confirm(request)
     except UnknownProposalError as exc:
@@ -72,9 +88,13 @@ async def panel_confirm(request: ConfirmRequest) -> ConfirmResponse:
 @router.post("/checkbox-projection", response_model=CheckboxProjectionResponse)
 async def panel_checkbox_projection(
     request: CheckboxProjectionRequest,
+    http_request: Request,
 ) -> CheckboxProjectionResponse:
+    # The projection resolves its own vault root; hand it the sealed binding so it
+    # proves that root before reading or writing the note.
+    sealed_root = getattr(http_request.state, "compatibility_write_root", None)
     try:
-        return checkbox_projection_module._service.project(request)
+        return checkbox_projection_module._service.project(request, sealed_root=sealed_root)
     except CheckboxProjectionHTTPError as exc:
         raise HTTPException(
             status_code=exc.status_code,

@@ -1145,6 +1145,46 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 - **Related docs / contracts / ADRs:** ADR-0055; `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7 (INV-VW3).
 - **Related issues:** #3132, #3450, #3452.
 
+### sources_zone_single_writer (proposed)
+
+- **Purpose:** Keep the selected vault's Sources zone settings-resolved, restricted to the
+  registered sensor/acquisition writers, and disjoint from capture and app-agent destinations.
+- **Protected principle:** One registered writer class per zone; configured vault paths determine
+  destinations, while capture and app-agent paths remain excluded.
+- **Affected boundaries:** OEF, HKA, EBF.
+- **Required fixture / data:** A vault with a non-default `paths.sources_dir_rel`, production
+  fixtures for every shipped sensor/acquisition producer, and capture, MCP, and app-agent
+  exclusion paths.
+- **Expected failure mode:** A new literal or resolver callsite drifts without review, a shipped
+  producer writes outside the configured root, an unregistered producer targets Sources, or capture
+  / app-agent content crosses the Sources boundary.
+- **Current enforcement:** `static_test + runtime_test` (proposed) — an exact source inventory
+  rejects unreviewed literal/resolver drift and resolves absolute and relative app imports,
+  visible package re-exports, and possible aliases across module, immediate class-body,
+  function-local class-body, function, and enclosing lexical scopes. Function-local class bodies
+  use enclosing function bindings; class-local bindings do not leak into methods. Helper identities
+  retain their full lexical path, and the census follows one value-carrying path-helper/write-helper
+  boundary; star imports fail closed. Focused callsite proofs require the production
+  `app.knowledge.service._build_adapter` to pass its resolved `sources_root_rel` into both
+  `FsVaultAdapter` and `ObsidianCliAdapter`. One alias-aware inventory covers all eight current
+  default-bearing helper/constructor identities, including candidate projection paths, the YouTube
+  attachment root validator, and the meeting path helper. A source census compares that finite set
+  with default-bearing identities found in the current AST, so a new root default cannot silently
+  escape caller proof. Every current caller must pass its resolved root by keyword or positional
+  argument; missing/defaulted forwarding and new callers fail closed. The same enclosing-scope
+  collector records calls in eagerly evaluated function defaults at module, function, and class-body
+  definition sites. Writer census keys retain every lexical scope name so
+  same-leaf writers under different enclosing factories cannot deduplicate. Synthetic positive and
+  negative cases cover aliases, class-body calls, forwarding removal/defaulting, new-caller drift,
+  and unrelated writes.
+  Production producer tests verify selected-root writes and capture-note overlap refusal, while
+  capture, MCP, and panel-agent paths verify exclusion with existing vault notes.
+- **Eventual test path:** `tests/architecture/test_sources_zone_writers.py`.
+- **Related docs / contracts / ADRs:** `docs/contracts/MIMER_CLIENT_CONTRACT.md` §5;
+  `docs/testing/invariant-synthesis-2026-07.md` P-1 registered-list conventions and P-6
+  `single_writer_per_table`.
+- **Related issues:** #3414, #3413, #5700, #6034.
+
 ## Coverage map (invariant → principle → test)
 
 | Invariant | Matrix principle(s) | Primary boundary | Enforcement | Test path |
@@ -1191,6 +1231,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | stale_write_rejected_for_rewritten_notes (INV-VW1) | vault canonical + fail-loud | WSP/HKA | runtime (opt-in expected-version seam) | `tests/invariants/test_vault_multiwriter.py::test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_seam`, `tests/invariants/test_vault_multiwriter.py::test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam` |
 | write_guard_asserted_at_every_write_seam (INV-VW2) | vault canonical + fail-loud | WSP | gate + runtime | `tests/knowledge/test_write_ops.py::test_append_note_relative_rejects_unhealthy_write_guard`, `tests/knowledge/test_write_ops.py::test_append_note_relative_allows_healthy_write_guard` |
 | icloud_conflict_artifacts_never_silently_ingested (INV-VW3) | vault canonical + fail-loud | SIP/WSP | runtime | `tests/watcher/test_vault_conflict_quarantine.py` |
+| sources_zone_single_writer (proposed) | registered writer + selected-vault path | OEF/HKA/EBF | static + runtime | `tests/architecture/test_sources_zone_writers.py` |
 
 ## Heimdal invariants (HEIM-1..14) — sibling registry
 
@@ -1329,6 +1370,75 @@ added as their child slices land.
   `docs/EVENTS.md :: settings.write.receipt`,
   `docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F5`.
 - **Related issues:** #3162; parent #3156.
+
+## SLER proposal evaluation (#4906)
+
+**Proposed evaluation v1; owner acceptance pending.** SLER here abbreviates source lineage,
+evidence independence, and family-aware retrieval; it names this evaluation scope, not a new
+subsystem or capability. The following targets are `doc_only` / `future_runtime`: no SLER corpus,
+runner, measurements, passing enforcement, or owner annotations are claimed by this docs change.
+Existing metadata, prefilter, provenance, and citation probes remain applicable baselines.
+
+### Minimum corpus and reproducible procedure
+
+Before implementation acceptance, seal a versioned manifest with at least 24 origin objects,
+72 artifacts/representations and 120 citable segments, spanning video/transcript, document,
+dataset/observation and human synthesis. Include at least six origins with multiple content
+versions; byte-identical separately published sources; title/URL/path changes; malformed, missing,
+cyclic and multi-parent lineage; duplicate summaries; contradictory spans; a shared study reported
+by different publishers; partial overlap; distinct assessed bases; and unknown/disputed bases.
+Include two vault bindings and two scopes, suppressed/sensitive siblings, retrieve-without-cite
+flows, expired contexts, and one unavailable binding. Synthetic fixtures establish mechanics only;
+owner-approved, legally usable real-source annotations are required for empirical quality claims.
+
+The manifest records exact source/content/artifact/segment identities and hashes, lineage edges,
+scope/sensitivity/binding and standing, assessment target versions/purpose/method/reviewer, expected
+shared/distinct/unknown bases, permitted citation ranges, and expected refusal/degradation. Seal at
+least 100 labeled same-family pairs, 100 different-family pairs and 40 unknown/overlap assessments.
+Keep unknowns out of positive/negative pair denominators and report their count. Split by complete
+source/evidence groups into development and held-out halves; no derivatives or shared bases cross
+the split. Ambiguous gold labels remain unknown, never invented to fill a quota.
+
+Use at least 24 queries across orientation, quotation/verification, analysis and version/audit
+intents, each with explicit eligible relevance/coverage gold, preferred representations and allowed
+citations. Run the same immutable corpus/context/query set through the baseline and candidate's
+real production retrieval and consuming citation paths. Record repository head, manifest digest,
+annotation version, executable entrypoint/command, seed, effective settings/model identities,
+hardware/network profile, context generations and policy, candidate window, k, and context budget.
+The implementation supplies the replay command before its acceptance; no helper-only grouping
+test substitutes for production call-site proof. Fix k=8, candidate window=256 eligible segments
+and context budget=4,096 tokens for v1 comparison; report truncation and queries with fewer eligible
+items. A later budget change needs a newly bound evaluation version.
+
+Run cold-start cases five times and warm cases 30 times per query with baseline/candidate order
+alternated. Capture per-query outputs, citations, unknowns, selection/collapse reasons and timings;
+compute denominators and per-stratum results before aggregates. Repeat from the sealed inputs after
+deleting/rebuilding only disposable projections. Preserve durable identities, assessment content,
+receipts, and eligible citations. Performance profiles and operational trials are separately bound
+to the [proposed budgets](../REQUIREMENTS_INDEX.md#source-lineage-operating-budget-proposal-4906).
+
+### Proposed targets and owner routing
+
+| Invariant / metric | Calculation and proposed v1 target | Owners / credible failure |
+| --- | --- | --- |
+| `sler_source_family_precision` | False merge = merged different-family pairs / labeled different pairs: 0. False split = separated same-family pairs / labeled same pairs: at most 5%, with every error shown. | SIP/DRI; hash/URL similarity joins distinct origin objects or splits a moved/versioned one. |
+| `sler_duplicate_top_k` | Redundant source contributions after collapse / returned slots: 0 in deterministic duplicate fixtures; at most 10% on annotated held-out queries. Complementary spans and requested version comparisons are not duplicates. | RCA; a summary/transcript/original fills all slots and hides other relevant sources. |
+| `sler_task_representative` | Exact matches to gold permitted representative/coverage sets / eligible query cases: 100% deterministic, at least 95% annotated held-out. Report each intent separately. | RCA/HIX; a summary replaces an exact quote or collapse removes a relevant contradiction. |
+| `sler_citation_preservation` | Every admitted citation resolves to the exact used source/version/segment and required provenance; 100%, zero wrong-source/range citations, including rebuild. | SIP/RCA/GOV; a family label or stale version replaces the cited source. |
+| `sler_independence_unknown` | 100% unknown, stale, conflicting and unconfirmed assessments stay visible and add zero confirmed-independent count; no transitive merge through partial overlap. | SIP/GOV/HIX; separate URLs or a high confidence score manufacture independence. |
+| `sler_known_basis_diversity` | Cover at least min(k, gold required distinct assessed bases) among eligible candidates meeting the query's declared relevance floor and context budget. Report achieved/available/required bases and budget-limited cases. Zero double-counting of derivatives. | RCA/SIP; shared evidence is counted several times or irrelevant evidence is added to meet a quota. |
+| `sler_cross_vault_provenance` | 100% admitted members retain their own identity, version, scope, sensitivity, binding and provenance; zero denied identifiers/count leakage; retrieve-without-cite never cites. | WSP/GOV/RCA/SFC; a representative imports a sibling's permission or overwrites its binding. |
+| `sler_latency_and_rebuild` | Report warm/cold p50/p95 and peak resources against the named operating profile; meet the proposed latency/freshness/rebuild budgets after owner acceptance. | OEF/DRI/PDM; unbounded family traversal or stale rebuild is hidden by an aggregate latency. |
+
+**Protected principles:** existing `retrieve_scope_prefilter`, `similarity_not_permission`,
+`provenance_survives_derivation`, `projection_not_evidence`, and candidate identity/evidence-role
+invariants. **Current enforcement:** proposal `doc_only`, later `future_runtime`; these targets
+cannot be represented as passing tests. **Eventual test path:** owner-routed production retrieval,
+acquisition adapters, context/citation consumers and corpus evaluator; exact paths are selected in
+the accepted implementation breakdown, not created by #4906. The source-specific #4119 harness
+can contribute anchor/derivation checks but does not evaluate cross-source independence. Acceptance
+must bind this evaluation v1, owner sections, unresolved-budget treatment and actual corpus plan
+before implementation issues are filed.
 
 ## Related documents
 

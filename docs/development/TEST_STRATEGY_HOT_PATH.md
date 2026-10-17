@@ -5,7 +5,7 @@ Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
-Last reviewed: 2026-10-10 (companion-helper selector coverage)
+Last reviewed: 2026-10-14 (scoped unit execution margin)
 Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/import-linter.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py`, `tests/governance/test_governed_vault_profile_contract.py`, `tests/governance/test_governed_vault_profile_proposals.py`, `tests/agents/test_reviewer.py`, `tests/agents/test_reviewer_single_note.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`, `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`, Issue #5820 / PR #5838 candidate selector coverage and `tests/scripts/test_select_pr_tests.py::test_product_embedding_adapters_select_their_regression_coverage`
 
 # Test Strategy for the Hot Path
@@ -74,11 +74,46 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
-- Both full and scoped non-PG unit-test steps retain the verified 35-minute batch ceiling from
-  #5921 / PR #5924 and the existing 120-second per-test thread watchdog. This preserves every
-  target, marker, required check, assertion and failure handler. The earlier #5922 selection
-  reached 98 percent before its old 22-minute ceiling; a larger ceiling is execution margin,
-  not a reduction in execution time. Actual duration and coverage handoff are measured separately.
+- CI Smoke, the nightly full suite and release-UAT produce fitness evidence with
+  `python -m pytest -q -s -m "not pg" tests/fitness/test_ci_fitness.py::test_ci_report_entrypoint_uses_scoped_product_gateway_fixture`.
+  That explicit functional test runs the actual `app.fitness.report` entrypoint with the canonical
+  `product_model_access_gateway` fixture, the full golden corpus and the existing 32-sample latency
+  probes. Only the model test boundary is isolated; metric algorithms, reranking, summary labels and
+  gate thresholds remain unchanged. Bash pipefail preserves a failed report/test exit before the
+  subsequent parser, and stderr plus the complete report are retained in `tmp/ci_summary.log` and
+  an always-uploaded artifact. The executable caller tests reconcile coverage with the checked-in
+  workflow producer inventory, run all three real YAML commands over finite
+  seed copies and require failure for missing/malformed metric input, failed gates and missing
+  thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
+  unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
+- Both full and scoped non-PG unit steps have finite 60-minute outer ceilings. The scoped step's
+  former 35-minute ceiling cut off #6091 / PR #6092 at 91% without a reported assertion failure
+  ([job 116083429844](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38631158811/job/116083429844));
+  its six selected subsystem groups run serially. Additional outer margin does not prove completion
+  or promise a speedup: current-head substantive CI must still pass. Both retain the 120-second per-test thread watchdog,
+  every target, marker, required check, assertion and failure handler. #6084 records two independent
+  35-minute cutoffs: [#6074 job 115700746542](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38514333873/job/115700746542)
+  and [#6075 job 115693481077](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38515571086/job/115693481077).
+  All parallel shards passed; the serial boundary was still running when cancelled. Their
+  parallel phases alone took approximately 30m56s and 29m50s, leaving only about four to five
+  minutes for serial coverage at the old ceiling. The 60-minute bound leaves approximately
+  29 minutes after the slowest observed parallel phase, without changing four-process concurrency
+  or starting host-sensitive tests until all parallel processes exit. This is execution margin,
+  not a speedup or a completed-run duration measurement. The `required-unit-phase-margin.v1`
+  receipt (`pytest-not-pg-shards/phase-margin.json`) records exact checkout SHA, budget, watchdog,
+  phase durations and exit status. Only `phase=complete` with `exit_status=0` describes success;
+  null/incomplete fields cannot prove a missing or cancelled phase. Initial and boundary receipts,
+  partial logs, and status inventory survive cancellation for the always-run artifact upload;
+  normal EXIT handling adds final timings/status when the shell can execute it. Actual current-head
+  CI completion remains required; the ceiling and fixture receipt alone are not runtime proof.
+  PR #6083's scoped serial job [115940412928](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38531981018/job/115940412928)
+  separately reached 93% at the old 35-minute cutoff, with one failed result whose traceback
+  was lost. The scoped command keeps the exact selector arguments and adds verbose node IDs,
+  short tracebacks and unbuffered output; pipefail and the always-uploaded log retain failure
+  evidence. Its increased ceiling is execution margin, not a completed-run measurement or a
+  speedup. `tests/ops/test_ci_workflow.py::test_scoped_unit_budget_preserves_selected_command_and_failure`
+  executes that YAML command against finite success/failure producers to verify selected arguments,
+  watchdog, visible diagnostics, retained log and failure exit propagation.
 - The shared native PostgreSQL acceptance profile retains the former `pr-index-pg-contracts`
   surface (#5587), including FCA-06 second-consumer conformance (#5405) and dormant host-candidate
   admission/history/live-refusal and managed-source proofs (#5593). Each test retains the
@@ -108,6 +143,44 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   runner temporary directory and are uploaded even when a later shard fails or the test step is
   cancelled. The aggregate log remains available on normally completed runs. This removes known
   duplicate execution; it does not promise a particular wall-clock speedup or suppress failures.
+- The nightly full suite reuses that non-overlapping process pattern with four parallel pytest
+  processes and the same serial `tests/ops` / `test_vault_multiwriter.py` boundary. It preserves
+  every selected test while discovering `tests/deploy` at file granularity; other top-level
+  groups keep their existing discovery. The measured longest deploy file,
+  `test_deploy_channel_script.py`, is queued first, with the remaining discovered paths sorted.
+  Fully deselected files remain in the finite inventory and require their empty JUnit result.
+  The selection remains
+  `not pg and not alpha_llm and not eval`, including E2E and the other marker classes omitted on
+  the PR path. The qualified real-eval lane remains opt-in; the ten deterministic SV/EN checks
+  stay in this nightly selection. Every invocation retains the canonical temporary namespace,
+  plugin autoload and importlib collection; each has the existing 120-second thread watchdog, verbose node IDs,
+  short tracebacks, unbuffered output and the slowest 30 durations. The batch ceiling is 50 minutes
+  with a 60-minute job ceiling for installation, later checks and uploads. The triggering #6063
+  run exhausted the former 20-minute step after partial execution. Later, #6090's
+  [Python 3.12 job](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38638069945/job/116106250882)
+  completed all 132 shards and 20,208 reported cases at 35 minutes 6 seconds but timed out at the
+  35-minute ceiling. A [later run](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38649149411)
+  exhausted the 40-minute limit on both versions after their deploy groups took 31m31s and
+  32m46s, leaving the serial phase incomplete. After file grouping,
+  [run 38658078391](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38658078391)
+  completed all 155 shards and 20,343 reported cases on both versions with zero failures, but
+  Python 3.12 still timed out at 40m06s; Python 3.13 completed at 39m34s. The measured envelope
+  allows 20% beyond the slower complete run plus one minute, with separate setup and upload
+  reserves. Prior failed proof and timeout accounting remain unwaived. Neither grouping nor
+  a larger ceiling establishes acceptance: complete current-head inventories, failure-free
+  required targets, no timeout, and successful later checks still qualify the producer.
+- Nightly shard inventory, raw exit statuses, per-shard logs and JUnit results live under
+  `$RUNNER_TEMP/pytest-nightly-shards` and are uploaded with the aggregate log by an `always()`
+  step. A completed phase requires each expected shard exactly once and a JUnit testcase count
+  consistent with its declared result count. A fully deselected shard may report pytest exit 5,
+  but an empty whole selection, missing/duplicate status, terminated process, missing result or
+  failed test makes the producer fail. After a completed launcher wait, ordinary parallel failures
+  remain recorded while the serial boundary still runs; validation then reports both phases and
+  retains the failing result. An incomplete launcher stops before that boundary because child
+  process exit cannot be established. Partial logs survive those failures and step cancellation.
+  The executable nightly workflow fixtures in `tests/ops/test_ci_workflow.py` prove inventory,
+  failure accounting and the serial boundary with finite synthetic populations; those producer
+  proofs do not claim that unexecuted Product tests passed or replace current-head CI.
 - A docs-only PR may include a changed `tests/e2e/**` scenario as its executable acceptance companion. That E2E path is scope-neutral for selection and remains deferred; the docs lane still runs its non-E2E contract targets and must not fall through to the unowned/full-suite refusal.
 - The startup-redesign contract owner selects both its static contract suites and the exact docs-index Verify target `tests/architecture/test_docs_index.py::test_all_docs_are_listed_in_docs_index`. Its selector regression must include the mixed shape of startup docs, `docs/DOCS_INDEX.md`, the selector, and governance tests so a docs-index proof cannot disappear behind a green scoped run.
 - Statically declared selector file and node-id targets must be collectable. Before pytest receives a selected node id, the selector checks its file portion exists; its always-selected selector fitness test collect-checks every static file/node-id target so a rename or deletion fails in the changing PR rather than an unrelated downstream selection.
@@ -275,6 +348,7 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 - Runtime PRs should run focused tests first and add smoke only when the runtime surface is actually touched.
 - Subsystem-scoped CI must be conservative: workflow/test configuration, dependency files, migrations, and shared fixtures choose the broad deterministic suite. Unmapped runtime paths fail selection until an owner is declared; they must never silently borrow the whole repository's suite.
 - E2E coverage is reserved for post-merge, nightly, or explicit manual verification.
+- Heavy test targets in `HEAVY_PR_DEFERRED_TARGETS` run on the PR path only when the PR changes a source they exercise; otherwise they run in `post-merge-heavy-tests.yml` (see `:: Post-merge heavy tests`).
 - When a governing contract names an exact-ref browser proof, dispatch the dedicated workflow only
   after publishing the candidate and authenticate the result and artifacts against its resolved
   SHA; do not reinterpret ordinary unit CI as browser evidence.
@@ -282,6 +356,15 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 - Direct repair PRs are classified by the surfaces they touch, not by whether they carry a governing issue.
 - Failing required checks must be classified, not ignored as out-of-scope.
 - A required check that is stale, missing, or unrelated to the current head SHA is a blocking classification problem, not a silent pass.
+
+## Post-merge heavy tests
+
+Owner decision (verbal, 2026-10-16, recorded in #6154): heavy test sets do not run on the PR path. They run after merge and nightly. Moving them to the ygg-dev / ygg-test verification VMs is a later step.
+
+- `scripts/select_pr_tests.py :: HEAVY_PR_DEFERRED_TARGETS` maps each heavy target to the source paths it exercises. A scoped or full-suite PR selection keeps a heavy target only when the PR changes one of those paths, or a non-test file inside the target (a `conftest.py` or helper). Otherwise the selector drops it and reports it as `deferred_targets` (stdout and `GITHUB_OUTPUT`). The full-suite lane skips the deferred shard and logs `SHARD DEFERRED`. A changed test module inside a deferred directory still runs as its own changed-file target.
+- The only entry today is `tests/deploy`, kept on the PR path when a PR changes any repo file it reads directly: deploy scripts and `scripts/lib/**`, compose files, requirements files, `Dockerfile`, `ops/**`, `config/deploy/**`, release-channel surfaces, and the `app/` modules it loads by path. It took ~1497 s of PR #6134's 2287 s unit step and timed out PR #6152, because `ops_deploy` owns all of `scripts/`. A census test keeps the trigger set covering every existing repo file that `tests/deploy` references (#6155 review). Add a target only with a timing receipt.
+- `.github/workflows/post-merge-heavy-tests.yml` runs `select_pr_tests.py --print-heavy-targets` on every push to `main`, nightly, and on `workflow_dispatch`. It uses the PR marker expression and the 120-second per-test watchdog, and never cancels a started run. An empty target list fails instead of passing vacuously.
+- Red routing: a failed run opens one rolling `type:bug` + `prio:high` + `agent:ready` alert Issue rendered by `scripts/post_merge_heavy_tests_alert.py`, or comments on the open one. The alert job also exits red. The next green run comments and closes the alert. The workflow is not a required PR check; a green `Unit tests (not pg)` does not prove the deferred heavy targets.
 
 ## Historical selector replay
 

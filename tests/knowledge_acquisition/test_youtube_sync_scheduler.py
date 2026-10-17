@@ -354,6 +354,21 @@ def test_backoff_and_manual_sync_now() -> None:
     assert backoff["consecutive_failures"] >= 2
 
 
+def test_policy_conflict_reason_is_preserved_in_scheduled_backoff() -> None:
+    registry = _Registry([_Binding("inbox")])
+
+    def conflicting_poll(_binding: _Binding, **_kwargs: Any) -> _PollResult:
+        return _PollResult(reason_code="policy_conflict")
+
+    sched, _clock, state, _queue = _make(registry=registry, poll_fn=conflicting_poll)
+
+    sched.tick()
+
+    backoff = state.get("backoff:inbox") or {}
+    assert backoff["consecutive_failures"] == 1
+    assert backoff["reason_code"] == "policy_conflict"
+
+
 def test_pause_semantics() -> None:
     registry = _Registry([_Binding("inbox"), _Binding("paused-source", enabled=False)])
     polls: list[str] = []
@@ -457,7 +472,7 @@ def test_raising_poll_still_backs_off(last_attempt) -> None:
     # lets its backoff apply -- reproduced at 6 polls over 6 minutes against a
     # 3600s cadence before this was fixed.
     registry = _Registry(
-        [_Binding("playlist-1", collection_kind="playlist", poll_interval_seconds=3600, last_attempt_at=last_attempt)]
+        [_Binding("playlist-1", collection_kind="inbox_playlist", poll_interval_seconds=3600, last_attempt_at=last_attempt)]
     )
     attempts: list[str] = []
 
@@ -749,6 +764,26 @@ def test_priority_sources_receive_the_tick_budget_first() -> None:
     outcome = scheduler.tick()
     assert polled == ["inbox"]
     assert outcome.skipped["normal"] == "tick_budget_exhausted"
+
+
+def test_scheduler_routes_only_inbox_bindings_to_inbox_poller() -> None:
+    rows = [
+        _Binding("inbox"),
+        _Binding("subscription", collection_kind="subscription_feed"),
+        _Binding("owned", collection_kind="owned_playlist"),
+        _Binding("liked", collection_kind="liked_videos"),
+    ]
+    polled: list[str] = []
+    scheduler, *_ = _make(
+        registry=_Registry(rows),
+        poll_fn=lambda binding, **_kwargs: (polled.append(binding.binding_id) or _PollResult()),
+    )
+
+    outcome = scheduler.tick()
+    assert outcome.polled == ("inbox",)
+    assert polled == ["inbox"]
+    assert scheduler.sync_now("subscription").polled == ()
+    assert polled == ["inbox"]
 
 
 @pytest.mark.parametrize("failure", [False, True])

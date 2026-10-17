@@ -28,7 +28,9 @@ from app.llm.preflight_fallback import (
 from app.model_access.codex_remote_transport import (
     CodexRemoteTransport,
     RemoteCompletionError,
-    RemoteEmbeddingError,
+    RemoteEmbeddingError as RemoteEmbeddingError,
+    RemoteEmbeddingIdentityError,
+    RemoteEmbeddingVectorError,
 )
 from app.model_access.executor_network_policy import (
     EXECUTOR_NETWORK_PROFILE,
@@ -1437,6 +1439,11 @@ class _RemoteProductEmbeddingClient:
         if self._finalizer.alive:
             self._finalizer()
 
+    def close_for_preflight(self) -> None:
+        """Report cleanup failure only to the existing deployment probe."""
+        if self._finalizer.detach() is not None:
+            self._remote_transport.close(require_success=True)
+
     def _embed_one(self, text: str) -> tuple[float, ...]:
         request = ProductEmbeddingRequest(
             provider=self.identity.provider,
@@ -1451,10 +1458,15 @@ class _RemoteProductEmbeddingClient:
             route.provider != self.identity.provider
             or route.model != self._request_model
             or route.transport_id != self._expected_transport
-            or response.dimensions != self.identity.dim
+        ):
+            raise RemoteEmbeddingIdentityError(
+                "embedding_route_or_dimension_mismatch", indeterminate=True
+            )
+        if (
+            response.dimensions != self.identity.dim
             or len(response.vector) != self.identity.dim
         ):
-            raise RemoteEmbeddingError(
+            raise RemoteEmbeddingVectorError(
                 "embedding_route_or_dimension_mismatch", indeterminate=True
             )
         self._route_provenance = {

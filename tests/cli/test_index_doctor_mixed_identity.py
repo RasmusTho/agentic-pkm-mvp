@@ -111,3 +111,18 @@ def test_doctor_reports_mixed_identity_count(mixed_identity_doctor_env) -> None:
     text_result = runner.invoke(cli, ["index", "doctor"])
     assert text_result.exit_code == 0, text_result.output
     assert f"Mixed-identity rows (reconcile signal, ADR-0059): {_MIXED_ROW_COUNT}" in text_result.output
+
+
+def test_json_reports_unembedded_object_count(
+    mixed_identity_doctor_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        doctor_mod, "inspect_unembedded_pg_objects", lambda **_kwargs: (1, ["object-id"])
+    )
+
+    result = CliRunner().invoke(cli, ["index", "doctor", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["unembedded_object_count"] == 1
+    assert payload["non_vector_issue_count"] == len(payload["issues"]) - 1

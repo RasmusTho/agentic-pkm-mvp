@@ -168,11 +168,13 @@ def _hash_text(text: str) -> str:
 
 
 def _read_note(path: Path) -> tuple[dict[str, Any], str]:
+    from app.rebuildability.product_total_loss import capture_source_frontmatter
     raw = path.read_text(encoding="utf-8") if path.exists() else ""
     frontmatter, body, error = parse_bounded_frontmatter(raw)
-    if error is not None:
+    captured = capture_source_frontmatter(raw)
+    if error is not None or captured is None:
         raise ValueError("malformed frontmatter")
-    return frontmatter, body
+    return captured, body
 
 
 def _canonical_note_title(frontmatter: dict[str, Any], body: str, path: Path) -> str:
@@ -327,6 +329,22 @@ def canonical_note_replay(
         source_text=canonical_text,
         allow_empty_source=True,
     )
+
+
+def prepare_note_projection(
+    note_path: Path, frontmatter: dict[str, Any], body: str, *, vault_root: Path | None,
+) -> dict[str, Any]:
+    """Prepare the ordinary vault-sync projection without any filesystem/DB effects."""
+    normalized = normalize_artifact_state_axes(frontmatter, default_review_state="provisional")
+    payload = _canonical_note_payload(
+        frontmatter=normalized,
+        title=_canonical_note_title(frontmatter, body, note_path),
+        review_state=normalized["review_state"], maturity=normalized.get("maturity"), content=body,
+        replay=canonical_note_replay(note_path, vault_root=vault_root, source_body=body),
+    )
+    payload.update(origin="vault", trust=normalized.get("trust", "unreviewed"),
+                   vault_uuid=frontmatter.get("uuid"))
+    return payload
 
 
 def _object_materialization_state(
@@ -785,9 +803,7 @@ def upsert_object_from_note(
     path_str = str(note_path)
     uuid_value = frontmatter["uuid"]
     title = _canonical_note_title(frontmatter, body, note_path)
-    replay = canonical_note_replay(
-        note_path, vault_root=vault_root, source_body=body
-    )
+    canonical_payload = prepare_note_projection(note_path, frontmatter, body, vault_root=vault_root)
     normalized_frontmatter = normalize_artifact_state_axes(
         frontmatter, default_review_state="provisional"
     )
@@ -806,14 +822,6 @@ def upsert_object_from_note(
         state = _get_state_by_uuid(conn, uuid_value, binding_id=binding_id)
         canonical_object_id = _canonical_object_id(conn, uuid_value)
         with conn.cursor() as cur:
-            canonical_payload = _canonical_note_payload(
-                frontmatter=normalized_frontmatter,
-                title=title,
-                review_state=review_state,
-                maturity=normalized_frontmatter.get("maturity"),
-                content=body,
-                replay=replay,
-            )
             payload_json = json.dumps(canonical_payload)
             try:
                 cur.execute(

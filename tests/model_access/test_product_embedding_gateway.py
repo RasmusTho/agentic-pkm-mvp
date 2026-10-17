@@ -7,12 +7,15 @@ import threading
 from typing import Any
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.codex_executor_service import create_codex_executor_app
 from app.model_access.ollama_http import OllamaHttpAdapter, OllamaHttpCatalogModel
 from app.model_access.provider_api import ProductProviderApiAdapter
+from app.model_access.codex_remote_transport import CodexRemoteTransport, RemoteEmbeddingError
+from app.model_access.remote_contract import ProductEmbeddingRequest
 
 
 GEMINI_KEY = "synthetic-gemini-key-never-return"
@@ -191,6 +194,73 @@ def test_ollama_embedding_uses_one_api_embed_request_without_legacy_fallback() -
     assert len(embed_requests) == 1
     assert not any(request.url.path.endswith("/api/embeddings") for request in requests)
     assert not any(request.url.path.endswith("/v1/embeddings") for request in requests)
+
+
+@pytest.mark.parametrize("failure", [httpx.ReadTimeout, httpx.ReadError])
+def test_ollama_embedding_timeout_is_single_dispatch_and_terminal(
+    failure: type[httpx.TransportError],
+) -> None:
+    requests: list[httpx.Request] = []
+    product_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/tags":
+            return httpx.Response(
+                200, json={"models": [{"name": "nomic-embed-text:latest"}]}
+            )
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json={"capabilities": ["embedding"]})
+        assert request.url.path == "/api/embed"
+        raise failure("synthetic private provider failure", request=request)
+
+    ollama = OllamaHttpAdapter(
+        base_url="http://127.0.0.1:11434", transport=httpx.MockTransport(handler)
+    )
+    # Any attempt to switch provider fails loudly through the same production app.
+    fallback = _gemini_adapter(httpx.MockTransport(
+        lambda request: pytest.fail("provider switch after dispatch")
+    ))
+    app = create_codex_executor_app(
+        codex_executor=_Codex(),  # type: ignore[arg-type]
+        ollama_adapter=ollama,
+        provider_api_adapter=fallback,
+        adapter_factory=_factory(),
+    )
+    with _client(app) as client:
+        def portal(request: httpx.Request) -> httpx.Response:
+            product_requests.append(request)
+            assert request.url.path == "/v1/product/embed"
+            response = client.post(
+                request.url.path, content=request.content,
+                headers={"Content-Type": request.headers["Content-Type"]},
+            )
+            assert _INPUT not in response.text
+            assert "synthetic private provider failure" not in response.text
+            assert response.json() == {"error": {"code": (
+                "ollama_timeout" if failure is httpx.ReadTimeout else "ollama_unavailable"
+            )}}
+            return httpx.Response(response.status_code, content=response.content)
+
+        remote = CodexRemoteTransport(
+            endpoint="https://synthetic-executor.test.ts.net",
+            transport=httpx.MockTransport(portal),
+        )
+        try:
+            with pytest.raises(RemoteEmbeddingError) as caught:
+                remote.embed_product(ProductEmbeddingRequest.model_validate(
+                    _request(provider="ollama", model="nomic-embed-text:latest")
+                ))
+            assert caught.value.indeterminate is True
+            assert caught.value.code == "embedding_http_503"
+            assert str(caught.value) == "embedding_http_503"
+        finally:
+            remote.close()
+
+    assert len(product_requests) == 1
+    assert [request.url.path for request in requests] == [
+        "/api/tags", "/api/tags", "/api/show", "/api/embed"
+    ]
 
 
 def test_product_catalog_refresh_obeys_executor_concurrency_bound() -> None:

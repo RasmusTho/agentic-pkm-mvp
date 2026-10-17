@@ -195,21 +195,37 @@ No pattern satisfies every criterion. The appropriate architecture is a composit
 
 ## 6. Fit with the current Yggdrasil design
 
-| Area | Current design | Disposition |
-| --- | --- | --- |
-| Core ontology | `Artifact`, `Segment`, `Claim`, `Concept`, `Relation`, `Source`, `Projection`, and `RetrievalResult` are distinct | Already canonical; reuse them |
-| Source versus representation | Source, artifact, segment, projection, source role, and content identity are separated | Already canonical or substantially present |
-| Authority and evidence | `source_role`, `authority_state`, and `evidence_role` are orthogonal | Stronger than a generic trust model; preserve unchanged |
-| Transformation lineage | `derived_from`, immutable raw, stage/version, events, and replay exist in Knowledge Acquisition | Partially canonical and partly delivered |
-| Source-family grouping | YouTube/KAP have source-specific item and content identity plus staged derivation | Partially present; not a generic cross-source projection |
-| Evidence independence | Claims and evidence roles exist, but no explicit general contract states that several sources share one underlying study or observation | Missing or unresolved |
-| Human/machine contributions | Creation, review, proposal, promotion, and authority transition are separated | Largely canonical; add transformation and review-scope detail only if needed |
-| Claim/evidence anchoring | Claims and segments are first-class; source-note work adds exact anchors | Target-state fit is strong; delivery is incomplete across all source paths |
-| Retrieval | Candidate-level ranking and exact citations exist; family collapse and evidence-lineage diversification are not established | Material gap |
-| Cognitive-load UI | Existing projection model separates source, interpretation, uncertainty, and `why_now` | Reuse; add a concrete source-family projection |
-| Persistence surfaces | Writing, retention, mirrors/indexes, operational traces, and receipts are distinguished | Strong fit; do not treat all system data as disposable |
-| Multi-vault | Registry, vault bindings, `ActiveContextSet`, dimensions, and provenance-preserving composition exist or are specified | Strong logical base; complete resolver/runtime behavior remains to validate |
-| Quantitative scale budgets | Repository recognises NFR gaps but lacks the corpus/rebuild/sync budgets needed for this decision | Missing |
+### Current repository validation (#4906, 2026-10-14)
+
+This refresh validates the findings against `main` at
+`69e23e89ce5962c556af16cdf454026c2e1380fd`, not only the original research baseline. The tracked
+repository was searched for source-family, lineage and independence implementations; the selected
+runtime evidence is the production retrieval/citation composition path, acquisition persistence,
+source-bundle and quality paths, request-context seam, and the Builder counts precedent below.
+This is static repository evidence, not a real-corpus or live performance run. Canonical means
+owner-contract coverage; it does not imply universal runtime enforcement. Proposal sections added
+by #4906 are excluded from the shipped-state classification.
+
+| Finding | Classification | Exact owner anchor | Selected runtime / schema evidence and disposition |
+| --- | --- | --- | --- |
+| Core ontology | Already canonical | `docs/architecture/functional-ontology.md :: 1. Ontology rules (read before the terms)` and `:: 3. Knowledge and meaning terms` | `schemas/metadata-bundle.schema.json :: object_type`; `schemas/retrieval-result.schema.json :: candidate_items`. Reuse the existing objects; no parallel model. |
+| Source versus representation | Already canonical | `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md :: 3. Source as role`; `docs/architecture/functional-ontology.md :: 3. Knowledge and meaning terms` | `app/knowledge_acquisition/source_bundle.py:182 :: _source_key` and `:188 :: _version_key` distinguish item identity from content/stage version. Source-role terminology and origin entity are contextual facets, not competing base classes. |
+| Authority versus evidence | Already canonical | `docs/architecture/semantic-dimensions.md :: 1. The non-collapse rule (read first)`; `docs/architecture/metadata-bundle.md :: 3. Required rules` | `app/retrieval/hybrid.py:37 :: _intrinsic_evidence_role` and `:46 :: _clamp_in_context` preserve the non-upgrading role distinction. Keep source/authority/evidence roles independent. |
+| Transformation lineage and replay | Partially canonical | `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md :: Lineage and replay` | `app/knowledge_acquisition/extraction_persistence.py:112 :: persist_normalized_transcript`, `:291 :: persist_extraction_result`; `app/knowledge_acquisition/source_bundle.py:199 :: _manifest`. Source-specific durable ancestry/versioning is implemented; generic source adapters/family views are not thereby delivered. |
+| Source-family grouping | Partially canonical | `docs/YOUTUBE_SOURCE_NOTE_V2/README.md :: Reconciliation baseline`; `docs/CONCEPTS/RELATION_TAXONOMY.md :: Relation rebuildability semantics` | `app/knowledge_acquisition/source_bundle.py:63 :: materialize_youtube_source_bundle` builds the YouTube source folder and immutable version members. No generic family resolver/collapse appears in `app/retrieval/hybrid.py:666 :: _rank_eligible`. Source bundle and source family remain distinct. |
+| Evidence independence | Missing | `docs/boundaries/SIP.md :: Owns`; `docs/CONCEPTS/RELATION_TAXONOMY.md :: Inferred vs authoritative relations` | `app/knowledge_acquisition/source_note_quality.py:286 :: load_rendered_subject` checks common content/raw ancestry, not independent studies. `app/builderops/ckm/overview_html.py:760 :: _shared_evidence_pairs` counts shared `(artifact_id, basis)` linkage in Builder CKM. That is a presentation precedent, not Product independence authority or an implementation to copy wholesale. |
+| Human/machine contributions and authority | Already canonical | `docs/CONCEPTS/STATE_AXES_CONTRACT.md :: Core rule`; `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md :: Axis disambiguation (read this first)` | `app/knowledge_acquisition/source_bundle.py:199 :: _manifest` produces derived/reference posture. A persisted candidate or reviewed projection is not automatically accepted knowledge or independent evidence. |
+| Explicit review/assessment scope | Missing | `docs/CONCEPTS/STATE_AXES_CONTRACT.md :: review_state` (the `review_state` heading); `docs/boundaries/HIX.md :: Owns` | Existing posture fields and the source-note quality evaluator do not constitute a general version/claim/purpose-bound human independence assessment. #4906 proposes inspectable assessment content without changing the axes. |
+| Exact claim/segment anchoring | Partially canonical | `docs/architecture/retrieval-contract.md :: 3. Required rules`; `docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md :: Writeback` | `app/knowledge_acquisition/evidence_synthesis.py:165 :: validate_resolvable_anchor`; `app/knowledge_acquisition/source_note_quality.py:606 :: evaluate_subject` verify source-specific anchors. `app/retrieval/hybrid.py:666 :: _rank_eligible` returns document/snippet/source_ref payloads, not universal exact segment coverage. Do not present source-specific quality as global retrieval proof. |
+| Family collapse, representative selection and diversification | Specified but not delivered | This advisory report `:: 7.3 Retrieval ordering`; `docs/architecture/retrieval-contract.md :: 3. Required rules`; `docs/RETRIEVAL.md :: Output Shape` | `app/retrieval/hybrid.py:810 :: scoped_hybrid_search` applies eligibility then document top-k/rerank. `app/retrieval/production_bundle.py:27 :: emit_bundle_from_response` separates ranked candidates from included items but performs no family/evidence-basis composition. The generic target remains proposed. |
+| Source-family cognitive-load view | Specified but not delivered | `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md :: Core Rules` and `:: Review mode`; this report `:: 7.6 Human-facing projection` | The selected retrieval response/bundle paths carry no generic source-family/assessment view. Existing projection boundaries are reusable; a shipped family UI is not established. |
+| Persistence surfaces | Already canonical | `docs/SEPARATING_PERSISTENCE_SURFACES/README.md :: Reading order for task files`; `docs/SEPARATING_PERSISTENCE_SURFACES/DISTINGUISH_MIRROR_RECEIPT_TRACE.md :: Hard invariants` | `app/knowledge_acquisition/source_bundle.py:221 :: _render_transcript` labels the vault transcript derived and excludes it as replay authority. Existing durable sources/receipts and disposable projections retain their roles; no storage move follows. |
+| Multi-vault context and provenance | Partially canonical | `docs/contracts/ACTIVE_CONTEXT_SET.md :: Shipped V1 seam (MVR-03, #3857)`; `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Dimensions` | `app/vault/active_context_v1.py:198 :: ActiveContextSetV1`; `app/instance/active_context_service.py:235 :: ActiveContextSelectionService`; `app/retrieval/hybrid.py:810 :: scoped_hybrid_search`. Snapshot/binding seams exist; the owner explicitly calls the full-context cache seam unwired and reserves remaining consumer migration to #2143 work. Cross-vault family retrieval is not proved. |
+| Quantitative corpus/operating budgets | Missing | `docs/REQUIREMENTS_INDEX.md :: Scale/perf-budget note (audit §15 Q1)` | No SLER measurement source is established in the selected retrieval/quality paths. Q1 remains an open owner choice; proposed trials below do not silently settle repository-wide NFR policy. |
+
+No additional finding in this bounded pass is classified **implemented but undocumented** or
+**conflicting**. The similarly named source-note `evidence_lineage` and Builder shared-evidence
+metrics are explicitly limited above; they are not conflicting authority to import into SIP.
 
 The central semantic gap is the difference between source derivation and evidence independence.
 
@@ -471,6 +487,37 @@ The architecture work must reconcile with, not absorb or duplicate:
 - current retrieval and context-bundle contracts.
 
 The new work is cross-source architecture. Existing YouTube tasks remain source-specific delivery contracts.
+
+### 11.4 Reviewable owner-routed proposal (#4906)
+
+PR #4907 merged this advisory sibling at `c1c0c7558ba68164ca9c9a98b25bc87e19ede67c`; the
+Knowledge Acquisition directory row covers it. The #4906 readiness reconciliation
+[5864794698](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4906#issuecomment-5864794698)
+permits architecture validation and a docs-only proposal, and explicitly approves no semantic
+design. The refreshed repository findings in section 6 and the following **proposal v1** owner
+sections are the reviewable outcome of that stage. Merge/closure is not owner acceptance or
+shipped Product/Runtime truth.
+
+| Proposed delta | Existing owner section / SBS boundary |
+| --- | --- |
+| Minimum representation, source versus evidence lineage, normal unknown posture | [Functional ontology](../architecture/functional-ontology.md#31-source-and-evidence-lineage-proposal-4906): SIP meaning; HKA durable origins/assessments; EBF acquisition identity. No new functional object. |
+| Relation and assessment posture, partial-overlap/non-transitivity | [Relation taxonomy](../CONCEPTS/RELATION_TAXONOMY.md#source-and-evidence-lineage-proposal-4906): SIP semantics; GOV confirmation; DRI disposable projections. Existing vocabulary only. |
+| Versioned review target, scope, method, reviewer, outcome and evidence | [State axes](../CONCEPTS/STATE_AXES_CONTRACT.md#scoped-assessment-proposal-4906): GOV confirmation; SIP lineage meaning; HKA content; HIX disclosure. Existing axes unchanged. |
+| Eligibility-first segment retrieval, grouping/collapse, representatives, basis diversity, admission/citation | [Retrieval contract](../architecture/retrieval-contract.md#family-aware-retrieval-proposal-4906): RCA composition, DRI grouping, SIP provenance, GOV/WSP permission/context; [RETRIEVAL](../RETRIEVAL.md#source-lineage-proposal-and-shipped-boundary-4906) preserves shipped truth. |
+| Source-family disclosure and why-shown | [Cognitive-load layer](../COGNITIVE_LOAD_PROJECTION_LAYER.md#source-family-projection-proposal-4906): HIX presentation under existing non-authoritative rules. |
+| Corpus, failure modes, metrics and reproducible acceptance evidence | [Invariant registry](../testing/invariant-tests.md#sler-proposal-evaluation-4906): OEF evaluation, with owner-routed production proof and explicit future enforcement. |
+| Workload and operating budgets before topology choices | [Requirements index](../REQUIREMENTS_INDEX.md#source-lineage-operating-budget-proposal-4906): OEF measurements; PDM/SFC mechanics; existing topology/authority constraints preserved. Q1 unresolved. |
+| Adjacent delivery reconciliation | [YouTube implementation tasks](../YOUTUBE_SOURCE_NOTE_V2/README.md#implementation-tasks) and [multi-vault implementation tasks](../MULTI_VAULT_RUNTIME/README.md#implementation-tasks): preserve #4107/#4112/#4113/#4119 and #2143 ownership; no duplicate tasks. |
+
+**Acceptance status:** proposed owner sections and evaluation/trial budgets v1 are not yet
+semantically accepted; no corpus or performance result is asserted. A later attributable owner
+decision must name the exact merged revision, sections, evaluation version and budget/Q1 treatment,
+including any revisions or exclusions. It may be recorded on #4906; proposal-stage closure does not
+erase that gate. Only after that acceptance may `feature-breakdown` produce the dependency-ordered
+implementation set with actual production-path `Verify:` targets. No such set, schema/store/graph
+choice, physical split, or runtime activation is produced here. Logical source families are
+rebuildable; accepted assessment content and minimum origin/version provenance are durable under
+their existing owners, never only in a disposable mirror.
 
 ## 12. Open decisions
 

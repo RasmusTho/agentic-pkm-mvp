@@ -11,6 +11,7 @@ on:
       - 'tests/companion_ui/**'
       - 'tests/builderops/focus_owner_facts_fixture.py'
       - '.github/workflows/browser-runtime.yml'
+      - 'scripts/devui_component_browser_smoke.py'
       - 'scripts/run_jev_browser_advisory.py'
       - 'scripts/ygg_jev.py'
   pull_request:
@@ -22,6 +23,7 @@ on:
       - 'tests/companion_ui/**'
       - 'tests/builderops/focus_owner_facts_fixture.py'
       - '.github/workflows/browser-runtime.yml'
+      - 'scripts/devui_component_browser_smoke.py'
       - 'scripts/run_jev_browser_advisory.py'
       - 'scripts/ygg_jev.py'
   workflow_dispatch:
@@ -380,6 +382,34 @@ jobs:
               for case in cases
           )
           PY
+
+      - name: Verify managed Builder System Control navigation
+        env:
+          DEVUI_BSC_EVIDENCE_DIR: ${{ runner.temp }}/devui-bsc
+        run: |
+          set -euo pipefail
+          pytest -q tests/companion_ui/test_devui_builder_system_control_journeys.py \
+            tests/companion_ui/test_devui_component_promotion_smoke.py \
+            --junitxml="$DEVUI_BSC_EVIDENCE_DIR/junit.xml"
+          python - "$DEVUI_BSC_EVIDENCE_DIR/junit.xml" <<'PYXML'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = ET.parse(sys.argv[1]).getroot().findall(".//testcase")
+          assert len(cases) == 2
+          assert {case.get("name") for case in cases} == {
+              "test_system_lens_accessibility_and_no_egress",
+              "test_component_smoke_exercises_runtime_and_refuses_wrong_identity",
+          }
+          assert not any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped"))
+          PYXML
+
+      - name: Retain Builder System Control browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: devui-bsc-${{ github.sha }}
+          path: ${{ runner.temp }}/devui-bsc
+          if-no-files-found: error
 
       - name: Retain standalone managed browser evidence
         if: always()

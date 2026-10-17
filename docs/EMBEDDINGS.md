@@ -438,6 +438,22 @@ VectorIndex is rebuildable cache: if identity changes, vectors are invalid until
 
 ## Operational guardrails
 
+The native deployment pre-mutation probe uses only the strict routed Product embedding client
+and the selected provider/model; no diagnostic permits provider substitution or fallback.
+Its fixed content-free reasons are `embedding_probe_client_failed` (client/identity acquisition),
+`embedding_probe_identity_mismatch`, `embedding_probe_generation_failed` (generation/transport),
+`embedding_probe_vector_invalid` (shape/dimension and existing routed-client vector refusals), and
+`embedding_probe_cleanup_failed`. An earlier failure takes precedence over cleanup failure;
+unknown process outcomes retain `embedding_probe_failed`. The wrapper discards child streams
+and retains only allowlisted codes in native diagnostics and same-operation/controller receipts.
+Probe reasons are receipt-only, not source-worker exit codes; unknown worker exits remain
+`source_worker_failed` and cannot assert a probe failure.
+Never include exceptions, responses, endpoints, paths, credentials, source identity or probe content.
+Failure remains before source projection, PostgreSQL acceptance, TEST and journaling qualification;
+these diagnostics neither authorize Product writes nor prove live model acceptance.
+The remote Product client uses checked router cleanup for this probe only; ordinary client cleanup
+retains its best-effort behavior. Existing vector conversion/validation policy is not tightened.
+
 Recommended checks:
 - `/api/health` confirms backend reachable and models visible
 - Index preflight warns on:
@@ -446,6 +462,129 @@ Recommended checks:
 - `index doctor` detects:
   - runtime identity != stored identity
   - mismatched vector dimensions in storage
+  - indexable objects with no embedded vector row; diagnosis reports a content-free count,
+    and strict mode fails while any remain
+
+During native deployment, a vector-only finding can trigger the existing guarded source-backed
+rebuild of the selected retained-source inventory. The strict doctor must then pass before service
+activation; see [the deployment procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
+If replay leaves a vector-only gap elsewhere in the selected binding, `index repair-missing`
+reads canonical ObjectStore payloads and inserts only absent, provenance-complete admitted vault-note
+vectors under the current configured identity. It does not reset, overwrite or delete vectors,
+rewrite Product objects, synthesize source provenance, or promote candidate-only/untrusted material.
+Each insert locks and rechecks the source snapshot and commits vector plus derived provenance
+atomically; failures leave that vector absent. Existing rows, including malformed vectors, remain
+untouched and the strict final doctor remains authoritative.
+Repair admission requires a complete producer-captured `frontmatter` snapshot in the stored payload.
+Candidate/non-authoritative/review-required, draft, untrusted or malformed markers at any persisted
+frontmatter, core6 or top-level location refuse; a permissive alias cannot shadow them. Missing
+legacy admission evidence is unknown and remains absent, not synthesized from a body-only replay
+hash. Existing vault-alpha, vault-root, vault-sync, retained-projection and source-aware indexer
+producers preserve the captured source snapshot in their ordinary writes. Indexer refresh replaces
+it even for metadata-only source changes, and invalidates stale evidence when capture is unavailable.
+This is producer metadata preservation, not a missing-repair rewrite or a live legacy migration.
+
+Native recovery can run the separate guarded `index reconcile-legacy` stage before missing-only
+repair. For an evidence-free, vector-missing note mirror, its stored locator is discovery only.
+The active-vault adapter reads a stable regular source without following redirected components;
+current profile admission, canonical identity, complete frontmatter, supported trust and the shared
+producer inventory are re-proven. Alpha-selected sources prepare the canonical vault-alpha payload
+without companion/outbox writes and generate the embedding before one Product/vector transaction.
+Sources excluded from all applicable current producer inventories may retire only their exact unchanged stale
+mirror, never the source file or canonical identity/history. Retained history/dependents refuse
+retirement. Changed sources, duplicate identities, candidate/staging material, malformed metadata,
+untrusted authority and ambiguous selection refuse without mutation.
+The separate dev-only `scripts/fs_watcher.py` producer has a broader vault-sync inventory.
+The default native registry watcher is independently broader too: `WATCHER_ENABLE`,
+`WATCHER_VAULT_PATH`, the canonical `configs/watchers.yaml` entrypoint and effective scope resolve
+through its ordinary registry loader. Recovery uses its read-only mode, requiring persisted vault
+identities and denying the normal settings identity-heal seam, then privately drains that same incremental scanner with
+memory-only state, never a second interpretation of nested-vault, hidden-path, settings-root,
+companion, conflict or scope exclusions. Registry claims prepare through the ordinary
+`ingest.vault.changed` worker/indexer payload factories without emitting events, healing a UUID,
+writing companions or saving Product state. Native registry claims take the native recipe; alpha
+and optional filesystem preparation remain available when that registry does not claim the source.
+The supported native Compose graph shares the governed runtime-env and selected-root binding
+across API, worker and watcher; recovery does not synthesize another service's environment.
+The legacy filesystem entrypoint and recovery share one strict activation/inventory reader: unset or explicitly false
+`FS_WATCHER_ENABLE` disables that optional producer; true requires an explicit absolute existing
+`VAULT_DIR`. Merely setting `VAULT_DIR`, or a default `./vault` path, never enables a producer.
+Every enabled source producer must be excluded before retirement. The UUID uniqueness proof
+uses the union of their full inventories, including the legacy filesystem
+producer's nested-vault files. Filesystem claims require an existing plain UUID scalar that its
+real adapter preserves; id-only or encoded identities refuse rather than being healed.
+Registry claims likewise refuse id-only sources in its configured inbox when the ordinary worker
+would allocate a fresh UUID on resume; the shared inbox-heal selector is evaluated without writes.
+Overlapping enabled producers must bind the same active root; conflicting roots, malformed settings
+or configuration drift refuse. Enabled legacy filesystem sources prepare through the ordinary vault-sync
+payload builder with complete current admission evidence, never through alpha's excluded inventory.
+When every enabled producer excludes the source, exact CAS retirement remains available.
+Identity evidence is effect-sensitive too. Replacement/reprojection still requires explicit
+frontmatter identity in the form each actual producer preserves; a companion never authorizes
+replacement, embedding or producer UUID healing. For excluded-only retirement, either valid
+frontmatter UUID/ID or an existing valid persisted companion UUID can prove identity. Companion
+identity must exactly match the stale row and canonical Product mapping, be uniquely claimed
+across the applicable source inventories, and survive hardened snapshot rechecks. Companion
+observations must still bind this exact source in the active root: matching body hash/title is
+discovery only, not identity authority for a moved/reused or foreign observation. Companion
+sidecars excluded by every producer are not second source claims. A sidecar actually claimed by
+an enabled producer (including the optional legacy filesystem writer) remains in the identity
+census; duplicate claims refuse. The census also counts identities each actual selected producer
+would emit, including alpha fallbacks and read-only-derived registry identities, as denial claims
+only; those unpersisted identities never authorize retirement. Ambiguous matching companions refuse. Invalid
+declarations and unpersisted path/fingerprint-only identities always refuse. No source metadata
+is created, healed, normalized or rewritten, and every existing atomic/history/race fence remains.
+An enabled filesystem producer on a different root refuses recovery, including nested or disjoint
+roots: its legacy compatibility Product binding does not prove isolation from the active root.
+Read-only companion discovery includes both the configured canonical and supported legacy
+`_system/companions/` directories; a legacy-only persisted observation is not treated as absent.
+Discovery filters the complete set by body hash and title before selection; an unrelated title
+with identical template body text cannot shadow the unique matching persisted observation.
+Origin evidence is effect-sensitive: an explicit non-vault, unknown or malformed stored origin
+still refuses replacement/reprojection with `legacy_origin_refused` before payload preparation or
+embedding. Only the already-governed exact retirement path may disregard that marker after every
+producer excludes the source and all source, admission, identity, race, dependency/history,
+relation/membership and reverse-reference proofs succeed. This does not normalize or rewrite origin,
+infer vault authority from matching source text/identity, or launder provenance. Retirement creates
+no replacement or embedding, never mutates the source, and retains the same atomic-or-absent,
+retrieval-invisible and never-overwrite protections.
+The private boundary retains only `legacy_producer_policy_refused`, `legacy_source_refused`,
+`legacy_admission_refused`, `legacy_identity_refused`, `legacy_race_refused`,
+`embedding_generation_failed` or `legacy_write_failed`; no path, identity or raw diagnostic is emitted.
+Bounded admission refusals additionally distinguish these remediation classes:
+
+| Fixed reason | Required area of source-authorized investigation |
+| --- | --- |
+| `legacy_candidate_refused` | Candidate-only or proposal classification |
+| `legacy_authority_refused` | Malformed, non-authoritative or review-required authority evidence |
+| `legacy_trust_refused` | Unsupported trust or review-state evidence |
+| `legacy_origin_refused` | Non-vault origin evidence |
+| `legacy_payload_shape_refused` | Malformed retained admission envelope |
+| `legacy_system_path_refused` | Source excluded by system/staging path admission |
+| `legacy_profile_refused` | Profile authority admission or unavailable profile proof |
+| `legacy_dependency_shape_refused` | Unsupported retained dependency shape |
+| `legacy_retained_history_refused` | Retained foreign-key history prevents retirement |
+| `legacy_relation_retention_refused` | Retained relation or membership prevents retirement |
+| `legacy_identity_persistence_refused` | Missing or invalid persisted source identity |
+| `legacy_identity_mismatch_refused` | Stored/source identity disagreement |
+| `legacy_identity_ambiguous_refused` | Duplicate or ambiguous source/companion inventory claims |
+| `legacy_identity_producer_refused` | Producer would heal or fail to preserve the existing identity |
+| `legacy_identity_canonical_refused` | Canonical Product identity mapping disagreement or unavailable proof |
+
+These are finite content-free diagnostic classes, not source values or exception details.
+Multiple refusing markers retain the first observed class; classification does not inventory every
+problem. Unknown/private failures retain the generic fail-closed fallback. Diagnosis grants no
+repair, admission, retirement or acceptance authority: never synthesize approval or delete protected
+history, relations or memberships to clear a refusal. Any subsequent repair remains separately governed.
+Complete private-stage stream and logging
+suppression covers settings compatibility and conflict-quarantine diagnostics too.
+The transaction rechecks source/policy and forward/reverse canonical identity, compares equivalent
+absolute/relative source locators across the locked binding inventory, compares the discovered Product
+snapshot, fences vector writes, and inserts only an absent vector. Provider/write failure or a
+failed final recheck rolls back the affected Product/vector transition. Existing vectors are never
+overwritten; retry sees either the prior legacy row or the completed replacement/retirement.
+The strict final doctor remains authoritative for whole-binding coverage. Repository tests do not
+claim live DEV/TEST reconciliation or parent acceptance.
 
 ## Rebuild playbook (when identity changes)
 

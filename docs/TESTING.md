@@ -492,6 +492,12 @@ Older overlapping workflows may still exist while the surface is being consolida
 Current implementation:
 - `.github/workflows/ci-smoke.yaml` — PR smoke for pull-request creation, reopening, code/integration updates (`synchronize`), and base-ref retargets represented by `edited`, with explicit system dependency parity (`ffmpeg`, `ripgrep`), required `ruff check app tests` and `settings-validate` checks, split baseline pytest and deterministic Quality Wave UAT harness steps, and path-based skipping of the heavy pytest slices for docs-only PRs that do not touch code, tests, scripts, workflow, Docker, dependency, or Makefile surfaces. Pure PR title/body metadata edits keep the workflow jobs skipped and are checked by `.github/workflows/issue-pr-governance.yml`.
 - `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC, explicit deterministic acceptance harness coverage via `tests/quality_wave/test_uat_harness.py`, first bounded PG contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`), runtime contract regressions, and fitness gates.
+  Its full-suite producer checks out complete Git history for provenance and promotion/review
+  fixtures, installs the standalone Mimer MCP sidecar requirements separately from the core
+  Product dependencies, and excludes only the explicitly qualified `eval` marker from the default
+  memory lane; the ten deterministic SV/EN checks remain in that lane and the two live checks stay
+  opt-in.
+- `.github/workflows/post-merge-heavy-tests.yml` — the heavy targets `scripts/select_pr_tests.py` defers from `Unit tests (not pg)` (today `tests/deploy`, unless the PR changes a file it reads directly), run on every push to `main`, nightly at 03:30 UTC, and on dispatch. A red run opens or updates one `type:bug` + `prio:high` alert Issue, and the next green run closes it. It is not a required PR check. See `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`.
 - `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
 
 Post-merge image admission is implemented by `.github/workflows/postmerge-dev-test.yml`; the existing
@@ -589,6 +595,62 @@ browser playback belong to the Daily wrapper. Unit/contract tests prove envelope
 behavior only. Actual post-merge all-scenario qualification remains on #2443/#3314; repository
 delivery establishes neither their acceptance nor currently healthy deployment.
 
+The separate fixed `native-journaling.v1` extension is invoked with
+`app.ops.postgres_deploy_linux qualify-journaling test <committed-operation-uuid>`.
+It does not add a third pilot to `native-web-pilots.v1`. It reuses the committed native
+request/PG proof, SHA/digest, baked Product code, immutable Git resources and exact
+operation/generation cleanup. No command, provider, selector, manifest, fixture or budget is
+caller-selectable. Canonical vault initialization, commitment persistence, decision receipt
+append and capture-candidate writeback supply all three current-day source families. The private
+manifest is created inside the disposable image and consumed by the exact #5988 live wrapper.
+The wrapper runs without deterministic-suite conftests: their mock provider/memory defaults are
+not qualified Product evidence. Original Product calls and returns are observed, not replaced;
+the fixed six-effect order binds two distinct sessions, primary/addendum candidates, one exact
+synthetic checkbox write and one guarded receipt-bound canonical materialization. All ten original
+scenarios, exact budgets, source hashes and accepted-primary preservation are mandatory.
+Canonical settings compilation and runtime ingestion precede provider admission in the fresh
+scratch runtime. Every original Product model call is reserved and observed at its real call
+seam, with successful remote preflight/response and undegraded actual route. Draft cognition
+provider failures or missing model calls refuse even if the original wrapper's degraded collation
+remains useful; preflight alone cannot attest model execution.
+
+The existing protected `/etc/yggdrasil/model-access/runtime.env` four-key binding must select
+an actual private IPv4 HTTPS Product executor with existing mTLS material. Only finite private
+certificate snapshots enter the image. The candidate retains its configured endpoint/model/TLS
+identity; a native-owned bounded ciphertext relay on an operation-local loopback /32 connects
+only that same executor. The candidate remains network-none, with no socket mount or general
+egress. Missing references, unsupported endpoints, provider unavailability, transport limits,
+skips, incomplete effects or drift refuse; there is no mock, host Product overlay or fallback.
+The loopback alias uses an open descriptor of the exact owned Docker namespace inode, not a
+recyclable PID pathname. Relay worker exit is part of cleanup; container absence cannot confirm
+an unknown host relay exit.
+
+Private report/JUnit retention is complete-before-rename under `native-journaling-results/`,
+outside the disposable vault. Separate terminal evidence binds operation, SHA/digest, generation,
+fixture/actor, exact wrapper, report hashes, transport budget and cleanup readback. Partial
+retention is non-PASS; unknown cleanup keeps channel admission, and foreign resources remain
+untouched. Retry uses the same committed operation and existing inode/flock reconciliation before
+a fresh generation. A deterministic mechanism test or refused receipt is not parent acceptance:
+only an actual post-merge TEST all-PASS `conversational_journaling_execution.v1` receipt on #3347
+permits delivered-capability owner-doc promotion and parent closure. PG, Daily/Deep, channel health
+and production eligibility remain separate authorities.
+The original guarded review outbox is also retained and hash-bound to the materialization receipt.
+Terminal evidence is fsynced before atomic no-overwrite publication; a failed publication leaves
+no consumable PASS file. A complete pre-rename owner-preparing proof recovers its exact generation,
+while malformed pre-owner bytes can only be retired when no durable resource exists. Foreign
+proofs remain preserved. Journaling refusals retain their own profile and cleanup attribution.
+Relay uncertainty is durable: an operation/generation-bound private proof records the native
+owner's Linux boot/PID/start-time identity before listener effects. Interrupted teardown or a
+fresh runner preserves admission until the exact owner is proved departed; no PID is killed.
+Deadline exhaustion refuses even if late container logs contain PASS. Terminal interruption
+invalidates only its own published inode and syncs absence, with no fallible cleanup after the
+publication acknowledgement.
+The shared channel lock's existing `bws-owner` inode durably binds the fixed qualifier profile
+before effects. Only that same profile can reconcile/retire it after confirmed cleanup; another
+qualifier or generic deploy recovery cannot release unknown cleanup. Legacy empty owners are
+adopted under the held inode/flock only after opposite-profile resource absence is proved.
+Foreign/nonempty mismatched owners and replacement inodes remain untouched.
+
 ### Nightly deterministic acceptance harness
 
 The deterministic Quality Wave acceptance harness belongs in `integration-nightly`, not `release-uat`.
@@ -596,7 +658,7 @@ The deterministic Quality Wave acceptance harness belongs in `integration-nightl
 Reason:
 - it is a trusted recurring verification signal for the active memory-backed runtime posture
 - it proves the CLI-first UAT contract continues to pass outside tag/manual release events
-- it should run alongside the broader nightly `not pg and not alpha_llm` surface rather than only as a release gate
+- it should run alongside the broader nightly `not pg and not alpha_llm and not eval` surface rather than only as a release gate
 
 Current nightly harness target:
 - `tests/quality_wave/test_uat_harness.py`
@@ -605,22 +667,31 @@ Current nightly harness target:
 
 The first recurring Postgres lane is intentionally small and contract-focused. It exists to establish a credible recurring PG signal without broadening nightly into all PG coverage at once.
 
-Lane membership:
+The required `integration-nightly / pg-contracts` step invokes
+`python -m app.ops.pg_acceptance --ci --nightly`. Its complete bounded target inventory is
+`app/ops/pg_acceptance.py::NIGHTLY_SELECTORS`; the original entry targets include:
 - `tests/int/test_pg_backend.py`
 - `tests/api/test_status_store_pg.py`
 - `tests/indexer/test_outbox_roundtrip_pg.py`
 
 Required service/env contract:
-- GitHub Actions service container: `postgres:16`
+- GitHub Actions service container: `pgvector/pgvector:pg16`
 - `POSTGRES_USER=app`
 - `POSTGRES_PASSWORD=app`
-- `POSTGRES_DB=app`
+- `POSTGRES_DB=app_test`
 - `DATABASE_URL` or `DB_DSN` points at the target Postgres endpoint; the repo DB abstraction normalizes psycopg/SQLAlchemy forms
 - `STORE_BACKEND=pg`
 - schema prepared with `alembic upgrade head`
 
+The shared `RequiredResults` guard requires every target to collect and every selected node to
+pass, including setup and teardown. Imported fixture skips, missing or deselected targets, xfails,
+collection errors and watchdog failures refuse the required invocation. The nightly log records
+the required selector inventory and passed node IDs. Ordinary optional developer pytest keeps its
+explicit environment skips. The separate native dev/test profile retains its existing `SELECTORS`
+inventory and immutable disposable-resource contract.
+
 First-green definition:
-- all three PG lane tests pass against the provisioned Postgres service in `integration-nightly`
+- every required selector collects and every selected node passes against the provisioned Postgres service in `integration-nightly`, with zero required skips, xfails or errors
 - the deterministic acceptance harness step is green in the same nightly workflow run
 - the existing memory-backed nightly suite and runtime contract regressions remain green
 

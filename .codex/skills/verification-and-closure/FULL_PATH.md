@@ -81,18 +81,13 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
 
 ## Validation Rules
 
-- Compare code and docs to the governing issue's `Scope`, `Source Anchors`, `Constraints`, `Acceptance Criteria`, and `Suggested Validation`
-- Verify the PR's Product/Runtime System vs Builder System vs boundary classification. Product work
-  must satisfy the SBS impact and owner-doc path; Builder work must route through the Builder System
-  boundary/artifact map; boundary work must name and satisfy both sides.
-- Resolve `Suggested Validation` using current applicable results; run only missing or invalidated checks per `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Evidence reuse and stop rule`
-- Add focused extra checks if the touched surface obviously needs them
-- For every AC, resolve the declared `Verify:` target on the current PR head SHA
+Apply `.codex/skills/verification-and-closure/SKILL.md :: Inputs` and
+`.codex/skills/verification-and-closure/SKILL.md :: Validation` for contract/scope, system ownership,
+AC coverage, evidence reuse and owner-doc checks. The following rules add executor-specific
+authority, recovery and closure requirements; they do not replace those common checks.
+
 - Enforce **late-change supersession** at the closing boundary. If a late delivery change altered the PR head, scope/authority body, governing contract, or required-check configuration after any evidence was collected, compare the prior/current digest/version of every mutable authority surface — PR body, governing contract, and required-check configuration — alongside the head SHA, identify only the evidence affected by that change, mark it superseded, and emit a `late_change_supersession_receipt.v1` in the delivery evidence. The receipt names the prior/current head SHA and mutable-authority digest/version snapshots, late change, superseded evidence, unaffected evidence retained with its dependency, required reruns, and current-head rerun results. Rerun every affected gate before merge or closure; unchanged, independent evidence need not be repeated.
-- If a behavioral `Verify:` test is missing, skipped, xfailed, or excluded from the CI suite that ran, do not treat the AC as satisfied
-- If a non-behavioral `Verify:` target is absent, do not merge until the writeback exists
 - If any AC lacks a `Verify:` marker, route through issue maintenance before proceeding
-- Verify owner-doc writeback if shipped behavior or contracts changed and acceptance is complete
 - Verify Builder System work did not claim runtime/user memory or Product MEM/HKA authority unless a
   Product System authority path is present in the issue/PR evidence.
 - Verify roadmap or plan wording was cleaned up if the item is now delivered
@@ -173,9 +168,18 @@ or the normal issue-maintenance/owner-authority path, then re-run the affected c
 
 Verification owns the merge decision.
 
+For the session-owned manual FULL_PATH producer, invoke
+`scripts/build_verified_issue_set_merge_phase.py --mode manual` for every phase. This explicit
+route emits the authenticated continuous `verified_issue_set_merge_phase.v1` chain without
+post-effect deployment or operation-key inputs. It must start from a v1-only history: the CLI
+rejects post-effect inputs, consumer/in-flight v2 predecessors, and mixed v1/v2 phase history.
+Manual v1 is not consumer authority and must never be used for a dispatched or recoverable
+post-effect attempt.
+
 For the recoverable post-effect consumer, require fresh exact deployed capability preflight under
 `docs/AGENT_ISSUE_DISPATCHER.md :: Current-State Honesty` before activation. Build all four phases
-as `verified_issue_set_merge_phase.v2` using `scripts/build_verified_issue_set_merge_phase.py`
+as `verified_issue_set_merge_phase.v2` using
+`scripts/build_verified_issue_set_merge_phase.py --mode consumer`
 with fresh authenticated status deployment readback (or the explicit
 `--post-effect-deployment-json` override); reconciled/restored also require the exact
 `--post-effect-operation-key`. The builder reads the persisted record through the authenticated
@@ -192,9 +196,13 @@ already-authenticated merge attempts. Review depth or Issue count alone does not
 
 #### Issue-free reviewed lane compatibility path
 
-An issue-free Tier 1 docs-authoring or governance PR that truthfully declares
-`Final-Review-Rounds: 1` is a full-path exception only for its authenticated review decision. It
-does not acquire, infer, neutralize, close, or mutate GitHub Issue authority. After the full-path
+Use this procedure only after `.codex/skills/verification-and-closure/SKILL.md :: Routing`
+selects executor/in-flight delivery for an issue-free reviewed docs-authoring or governance PR.
+`Final-Review-Rounds: 1` alone stays native; its review and merge are owned by
+`.codex/skills/verification-and-closure/SKILL.md :: Review` and
+`.codex/skills/verification-and-closure/SKILL.md :: Native merge procedure`.
+This retained compatibility path does not acquire, infer, neutralize, close, or mutate GitHub
+Issue authority. After the full-path
 current-head CI and local-review prerequisites are green, freeze a context with
 `governing_issue: null`, empty `closing_issues` and `supporting_issues`, and the exact head. Then
 run `scripts/prepare_verified_issue_set_merge.py` with the live empty closing-links snapshot and
@@ -210,11 +218,12 @@ evidence and blocks the receipt. Verify the resulting Issue state is unchanged, 
 authority receipt, body neutralization, phase ledger, dispatcher completion, or inferred
 issue-label mutation on this path.
 
-For autonomous delivery, run the governing path's gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks and repo-standard checks that cover the PR to go green, classify any red check before merge, and — on the full path — resolve the local review gate; do not ask the owner to babysit. Within the governing path, the prerequisites are never waived (an unprotected branch or non-required GitHub check does not relax them); only the human watching is removed.
+Continue through `.codex/skills/README.md :: Workflow continuation`. For current-head CI eligibility
+and waiting, use `.codex/skills/_shared/CI_WAIT_CONTRACT.md :: Rules` and
+`.codex/skills/_shared/CI_WAIT_CONTRACT.md :: Blessed path`; review remains a separate gate below.
 
-Wait **how** matters for CI: follow `_shared/CI_WAIT_CONTRACT.md` — use the shared `app.dispatcher.poll_backoff` helper through `scripts/await_pr_checks.sh <PR>` (no `--codex`; the review gate now runs locally per `Running the local review gate` below, not through the shared verdict poller), REST check-runs only, interval + cap + exponential backoff, honor `Retry-After` and x-ratelimit-reset headers, sleep the bulk of CI up front, and back off ≥60–120s. Never tight-poll `gh pr checks` or `gh pr view --json mergeStateStatus`; they are GraphQL and drain the budget shared by every concurrent agent.
-
-Prerequisites for merge (full path; the light path's complete gate is in `Delivery-path routing` above):
+Prerequisites for merge (executor/in-flight path; native gates remain in
+`.codex/skills/verification-and-closure/SKILL.md :: Native merge procedure`):
 
 - current SHA truth is intact
 - late-change supersession is resolved: a `late_change_supersession_receipt.v1` exists for every late delivery change after evidence collection, it compares every mutable authority surface by digest/version as well as head SHA, its affected evidence has been rerun green on the current head SHA, and stale evidence must not merge or close the PR
@@ -479,7 +488,7 @@ same exact head back to the ordinary verified-merge sequence below.
    merge, Issue, dispatcher, or lifecycle effect. Never reuse the pre-edit green `pr-contract`
    result as merge authority
 4. use `scripts/build_verified_issue_set_merge_phase.py` to post an authenticated
-   `verified_issue_set_merge_phase.v1` `prepared` receipt bound to the durable authority receipt and
+   `prepared` receipt bound to the durable authority receipt and
    exact convergence receipt plus its embedded `final_projection_observation` through
    `--projection-convergence-json`, `--final-projection-observation-json`, and the complete bounded
    PR comment readback through `--comments-json`; `prepared` refuses
@@ -492,7 +501,9 @@ same exact head back to the ordinary verified-merge sequence below.
    pre-#4010 legacy exception, also pass the complete trusted
    authority comment through `--authority-comment-json`; the receipt payload alone does not prove
    cutoff provenance. Require a single continuous prepared/merged/reconciled/restored
-   phase ledger. Every current-schema phase consumer resolves the one trusted durable convergence
+   phase ledger. Pass `--mode manual` for the session-owned manual v1 route described above, or
+   `--mode consumer` for the recoverable v2 route; do not mix modes or phase histories. Every
+   current-schema phase consumer resolves the one trusted durable convergence
    comment, recomputes its quorum/final-observation proof, and requires its digest; duplicate
    convergence comments and missing, stale, forged, or
    conflicting receipts fail closed. Pass the same authenticated convergence JSON to every later

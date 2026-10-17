@@ -32,6 +32,45 @@ def test_explicit_endpoint_keeps_loopback_guard() -> None:
         OllamaHttpAdapter(base_url="http://192.0.2.1:11434")
 
 
+@pytest.mark.parametrize("execution_timeout", [1.5, 1260.0])
+def test_metadata_timeout_remains_short_with_long_inference_window(
+    execution_timeout: float,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": MODEL}]})
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json={"capabilities": ["embedding"]})
+        assert request.url.path == "/api/embed"
+        return httpx.Response(200, json={"model": MODEL, "embeddings": [[0.5]]})
+
+    adapter = OllamaHttpAdapter(
+        base_url=BASE_URL, timeout_seconds=execution_timeout,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        adapter.list_models()
+        adapter.preflight_embedding(model=MODEL)
+        adapter.embed(model=MODEL, input_text="synthetic timeout test", dimensions=1)
+    finally:
+        adapter.close()
+
+    assert [request.url.path for request in requests] == [
+        "/api/tags", "/api/tags", "/api/show", "/api/embed"
+    ]
+    for request in requests:
+        expected = (
+            execution_timeout if request.url.path == "/api/embed"
+            else min(execution_timeout, 120.0)
+        )
+        assert request.extensions["timeout"] == {
+            phase: expected for phase in ("connect", "read", "write", "pool")
+        }
+
+
 def test_preflight_reports_model_and_declared_capabilities() -> None:
     calls: list[tuple[str, str]] = []
 

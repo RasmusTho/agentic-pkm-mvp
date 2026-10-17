@@ -4289,6 +4289,54 @@ def _finish_instance_state_deployment_locked(
     return _complete_instance_state_deployment_cleanup(ownership_root)
 
 
+def require_existing_authority_cutover_ready(
+    *,
+    channel_id: str,
+    registry_path: Path,
+    host_global_root: Path,
+    vault_binding_id: str,
+    vault_root: Path,
+) -> None:
+    """Qualify an explicit nonprod binding without initialization or recovery.
+
+    The caller proves the existing writer mounts and supplies their qualified
+    registry view. This facade reads existing identities and physical ownership
+    with read-only locks; only the stopped-window producer may activate authority.
+    """
+    if channel_id not in {"dev", "test"}:
+        raise RegistryError("nonprod authority qualification required")
+    for path in (vault_root, host_global_root, registry_path):
+        if not path.exists() or any(p.is_symlink() for p in (path, *path.parents)):
+            raise RegistryError("existing authority input unavailable")
+    snapshot = VaultRegistryStore(registry_path).read_existing()
+    target = snapshot.registrations.get(vault_binding_id)
+    if target is None or not target.vault_id or not target.local_instance_id:
+        raise RegistryError("initialized authority binding required")
+    if target.path not in {str(vault_root), "/app/vault"}:
+        raise RegistryError("authority binding root mismatch")
+    settings = vault_root / "settings"
+    for name in ("vault.md", "local.md", "paths.md", "workflow.md", "design-handoff.md", "companion-ui.md"):
+        path = settings / name
+        if not path.is_file() or path.is_symlink() or settings.is_symlink():
+            raise RegistryError("initialized authority settings required")
+    identities = []
+    for name, field in (("vault.md", "vaultId"), ("local.md", "localInstanceId")):
+        text = (settings / name).read_text(encoding="utf-8")
+        if not text.startswith("---\n") or len(text.split("---", 2)) != 3:
+            raise RegistryError("initialized authority identity required")
+        payload = yaml.safe_load(text.split("---", 2)[1])
+        if not isinstance(payload, dict):
+            raise RegistryError("initialized authority identity required")
+        identities.append(payload.get(field))
+    if identities != [target.vault_id, target.local_instance_id]:
+        raise RegistryError("authority identity mismatch")
+    OwnershipLedger(host_global_root).require_scalar_rollback_ready(
+        channel_id=channel_id,
+        registrations={key: vault_root if key == vault_binding_id else None for key in snapshot.registrations},
+        recover_rotation=False,
+    )
+
+
 def open_default_vault_service(registry_path: Path) -> InstanceDefaultVaultService:
     """Hand the sealed storage-mutation capability to the MVR-02 default service.
 

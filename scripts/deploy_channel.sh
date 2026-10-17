@@ -4,12 +4,32 @@ set -euo pipefail
 # Advisory only: the supervised adapter accepts one exact allowlisted marker,
 # never the child command's raw output. Keep the primary stage through recovery.
 DEPLOY_FAILURE_STAGE=preflight
+PREVIOUS_PIN_SNAPSHOT_FILE=""
+PREVIOUS_PIN_SNAPSHOT_TAKEN=0
+PREVIOUS_PIN_SNAPSHOT_EXISTED=0
+PREVIOUS_PIN_SNAPSHOT_PRESERVE=0
+CURRENT_PIN_SNAPSHOT_FILE=""
+CURRENT_PIN_SNAPSHOT_TAKEN=0
+CURRENT_PIN_SNAPSHOT_EXISTED=0
+CURRENT_PIN_SNAPSHOT_PRESERVE=0
 deploy_channel_failure_diagnostic() {
   if [ "${1}" -ne 0 ] && [ "${BASH_SUBSHELL}" -eq 0 ]; then
     printf 'YGGDRASIL_DEPLOY_FAILURE_STAGE=%s\n' "${DEPLOY_FAILURE_STAGE}" >&2
   fi
 }
-trap 'deploy_channel_failure_diagnostic "$?"' EXIT
+deploy_channel_exit() {
+  local status="${1:?exit status required}"
+  if [ -n "${PREVIOUS_PIN_SNAPSHOT_FILE:-}" ] && \
+      [ "${PREVIOUS_PIN_SNAPSHOT_PRESERVE:-0}" != "1" ]; then
+    rm -f -- "${PREVIOUS_PIN_SNAPSHOT_FILE}" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${CURRENT_PIN_SNAPSHOT_FILE:-}" ] && \
+      [ "${CURRENT_PIN_SNAPSHOT_PRESERVE:-0}" != "1" ]; then
+    rm -f -- "${CURRENT_PIN_SNAPSHOT_FILE}" >/dev/null 2>&1 || true
+  fi
+  deploy_channel_failure_diagnostic "${status}"
+}
+trap 'deploy_channel_exit "$?"' EXIT
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 source "${ROOT}/scripts/lib/deploy_channel_compose.sh"
@@ -192,7 +212,7 @@ values = [compose_env_value(line[len("HEIMDAL_CAPTURE_WATCH_DIR="):]) for line i
           if line.startswith("HEIMDAL_CAPTURE_WATCH_DIR=")]
 if len(values) > 1:
     print("blocked")
-elif values and values[0]:
+elif values and values[0].strip():
     print("configured")
 else:
     print("disabled")
@@ -269,16 +289,32 @@ read_pin() {
 
 write_pin() {
   local file="$1" sha="$2" digest="${3:-}"
-  local tmp_file
-  tmp_file="$(mktemp "${file}.tmp.XXXXXX")"
+  local tmp_file rc
+  tmp_file="$(mktemp "${file}.tmp.XXXXXX")" || return $?
   if [ -f "${file}" ]; then
-    awk -F= '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG" && $1 != "APP_IMAGE_DIGEST_SUFFIX" { print }' "${file}" >"${tmp_file}"
+    awk -F= '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG" && $1 != "APP_IMAGE_DIGEST_SUFFIX" { print }' "${file}" >"${tmp_file}" || {
+      rc=$?
+      rm -f -- "${tmp_file}" || true
+      return "${rc}"
+    }
   fi
-  printf 'APP_IMAGE_REPOSITORY=%s\nAPP_IMAGE_TAG=%s\n' "${image_repository}" "${sha}" >>"${tmp_file}"
+  printf 'APP_IMAGE_REPOSITORY=%s\nAPP_IMAGE_TAG=%s\n' "${image_repository}" "${sha}" >>"${tmp_file}" || {
+    rc=$?
+    rm -f -- "${tmp_file}" || true
+    return "${rc}"
+  }
   if [ -n "${digest}" ]; then
-    printf 'APP_IMAGE_DIGEST_SUFFIX=@%s\n' "${digest}" >>"${tmp_file}"
+    printf 'APP_IMAGE_DIGEST_SUFFIX=@%s\n' "${digest}" >>"${tmp_file}" || {
+      rc=$?
+      rm -f -- "${tmp_file}" || true
+      return "${rc}"
+    }
   fi
-  mv "${tmp_file}" "${file}"
+  mv "${tmp_file}" "${file}" || {
+    local rc=$?
+    rm -f -- "${tmp_file}"
+    return "${rc}"
+  }
 }
 
 resolve_target_sha() {
@@ -320,7 +356,7 @@ MIGRATION_PENDING_MARKER_CREATED=0
 MIGRATION_PENDING_ACK=0
 migration_materialize_dir="$(mktemp -d "${TMPDIR:-/tmp}/pkm-deploy-migrations.XXXXXX")"
 deploy_lock_dir=""
-trap 'deploy_channel_failure_diagnostic "$?"; rm -rf "${migration_materialize_dir}"; [ -n "${deploy_lock_dir}" ] && rmdir "${deploy_lock_dir}" 2>/dev/null' EXIT
+trap 'deploy_channel_exit "$?"; rm -rf "${migration_materialize_dir}"; [ -n "${deploy_lock_dir}" ] && rmdir "${deploy_lock_dir}" 2>/dev/null' EXIT
 
 acquire_channel_mutation_lock() {
   # Serialize the mutation phase (pending-marker + pin writes + compose) per
@@ -1350,28 +1386,265 @@ raise SystemExit(0 if quiesce_owned_container(*sys.argv[1:]) else 78)
 ' "${channel}" "$1" "${BWS_DEPLOY_OPERATION_ID}" "${target_sha}" >/dev/null 2>&1
 }
 
+native_source_terminal_cleanup() {
+  PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON}" -c '
+import sys
+from app.ops.postgres_deploy_linux import record_source_terminal
+try:
+    status = record_source_terminal(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+except Exception:
+    raise SystemExit(78) from None
+raise SystemExit(status)
+' "${channel}" "$1" "$2" >/dev/null 2>&1
+}
+
+restore_pre_migration_deploy_pin() {
+  if [ "${CURRENT_PIN_SNAPSHOT_TAKEN}" = "1" ]; then
+    if [ "${CURRENT_PIN_SNAPSHOT_EXISTED}" = "1" ]; then
+      [ -n "${CURRENT_PIN_SNAPSHOT_FILE}" ] && \
+        [ -f "${CURRENT_PIN_SNAPSHOT_FILE}" ] || return 1
+      mv -f -- "${CURRENT_PIN_SNAPSHOT_FILE}" "${pin_file}" || return $?
+      CURRENT_PIN_SNAPSHOT_FILE=""
+    else
+      rm -f -- "${pin_file}" || return $?
+    fi
+    CURRENT_PIN_SNAPSHOT_TAKEN=0
+  else
+    return 78
+  fi
+  if [ "${PREVIOUS_PIN_SNAPSHOT_TAKEN}" = "1" ]; then
+    if [ "${PREVIOUS_PIN_SNAPSHOT_EXISTED}" = "1" ]; then
+      [ -n "${PREVIOUS_PIN_SNAPSHOT_FILE}" ] && \
+        [ -f "${PREVIOUS_PIN_SNAPSHOT_FILE}" ] || return 1
+      mv -f -- "${PREVIOUS_PIN_SNAPSHOT_FILE}" "${previous_pin_file}" || return $?
+      PREVIOUS_PIN_SNAPSHOT_FILE=""
+    else
+      rm -f -- "${previous_pin_file}" || return $?
+    fi
+    PREVIOUS_PIN_SNAPSHOT_TAKEN=0
+  fi
+  if [ "${MIGRATION_PENDING_MARKER_CREATED}" = "1" ]; then
+    rm -f "${migration_pending_file}" || return $?
+    MIGRATION_PENDING_MARKER_CREATED=0
+  fi
+}
+
+snapshot_previous_pin_before_deploy() {
+  local snapshot_file="" current_snapshot_file=""
+  [ "${PREVIOUS_PIN_SNAPSHOT_TAKEN}" = "0" ] || return 78
+  [ "${CURRENT_PIN_SNAPSHOT_TAKEN}" = "0" ] || return 78
+  CURRENT_PIN_SNAPSHOT_TAKEN=1
+  if [ -L "${pin_file}" ] || [ -e "${pin_file}" ]; then
+    [ -f "${pin_file}" ] && [ ! -L "${pin_file}" ] || return 78
+    current_snapshot_file="$(mktemp "${pin_file}.preflight.XXXXXX")" || {
+      local rc=$?
+      CURRENT_PIN_SNAPSHOT_TAKEN=0
+      return "${rc}"
+    }
+    if ! cp -p "${pin_file}" "${current_snapshot_file}"; then
+      rm -f -- "${current_snapshot_file}" || true
+      CURRENT_PIN_SNAPSHOT_TAKEN=0
+      return 1
+    fi
+    CURRENT_PIN_SNAPSHOT_EXISTED=1
+    CURRENT_PIN_SNAPSHOT_FILE="${current_snapshot_file}"
+  fi
+  PREVIOUS_PIN_SNAPSHOT_TAKEN=1
+  if [ -L "${previous_pin_file}" ] || [ -e "${previous_pin_file}" ]; then
+    [ -f "${previous_pin_file}" ] && [ ! -L "${previous_pin_file}" ] || return 78
+    snapshot_file="$(mktemp "${previous_pin_file}.preflight.XXXXXX")" || return $?
+    if ! cp -p "${previous_pin_file}" "${snapshot_file}"; then
+      rm -f -- "${snapshot_file}" || true
+      PREVIOUS_PIN_SNAPSHOT_TAKEN=0
+      return 1
+    fi
+    PREVIOUS_PIN_SNAPSHOT_EXISTED=1
+    PREVIOUS_PIN_SNAPSHOT_FILE="${snapshot_file}"
+  fi
+}
+
+native_source_failure() {
+  printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=%s\n' "$1" >&2
+}
+
+native_source_embedding_preflight_gate() {
+  if [ "${HOST_SECRET_PROVIDER:-}" != bws ] || [ "${action}" != deploy ]; then
+    NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY=1
+    return 0
+  fi
+
+  local operation="${BWS_DEPLOY_OPERATION_ID:-}" identity_json identity_result
+  local provider="" model="" identity_command probe_command probe_status=0 probe_reason service_ready=0 attempt
+  [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure embedding_context_invalid; return 78; }
+  [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure embedding_context_invalid; return 78; }
+  [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
+    [ -f "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] && \
+    [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || { native_source_failure embedding_context_invalid; return 78; }
+
+  identity_command='import json; from app.components.llm.router import LLMRouter, LLMTaskIntent; route = LLMRouter().route(LLMTaskIntent(task_kind="embed", strict_identity_required=True)); identity = route.embedding_identity; assert identity is not None; print(json.dumps({"contract": "native-source-embedding-identity.v1", "provider": identity.provider, "model": identity.model}, separators=(",", ":")))'
+  identity_json="$(DEPLOY_NATIVE_SOURCE_EMBEDDING_IDENTITY_OUTPUT=1 compose run --rm --no-deps -T \
+    --entrypoint python api -c "${identity_command}" 2>/dev/null)" || {
+    native_source_failure embedding_identity_unavailable
+    return 78
+  }
+  identity_result="$(
+    NATIVE_SOURCE_EMBEDDING_IDENTITY_JSON="${identity_json}" "${PYTHON}" - 2>/dev/null <<'PY'
+import json
+import os
+import re
+import sys
+
+try:
+    payload = json.loads(os.environ["NATIVE_SOURCE_EMBEDDING_IDENTITY_JSON"])
+except (KeyError, json.JSONDecodeError):
+    raise SystemExit(78) from None
+if not isinstance(payload, dict) or set(payload) != {"provider", "model"}:
+    raise SystemExit(78)
+provider, model = payload.get("provider"), payload.get("model")
+if not isinstance(provider, str) or re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", provider) is None:
+    raise SystemExit(78)
+if provider != "ollama":
+    print("skip")
+    raise SystemExit(0)
+if not isinstance(model, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model) is None:
+    raise SystemExit(78)
+print("ollama\t" + model)
+PY
+  )" || {
+    native_source_failure embedding_identity_invalid
+    return 78
+  }
+  if [ "${identity_result}" = "skip" ]; then
+    NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY=1
+    return 0
+  fi
+  IFS=$'\t' read -r provider model <<<"${identity_result}"
+  [ "${provider}" = "ollama" ] && [ -n "${model}" ] || { native_source_failure embedding_identity_invalid; return 78; }
+
+  compose up -d --no-deps ollama >/dev/null 2>&1 || {
+    native_source_failure embedding_service_unavailable
+    return 78
+  }
+  for ((attempt = 0; attempt < 30; attempt++)); do
+    if compose exec -T ollama ollama list >/dev/null 2>&1; then
+      service_ready=1
+      break
+    fi
+    sleep 2
+  done
+  if [ "${service_ready}" != "1" ]; then
+    native_source_failure embedding_service_not_ready
+    return 78
+  fi
+  if ! compose exec -T ollama ollama show "${model}" >/dev/null 2>&1; then
+    if ! compose exec -T ollama ollama pull "${model}" >/dev/null 2>&1; then
+      native_source_failure embedding_model_unavailable
+      return 78
+    fi
+  fi
+  if ! compose exec -T ollama ollama show "${model}" >/dev/null 2>&1; then
+    native_source_failure embedding_model_not_ready
+    return 78
+  fi
+
+  # Only fixed process statuses cross the private child boundary. Retain the
+  # first failure if closing an already-failed client also fails.
+  probe_command=$'import os\nclient = None\nstatus = 0\nphase = 114\ntry:\n    from app.components.llm.fabric import get_product_embedding_client, RemoteEmbeddingIdentityError, RemoteEmbeddingVectorError\n    client = get_product_embedding_client()\n    identity = client.identity\n    actual = (identity.provider, identity.model)\n    dimension = identity.dim\n    expected = (os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER"), os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL"))\n    if actual != expected:\n        status = 115\n    else:\n        phase = 116\n        vector = client.embed_text("Yggdrasil deployment preflight")\n        phase = 117\n        if not isinstance(vector, (list, tuple)) or len(vector) != dimension:\n            status = 117\nexcept Exception as exc:\n    status = phase\n    if phase == 116 and isinstance(exc, RemoteEmbeddingIdentityError):\n        status = 115\n    elif phase == 116 and isinstance(exc, RemoteEmbeddingVectorError):\n        status = 117\nfinally:\n    if client is not None:\n        try:\n            close = getattr(client, "close_for_preflight", None)\n            if not callable(close):\n                close = getattr(client, "close", None)\n            if callable(close):\n                close()\n        except Exception:\n            if status == 0:\n                status = 118\nraise SystemExit(status)'
+  compose run --rm --no-deps -T \
+      -e "NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER=${provider}" \
+      -e "NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL=${model}" \
+      --entrypoint python api -c "${probe_command}" >/dev/null 2>&1 || probe_status=$?
+  if [ "${probe_status}" != 0 ]; then
+    case "${probe_status}" in
+      114) probe_reason=embedding_probe_client_failed ;;
+      115) probe_reason=embedding_probe_identity_mismatch ;;
+      116) probe_reason=embedding_probe_generation_failed ;;
+      117) probe_reason=embedding_probe_vector_invalid ;;
+      118) probe_reason=embedding_probe_cleanup_failed ;;
+      *) probe_reason=embedding_probe_failed ;;
+    esac
+    native_source_failure "${probe_reason}"
+    return 78
+  fi
+
+  NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY=1
+}
+
 native_source_projection_gate() {
   if [ "${HOST_SECRET_PROVIDER:-}" != bws ] || [ "${action}" != deploy ]; then
     return 0
   fi
+  [ "${NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY:-0}" = "1" ] || { native_source_failure embedding_context_invalid; return 78; }
   local operation="${BWS_DEPLOY_OPERATION_ID:-}" name="" rc=0
-  [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 78
-  [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || return 78
+  [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure source_preflight_failed; return 78; }
+  [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure source_preflight_failed; return 78; }
   [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
     [ -f "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] && \
-    [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || return 78
+    [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || { native_source_failure source_preflight_failed; return 78; }
   name="pkm-${channel}-source-bootstrap-${operation}"
-  compose stop api worker watcher heimdal-capture-watch companion-ui || return $?
+  compose stop api worker watcher heimdal-capture-watch companion-ui || {
+    rc=$?
+    native_source_failure source_writer_stop_failed
+    return "${rc}"
+  }
   NATIVE_SOURCE_QUIESCENT=0
-  compose run --rm --no-deps -T --name "${name}" \
+  compose run --no-deps -T --name "${name}" \
     --label "yggdrasil.native.operation=${operation}" \
     --label "yggdrasil.native.revision=${target_sha}" \
     -e "NATIVE_SOURCE_BOOTSTRAP=${channel}:${target_sha}" api || rc=$?
-  if native_source_container_quiescence "${name}"; then
-    NATIVE_SOURCE_QUIESCENT=1
-  else
-    return 78
-  fi
+  local terminal_rc=0
+  native_source_terminal_cleanup "${name}" "${rc}" || terminal_rc=$?
+  # Only the observer's documented result namespace proves cleanup. A Python
+  # import/crash or signal must never admit compensation/runtime writers.
+  case "${terminal_rc}" in
+    0|79|8[0-9]|9[0-9]|10[0-9]|11[0-3])
+      NATIVE_SOURCE_QUIESCENT=1
+      rc="${terminal_rc}"
+      ;;
+    *)
+      native_source_failure source_quiescence_failed
+      return 78
+      ;;
+  esac
+  case "${rc}" in
+    79) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed\n' >&2 ;;
+    80) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=embedding_generation_failed\n' >&2 ;;
+    81) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_index_write_failed\n' >&2 ;;
+    82) native_source_failure source_preflight_failed ;;
+    83) native_source_failure source_readiness_failed ;;
+    84) native_source_failure source_command_failed ;;
+    85) native_source_failure source_summary_invalid ;;
+    86) native_source_failure source_post_rebuild_failed ;;
+    87) native_source_failure source_doctor_failed ;;
+    88) native_source_failure source_settings_failed ;;
+    89) native_source_failure source_worker_failed ;;
+    90) native_source_failure legacy_producer_policy_refused ;;
+    91) native_source_failure legacy_source_refused ;;
+    92) native_source_failure legacy_admission_refused ;;
+    93) native_source_failure legacy_identity_refused ;;
+    94) native_source_failure legacy_race_refused ;;
+    95) native_source_failure legacy_write_failed ;;
+    96) native_source_failure source_worker_timeout ;;
+    97) native_source_failure source_worker_terminated ;;
+    98) native_source_failure source_worker_oom ;;
+    99) native_source_failure legacy_candidate_refused ;;
+    100) native_source_failure legacy_authority_refused ;;
+    101) native_source_failure legacy_trust_refused ;;
+    102) native_source_failure legacy_origin_refused ;;
+    103) native_source_failure legacy_payload_shape_refused ;;
+    104) native_source_failure legacy_system_path_refused ;;
+    105) native_source_failure legacy_profile_refused ;;
+    106) native_source_failure legacy_dependency_shape_refused ;;
+    107) native_source_failure legacy_retained_history_refused ;;
+    108) native_source_failure legacy_relation_retention_refused ;;
+    109) native_source_failure legacy_identity_persistence_refused ;;
+    110) native_source_failure legacy_identity_mismatch_refused ;;
+    111) native_source_failure legacy_identity_ambiguous_refused ;;
+    112) native_source_failure legacy_identity_producer_refused ;;
+    113) native_source_failure legacy_identity_canonical_refused ;;
+    0) ;;
+    *) native_source_failure source_worker_failed ;;
+  esac
   return "${rc}"
 }
 
@@ -1818,6 +2091,9 @@ DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
 export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 
 DEPLOY_FAILURE_STAGE=pin_write
+if [ "${action}" = "deploy" ] && [ "${HOST_SECRET_PROVIDER:-}" = bws ]; then
+  snapshot_previous_pin_before_deploy || exit $?
+fi
 if [ "${action}" = "deploy" ] && \
     { [ "${MIGRATIONS_CHECKED}" -gt 0 ] || \
       [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" = "1" ]; } && \
@@ -1856,6 +2132,25 @@ if [ "${scalar_rollback}" = "1" ]; then
 else
   run_postmutation_gate "image pull failed" \
     pull_channel_images || exit $?
+fi
+if [ "${action}" = "deploy" ]; then
+  DEPLOY_FAILURE_STAGE=source_projection
+  native_source_embedding_preflight_gate || {
+    source_preflight_rc=$?
+    if [ "${MIGRATION_EXECUTION_STARTED}" != "1" ] && restore_pre_migration_deploy_pin; then
+      echo "native source embedding preflight failed before writer drain; pre-migration pin state restored and app services were not stopped" >&2
+    else
+      if [ -n "${PREVIOUS_PIN_SNAPSHOT_FILE}" ]; then
+        PREVIOUS_PIN_SNAPSHOT_PRESERVE=1
+      fi
+      if [ -n "${CURRENT_PIN_SNAPSHOT_FILE}" ]; then
+        CURRENT_PIN_SNAPSHOT_PRESERVE=1
+      fi
+      echo "native source embedding preflight failed before writer drain; app services were not stopped but pre-migration pin/marker restoration failed" >&2
+      exit 78
+    fi
+    exit "${source_preflight_rc}"
+  }
 fi
 if [ "${scalar_rollback}" != "1" ] && [ "${action}" = "deploy" ]; then
   DEPLOY_FAILURE_STAGE=scalar_retirement

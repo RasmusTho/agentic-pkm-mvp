@@ -5,11 +5,15 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-09 (Issue #5868 existing-value TARS deployment candidate checked alongside the PR #5835, #5822, #5838, and #5847 evidence; no host credentials, route settings, database, or deployment changed)
-Last reviewed (SCREEN-06 host controls): 2026-10-13
+Last reviewed: 2026-10-15 (BWS / #5667 status reconciliation and bounded DevUI promotion / #6105; unrelated status entries were not re-audited)
+Last reviewed (SCREEN-06 host controls): 2026-10-17
 Last verified against (SCREEN-06 host controls): Issue #3342, `app/heimdal/screen_control.py`,
-`tests/heimdal/test_screen_control_receipts.py`, and `tests/heimdal/test_screen_control_settings.py`.
-Actual native capture/indicator agreement remains Bifrost #72, #3341, and parent #3340 acceptance.
+`app/heimdal/retention.py`, `app/api/routes/heimdal_screen.py`,
+`tests/heimdal/test_screen_control_receipts.py`, `tests/heimdal/test_screen_control_settings.py`,
+and `tests/heimdal/test_screen_frame_retention.py`. Scoped control reads fail closed until the
+surface is vault-bound. If the settings source is missing, host capture remains degraded/paused;
+retention cleanup may use only a durable last-accepted bound. Actual native capture/indicator
+agreement remains Bifrost #72, #3341, and parent #3340 acceptance.
 Last reviewed (Builder execution routing): 2026-10-11
 Last verified against (Builder execution routing): `docs/settings/models/providers.yaml`,
 `.codex/agents/verification-closer.toml`, and the focused provider-census, execution-routing,
@@ -21,15 +25,21 @@ The dated GPT-5.4 Mini price provenance and GPT-5.6 candidate/default wording ar
 Issue #5997; they do not constitute a live comparison receipt or change the Product default.
 Last verified against (BWS PostgreSQL): Issue #5680, `app/ops/postgres_deploy.py`,
 `app/ops/postgres_deploy_linux.py`, `app/config/database.py`, and the focused deploy/DSN tests;
-repository implementation only. The Bash-dependent entrypoint proof belongs to hosted Linux CI;
-BWS-03 repository token-push support is delivered by PR #5732, while live VM installation and
-parent #5667 qualification remain separate gates.
+repository implementation only. The Bash-dependent entrypoint proof belongs to hosted Linux CI.
+BWS-03 repository support was delivered by PR #5732; its live encrypted reader installation is
+verified by #5667 comments #6114638077 and #6114724380. The broader parent qualification remains
+separate.
 Last verified against (BWS-03 repository implementation): Issue #5679 and PR #5732
 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`; reviewed candidate
 `1f9b2ff4e2a35ccd9c2fea5df01a233b6893f0e6`); focused token-push/secret-bootstrap tests
 (182 passed), Ruff, `mypy app` (1,020 source files), docs guard, and current-head CI passed.
-This is repository evidence only; no live TARS VM, Keychain, systemd-creds host key, BWS account,
-or channel qualification was accessed.
+This entry records repository evidence only. Separate live receipts on #5667 verify the current
+Free-plan entitlement, both reader-token scopes, active encrypted reader services on all three
+channel VMs, the exact MARR non-prod binding, and the accepted normal-writer model; they do not
+establish complete target/action-bound DEV/TEST/PROD deployment/runtime acceptance.
+Last verified against (BWS live qualification): #5667 comments #6114638077, #6114724380, and
+#6114787299. These establish the specific current BWS, reader, MARR, and writer facts stated above;
+they do not close the parent deployment/runtime gate.
 Last verified against (governed vault profile): accepted parent #4944 and PRs #5731, #5733, and
 #5735; exact child heads, merge SHAs, Verify coverage, CI, and receipts are recorded on the parent.
 Repository and GitHub evidence only; no live vault contents or deployed runtime were exercised.
@@ -78,6 +88,12 @@ permission write, key import, host installation, or Jev call is claimed.
 Source: Issues #5764, #5667, and #5801; `docs/TYPESAFE_SYSTEM_ONE/README.md`,
 `docs/CLOUD_SECRET_PROVISIONING/README.md`, and PR #5803, merged at
 `cf2a8dbe0d670e120fedf85a347db0babf916fe3`.
+Last verified against (DevUI component promotion): Issue #6105,
+`app/ops/devui_component_promotion.py` and its focused production-path tests. Repository support
+provides an attested manual DevUI-only promotion and rollback with exact image/config and browser
+checks; [the deployment owner](BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#bounded-manual-devui-component-promotion)
+defines its boundary. This is no live deployment, complete-system/source qualification or human
+outcome claim; subsequent VM102 evidence remains on #5181 and owner acceptance stays separate.
 Last verified against (DevUI supervised continuity): Issue #5655,
 `app/builderops/devui_issue_work.py`, `app/builderops/devui_sources.py`, and
 `tests/builderops/test_devui_issue_work.py` on 2026-09-24. The managed Focus read carries an

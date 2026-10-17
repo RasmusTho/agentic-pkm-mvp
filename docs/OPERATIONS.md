@@ -5,11 +5,13 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-12 (fixed native web qualification entry for #5969, repository-only; prior #5993 placement and other section reviews retained; no new live host or service verification)
+Last reviewed: 2026-10-15 (Companion collection-preflight output classification for #6079, repository-only; prior 2026-10-14 VOICE-04 session/transcript guidance, native MVR-01C entry for #6056, native BWS embedding preflight for #6069, and fixed native TEST journaling entry for #6050, repository-only; prior #5969 web qualification, #5993 placement and other section reviews retained; no new live host or service verification)
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
 BWS child-runtime repository evidence: requirements-bws-deploy.txt; scripts/install_bws_deploy_runtime.sh; tests/deploy/test_deploy_channel.py::test_bws_runtime_setup_covers_mandatory_browser_smoke and tests/deploy/test_deploy_channel_script.py::test_managed_deploy_child_uses_declared_supervisor_interpreter; Issue #5905 / PR #5906 (repository validation only; no live host installation or channel acceptance).
 Native web entry repository evidence (2026-10-12): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_web, app/ops/native_web_acceptance_runner.py::NativeWebRunner, and tests/ops/test_native_web_acceptance.py; runtime pilot qualification remains with #2443/#3314.
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/KARAKEEP_MIMER_ACQUISITION/README.md, docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md, docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md, config/secrets/host_secret_contract.json, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, app/ops/native_source_bootstrap.py, scripts/deploy_channel.sh, tests/deploy/test_deploy_channel_script.py::test_native_deploy_rebuilds_source_projection_before_health_gate, tests/deploy/test_deploy_channel_script.py::test_native_api_source_selector_refuses_before_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_unbound_api_preserves_idle_without_source_write, tests/ops/test_ci_workflow.py::test_scoped_not_pg_step_has_room_for_multi_subsystem_selection, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-11
+Native journaling entry repository evidence (2026-10-14): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_journaling, app/ops/native_journaling_acceptance_runner.py::NativeJournalingRunner, and tests/ops/test_native_journaling_acceptance.py; actual-image/provider TEST acceptance remains with #3347.
+Native authority-cutover repository evidence (2026-10-14): app/ops/postgres_deploy.py::DeployPlan, app/ops/postgres_deploy_linux.py::DeploymentSupervisor and tests/deploy/test_postgres_deploy_authority_cutover.py; live nonprod qualification remains with #3367.
+Last verified against: scripts/companion_ui_postdeploy_smoke.sh::preflight and tests/companion_ui/test_gateway_postdeploy_smoke.py::test_collection_preflight_classifies_captured_output_without_pipe_race (#6079 repository-only evidence), docs/MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md, app/api/routes/ask.py::ask_voice, app/chat/voice_session.py::VoiceSessions, tests/voice/test_session_transcript.py::test_only_write_is_appendonly_transcript (VOICE-04 repository evidence), docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/KARAKEEP_MIMER_ACQUISITION/README.md, docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md, docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md, config/secrets/host_secret_contract.json, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, app/ops/native_source_bootstrap.py, scripts/deploy_channel.sh, tests/deploy/test_deploy_channel_script.py::test_native_deploy_rebuilds_source_projection_before_health_gate, tests/deploy/test_deploy_channel_script.py::test_native_api_source_selector_refuses_before_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_unbound_api_preserves_idle_without_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_prepares_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_refuses_unavailable_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_preserves_selected_embedding_identity, Issue #6069 candidate containing origin/main 8ec709f (repository-only; no live channel verification), tests/ops/test_ci_workflow.py::test_not_pg_steps_have_room_for_selected_coverage, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-14
 TypeSafe credential boundary evidence: config/secrets/host_secret_contract.json; tests/ops/test_host_secret_contract.py::test_typesafe_key_uses_non_prod_project_and_marr_only_consumer, tests/ops/test_secret_admin.py::test_typesafe_import_targets_non_prod_and_rejects_other_channels, and tests/architecture/test_typesafe_runtime_boundary.py::test_runtime_key_stays_on_marr_and_callers_keep_separate_policy; Issue #5808 follows Issue #5801 / PR #5803 on 2026-10-07. Repository-only fake/injected-source evidence; no live BWS permission or host/provider verification.
 TypeSafe Builder CKM repository evidence: app/builderops/ckm/judgment.py, app/model_access/ckm_judgment_executor.py, tests/builderops/ckm/test_semantic_typesafe.py, and Issue #5768 on 2026-10-05; fake-provider proofs only, with runtime disabled and no live host or provider verification.
 # Operations Playbook
@@ -46,6 +48,31 @@ CLI note:
 - Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
 - Canvas note: `python -m app.cli canvas ...` and `/api/canvas/*` now exist as bounded session surfaces behind `CANVAS_ENABLED`; they are materially supported for bounded co-authoring, but still not part of the default production operator surface.
 
+### Mimer voice sessions (VOICE-04)
+
+`POST /api/ask/voice` returns a `session_id` when a question turn opens a transcript
+on an initialized selected vault. Pass that id for follow-ups; `end_session=true`
+closes the transcript and retires the live context. Context and pointers are
+process-local: restart, another API worker, a changed vault/scope or an already
+closed id returns `409 voice_session_context_lost`. Start a new session and
+restate the missing context; the durable transcript is never replayed as live memory.
+
+A process-local window on the actual shared vault manager keeps selection stable
+through context lookup, ASK retrieval and transcript create/append/close. A
+concurrent legacy select or lazy selection load waits for those effects; derived
+TTS runs after release. This is not a persistent lease or cross-worker recovery.
+
+Voice persistence uses the existing guarded `SessionLogWriter` only under
+`.chats/voice/`, with per-turn UTC timestamps. It creates no human-note anchor,
+UUID repair or `.canvas-sessions` pointer. Logging refusal/failure preserves the
+grounded answer and reports `session_error: session_transcript_unavailable`,
+independently of TTS degradation. Capture-intent suggestions perform no write.
+See [the client contract](contracts/MIMER_CLIENT_CONTRACT.md#43-post-apiaskvoice)
+and [the session owner spec](MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md)
+for semantics and production-path verification. These are repository contracts;
+parent #3335 retains qualified TARS TEST voice/UI acceptance, and ERE
+`chat.sessions` consumption remains planned.
+
 ### Heimdal raw-store capacity receipt
 
 Use `python -m app.cli heimdal capacity --vault-root <vault>` to inspect an
@@ -67,6 +94,19 @@ event zero and (re)write the weekly markdown projection note(s) at
 (`requires_review`, never authority): rebuilding overwrites only its own prior
 projection and refuses to touch any other note at the path. A missing store
 backend fails loud (`STORE_BACKEND=memory` or a Postgres DSN is required).
+
+### ERE screen-span ingestion (SCREEN-04)
+
+The registry-driven Episode Resolution Engine tick consumes already-published
+screen spans from Heimdal's observation log through its own modality-filtered,
+monotone consumer cursor. Each admitted span becomes a normalized signal; the
+`heimdal_gated` registry class describes the existing publish-side consent
+gate. ERE registration does not start capture or grant consent, and the
+adapter requires a nonempty grant reference without resolving or changing the
+grant. On retry, exact scope/provenance already recorded by a validated
+canonical Episode note or current open state is skipped before segmentation;
+malformed canonical note evidence stops the tick before cursor advancement.
+See `docs/EPISODE_RESOLUTION_ENGINE/README.md` for the owner contract.
 
 ## Version & Release Workflow
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
@@ -296,6 +336,12 @@ When the issue is startup topology or Compose wiring, switch to `docs/INFRASTRUC
 When the issue is signal interpretation, switch to `docs/OBSERVABILITY.md`.
 When the issue is health semantics or degraded-state rules, switch to `docs/HEALTH.md`.
 
+For the nightly `k6-search` validation producer, use the disposable PG16/pgvector database,
+canonical migrations, assert-only bootstrap and generated binding-aware fixture described in
+[`DEV_WORKFLOW.md :: CI / validation expectations`](development/DEV_WORKFLOW.md#ci--validation-expectations).
+Its local equivalent requires an isolated localhost API and the real seeded-result warm-up before
+the five-VU, ten-second load run; status, result, error and p95 latency thresholds must all pass.
+
 ## ASK provenance shadow operations
 
 The ASK provenance manifest is an opt-in read-side experiment, not a canonical
@@ -447,16 +493,29 @@ Companion docs:
   quiescence permits compensation or terminal same-ID reconciliation. See the [Deploy procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure)
   for candidate-image support, bounded waiting and pending-state limits. Issue #5918's executable
   repository tests establish this support; live channel qualification remains separate.
+- Before migration writer drain, Linux BWS deploy resolves the target image's selected Product
+  embedding identity. If Ollama is selected, it prepares that exact channel model and probes the
+  Product embedding client with fixed non-vault text; failure occurs before normal app-service stop
+  and follows the documented pin/marker compensation path. Repository tests establish this support;
+  live channel qualification remains separate. See the [Deploy procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure)
+  for the exact sequence.
 - If an existing-secrets-only Linux BWS deployment remains pending after worker loss, follow the
   same-ID recovery procedure in [Deployment and environments](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#linux-channel-secret-provisioning)
   before starting a new deployment. A `failed` receipt leaves deployment unverified and does not
   claim rollback or absence of partial effects.
+- Explicit manual nonprod MVR-01C authority cutover uses the immutable native request described in
+  [Multi-vault instance-state rollout boundary](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#multi-vault-instance-state-rollout-boundary).
+  Supply the already-qualified binding/source/ownership-state inputs under the existing mandate;
+  unresolved ownership state refuses without repair. This route has no automatic or PROD cutover.
+  Interrupted authority cutover retains its request and admission lock as pending: service health
+  or quiescence cannot establish terminal completion or authorize same-ID failed reconciliation.
 - Physical automatic and explicit previous-good recreation retains existing valid Model Access
   path references through the four-key allowlist. Missing or invalid optional input keeps legacy
   empty bindings; see [Rollback posture](RELEASE_CHANNELS/README.md#rollback-posture) for the
   configuration and modern-caller limits.
-- A failed supervised deploy child reports only an allowlisted advisory gate stage and
-  `command_failed` class directly to the existing native journal socket, with `unknown` for absent
+- A failed supervised deploy child reports only an allowlisted advisory gate stage and the finite
+  class defined in the [Deploy procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure)
+  directly to the existing native journal socket, retaining `unknown`/`command_failed` for absent
   or ambiguous markers. One nonblocking datagram carries only the finite message and fixed priority
   and identifier; both raw service streams remain null. An unavailable or full socket loses only
   the advisory diagnostic. This diagnostic does not establish a terminal result or live
@@ -464,8 +523,12 @@ Companion docs:
 - Before a Linux BWS deployment, operator setup must qualify the complete isolated host runtime,
   including Python helpers, Chromium headless payload, exact browser-smoke collection and tuning
   imports. Follow [Linux channel secret provisioning](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#linux-channel-secret-provisioning)
-  for the setup/runtime binding and infrastructure-owned OS prerequisites. Missing dependencies or
-  an unavailable browser refuse setup before launcher replacement; application-image selection,
+  for the setup/runtime binding and infrastructure-owned OS prerequisites. The offline collection
+  preflight accepts exit 0 or exit 5 with its intentional `SKIPPED` marker, checking captured output
+  without a short-circuiting pipe; missing-marker and other-error outcomes still refuse setup.
+  Repository regression checks cover this classification without establishing live host or channel
+  qualification. Missing dependencies or an unavailable browser refuse setup before launcher
+  replacement; application-image selection,
   credential/grant and migration authority remain with their existing operator gates.
 - Fixed native `qualify-web` uses an already committed dev/test operation/image and its exact
   native lock/resource admission. Disposable baked API/UI services bootstrap canonical sources
@@ -476,6 +539,15 @@ Companion docs:
   actual parent scenario qualification remains pending. Follow the fixed invocation and cleanup
   contract in [Build-once / promote model](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#build-once--promote-model)
   and [Automated Technical Acceptance](TESTING.md#automated-technical-acceptance).
+- Fixed TEST-only `qualify-journaling test <committed-operation-uuid>` independently consumes the
+  shipped Conversational Journaling journey from the exact admitted image, canonical disposable
+  sources and original Product provider. Its `native-journaling.v1` evidence cannot replace
+  Daily/Deep, PG or long-lived channel health. Exact owned relay/resource cleanup and atomic
+  no-overwrite evidence are required; unknown cleanup preserves same-operation admission.
+  The shared lock binds its fixed qualifier profile; cross-profile or generic recovery cannot
+  retire unknown cleanup. Retry the owning qualifier, not the other journey.
+  Follow the same linked deployment/testing contracts above. Repository delivery of #6050 is
+  not actual TEST PASS or parent #3347 acceptance.
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.
@@ -497,13 +569,14 @@ Companion docs:
 - The repository resolves the MARR-only `typesafe.api-key` binding from the exact
   `dev/typesafe.api-key` identity in the existing `non-prod` BWS project through the existing
   read-only `non-prod-reader` account (#5801 / #5808). Its BWS reader token remains a
-  separate Mac Keychain bootstrap credential. The existing admin writer may access this project only
-  through the designated controller after #5667 qualification. Product and Builder callers receive no
+  separate Mac Keychain bootstrap credential. The #5667 receipts #6114638077 and #6114787299 verify
+  the current entitlement, existing reader scopes, exact MARR binding, and accepted Demerzel normal
+  writer with its same-user residual. Product and Builder callers receive no
   provider key; Linux reader identities retain accepted store-level access to the existing projects,
   while the application code-level MARR grant remains the sole runtime binding. Codex and Claude
-  receive no code-level provider-key grant. Fake-backed repository proofs do not establish
-  live entitlement or permissions. Verify the BWS entitlement and sole-writer boundary under #5667,
-  then the existing MARR host and separate caller bindings under #5764. The already-authorized
+  receive no code-level provider-key grant. Fake-backed repository proofs do not establish the broader
+  integrated channel deployment/runtime acceptance, which remains open under #5667. Product/Builder
+  caller acceptance remains a separate #5764 gate. The already-authorized
   synthetic Product and Builder attempts remain single-shot and require separate redacted acceptance
   receipts before either route is activated. Follow `docs/LOCAL_SECRET_PROVISIONING/README.md`
   (`Declared identifier contract`) and `docs/TYPESAFE_SYSTEM_ONE/README.md`
@@ -524,6 +597,12 @@ Companion docs:
   provisioning steps
   live in `companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md` and
   `docs/runbooks/RUNBOOK_TTS_PROVISIONING.md`.
+- Runtime-env regeneration retains the explicitly supplied binding set described in that TTS
+  runbook through ordinary Compose env-file syntax and the existing defaults loaders, including
+  literal dollars, quotes and backslashes. Empty or whitespace-only capture selectors remain
+  unconfigured in both deployment preflights, matching the capture runtime's stripped-empty rule;
+  their input values are preserved. Configuration preservation does not establish model-backed
+  qualification or current runtime health.
 
 ### BuilderOps Issue-delivery repository support
 

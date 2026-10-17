@@ -272,6 +272,95 @@ def test_vault_alpha_cli_routes_source_backed_rebuild_admission(
     assert captured["source_backed_rebuild"] is True
 
 
+def test_source_backed_rebuild_fails_loud_when_vector_projection_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product_model_access_gateway,
+) -> None:
+    vault = _prepare_vault(tmp_path)
+    for key, value in _base_env(tmp_path).items():
+        monkeypatch.setenv(key, value)
+    reset_store_backends()
+    note = vault / "Concepts" / "ExistingUUID.md"
+    monkeypatch.setattr(vault_alpha, "_select_candidates", lambda *args, **kwargs: ([note], ["Concepts"]))
+    monkeypatch.setattr(vault_alpha, "classify_run", lambda *args, **kwargs: {})
+
+    def refused(**kwargs):
+        raise RuntimeError("private-note /private/vault provider-secret")
+
+    monkeypatch.setattr(vault_alpha, "index_ingest_object", refused)
+    arguments = ["vault-alpha-ingest", "--vault-root", str(vault), "--force", "--json"]
+    failed = CliRunner().invoke(cli, [*arguments, "--source-backed-rebuild"])
+    assert failed.exit_code == 79
+    summary = json.loads(failed.stdout)
+    assert summary == dict(scanned=1, ingested=0, errors=1, malformed=0,
+                           skipped_locked=0, skipped_invalid=0, vector_projection_errors=1,
+                           vector_projection_failure_counts={"vector_projection_failed": 1})
+    assert "provider-secret" not in failed.output
+    ordinary = CliRunner().invoke(cli, arguments)
+    assert ordinary.exit_code == 0
+    assert json.loads(ordinary.stdout)["ingested"] == 1
+    from app.components.embeddings import get_embedding_identity
+    from app.search import service
+    from app.stores import get_vector_index
+
+    identity = get_embedding_identity()
+    vector = [1.0] + [0.0] * (identity.dim - 1)
+    monkeypatch.setattr(service, "embed_query", lambda text: (vector, identity))
+    monkeypatch.setattr(service, "embed_docs", lambda texts: ([vector], identity))
+    monkeypatch.setattr(vault_alpha, "index_ingest_object", service.ingest_object)
+    retried = CliRunner().invoke(cli, [*arguments, "--source-backed-rebuild"])
+    assert retried.exit_code == 0, retried.output
+    assert json.loads(retried.stdout)["ingested"] == 1
+    rows = list(get_vector_index().all_rows())
+    assert len(rows) == 1
+    assert rows[0]["embedding"] == vector
+    assert rows[0]["model"] == identity.model
+
+
+@pytest.mark.parametrize("failure,reason", [
+    ("embedding", "embedding_generation_failed"),
+    ("index", "vector_index_write_failed"),
+    ("resolution", "vector_index_write_failed"),
+])
+def test_source_backed_rebuild_classifies_embedding_and_index_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product_model_access_gateway,
+    failure: str, reason: str,
+) -> None:
+    from app.search import service
+    import app.stores as stores
+
+    vault = _prepare_vault(tmp_path)
+    for key, value in _base_env(tmp_path).items():
+        monkeypatch.setenv(key, value)
+    reset_store_backends()
+    note = vault / "Concepts" / "ExistingUUID.md"
+    monkeypatch.setattr(vault_alpha, "_select_candidates", lambda *args, **kwargs: ([note], ["Concepts"]))
+    monkeypatch.setattr(vault_alpha, "classify_run", lambda *args, **kwargs: {})
+    index = stores.get_vector_index()
+
+    def refused(*args, **kwargs):
+        raise RuntimeError("private-note /private/vault provider-secret")
+
+    if failure == "embedding":
+        monkeypatch.setattr(service, "embed_docs", refused)
+        monkeypatch.setattr(service, "embed_query", refused)
+    elif failure == "index":
+        monkeypatch.setattr(index, "upsert", refused)
+    else:
+        monkeypatch.setattr(stores, "get_vector_index", refused)
+    arguments = ["vault-alpha-ingest", "--vault-root", str(vault), "--force", "--json"]
+    result = CliRunner().invoke(cli, [*arguments, "--source-backed-rebuild"])
+    assert result.exit_code == 79
+    summary = json.loads(result.stdout)
+    assert summary["ingested"] == 0
+    assert summary["vector_projection_errors"] == 1
+    assert summary["vector_projection_failure_counts"] == {reason: 1}
+    assert "provider-secret" not in result.output
+    assert "private-note" not in result.output
+    ordinary = CliRunner().invoke(cli, arguments)
+    assert ordinary.exit_code == 0
+    assert json.loads(ordinary.stdout)["ingested"] == 1
+
+
 def test_vault_alpha_ingest_persists_uuid_to_companion_and_store(tmp_path: Path) -> None:
     reset_store_backends()
     get_store().set_documents([])

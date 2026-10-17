@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from fastapi.responses import JSONResponse
 
@@ -25,6 +27,13 @@ class SelectedVaultUninitializedError(RuntimeError):
     def __init__(self, selected_path: Path | None = None) -> None:
         self.selected_path = selected_path
         super().__init__("selected vault is not initialized")
+
+
+@contextmanager
+def active_vault_selection_window() -> Iterator[None]:
+    """Coordinate a scalar route's effects with the real shared selector."""
+    with get_vault_manager().selection_window():
+        yield
 
 
 def resolve_active_vault_root(*, require_initialized: bool = False) -> Path:
@@ -53,6 +62,59 @@ def resolve_active_vault_root(*, require_initialized: bool = False) -> Path:
         environment=active_environment()
     )  # raises on set-but-missing
     raise NoSelectedVaultError(configured)
+
+
+# --- MVR-05B3: named compatibility adapters ---------------------------------
+#
+# Route modules no longer resolve the process-selected vault themselves. A
+# carrier-bearing read binds its own ActiveContextSet
+# (``app.api.request_active_context.route_read_vault_root_or_selection_required``)
+# and a carrier-bearing write is sealed (``app.api.compatibility_mutation``).
+# Only a carrier-free legacy request reaches the three adapters below, and a
+# legacy *write* reaches them only inside the compatibility write-target window,
+# which proves the selection is the sole freshly revalidated compatibility
+# binding. They retire with the single-binding compatibility selector (MVR-06);
+# tests/architecture/context_boundary_inventory.py lists them by name.
+
+
+def compatibility_vault_root(*, require_initialized: bool = False) -> Path:
+    """Carrier-free compatibility adapter: the process-selected binding's root (raising)."""
+
+    return resolve_active_vault_root(require_initialized=require_initialized)
+
+
+def compatibility_vault_root_or_selection_required(
+    *,
+    requested_note_path: str | None = None,
+    require_initialized: bool = False,
+) -> Path | JSONResponse:
+    """Carrier-free compatibility adapter: the selected root, or the picker state."""
+
+    return active_vault_root_or_selection_required(
+        requested_note_path=requested_note_path,
+        require_initialized=require_initialized,
+    )
+
+
+@contextmanager
+def compatibility_selection_window() -> Iterator[None]:
+    """Carrier-free compatibility adapter: pin the process selection through an effect."""
+
+    with active_vault_selection_window():
+        yield
+
+
+def compatibility_selected_vault_root() -> Path | None:
+    """The process selection's root (selected or uninitialized), or ``None`` without one.
+
+    Used by the pre-05C write seal to compare a legacy write's target with the
+    durable compatibility binding. Never raises for a missing selection.
+    """
+
+    try:
+        return compatibility_vault_root()
+    except (NoSelectedVaultError, VaultRootMisconfiguredError):
+        return None
 
 
 def vault_selection_required_json(

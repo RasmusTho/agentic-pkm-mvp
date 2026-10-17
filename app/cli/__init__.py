@@ -704,6 +704,28 @@ def acquire_youtube_cmd(
 
 
 @cli.command(
+    name="youtube-onboard",
+    help="Bootstrap YouTube subscriptions and playlists from a Google Takeout export.",
+)
+@click.argument("takeout_root", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--output", "output_path", required=True, type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True, help="Print the registry receipt as JSON.")
+def youtube_onboard(takeout_root: Path, output_path: Path, as_json: bool) -> None:
+    """Create a source registry without contacting YouTube or writing vault notes."""
+    from app.knowledge_acquisition.youtube_onboarding import parse_takeout, save_registry
+
+    registry = parse_takeout(takeout_root)
+    save_registry(output_path, registry)
+    receipt = {
+        "output": str(output_path),
+        "subscriptions": sum(source.kind == "subscription" for source in registry.sources),
+        "playlists": sum(source.kind == "playlist" for source in registry.sources),
+        "source_count": len(registry.sources),
+    }
+    click.echo(json.dumps(receipt if as_json else {**receipt, "status": "written"}, ensure_ascii=False))
+
+
+@cli.command(
     help="Run full pipeline (normalize -> classify -> optional transcribe). Accepts file, URL, or audio/YouTube."
 )
 @click.argument("source")
@@ -871,8 +893,18 @@ def vault_alpha_ingest(
             "invalid_examples": summary.invalid_examples,
             "invalid_report_path": summary.invalid_report_path,
         }
+        if source_backed_rebuild:
+            payload = {key: payload[key] for key in (
+                "scanned", "ingested", "errors", "malformed", "skipped_locked", "skipped_invalid",
+            )}
+            payload["vector_projection_errors"] = summary.vector_projection_errors
+            payload["vector_projection_failure_counts"] = summary.vector_projection_failure_counts
         _dump(payload, True)
+        if source_backed_rebuild and summary.vector_projection_errors:
+            raise click.exceptions.Exit(79)
         return
+    if source_backed_rebuild and summary.vector_projection_errors:
+        raise click.ClickException("vector_projection_failed")
     if summary.ingested == 0 and not summary.force:
         click.echo(
             f"Scanned {summary.scanned} files; ingested {summary.ingested} notes (already up to date; run with --force to resync if the store is empty)"

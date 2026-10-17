@@ -75,6 +75,7 @@ from scripts.yaml_roundtrip import load_frontmatter
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 DEFAULT_SCOPE_GLOB = "*.md,**/*.md"
+DEFAULT_REGISTRY_CONFIG_PATH = Path("configs/watchers.yaml")
 
 MIN_TICK_SLEEP_SECONDS = 0.05
 BRIEFING_TICK_INTERVAL_SECONDS = 15 * 60
@@ -136,6 +137,15 @@ def _matches_scope(rel_path: Path, scope_glob: str) -> bool:
 
 def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
     return derive_scope_roots(vault_root, scope_glob)[0]
+
+
+def registry_scan_roots(vault_root: Path, scope_glob: str) -> list[Path]:
+    roots = derive_scope_roots(vault_root, scope_glob)
+    for name in (SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name):
+        source_root = vault_root / name
+        if source_root.exists():
+            roots = [*roots, source_root]
+    return roots
 
 
 def _scan_markdown_many(
@@ -663,8 +673,9 @@ class RegistryConfig:
     watcher_run_log: Path = field(default_factory=lambda: Path("tmp/watcher_run.jsonl"))
 
     @classmethod
-    def from_env(cls, specs: list[WatcherSpec], config_path: Path) -> "RegistryConfig":
-        enable = _as_bool(env_str("WATCHER_ENABLE"))
+    def from_env(cls, specs: list[WatcherSpec], config_path: Path, *, read_only: bool = False) -> "RegistryConfig":
+        from app.ingest.producer_policy import parse_producer_activation
+        enable = parse_producer_activation(env_str("WATCHER_ENABLE"))
         vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
         if enable and not vault_raw:
             # No vault bound — idle until one is opened instead of raising
@@ -673,7 +684,7 @@ class RegistryConfig:
             logger.info("watcher registry idling: WATCHER_ENABLE=1 but no vault bound")
             enable = False
         vault_path = Path(vault_raw or ".").expanduser()
-        if enable and not _validate_registry_vault(vault_path):
+        if enable and not _validate_registry_vault(vault_path, read_only=read_only):
             enable = False
         scope_glob, scope_source, inbox_source = _resolve_scope_glob(vault_path)
         logger.info(
@@ -835,7 +846,7 @@ def _expand_env_values(value: object) -> object:
     return value
 
 
-def load_registry_config(config_path: Path) -> RegistryConfig:
+def load_registry_config(config_path: Path, *, read_only: bool = False) -> RegistryConfig:
     config_path = config_path.expanduser()
     if not config_path.exists():
         raise FileNotFoundError(f"watcher config not found: {config_path}")
@@ -846,7 +857,7 @@ def load_registry_config(config_path: Path) -> RegistryConfig:
     specs = [WatcherSpec.from_dict(_expand_env_values(entry or {})) for entry in watchers_raw]
     if not specs:
         raise ValueError("watchers config is empty")
-    return RegistryConfig.from_env(specs, config_path=config_path)
+    return RegistryConfig.from_env(specs, config_path=config_path, read_only=read_only)
 
 
 def _adopt_idle_selected_binding(
@@ -1024,7 +1035,7 @@ def _auto_exec_enabled(vault_root: Path) -> bool:
 _IDLE_VAULT_STATUSES = {"none", "uninitialized"}
 
 
-def _validate_registry_vault(vault_path: Path) -> bool:
+def _validate_registry_vault(vault_path: Path, *, read_only: bool = False) -> bool:
     """Return True when the registry should run; False when it should idle.
 
     Raises only for a *loud* misconfiguration (set-but-missing or invalid vault
@@ -1032,7 +1043,18 @@ def _validate_registry_vault(vault_path: Path) -> bool:
     uninitialized vault returns False so the caller builds an idle runtime.
     """
 
-    manager = VaultManager()
+    if read_only:
+        from app.write_guard import WriteGuard
+        # Recovery inspects the canonical configuration but must never perform
+        # the normal registry loader's missing-identity heal transition.
+        guard = WriteGuard(lambda: {"state": "safe_mode"}, bootstrap_actions=())
+        manager = VaultManager(write_guard=guard)
+        for name, key in (("vault.md", "vaultId"), ("local.md", "localInstanceId")):
+            document = manager.markdown_store.read(vault_path / "settings" / name)
+            if not str(document.frontmatter.get(key) or "").strip():
+                raise ValueError("watcher registry requires persisted vault identities")
+    else:
+        manager = VaultManager()
     context = manager.validate_vault(vault_path)
     if context.status in _IDLE_VAULT_STATUSES:
         logger.info(
@@ -1565,6 +1587,36 @@ def _next_incremental_markdown(
     state.scan_in_progress = False
     state.scan_stack = []
     return None, True
+
+
+def source_backed_registry_inventory(cfg: RegistryConfig) -> frozenset[Path]:
+    """Drain the real scanner privately with memory-only state and no effects.
+
+    Recovery must not infer exclusion from a parallel approximation of nested
+    vaults, settings roots, hidden paths, companions, conflicts or scope rules.
+    No observation sidecar, event, source heal, checkpoint or tick is opened.
+    """
+    paths: set[Path] = set()
+    root = cfg.vault_path.resolve(strict=True)
+    for spec in cfg.specs:
+        if spec.emit_event != INGEST_VAULT_CHANGED:
+            continue
+        state = WatcherState()
+        roots = _normalized_scan_roots(root, registry_scan_roots(root, spec.scope_glob), state=state)
+        _begin_or_resume_scan(state, vault_root=root, scan_roots=roots, scope_glob=spec.scope_glob)
+        cache: dict[str, tuple[list[str], list[Path]]] = {}
+        while True:
+            entry, complete = _next_incremental_markdown(
+                vault_root=root, scan_roots=roots, scope_glob=spec.scope_glob,
+                state=state, summary={}, deadline=float("inf"), directory_cache=cache,
+            )
+            if entry is not None:
+                paths.add(entry[2])
+            if complete:
+                break
+        if state.errors or state.scan_generation_had_error:
+            raise ValueError("producer inventory ambiguous")
+    return frozenset(paths)
 
 
 def _capture_settings_source_snapshot(
@@ -2150,11 +2202,7 @@ def _run_spec_tick(
         raise FileNotFoundError(f"Vault path not found: {cfg.vault_path}")
 
     try:
-        scan_roots = derive_scope_roots(cfg.vault_path, spec.scope_glob)
-        for source_name in (SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name):
-            settings_sources_root = cfg.vault_path / source_name
-            if settings_sources_root.exists():
-                scan_roots = [*scan_roots, settings_sources_root]
+        scan_roots = registry_scan_roots(cfg.vault_path, spec.scope_glob)
     except FileNotFoundError as exc:
         # Static scope-prefix directory does not exist under the bound vault
         # (e.g. an env scope glob naming a folder the vault does not have).
@@ -2653,6 +2701,7 @@ def run_registry_forever(
 ) -> None:
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
+    idle_without_binding = False
     with _compatibility_watcher_window(reconciler):
         _adopt_idle_selected_binding(cfg, reconciler)
         startup_rebind_cycle = (
@@ -2664,20 +2713,34 @@ def run_registry_forever(
             # ingestion or the first scan, so restart cannot observe old-root work.
             if startup_rebind_cycle.record.candidate_binding_id is None:
                 cfg.enable = False
+                idle_without_binding = True
             else:
                 cfg.vault_path = reconciler.candidate_vault_path(startup_rebind_cycle.record)
+        elif (
+            startup_rebind_cycle is not None
+            and startup_rebind_cycle.mode == "refused"
+            and reconciler is not None
+            and reconciler.cleared_before(startup_rebind_cycle.record)
+        ):
+            # A restart during a post-CLEAR selection of another root: the boot env root
+            # is the cleared vault, so stay idle exactly like the long-lived loop.
+            cfg.enable = False
+            idle_without_binding = True
         # `watcher run` is the production entrypoint.  Compile its bound vault at
         # boot just as API and worker do; the registry config is authoritative for
         # this process and need not depend on VAULT_ROOT being set separately.
-        try:
-            from app.settings.ingestion import ingest_settings
+        # A durably cleared binding has no vault to compile: the boot env root is
+        # the cleared vault, so recompiling it would resurrect its settings.
+        if not idle_without_binding:
+            try:
+                from app.settings.ingestion import ingest_settings
 
-            ingest_settings(
-                reason="registry_watcher_startup",
-                vault_root=cfg.vault_path,
-            )
-        except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
-            logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)
+                ingest_settings(
+                    reason="registry_watcher_startup",
+                    vault_root=cfg.vault_path,
+                )
+            except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
+                logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)
     states = {
         spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
         for spec in cfg.specs

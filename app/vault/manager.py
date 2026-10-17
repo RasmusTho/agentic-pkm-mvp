@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
-from threading import Lock
+from threading import Lock, RLock
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal
 from uuid import uuid4
 
@@ -462,6 +463,7 @@ class VaultManager:
 
             write_guard = DEFAULT_WRITE_GUARD
         self._write_guard = write_guard
+        self._selection_lock = RLock()
         self._context = no_vault_context()
         self._subscribers: list[Callable[[VaultChangedEvent], None]] = []
 
@@ -472,7 +474,22 @@ class VaultManager:
     def subscribe(self, callback: Callable[[VaultChangedEvent], None]) -> None:
         self._subscribers.append(callback)
 
+    @contextmanager
+    def selection_window(self) -> Iterator[None]:
+        """Keep the process-local selection stable through a bounded effect.
+
+        Selection may run in a FastAPI worker thread while a voice turn runs
+        on the event loop. The same manager lock covers both, including lazy
+        selection loading. This supplies no cross-process session recovery.
+        """
+        with self._selection_lock:
+            yield
+
     def load_last_active(self) -> VaultContext:
+        with self.selection_window():
+            return self._load_last_active_locked()
+
+    def _load_last_active_locked(self) -> VaultContext:
         try:
             settings = self.app_local_store.load()
         except (OSError, MarkdownSettingsError):
@@ -492,7 +509,8 @@ class VaultManager:
         return self.select_vault(Path(item.path), remember=False)
 
     def select_vault(self, vault_path: Path, *, remember: bool = True) -> VaultContext:
-        return self._select_vault_locked(vault_path, remember=remember)
+        with self.selection_window():
+            return self._select_vault_locked(vault_path, remember=remember)
 
     def _select_vault_locked(self, vault_path: Path, *, remember: bool) -> VaultContext:
         previous = self._context
@@ -605,7 +623,13 @@ class VaultManager:
             snapshot.authority,
         )
 
-    def validate_vault(self, vault_path: Path) -> VaultContext:
+    def validate_vault(self, vault_path: Path, *, heal_identity: bool = True) -> VaultContext:
+        """Classify ``vault_path`` into a :class:`VaultContext`.
+
+        ``heal_identity=False`` is the write-free read classification used by
+        per-request scoped reads (MVR-05B2): a missing identity id is reported
+        as a runtime id and never written back, whatever the machine role.
+        """
         # Lazy import: see the constructor's comment on the write_guard cycle.
         from app.write_guard import WritesBlockedError
 
@@ -669,8 +693,12 @@ class VaultManager:
         # A read-only role writes neither; a satellite with shared edits disabled
         # can still persist its own local clone id so recent-vault identity stays
         # stable (Codex #2030 P2).
-        allow_shared_heal = self._allow_shared_identity_heal(role, local_doc.frontmatter)
-        allow_local_heal = self._allow_local_identity_heal(role, local_doc.frontmatter)
+        allow_shared_heal = heal_identity and self._allow_shared_identity_heal(
+            role, local_doc.frontmatter
+        )
+        allow_local_heal = heal_identity and self._allow_local_identity_heal(
+            role, local_doc.frontmatter
+        )
         try:
             vault_id = self._ensure_frontmatter_id(
                 settings_dir / "vault.md",
@@ -975,12 +1003,15 @@ class VaultManager:
 
 
 _GLOBAL_MANAGER: VaultManager | None = None
+_GLOBAL_MANAGER_LOCK = Lock()
 
 
 def get_vault_manager() -> VaultManager:
     global _GLOBAL_MANAGER
     if _GLOBAL_MANAGER is None:
-        _GLOBAL_MANAGER = VaultManager()
+        with _GLOBAL_MANAGER_LOCK:
+            if _GLOBAL_MANAGER is None:
+                _GLOBAL_MANAGER = VaultManager()
     return _GLOBAL_MANAGER
 
 

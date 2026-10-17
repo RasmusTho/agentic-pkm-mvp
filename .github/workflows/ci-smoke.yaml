@@ -270,8 +270,12 @@ jobs:
         run: test -s "$INDEX_PERSIST_PATH"
 
       - name: Fitness report (QAS-003/QAS-010)
+        shell: bash
         run: |
-          python -m app.fitness.report | tee tmp/ci_summary.log
+          set -euo pipefail
+          python -m pytest -q -s -m "not pg" \
+            tests/fitness/test_ci_fitness.py::test_ci_report_entrypoint_uses_scoped_product_gateway_fixture \
+            2>&1 | tee tmp/ci_summary.log
 
       - name: Verify CI summary lines
         run: |
@@ -292,6 +296,13 @@ jobs:
           if ok_status != "true":
               raise SystemExit(f"CI gates failed: {gates}")
           PY
+
+      - name: Upload fitness report log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-scoped-fitness-report
+          path: tmp/ci_summary.log
 
       - name: CLI smoke commands
         run: |
@@ -814,13 +825,19 @@ jobs:
         if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite == 'true'
         shell: bash
         # Workflow/test configuration changes select this full-suite lane.
+        # Observed parallel phases consumed ~31m before the serial boundary;
+        # retain finite margin for both phases, not a wall-clock speedup claim.
         # The 120-second per-test timeout still catches individual hangs.
-        timeout-minutes: 35
+        timeout-minutes: 60
         env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+          # Heavy targets the selector deferred (#6154); the post-merge heavy
+          # tests workflow runs them on main and alerts when red.
+          DEFERRED_TARGETS: ${{ steps.select-tests.outputs.deferred_targets }}
         run: |
           set -euo pipefail
           echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"
+          echo "Deferred to post-merge heavy tests: ${DEFERRED_TARGETS:-none}"
           echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"
           # xdist workers are separate pytest processes, but this suite also
           # contains tests that inspect host-wide process state and tests whose
@@ -838,6 +855,23 @@ jobs:
           log_dir="$shard_root/logs"
           mkdir -p "$log_dir"
           : > "$status_file"
+          run_started=$SECONDS
+          phase=parallel
+          parallel_seconds=null
+          serial_seconds=null
+          write_phase_receipt() {
+            local rc="$1"
+            if [[ "$phase" == serial ]]; then
+              serial_seconds=$((SECONDS - serial_started))
+            fi
+            printf '{"schema":"required-unit-phase-margin.v1","github_sha":"%s","outer_budget_seconds":3600,"per_test_timeout_seconds":120,"phase":"%s","parallel_seconds":%s,"serial_seconds":%s,"total_seconds":%s,"exit_status":%s}\n' \
+              "${GITHUB_SHA:-unknown}" "$phase" "$parallel_seconds" "$serial_seconds" \
+              "$((SECONDS - run_started))" "$rc" > "$shard_root/phase-margin.json"
+          }
+          # A normal failure retains timings as well as partial logs. Cancellation
+          # may prevent EXIT handling; the initial receipt cannot imply success.
+          write_phase_receipt null
+          trap 'write_phase_receipt "$?"' EXIT
 
           find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print |
             while IFS= read -r path; do
@@ -855,6 +889,10 @@ jobs:
               case "$shard" in
                 tests/ops|tests/e2e|tests/e2e/*) continue ;;
               esac
+              if [[ " ${DEFERRED_TARGETS:-} " == *" $shard "* ]]; then
+                echo "SHARD DEFERRED to post-merge heavy tests: $shard" >&2
+                continue
+              fi
               printf '%s\n' "$shard"
             done > "$shard_list"
 
@@ -884,6 +922,9 @@ jobs:
           ' _ < "$shard_list"
           xargs_status=$?
           set -e
+          parallel_seconds=$((SECONDS - run_started))
+          phase=parallel-accounting
+          write_phase_receipt null
 
           actual_shards="$(wc -l < "$status_file" 2>/dev/null || true)"
           if (( xargs_status != 0 || actual_shards != expected_shards )); then
@@ -907,22 +948,31 @@ jobs:
 
           # These tests must observe an otherwise-quiescent host and exact
           # descriptor state; run them only after all parallel processes exit.
+          phase=serial
+          serial_started=$SECONDS
+          write_phase_receipt null
           python -m pytest -q -m "$marker" \
             tests/ops tests/invariants/test_vault_multiwriter.py | tee -a pytest-not-pg.log
+          serial_seconds=$((SECONDS - serial_started))
+          phase=complete
 
       - name: Run scoped not-pg unit tests
         if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'
         shell: bash
         # Several independently selected subsystems run serially in this step.
+        # PR #6083 reached 93% and Issue #6091 reached 91% at the former
+        # 35-minute cutoff; retain finite completion/diagnostic margin
+        # without changing selected coverage.
         # The 120-second per-test timeout still catches individual hangs.
-        timeout-minutes: 35
+        timeout-minutes: 60
         env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+          PYTHONUNBUFFERED: "1"
         run: |
           set -o pipefail
           echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"
           echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"
-          pytest ${{ steps.select-tests.outputs.pytest_args }} --durations=20 | tee pytest-not-pg.log
+          pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20 | tee pytest-not-pg.log
 
       - name: Skip unit tests for docs-only PR
         if: steps.changes.outputs.code != 'true'

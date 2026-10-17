@@ -272,6 +272,10 @@ def _keyboard_navigation(
     link = page.get_by_role("link", name=name)
     assert link.count() == 1
     assert link.get_attribute("href") == destination
+    system_entry = page.locator('[data-testid="builder-system-control-entry"]')
+    assert system_entry.count() == 1
+    expected_system = "/devui/builder-system-control" + ("?return_subject=github%3Aexample%2Ffixture%23501" if surface == "focus" else "")
+    assert system_entry.get_attribute("href") == expected_system
     expected_summaries = EXPECTED_DISCLOSURE_SUMMARIES[surface]
     assert page.locator("details.technical-disclosure > summary").all_text_contents() == expected_summaries, (
         "Only the admitted navigation and disclosures are keyboard interactive"
@@ -481,6 +485,7 @@ def _keyboard_navigation(
                         ? Array.from(body.querySelectorAll(':scope > .evidence-entry > details.technical-disclosure > summary'))
                         : [];
                     return [
+                        document.querySelector('[data-testid="builder-system-control-entry"]'),
                         trust && trust.querySelector(':scope > details.technical-disclosure > summary'),
                         body && body.querySelector(':scope > details.technical-disclosure > summary'),
                         ...evidenceSummaries,
@@ -489,6 +494,7 @@ def _keyboard_navigation(
                 })()
                 : [
                     document.querySelector('[data-testid="overview-return"]'),
+                    document.querySelector('[data-testid="builder-system-control-entry"]'),
                     ...inventory.sections.flatMap(({section, entries}) => entries.map(spec => {
                         const entry = expectedEntry(section, spec);
                         return entry && entry.querySelector(':scope > details.technical-disclosure > summary');
@@ -514,7 +520,8 @@ def _keyboard_navigation(
                 const grid = shell && shell.querySelector(':scope > .focus-grid');
                 const returnLink = document.querySelector('[data-testid="overview-return"]');
                 if (!shell || !claim || !grid || !returnLink || returnLink.parentElement !== claim ||
-                    claim.lastElementChild !== returnLink ||
+                    claim.lastElementChild !== document.querySelector('[data-testid="builder-system-control-entry"]') ||
+                    returnLink.nextElementSibling !== claim.lastElementChild ||
                     Array.from(shell.children).indexOf(claim) >= Array.from(shell.children).indexOf(grid)) return false;
             }
             return actual.length === expected.length && actual.every((element, index) => element === expected[index]) &&
@@ -541,7 +548,7 @@ def _keyboard_navigation(
             (el.tabIndex >= 0 || el.isContentEditable) &&
             !el.matches(':disabled') && !el.closest('[inert]') &&
             el.getClientRects().length && getComputedStyle(el).visibility === 'visible'
-        ).every(el => el === expected || el.matches('details.technical-disclosure > summary'))""",
+        ).every(el => el === expected || el === document.querySelector('[data-testid="builder-system-control-entry"]') || el.matches('details.technical-disclosure > summary'))""",
         link.element_handle(),
     ), "Only the admitted navigation and disclosures are keyboard interactive"
     page.bring_to_front()
@@ -559,13 +566,14 @@ def _keyboard_navigation(
     if surface == "overview":
         card = page.locator('[data-testid="overview-now"] > article.card')
         expected_focus = [
+            system_entry,
             page.locator('[data-testid="overview-trust-matrix"] details.technical-disclosure > summary'),
             card.locator(':scope > .body > details.technical-disclosure > summary'),
             *card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary').all(),
             card.locator(':scope > a[data-testid="overview-focus-link"]'),
         ]
     else:
-        expected_focus = [page.locator('[data-testid="overview-return"]')]
+        expected_focus = [page.locator('[data-testid="overview-return"]'), system_entry]
         for testid, identities in EXPECTED_FOCUS_ENTRY_IDENTITIES.items():
             section = page.locator(f'[data-testid="{testid}"]')
             expected_focus.extend(

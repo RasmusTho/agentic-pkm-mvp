@@ -32,6 +32,7 @@ def collect_now_moments(
     *,
     reachout_outbox_path: Path | None = None,
     strict: bool = False,
+    include_in_app_nudges: bool = True,
 ) -> list[dict[str, Any]]:
     """Return moments; strict derived consumers must name invalid source loss."""
 
@@ -42,7 +43,13 @@ def collect_now_moments(
     if not moments_dir.is_dir():
         return []
 
-    nudges = _in_app_nudges_by_moment(reachout_outbox_path=reachout_outbox_path)
+    # The reach-out receipt source is process-global and keyed only by moment
+    # UUID; a caller that cannot attribute it to this vault opts out.
+    nudges = (
+        _in_app_nudges_by_moment(reachout_outbox_path=reachout_outbox_path)
+        if include_in_app_nudges
+        else {}
+    )
     views: list[dict[str, Any]] = []
     for path in sorted(moments_dir.glob("*.md")):
         moment = _load_moment(path)

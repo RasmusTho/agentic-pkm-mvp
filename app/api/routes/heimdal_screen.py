@@ -5,7 +5,8 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 
-from app.api.compatibility_mutation import reject_scoped_vault_mutation
+from app.api.compatibility_mutation import reject_scoped_vault_mutation, seal_vault_mutation
+from app.api.request_active_context import refuse_carrier_until_binding_aware
 from app.auth import api_key_header, resolve_auth_subject
 from app.heimdal.screen_capture import ingest_screen_bundle
 from app.heimdal.screen_control import screen_control_status
@@ -13,7 +14,12 @@ from app.settings.models import SCREEN_CONTROL_KEYS
 from app.vault.manager import get_vault_manager
 from app.vault.settings_service import SettingsService, SettingsWriteError
 
-router = APIRouter(prefix="/api/heimdal/screen", tags=["heimdal"])
+# MVR-05B3: the vault-bound Heimdal ingress carries the pre-05C mutation seal.
+router = APIRouter(
+    prefix="/api/heimdal/screen",
+    tags=["heimdal"],
+    dependencies=[Depends(seal_vault_mutation)],
+)
 
 
 def _control_actor(request: Request, api_key: str | None = Depends(api_key_header)) -> str:
@@ -26,7 +32,10 @@ class ScreenControlWrite(BaseModel):
     value: Any
 
 
-@router.get("/control", dependencies=[Depends(_control_actor)])
+@router.get(
+    "/control",
+    dependencies=[Depends(_control_actor), Depends(refuse_carrier_until_binding_aware)],
+)
 def read_screen_control(
     app_id: str | None = None, scopes: list[str] = Query(default=[]),
 ) -> dict[str, Any]:

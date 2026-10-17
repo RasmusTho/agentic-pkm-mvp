@@ -22,6 +22,7 @@ from app.builderops.publication import (
 )
 from scripts.pr_body_generator import generate_pr_body_from_mapping
 from scripts.publication import main as publication_main
+from scripts.build_verification_dispatch_request import build_request as build_verification_request
 
 
 BASE_SHA = "a" * 40
@@ -38,6 +39,7 @@ HOST_QUALIFIED_REPOSITORY = f"{GITHUB_HOST}/{REPOSITORY}"
 BODY_INPUTS = {
     "lane": "governance",
     "issue_number": 5230,
+    "pickup_receipt": "pickup-claim-complete issue=5230 branch=codex/publication-test worktree=/tmp/publication-test coordination_mode=dispatcher-backed fallback_reason=none task_id=github-RasmusTho--agentic-pkm-mvp-issue-5230 lease_id=lease-5230 holder=codex-slice-implementer evidence=verified-dispatcher-lease",
     "summary": ["Add deterministic publication plan/apply."],
     "sbs_impact": {
         "primary_subsystem": "Builder System / CES boundary",
@@ -511,6 +513,95 @@ def test_publication_plan_is_canonical_hash_bound_and_read_only(
     pr_reads = [call for call in executor.calls if call and call[-1] == "per_page=2"]
     assert pr_reads
     assert all("state=all" in call for call in pr_reads)
+
+
+class RealBodyExecutor(FakeExecutor):
+    def run(self, argv: Sequence[str], *, cwd: Path, input_text: str | None = None) -> CommandResult:
+        if any(part.endswith("scripts/pr_body_generator.py") for part in argv):
+            self.calls.append(tuple(argv))
+            result = SubprocessExecutor().run(argv, cwd=cwd, input_text=input_text)
+            if result.returncode == 0:
+                self.pr_body = result.stdout
+            return result
+        return super().run(argv, cwd=cwd, input_text=input_text)
+
+
+@pytest.mark.parametrize("mode", ["dispatcher-backed", "github-label-only-fallback"])
+def test_first_publication_carries_pickup_receipt_before_any_effect(tmp_path: Path, mode: str) -> None:
+    (tmp_path / "feature.txt").write_text("new\n", encoding="utf-8")
+    pickup = str(BODY_INPUTS["pickup_receipt"]).replace(
+        "holder=codex-slice-implementer", "holder=worker holder=TBD"
+    )
+    if mode == "github-label-only-fallback":
+        pickup = (
+            "pickup-claim-complete issue=5230 branch=codex/publication-test "
+            "worktree=/tmp/publication test coordination_mode=github-label-only-fallback "
+            "fallback_reason=dispatcher unavailable agent=worker agent=TBD "
+            "session=run session=TBD evidence=github-comment:5230"
+        )
+    inputs = {**BODY_INPUTS, "pickup_receipt": pickup}
+    executor = RealBodyExecutor(tmp_path)
+    plan = build_publication_plan(replace(_request(tmp_path), pr_body_inputs=inputs), executor=executor)
+    assert plan["pr"]["body"].count("Pickup-Receipt:") == 1
+    generator_calls = [
+        call
+        for call in executor.calls
+        if any(part.endswith("pr_body_generator.py") for part in call)
+    ]
+    assert generator_calls
+    assert "--pickup-receipt" in generator_calls[-1]
+    assert pickup in generator_calls[-1]
+    assert plan["pr"]["body_sha256"] == hashlib.sha256(plan["pr"]["body"].encode()).hexdigest()
+    apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=executor)
+    creates = [call for call in executor.calls if call[:3] == ("gh", "pr", "create")]
+    assert len(creates) == 1
+    assert creates[0][creates[0].index("--body") + 1] == plan["pr"]["body"]
+    assert f"Pickup-Receipt: {pickup}\n" in plan["pr"]["body"]
+
+    invalid = json.loads(canonical_json(plan))
+    invalid["pr"]["body_inputs"]["pickup_receipt"] = None
+    invalid["plan_sha256"] = publication_plan_hash(invalid)
+    executor.calls.clear()
+    with pytest.raises(PublicationRefusal, match="requires a pickup receipt"):
+        apply_publication_plan(
+            invalid,
+            expected_plan_sha256=invalid["plan_sha256"],
+            executor=executor,
+        )
+    assert not any(
+        call[:2] in {("git", "add"), ("git", "commit"), ("git", "push")}
+        or _is_gh_api_call(call, "POST")
+        or call[:3] == ("gh", "pr", "create")
+        for call in executor.calls
+    )
+
+
+@pytest.mark.parametrize("drift", ["missing", "placeholder", "malformed", "foreign", "body-only"])
+def test_apply_rejects_receipt_drift_before_staging(tmp_path: Path, drift: str) -> None:
+    (tmp_path / "feature.txt").write_text("new\n", encoding="utf-8")
+    executor = RealBodyExecutor(tmp_path)
+    plan = build_publication_plan(_request(tmp_path), executor=executor)
+    pickup = str(BODY_INPUTS["pickup_receipt"])
+    if drift == "body-only":
+        plan["pr"]["body"] = plan["pr"]["body"].replace(f"Pickup-Receipt: {pickup}\n", "")
+    else:
+        replacement = {
+            "missing": None, "placeholder": "TBD", "malformed": pickup.replace("evidence=", "unknown="),
+            "foreign": pickup.replace("5230", "9999"),
+        }[drift]
+        plan["pr"]["body_inputs"]["pickup_receipt"] = replacement
+        plan["pr"]["body"] = plan["pr"]["body"].replace(pickup, replacement or "")
+    plan["pr"]["body_sha256"] = hashlib.sha256(plan["pr"]["body"].encode()).hexdigest()
+    plan["plan_sha256"] = publication_plan_hash(plan)
+    executor.calls.clear()
+    with pytest.raises(PublicationRefusal):
+        apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=executor)
+    assert executor.phase == "uncommitted"
+    assert not any(
+        call[:2] in {("git", "add"), ("git", "commit"), ("git", "push")}
+        or _is_gh_api_call(call, "POST") or _is_gh_api_call(call, "PATCH")
+        or call[:3] == ("gh", "pr", "create") for call in executor.calls
+    )
 
 
 def test_publication_plan_rejects_non_main_without_observation(tmp_path: Path) -> None:
@@ -1298,7 +1389,7 @@ def test_publication_cli_types_external_effect_failures_from_exact_readback(
 def test_issue_free_native_publication(tmp_path: Path, lane: str) -> None:
     (tmp_path / "feature.txt").write_text("new content\n")
     runner = FakeExecutor(tmp_path)
-    inputs = {**BODY_INPUTS, "lane": lane, "issue_number": None}
+    inputs = {**BODY_INPUTS, "lane": lane, "issue_number": None, "pickup_receipt": None}
     runner.pr_body = generate_pr_body_from_mapping(inputs)
     request = replace(_request(tmp_path), lane=lane, governing_issue=None, pr_body_inputs=inputs)
     plan = build_publication_plan(request, executor=runner)
@@ -1548,6 +1639,68 @@ def _local_publication_repo(tmp_path: Path) -> tuple[Path, Path]:
     _run("git", "push", "origin", "main", cwd=repo)
     _run("git", "checkout", "-b", BRANCH, cwd=repo)
     return repo, remote
+
+
+@pytest.mark.parametrize("rounds", [0, 1])
+@pytest.mark.parametrize("issue_free", [False, True])
+def test_native_and_retained_executor_routes_remain_distinct(
+    tmp_path: Path, rounds: int, issue_free: bool
+) -> None:
+    """Real Git publication stays native; the retained producer needs executor intent."""
+    repo, remote = _local_publication_repo(tmp_path)
+    (repo / "feature.txt").write_text("bounded native candidate\n")
+    inputs = {**BODY_INPUTS, "final_review_rounds": rounds}
+    if issue_free:
+        inputs.update(lane="docs-authoring", issue_number=None, pickup_receipt=None)
+    request = replace(
+        _request(repo), lane=str(inputs["lane"]),
+        governing_issue=None if issue_free else 5230, pr_body_inputs=inputs,
+    )
+    runner = LocalGitPublicationExecutor(remote)
+    plan = build_publication_plan(request, executor=runner)
+    receipt = apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=runner)
+    head = _run("git", "rev-parse", "HEAD", cwd=repo).strip()
+    assert receipt["commit_sha"] == head
+    assert _run("git", "ls-remote", "--heads", "origin", f"refs/heads/{BRANCH}", cwd=repo).split()[0] == head
+    assert _run("git", "status", "--short", cwd=repo) == ""
+    assert not any(
+        "prepare_verified_issue_set_merge" in " ".join(call)
+        or "build_verification_dispatch_request" in " ".join(call)
+        for call in runner.calls
+    )
+    assert ("Governing-Issue:" not in plan["pr"]["body"]) == issue_free
+
+    # Retained executor requests are bound to successful CI and exact Issue/head authority.
+    event = {
+        "repository": {"full_name": REPOSITORY},
+        "artifact_workflow_run": {"id": 123, "repository_id": 456},
+        "workflow_run": {"id": 987, "run_attempt": 1, "name": "CI Smoke",
+                         "event": "pull_request", "conclusion": "success", "head_sha": head,
+                         "updated_at": "2026-10-14T00:00:00Z"},
+    }
+    pr = {"number": 6000, "state": "open", "head": {"sha": head},
+          "body": plan["pr"]["body"],
+          "live_closing_issues": [] if issue_free else [{"number": 5230, "repository": REPOSITORY}]}
+    issue = {} if issue_free else _issue()
+    assert build_verification_request(event=event, pr=pr, issue=issue, automatic=True) is None
+    explicit = build_verification_request(event=event, pr=pr, issue=issue, automatic=False)
+    if issue_free or rounds == 0:
+        assert explicit is None
+    else:
+        assert explicit is not None and explicit["closing_issues"] == [5230]
+        assert explicit["current_head_sha"] == head
+        legacy = {**pr, "body": str(pr["body"]).replace("Final-Review-Rounds: 1", "Final-Review-Rounds: 2")}
+        assert build_verification_request(event=event, pr=legacy, issue=issue, automatic=True) is not None
+        stale_event = {**event, "workflow_run": {**event["workflow_run"], "head_sha": RACED_HEAD_SHA}}
+        assert build_verification_request(event=stale_event, pr=pr, issue=issue) is None
+        assert build_verification_request(event=event, pr={**pr, "live_closing_issues": []}, issue=issue) is None
+        assert build_verification_request(event=event, pr=pr, issue={"number": 9999}) is None
+
+    # A clean reviewed native success cannot turn protected publication into a supported path.
+    protected = LocalGitPublicationExecutor(remote)
+    with pytest.raises(PublicationRefusal, match="high-risk publication"):
+        build_publication_plan(replace(request, risk_surfaces=("auth",)), executor=protected)
+    assert protected.calls == []
 
 
 def test_resumed_publication_stages_only_dirty_paths_with_retired_history(tmp_path: Path) -> None:
