@@ -98,6 +98,7 @@ def test_receipt_pending_retry_reconciles_same_disposition_without_second_mutati
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
     outbox_path = tmp_path / "eval-disposition-outbox.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    outbox_path.write_text("", encoding="utf-8")
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
@@ -220,6 +221,7 @@ def test_receipt_pending_retry_rejects_tampered_governed_token(
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
     outbox_path = tmp_path / f"tampered-token-{tamper}.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    outbox_path.write_text("", encoding="utf-8")
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
@@ -313,7 +315,7 @@ def test_receipt_pending_retry_rejects_tampered_governed_token(
     persisted = read_draft(vault, draft.draft_id)
     assert persisted is not None and persisted.status == DRAFT_STATUS_PROMOTED
     assert persisted.decision_token == changed_token
-    assert not outbox_path.exists()
+    assert outbox_path.read_text(encoding="utf-8") == ""
 
 
 def test_legacy_terminal_eval_draft_retry_fails_closed_without_minting_authority(
@@ -710,14 +712,17 @@ def test_exact_retry_returns_db_receipt_when_jsonl_source_is_corrupt(
     assert reread.decision_token.token_id == original_token_id
 
 
-def test_malformed_receipt_jsonl_fails_closed_on_exact_retry(
+@pytest.mark.parametrize("source_state", ["missing", "malformed"])
+def test_unavailable_receipt_source_fails_closed_on_exact_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    source_state: str,
 ) -> None:
     runtime, first, _extra, principal_record = provisioned_instance(tmp_path)
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
     outbox_path = tmp_path / "malformed-receipt-source.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    outbox_path.write_text("", encoding="utf-8")
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
@@ -773,8 +778,11 @@ def test_malformed_receipt_jsonl_fails_closed_on_exact_retry(
     assert first_response.status_code == 409, first_response.text
     assert append_attempts == 2
     assert status_writes == 1
-    outbox_path.write_text('{"event": malformed\n', encoding="utf-8")
-    malformed_source = outbox_path.read_text(encoding="utf-8")
+    if source_state == "missing":
+        outbox_path.unlink()
+    else:
+        outbox_path.write_text('{"event": malformed\n', encoding="utf-8")
+        malformed_source = outbox_path.read_text(encoding="utf-8")
 
     retry = client.post(f"/api/eval-drafts/{draft.draft_id}/decision", json=payload)
 
@@ -782,7 +790,10 @@ def test_malformed_receipt_jsonl_fails_closed_on_exact_retry(
     assert issue_calls == 1
     assert append_attempts == 2
     assert status_writes == 1
-    assert outbox_path.read_text(encoding="utf-8") == malformed_source
+    if source_state == "missing":
+        assert not outbox_path.exists()
+    else:
+        assert outbox_path.read_text(encoding="utf-8") == malformed_source
 
 
 def test_concurrent_same_decision_posts_reconcile_one_terminal_mutation(
@@ -889,6 +900,7 @@ def test_concurrent_initial_and_retry_receipts_converge_before_acknowledgement(
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
     outbox_path = tmp_path / "concurrent-initial-retry-eval-disposition.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    outbox_path.write_text("", encoding="utf-8")
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)

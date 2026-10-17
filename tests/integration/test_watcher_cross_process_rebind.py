@@ -31,6 +31,7 @@ from app.vault.manager import VaultContext
 from app.watcher import registry
 from app.watcher.settings_rebind import (
     DormantSettingsRebindReconciler,
+    RebindScanReceipt,
     _write_receipt,
     SettingsRebindWatcherReceipt,
     load_settings_rebind_watcher_receipt,
@@ -1530,6 +1531,154 @@ def test_cancelled_selection_after_cleared_default_keeps_watcher_disabled(
     )
     cfg = registry.load_registry_config(config_path)
     assert reconciler.begin_cycle(cfg).mode == "stable"
+
+
+def test_idle_watcher_is_not_rearmed_on_an_unmounted_configured_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#6144 review: re-arm after CLEAR validates the configured root is usable."""
+    import shutil
+
+    runtime, vault_a, _vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, prepare=False
+    )
+    # After a completed CLEAR the loop is idle; the configured root A then goes
+    # missing while a default SET prepares its still-registered binding.
+    prepared = SettingsRebindRecord(
+        desired_revision=2,
+        applied_revision=1,
+        phase="prepared",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        prepared.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    # The long-lived loop loaded its config while A was mounted.
+    cfg = registry.load_registry_config(config_path)
+    cfg.enable = False
+    shutil.rmtree(vault_a)
+    reconciler = DormantSettingsRebindReconciler(
+        registry_path=runtime.registry.path,
+        state_dir=tmp_path / "watcher-state",
+    )
+
+    cycle = reconciler.begin_cycle(cfg)
+
+    # Two identical missing paths compare equal, but a missing root is not usable:
+    # the cycle stays refused and idle instead of re-arming a scan that would raise.
+    assert cycle.mode == "refused"
+    assert cfg.enable is False
+    assert runtime.open_settings_rebind_store().read() == prepared
+
+
+def test_idle_watcher_is_not_rearmed_onto_a_policy_disabled_configured_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#6144 review: re-arm after CLEAR runs full candidate policy before scanning."""
+    runtime, vault_a, _vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, prepare=False
+    )
+    prepared = SettingsRebindRecord(
+        desired_revision=2,
+        applied_revision=1,
+        phase="prepared",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        prepared.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    cfg = registry.load_registry_config(config_path)
+    cfg.enable = False
+    # The configured root stays mounted but its local settings now forbid watching.
+    local_path = vault_a / "settings" / "local.md"
+    settings_store = MarkdownSettingsStore()
+    local_doc = settings_store.read(local_path)
+    frontmatter = dict(local_doc.frontmatter)
+    frontmatter["enableVaultWatcher"] = False
+    settings_store.write_frontmatter(local_path, frontmatter, body=local_doc.body)
+    reconciler = DormantSettingsRebindReconciler(
+        registry_path=runtime.registry.path,
+        state_dir=tmp_path / "watcher-state",
+    )
+
+    cycle = reconciler.begin_cycle(cfg)
+
+    assert cycle.mode == "refused"
+    assert cfg.enable is False
+    assert runtime.open_settings_rebind_store().read() == prepared
+
+
+def test_restart_during_post_clear_selection_keeps_cleared_root_idle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#6144 review: a restarted process derives CLEAR idleness from durable history."""
+    runtime, vault_a, _vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, prepare=False
+    )
+    observed = RebindScanReceipt(
+        scan_kind="pre_commit",
+        desired_revision=1,
+        observed_at="2026-10-16T00:00:00Z",
+        watcher_ticks={},
+    )
+    # Revision 1 durably completed a default CLEAR of binding A ...
+    _write_receipt(
+        _revision_receipt_path(tmp_path, 1),
+        SettingsRebindWatcherReceipt(
+            desired_revision=1,
+            prior_binding_id="binding-a",
+            candidate_binding_id=None,
+            stage="completed",
+            buffer=(),
+            acknowledgement=observed,
+            drain_receipt=RebindScanReceipt(
+                scan_kind="post_commit",
+                desired_revision=1,
+                observed_at="2026-10-16T00:00:01Z",
+                watcher_ticks={},
+            ),
+            resume_ready_at="2026-10-16T00:00:02Z",
+        ),
+    )
+    # ... and revision 2 now prepares a selection of B, while the process env
+    # (WATCHER_VAULT_PATH) still names the cleared vault A.
+    prepared = SettingsRebindRecord(
+        desired_revision=2,
+        applied_revision=1,
+        phase="prepared",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-b",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        prepared.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    reloads: list[Path] = []
+    monkeypatch.setattr("app.settings.ingestion.ingest_settings", _record_reload(reloads))
+    (vault_a / "edited-after-clear.md").write_text("# edited\n", encoding="utf-8")
+
+    registry.run_registry_forever(config_path, max_ticks=2)
+
+    # Neither startup ingestion nor any refused cycle may observe the cleared root.
+    assert reloads == []
+    assert not any(path.startswith(str(vault_a)) for path in _event_paths(tmp_path))
+    assert runtime.open_settings_rebind_store().read() == prepared
 
 
 def test_stranded_no_lifecycle_default_set_commits_default(

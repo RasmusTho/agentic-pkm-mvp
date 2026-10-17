@@ -113,8 +113,12 @@ def _history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, count: int):
     connections: list[StreamingConnection] = []
 
     def connect():
-        rows = ((index, "promotion.transition.applied", special.get(index, dict(filler)), None) for index in range(count))
-        connection = StreamingConnection(rows)
+        def rows():
+            for index in range(count):
+                record = special.get(index, dict(filler))
+                yield index, record["event"], record, None
+
+        connection = StreamingConnection(rows())
         connections.append(connection)
         return connection
 
@@ -273,7 +277,9 @@ def test_late_db_failure_discards_prior_matches_for_every_read_consumer(tmp_path
     root, outbox, _connections, _records, _rows, paths = _history(tmp_path, monkeypatch, count=512)
     first = _promotion("prior-match", timestamp="2026-10-10T00:00:00Z", note_uuid="memory-a", note_path="Agent Memory/retained.md", memory=True)
     def db_rows():
-        return ((index, "promotion.transition.applied", first if index == 0 else {"event": "runtime.trace"}, None) for index in range(512))
+        for index in range(512):
+            record = first if index == 0 else {"event": "runtime.trace"}
+            yield index, record["event"], record, None
 
     connection = StreamingConnection(db_rows(), fail_after=1)
     monkeypatch.setattr(outbox_service, "_open_conn", lambda: connection)

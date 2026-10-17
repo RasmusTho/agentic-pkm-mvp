@@ -1865,7 +1865,14 @@ def _dispatcher_protect_escaped_html_comments(content: str) -> str:
 def _dispatcher_render_text_token(
     content: str, *, mask_comment_closers: bool = False
 ) -> str:
-    content = _DISPATCHER_HTML_COMMENT_OPEN_RE.sub("", content)
+    # Markdown leaves a completed pending comment's unfinished-tag suffix in
+    # a text token. Only an actual pending HTML comment may hide its opener;
+    # a literal opener in the parser's unfinished tag buffer remains visible.
+    if _DISPATCHER_HTML_COMMENT_OPEN_RE.search(content):
+        parser = _DispatcherHTMLBlockTextParser()
+        parser.feed(content)
+        if not _DISPATCHER_HTML_TAG_NAME_RE.match(parser.rawdata):
+            content = _DISPATCHER_HTML_COMMENT_OPEN_RE.sub("", content)
     content = content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
     if not mask_comment_closers:
         content = content.replace(
@@ -1918,7 +1925,12 @@ class _DispatcherHTMLBlockTextParser(HTMLParser):
 def _dispatcher_render_html_block(content: str) -> str:
     parser = _DispatcherHTMLBlockTextParser()
     parser.feed(content)
-    parser.close()
+    # Pending comments stay hidden. Preserve an unfinished tag's source text
+    # explicitly: HTMLParser.close() drops it on newer Python patch releases.
+    if _DISPATCHER_HTML_TAG_NAME_RE.match(parser.rawdata):
+        parser.parts.append(parser.rawdata)
+    elif not parser.rawdata.startswith("<!--"):
+        parser.close()
     return "".join(parser.parts)
 
 

@@ -8,8 +8,9 @@ and exclusions, keeps ``may_write=false``, and rejects bundles not scoped for
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.request_active_context import refuse_carrier_until_binding_aware
 from app.context_bundles.runtime_registry import get_emitted_bundle
 from app.context_bundles.schema import ContextBundle
 from app.resurfacing.bundle_consumer import (
@@ -19,7 +20,7 @@ from app.resurfacing.bundle_consumer import (
     build_resurfacing_bundle_frame,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(refuse_carrier_until_binding_aware)])
 
 
 def _resurfacing_bundle_source(bundle_id: str) -> ContextBundle:

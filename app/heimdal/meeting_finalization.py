@@ -157,6 +157,16 @@ def meetings_dir_rel(vault_root: Path | None = None) -> str:
     return MEETINGS_DIR_DEFAULT
 
 
+def configured_meeting_vault_root() -> Optional[Path]:
+    """The configured ``HEIMDAL_MEETING_VAULT_ROOT`` finalization target, if any.
+
+    Named for what it is -- this channel's meeting-finalization target, not the
+    process-selected vault -- so route seals can prove it against the binding.
+    """
+
+    return resolve_vault_root()
+
+
 def resolve_vault_root() -> Optional[Path]:
     """Resolve the finalization vault root, or None when unconfigured.
 

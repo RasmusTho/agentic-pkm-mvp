@@ -444,6 +444,13 @@ does not supply source qualification or Ready to try, and never establishes owne
 acceptance. It retains the complete inventory and its unresolved gaps. This bounded install path
 does not change the ordered complete-system chain.
 
+Its explicit config-only source-epoch rebind uses a closed v2 plan and the same component effect
+and receipt owner. Before/after observations run the existing consumer's GET-only source client;
+the receipt distinguishes source binding from refused or unavailable task data. Neither those
+observations nor a changed configuration fingerprint supplies a full-system prerequisite, source
+qualification, task correction, or transferred owner acceptance. See
+[Explicit source-epoch rebind](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#explicit-source-epoch-rebind).
+
 The full-system successful-deployment path is ordered by evidence dependency, not merely by receipt
 appearance. It remains unchanged by the target
 [M1 first-read boundary](#m1-first-read-qualification-target): the complete inventory and existing
