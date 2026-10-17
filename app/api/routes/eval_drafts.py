@@ -37,10 +37,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.api.compatibility_mutation import seal_vault_mutation
+from app.api.request_active_context import (
+    current_scoped_route_read,
+    route_read_vault_root_or_selection_required,
+    scoped_route_read,
+)
 from app.api.routes.active_context_selection import build_selection_service, get_selection_store
 from app.auth import api_key_header, resolve_auth_subject
-from app.api.routes.vault_resolution import active_vault_root_or_selection_required
+from app.api.routes.vault_resolution import compatibility_vault_root_or_selection_required
 from app.eval.failure_capture import (
+    DRAFT_DIR_NAME,
     DraftEvalCase,
     DRAFT_STATUS_PENDING,
     DRAFT_STATUS_PROMOTED,
@@ -56,8 +63,15 @@ from app.eval.failure_capture import (
 )
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.instance.local_operator_principal import PrincipalPreflightError
+from app.vault.paths import get_vault_system_dir_rel
 
-router = APIRouter(prefix="/eval-drafts", tags=["eval-drafts"])
+# MVR-05B3: the decision route is a vault-bound mutation and carries the pre-05C
+# seal; the listing route reads its own ActiveContextSet when it carries one.
+router = APIRouter(
+    prefix="/eval-drafts",
+    tags=["eval-drafts"],
+    dependencies=[Depends(seal_vault_mutation)],
+)
 
 
 class EvalDraftSourceEvent(BaseModel):
@@ -163,18 +177,41 @@ def _reconcile_matching_terminal_decision(
     return reconcile_pending_disposition_receipt(vault_root, draft_id)
 
 
+def _scoped_drafts_dir_is_contained(vault_root: Path) -> bool:
+    """Whether the drafts folder resolves inside the bound binding's root.
+
+    The system folder may be overridden process-wide; a scoped read never
+    follows such an override out of the binding it is bound to.
+    """
+
+    root = vault_root.resolve()
+    try:
+        drafts_dir = (vault_root / get_vault_system_dir_rel(vault_root) / DRAFT_DIR_NAME).resolve()
+    except (OSError, ValueError):
+        return False
+    try:
+        drafts_dir.relative_to(root)
+    except ValueError:
+        return False
+    return drafts_dir != root
+
+
 @router.get("", response_model=PendingEvalDraftsResponse)
+@scoped_route_read
 def get_pending_eval_drafts() -> PendingEvalDraftsResponse | JSONResponse:
     """Bounded read over pending eval-draft candidates awaiting review.
 
     Read-only: scans ``<vault_system_dir>/eval_drafts/*.md`` and parses
     frontmatter. Never writes. Distinct surface from
     ``GET /api/companion/memory/review-queue`` (memory candidates) — this
-    route never touches ``MemoryCandidateReviewQueue``.
+    route never touches ``MemoryCandidateReviewQueue``. A carrier-bearing
+    request lists its own bound binding (MVR-05B3).
     """
-    vault_root = active_vault_root_or_selection_required()
+    vault_root = route_read_vault_root_or_selection_required()
     if isinstance(vault_root, JSONResponse):
         return vault_root
+    if current_scoped_route_read() is not None and not _scoped_drafts_dir_is_contained(vault_root):
+        raise HTTPException(status_code=409, detail="active_context_read_unavailable")
 
     drafts = [_projection(d) for d in list_pending_drafts(vault_root)]
     return PendingEvalDraftsResponse(pending_count=len(drafts), drafts=drafts)
@@ -208,7 +245,9 @@ def post_eval_draft_decision(
                 "message": "decided_by must match the authenticated principal",
             },
         )
-    vault_root = active_vault_root_or_selection_required()
+    # Sealed legacy write: the router dependency already proved the process
+    # selection is the sole freshly revalidated compatibility binding.
+    vault_root = compatibility_vault_root_or_selection_required()
     if isinstance(vault_root, JSONResponse):
         return vault_root
 

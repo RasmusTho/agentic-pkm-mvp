@@ -27,12 +27,12 @@ from app.panel.confirmation import (
     SameTurnExecutionError,
     UnknownProposalError,
 )
-from app.api.compatibility_mutation import reject_scoped_vault_mutation
+from app.api.compatibility_mutation import seal_vault_mutation
 
 router = APIRouter(
     prefix="/panel",
     tags=["panel"],
-    dependencies=[Depends(reject_scoped_vault_mutation)],
+    dependencies=[Depends(seal_vault_mutation)],
 )
 
 

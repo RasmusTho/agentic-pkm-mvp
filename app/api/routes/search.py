@@ -7,7 +7,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from app.api.request_active_context import require_scoped_read_context
+from app.api.request_active_context import (
+    reject_carrier_on_legacy_read,
+    require_scoped_read_context,
+)
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_effect_window
 from app.instance.context_settings import resolve_context_settings
 from app.instance.vault_registry import VaultRegistryStore
@@ -18,7 +21,7 @@ from app.vault.active_context_v1 import ActiveContextSetV1
 router = APIRouter()
 
 
-@router.get("/search")
+@router.get("/search", dependencies=[Depends(reject_carrier_on_legacy_read)])
 async def search(
     request: Request,
     q: str = Query(...),

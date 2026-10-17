@@ -10,15 +10,17 @@ from app.agent_memory.provisional_write import (
     ProvisionalWriteResult,
     write_provisional_memory,
 )
-from app.api.compatibility_mutation import reject_scoped_vault_mutation
-from app.api.routes.vault_resolution import active_vault_root_or_selection_required
+from app.api.compatibility_mutation import seal_vault_mutation
+from app.api.routes.vault_resolution import compatibility_vault_root_or_selection_required
 from app.auth import require_loopback_or_api_key
 from app.write_guard import WritesBlockedError
 
+# MVR-05B3: pre-05C seal (scoped carriers and misrouted preconditions refused;
+# the legacy write target is proved to be the sole compatibility binding).
 router = APIRouter(
     prefix="/companion/memory",
     tags=["companion", "memory"],
-    dependencies=[Depends(reject_scoped_vault_mutation)],
+    dependencies=[Depends(seal_vault_mutation)],
 )
 
 
@@ -30,7 +32,7 @@ router = APIRouter(
 def post_provisional_memory(
     request: ProvisionalWriteRequest,
 ) -> ProvisionalWriteResult | JSONResponse:
-    vault_root = active_vault_root_or_selection_required(require_initialized=True)
+    vault_root = compatibility_vault_root_or_selection_required(require_initialized=True)
     if isinstance(vault_root, JSONResponse):
         return vault_root
     try:

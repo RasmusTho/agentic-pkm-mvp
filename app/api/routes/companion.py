@@ -92,8 +92,11 @@ from app.api.request_active_context import (
 from app.instance.errors import RegistryError
 from app.api.compatibility_mutation import (
     HEADER_COMPATIBILITY_PRECONDITION,
+    compatibility_selector_bridge,
+    make_vault_mutation_seal,
     reject_scoped_vault_mutation,
     require_compatibility_mutation,
+    require_compatibility_write_root,
     issue_compatibility_precondition,
 )
 from app.events.panel import (
@@ -172,10 +175,18 @@ from app.vault.settings_service import (
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.standing_questions.registration import register_question_explicitly
 
+# MVR-05B3: every companion mutation carries the pre-05C seal (scoped carriers and
+# misrouted migrated preconditions refused; a legacy write target proved to be
+# the sole compatibility binding). The picker/initialize/reload/settings bridge
+# moves that binding and is exempt from the write-target window only.
 router = APIRouter(
     prefix="/companion",
     tags=["companion"],
-    dependencies=[Depends(reject_scoped_vault_mutation)],
+    # The seal compares the durable compatibility binding with the selection
+    # these routes actually resolve (the companion legacy adapter below).
+    dependencies=[
+        Depends(make_vault_mutation_seal(lambda: _legacy_companion_selected_root()))
+    ],
 )
 
 logger = logging.getLogger(__name__)
@@ -1052,6 +1063,20 @@ def _scoped_companion_vault_root(
     return scoped.root
 
 
+def _legacy_companion_selected_root() -> Path | None:
+    """The legacy selection a companion mutation resolves, or ``None`` without one.
+
+    The pre-05C write seal compares it with the durable compatibility binding.
+    Mutations never run inside a scoped read, so this is always the carrier-free
+    compatibility journey.
+    """
+
+    try:
+        return _active_companion_vault_root()
+    except (VaultRootMisconfiguredError, VaultUninitializedError, NoVaultBoundError):
+        return None
+
+
 def _active_companion_vault_root(
     *,
     require_initialized: bool = False,
@@ -1216,6 +1241,7 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
     response_model=VaultContextResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
+@compatibility_selector_bridge
 def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
     context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
     return _vault_context_response(context)
@@ -1580,6 +1606,7 @@ def _create_initialized_scoped_selection(
     response_model=VaultInitializeBootstrapResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
+@compatibility_selector_bridge
 def create_vault_initialize_bootstrap(
     req: VaultInitializeRequest,
     request: Request,
@@ -1625,6 +1652,7 @@ def create_vault_initialize_bootstrap(
     response_model=VaultInitializeResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
+@compatibility_selector_bridge
 def initialize_companion_vault(
     req: VaultInitializeRequest,
     request: Request,
@@ -1745,6 +1773,7 @@ def initialize_companion_vault(
 
 
 @router.post("/vault/reload", response_model=VaultContextResponse)
+@compatibility_selector_bridge
 def reload_companion_vault() -> VaultContextResponse:
     manager = get_vault_manager()
     context = manager.context
@@ -1769,6 +1798,7 @@ def read_companion_vault_settings() -> VaultSettingsResponse:
 
 
 @router.post("/vault/settings", response_model=VaultSettingUpdateResponse)
+@compatibility_selector_bridge
 def update_companion_vault_setting(req: VaultSettingUpdateRequest) -> VaultSettingUpdateResponse:
     manager = get_vault_manager()
     context = manager.context
@@ -5571,6 +5601,9 @@ def save_note_body(
     )
     if isinstance(vault_root, VaultSelectionRequiredResponse):
         return vault_root
+    # Pre-05C seal: the resolved write target must be the sealed compatibility
+    # binding (and, on the compatibility route, the precondition's binding).
+    require_compatibility_write_root(request, vault_root)
     note_path = _find_workspace_note(vault_root, safe_note_path)
     if note_path is None:
         raise HTTPException(

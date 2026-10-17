@@ -34,11 +34,13 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.api.compatibility_mutation import seal_vault_mutation
+from app.api.request_active_context import refuse_carrier_until_binding_aware
 from app.api.routes.heimdal_capture import _assert_lan_posture, _trace_id
 from app.events.schema import make_outbox_event
 from app.events.types import HEIMDAL_MEETING_USER_NOTE_WRITTEN
@@ -50,7 +52,13 @@ from app.heimdal.meeting_ledger import MeetingSession, MeetingSessionNotFoundErr
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/heimdal/meeting", tags=["heimdal"])
+# MVR-05B3: meeting writes carry the pre-05C mutation seal; the projection reads
+# are process-global (not binding-aware until MVR-05B4) and refuse a carrier.
+router = APIRouter(
+    prefix="/api/heimdal/meeting",
+    tags=["heimdal"],
+    dependencies=[Depends(seal_vault_mutation), Depends(refuse_carrier_until_binding_aware)],
+)
 
 
 class OpenSessionRequest(BaseModel):

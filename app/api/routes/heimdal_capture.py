@@ -62,7 +62,7 @@ from ipaddress import ip_address, ip_network
 from typing import Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 # Starlette's `UploadFile`, not FastAPI's: `request.form()` yields the Starlette
@@ -70,6 +70,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 # against the FastAPI type silently misses every real part.
 from starlette.datastructures import UploadFile
 
+from app.api.compatibility_mutation import seal_vault_mutation
+from app.api.request_active_context import refuse_carrier_until_binding_aware
 from app.events.models import new_trace_id
 from app.heimdal import media_ingress, media_receipts, meeting_ledger, raw_liveness
 from app.heimdal.consent_ledger import ConsentRefusedError
@@ -87,7 +89,13 @@ from app.heimdal.raw_store import RawStoreKeyMissingError
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/heimdal/capture", tags=["heimdal"])
+# MVR-05B3: media admission carries the pre-05C mutation seal; the receipt read
+# is process-global (not binding-aware until MVR-05B4) and refuses a carrier.
+router = APIRouter(
+    prefix="/api/heimdal/capture",
+    tags=["heimdal"],
+    dependencies=[Depends(seal_vault_mutation), Depends(refuse_carrier_until_binding_aware)],
+)
 
 # The admitted ingress posture, stated as explicit networks rather than
 # `ip_address(...).is_private`: that property also covers documentation and
