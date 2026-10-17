@@ -1181,7 +1181,7 @@ def test_terminal_payload_status_correction_enforces_existing_admission(
         (
             "writer",
             envelope.actor,
-            ["tasks:write", "leases:write", "status:read"],
+            ["tasks:write", "leases:write", "status:read", "receipts:read"],
             [envelope.repository],
         ),
         ("reader", "reader", ["status:read", "receipts:read"], [envelope.repository]),

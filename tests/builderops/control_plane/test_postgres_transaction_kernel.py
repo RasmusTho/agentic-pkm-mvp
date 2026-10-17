@@ -474,6 +474,13 @@ def test_terminal_payload_status_correction_rejects_drift_and_active_lease(
     ):
         with pytest.raises((LeaseRequired, StaleFencingToken)):
             store.correct_task_payload_status(**dict(args, **delta))
+    # Expiry is checked against the locked database row, not the echoed timestamp.
+    with store._connect() as conn:
+        conn.execute("UPDATE builderops_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE lease_kind='generic'")
+    with pytest.raises(StaleFencingToken):
+        store.correct_task_payload_status(**args)
+    with store._connect() as conn:
+        conn.execute("UPDATE builderops_leases SET expires_at=%s WHERE lease_kind='generic'", (args["lease"].expires_at,))
     with store._connect() as conn:
         conn.execute(
             "UPDATE builderops_leases SET expires_at=clock_timestamp()+interval '1 hour' WHERE lease_kind='task'"
