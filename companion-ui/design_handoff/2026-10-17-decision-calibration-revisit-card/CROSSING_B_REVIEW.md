@@ -6,7 +6,7 @@
 - Design-system ID: `f2b13410-af14-4875-8029-445352123f57`
 - Exact token-sheet SHA-256: `edbc81c77209b5274b26b5e827191f95595f20d6bc5a97a17f7dd8751a774ba2`
 - Original independently reviewed payload SHA-256: `8efac4fa45fc4984ca0440b4afb8e021a0a2be0d54e54788b1450797a75e8b29`
-- Candidate payload SHA-256 after security delta: `d63b0489154fb3c2d32ac6d9ae0055e0f224abaa0ab8f2d3f7198c8a39e14349`
+- Candidate payload SHA-256 after security delta: `086543c84ee24997220aadf4874c5a4771e776fa78d7e79edc36c1747381b6bd`
 - Payload digest command: `find . -type f ! -name CROSSING_B_REVIEW.md -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256`
 - Payload scope: the ten generated files present before this receipt was added; this receipt and archive-index entry are excluded from the payload digest.
 - Reviewer identity: `Codex /root/cal03_crossing_b_review`
@@ -26,8 +26,12 @@ the same card and gallery with DOM APIs and `textContent`, and focuses outcome c
 comparing their static `data-outcome` attributes rather than constructing a CSS selector from
 the submitter value. No visual states, routes, authority boundaries, or token inputs changed.
 The candidate digest above is recomputed with the receipt excluded. This author-authored security
-delta requires an independent Crossing-B delta re-review before the refreshed hash can be treated
-as a passing receipt.
+delta required an independent Crossing-B delta re-review. The candidate was then corrected for
+three delta-review findings: restored the note, outcome, and dismissal hint IDs used by
+`aria-describedby`; retained the submitted outcome through failure-state focus restoration; and
+restored the `<strong>` wrapper for the recorded outcome label. The current candidate digest
+includes those corrections and still requires independent re-review before it can be treated as a
+passing receipt.
 
 The reviewer independently recomputed the final payload digest. Nine files were
 byte-identical to the prior reviewed payload; only `state-gallery.md` changed.
