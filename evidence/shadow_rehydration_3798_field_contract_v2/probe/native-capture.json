@@ -1,0 +1,59 @@
+{
+  "recorder": "parent coordinator /root, recorded by sole implementation owner codex-6174-field-contract",
+  "source": "actual parent clock/native admission/original-artifact readback observations; trusted recorder attestation, not authenticated carrier instrumentation",
+  "probe_id": "shadow_rehydration_3798_field_contract",
+  "agent_name": "/root/fresh_shadow_fields_3798",
+  "history": "none",
+  "invocation": {
+    "admitted_model": "gpt-6-luna",
+    "admitted_reasoning_effort": "xhigh",
+    "engine_identity": "unknown",
+    "engine_identity_source": "native carrier admission metadata does not expose engine identity",
+    "start_status": "succeeded",
+    "start_observed_at": "2026-10-17T21:51:41Z"
+  },
+  "pre_invocation_marker": "2026-10-17T21:51:28Z",
+  "admission_observed_at": "2026-10-17T21:51:41Z",
+  "original_artifact_readback_at": "2026-10-17T21:53:24Z",
+  "timestamp_precision": "UTC wall-clock observations at one-second resolution; pre-invocation marker is before actual tool dispatch, event markers are observed confirmations rather than precise carrier instants",
+  "scope": "parent pre-invocation UTC wall-clock marker through exact original artifact readback; includes orchestration and dispatch; excludes earlier implementation/review and later delivery/CI; not model-active time or human effort",
+  "native_admission_rejections": 0,
+  "admission_fallback": "none",
+  "original_edits_or_probe_repairs": 0,
+  "observed_event_counts": {
+    "successful_agent_starts": 1,
+    "packet_and_response_handoffs": 2,
+    "admission_retries": 0,
+    "implementation_repairs": 0,
+    "review_repairs": 0,
+    "ci_repairs": 0
+  },
+  "original_artifacts": [
+    {
+      "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/agent-response.original.json",
+      "sha256": "a6e1b74af8327a414901bd720e2c4329800d4b6e0370d2154c65e720dbdc41a1",
+      "bytes_length": 6937
+    },
+    {
+      "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-github.json",
+      "sha256": "0bf12d0bfbc1e71b36f03a3a200dd7ce95e017bd5a239b77d08eaaac2012852e",
+      "bytes_length": 782
+    },
+    {
+      "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-repository.json",
+      "sha256": "cfd6c3043a4402fd24dcd49d00db1adcf279261baa15a921b3ccff1b8d3f85ce",
+      "bytes_length": 667
+    },
+    {
+      "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-dispatcher.json",
+      "sha256": "42101a48f7ec720e13d066515808ee163caf02e6c601b106a31027b9b1c8d682",
+      "bytes_length": 3386
+    }
+  ],
+  "observer_attested_live_read_failures": {
+    "pr_view_attempts": 2,
+    "remote_main_attempts": 2,
+    "source": "unchanged original response limitations and unavailable live-read envelopes; read retries are not native admission retries"
+  },
+  "limits": "No positive live GitHub/remote-head rehydration proof in this run. No network diagnosis, recovery, fallback source-fill or second probe. Carrier tokens/cost/engine identity and human effort remain unknown. Five pre-probe protected repair passes are excluded from this probe interval, not erased."
+}

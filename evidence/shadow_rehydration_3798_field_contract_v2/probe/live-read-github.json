@@ -1,0 +1,15 @@
+{
+  "schema_name": "epic_rehydration_live_read",
+  "schema_version": 2,
+  "probe_id": "shadow_rehydration_3798_field_contract",
+  "kind": "github",
+  "target": {
+    "repository": "RasmusTho/agentic-pkm-mvp",
+    "issue_number": 3798,
+    "pr_number": 3803
+  },
+  "observed_at": "2026-10-17T21:52:26Z",
+  "availability": "unavailable",
+  "payload": "unknown",
+  "unavailable_reason": "gh pr view 3803 --repo RasmusTho/agentic-pkm-mvp --json number,url,state,headRefOid,mergeCommit,statusCheckRollup failed twice with exit 1: error connecting to api.github.com; check your internet connection or https://githubstatus.com. The Issue read and complete review-thread pagination succeeded, but the composite GitHub payload requires the fresh PR object, so this domain is unavailable."
+}

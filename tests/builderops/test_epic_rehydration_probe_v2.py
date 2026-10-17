@@ -733,6 +733,31 @@ def test_v1_evidence_remains_compatible():
     assert probe.SCHEMA_VERSION == 1
 
 
+def test_v2_retained_fresh_probe_replays_without_rewriting_originals():
+    root = Path("evidence/shadow_rehydration_3798_field_contract_v2")
+    receipt = probe.parse_strict_json(Path("evidence/shadow_rehydration_3798_field_contract.v2.json").read_bytes())
+    assert probe.normalize_probe_receipt(receipt) == receipt
+    capture = probe.parse_strict_json((root / "probe/native-capture.json").read_bytes())
+    for binding in capture["original_artifacts"]:
+        assert v2._bound_ref(binding["ref"]) == binding
+    packet = probe.parse_strict_json((root / "probe/context-pack.json").read_bytes())
+    pinned = probe.parse_strict_json((root / "accepted/run-state-readback.json").read_bytes())
+    assert pinned["context_budget_receipts"] == [packet["source"]["receipt"]]
+    assert all(not Path(ref).is_absolute() for ref in receipt["evidence"].values())
+    measurements = receipt["telemetry"]["measurements"]
+    assert measurements["packet_bytes"]["value"] == 31502
+    assert measurements["response_bytes"]["value"] == 6937
+    assert measurements["elapsed_wall_time"]["value"] == 116.0
+    assert measurements["agent_start"]["value"] == 1
+    assert measurements["handoff"]["value"] == 2
+    assert all(measurements[name]["value"] == 0 for name in ("admission_retry", "implementation_repair", "review_repair", "ci_repair"))
+    assert all(measurements[name]["availability"] == "unknown" for name in v2.USAGE_UNITS)
+    comparison = probe.parse_strict_json((root / "probe/comparison.json").read_bytes())
+    assert all(comparison["field_results"][name]["status"] == "match" for name in v2.CHECKPOINT_POINTERS)
+    assert all(comparison["field_results"][name]["status"] == "unknown" for name in ("slice_status", "open_review_findings", "external_state", "fabricated_claims"))
+    assert comparison["external_refresh"] == {"status": "unknown", "refresh_required": True}
+
+
 def test_v2_manual_entrypoints_have_no_authority_effects(chain, tmp_path):
     for value in (chain["pack"], chain["comparison"], chain["telemetry"], chain["receipt"]):
         assert all(value["effects"][name] == [] for name in probe._EFFECT_CATEGORIES)
