@@ -77,6 +77,9 @@ RETIRING_STAGES = frozenset(
         "05B4",
         "retained:MVR-05C",
         "retained:MVR-06",
+        # MCP context semantics and packaging are owned by #3368; until it defines
+        # them, the carrier-free MCP journey keeps one named env adapter.
+        "retained:#3368",
     }
 )
 
@@ -124,6 +127,12 @@ _ASK_LEGACY_RECALL = (
     "context -- legacy /api/ask, voice, the smoke CLI -- still reads the process-wide "
     "single-binding selection once per turn through these named adapters)"
 )
+_MCP_COMPATIBILITY = (
+    "carrier-free MCP vault journey (MVR-05B4a: a VaultCarrier argument or the vault_carrier "
+    "setting is the whole answer and no environment key is read; a call with neither a carrier "
+    "nor an explicit path keeps the MCP_VAULT_ROOT/VAULT_DIR/VAULT_ROOT fallback until #3368 "
+    "defines MCP context semantics)"
+)
 _CARRIER_NOTE = (
     "agent/MCP carrier resolves its vault from process selection or environment, not from a "
     "request-carried ActiveContextSet"
@@ -155,8 +164,7 @@ COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
     _a("app/cli/vault.py", "vault_init", "get_vault_manager", _CLI_NOTE, "05B4"),
     _a("app/cli/youtube_inbox_dev.py", "_build_youtube_inbox_dev_services.global_sync_enabled", "get_vault_manager", _CLI_NOTE, "05B4"),
     _a("app/cli/youtube_inbox_dev.py", "drain", "get_vault_manager", _CLI_NOTE, "05B4"),
-    _a("app/mcp/vault_tools.py", "_resolve_mcp_env_root", "env:VAULT_DIR", _CARRIER_NOTE, "05B4"),
-    _a("app/mcp/vault_tools.py", "get_vault_root", "resolve_optional_vault_root", _CARRIER_NOTE, "05B4"),
+    _a("app/mcp/vault_tools.py", "_compatibility_env_vault_root", "env:MCP_VAULT_ROOT env:VAULT_DIR resolve_optional_vault_root", _MCP_COMPATIBILITY, "retained:#3368"),
 )
 
 
