@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
@@ -26,11 +27,20 @@ from app.dispatcher.verification_dispatch import VerificationRun
 from app.dispatcher.verified_merge import (
     FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
     fixed_verified_merge_commit_title,
+    valid_post_effect_authority,
 )
 
 
 class MergeAuthorityError(RuntimeError):
     """The protected repository did not authorize the privileged effect."""
+
+
+class MergeIdentityConflict(MergeAuthorityError):
+    """A native merge or closure identity contradiction refuses delivery."""
+
+
+class MergeEffectNotStarted(MergeAuthorityError):
+    """A final local authority check refused before the external effect."""
 
 
 POST_EFFECT_CAPABILITY = "post_effect_merge_readback.v1"
@@ -179,6 +189,7 @@ class ProtectedRepositoryAuthority(Protocol):
         commit_title: str,
         commit_message: str,
         credential: object,
+        effect_revalidator: Callable[[], None] | None = None,
     ) -> Mapping[str, object]: ...
 
     def merge_readback(
@@ -242,6 +253,7 @@ class EffectIntentLedger(Protocol):
         run_id: str,
         effect_type: str,
         expected_payload: Mapping[str, object] | None = None,
+        force_current_fence: bool = False,
     ) -> Mapping[str, object]: ...
 
     def finish_effect(
@@ -416,7 +428,46 @@ class VerificationMergeExecutor:
             "scope",
             "current_head",
         }
-        return required.issubset(gates) and all(gates[name] for name in required)
+        return (
+            required.issubset(gates)
+            and all(gates[name] for name in required)
+            and gates.get("threads", True)
+        )
+
+    def _prepared_gate(
+        self, run: VerificationRun, repair_budget: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        native_reader = getattr(self.repository, "native_single_closer_prepared", None)
+        if (
+            callable(native_reader)
+            and run.request.get("contract_version") == "verification_dispatch_request.v3"
+            and run.closing_authority == (run.request.get("linked_issue"),)
+            and not run.supporting_authority
+        ):
+            self.ledger.require_post_effect_capability()
+            native = native_reader(
+                run.repository, run.pr_number, run_id=run.run_id, head_sha=run.current_head_sha
+            )
+            if native is not None:
+                if not all(callable(getattr(self.ledger, name, None)) for name in (
+                        "record_native_merge_response", "record_native_merge_conflict")):
+                    raise MergeAuthorityError("native merge observation writers are unavailable")
+                deployment = getattr(self.ledger, "post_effect_deployment", None)
+                receipt = deployment.get("deployment_receipt") if isinstance(deployment, Mapping) else None
+                if not isinstance(receipt, Mapping) or native.get("final_review_rounds") != run.request.get("final_review_rounds"):
+                    raise MergeAuthorityError("native review or deployed prerequisite identity is unavailable")
+                identity = {key: receipt.get(key) for key in (
+                    "source_sha", "image_digest", "postgres_image_digest", "schema_version",
+                    "authority_epoch", "candidate_receipt_sha")}
+                return {**native, "post_effect_deployment": {
+                    **identity, "capability": POST_EFFECT_CAPABILITY}}
+        return self.repository.verified_merge_prepared(
+            run.repository.lower(),
+            run.pr_number,
+            run_id=run.run_id,
+            head_sha=run.current_head_sha,
+            expected_repair_budget=repair_budget,
+        )
 
     @staticmethod
     def _authority_digest(value: Mapping[str, object]) -> str:
@@ -465,7 +516,7 @@ class VerificationMergeExecutor:
         effect_type: str,
         run_id: str,
         repository: str,
-        expected_payload: Mapping[str, object],
+        expected_payload: Mapping[str, object] | None,
     ) -> None:
         expires_at = claim.get("expires_at")
         fencing_token = claim.get("fencing_token")
@@ -474,9 +525,10 @@ class VerificationMergeExecutor:
         except ValueError as exc:
             raise MergeAuthorityError("outbox claim expiry is malformed") from exc
         claim_payload = claim.get("payload")
-        payload_matches = isinstance(claim_payload, Mapping) and dict(
-            claim_payload
-        ) == dict(expected_payload)
+        payload_matches = expected_payload is None or (
+            isinstance(claim_payload, Mapping)
+            and dict(claim_payload) == dict(expected_payload)
+        )
         if (
             claim.get("repository") != repository
             or claim.get("operation_key") != operation_key
@@ -503,8 +555,36 @@ class VerificationMergeExecutor:
         self.ledger.finish_effect(
             operation_key,
             observed_applied=True,
-            evidence={"outcome": "terminal_no_effect", **dict(evidence)},
+            evidence={**dict(evidence), "outcome": "terminal_no_effect"},
         )
+
+    def _settle_native_effect_refusal(
+        self,
+        operation_key: str,
+        *,
+        run: VerificationRun,
+        expected_payload: Mapping[str, object],
+        evidence: Mapping[str, object],
+    ) -> None:
+        """Persist a proved pre-PUT refusal, reacquiring only readback authority."""
+
+        try:
+            self._terminal_no_effect(operation_key, evidence=evidence)
+            return
+        except Exception:
+            # The exact fence just failed revalidation.  A retained claim can
+            # therefore be stale even when its process-local timestamp has not
+            # elapsed.  Recovery acquires a new readback-only fence; execute()
+            # routes every previously attempted merge to recover() and can
+            # never issue another PUT.
+            self.ledger.recover_effect(
+                operation_key,
+                run_id=run.run_id,
+                effect_type="github.merge",
+                expected_payload=expected_payload,
+                force_current_fence=True,
+            )
+        self._terminal_no_effect(operation_key, evidence=evidence)
 
     def _readback_and_reconcile(
         self,
@@ -518,9 +598,103 @@ class VerificationMergeExecutor:
             run.repository.lower(), run.pr_number
         )
         applied = self._merged_exactly(readback, run)
+        pending = self.ledger.pending_effect_binding(run.run_id)
+        payload = pending.get("payload") if isinstance(pending, Mapping) else None
+        gate = payload.get("verified_merge_prepared") if isinstance(payload, Mapping) else None
+        if applied and isinstance(gate, Mapping) and gate.get("contract") == "native_single_closer_gate.v1":
+            assert isinstance(pending, Mapping)
+            response_sha = pending.get("native_merge_response_sha")
+            if pending.get("native_merge_identity_conflict") is True:
+                raise MergeIdentityConflict("native merge has a durable identity refusal")
+            if response_sha is None:
+                return readback, False
+            if response_sha != readback.get("merge_commit_sha"):
+                self._refuse_native_conflict(run, str(claim["operation_key"]), readback=readback)
+                raise MergeIdentityConflict("native returned and fetched merge identities contradict")
         if applied:
             self.ledger.finish_merge_readback(str(claim["operation_key"]), readback)
         return readback, applied
+
+    def _refuse_native_conflict(
+        self,
+        run: VerificationRun,
+        operation_key: str,
+        *,
+        readback: Mapping[str, object] | None = None,
+        prepare_readback: bool = True,
+    ) -> None:
+        self._record_native_conflict_fence(run, operation_key)
+        if prepare_readback:
+            self.ledger.prepare_merge_readback(operation_key)
+        if readback is None:
+            readback = self.repository.merge_readback(run.repository.lower(), run.pr_number)
+        if self._merged_exactly(readback, run):
+            try:
+                self._native_compensation(run, readback)
+            except Exception:
+                pass  # Unavailable compensation proof cannot clear the durable refusal.
+
+    def _record_native_conflict_fence(
+        self,
+        run: VerificationRun,
+        operation_key: str,
+    ) -> None:
+        if not run.claimed_by or not run.lease_id:
+            raise MergeAuthorityError(
+                "native compensation requires current task ownership"
+            )
+        writer = getattr(self.ledger, "record_native_merge_conflict", None)
+        if not callable(writer):
+            raise MergeAuthorityError("native refusal writer is unavailable")
+        writer(run.run_id, operation_key, holder=run.claimed_by or "", lease_id=run.lease_id or "")
+        persisted = self.ledger.pending_effect_binding(run.run_id)
+        if (
+            not isinstance(persisted, Mapping)
+            or persisted.get("operation_key") != operation_key
+            or persisted.get("native_merge_identity_conflict") is not True
+        ):
+            raise MergeAuthorityError("native closure conflict was not durable")
+        authorizer = getattr(
+            self.ledger, "authorize_native_merge_compensation", None
+        )
+        if not callable(authorizer):
+            raise MergeAuthorityError(
+                "native compensation authority writer is unavailable"
+            )
+        authorizer(
+            run.run_id,
+            operation_key,
+            holder=run.claimed_by,
+            lease_id=run.lease_id,
+        )
+
+    def _native_compensation(self, run: VerificationRun, readback: Mapping[str, object]) -> Mapping[str, object]:
+        pending = self.ledger.pending_effect_binding(run.run_id)
+        payload = pending.get("payload") if isinstance(pending, Mapping) else None
+        gate = payload.get("verified_merge_prepared") if isinstance(payload, Mapping) else None
+        operation_key = (
+            pending.get("operation_key") if isinstance(pending, Mapping) else None
+        )
+        if (
+            not isinstance(payload, Mapping)
+            or not isinstance(gate, Mapping)
+            or not isinstance(operation_key, str)
+        ):
+            raise MergeAuthorityError("native compensation intent is unavailable")
+        body_edit = gate.get("body_edit")
+        snapshot = body_edit.get("native_snapshot") if isinstance(body_edit, Mapping) else None
+        compensate = getattr(self.repository, "native_single_closer_reconcile", None)
+        if not isinstance(snapshot, Mapping) or not callable(compensate):
+            raise MergeAuthorityError("native compensation snapshot is unavailable")
+        self._record_native_conflict_fence(run, operation_key)
+        credential = self.credentials.resolve(repository=run.repository.lower(),
+            credential_id=str(payload["credential_id"]), rotation_generation=int(payload["rotation_generation"]))
+        return compensate(gate["repository"], run.pr_number, closing_issue=run.request["linked_issue"],
+                          readback=readback, credential=credential, snapshot=snapshot,
+                          compensation_only=True,
+                          before_compensation=lambda: self._record_native_conflict_fence(
+                              run, operation_key
+                          ))
 
     def execute(
         self,
@@ -539,9 +713,7 @@ class VerificationMergeExecutor:
         if run.status not in {"claimed", "running"}:
             raise MergeAuthorityError("merge requires a claimed verification run")
         if not self.ledger.closure_ready(run.run_id):
-            raise MergeAuthorityError(
-                "merge requires the verifier's fresh independent review gate"
-            )
+            raise MergeAuthorityError("merge requires the verifier's fresh independent review gate")
         marker = self.ledger.merge_ready_receipt(run.run_id)
         if (
             not isinstance(marker, Mapping)
@@ -549,9 +721,7 @@ class VerificationMergeExecutor:
             or marker.get("pr_number") != run.pr_number
             or marker.get("head_sha") != run.current_head_sha
         ):
-            raise MergeAuthorityError(
-                "merge requires a current host-fenced merge-ready receipt"
-            )
+            raise MergeAuthorityError("merge requires a current host-fenced merge-ready receipt")
 
         if not dry_run:
             pending = self.ledger.pending_effect_binding(run.run_id)
@@ -575,9 +745,7 @@ class VerificationMergeExecutor:
             )
         if self.repository.current_pr_head(canonical, run.pr_number) != run.current_head_sha:
             raise MergeAuthorityError("pull request head changed before final validation")
-        gates = self.repository.required_gates(
-            canonical, run.pr_number, run.current_head_sha
-        )
+        gates = self.repository.required_gates(canonical, run.pr_number, run.current_head_sha)
         if not self._required_gates_pass(gates):
             raise MergeAuthorityError("required CI/review/protection/scope gate is missing")
         prepared_gate: Mapping[str, object] | None = None
@@ -585,19 +753,12 @@ class VerificationMergeExecutor:
         commit_message = FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
         repair_budget = self.ledger.repair_budget_projection(run.run_id)
         if not dry_run:
-            prepared_gate = self.repository.verified_merge_prepared(
-                canonical,
-                run.pr_number,
-                run_id=run.run_id,
-                head_sha=run.current_head_sha,
-                expected_repair_budget=repair_budget,
-            )
+            prepared_gate = self._prepared_gate(run, repair_budget)
             if (
-                prepared_gate.get("governing_issue")
-                != run.request.get("linked_issue")
-                or prepared_gate.get("closing_issues")
-                != list(run.closing_authority)
-                or prepared_gate.get("closing_reference_count") != 0
+                prepared_gate.get("governing_issue") != run.request.get("linked_issue")
+                or prepared_gate.get("closing_issues") != list(run.closing_authority)
+                or prepared_gate.get("closing_reference_count")
+                != (1 if prepared_gate.get("contract") == "native_single_closer_gate.v1" else 0)
                 or prepared_gate.get("fixed_commit_title") != commit_title
                 or prepared_gate.get("fixed_commit_message") != commit_message
             ):
@@ -617,9 +778,7 @@ class VerificationMergeExecutor:
             "rotation_generation": manifest.credential_generation,
             "fixed_commit_title": commit_title,
             "fixed_commit_message": commit_message,
-            "verified_merge_prepared": (
-                dict(prepared_gate) if prepared_gate is not None else None
-            ),
+            "verified_merge_prepared": (dict(prepared_gate) if prepared_gate is not None else None),
         }
         try:
             operation_key = self.ledger.begin_effect(
@@ -644,19 +803,9 @@ class VerificationMergeExecutor:
         effect_base = self.repository.protected_base_sha(canonical)
         effect_manifest = self.repository.delivery_manifest(canonical, effect_base)
         effect_head = self.repository.current_pr_head(canonical, run.pr_number)
-        effect_gates = self.repository.required_gates(
-            canonical, run.pr_number, effect_head
-        )
+        effect_gates = self.repository.required_gates(canonical, run.pr_number, effect_head)
         effect_prepared_gate = (
-            self.repository.verified_merge_prepared(
-                canonical,
-                run.pr_number,
-                run_id=run.run_id,
-                head_sha=run.current_head_sha,
-                expected_repair_budget=repair_budget,
-            )
-            if prepared_gate is not None
-            else None
+            self._prepared_gate(run, repair_budget) if prepared_gate is not None else None
         )
         if (
             effect_base != base_sha
@@ -667,9 +816,7 @@ class VerificationMergeExecutor:
                 prepared_gate is not None
                 and (
                     effect_prepared_gate is None
-                    or not self._same_prepared_gate(
-                        prepared_gate, effect_prepared_gate
-                    )
+                    or not self._same_prepared_gate(prepared_gate, effect_prepared_gate)
                 )
             )
         ):
@@ -681,9 +828,7 @@ class VerificationMergeExecutor:
                     "manifest_blob_sha": effect_manifest.blob_sha,
                     "required_gates": dict(effect_gates),
                     "verified_merge_prepared": (
-                        dict(effect_prepared_gate)
-                        if effect_prepared_gate is not None
-                        else None
+                        dict(effect_prepared_gate) if effect_prepared_gate is not None else None
                     ),
                 },
             )
@@ -692,16 +837,17 @@ class VerificationMergeExecutor:
             )
 
         claim = self.ledger.effect_claim(operation_key)
+        expected_claim_payload = {
+            **effect_payload,
+            "review_authority_sha256": verification_authority_digest(marker),
+        }
         self._validate_claim(
             claim,
             operation_key=operation_key,
             effect_type=effect_type,
             run_id=run.run_id,
             repository=canonical,
-            expected_payload={
-                **effect_payload,
-                "review_authority_sha256": verification_authority_digest(marker),
-            },
+            expected_payload=expected_claim_payload,
         )
         credential = self.credentials.resolve(
             repository=canonical,
@@ -715,15 +861,7 @@ class VerificationMergeExecutor:
             # races the outbox/credential path cannot reach the transport under
             # the earlier closing-projection identity.
             try:
-                effect_boundary_prepared_gate = (
-                    self.repository.verified_merge_prepared(
-                        canonical,
-                        run.pr_number,
-                        run_id=run.run_id,
-                        head_sha=run.current_head_sha,
-                        expected_repair_budget=repair_budget,
-                    )
-                )
+                effect_boundary_prepared_gate = self._prepared_gate(run, repair_budget)
             except MergeAuthorityError as exc:
                 # The prepared-gate adapter may reject a raced body edit
                 # instead of returning a different gate.  The intent is
@@ -740,11 +878,8 @@ class VerificationMergeExecutor:
                     },
                 )
                 raise
-            if (
-                effect_prepared_gate is None
-                or not self._same_prepared_gate(
-                    effect_prepared_gate, effect_boundary_prepared_gate
-                )
+            if effect_prepared_gate is None or not self._same_prepared_gate(
+                effect_prepared_gate, effect_boundary_prepared_gate
             ):
                 self._terminal_no_effect(
                     operation_key,
@@ -752,9 +887,7 @@ class VerificationMergeExecutor:
                         "base_sha": base_sha,
                         "head_sha": run.current_head_sha,
                         "manifest_blob_sha": manifest.blob_sha,
-                        "verified_merge_prepared": dict(
-                            effect_boundary_prepared_gate
-                        ),
+                        "verified_merge_prepared": dict(effect_boundary_prepared_gate),
                     },
                 )
                 raise MergeAuthorityError(
@@ -768,9 +901,7 @@ class VerificationMergeExecutor:
                         "base_sha": base_sha,
                         "head_sha": run.current_head_sha,
                         "manifest_blob_sha": manifest.blob_sha,
-                        "verified_merge_prepared": dict(
-                            effect_boundary_prepared_gate
-                        ),
+                        "verified_merge_prepared": dict(effect_boundary_prepared_gate),
                     },
                 )
                 raise MergeAuthorityError(
@@ -797,21 +928,124 @@ class VerificationMergeExecutor:
                 readback,
             )
         try:
-            self.repository.conditional_merge(
+            native_effect = (
+                prepared_gate is not None
+                and prepared_gate.get("contract") == "native_single_closer_gate.v1"
+            )
+
+            def revalidate_native_effect() -> None:
+                revalidate = getattr(self.outbox, "revalidate_effect", None)
+                if not callable(revalidate):
+                    raise MergeEffectNotStarted(
+                        "native merge requires final outbox effect revalidation"
+                    )
+                try:
+                    refreshed = revalidate(claim)
+                    self._validate_claim(
+                        refreshed,
+                        operation_key=operation_key,
+                        effect_type=effect_type,
+                        run_id=run.run_id,
+                        repository=canonical,
+                        # The production revalidation response deliberately
+                        # excludes the durable payload.  That payload was
+                        # authenticated on the original claim above; this
+                        # final DB-clock read proves only the same exact fence.
+                        expected_payload=None,
+                    )
+                except Exception as exc:
+                    raise MergeEffectNotStarted(
+                        "native final outbox effect fence is no longer current"
+                    ) from exc
+                claim_identity_fields = (
+                    "worker_id",
+                    "fencing_token",
+                    "intent_lsn",
+                    "claim_lsn",
+                    "receipt_sequence",
+                )
+                try:
+                    original_expiry = datetime.fromisoformat(
+                        str(claim.get("expires_at")).replace("Z", "+00:00")
+                    )
+                    refreshed_expiry = datetime.fromisoformat(
+                        str(refreshed.get("expires_at")).replace("Z", "+00:00")
+                    )
+                except ValueError as exc:
+                    raise MergeEffectNotStarted(
+                        "native final outbox effect fence expiry is malformed"
+                    ) from exc
+                if (
+                    original_expiry != refreshed_expiry
+                    or any(
+                    refreshed.get(field) != claim.get(field)
+                    for field in claim_identity_fields
+                    )
+                ):
+                    raise MergeEffectNotStarted(
+                        "native final outbox effect fence changed before merge"
+                    )
+
+            result = self.repository.conditional_merge(
                 canonical,
                 run.pr_number,
                 expected_head_sha=run.current_head_sha,
                 expected_base_sha=base_sha,
                 expected_manifest_blob_sha=manifest.blob_sha,
-                expected_body_edit=(
-                    effect_body_edit
-                    if effect_body_edit is not None
-                    else {}
-                ),
+                expected_body_edit=(effect_body_edit if effect_body_edit is not None else {}),
                 commit_title=commit_title,
                 commit_message=commit_message,
                 credential=credential,
+                effect_revalidator=(revalidate_native_effect if native_effect else None),
             )
+            if native_effect:
+                response_sha = result.get("sha")
+                if (result.get("merged") is not True or not isinstance(response_sha, str)
+                        or re.fullmatch(r"[0-9a-f]{40}", response_sha) is None):
+                    raise MergeIdentityConflict("native successful merge response is malformed")
+                getattr(self.ledger, "record_native_merge_response")(run.run_id, operation_key,
+                    response_sha=response_sha, holder=holder, lease_id=lease_id)
+        except MergeIdentityConflict:
+            self._refuse_native_conflict(run, operation_key)
+            raise
+        except MergeEffectNotStarted as exc:
+            refusal_writer = getattr(
+                self.ledger, "record_native_merge_effect_refusal", None
+            )
+            if not callable(refusal_writer):
+                raise MergeEffectNotStarted(
+                    "native final outbox effect refusal cannot be recorded"
+                ) from exc
+            try:
+                refusal_writer(
+                    run.run_id,
+                    operation_key,
+                    holder=holder,
+                    lease_id=lease_id,
+                )
+            except Exception as record_exc:
+                raise MergeEffectNotStarted(
+                    "native final outbox effect refusal was not durable"
+                ) from record_exc
+            refusal_evidence = {
+                "base_sha": base_sha,
+                "head_sha": run.current_head_sha,
+                "manifest_blob_sha": manifest.blob_sha,
+                "reason": "native_effect_fence_refused",
+            }
+            try:
+                self._settle_native_effect_refusal(
+                    operation_key,
+                    run=run,
+                    expected_payload=expected_claim_payload,
+                    evidence=refusal_evidence,
+                )
+            except Exception as settle_exc:
+                raise MergeEffectNotStarted(
+                    "native final outbox effect fence was refused; "
+                    "durable no-effect reconciliation is pending"
+                ) from settle_exc
+            raise
         except Exception:
             # Every transport failure is outcome-unknown until exact GitHub
             # readback proves whether the conditional effect applied.
@@ -836,9 +1070,7 @@ class VerificationMergeExecutor:
             raise MergeAuthorityError(
                 "merge return was not confirmed by exact-head GitHub readback"
             )
-        return self._receipt(
-            "merged", operation_key, run, manifest, readback
-        )
+        return self._receipt("merged", operation_key, run, manifest, readback)
 
     def recover(
         self,
@@ -935,6 +1167,84 @@ class VerificationMergeExecutor:
         ):
             raise MergeAuthorityError(
                 "merge recovery manifest binding is inconsistent"
+            )
+        native_conflict = bool(
+            isinstance(prepared_gate, Mapping)
+            and prepared_gate.get("contract") == "native_single_closer_gate.v1"
+            and pending.get("native_merge_identity_conflict") is True
+        )
+        if native_conflict:
+            if pending.get("outbox_status") != "succeeded":
+                try:
+                    self.ledger.recover_effect(
+                        operation_key,
+                        run_id=run.run_id,
+                        effect_type=effect_type,
+                        expected_payload=payload,
+                    )
+                    self.ledger.prepare_merge_readback(operation_key)
+                except ValueError as exc:
+                    raise MergeIdentityConflict(
+                        "native conflict compensation could not acquire readback authority"
+                    ) from exc
+            conflict_readback = self.repository.merge_readback(canonical, run.pr_number)
+            if self._merged_exactly(conflict_readback, run):
+                try:
+                    self._native_compensation(run, conflict_readback)
+                except Exception as exc:
+                    raise MergeIdentityConflict(
+                        "native conflict compensation remains incomplete"
+                    ) from exc
+            raise MergeIdentityConflict(
+                "native merge or closure identity conflict requires governed repair"
+            )
+        native_effect_refused = bool(
+            isinstance(prepared_gate, Mapping)
+            and prepared_gate.get("contract") == "native_single_closer_gate.v1"
+            and pending.get("native_merge_effect_refusal")
+            == "final_effect_fence_refused"
+        )
+        if native_effect_refused:
+            refusal_evidence: Mapping[str, object] = {
+                "base_sha": base_sha,
+                "head_sha": run.current_head_sha,
+                "manifest_blob_sha": manifest.blob_sha,
+                "reason": "native_effect_fence_refused",
+                "outcome": "terminal_no_effect",
+            }
+            self._resolve_recovery_credential(canonical, manifest)
+            if pending.get("outbox_status") == "succeeded":
+                if (
+                    not durable_reconciliation
+                    or not isinstance(reconciliation_evidence, Mapping)
+                    or dict(reconciliation_evidence) != dict(refusal_evidence)
+                ):
+                    raise MergeAuthorityError(
+                        "native effect refusal lacks exact durable no-effect authority"
+                    )
+            else:
+                try:
+                    self._settle_native_effect_refusal(
+                        operation_key,
+                        run=run,
+                        expected_payload=expected_payload,
+                        evidence={
+                            key: value
+                            for key, value in refusal_evidence.items()
+                            if key != "outcome"
+                        },
+                    )
+                except Exception as exc:
+                    raise MergeAuthorityError(
+                        "native effect refusal could not acquire current "
+                        "readback-only fence"
+                    ) from exc
+            return self._receipt(
+                "terminal_no_effect",
+                operation_key,
+                run,
+                manifest,
+                refusal_evidence,
             )
         if dry_run and durable_reconciliation:
             assert isinstance(reconciliation_evidence, Mapping)
@@ -1033,6 +1343,13 @@ class VerificationMergeExecutor:
         readback = self.repository.merge_readback(
             canonical, run.pr_number
         )
+        if isinstance(prepared_gate, Mapping) and prepared_gate.get("contract") == "native_single_closer_gate.v1":
+            response_sha = pending.get("native_merge_response_sha")
+            if response_sha is None:
+                return self._receipt("retry_after_readback", operation_key, run, manifest, readback)
+            if self._merged_exactly(readback, run) and response_sha != readback.get("merge_commit_sha"):
+                self._refuse_native_conflict(run, operation_key, readback=readback)
+                raise MergeIdentityConflict("native recovery returned/fetched merge identity conflict")
         if self._merged_exactly(readback, run):
             self.ledger.finish_merge_readback(operation_key, readback)
             return self._receipt(
@@ -1079,14 +1396,89 @@ class VerificationMergeExecutor:
             == FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
         )
 
-    @staticmethod
     def _receipt(
+        self,
         outcome: str,
         operation_key: str,
         run: VerificationRun,
         manifest: ProtectedDeliveryManifest,
         readback: Mapping[str, object],
     ) -> MergeEffectReceipt:
+        if outcome == "retry_after_readback" and self._merged_exactly(readback, run):
+            pending = self.ledger.pending_effect_binding(run.run_id)
+            payload = pending.get("payload") if isinstance(pending, Mapping) else None
+            gate = payload.get("verified_merge_prepared") if isinstance(payload, Mapping) else None
+            if isinstance(gate, Mapping) and gate.get("contract") == "native_single_closer_gate.v1":
+                self._native_compensation(run, readback)
+        if outcome == "merged":
+            pending = self.ledger.pending_effect_binding(run.run_id)
+            payload = pending.get("payload") if isinstance(pending, Mapping) else None
+            gate = payload.get("verified_merge_prepared") if isinstance(payload, Mapping) else None
+            if isinstance(gate, Mapping) and gate.get("contract") == "native_single_closer_gate.v1":
+                fresh_readback = self.repository.merge_readback(run.repository.lower(), run.pr_number)
+                fresh_exact = self._merged_exactly(fresh_readback, run)
+                if (
+                    fresh_exact
+                    and fresh_readback.get("merge_commit_sha")
+                    != readback.get("merge_commit_sha")
+                ):
+                    self._refuse_native_conflict(
+                        run,
+                        operation_key,
+                        readback=fresh_readback,
+                        prepare_readback=False,
+                    )
+                    raise MergeIdentityConflict(
+                        "native durable-success readback identity contradicted"
+                    )
+                if not fresh_exact:
+                    raise MergeAuthorityError("native durable-success recovery readback drifted")
+                readback = fresh_readback
+                reader = getattr(self.ledger, "post_effect_authority", None)
+                if not callable(reader):
+                    raise MergeAuthorityError("native terminal delivery lacks reconciled authority")
+                authority = reader(operation_key, run_id=run.run_id)
+                if (
+                    not valid_post_effect_authority(
+                        authority,
+                        {
+                            "repository": run.repository,
+                            "run_id": run.run_id,
+                            "pr_number": run.pr_number,
+                            "head_sha": run.current_head_sha,
+                        },
+                        readback.get("merge_commit_sha"),
+                    )
+                    or authority.get("operation_key") != operation_key
+                    or authority.get("deployment") != gate.get("post_effect_deployment")
+                ):
+                    raise MergeAuthorityError("native post-effect phase identity drifted")
+                credential = self.credentials.resolve(
+                    repository=run.repository.lower(),
+                    credential_id=manifest.credential_id,
+                    rotation_generation=manifest.credential_generation,
+                )
+                reconcile = getattr(self.repository, "native_single_closer_reconcile", None)
+                if not callable(reconcile):
+                    raise MergeAuthorityError("native closure attribution adapter is unavailable")
+
+                def record_closure_conflict() -> None:
+                    self._record_native_conflict_fence(run, operation_key)
+
+                closure = reconcile(
+                    gate["repository"],
+                    run.pr_number,
+                    closing_issue=run.request["linked_issue"],
+                    readback=readback,
+                    credential=credential,
+                    snapshot=gate["body_edit"]["native_snapshot"],
+                    before_compensation=record_closure_conflict,
+                )
+                readback = {
+                    **readback,
+                    "post_effect_authority": dict(authority),
+                    "native_closure": dict(closure),
+                }
         return MergeEffectReceipt(
             outcome=outcome,
             operation_key=operation_key,

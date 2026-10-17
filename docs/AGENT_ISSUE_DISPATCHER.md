@@ -424,6 +424,49 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   or an operation key. Manual mode rejects post-effect inputs, consumer/in-flight v2 predecessors,
   and mixed v1/v2 history, and is never a recoverable-consumer authority path.
 
+- The API-backed merge executor admits a native single-closer route only for an authenticated v3
+  full-review run with exactly one open governing closer and no parent, supporting or second Issue.
+  The complete bounded GitHub closing-reference and resolved-review-thread pages must agree with
+  exact repository, PR, head, base, title, raw body digest, Issue contract digest/update identity and
+  review depth. Existing verified-merge authority or phase comments preserve the in-flight protocol;
+  legacy and multi-Issue runs retain verified-merge. Incomplete pagination, duplicate identities,
+  cursor failures or snapshot drift confer no authority.
+- Closure mechanics do not relax the independent ledger review gate, required current-head CI,
+  protected-base/manifest/credential gates, exact Issue contract checks, review-thread resolution,
+  owner-doc receipt or final delivery readback. Admission rereads the freshly deployed #4897
+  capability and binds its source/image/schema/epoch identity. The existing task-bound effect intent
+  remains the sole durable writer fence. One serialized final reread precedes REST merge with the
+  exact expected head SHA and fixed non-closing title/message; expected-head conflict is not a retry
+  authorization. Returned and fetched merge SHAs must agree, and the fetched commit text must match.
+  A contradictory returned identity durably preserves the task's operation-bound
+  `native_merge_identity_conflict` refusal. Depending on the discovery point, the outbox may remain
+  pending or unknown, or may already be succeeded; the refusal does not rewrite it into a terminal
+  dead-letter. Only exact-attributed defensive compensation is permitted, and governed repair is
+  required; generic transport recovery cannot turn that contradiction into a successful merge receipt.
+- Before returning a native merge receipt, the executor requires the same operation's authenticated
+  #4897 reconciled post-effect authority and unchanged deployed identity. It reuses bounded repository
+  event enumeration and exact PR/repository/merge-SHA closure attribution, verifies the sole closer
+  closed by that PR, and reopens only an unexpected closure attributed to that PR. Compensation or
+  ambiguous attribution withholds the merge receipt. Before reopening an unexpected closure
+  attributed to this exact PR, the task-bound operation is durably fenced and every reopen write
+  revalidates its current task owner, lease, and exact operation binding; reopening the Issue,
+  restarting, lease expiry, or task takeover cannot erase that refusal, reuse former-owner write
+  authority, or reconstruct a successful merge receipt. Restart performs readback and reconciliation,
+  never another merge. A merge receipt is not terminal delivery:
+  PR-specific owner-doc receipts and the governing verification workflow's final lifecycle/readback
+  gates still apply. Repository delivery of this integration does not claim deployment.
+- The native consumer's final merged-recovery scan is another producer of that same refusal. If the
+  freshly claimed consumer observes a complete unexpected-closure record attributed to the exact
+  PR/repository/merge SHA after the executor's earlier scan was clean, it persists the existing
+  operation-bound conflict before delegating compensation to the same-ledger executor recovery path.
+  A missing or failed callback cannot clear the conflict or admit a later clean scan; unrelated PR
+  closures, manual closes, open references, and incomplete attribution receive no compensation
+  authority. The fresh database-clock/version-bound task transition is a compensation-only recovery
+  fence before credential resolution and each reopen write. An ordinary clean executor scan may
+  resolve the protected credential while determining that no compensation is needed, but it cannot
+  perform a reopen write without the per-write fence above; this narrower ordering is not additional
+  write authority.
+
 - Verification dispatch request v3 binds one non-empty, sorted set of at most 10 closing issues and
   one authenticated `final_review_rounds` value to
   the exact repository, PR, and head. `supporting_authority_json` is durable, cumulative evidence
