@@ -19,13 +19,12 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from app.api.routes.active_context_selection import build_selection_service, get_selection_store
 from app.api.routes.vault_resolution import compatibility_selected_vault_root
 from app.auth import api_key_header, resolve_auth_subject
-from app.instance._storage_boundary import RegistryError
 from app.instance.filesystem_identity import (
     resolve_filesystem_root_identity,
     same_filesystem_root,
 )
 from app.instance.settings_rebind import SettingsRebindStore, compatibility_ingress_window
-from app.instance.vault_registry import VaultRegistryStore
+from app.instance.vault_registry import RegistryError, VaultRegistryStore
 from app.settings import settings
 
 HEADER_COMPATIBILITY_PRECONDITION = "X-Compatibility-Write-Precondition"
