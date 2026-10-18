@@ -52,8 +52,11 @@ A red `dev` or `test` candidate opens or updates one rolling bug Issue per chann
 candidate SHA, the commit range since the channel's last good candidate, the failing gate, and the run
 or receipt. The next candidate then proceeds as normal. The default recovery is **roll-forward**: the
 fix merges to `main` and reaches `dev` as a later candidate. The controller may redeploy the last good
-image automatically only when the failed candidate applied no forward-only migration. The existing
-rule that automation never rolls back a database stays.
+image automatically only when the database revision is unchanged by the failed candidate, or when
+prior-image compatibility with the migrated schema is explicitly proven. A reversible migration marker
+alone is not enough. This matches `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md :: Concretely`.
+Otherwise the controller keeps the retained target image. The existing rule that automation never
+rolls back a database stays.
 
 ### D4 — Git refs record channel state
 
@@ -111,7 +114,7 @@ so a bad candidate cannot crash the deployer (for example the 2026-10 controller
 Tracked by the parent Issue linked from `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md :: Continuous dev delivery target (ADR-0068)`.
 The slices are: the liveness check (D6), automatic channel bug filing (D3), the `dev`/`test` refs and
 their advancement (D4), the kill switch replacing unload-as-pause (D5), pinned controller tooling (D7),
-the safe last-good redeploy (D3), heavy tests on `dev` (D4), and prod promotion from `test` to
+the fail-closed last-good redeploy (D3), heavy tests on `dev` (D4), and prod promotion from `test` to
 `stable` (D4, superseding ADR-0040 §1–§2).
 
 ## References

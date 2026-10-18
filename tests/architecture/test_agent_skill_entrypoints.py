@@ -43,7 +43,7 @@ def test_canonical_agents_entrypoint_routes_to_repo_skill_index() -> None:
 def test_canonical_agents_entrypoint_stays_within_active_instruction_budget() -> None:
     text = _read("AGENTS.md")
 
-    assert len(text.splitlines()) <= 162
+    assert len(text.splitlines()) <= 161
     assert len(text.split()) <= 2_080
     assert len(text) <= 15_500
 
