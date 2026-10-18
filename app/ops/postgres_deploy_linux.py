@@ -2573,12 +2573,13 @@ class DeploymentSupervisor:
         self._require_current_config()
         if set(data) != {
             'action', 'failed_operation_id', 'source_operation_id',
-            'plan', 'authority_cutover',
+            'source_plan', 'plan', 'authority_cutover',
         }:
             raise PostgresDeployError()
         request = TestRecoveryRequest.from_payload({
             'failed_operation_id': data['failed_operation_id'],
             'source_operation_id': data['source_operation_id'],
+            'source_plan': data['source_plan'],
             'plan': data['plan'],
             'authority_cutover': data['authority_cutover'],
         })

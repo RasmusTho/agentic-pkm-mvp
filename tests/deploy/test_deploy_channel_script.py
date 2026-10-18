@@ -5577,8 +5577,8 @@ def test_linux_recovery_rejects_active_supervised_operation(monkeypatch, tmp_pat
 
     plan = DeployPlan(
         'test', 'b' * 40, tuple(DATABASE_CONSUMERS.values()),
-        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), True,
-        'sha256:' + 'c' * 64, False,
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'c' * 64, True,
     )
     authority = AuthorityCutover(
         'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
@@ -5736,9 +5736,10 @@ def test_linux_reconstruction_uses_retained_reset_request_after_journal_rollover
             journal.write(operation_id, stage)
 
     fail_operation(source_operation_id, source_cutover_plan)
-    effects = linux.LinuxEffects(SimpleNamespace(
+    config = SimpleNamespace(
         channel='test', root=tmp_path, uid=os.geteuid(), gid=os.getegid(), journal=journal,
-    ))
+    )
+    effects = linux.LinuxEffects(config)
     source_request = TestRecoveryRequest(
         source_operation_id, source_request_plan, authority,
     )
@@ -5756,17 +5757,51 @@ def test_linux_reconstruction_uses_retained_reset_request_after_journal_rollover
     ownership_root.mkdir(mode=0o700)
     (ownership_root / 'legacy-owner-inventory.json').write_text('{}\n')
     (ownership_root / 'deployment-quiescence-proof.json').write_text('{}\n')
-    effects._validate_test_instance_state_recovery_authority = (
-        lambda *_args, **_kwargs: 'c' * 64
-    )
-    effects.recovery_quiescent = lambda: True
     monkeypatch.setattr(
         linux, '_private_json', lambda path: json.loads(path.read_text()),
     )
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'local_database', lambda _self: True,
+    )
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'recovery_quiescent', lambda _self: True,
+    )
+    monkeypatch.setattr(
+        linux.LinuxEffects, '_validate_test_instance_state_recovery_authority',
+        lambda *_args, **_kwargs: 'c' * 64,
+    )
 
-    receipt_path, *_ = effects._write_test_instance_state_recovery_receipt(request)
+    def compose(_self, *args, **_kwargs):
+        if '--user' not in args:
+            return ''
+        return json.dumps({
+            'schema': 'test-instance-state-recovery.v2',
+            'channel': 'test',
+            'activation': 'inactive_fenced',
+            'request': {
+                'source_operation_id': source_operation_id,
+                'failed_successor_operation_id': failed_successor_operation_id,
+            },
+            'ledger_sha256': 'c' * 64,
+        })
+
+    monkeypatch.setattr(linux.LinuxEffects, 'compose', compose)
+    supervisor = linux.DeploymentSupervisor(config)
+
+    def run_rpc(_argv, **kwargs):
+        response = supervisor.request(json.loads(kwargs['input']))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(response))
+
+    monkeypatch.setattr(linux.subprocess, 'run', run_rpc)
+    result = linux.SshDeployRemote('ygg-test').test_recovery_reconstruct_instance_state(request)
+
+    receipt_path = ownership_root / (
+        'test-instance-state-recovery-' + failed_successor_operation_id + '.json'
+    )
 
     payload = json.loads(receipt_path.read_text())
+    assert result['activation'] == 'inactive_fenced'
     assert payload['source_operation_id'] == source_operation_id
     assert payload['failed_successor_operation_id'] == failed_successor_operation_id
     assert payload['candidate_revision'] == fresh_candidate.revision
