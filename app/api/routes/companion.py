@@ -2628,6 +2628,44 @@ def _vault_identity_state(
     )
 
 
+def _scoped_ingest_binding_state(scoped: _ScopedCompanionRead) -> IngestBindingResponse:
+    """Watcher status for the request binding only (MVR-05B4b).
+
+    The heartbeat is one process-wide fact naming one root. It is compared with the
+    request binding's root and reported as bound only for that same root. Any other
+    outcome is "unbound" with no watcher path, so a heartbeat naming another binding
+    is never published, and process-wide rebind state is omitted.
+    """
+
+    if scoped.root is None:
+        return IngestBindingResponse(
+            state="unavailable",
+            bound=False,
+            detail="no vault binding is selected for this request",
+        )
+    try:
+        status = ingest_binding_status(selected_vault_path=str(scoped.root))
+    except Exception:
+        logger.warning("ingest binding status check failed", exc_info=True)
+        return IngestBindingResponse(
+            state="unavailable",
+            bound=False,
+            detail="ingest binding status could not be determined",
+        )
+    if status.is_bound:
+        return IngestBindingResponse(
+            state="bound",
+            bound=True,
+            detail="watcher/worker are bound to this vault",
+            watcher_vault_path=status.watcher_vault_path,
+        )
+    return IngestBindingResponse(
+        state="unbound",
+        bound=False,
+        detail="the watcher/worker are not confirmed bound to this vault",
+    )
+
+
 def _ingest_binding_state(vault_root: Path) -> IngestBindingResponse:
     """Report whether the watcher/worker are actually bound to ``vault_root``.
 
@@ -2636,14 +2674,9 @@ def _ingest_binding_state(vault_root: Path) -> IngestBindingResponse:
     visible must not introduce a new outage of its own).
     """
 
-    if _SCOPED_COMPANION_READ.get() is not None:
-        # The watcher heartbeat is process-wide (one compatibility binding); for a
-        # scoped read it may name another vault, so it is not reported.
-        return IngestBindingResponse(
-            state="unavailable",
-            bound=False,
-            detail="watcher binding status is process-wide and is not reported for scoped reads",
-        )
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None:
+        return _scoped_ingest_binding_state(scoped)
     try:
         status = ingest_binding_status(selected_vault_path=str(vault_root))
     except Exception:
