@@ -277,6 +277,11 @@ def main(argv: list[str] | None = None) -> int:
         help='reset only the exact failed TEST source projection, then deploy this candidate',
     )
     parser.add_argument(
+        '--reconstruct-missing-instance-state', '--reconstruct-missing-test-instance-state',
+        dest='reconstruct_missing_instance_state', action='store_true',
+        help='reconstruct only the exact already-lost TEST instance-state authority',
+    )
+    parser.add_argument(
         '--failed-operation-id',
         help='exact failed TEST deployment operation authenticated by --recover-test-source',
     )
@@ -291,14 +296,15 @@ def main(argv: list[str] | None = None) -> int:
                 raise PostgresDeployError()
             selected = AuthorityCutover(args.authority_cutover_binding, args.authority_cutover_root,
                                         args.authority_cutover_ownership_root)
-            if args.recover_test_source:
+            if args.recover_test_source or args.reconstruct_missing_instance_state:
                 recovery_authority = selected
             else:
                 cutover = selected
-        if args.recover_test_source:
+        if args.recover_test_source or args.reconstruct_missing_instance_state:
             if (args.channel != 'test' or not args.automatic or not args.existing_secrets_only
                 or args.reconcile_pending or args.operation_id is not None
-                or args.failed_operation_id is None or recovery_authority is None):
+                or args.failed_operation_id is None or recovery_authority is None
+                or (args.recover_test_source and args.reconstruct_missing_instance_state)):
                 raise PostgresDeployError()
             if not isinstance(args.failed_operation_id, str) or str(UUID(args.failed_operation_id)) != args.failed_operation_id:
                 raise PostgresDeployError()
@@ -317,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
                           (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only,
                           args.image_digest, args.automatic, cutover)
         recovery_request = None
-        if args.recover_test_source:
+        if args.recover_test_source or args.reconstruct_missing_instance_state:
             failed_operation_id = args.failed_operation_id
             selected_authority = recovery_authority
             if not isinstance(failed_operation_id, str) or selected_authority is None:
@@ -332,6 +338,7 @@ def main(argv: list[str] | None = None) -> int:
                 or args.operation_id is None
                 or args.reconcile_pending
                 or args.recover_test_source
+                or args.reconstruct_missing_instance_state
                 or args.channel not in {'dev', 'test'}
             ):
                 raise PostgresDeployError()
@@ -349,6 +356,24 @@ def main(argv: list[str] | None = None) -> int:
             }
             print(json.dumps(proof, sort_keys=True))
             return 0
+        if args.reconstruct_missing_instance_state:
+            if recovery_request is None:
+                raise PostgresDeployError()
+            # The explicit producer is itself crash-idempotent on the VM.  The
+            # host checkpoint binds its fresh successor so a host interruption
+            # after reconstruction cannot start a second deployment operation.
+            marker = _read_test_recovery_marker(controller, recovery_request)
+            if marker is None:
+                result = SshDeployRemote('ygg-test').test_recovery_reconstruct_instance_state(
+                    recovery_request
+                )
+                if result.get('activation') != 'inactive_fenced':
+                    raise PostgresDeployError()
+                _write_test_recovery_marker(
+                    controller, recovery_request, 'ready', str(uuid4())
+                )
+            elif marker['state'] != 'ready':
+                raise PostgresDeployError()
         if recovery_request is not None:
             remote = SshDeployRemote('ygg-test')
             marker = _read_test_recovery_marker(controller, recovery_request)

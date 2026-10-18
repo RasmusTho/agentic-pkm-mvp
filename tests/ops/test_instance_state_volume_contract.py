@@ -4325,6 +4325,134 @@ def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
         assert service["depends_on"]["instance-state-init"]["condition"] == "service_completed_successfully"
 
 
+def test_missing_established_registry_remains_fail_closed_after_recovery_support(tmp_path) -> None:
+    """The new TEST producer does not weaken ordinary consumer preflight."""
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
+    layout.ensure()
+    store = VaultRegistryStore(layout.registry_path)
+    store.load()
+    layout.registry_path.unlink()
+    store.snapshot_path.unlink()
+    store.snapshot_checksum_path.unlink()
+
+    with pytest.raises(InstanceStatePreflightError, match="producer has not initialized"):
+        preflight_instance_state(
+            layout,
+            consumer_paths={
+                "api": layout.registry_path,
+                "worker": layout.registry_path,
+                "watcher": layout.registry_path,
+                "heimdal-capture-watch": layout.registry_path,
+            },
+        )
+
+
+def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(tmp_path) -> None:
+    """The explicit TEST producer reconstructs only an existing dormant binding."""
+    import app.instance.legacy_owner_recovery as recovery_module
+
+    state_mount = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    layout = InstanceStateLayout.for_channel(state_mount, "test")
+    runtime = InstanceRegistryRuntime.for_paths(layout, host_global_root)
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=vault_root,
+        watcher_vault_path=vault_root,
+    )
+    legacy_path = tmp_path / "missing-legacy.md"
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        owners=[
+            {
+                "channel_id": "test",
+                "vault_binding_id": registration.vault_binding_id,
+                "root": str(vault_root.resolve()),
+            }
+        ],
+    )
+    # Simulate the source-recovery reset's lost volume while preserving the
+    # host-global ownership authority and its stopped-window proof.
+    shutil.rmtree(layout.root)
+    state_mount.chmod(0o700)
+    recovery_receipt = host_global_root / (
+        "test-instance-state-recovery-" + "11111111-1111-4111-8111-111111111111" + ".json"
+    )
+    candidate_revision = "a" * 40
+    candidate_digest = "sha256:" + "a" * 64
+    request_payload = {
+        "schema": "test-instance-state-recovery.v1",
+        "channel": "test",
+        "failed_operation_id": "11111111-1111-4111-8111-111111111111",
+        "candidate_revision": candidate_revision,
+        "candidate_image_digest": candidate_digest,
+        "authority_cutover": {
+            "binding_id": registration.vault_binding_id,
+            "root": str(vault_root.resolve()),
+            "ownership_root": str(host_global_root.resolve()),
+        },
+        "disposition": "complete",
+        "owner_receipt_sha256": hashlib.sha256(owner_receipt.read_bytes()).hexdigest(),
+        "quiescence_proof_sha256": hashlib.sha256(
+            (host_global_root / "deployment-quiescence-proof.json").read_bytes()
+        ).hexdigest(),
+    }
+    recovery_receipt.write_text(
+        json.dumps(request_payload, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    recovery_receipt.chmod(0o600)
+
+    result = recovery_module.reconstruct_missing_test_instance_state(
+        channel="test",
+        failed_operation_id=request_payload["failed_operation_id"],
+        candidate_revision=candidate_revision,
+        candidate_image_digest=candidate_digest,
+        authority_binding_id=registration.vault_binding_id,
+        authority_root=str(vault_root.resolve()),
+        authority_ownership_root=str(host_global_root.resolve()),
+        instance_state_root=state_mount,
+        host_global_root=host_global_root,
+        recovery_receipt_path=recovery_receipt,
+        owner_receipt_path=owner_receipt,
+        expected_owner_receipt_sha256=request_payload["owner_receipt_sha256"],
+        quiescence_proof_path=host_global_root / "deployment-quiescence-proof.json",
+        expected_quiescence_proof_sha256=request_payload["quiescence_proof_sha256"],
+    )
+
+    assert result["activation"] == "inactive_fenced"
+    restored = VaultRegistryStore(layout.registry_path).load()
+    assert restored.authority == "dormant"
+    assert restored.revision == 1
+    assert set(restored.registrations) == {registration.vault_binding_id}
+    assert preflight_instance_state(
+        layout,
+        consumer_paths={
+            "api": layout.registry_path,
+            "worker": layout.registry_path,
+            "watcher": layout.registry_path,
+            "heimdal-capture-watch": layout.registry_path,
+        },
+    ).registry_path == str(layout.registry_path.resolve())
+    assert recovery_module.reconstruct_missing_test_instance_state(
+        channel="test",
+        failed_operation_id=request_payload["failed_operation_id"],
+        candidate_revision=candidate_revision,
+        candidate_image_digest=candidate_digest,
+        authority_binding_id=registration.vault_binding_id,
+        authority_root=str(vault_root.resolve()),
+        authority_ownership_root=str(host_global_root.resolve()),
+        instance_state_root=state_mount,
+        host_global_root=host_global_root,
+        recovery_receipt_path=recovery_receipt,
+        owner_receipt_path=owner_receipt,
+        expected_owner_receipt_sha256=request_payload["owner_receipt_sha256"],
+        quiescence_proof_path=host_global_root / "deployment-quiescence-proof.json",
+        expected_quiescence_proof_sha256=request_payload["quiescence_proof_sha256"],
+    ) == result
 def test_runtime_preflight_rejects_foreign_channel_host_global_lease_without_mutation(
     tmp_path,
 ) -> None:

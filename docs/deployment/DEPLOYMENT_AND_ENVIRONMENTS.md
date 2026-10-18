@@ -412,6 +412,28 @@ preparation window. A separately authorized ordinary B47 producer must create it
 proof; no manual state edit, migration retarget, B47 completion, live TEST repair or activation is
 inferred. This source preparation does not itself authorize the future live operation or owner ACK.
 
+#### TEST source-recovery instance-state preservation and explicit reconstruction
+
+The TEST source-projection recovery reset preserves `pkm-test_instance-state`. It removes only
+the managed `pgdata` and runtime-temporary projection volumes, because the instance registry and
+host-global ownership ledger are durable authority rather than rebuildable runtime state. A
+missing or corrupt registry remains a fail-closed consumer-preflight error; the normal deploy and
+startup paths never create it as a side effect.
+
+For the already-observed TEST total-loss case, the host controller exposes the explicit
+`--reconstruct-missing-test-instance-state` operation. It binds the terminal failed successor and
+completed source-recovery disposition to a fresh owner-inventory receipt and two-pass quiescence
+proof, the exact selected TEST authority tuple, the existing host-global key/ledger, and the new
+candidate revision/image digest. The mounted runtime producer validates those bytes before any
+instance-state write, then uses the canonical deployment-admission -> producer-transition ->
+ownership-ledger -> registry-store order and the existing registry snapshot, checksum, and
+legacy-export writers to materialize only receipt/ledger-proven dormant registrations. The result
+is inactive-fenced and does not activate runtime authority or alter vault/source/database bytes.
+The request receipt and result are byte-bound for crash-safe retries; changed candidate,
+operation, disposition, owner evidence, proof, binding, root, channel, or lock evidence refuses
+without mutation. A successful reconstruction is still only a stopped-window producer: a separate
+fresh normal TEST deployment and the parent acceptance gates remain required.
+
 #### Legacy owner root namespace authority (#4539)
 
 The owner-authorized decision recorded on 2026-08-30 is host-side validation (Option B). The

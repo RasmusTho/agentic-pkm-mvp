@@ -3484,6 +3484,7 @@ def _materialize_authenticated_channel_registrations(
     registry: VaultRegistryStore,
     ledger: OwnershipLedger,
     owners: tuple[LegacyOwner, ...],
+    owners_authenticated: bool = False,
 ) -> RegistrySnapshot:
     """Materialize an empty registry from the already-authenticated owner receipt.
 
@@ -3502,6 +3503,40 @@ def _materialize_authenticated_channel_registrations(
         for owner in owners
         if owner.channel_id == channel and owner.vault_binding_id
     )
+    if not owners_authenticated:
+        for owner in channel_owners:
+            try:
+                resolved = ledger.resolve_live_owner_bindings(
+                    (replace(owner, vault_binding_id=""),),
+                    allow_legacy=True,
+                )
+            except LedgerError as exc:
+                raise InstanceStatePreflightError(
+                    "authenticated owner does not match an active ownership lease"
+                ) from exc
+            if (
+                len(resolved) != 1
+                or resolved[0].vault_binding_id != owner.vault_binding_id
+            ):
+                raise InstanceStatePreflightError(
+                    "authenticated owner does not match its ownership binding"
+                )
+    # Ledger evidence is read before the registry lock.  Recovery therefore
+    # follows the canonical ownership-ledger -> registry-store order even when
+    # retired TEST bindings need dormant tombstones materialized.
+    tombstone_paths: dict[str, str] = {}
+    with ledger._locked():
+        key = ledger._load_or_create_key_locked(allow_create=False)
+        current = ledger._load_or_create_ledger_locked(key, allow_create=False)
+        for binding_id, lease in current.tombstones.items():
+            if lease.channel_id != channel:
+                continue
+            root = str(
+                Path(ledger._open_root(lease.sealed_root, key))
+                .expanduser()
+                .resolve(strict=False)
+            )
+            tombstone_paths[binding_id] = root
     snapshot = registry.load()
     registered_binding_ids = set(snapshot.registrations)
     owner_binding_ids = {owner.vault_binding_id for owner in channel_owners}
@@ -3526,23 +3561,6 @@ def _materialize_authenticated_channel_registrations(
     if not channel_owners:
         return snapshot
     for owner in channel_owners:
-        try:
-            resolved = ledger.resolve_live_owner_bindings(
-                (replace(owner, vault_binding_id=""),),
-                allow_legacy=True,
-            )
-        except LedgerError as exc:
-            raise InstanceStatePreflightError(
-                "authenticated owner does not match an active ownership lease"
-            ) from exc
-        if (
-            len(resolved) != 1
-            or resolved[0].vault_binding_id != owner.vault_binding_id
-        ):
-            raise InstanceStatePreflightError(
-                "authenticated owner does not match its ownership binding"
-            )
-    for owner in channel_owners:
         root = str(owner.root.expanduser().resolve(strict=False))
         registration = VaultRegistration(
             vault_binding_id=owner.vault_binding_id,
@@ -3566,19 +3584,6 @@ def _materialize_authenticated_channel_registrations(
             expected_revision=snapshot.revision,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
-    tombstone_paths: dict[str, str] = {}
-    with ledger._locked():
-        key = ledger._load_or_create_key_locked(allow_create=False)
-        current = ledger._load_or_create_ledger_locked(key, allow_create=False)
-        for binding_id, lease in current.tombstones.items():
-            if lease.channel_id != channel:
-                continue
-            root = str(
-                Path(ledger._open_root(lease.sealed_root, key))
-                .expanduser()
-                .resolve(strict=False)
-            )
-            tombstone_paths[binding_id] = root
     if tombstone_paths:
         tombstones = {
             binding_id: RemovalTombstone(
@@ -5345,6 +5350,23 @@ def _main(argv: list[str] | None = None) -> int:
             explicit_test.add_argument("--expected-registry-sha256", required=True)
             explicit_test.add_argument("--backup-root", type=Path, required=True)
             explicit_test.add_argument("--acknowledge-new-ownership-epoch", action="store_true")
+    reconstruct = subparsers.add_parser(
+        "deployment-reconstruct-missing-test-instance-state"
+    )
+    reconstruct.add_argument("--channel", required=True)
+    reconstruct.add_argument("--instance-state-root", type=Path, required=True)
+    reconstruct.add_argument("--host-global-root", type=Path, required=True)
+    reconstruct.add_argument("--recovery-receipt-path", type=Path, required=True)
+    reconstruct.add_argument("--failed-operation-id", required=True)
+    reconstruct.add_argument("--candidate-revision", required=True)
+    reconstruct.add_argument("--candidate-image-digest", required=True)
+    reconstruct.add_argument("--authority-binding-id", required=True)
+    reconstruct.add_argument("--authority-root", required=True)
+    reconstruct.add_argument("--authority-ownership-root", required=True)
+    reconstruct.add_argument("--owner-receipt-path", type=Path, required=True)
+    reconstruct.add_argument("--expected-owner-receipt-sha256", required=True)
+    reconstruct.add_argument("--quiescence-proof-path", type=Path, required=True)
+    reconstruct.add_argument("--expected-quiescence-proof-sha256", required=True)
     read = subparsers.add_parser("read-revision")
     read.add_argument("--registry-path", type=Path, required=True)
     read.add_argument("--consumer", required=True)
@@ -5534,6 +5556,27 @@ def _main(argv: list[str] | None = None) -> int:
             command.add_argument("--kind", choices=("human", "agent"), required=True)
             command.add_argument("--label", required=True)
     args = parser.parse_args(argv)
+    if args.command == "deployment-reconstruct-missing-test-instance-state":
+        from app.instance.legacy_owner_recovery import reconstruct_missing_test_instance_state
+
+        values = vars(args).copy()
+        values.pop("command")
+        try:
+            reconstruct_result = reconstruct_missing_test_instance_state(**values)
+        except (
+            InstanceStatePreflightError,
+            RegistryError,
+            LedgerError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ):
+            print(json.dumps({"channel": "test", "outcome": "refused", "prepared": False}))
+            return 1
+        print(json.dumps(reconstruct_result, sort_keys=True))
+        return 0
     if args.command in {"deployment-initialize-dormant-ownership", "deployment-bind-owner-proof", "deployment-qualify-native"}:
         from app.instance.legacy_owner_recovery import initialize_dormant_ownership, qualify_test_native_source
         values = vars(args).copy()
