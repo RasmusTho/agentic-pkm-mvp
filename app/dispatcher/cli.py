@@ -1196,7 +1196,11 @@ def _cmd_pickup_refresh(args: argparse.Namespace, store: SqliteStore) -> int:
 
     sync_meta = get_sync_meta(store, PROVIDER_IDENTITY)
     task = store.get_task(args.task_id)
-    refresh_reason = pickup_refresh_reason(task, sync_meta, args.repo)
+    refresh_reason = (
+        "explicit_readiness_repo_root"
+        if args.readiness_repo_root is not None
+        else pickup_refresh_reason(task, sync_meta, args.repo)
+    )
     if refresh_reason is None:
         _emit({
             "ok": True,

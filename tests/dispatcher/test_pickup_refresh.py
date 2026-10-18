@@ -314,6 +314,91 @@ def test_pickup_refresh_uses_readiness_repo_root_for_target_repository(
     assert hub_task is not None and hub_task.status == "ready"
 
 
+def test_pickup_refresh_revalidates_fresh_cache_when_readiness_repo_root_is_supplied(
+    pickup_store: SqliteStore,
+    tmp_path: Path,
+) -> None:
+    from unittest.mock import MagicMock, patch
+
+    target_repo = DEFAULT_REPOS[1]
+    task_id = github_issue_task_id(target_repo, 5491)
+    target_verify_path = "tests/fixtures/issue_readiness/valid_ready_candidate.md"
+    assert (REPO_ROOT / target_verify_path).is_file()
+
+    target_issue = _ready_issue(5491)
+    target_issue["body"] = VALID_READY_BODY.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        f"{target_verify_path}::test_fixture_classifications",
+    )
+    target_root = tmp_path / "selected-target"
+    target_root.mkdir()
+    assert not (target_root / target_verify_path).exists()
+
+    pull_at = datetime.now(timezone.utc).isoformat()
+    pickup_store.upsert_task(
+        TaskRecord(
+            task_id=task_id,
+            issue_number=5491,
+            title="Fresh cached ready issue",
+            status="ready",
+            priority="high",
+            source_anchor_refs=["github:issue:5491"],
+            created_at=pull_at,
+            updated_at=pull_at,
+            repo=target_repo,
+            sync_state={"last_pull_at": pull_at},
+        )
+    )
+    record_sync_batch_summary(
+        pickup_store,
+        PROVIDER_IDENTITY,
+        pull_at,
+        sync_result="ok",
+        sync_note=None,
+        extra={
+            "repo_results": {
+                target_repo: {
+                    "last_pull_at": pull_at,
+                    "sync_result": "ok",
+                    "ready_issue_scan": True,
+                }
+            }
+        },
+    )
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.get_rate_limit.return_value = {"remaining": 5000, "reset": None}
+    source.list_issues.side_effect = lambda repo, **_kwargs: (
+        [target_issue] if repo == target_repo else []
+    )
+    source.list_open_issues.side_effect = lambda repo, **_kwargs: (
+        [target_issue] if repo == target_repo else []
+    )
+
+    with patch("app.dispatcher.cli.GhCliIssueSource", return_value=source):
+        code, data = _run(
+            [
+                "pickup-refresh",
+                task_id,
+                "--repo",
+                target_repo,
+                "--readiness-repo-root",
+                str(target_root),
+                "--json",
+            ]
+        )
+
+    assert code == 1, data
+    assert data["ready"] is False
+    assert data["reason"] == "task_not_in_observed_ready_set"
+    assert data["refresh_reason"] == "explicit_readiness_repo_root"
+    assert data["refreshed"] is True
+    assert data["observed_ready"] is False
+    assert any(
+        call.args[0] == target_repo for call in source.list_issues.call_args_list
+    )
+
+
 def test_failed_refresh_preserves_truthful_fallback(
     pickup_store: SqliteStore,
 ) -> None:
