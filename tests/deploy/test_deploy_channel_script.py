@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import errno
+import hashlib
 import socket
 import subprocess
 import sys
@@ -3949,6 +3950,8 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
 
     controller.deploy_operation = deploy_operation
     calls: list[TestRecoveryRequest] = []
+    releases: list[TestRecoveryRequest] = []
+    events: list[str] = []
     deployed: list[tuple[DeployPlan, str]] = []
 
     class Remote:
@@ -3963,6 +3966,7 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
 
         def test_recovery_reconstruct_instance_state(self, request):
             calls.append(request)
+            events.append('reconstruct')
             return {
                 'schema': 'test-instance-state-recovery.v1',
                 'channel': 'test',
@@ -3973,6 +3977,11 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
                 'registered_bindings': ['test-binding'],
             }
 
+        def test_recovery_release_instance_state(self, request):
+            releases.append(request)
+            events.append('release')
+            return {'channel': 'test', 'released': True, 'reason': 'abandoned-deployment'}
+
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
     monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
@@ -3982,6 +3991,7 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
     def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap, operation_id):
         qualified()
         assert allow_bootstrap is False
+        events.append('deploy')
         deployed.append((selected, operation_id))
         return host.DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
 
@@ -4011,11 +4021,14 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
         '--authority-cutover-ownership-root', authority.ownership_root,
     ]
     assert host.main(args) == 0
-    assert calls == [TestRecoveryRequest(
+    expected_lineage = TestRecoveryRequest(
         failed_successor_operation_id, plan, authority,
         source_operation_id=failed_operation_id,
         source_plan=source_request.plan,
-    )]
+    )
+    assert calls == [expected_lineage]
+    assert releases == [expected_lineage]
+    assert events == ['reconstruct', 'release', 'deploy']
     assert len(deployed) == 1
     assert deployed[0][0] == plan
     assert deployed[0][1] != failed_operation_id
@@ -4028,7 +4041,6 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
 
 def test_missing_instance_state_recovery_refuses_authority_drift_without_mutation(monkeypatch, tmp_path):
     """The VM producer rejects a changed authority tuple before Compose."""
-    from dataclasses import replace
     from types import SimpleNamespace
     from uuid import uuid4
 
@@ -4040,13 +4052,20 @@ def test_missing_instance_state_recovery_refuses_authority_drift_without_mutatio
     )
 
     operation_id = str(uuid4())
+    source_operation_id = str(uuid4())
     digest = 'sha256:' + 'b' * 64
     plan = DeployPlan(
         'test', 'c' * 40, tuple(DATABASE_CONSUMERS.values()),
         (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
     )
-    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
-    failed = replace(plan, automatic=False, image_digest=None, authority_cutover=authority)
+    ownership_root = tmp_path / 'ownership'
+    ownership_root.mkdir(mode=0o700)
+    (ownership_root / 'legacy-owner-inventory.json').write_text('{}\n')
+    (ownership_root / 'deployment-quiescence-proof.json').write_text('{}\n')
+    authority = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(ownership_root),
+    )
+    failed = plan
     receipt = DeployReceipt(
         operation_id, 'test', 'deploy', 'failed', 'failed',
         source_failure='legacy_identity_persistence_refused',
@@ -4063,14 +4082,30 @@ def test_missing_instance_state_recovery_refuses_authority_drift_without_mutatio
             assert selected == operation_id
             return failed
 
-    effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path, journal=Journal()))
+    effects = linux.LinuxEffects(SimpleNamespace(
+        channel='test', root=tmp_path, journal=Journal(),
+        uid=os.geteuid(), gid=os.getegid(),
+    ))
     effects.local_database = lambda: True
+    effects.recovery_quiescent = lambda: True
+    effects._read_test_recovery_disposition = lambda _request: {'state': 'complete'}
     composed: list[object] = []
     effects.compose = lambda *args: composed.append(args) or ''
     drifted = AuthorityCutover('other-binding', authority.root, authority.ownership_root)
-    request = TestRecoveryRequest(operation_id, plan, drifted)
+    request = TestRecoveryRequest(
+        operation_id, plan, drifted,
+        source_operation_id=source_operation_id, source_plan=plan,
+    )
+    observed: list[AuthorityCutover] = []
+
+    def refuse_drift(selected, **_kwargs):
+        observed.append(selected.authority_cutover)
+        raise PostgresDeployError()
+
+    effects._validate_test_instance_state_recovery_authority = refuse_drift
     with pytest.raises(PostgresDeployError):
         effects.reconstruct_missing_test_instance_state(request)
+    assert observed == [drifted]
     assert composed == []
 
 
@@ -4108,6 +4143,7 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
 
     controller.deploy_operation = deploy_operation
     reconstruct_calls: list[object] = []
+    release_calls: list[object] = []
     deploy_calls: list[str] = []
 
     class Remote:
@@ -4125,6 +4161,13 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
                 'channel': 'test',
                 'activation': 'inactive_fenced',
                 'request': {'failed_operation_id': operation_id},
+            }
+
+        def test_recovery_release_instance_state(self, request):
+            release_calls.append(request)
+            return {
+                'channel': 'test', 'released': False,
+                'reason': 'already-released-after-reconstruction',
             }
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
@@ -4165,6 +4208,8 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
     assert host.main(args) == 0
     assert host.main(args) == 0
     assert reconstruct_calls == ['reconstruct']
+    assert len(release_calls) == 2
+    assert release_calls[0] == release_calls[1]
     assert len(deploy_calls) == 2
     assert deploy_calls[0] == deploy_calls[1]
     capsys.readouterr()
@@ -5511,6 +5556,112 @@ def test_linux_recovery_prepares_new_volume_before_runtime_uid(monkeypatch, tmp_
     assert calls[1][1]['cutover'] == cutover
     assert calls[0][1]['candidate'] == plan
     assert calls[1][1]['candidate'] == plan
+
+
+def test_linux_recovery_releases_authenticated_lease_after_durable_result(tmp_path):
+    """Lease handoff reuses the exact reconstruction evidence and controller."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
+
+    failed_operation_id = str(uuid4())
+    source_operation_id = str(uuid4())
+    ownership_root = tmp_path / 'ownership'
+    ownership_root.mkdir(mode=0o700)
+    public_root = ownership_root / 'deployment-public'
+    public_root.mkdir(mode=0o700)
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'b' * 64, True,
+    )
+    authority = AuthorityCutover('test-binding', str(tmp_path / 'vault'), str(ownership_root))
+    request = TestRecoveryRequest(
+        failed_operation_id, plan, authority,
+        source_operation_id=source_operation_id, source_plan=plan,
+    )
+    proof = {
+        'channel_id': 'test',
+        'controller': {'pid': 4242, 'start_token': 'linux:' + 'c' * 64},
+    }
+    proof_path = ownership_root / 'deployment-quiescence-proof.json'
+    proof_path.write_text(json.dumps(proof, sort_keys=True) + '\n', encoding='utf-8')
+    proof_path.chmod(0o600)
+    receipt = {
+        'schema': 'test-instance-state-recovery.v2',
+        'channel': 'test',
+        'source_operation_id': source_operation_id,
+        'failed_successor_operation_id': failed_operation_id,
+        'candidate_revision': plan.revision,
+        'candidate_image_digest': plan.image_digest,
+        'authority_cutover': {
+            'binding_id': authority.binding_id,
+            'root': authority.root,
+            'ownership_root': authority.ownership_root,
+        },
+        'disposition': 'complete',
+        'owner_receipt_sha256': 'd' * 64,
+        'quiescence_proof_sha256': hashlib.sha256(proof_path.read_bytes()).hexdigest(),
+        'ledger_sha256': 'e' * 64,
+    }
+    receipt_path = ownership_root / (
+        'test-instance-state-recovery-' + failed_operation_id + '.json'
+    )
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + '\n', encoding='utf-8')
+    receipt_path.chmod(0o600)
+    result_path = ownership_root / (
+        'test-instance-state-recovery-result-' + failed_operation_id + '.json'
+    )
+    result_path.write_text(json.dumps({
+        'schema': 'test-instance-state-recovery.v2',
+        'channel': 'test',
+        'request': receipt,
+        'registry_revision': 1,
+        'registry_sha256': 'f' * 64,
+        'ledger_sha256': receipt['ledger_sha256'],
+        'activation': 'inactive_fenced',
+        'registered_bindings': [authority.binding_id],
+    }, sort_keys=True) + '\n', encoding='utf-8')
+    result_path.chmod(0o600)
+    (public_root / 'deployment-host-global-lease.json').write_text('{}\n')
+    (ownership_root / 'deployment-host-global-lease.json').write_text('{}\n')
+
+    config = SimpleNamespace(
+        channel='test', root=tmp_path, uid=os.geteuid(), gid=os.getegid(), journal=object(),
+    )
+    effects = linux.LinuxEffects(config)
+    effects.local_database = lambda: True
+    effects.recovery_quiescent = lambda: True
+    calls = []
+
+    def compose(*args, **kwargs):
+        calls.append((args, kwargs))
+        return json.dumps({
+            'channel': 'test', 'released': True,
+            'reason': 'abandoned-deployment',
+        })
+
+    effects.compose = compose
+    released = effects.release_test_instance_state_recovery_lease(request)
+
+    assert released['released'] is True
+    assert len(calls) == 1
+    assert calls[0][0][-4:] == (
+        '--controller-pid', '4242', '--controller-start-token', 'linux:' + 'c' * 64,
+    )
+    assert calls[0][1] == {'cutover': authority, 'candidate': plan}
+
+    (public_root / 'deployment-host-global-lease.json').unlink()
+    (ownership_root / 'deployment-host-global-lease.json').unlink()
+    effects.recovery_quiescent = lambda: False
+    effects.compose = lambda *_args, **_kwargs: pytest.fail('idempotent release called Compose')
+    assert effects.release_test_instance_state_recovery_lease(request) == {
+        'channel': 'test', 'released': False,
+        'reason': 'already-released-after-reconstruction',
+    }
 
 
 def test_linux_recovery_quiescence_rejects_running_state_writers(monkeypatch, tmp_path):

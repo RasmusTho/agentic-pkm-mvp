@@ -2233,6 +2233,119 @@ class LinuxEffects:
             raise PostgresDeployError()
         return output
 
+    def release_test_instance_state_recovery_lease(
+        self, request: TestRecoveryRequest,
+    ) -> dict[str, object]:
+        """Release the reconstruction lease after the host checkpoint is durable."""
+        request.validate()
+        if (
+            request.source_operation_id is None
+            or self.config.channel != 'test'
+            or not self.local_database()
+        ):
+            raise PostgresDeployError()
+        root = Path(request.authority_cutover.ownership_root)
+        try:
+            receipt = _private_recovery_json(
+                self._test_instance_state_recovery_receipt_path(request), self.config.uid,
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        expected_request = {
+            'schema': 'test-instance-state-recovery.v2',
+            'channel': 'test',
+            'source_operation_id': request.source_operation_id,
+            'failed_successor_operation_id': request.failed_operation_id,
+            'candidate_revision': request.plan.revision,
+            'candidate_image_digest': request.plan.image_digest,
+            'authority_cutover': {
+                'binding_id': request.authority_cutover.binding_id,
+                'root': request.authority_cutover.root,
+                'ownership_root': request.authority_cutover.ownership_root,
+            },
+            'disposition': 'complete',
+        }
+        if any(receipt.get(key) != value for key, value in expected_request.items()):
+            raise PostgresDeployError()
+        result_path = root / (
+            'test-instance-state-recovery-result-' + request.failed_operation_id + '.json'
+        )
+        try:
+            result = _private_recovery_json(result_path, self.config.uid)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        if (
+            result.get('schema') != 'test-instance-state-recovery.v2'
+            or result.get('channel') != 'test'
+            or result.get('activation') != 'inactive_fenced'
+            or result.get('request') != receipt
+            or result.get('ledger_sha256') != receipt.get('ledger_sha256')
+        ):
+            raise PostgresDeployError()
+        public_lease = root / 'deployment-public/deployment-host-global-lease.json'
+        legacy_lease = root / 'deployment-host-global-lease.json'
+        public_lease_exists = os.path.lexists(public_lease)
+        legacy_lease_exists = os.path.lexists(legacy_lease)
+        if not public_lease_exists and not legacy_lease_exists:
+            return {
+                'channel': 'test', 'released': False,
+                'reason': 'already-released-after-reconstruction',
+            }
+        if (
+            not self.recovery_quiescent()
+            or not public_lease_exists
+            or not legacy_lease_exists
+            or public_lease.is_symlink()
+            or legacy_lease.is_symlink()
+            or not public_lease.is_file()
+            or not legacy_lease.is_file()
+        ):
+            raise PostgresDeployError()
+        proof_path = root / 'deployment-quiescence-proof.json'
+        try:
+            proof_bytes = proof_path.read_bytes()
+        except OSError:
+            raise PostgresDeployError() from None
+        if hashlib.sha256(proof_bytes).hexdigest() != receipt.get('quiescence_proof_sha256'):
+            raise PostgresDeployError()
+        try:
+            proof = _private_recovery_json(proof_path, self.config.uid)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        controller = proof.get('controller')
+        if (
+            proof.get('channel_id') != 'test'
+            or not isinstance(controller, dict)
+            or set(controller) != {'pid', 'start_token'}
+            or not isinstance(controller.get('pid'), int)
+            or controller['pid'] <= 0
+            or not isinstance(controller.get('start_token'), str)
+            or re.fullmatch(r'(?:linux|darwin):[0-9a-f]{64}', controller['start_token']) is None
+        ):
+            raise PostgresDeployError()
+        raw = self.compose(
+            'run', '--rm', '--no-deps', '-T', '--user', str(self.config.uid),
+            'instance-state-init', 'python', '-m', 'app.instance.runtime',
+            'deployment-release', '--channel', 'test',
+            '--host-global-root', '/app/instance-ownership',
+            '--controller-pid', str(controller['pid']),
+            '--controller-start-token', controller['start_token'],
+            cutover=request.authority_cutover,
+            candidate=request.plan,
+        )
+        try:
+            released = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        if (
+            not isinstance(released, dict)
+            or released.get('channel') != 'test'
+            or released.get('released') is not True
+            or released.get('reason') not in {'abandoned-deployment', 'already-in-cleanup'}
+        ):
+            raise PostgresDeployError()
+        return released
+
     @contextmanager
     def channel_lock(self, *, journal: DeployJournal | None = None,
                      owner_marker: dict[str, str] | None = None,
@@ -2617,6 +2730,28 @@ class DeploymentSupervisor:
         result = LinuxEffects(self.config).reconstruct_missing_test_instance_state(request)
         return {'result': result, 'recovery': 'test-instance-state-reconstructed'}
 
+    def _test_recovery_release_instance_state(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Release only the lease authenticated by the completed reconstruction."""
+        self._require_current_config()
+        if set(data) != {
+            'action', 'failed_operation_id', 'source_operation_id',
+            'source_plan', 'plan', 'authority_cutover',
+        }:
+            raise PostgresDeployError()
+        request = TestRecoveryRequest.from_payload({
+            'failed_operation_id': data['failed_operation_id'],
+            'source_operation_id': data['source_operation_id'],
+            'source_plan': data['source_plan'],
+            'plan': data['plan'],
+            'authority_cutover': data['authority_cutover'],
+        })
+        if request.plan.channel != self.config.channel or self.config.channel != 'test':
+            raise PostgresDeployError()
+        if self.operation is not None:
+            raise PostgresDeployError()
+        result = LinuxEffects(self.config).release_test_instance_state_recovery_lease(request)
+        return {'result': result, 'recovery': 'test-instance-state-released'}
+
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
         if data.get('action') in {'karakeep-acquire', 'karakeep-project'}:
             from app.ops.karakeep_runtime import dispatch
@@ -2638,6 +2773,9 @@ class DeploymentSupervisor:
         if data.get('action') == 'test-recovery-reconstruct-instance-state':
             with self.mutex:
                 return self._test_recovery_reconstruct_instance_state(data)
+        if data.get('action') == 'test-recovery-release-instance-state':
+            with self.mutex:
+                return self._test_recovery_release_instance_state(data)
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
         operation_id = str(data['operation_id'])
@@ -2828,6 +2966,44 @@ class SshDeployRemote:
         ):
             raise PostgresDeployError()
         return response['result']
+
+    def test_recovery_release_instance_state(
+        self, request: TestRecoveryRequest,
+    ) -> dict[str, object]:
+        request.validate()
+        payload = {'action': 'test-recovery-release-instance-state', **request.payload()}
+        result = subprocess.run(
+            [
+                'ssh', '-o', 'BatchMode=yes', '--', self.host,
+                'sudo', '-n', '/usr/local/libexec/yggdrasil-bws-deploy',
+                'rpc', 'test',
+            ],
+            input=json.dumps(payload) + '\n', text=True,
+            capture_output=True, check=False,
+        )
+        if result.returncode:
+            raise PostgresDeployError()
+        try:
+            response = json.loads(result.stdout)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        released = response.get('result') if isinstance(response, dict) else None
+        if (
+            not isinstance(response, dict)
+            or response.get('recovery') != 'test-instance-state-released'
+            or not isinstance(released, dict)
+            or released.get('channel') != 'test'
+            or released.get('reason') not in {
+                'abandoned-deployment', 'already-in-cleanup',
+                'already-released-after-reconstruction',
+            }
+            or (
+                released.get('reason') != 'already-released-after-reconstruction'
+                and released.get('released') is not True
+            )
+        ):
+            raise PostgresDeployError()
+        return released
 
     def prepare(self, operation_id: str, plan: DeployPlan, *, bootstrap: bool) -> bool:
         self.bootstrap = bootstrap
