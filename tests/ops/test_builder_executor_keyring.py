@@ -167,6 +167,46 @@ def test_installer_plan_apply_binding_and_existing_state_refusal(host, tmp_path,
     assert original.read_bytes() == content and len(fake.encryptions) == 1
 
 
+@pytest.mark.parametrize("action", ["plan", "status", "apply"])
+@pytest.mark.parametrize("untrusted", ["local_branch", "foreign_repository", "stale_origin"])
+def test_every_installer_action_authenticates_source_before_privileged_ssh(
+        tmp_path, monkeypatch, capsys, action, untrusted):
+    spec = importlib.util.spec_from_file_location(
+        "keyring_untrusted_source_test",
+        Path(__file__).resolve().parents[2] / "scripts/install_builder_executor_keyring.py")
+    installer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(installer)
+    head = "a" * 40
+    monkeypatch.setattr(installer, "payload", lambda: {
+        "source_sha": head, "module": "raise RuntimeError('untrusted module executed')", "unit": ""})
+
+    def git(*args):
+        if args[:2] == ("remote", "get-url"):
+            return ("https://github.com/another/repository.git" if untrusted == "foreign_repository"
+                    else "https://github.com/RasmusTho/agentic-pkm-mvp.git")
+        if args[0] == "ls-remote":
+            return ("b" * 40 if untrusted == "local_branch" else head) + "\trefs/heads/main"
+        assert args == ("rev-parse", "origin/main")
+        return "b" * 40 if untrusted == "stale_origin" else head
+
+    monkeypatch.setattr(installer, "git", git)
+
+    def forbidden_ssh(*args, **kwargs):
+        pytest.fail("untrusted source reached privileged SSH")
+
+    monkeypatch.setattr(installer, "_RUN", forbidden_ssh)
+    argv = [] if action == "plan" else [action]
+    if action == "apply":
+        plan_file = tmp_path / "approved.json"
+        plan_file.write_text(json.dumps({"action": "apply", "plan_sha256": "c" * 64}))
+        argv += ["--plan-file", str(plan_file), "--expected-plan-sha256", "c" * 64]
+    assert installer.main(argv) == 78
+    result = json.loads(capsys.readouterr().out)
+    assert result == {"result": "refused", "reason": (
+        "source_repository_identity_refused" if untrusted == "foreign_repository"
+        else "exact_live_merged_main_required")}
+
+
 def test_apply_uses_encrypted_stdin_handoff_and_rejects_bad_custody(host):
     fake, package = host
     approved = invoke(package)
@@ -351,7 +391,7 @@ def test_remaining_owned_cgroup_blocks_withdrawal_success_and_reactivation(host)
     assert invoke(package, "apply", plan=stop)["owned_cgroup_empty_or_reclaimed"]
 
 
-@pytest.mark.parametrize("failure", [None, "empty", "public", "symlink", "hardlink", "acl", "foreign-acl",
+@pytest.mark.parametrize("failure", ["uid-no-acl", "empty", "public", "symlink", "hardlink", "acl", "foreign-acl",
                                          "group-acl", "write-acl", "malformed-acl", "root-no-acl",
                                          "writable-key", "writable-parent", "decrypt", "drop", "owner"])
 def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, monkeypatch, failure):

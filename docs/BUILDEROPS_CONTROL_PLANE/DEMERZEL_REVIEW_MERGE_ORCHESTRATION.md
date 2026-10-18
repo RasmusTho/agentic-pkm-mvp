@@ -142,6 +142,8 @@ The fixed Linux executor native-authentication installer is
 `bob-1-builder-system` SSH route. Repository delivery under #6245 supplies the installer, service and
 sanitized-environment integration; it does not establish production activation, personal login or
 the installed-main qualification under #6146. The API and GitHub bootstrap identities remain separate.
+Every installer action, including plan/status, authenticates clean source against freshly read
+`origin/main` before privileged SSH execution.
 
 An explicitly approved apply uses an existing private systemd host key to encrypt a newly generated
 native-keyring master on the VM. `LoadCredential` transports ciphertext only. A short root bootstrap
@@ -153,8 +155,9 @@ foreign state, a competing native owner, source/plan drift and unknown startup o
 Encryption and validation use finite transient services with read-only host-key file/parent mounts,
 preventing implicit generation or replacement of shared OS custody. Automatic native restart/boot
 also decrypts only after those mounts are active; PID1 never decrypts this credential. Ciphertext
-input admits only systemd's exact root-owned ACL granting `ygg` read access, or its UID-owned `0400`
-fallback. The long-running native process has no root identity or supplementary groups.
+input admits only systemd's exact root-owned ACL granting `ygg` read access. The UID-owned `0400`
+fallback is refused because the capability-bounded root bootstrap cannot read it. The long-running
+native process has no root identity or supplementary groups.
 An existing encrypted keyring never causes automatic master regeneration. The actual auth-preflight
 and model-child environment admit only the current UID's validated private local bus/runtime pair;
 ambient provider/GitHub credentials and `CODEX_HOME` remain excluded.

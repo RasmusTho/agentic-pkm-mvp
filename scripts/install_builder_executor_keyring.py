@@ -47,6 +47,9 @@ def merged_source(head: str) -> None:
 
 
 def dispatch(request: dict[str, Any]) -> dict[str, Any]:
+    # Even plan/status execute this source under sudo. Authenticate every
+    # privileged dispatch before constructing or sending the remote program.
+    merged_source(request["payload"]["source_sha"])
     source = request["payload"]["module"]
     program = "import json\nnamespace={'__name__':'executor_keyring_remote'}\n"
     program += f"exec(compile({source!r},'<reviewed-executor-keyring>','exec'),namespace)\n"
@@ -83,7 +86,6 @@ def main(argv: list[str] | None = None) -> int:
                 raise InstallerRefusal("operator_plan_mismatch")
             if approved.get("action") != args.operation:
                 raise InstallerRefusal("operator_action_mismatch")
-            merged_source(package["source_sha"])
             request["plan"] = approved
         response = dispatch(request)
         print(json.dumps(response, indent=2, sort_keys=True))

@@ -103,14 +103,15 @@ VM102 guest `builder-system`, existing `ygg` UID/GID1000, administered from the 
 `bob-1-builder-system` and noninteractive sudo. This does not install an executor identity, update
 the VM source checkout, activate the service or establish #6146 qualification.
 
-From a clean committed checkout, prepare the value-free plan and retain its `plan_sha256`:
+From a clean committed checkout matching freshly read `origin/main`, prepare the value-free plan
+and retain its `plan_sha256`. Every action, including plan/status, authenticates that source before
+privileged SSH execution:
 
 ```bash
 python3 scripts/install_builder_executor_keyring.py plan
 ```
 
-After concrete operator approval, apply the exact saved plan. Apply additionally requires the
-source/payload to match clean, freshly read `origin/main` in this repository:
+After concrete operator approval, apply the exact saved plan:
 
 ```bash
 python3 scripts/install_builder_executor_keyring.py apply \
@@ -131,8 +132,9 @@ ciphertext only; PID1 never decrypts it. The fixed `ExecStart=!` bootstrap retai
 needed to drop user/group identity, checks that the host-key file and parent are read-only, decrypts
 through descriptors, clears supplementary groups, permanently drops to `ygg`, and execs GNOME with
 an anonymous stdin pipe. Readiness runs as `ygg`. This ordering also protects automatic restart/boot.
-Ciphertext custody accepts systemd's exact root-owned read ACL for `ygg`, or its UID-owned `0400`
-fallback; additional ACL grants are refused.
+Ciphertext custody accepts only systemd's exact root-owned read ACL for `ygg`; additional grants
+and the UID-owned `0400` fallback are refused. That fallback is unreadable by the capability-bounded
+root bootstrap. The supported BOB-1 ACL path is exercised by the isolated native fixture.
 
 The concrete activation step enables `ygg` lingering and
 `yggdrasil-builder-executor-keyring.service`, retaining the user bus across SSH logout. Existing

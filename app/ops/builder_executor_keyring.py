@@ -233,9 +233,9 @@ def credential_permissions(fd: int, metadata: os.stat_result) -> None:
         acl = getattr(os, "getxattr")(fd, "system.posix_acl_access")
     except OSError as exc:
         require(exc.errno in (errno.ENODATA, errno.ENOTSUP), "credential_acl_unavailable")
-        require(metadata.st_uid == UID and stat.S_IMODE(metadata.st_mode) == 0o400,
-                "credential_owner_or_mode")
-        return
+        # The short root bootstrap deliberately has no DAC bypass capability.
+        # systemd's UID-owned 0400 fallback cannot be read with this sandbox.
+        raise Refusal("credential_read_acl_required") from exc
     require(metadata.st_uid == ROOT_UID and stat.S_IMODE(metadata.st_mode) == 0o440,
             "credential_acl_owner_or_mode")
     # Linux POSIX ACL xattr v2: tag, permissions, qualifier. Reject any extra grant,
