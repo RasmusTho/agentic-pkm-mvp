@@ -209,6 +209,12 @@ JSON-string replacement, shell-escaped `\\n` substitution, or an inline API payl
 can persist the two literal characters `\\` and `n`, leaving required headings such as `## SBS
 Impact` unparseable.
 
+When the Issue belongs to a constituent repository and this checkout contains the shared validator,
+pass that repository's local root with `--repo-root "$TARGET_REPO_ROOT"` during strict validation
+and `--readiness-repo-root "$TARGET_REPO_ROOT"` to `scripts/issue_pickup_claim.sh`. The pickup
+refresh applies that root only to the exact `--repo` target; keep GitHub repository identity and
+validator source imports rooted in their existing checkout.
+
 1. Read the live body into a file, edit the file as Markdown, and submit that file:
    ```bash
    set -euo pipefail

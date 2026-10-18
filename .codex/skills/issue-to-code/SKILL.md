@@ -23,6 +23,12 @@ hub by default. Every direct `gh issue` command in this skill carries `--repo "$
 constituent-surface work, use that constituent repository for its Issue and PR lifecycle while
 preserving a hub Issue only when the governing contract explicitly names it.
 
+When a constituent repository's Issue is handled from a different checkout, resolve its relative
+`Verify:` paths against that checkout by passing `--repo-root "$TARGET_REPO_ROOT"` to
+`scripts/validate_issue_readiness.py` and `--readiness-repo-root "$TARGET_REPO_ROOT"` to
+`scripts/issue_pickup_claim.sh`. Keep `--repo "$REPO"` as the GitHub repository identity; the root
+flag only selects local file checks for the exact target repository during pickup refresh.
+
 ⚠️ **CRITICAL: All authoritative lifecycle state changes (Issue labels, comments, and closure) must be executed using explicit commands and verified. Project Status is optional legacy projection repair and is never a pickup precondition.**
 
 Your governing rule:

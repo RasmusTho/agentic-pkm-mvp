@@ -1215,6 +1215,8 @@ def _cmd_pickup_refresh(args: argparse.Namespace, store: SqliteStore) -> int:
             configured_repos,
             configured_repositories=configured_repos,
             source=GhCliIssueSource(),
+            readiness_repo=args.repo,
+            readiness_repo_root=args.readiness_repo_root,
         )
     except RepositoryConfigurationError as exc:
         _emit({
@@ -1576,6 +1578,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("task_id", help="Repo-qualified dispatcher task identity")
     p.add_argument("--repo", required=True, help="Task GitHub repository (owner/repo)")
+    p.add_argument(
+        "--readiness-repo-root",
+        help="Repository root for Verify path checks on the exact target repository.",
+    )
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser(

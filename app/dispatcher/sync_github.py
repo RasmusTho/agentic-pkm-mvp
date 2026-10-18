@@ -299,7 +299,9 @@ def _label_names(payload: dict[str, Any]) -> list[str]:
     ]
 
 
-def _ready_validation_failure(payload: dict[str, Any]) -> str | None:
+def _ready_validation_failure(
+    payload: dict[str, Any], *, repo_root: str | None = None
+) -> str | None:
     number = payload.get("number")
     if (
         isinstance(number, bool)
@@ -328,6 +330,7 @@ def _ready_validation_failure(payload: dict[str, Any]) -> str | None:
         payload.get("body") or "",
         issue_number=number,
         labels=labels,
+        repo_root=repo_root,
     )
     if report.readiness_classification == "ready_candidate":
         return None
@@ -847,10 +850,14 @@ class PullSyncAdapter:
         store: DispatcherStore,
         source: GitHubIssueSource,
         provider: str = PROVIDER_IDENTITY,
+        readiness_repo: str | None = None,
+        readiness_repo_root: str | None = None,
     ) -> None:
         self._store = store
         self._source = source
         self._provider = provider
+        self._readiness_repo = readiness_repo
+        self._readiness_repo_root = readiness_repo_root
         self.last_reconciled_count = 0
 
     def pull(self, repo: str, **kwargs: Any) -> list[TaskRecord]:
@@ -951,7 +958,14 @@ class PullSyncAdapter:
         ready_issue_numbers: set[int] = set()
         for issue in ready_issues:
             try:
-                validation_failure = _ready_validation_failure(issue)
+                readiness_repo_root = (
+                    self._readiness_repo_root
+                    if repo == self._readiness_repo
+                    else None
+                )
+                validation_failure = _ready_validation_failure(
+                    issue, repo_root=readiness_repo_root
+                )
                 number = issue.get("number")
                 if validation_failure is not None:
                     if (

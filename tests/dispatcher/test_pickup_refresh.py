@@ -254,6 +254,66 @@ def test_missing_task_triggers_bounded_multi_repo_refresh(
     assert claim_data["task"]["status"] == "claimed"
 
 
+def test_pickup_refresh_uses_readiness_repo_root_for_target_repository(
+    pickup_store: SqliteStore,
+    tmp_path: Path,
+) -> None:
+    from unittest.mock import MagicMock, patch
+
+    hub_repo, target_repo = DEFAULT_REPOS
+    target_issue = _ready_issue(5491)
+    target_verify_path = "Tests/ScreenObserverSmokeTests.swift"
+    target_issue["body"] = VALID_READY_BODY.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        f"{target_verify_path}::testCaptureLoop",
+    )
+    target_root = tmp_path / "bifrost"
+    target_file = target_root / target_verify_path
+    target_file.parent.mkdir(parents=True)
+    target_file.write_text("final class ScreenObserverSmokeTests {}\n", encoding="utf-8")
+
+    hub_issue = _ready_issue(5492)
+    target_task_id = github_issue_task_id(target_repo, target_issue["number"])
+    hub_task_id = github_issue_task_id(hub_repo, hub_issue["number"])
+    source = MagicMock(spec=GitHubIssueSource)
+    source.get_rate_limit.return_value = {"remaining": 5000, "reset": None}
+    source.list_issues.side_effect = lambda repo, **_kwargs: (
+        [target_issue]
+        if repo == target_repo
+        else [hub_issue]
+        if repo == hub_repo
+        else []
+    )
+    source.list_open_issues.side_effect = lambda repo, **_kwargs: (
+        [target_issue]
+        if repo == target_repo
+        else [hub_issue]
+        if repo == hub_repo
+        else []
+    )
+
+    with patch("app.dispatcher.cli.GhCliIssueSource", return_value=source):
+        code, data = _run(
+            [
+                "pickup-refresh",
+                target_task_id,
+                "--repo",
+                target_repo,
+                "--readiness-repo-root",
+                str(target_root),
+                "--json",
+            ]
+        )
+
+    assert code == 0, data
+    assert data["ready"] is True
+    assert data["observed_ready"] is True
+    target_task = pickup_store.get_task(target_task_id)
+    hub_task = pickup_store.get_task(hub_task_id)
+    assert target_task is not None and target_task.status == "ready"
+    assert hub_task is not None and hub_task.status == "ready"
+
+
 def test_failed_refresh_preserves_truthful_fallback(
     pickup_store: SqliteStore,
 ) -> None:
