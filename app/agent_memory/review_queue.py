@@ -16,6 +16,7 @@ rendering, and write-authority enforcement are owned by later slices
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
@@ -23,6 +24,14 @@ from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent_memory.candidate import MemoryCandidate, MemoryType
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+
+# Entries a carrier-free (legacy single-binding) view may see: stamped with the
+# sealed compatibility binding, or enqueued before binding stamps existed (``None``).
+# A scoped view never sees the ``None`` bucket.
+_LEGACY_VIEW_BINDINGS: tuple[Optional[str], ...] = (COMPATIBILITY_BINDING_ID, None)
+
+_QueueKey = tuple[Optional[str], str]
 
 
 class ReviewDecision(str, Enum):
@@ -58,6 +67,10 @@ class ReviewEntry(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     candidate: MemoryCandidate
+    # MVR-05B4c1: the vault binding that produced this candidate. ``None`` is an
+    # unstamped legacy entry, visible only to the carrier-free view. Distinct from
+    # ``scope_id``, which is the memory sphere and never a vault binding.
+    binding_id: Optional[str] = None
     status: ReviewStatus = Field(default=ReviewStatus.PENDING)
     decision: Optional[ReviewDecision] = None
     decided_by: Optional[str] = None
@@ -116,7 +129,15 @@ _DECISION_TO_STATUS: dict[ReviewDecision, ReviewStatus] = {
 
 
 class MemoryCandidateReviewQueue:
-    """In-memory review queue for memory candidates awaiting decision."""
+    """In-memory review queue for memory candidates awaiting decision.
+
+    Entries are keyed by (producing binding, candidate id) for enqueue, lookup,
+    decision and deduplication (MVR-05B4c1), so two vault bindings that enqueue
+    the same candidate id keep two independent entries. Every operation takes an
+    optional ``binding``: a string addresses exactly that binding's entries (the
+    scoped view); ``None`` is the carrier-free legacy view, which addresses the
+    sealed compatibility binding's entries and unstamped legacy entries only.
+    """
 
     def __init__(
         self,
@@ -125,7 +146,11 @@ class MemoryCandidateReviewQueue:
         vault_context: Any | None = None,
         channel: str | None = None,
     ) -> None:
-        self._entries: dict[str, ReviewEntry] = {}
+        self._entries: dict[_QueueKey, ReviewEntry] = {}
+        self._lock = threading.RLock()
+        # Set only on a detached per-binding snapshot: the binding that snapshot's
+        # unqualified reads address instead of the carrier-free legacy view.
+        self._view_binding: Optional[str] = None
         self._decision_store = decision_store
         self._vault_context = vault_context
         self._channel = channel
@@ -141,33 +166,67 @@ class MemoryCandidateReviewQueue:
         self._vault_context = vault_context
         self._channel = channel
 
-    def enqueue(self, candidate: MemoryCandidate) -> ReviewEntry:
-        reconciled = self._reconciled_terminal_entry(candidate)
-        if reconciled is not None:
-            # A terminal decision exists for this candidate.
-            #
-            # Fresh intake (candidate not already on the board): the candidate is
-            # fully resolved, so it is returned but not added to the queue — it
-            # belongs neither to pending() nor decided().
-            #
-            # Stale-pending reconciliation (candidate already queued as PENDING):
-            # replace the stale pending entry with the terminal projection so it
-            # no longer surfaces in pending(); the queue converges on the
-            # terminal decision instead of raising "already in queue".
-            if candidate.candidate_id in self._entries:
-                self._entries[candidate.candidate_id] = reconciled
-            return reconciled
-        if candidate.candidate_id in self._entries:
-            raise ReviewQueueError(
-                f"candidate already in queue: {candidate.candidate_id}"
-            )
-        entry = ReviewEntry(candidate=candidate)
-        self._entries[candidate.candidate_id] = entry
-        return entry
+    def _find_key(self, candidate_id: str, binding: Optional[str]) -> _QueueKey | None:
+        if binding is not None:
+            scoped_key: _QueueKey = (binding, candidate_id)
+            return scoped_key if scoped_key in self._entries else None
+        for legacy in _LEGACY_VIEW_BINDINGS:
+            legacy_key: _QueueKey = (legacy, candidate_id)
+            if legacy_key in self._entries:
+                return legacy_key
+        return None
+
+    def _in_view(self, entry: ReviewEntry, binding: Optional[str]) -> bool:
+        if binding is None:
+            binding = self._view_binding
+        if binding is not None:
+            return entry.binding_id == binding
+        return entry.binding_id in _LEGACY_VIEW_BINDINGS
+
+    def enqueue(
+        self, candidate: MemoryCandidate, *, binding: Optional[str] = None
+    ) -> ReviewEntry:
+        """Add ``candidate`` stamped with its producing ``binding``.
+
+        ``binding=None`` records an unstamped legacy entry. Deduplication and
+        terminal-decision reconciliation act within the producing binding only.
+        """
+
+        with self._lock:
+            existing_key = self._find_key(candidate.candidate_id, binding)
+            reconciled = self._reconciled_terminal_entry(candidate, binding)
+            if reconciled is not None:
+                # A terminal decision exists for this candidate.
+                #
+                # Fresh intake (candidate not already on the board): the candidate is
+                # fully resolved, so it is returned but not added to the queue — it
+                # belongs neither to pending() nor decided().
+                #
+                # Stale-pending reconciliation (candidate already queued as PENDING):
+                # replace the stale pending entry with the terminal projection so it
+                # no longer surfaces in pending(); the queue converges on the
+                # terminal decision instead of raising "already in queue".
+                if existing_key is not None:
+                    self._entries[existing_key] = reconciled.model_copy(
+                        update={"binding_id": existing_key[0]}
+                    )
+                return reconciled
+            if existing_key is not None:
+                raise ReviewQueueError(
+                    f"candidate already in queue: {candidate.candidate_id}"
+                )
+            entry = ReviewEntry(candidate=candidate, binding_id=binding)
+            self._entries[(binding, candidate.candidate_id)] = entry
+            return entry
 
     def _reconciled_terminal_entry(
-        self, candidate: MemoryCandidate
+        self, candidate: MemoryCandidate, binding: Optional[str]
     ) -> ReviewEntry | None:
+        if binding is not None and binding != COMPATIBILITY_BINDING_ID:
+            # The configured decision store and vault context describe the
+            # carrier-free (compatibility) journey only; they say nothing about
+            # another binding's decisions.
+            return None
         if (
             self._decision_store is None
             or self._vault_context is None
@@ -183,6 +242,7 @@ class MemoryCandidateReviewQueue:
             return None
         return ReviewEntry(
             candidate=candidate,
+            binding_id=binding,
             status=_DECISION_TO_STATUS[record.outcome],
             decision=record.outcome,
             decided_by=record.decided_by,
@@ -191,17 +251,43 @@ class MemoryCandidateReviewQueue:
             revision_of=record.revision_of,
         )
 
-    def get(self, candidate_id: str) -> ReviewEntry:
-        try:
-            return self._entries[candidate_id]
-        except KeyError as exc:
-            raise ReviewQueueError(f"no candidate in queue: {candidate_id}") from exc
+    def get(self, candidate_id: str, *, binding: Optional[str] = None) -> ReviewEntry:
+        with self._lock:
+            key = self._find_key(candidate_id, binding)
+            if key is None:
+                raise ReviewQueueError(f"no candidate in queue: {candidate_id}")
+            return self._entries[key]
 
-    def pending(self) -> list[ReviewEntry]:
-        return [e for e in self._entries.values() if e.status is ReviewStatus.PENDING]
+    def pending(self, *, binding: Optional[str] = None) -> list[ReviewEntry]:
+        with self._lock:
+            return [
+                e
+                for e in self._entries.values()
+                if e.status is ReviewStatus.PENDING and self._in_view(e, binding)
+            ]
 
-    def decided(self) -> list[ReviewEntry]:
-        return [e for e in self._entries.values() if e.status is not ReviewStatus.PENDING]
+    def decided(self, *, binding: Optional[str] = None) -> list[ReviewEntry]:
+        with self._lock:
+            return [
+                e
+                for e in self._entries.values()
+                if e.status is not ReviewStatus.PENDING and self._in_view(e, binding)
+            ]
+
+    def snapshot_for_binding(self, binding: str) -> "MemoryCandidateReviewQueue":
+        """A detached copy holding only ``binding``'s entries.
+
+        Scoped projections read this instead of the process queue, so they never
+        reconfigure it, never write to it, and cannot match another binding.
+        """
+
+        view = MemoryCandidateReviewQueue()
+        view._view_binding = binding
+        with self._lock:
+            for key, entry in self._entries.items():
+                if key[0] == binding:
+                    view._entries[key] = entry
+        return view
 
     def decide(
         self,
@@ -211,6 +297,7 @@ class MemoryCandidateReviewQueue:
         decided_by: str,
         notes: Optional[str] = None,
         revision: Optional[MemoryCandidate] = None,
+        binding: Optional[str] = None,
     ) -> ReviewEntry:
         """Record an explicit review decision for ``candidate_id``.
 
@@ -230,41 +317,45 @@ class MemoryCandidateReviewQueue:
                 "decided_by is required to record a review decision"
             )
 
-        entry = self.get(candidate_id)
-        if entry.status is not ReviewStatus.PENDING:
-            raise ReviewQueueError(
-                f"candidate already decided: {candidate_id}"
-            )
-
-        if decision is ReviewDecision.REVISE:
-            if revision is None:
+        with self._lock:
+            entry = self.get(candidate_id, binding=binding)
+            if entry.status is not ReviewStatus.PENDING:
                 raise ReviewQueueError(
-                    "revise requires a revised MemoryCandidate payload"
+                    f"candidate already decided: {candidate_id}"
                 )
-            if revision.candidate_id in self._entries:
-                raise ReviewQueueError(
-                    f"revision candidate id already in queue: {revision.candidate_id}"
+
+            if decision is ReviewDecision.REVISE:
+                if revision is None:
+                    raise ReviewQueueError(
+                        "revise requires a revised MemoryCandidate payload"
+                    )
+                if self._find_key(revision.candidate_id, binding) is not None:
+                    raise ReviewQueueError(
+                        f"revision candidate id already in queue: {revision.candidate_id}"
+                    )
+                revision_entry = ReviewEntry(
+                    candidate=revision,
+                    binding_id=entry.binding_id,
+                    status=ReviewStatus.PENDING,
+                    revision_of=candidate_id,
                 )
-            revision_entry = ReviewEntry(
-                candidate=revision,
-                status=ReviewStatus.PENDING,
-                revision_of=candidate_id,
+                self._entries[(entry.binding_id, revision.candidate_id)] = revision_entry
+
+            updated = entry.model_copy(
+                update={
+                    "status": _DECISION_TO_STATUS[decision],
+                    "decision": decision,
+                    "decided_by": decided_by,
+                    "decided_at": datetime.now(timezone.utc),
+                    "decision_notes": notes,
+                }
             )
-            self._entries[revision.candidate_id] = revision_entry
+            self._entries[(entry.binding_id, candidate_id)] = updated
+            return updated
 
-        updated = entry.model_copy(
-            update={
-                "status": _DECISION_TO_STATUS[decision],
-                "decision": decision,
-                "decided_by": decided_by,
-                "decided_at": datetime.now(timezone.utc),
-                "decision_notes": notes,
-            }
-        )
-        self._entries[candidate_id] = updated
-        return updated
-
-    def reset_to_pending(self, candidate_id: str) -> ReviewEntry:
+    def reset_to_pending(
+        self, candidate_id: str, *, binding: Optional[str] = None
+    ) -> ReviewEntry:
         """Revert a recorded PROMOTE decision back to PENDING in this queue.
 
         This is the in-process retry path for an accepted candidate whose
@@ -279,22 +370,23 @@ class MemoryCandidateReviewQueue:
         outcomes and are not retryable here.
         """
 
-        entry = self.get(candidate_id)
-        if entry.decision is not ReviewDecision.PROMOTE:
-            raise ReviewQueueError(
-                f"only a promote decision can be reset to pending: {candidate_id}"
+        with self._lock:
+            entry = self.get(candidate_id, binding=binding)
+            if entry.decision is not ReviewDecision.PROMOTE:
+                raise ReviewQueueError(
+                    f"only a promote decision can be reset to pending: {candidate_id}"
+                )
+            reverted = entry.model_copy(
+                update={
+                    "status": ReviewStatus.PENDING,
+                    "decision": None,
+                    "decided_by": None,
+                    "decided_at": None,
+                    "decision_notes": None,
+                }
             )
-        reverted = entry.model_copy(
-            update={
-                "status": ReviewStatus.PENDING,
-                "decision": None,
-                "decided_by": None,
-                "decided_at": None,
-                "decision_notes": None,
-            }
-        )
-        self._entries[candidate_id] = reverted
-        return reverted
+            self._entries[(entry.binding_id, candidate_id)] = reverted
+            return reverted
 
     def rollback_persistence_refusal(
         self,
@@ -304,20 +396,26 @@ class MemoryCandidateReviewQueue:
     ) -> None:
         """Restore the pending queue state after the durable store refuses."""
 
-        current = self.get(original.candidate_id)
-        if current.status is ReviewStatus.PENDING:
-            raise ReviewQueueError(
-                f"cannot roll back a pending decision: {original.candidate_id}"
-            )
-        if original.status is not ReviewStatus.PENDING or original.decision is not None:
-            raise ReviewQueueError(
-                f"rollback authority is not pending: {original.candidate_id}"
-            )
-        self._entries[original.candidate_id] = original
-        if revision_candidate_id is not None:
-            self._entries.pop(revision_candidate_id, None)
+        with self._lock:
+            key = (original.binding_id, original.candidate_id)
+            current = self._entries.get(key)
+            if current is None:
+                raise ReviewQueueError(f"no candidate in queue: {original.candidate_id}")
+            if current.status is ReviewStatus.PENDING:
+                raise ReviewQueueError(
+                    f"cannot roll back a pending decision: {original.candidate_id}"
+                )
+            if original.status is not ReviewStatus.PENDING or original.decision is not None:
+                raise ReviewQueueError(
+                    f"rollback authority is not pending: {original.candidate_id}"
+                )
+            self._entries[key] = original
+            if revision_candidate_id is not None:
+                self._entries.pop((original.binding_id, revision_candidate_id), None)
 
-    def recallable_for_working_context(self) -> list[ReviewEntry]:
+    def recallable_for_working_context(
+        self, *, binding: Optional[str] = None
+    ) -> list[ReviewEntry]:
         """Entries authorized for working-context recall.
 
         Per the hidden-authority guard in
@@ -328,4 +426,9 @@ class MemoryCandidateReviewQueue:
         successor, which must itself be reviewed.
         """
 
-        return [e for e in self._entries.values() if e.status is ReviewStatus.PROMOTED]
+        with self._lock:
+            return [
+                e
+                for e in self._entries.values()
+                if e.status is ReviewStatus.PROMOTED and self._in_view(e, binding)
+            ]

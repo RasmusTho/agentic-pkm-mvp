@@ -4,8 +4,37 @@ State: SoT v5.5 baseline (details align with ARCHITECTURE/STATUS).
 Lightweight policy for local and CI runs.
 
 <!-- SECTION:SECURITY:BEGIN -->
+## System-wide credential access
+
+Every credential has one owner contract that declares its consumer, execution host and channel,
+approved store, scope, binding, lifecycle, and qualification evidence. That contract and its owner
+documents decide access; an agent's model, task, or repository identity does not grant access by
+itself. Agents use the approved consumer or tool path and receive only the result needed for the
+task. Keep raw values in the approved store and inside the authorized process boundary. Never place
+them in model context, chat, command arguments, unapproved environment variables, logs, screenshots,
+receipts, Git, CI output, Builder Vault, issues, pull requests, or memory.
+
+Use `.codex/skills/secret-routing/SKILL.md` to find the existing owner path and
+`.codex/skills/secret-management/SKILL.md` for cross-owner policy or access changes. Fail closed
+when ownership, consumer binding, or authority is absent; do not add broad fallback access or a
+parallel secret store. Prefer existing stores and interfaces. Security work must not add a service,
+account, subscription, credential copy, or recurring human step unless the owner contract shows it
+is required and an authorized decision accepts that cost. Keep verification to evidence that can
+change the decision; never weaken a boundary to save tokens or operator time.
+
+Where implemented for the selected consumer, `scripts/secrets route <channel> --consumer
+<consumer>` prints only local declared BWS metadata. It does not read secret values, contact BWS,
+grant access, or verify live access. Unsupported commands and file-secret consumers must stop at
+metadata; they do not authorize a value-reading substitute. The metadata helper observed in the
+2026-10-18 working checkout is not delivered by this documentation change.
+
+The [2026-10-18 credential-route review](audits/SYSTEM_WIDE_CREDENTIAL_ROUTES_2026-10-18.md)
+records the inspected repositories, per-consumer routes, evidence limits, and exact remaining gaps.
+It is an advisory snapshot. Its tables confer no grants, establish no new store, and do not replace
+credential owners. A service being active proves neither BWS access nor integrated acceptance.
+
 ## API keys & endpoints
-- Store keys (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`) only in local `.env` files or a secrets manager. Never commit them to Git, CI logs, or docs.
+- Store keys (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`) only in a local `.env` file where the owner contract permits it, or in the approved secrets manager. Never commit them to Git, CI logs, or docs.
 - `LLM_PROVIDER=mock` is the CI default, so no external keys are needed for tests.
 - Integrated Runtime v1 still exposes non-UI local services on trusted interfaces by default: the FastAPI runtime starts `uvicorn` on `0.0.0.0:8000`, Compose publishes the API host port to container port `8000`, and Ollama sets `OLLAMA_HOST=0.0.0.0:11434`. Dev/test Companion UI launchers bind the browser UI to `127.0.0.1` by default and require `CUI_BIND_LAN=1` for LAN/Tailscale UAT; the production launcher rejects that flag and publishes only loopback. This is not an internet-ready security boundary.
 - For Companion UI non-loopback UAT, set `CUI_BIND_LAN=1` deliberately on dev/test only. API and Ollama host binding changes are runtime/config changes and should be made deliberately outside the Companion UI launcher default.
@@ -91,7 +120,10 @@ browser mode; presentation consumer #4836 must reuse this boundary unchanged.
 - CLI smoke commands append to the JSONL audit log (`INDEX_OUTBOX_PATH`). Runtime watcher/worker flows use the DB outbox; keep database permissions minimal and scoped to the outbox/index tables.
 
 ## Secrets in CI
-- GitHub Actions workflow does not require secrets today. If future jobs do, add them through `secrets.*` and never hardcode fallbacks.
+- GitHub Actions jobs use ephemeral job tokens and, for the optional Project projection, the
+  existing App private-key/installation-token path. `PROJECT_TOKEN` is a legacy reference, not an
+  active grant. Provider keys are not required for the synthetic BWS tests below. Follow
+  `docs/development/GITHUB_GOVERNANCE_SETUP.md :: token-isolation` for the separate token scopes.
 - `requirements.txt` lists public packages; no private indexes are used.
 - BWS deployment tests use fake provider/transport adapters and synthetic canaries. CI does not
   contact BWS, install VM tokens, start a database, or qualify a live channel. Compose checks render

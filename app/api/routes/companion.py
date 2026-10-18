@@ -3576,6 +3576,19 @@ def _orientation_memory_review_queue() -> MemoryCandidateReviewQueue:
     return _MEMORY_CANDIDATE_REVIEW_QUEUE
 
 
+def _scoped_memory_review_queue(scoped: _ScopedCompanionRead) -> MemoryCandidateReviewQueue:
+    """The request binding's own review-queue entries, as a detached read-only copy.
+
+    A scoped read never reconfigures, writes to, or reads unstamped or
+    other-binding entries of the process-wide queue (MVR-05B4c1). A zero-binding
+    selection owns no entries.
+    """
+
+    if scoped.vault_binding_id is None:
+        return MemoryCandidateReviewQueue()
+    return _MEMORY_CANDIDATE_REVIEW_QUEUE.snapshot_for_binding(scoped.vault_binding_id)
+
+
 def _memory_review_decision_store() -> ReviewDecisionStore:
     return _MEMORY_REVIEW_DECISION_STORE
 
@@ -3627,11 +3640,11 @@ def _memory_review_channel() -> str:
 
 
 def _orientation_memory_summary() -> WorkspaceOrientationMemory:
-    if _SCOPED_COMPANION_READ.get() is not None:
-        # Process-global source with no vault-binding predicate: a scoped read
-        # takes the degraded "unavailable" path (fail closed) until MVR-05B4.
-        raise RuntimeError("orientation source is not binding-aware")
-    pending = len(_orientation_memory_review_queue().pending())
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None:
+        pending = len(_scoped_memory_review_queue(scoped).pending())
+    else:
+        pending = len(_orientation_memory_review_queue().pending())
     return WorkspaceOrientationMemory(
         pending_candidate_count=pending,
         source_ref=_orientation_source_ref(
@@ -4327,12 +4340,15 @@ def _attach_agent_memory_posture_to_notes(
     *,
     vault_root: Path,
 ) -> list[VaultBrowserNoteState]:
-    if _SCOPED_COMPANION_READ.get() is not None:
-        # The receipt / review-queue sources are process-global and are not yet
-        # filtered by vault binding, so a scoped read would match another
-        # binding's artifacts on a shared UUID or note path. Omit the projection
-        # (fail closed) until MVR-05B4 makes it binding-aware.
-        return notes
+    scoped = _SCOPED_COMPANION_READ.get()
+    # A scoped read matches only candidates stamped with the request binding, so a
+    # UUID or note path shared across bindings never surfaces another binding's
+    # candidate (MVR-05B4c1).
+    queue = (
+        _scoped_memory_review_queue(scoped)
+        if scoped is not None
+        else _orientation_memory_review_queue()
+    )
     projection = agent_memory_posture_for_artifacts(
         [
             AgentMemoryPostureTarget(
@@ -4341,7 +4357,7 @@ def _attach_agent_memory_posture_to_notes(
             )
             for note in notes
         ],
-        queue=_orientation_memory_review_queue(),
+        queue=queue,
         vault_root=vault_root,
     )
     if projection is None:
@@ -6388,19 +6404,27 @@ def _memory_review_revision_candidate(
 
 
 @router.get("/memory/review-queue", response_model=MemoryReviewQueueResponse)
+@_scoped_companion_read
 def get_memory_review_queue(
     x_active_context_session: str | None = Header(default=None),
     x_active_context_override: str | None = Header(default=None),
 ) -> MemoryReviewQueueResponse:
-    """Bounded read over pending memory candidates awaiting review."""
+    """Bounded read over pending memory candidates awaiting review.
 
-    # A direct in-process call receives the ``Header(...)`` defaults, not values;
-    # only an actual (possibly blank) header string is a presented carrier.
-    if isinstance(x_active_context_session, str) or isinstance(x_active_context_override, str):
-        # The review queue is process-global and not yet binding-aware (MVR-05B4,
-        # #6139): a scoped request is refused rather than shown other vaults' items.
-        raise HTTPException(status_code=409, detail="capability_not_ready")
-    queue = _orientation_memory_review_queue()
+    A carrier-bearing request (a present header, even a blank one, is scoped and is
+    resolved by ``_scoped_companion_read``) reads only the request binding's
+    candidates (MVR-05B4c1). The two header parameters are retained only so direct
+    in-process callers keep their positional signature; ``Header(...)`` defaults
+    are not values, and the carrier is resolved by the decorator's dependency,
+    never from these parameters.
+    """
+
+    scoped = _SCOPED_COMPANION_READ.get()
+    queue = (
+        _scoped_memory_review_queue(scoped)
+        if scoped is not None
+        else _orientation_memory_review_queue()
+    )
     candidates = [_memory_review_candidate_projection(entry) for entry in queue.pending()]
     return MemoryReviewQueueResponse(
         pending_count=len(candidates),

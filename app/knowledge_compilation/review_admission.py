@@ -188,10 +188,12 @@ def route_admitted_memory_to_review_queue(
     scope_id: str,
     title: Optional[str] = None,
     content: Optional[str] = None,
+    binding: Optional[str] = None,
 ) -> ReviewEntry:
     """Enqueue admitted memory-like material for existing review-queue semantics.
 
     This is a handoff only: the returned entry is pending review, not durable memory.
+    ``binding`` stamps the producing vault binding on the enqueued entry (MVR-05B4c1).
     """
 
     record = handoff.decision_record
@@ -220,4 +222,4 @@ def route_admitted_memory_to_review_queue(
         content=content if content is not None else _artifact_content(artifact),
         inferred=artifact.inferred,
     )
-    return queue.enqueue(candidate)
+    return queue.enqueue(candidate, binding=binding)

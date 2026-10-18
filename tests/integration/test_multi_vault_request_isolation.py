@@ -334,7 +334,11 @@ def test_explicit_empty_selection_reads_inside_the_principal_effect_window(
 
 
 def test_scoped_reads_omit_process_global_artifact_projections(instance, client, monkeypatch) -> None:
-    """#6156 review: receipts, memory posture and panel stores are not binding-aware yet."""
+    """#6156 review: receipts and panel stores are not binding-aware yet.
+
+    Agent-memory posture is binding-aware since MVR-05B4c1 and is covered by
+    ``tests/api/test_mvr05b4c_review_queue_binding.py``.
+    """
 
     from pathlib import Path
 
@@ -344,7 +348,6 @@ def test_scoped_reads_omit_process_global_artifact_projections(instance, client,
         raise AssertionError("scoped read consulted a process-global artifact projection")
 
     monkeypatch.setattr(companion_routes, "receipts_for_artifacts", forbidden)
-    monkeypatch.setattr(companion_routes, "agent_memory_posture_for_artifacts", forbidden)
     monkeypatch.setattr(companion_routes, "_proposal_count_for_artifact", forbidden)
     runtime, first, _second = instance
     first_root = runtime.registry.lookup(first.vault_binding_id)
@@ -418,8 +421,8 @@ def test_scoped_now_orientation_and_browse_stay_inside_the_bound_vault(
     assert browse.json()["base"] == str(Path(first_root.path).resolve())
 
 
-def test_scoped_identity_is_stable_and_review_queue_refuses_carriers(instance, client) -> None:
-    """#6156 review: binding-snapshot identity; the global review queue fails closed."""
+def test_scoped_identity_is_stable_and_review_queue_serves_request_binding_only(instance, client) -> None:
+    """#6156 review: binding-snapshot identity; MVR-05B4c1: the queue answers per binding."""
 
     runtime, first, _second = instance
     registration = runtime.registry.lookup(first.vault_binding_id)
@@ -436,8 +439,8 @@ def test_scoped_identity_is_stable_and_review_queue_refuses_carriers(instance, c
     assert len(ids) == 1
     if registration.vault_id:
         assert ids == {registration.vault_id}
-    assert queue.status_code == 409, queue.text
-    assert queue.json()["detail"] == "capability_not_ready"
+    assert queue.status_code == 200, queue.text
+    assert queue.json()["candidates"] == []
 
 
 @pytest.mark.parametrize("header", ["X-Active-Context-Session", "X-Active-Context-Override"])
@@ -450,4 +453,5 @@ def test_blank_carrier_fails_closed_instead_of_legacy_fallback(instance, client,
 
     assert notes.status_code in (400, 401, 409), notes.text
     assert "notes" not in notes.json()
-    assert queue.status_code == 409, queue.text
+    assert queue.status_code in (400, 401, 409), queue.text
+    assert "candidates" not in queue.json()
