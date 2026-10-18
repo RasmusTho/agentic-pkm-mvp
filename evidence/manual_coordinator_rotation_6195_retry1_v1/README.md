@@ -101,6 +101,14 @@ argv, exit and output-budget/count metadata join every live payload and the actu
 initial five commands and continuation six commands all returned zero with no truncation observed.
 These are trusted native/actor/recorder attestations, not authenticated upstream truth.
 
+The fidelity consumer also requires every field in the carried Issue5/PR8 `--json` selections,
+with exact primitive/container types and the consumed label, merge, CheckRun/StatusContext and
+review-page fields. Raw/envelope equality alone cannot establish completeness when both omit
+the same key. Legitimate null/empty/pending and mixed check states remain valid; extra upstream
+metadata is retained, not stripped or treated as a universal closed GitHub schema. Nonterminal
+review cursors must advance without repetition. These checks do not authenticate unseen upstream
+bytes or repair originals. The actual retained result remains explicitly NONCONFORMING.
+
 The initial comparison has seven matching fields, fabricated claims unknown and live next action
 not comparable. Every external-state dimension/support matched at that initial observation.
 This does not include or conceal the separately reported admission-source mismatch.
@@ -128,7 +136,9 @@ historical PR rollup entries, not a current required-CI verdict for #6236.
 - Admission retries, read-command corrections, review repairs and CI repairs within that observed
   interval are zero under the operator's complete-scope attestation. One later contract/reporting
   mechanism repair occurred after `12:20:12`; it includes the finite raw-source binding correction
-  during local assembly and is not a fourth in-interval event. Complete delivery totals are unknown.
+  during local assembly and is not a fourth in-interval event. A separate later protected P1
+  source-completeness review repair is retained in PR #6237 finding `4307098664` and its repair
+  receipts, not backdated into that interval. Complete delivery totals are unknown.
 - Archival capture/log wording predating the final join used planned/positive labels. Those raw
   labels remain custody, not a present conformance verdict; the current result is NONCONFORMING.
 

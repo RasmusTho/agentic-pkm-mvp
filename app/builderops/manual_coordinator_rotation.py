@@ -237,6 +237,48 @@ def _review_argv(actual: list[str], expected: list[str]) -> None:
     _same(_review_query_tokens(actual[4][6:]), _review_query_tokens(expected[4][6:]), "bounded read-only review selection")
 
 
+def _github_capture(payload: Any, *, kind: str, fields: str) -> None:
+    """Require the carried selection without closing arbitrary upstream metadata."""
+    nullable_time = {"type": ["string", "null"]}
+    properties = {
+        "number": {"type": "integer", "minimum": 1}, "url": STRING,
+        "state": {"enum": ["OPEN", "CLOSED", "MERGED"]},
+        "labels": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": STRING}}},
+        "closedAt": nullable_time, "mergedAt": nullable_time,
+        "isDraft": {"type": "boolean"}, "headRefOid": v2.SHA,
+        "mergeCommit": {"anyOf": [{"type": "null"}, {"type": "object", "required": ["oid"], "properties": {"oid": v2.SHA}}]},
+        "statusCheckRollup": {"type": ["array", "null"], "items": {"type": "object"}},
+    }
+    v2._validate(payload, {"type": "object", "required": fields.split(","), "properties": properties}, f"complete {kind} --json capture")
+    for key in ("closedAt",) if kind == "issue" else ("mergedAt",):
+        if payload[key] is not None:
+            v2._timestamp(payload[key])
+    if kind == "pr":
+        families: dict[str, dict[str, Any]] = {
+            "CheckRun": {"name": STRING, "status": STRING, "conclusion": {"type": ["string", "null"]}},
+            "StatusContext": {"context": STRING, "state": STRING},
+        }
+        for row in payload["statusCheckRollup"] or []:
+            v2._validate(row, {"type": "object", "required": ["__typename"], "properties": {"__typename": {"enum": list(families)}}}, "complete rollup family")
+            selected = families[row["__typename"]]
+            v2._validate(row, {"type": "object", "required": list(selected), "properties": selected}, "complete rollup family selection")
+
+
+REVIEW_PAGE_SELECTION = {
+    "type": "object", "required": ["nodes", "pageInfo"], "properties": {
+        "nodes": {"type": "array", "items": {"type": "object", "required": ["isResolved", "comments"], "properties": {
+            "isResolved": {"type": "boolean"}, "comments": {"type": "object", "required": ["nodes"], "properties": {
+                "nodes": {"type": "array", "minItems": 1, "maxItems": 1,
+                          "items": {"type": "object", "required": ["url"], "properties": {"url": STRING}}},
+            }},
+        }}},
+        "pageInfo": {"type": "object", "required": ["hasNextPage", "endCursor"], "properties": {
+            "hasNextPage": {"type": "boolean"}, "endCursor": {"type": ["string", "null"]},
+        }},
+    },
+}
+
+
 def _capture_fidelity(value: dict[str, Any], *, phase: str, response_binding: dict[str, Any],
                       response: dict[str, Any], contract: dict[str, Any]) -> None:
     """Join data-preserving native result/clock originals to the actual v2 envelopes."""
@@ -277,7 +319,9 @@ def _capture_fidelity(value: dict[str, Any], *, phase: str, response_binding: di
     for kind, records in singles.items():
         _same(records[0]["argv"], argvs[kind], "actual upstream argument vector")
     for kind in ("issue", "pr"):
-        _same(probe.parse_strict_json(singles[kind][0]["raw_output"]), reads["github"]["payload"][kind], "complete original GitHub payload")
+        raw = probe.parse_strict_json(singles[kind][0]["raw_output"])
+        _github_capture(raw, kind=kind, fields=argvs[kind][-1])
+        _same(raw, reads["github"]["payload"][kind], "complete original GitHub payload")
     _same(probe.parse_strict_json(singles["dispatcher"][0]["raw_output"]), reads["dispatcher"]["payload"], "complete original dispatcher payload")
     lines = singles["repository"][0]["raw_output"].splitlines()
     if len(lines) != 1 or len(lines[0].split("\t")) != 2:
@@ -286,6 +330,7 @@ def _capture_fidelity(value: dict[str, Any], *, phase: str, response_binding: di
     _same({"head_sha": head, "remote": "origin", "ref": ref}, reads["repository"]["payload"], "complete original remote read")
     pages = [item for item in commands if item["kind"] == "review_threads"]
     cursor, nodes = None, []
+    seen_cursors: set[str] = set()
     planner_commands = [item for item in commands if item["kind"] == "planner"]
     if phase == "continuation":
         if len(planner_commands) != 1:
@@ -300,12 +345,17 @@ def _capture_fidelity(value: dict[str, Any], *, phase: str, response_binding: di
         _review_argv(item["argv"], ["gh", "api", "graphql", "-f", "query=" + review_query(repository, pr, cursor)])
         try:
             page = probe.parse_strict_json(item["raw_output"])["data"]["repository"]["pullRequest"]["reviewThreads"]
+            v2._validate(page, REVIEW_PAGE_SELECTION, "complete raw review selection")
             for node in page["nodes"]:
                 nodes.append({"isResolved": node["isResolved"], "url": node["comments"]["nodes"][0]["url"]})
             info = page["pageInfo"]
             if type(info["hasNextPage"]) is not bool or info["hasNextPage"] != (index < len(pages) - 1):
                 raise Error("raw review pagination is incomplete or contains trailing pages")
             cursor = info["endCursor"]
+            if info["hasNextPage"]:
+                if not cursor or cursor in seen_cursors:
+                    raise Error("raw review pagination has a non-progressing nonterminal cursor")
+                seen_cursors.add(cursor)
         except (KeyError, TypeError, IndexError) as exc:
             raise Error("malformed raw review-thread page") from exc
     _same({"repository": repository, "pr_number": pr, "nodes": nodes, "complete": True}, reads["github"]["payload"]["review_threads"], "complete original review threads")
@@ -408,8 +458,8 @@ def _derive_chain(value: Mapping[str, Any], *, expected_capture_contract: Mappin
     _same(activation["acknowledgment"], inputs["acknowledgment"], "activation acknowledgment")
     for before, after in ((decision, quiescence), (quiescence, acknowledgment), (acknowledgment, activation)):
         _after(before["at"], after["at"], "manual role boundary", strict=True)
-    facts = _continuation(phases["continuation"], contract, pack, inputs, phases, observation)
     _capture_fidelity(phases["continuation_fidelity"], phase="continuation", response_binding=inputs["continuation"], response=phases["continuation"], contract=contract)
+    facts = _continuation(phases["continuation"], contract, pack, inputs, phases, observation)
     measurements = _measurements(inputs, contract, initial, phases)
     return {"schema_name": "manual_coordinator_rotation_6195", "schema_version": 1,
             "experiment_id": experiment, "inputs": inputs, "actors": actors, "role_scope": SCOPE,

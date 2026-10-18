@@ -61,6 +61,20 @@ def _fidelity(phase, response_binding, response, contract):
 @pytest.fixture
 def rotation_chain(chain, tmp_path):  # noqa: F811 - intentionally reuse the shipped v2 fixture
     """Synthetic protocol-negative proof only; actual proof has its own retained test."""
+    # v2 deliberately permits partial payloads. Only this rotation-local producer
+    # adds the complete carried CLI selection; old v2 fixtures/contracts stay intact.
+    github_ref = next(item for item in chain["observation"]["live_reads"] if item["kind"] == "github")
+    github = _read(github_ref["evidence"]["ref"])
+    github["payload"]["issue"].update(labels=[], closedAt="2026-10-17T19:00:00Z")
+    github["payload"]["pr"].update(isDraft=False, mergedAt="2026-10-17T19:00:00Z")
+    github["payload"]["pr"]["statusCheckRollup"][0].update(__typename="CheckRun", name="test", status="COMPLETED")
+    github_ref["evidence"] = _retain(Path(github_ref["evidence"]["ref"]), github)
+    _retain(Path(chain["refs"]["agent_response"]), chain["observation"])
+    comparison = probe.compare_rehydrated_observation(chain["pack"], chain["observation"])
+    _retain(Path(chain["refs"]["comparison_receipt"]), comparison)
+    telemetry = v2.build_telemetry(chain["pack"], chain["observation"], pack_ref=chain["refs"]["context_pack"],
+                                   observation_ref=chain["refs"]["agent_response"], execution_ref=chain["execution_ref"])
+    chain["receipt"] = probe.build_probe_receipt(chain["pack"], chain["observation"], comparison, evidence_refs=chain["refs"], telemetry=telemetry)
     experiment = chain["pack"]["probe_id"]
     actors = {"operator": "test-operator", "incumbent": "test-incumbent", "successor": "test-fresh-successor", "writer": "test-sole-writer"}
     source = chain["pack"]["source"]["receipt"]
@@ -334,7 +348,7 @@ def test_rotation_measurements_are_provenance_bound(rotation_chain):
 def _raw_status_omission(value):
     command = next(item for item in value["commands"] if item["kind"] == "pr")
     actual = probe.parse_strict_json(command["raw_output"])
-    actual["statusCheckRollup"][0]["status"] = "COMPLETED"
+    del actual["statusCheckRollup"][0]["status"]
     command["raw_output"] = probe.canonical_json(actual) + "\n"
 
 
@@ -344,7 +358,7 @@ def _estimated_response_clock(value):
 
 
 @pytest.mark.parametrize("mutate,refusal", [
-    (_raw_status_omission, "complete original GitHub payload"),
+    (_raw_status_omission, "complete rollup family"),
     (_estimated_response_clock, "actual response clock"),
     (lambda value: value["commands"][0].update(original_token_count=16001), "truncated"),
     (lambda value: value["commands"].append(deepcopy(value["commands"][0])), "one actual upstream"),
@@ -447,6 +461,273 @@ def _result_cli(case, mode="build-result", value=None, output=None):
     if output is not None:
         args += ["--output", str(output)]
     return subprocess.run(args, capture_output=True, text=True, check=False)
+
+
+def _coherent_capture_case(tmp_path, phase, *, mutate=lambda value: None, pages=None, conforming=False):
+    """Private synthetic clones of retained bytes; never edit operator originals.
+
+    Keep the external capture pin. Rebind the entire downstream DAG, including v2
+    comparison/telemetry, planner inputs/output and every phase. Invalid required
+    v2 identity cases retain intentionally invalid semantics, not stale hashes.
+    """
+    memo = {}
+    github_ref = str(ROOT / f"successor/{phase}/live-read-github.json")
+    changed = _read(github_ref)
+    mutate(changed["payload"])
+    core_present = all({"number", "url", "state"} <= set(changed["payload"][kind]) for kind in ("issue", "pr"))
+    original_probe = _read(ROOT / "successor/initial/probe-receipt.json")
+    pack = _read(ROOT / "context-pack.json")
+
+    def destination(ref):
+        if ref.startswith(str(ROOT) + "/") and not ref.startswith(str(ROOT / "accepted") + "/") and ref not in {
+            str(ROOT / name) for name in ("capture-contract.json", "context-pack.json", "ingestion-contract.json")
+        }:
+            return str(tmp_path / "coherent" / ref[len(str(ROOT)) + 1:])
+        return ref
+
+    def rewrite(value):
+        if type(value) is dict:
+            if set(value) == {"ref", "sha256", "bytes_length"} and type(value["ref"]) is str:
+                return clone(value)
+            return {key: rewrite(item) for key, item in value.items()}
+        if type(value) is list:
+            return [rewrite(item) for item in value]
+        return destination(value) if type(value) is str else value
+
+    def clone(record):
+        ref = record["ref"]
+        if destination(ref) == ref or not ref.endswith(".json"):
+            return deepcopy(record)
+        if ref in memo:
+            return deepcopy(memo[ref])
+        value = changed if ref == github_ref else _read(ref)
+        if ref == str(ROOT / f"successor/{phase}/live-read-github.json") and pages is not None:
+            value["payload"]["review_threads"]["nodes"] = [
+                {"isResolved": node["isResolved"], "url": node["comments"]["nodes"][0]["url"]}
+                for page in pages for node in page["nodes"]
+            ]
+        if phase == "continuation" and ref in {str(ROOT / f"successor/continuation/live-{kind}-{number}.json") for kind, number in (("issue", 6195), ("pr", 6200))}:
+            value = deepcopy(changed["payload"]["issue" if "live-issue-" in ref else "pr"])
+        value = rewrite(value)
+        if ref == str(ROOT / "operator/admission.corrected.original.json") and conforming:
+            value["engine_identity_source"] = "native carrier exposes no independent engine identity"
+        if ref == str(ROOT / "successor/initial/agent-response.original.json") and phase == "initial" and core_present:
+            live = {item["kind"]: _read(item["evidence"]["ref"]) for item in value["live_reads"]}
+            for name, fact in v2._live_facts(live).items():
+                value["fields"][name]["value"] = fact
+            value["fields"]["missing_claims"]["value"] = [name for name in v2.COMPARED if v2._unknown(value["fields"][name]["value"])]
+        if ref == str(ROOT / "successor/initial/comparison.json") and (phase != "initial" or core_present):
+            obs = clone(original_probe["observation"])
+            value = v2.compare_rehydrated_observation(pack, _read(obs["ref"]), context_pack_ref=str(ROOT / "context-pack.json"), observation_ref=obs["ref"])
+        if ref == str(ROOT / "successor/initial/probe-receipt.json") and (phase != "initial" or core_present):
+            obs, comparison = clone(original_probe["observation"]), clone(original_probe["comparison"])
+            execution = clone(original_probe["telemetry"]["evidence"]["execution"])
+            telemetry = v2.build_telemetry(pack, _read(obs["ref"]), pack_ref=str(ROOT / "context-pack.json"), observation_ref=obs["ref"], execution_ref=execution["ref"])
+            value = v2.build_probe_receipt(pack, _read(obs["ref"]), _read(comparison["ref"]), evidence_refs={
+                "source_checkpoint": str(ROOT / "accepted/source-checkpoint.json"), "context_pack": str(ROOT / "context-pack.json"),
+                "agent_response": obs["ref"], "comparison_receipt": comparison["ref"],
+            }, telemetry=telemetry)
+        if phase == "continuation" and core_present and ref == str(ROOT / "successor/continuation/terminal-plan.original.json"):
+            value = build_lifecycle_transition_plan(transition="terminal", issue=changed["payload"]["issue"], pull_request=changed["payload"]["pr"], repo=pack["target"]["repository"])
+        if phase == "continuation" and core_present and ref == str(ROOT / "successor/continuation/continuation.original.json"):
+            live = {item["kind"]: _read(item["evidence"]["ref"]) for item in value["live_reads"]}
+            value["observation"].update(v2._live_facts(live))
+        if ref == str(ROOT / f"successor/{phase}/capture-fidelity.original.json"):
+            for item in value["commands"]:
+                if item["kind"] in {"issue", "pr"}:
+                    item["raw_output"] = probe.canonical_json(changed["payload"][item["kind"]]) + "\n"
+                elif item["kind"] == "planner":
+                    continuation = _read(value["response"]["ref"])
+                    item["raw_output"] = probe.canonical_json(_read(continuation["planner"]["output"]["ref"])) + "\n"
+            if pages is not None:
+                prototype = next(item for item in value["commands"] if item["kind"] == "review_threads")
+                value["commands"] = [item for item in value["commands"] if item["kind"] != "review_threads"]
+                cursor = None
+                for page in pages:
+                    item = deepcopy(prototype)
+                    item["argv"][-1] = "query=" + rotation.review_query(pack["target"]["repository"], 6200, cursor)
+                    item["raw_output"] = probe.canonical_json({"data": {"repository": {"pullRequest": {"reviewThreads": page}}}}) + "\n"
+                    value["commands"].append(item)
+                    cursor = page["pageInfo"]["endCursor"]
+        path = Path(destination(ref))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        memo[ref] = _retain(path, value)
+        return deepcopy(memo[ref])
+
+    report = rewrite(_read(ROOT / "nonconforming-result-input.json"))
+    return {"report": report, "anchor": rotation.binding(str(ROOT / "capture-contract.json")), "tmp_path": tmp_path}
+
+
+SELECTED_FIELDS = [("issue", name) for name in "number,url,state,labels,closedAt".split(",")] + [
+    ("pr", name) for name in "number,url,state,mergedAt,isDraft,headRefOid,mergeCommit,statusCheckRollup".split(",")
+]
+
+
+def test_coherent_complete_synthetic_copy_has_a_strict_cli_baseline(tmp_path):
+    # This new private fixture is deliberately conforming; actual admission and
+    # response originals remain unequal and are never repaired by the cloner.
+    case = _coherent_capture_case(tmp_path, "initial", conforming=True)
+    inputs = _read(case["report"]["rotation_input"]["ref"])
+    output = tmp_path / "synthetic-strict-receipt.json"
+    result = _result_cli(case, mode="build", value=inputs, output=output)
+    assert result.returncode == 0 and output.exists(), result.stdout + result.stderr
+    assert json.loads(result.stdout)["frozen_protocol_conformance"] == "CONFORMING"
+    rejected = _result_cli(case)
+    assert rejected.returncode == 2 and "requires an actual source-explanation mismatch" in rejected.stdout
+
+
+@pytest.mark.parametrize("phase", ["initial", "continuation"])
+@pytest.mark.parametrize("kind,field", SELECTED_FIELDS)
+def test_coherent_selected_field_omission_refuses_actual_cli(tmp_path, phase, kind, field):
+    def omit(payload):
+        del payload[kind][field]
+    for conforming in (False, True):
+        root = tmp_path / str(conforming)
+        root.mkdir()
+        case = _coherent_capture_case(root, phase, mutate=omit, conforming=conforming)
+        output = root / "must-not-exist.json"
+        mode = "build" if conforming else "build-result"
+        value = _read(case["report"]["rotation_input"]["ref"]) if conforming else case["report"]
+        result = _result_cli(case, mode=mode, value=value, output=output)
+        assert result.returncode == 2 and not output.exists(), result.stdout + result.stderr
+        assert "bound bytes" not in result.stdout and "does not match retained bytes" not in result.stdout
+        if field in {"labels", "closedAt", "isDraft", "mergedAt"}:
+            assert f"complete {kind} --json capture" in result.stdout
+
+
+@pytest.mark.parametrize("phase", ["initial", "continuation"])
+@pytest.mark.parametrize("field", ["__typename", "name", "status", "conclusion"])
+def test_coherent_checkrun_field_omission_refuses_actual_cli(tmp_path, phase, field):
+    def omit(payload):
+        del payload["pr"]["statusCheckRollup"][0][field]
+    case = _coherent_capture_case(tmp_path, phase, mutate=omit)
+    output = tmp_path / "missing-family-result.json"
+    result = _result_cli(case, output=output)
+    assert result.returncode == 2 and "complete rollup family" in result.stdout
+    assert not output.exists()
+
+
+def _review_pages(cursors):
+    return [{"nodes": [{"isResolved": True, "comments": {"nodes": [{"url": f"https://github.com/RasmusTho/agentic-pkm-mvp/pull/6200#discussion_synthetic_{index}"}]}}],
+             "pageInfo": {"hasNextPage": index < len(cursors) - 1, "endCursor": cursor}}
+            for index, cursor in enumerate(cursors)]
+
+
+@pytest.mark.parametrize("phase", ["initial", "continuation"])
+@pytest.mark.parametrize("cursors", [("A", "A", "Z"), ("A", "B", "A", "Z"), (None, "Z")])
+def test_coherent_nonprogressing_review_pages_refuse_actual_cli(tmp_path, phase, cursors):
+    case = _coherent_capture_case(tmp_path, phase, pages=_review_pages(cursors))
+    output = tmp_path / "nonprogressing-result.json"
+    result = _result_cli(case, output=output)
+    assert result.returncode == 2 and "non-progressing nonterminal cursor" in result.stdout
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("phase", ["initial", "continuation"])
+def test_coherent_two_page_capture_and_extra_metadata_are_preserved(tmp_path, phase):
+    def extra(payload):
+        payload["pr"]["future_upstream_metadata"] = {"retained": True}
+        payload["pr"]["statusCheckRollup"][0]["future_check_metadata"] = [1, None]
+    case = _coherent_capture_case(tmp_path, phase, mutate=extra, pages=_review_pages(("A", "B")))
+    result = _result_cli(case)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["frozen_protocol_conformance"] == "NONCONFORMING"
+    github = _read(tmp_path / f"coherent/successor/{phase}/live-read-github.json")
+    assert github["payload"]["pr"]["future_upstream_metadata"] == {"retained": True}
+    assert len(github["payload"]["review_threads"]["nodes"]) == 2
+
+
+@pytest.mark.parametrize("rollup,ci", [
+    ([], "unknown"), (None, "unknown"),
+    ([{"__typename": "CheckRun", "name": "pending", "status": "IN_PROGRESS", "conclusion": None}], "pending"),
+    ([{"__typename": "CheckRun", "name": "queued", "status": "QUEUED", "conclusion": ""}], "pending"),
+    ([{"__typename": "StatusContext", "context": "legacy", "state": "SUCCESS"}], "green"),
+    ([{"__typename": "StatusContext", "context": "legacy", "state": "PENDING"},
+      {"__typename": "CheckRun", "name": "done", "status": "COMPLETED", "conclusion": "SUCCESS"}], "pending"),
+])
+@pytest.mark.parametrize("phase", ["initial", "continuation"])
+def test_complete_rollup_families_allow_legitimate_states_actual_cli(tmp_path, phase, rollup, ci):
+    case = _coherent_capture_case(tmp_path, phase, mutate=lambda payload: payload["pr"].update(statusCheckRollup=rollup))
+    output = tmp_path / "complete-rollup-result.json"
+    result = _result_cli(case, output=output)
+    assert result.returncode == 0, result.stdout + result.stderr
+    facts = _read(output)
+    actual = facts["continuation_live_facts"]["external_state"]["ci"]["status"] if phase == "continuation" else facts["initial_field_results"]["external_state"]["observed"]["ci"]["status"]
+    assert actual == ci
+
+
+@pytest.mark.parametrize("phase", ["initial", "continuation"])
+@pytest.mark.parametrize("field", ["__typename", "context", "state"])
+def test_coherent_status_context_omission_refuses_actual_cli(tmp_path, phase, field):
+    def omit(payload):
+        row = {"__typename": "StatusContext", "context": "legacy", "state": "SUCCESS"}
+        del row[field]
+        payload["pr"]["statusCheckRollup"] = [row]
+    case = _coherent_capture_case(tmp_path, phase, mutate=omit)
+    result = _result_cli(case, output=tmp_path / "missing-context-result.json")
+    assert result.returncode == 2 and "complete rollup family" in result.stdout
+    assert not (tmp_path / "missing-context-result.json").exists()
+
+
+@pytest.mark.parametrize("phase", ["initial", "continuation"])
+@pytest.mark.parametrize("bad", [None, 0, "false"])
+def test_coherent_draft_type_never_coerces_actual_cli(tmp_path, phase, bad):
+    case = _coherent_capture_case(tmp_path, phase, mutate=lambda payload: payload["pr"].update(isDraft=bad))
+    output = tmp_path / "coerced-draft-result.json"
+    result = _result_cli(case, output=output)
+    assert result.returncode == 2 and "complete pr --json capture" in result.stdout
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("kind,key,bad", [
+    ("issue", "number", True), ("issue", "url", None), ("issue", "state", 0),
+    ("issue", "labels", {}), ("issue", "labels", [{"name": 1}]), ("issue", "labels", [{}]),
+    ("issue", "closedAt", False), ("issue", "closedAt", "not-a-time"),
+    ("pr", "mergedAt", []), ("pr", "isDraft", 0), ("pr", "headRefOid", None),
+    ("pr", "mergeCommit", {}), ("pr", "mergeCommit", {"oid": "bad"}),
+    ("pr", "statusCheckRollup", {}), ("pr", "statusCheckRollup", [True]),
+    ("pr", "statusCheckRollup", [{"__typename": "UnknownFamily"}]),
+    ("pr", "statusCheckRollup", [{"__typename": "CheckRun", "name": "x", "status": True, "conclusion": "SUCCESS"}]),
+    ("pr", "statusCheckRollup", [{"__typename": "StatusContext", "context": 1, "state": "SUCCESS"}]),
+])
+def test_selected_types_and_consumed_nested_fields_are_strict(kind, key, bad):
+    payload = deepcopy(_read(ROOT / "successor/initial/live-read-github.json")["payload"][kind])
+    payload[key] = bad
+    fields = "number,url,state,labels,closedAt" if kind == "issue" else "number,url,state,mergedAt,isDraft,headRefOid,mergeCommit,statusCheckRollup"
+    with pytest.raises(rotation.Error):
+        rotation._github_capture(payload, kind=kind, fields=fields)
+
+
+def test_nullable_selected_values_are_present_not_filled():
+    payload = _read(ROOT / "successor/initial/live-read-github.json")["payload"]
+    payload["issue"].update(labels=[], closedAt=None, future_metadata={"retained": True})
+    payload["pr"].update(mergedAt=None, mergeCommit=None, statusCheckRollup=None)
+    for kind, fields in (("issue", "number,url,state,labels,closedAt"),
+                         ("pr", "number,url,state,mergedAt,isDraft,headRefOid,mergeCommit,statusCheckRollup")):
+        rotation._github_capture(payload[kind], kind=kind, fields=fields)
+    assert payload["issue"]["closedAt"] is None and payload["pr"]["mergeCommit"] is None
+
+
+@pytest.mark.parametrize("bad", [
+    {"nodes": {}, "pageInfo": {"hasNextPage": False, "endCursor": None}},
+    {"nodes": [], "pageInfo": {"hasNextPage": 0, "endCursor": None}},
+    {"nodes": [], "pageInfo": {"hasNextPage": False}},
+    {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": 1}},
+    {"nodes": [{"isResolved": 1, "comments": {"nodes": [{"url": "x"}]}}], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+    {"nodes": [{"isResolved": True, "comments": {"nodes": []}}], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+    {"nodes": [{"isResolved": True, "comments": {"nodes": [{"url": None}]}}], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+])
+def test_raw_review_selected_types_refuse_at_actual_cli(rotation_chain, bad):
+    def corrupt(value):
+        command = next(item for item in value["commands"] if item["kind"] == "review_threads")
+        command["raw_output"] = probe.canonical_json({"data": {"repository": {"pullRequest": {"reviewThreads": bad}}}})
+    inputs = _coherent_mutation(rotation_chain, "initial_fidelity", corrupt)
+    case = _report_case(rotation_chain, _coherent_mutation({**rotation_chain, "inputs": inputs}, "admission",
+                                                        lambda value: value.update(engine_identity_source="unknown(test mismatch)")))
+    output = case["tmp_path"] / "malformed-review-result.json"
+    result = _result_cli(case, output=output)
+    assert result.returncode == 2 and "complete raw review selection" in result.stdout
+    assert not output.exists()
 
 
 def test_nonconforming_result_is_explicit_not_a_strict_fallback(rotation_chain):
