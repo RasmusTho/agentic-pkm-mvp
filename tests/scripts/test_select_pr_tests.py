@@ -1879,6 +1879,28 @@ def test_scoped_deploy_partitions_preserve_selected_targets(tmp_path: Path) -> N
         selector.SCOPED_DEPLOY_SERIAL_BOUNDARY
     )
 
+    release_output = tmp_path / "release-output"
+    release_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/select_pr_tests.py",
+            "--changed-file",
+            "app/release_channels/prepare_promotion.py",
+            "--github-output",
+            str(release_output),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert release_result.returncode == 0, release_result.stdout + release_result.stderr
+    release_fields = dict(
+        line.split("=", 1) for line in release_output.read_text().splitlines()
+    )
+    assert json.loads(release_fields["scoped_partitions_json"])
+    assert json.loads(release_fields["scoped_serial_boundary_json"]) == []
+
 
 def test_changed_heavy_test_file_still_runs_on_pr_path() -> None:
     changed = "tests/deploy/test_deploy_channel.py"
