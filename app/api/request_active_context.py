@@ -190,6 +190,9 @@ class ScopedRouteRead:
     vault_binding_id: str | None
     root: Path | None
     context_generation: int
+    # The immutable request context, for a read that queries by binding set
+    # (MVR-05B4c5 query-backed context bundles).
+    context: ActiveContextSetV1 | None = None
 
 
 _SCOPED_ROUTE_READ: ContextVar[ScopedRouteRead | None] = ContextVar(
@@ -226,12 +229,14 @@ def scoped_route_read_window(context: ActiveContextSetV1) -> Iterator[ScopedRout
                     vault_binding_id=roots[0].vault_binding_id,
                     root=roots[0].root,
                     context_generation=roots[0].context_generation,
+                    context=context,
                 )
             else:
                 scoped = ScopedRouteRead(
                     vault_binding_id=None,
                     root=None,
                     context_generation=context.generation,
+                    context=context,
                 )
             token = _SCOPED_ROUTE_READ.set(scoped)
             try:

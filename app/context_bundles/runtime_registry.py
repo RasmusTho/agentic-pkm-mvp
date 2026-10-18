@@ -2,6 +2,12 @@
 
 The registry lets runtime consumers resolve bundles that were already emitted
 in this process. It is not persistence, memory, knowledge, or authority.
+
+MVR-05B4c5: every entry is keyed by (emitting binding, bundle id), so two
+bindings emitting the same id stay independently addressable and a lookup never
+returns another binding's bundle. A carrier-free emission stamps the live
+compatibility binding; an unprovable binding registers unstamped (``None``),
+which only the carrier-free legacy view can see.
 """
 from __future__ import annotations
 
@@ -10,7 +16,8 @@ from collections import OrderedDict
 from app.context_bundles.schema import ContextBundle
 
 _MAX_EMITTED_BUNDLES = 128
-_EMITTED_BUNDLES: OrderedDict[str, ContextBundle] = OrderedDict()
+_RegistryKey = tuple[str | None, str]
+_EMITTED_BUNDLES: OrderedDict[_RegistryKey, ContextBundle] = OrderedDict()
 
 
 def _enforce_registry_bound() -> None:
@@ -21,26 +28,61 @@ def _enforce_registry_bound() -> None:
         _EMITTED_BUNDLES.popitem(last=False)
 
 
-def register_emitted_bundle(bundle: ContextBundle) -> ContextBundle:
-    """Record an emitted bundle for process-local lookup.
+def _legacy_emitting_binding() -> str | None:
+    from app.instance.compatibility_binding import (
+        CompatibilityBindingUnavailableError,
+        live_compatibility_binding_id,
+    )
 
-    A deep copy is stored and returned so later caller mutation cannot silently
-    rewrite the registry entry.
+    try:
+        return live_compatibility_binding_id()
+    except CompatibilityBindingUnavailableError:
+        return None
+
+
+def _legacy_view() -> tuple[str | None, ...]:
+    from app.instance.compatibility_binding import legacy_view_bindings
+
+    return legacy_view_bindings()
+
+
+def register_emitted_bundle(
+    bundle: ContextBundle, *, vault_binding_id: str | None = None
+) -> ContextBundle:
+    """Record an emitted bundle under its emitting binding for process-local lookup.
+
+    ``vault_binding_id`` is the scoped request's binding; a carrier-free caller
+    omits it and the live compatibility binding is stamped. A deep copy is
+    stored and returned so later caller mutation cannot silently rewrite the
+    registry entry.
     """
+    binding = vault_binding_id if vault_binding_id is not None else _legacy_emitting_binding()
     stored = bundle.model_copy(deep=True)
-    _EMITTED_BUNDLES[stored.id] = stored
-    _EMITTED_BUNDLES.move_to_end(stored.id)
+    key = (binding, stored.id)
+    _EMITTED_BUNDLES[key] = stored
+    _EMITTED_BUNDLES.move_to_end(key)
     _enforce_registry_bound()
     return stored.model_copy(deep=True)
 
 
-def get_emitted_bundle(bundle_id: str) -> ContextBundle | None:
-    """Return a copy of the emitted bundle for ``bundle_id`` if present."""
-    bundle = _EMITTED_BUNDLES.get(bundle_id)
-    if bundle is None:
-        return None
-    _EMITTED_BUNDLES.move_to_end(bundle_id)
-    return bundle.model_copy(deep=True)
+def get_emitted_bundle(
+    bundle_id: str, *, vault_binding_id: str | None = None
+) -> ContextBundle | None:
+    """Return a copy of the emitted bundle for ``bundle_id`` if visible.
+
+    A scoped read (``vault_binding_id``) sees only that binding's own entry, so a
+    foreign or unstamped bundle is indistinguishable from an unknown id. A
+    carrier-free read sees the legacy view: the live compatibility binding, the
+    no-registry sentinel and unstamped entries.
+    """
+    bindings = (vault_binding_id,) if vault_binding_id is not None else _legacy_view()
+    for binding in bindings:
+        key = (binding, bundle_id)
+        bundle = _EMITTED_BUNDLES.get(key)
+        if bundle is not None:
+            _EMITTED_BUNDLES.move_to_end(key)
+            return bundle.model_copy(deep=True)
+    return None
 
 
 def clear_emitted_bundles() -> None:
