@@ -4423,6 +4423,7 @@ def _finish_instance_state_deployment_locked(
         registry=store,
         ledger=ledger,
         owners=tuple(owners),
+        owners_authenticated=True,
     )
     try:
         ledger_snapshot = backup._require_registry_ledger_consistency(
