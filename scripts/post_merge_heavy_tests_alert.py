@@ -1,9 +1,9 @@
-"""Render the rolling alert Issue for a red dev verification run (#6154, #6158, #6205).
+"""Render the rolling alert Issue for a red post-merge heavy-tests run (#6154, #6158).
 
 The heavy test targets that `scripts/select_pr_tests.py` defers from the PR
-path run on the ygg `dev` VM after each dev deployment; a failed dev
-deployment is red too. `.github/workflows/post-merge-heavy-tests.yml` records
-the host's verdict, or runs a GitHub-hosted fallback when no verdict arrives. When a run is red on `main`, the workflow opens one rolling
+path run on the ygg `test` VM; `.github/workflows/post-merge-heavy-tests.yml`
+records the host's verdict, or runs a GitHub-hosted fallback when no verdict
+arrives. When a run is red on `main`, the workflow opens one rolling
 `type:bug` + `prio:high` Issue with this body (or comments on the open one),
 and a later green verdict closes it. The body follows the canonical Issue
 contract so the alert is directly pickup-ready.
@@ -14,9 +14,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-ALERT_TITLE = "bug: dev verification is red on main"
-# An alert opened before #6205 keeps receiving updates under its old title.
-LEGACY_ALERT_TITLE = "bug: post-merge heavy tests are red on main"
+ALERT_TITLE = "bug: post-merge heavy tests are red on main"
 ALERT_LABELS = ("type:bug", "prio:high", "agent:ready")
 ALERT_MARKER = "<!-- post-merge-heavy-tests-alert:v1 -->"
 
@@ -26,15 +24,15 @@ def render_alert_body(*, sha: str, run_url: str, targets: str, reason: str = "")
     return f"""{ALERT_MARKER}
 ## Context
 
-Dev verification is red for `main` at `{sha}`: {run_url}
+The post-merge heavy-tests workflow is red on `main` at `{sha}`: {run_url}
 {reason_line}
-Promotion runs main -> dev -> test -> prod, and merging to `main` is never blocked: problems are found on dev and filed here (owner decision 2026-10-18, #6205). After each native dev deployment, the heavy targets deferred from the required PR check `Unit tests (not pg)` run on the ygg `dev` VM (#6154, #6158), and the workflow records that verdict as the `post-merge-heavy-tests/ygg` commit status. A red verdict, or a failed dev deployment (`dev_deploy_failed`), holds the candidate from promotion to test. It means a regression may already be on `main`. A missing or refused verdict means the dev verification path itself is broken. Later red runs comment on this Issue. The next green verdict closes it.
+These heavy targets are deferred from the required PR check `Unit tests (not pg)` unless a PR changes a source they exercise (owner decision 2026-10-16, #6154). They run on the ygg `test` VM after the candidate's native test deployment (#6158), and the workflow records that verdict as the `post-merge-heavy-tests/ygg` commit status. A red result means a regression may already be on `main`; a missing or refused verdict means the VM path itself is broken. Later red runs comment on this Issue. The next green verdict closes it.
 
 Heavy targets: `{targets}`
 
 ## Scope
 
-Find the failing tests (named in the reason above, or in the GitHub-hosted fallback log), identify the merged change that broke them, and repair the code or the test on `main`. For `dev_deploy_failed`, repair the failing dev deployment gate named in the controller log. For a missing or refused verdict, restore the host controller or dev VM path instead.
+Find the failing tests (named in the reason above, or in the GitHub-hosted fallback log), identify the merged change that broke them, and repair the code or the test on `main`. For a missing or refused verdict, restore the host controller or VM path instead.
 
 ## Source Anchors
 
@@ -54,7 +52,7 @@ Depends on the failing suite. Classify it from the failing tests' owning subsyst
 
 ## Acceptance Criteria
 
-- [ ] AC1: The dev verification verdict is green on `main` at a commit containing the repair. Verify: `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`
+- [ ] AC1: The post-merge heavy-tests verdict is green on `main` at a commit containing the repair. Verify: `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`
 
 ## Out of Scope
 

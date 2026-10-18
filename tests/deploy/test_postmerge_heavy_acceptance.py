@@ -200,8 +200,8 @@ def test_qualify_heavy_is_fixed_dev_test_and_refuses_uncommitted(monkeypatch, ca
 
 def test_launcher_admits_qualify_heavy(monkeypatch):
     # The installed launcher is a fixed action/arity allowlist; the controller's
-    # exact `qualify-heavy dev <operation-id>` call must pass it and reach the
-    # root-owned channel configuration read.
+    # exact `qualify-heavy <channel> <operation-id>` call must pass it and reach
+    # the root-owned channel configuration read.
     import importlib.util
 
     spec = importlib.util.spec_from_file_location('launcher', ROOT / 'scripts' / 'postgres_deploy_service.py')

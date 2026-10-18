@@ -1,7 +1,7 @@
 """Resolve what a post-merge heavy-tests workflow run must do (#6158).
 
 The heavy targets `scripts/select_pr_tests.py` defers from the PR path run on
-the ygg `dev` VM after each dev deployment (#6205). The private host controller dispatches
+the ygg `test` VM. The private host controller dispatches
 `.github/workflows/post-merge-heavy-tests.yml` with a bounded verdict, and this
 script decides the run's mode:
 
@@ -65,8 +65,8 @@ def validate_verdict(inputs: dict[str, str]) -> Resolution:
         or (verdict == "passed" and failures)):
         raise VerdictRefused("malformed ygg verdict")
     detail = reason if verdict == "refused" else counts.strip()
-    description = f"ygg-dev {verdict}: {detail}"[:140]
-    why = f"ygg-dev verdict {verdict}" + (f" ({reason})" if reason else "")
+    description = f"ygg-test {verdict}: {detail}"[:140]
+    why = f"ygg-test verdict {verdict}" + (f" ({reason})" if reason else "")
     if failures:
         why += f"; failing: {failures}"
     return Resolution("verdict", sha, why, description)
