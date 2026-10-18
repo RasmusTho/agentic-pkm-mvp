@@ -253,3 +253,54 @@ def test_unprovable_ingest_run_keeps_binding_history(two_bindings) -> None:
         "notable"
     ]
     assert "ingest_total=4" in notable_b
+
+
+def test_concurrent_ingest_producers_keep_each_others_binding_history(
+    two_bindings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6251 review: the binding map update is serialized across producers."""
+
+    import sys
+    import threading
+
+    client, first, second, _outbox, _cursor_db = two_bindings
+    real_read = ingest_meta._read_binding_runs
+    first_read, release = threading.Event(), threading.Event()
+
+    def paused_read(path):
+        result = real_read(path)
+        # Pause producer A between the read and the write of its status rewrite.
+        in_rewrite = sys._getframe(1).f_code.co_name == "_write_status"
+        if (
+            in_rewrite
+            and threading.current_thread().name == "producer-a"
+            and not first_read.is_set()
+        ):
+            first_read.set()
+            release.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(ingest_meta, "_read_binding_runs", paused_read)
+    producer_a = threading.Thread(
+        name="producer-a",
+        target=lambda: record_ingest_run(
+            "vault", scanned=5, ingested=5, errors=0, vault_binding_id=first.vault_binding_id
+        ),
+    )
+    producer_a.start()
+    assert first_read.wait(timeout=5)
+    producer_b = threading.Thread(
+        target=lambda: record_ingest_run(
+            "external", scanned=8, ingested=8, errors=0, vault_binding_id=second.vault_binding_id
+        ),
+    )
+    producer_b.start()
+    producer_b.join(timeout=0.5)
+    release.set()
+    producer_a.join(timeout=5)
+    producer_b.join(timeout=5)
+
+    notable_a = _signal_view(_orientation(client, _headers(client, first.vault_binding_id)))
+    notable_b = _signal_view(_orientation(client, _headers(client, second.vault_binding_id)))
+    assert "ingest_total=5" in notable_a["notable"][0]
+    assert "ingest_total=8" in notable_b["notable"][0]

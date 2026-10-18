@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple
@@ -23,25 +26,52 @@ def _write_status(
     run_at: datetime,
     ok: bool,
     error_message: str | None,
-    binding_entry: tuple[str, dict] | None = None,
+    binding_run: tuple[str, str] | None = None,
 ) -> None:
+    """Rewrite the status file under an inter-process lock, atomically.
+
+    ``binding_run`` is ``(binding id, plane)`` of the run just recorded. The
+    per-binding map is read, merged and replaced inside one lock, so concurrent
+    producers (API and watcher share the file) never drop each other's history,
+    and a run with no provable binding keeps the existing map.
+    """
     path = _status_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: dict = {
         "last_run_at": run_at.isoformat(),
         "last_run_ok": ok,
         "last_error_message": error_message,
         "runs": {plane: _serialize_run(meta) for plane, meta in _last_runs.items()},
     }
-    # Every rewrite keeps the per-binding history, including a run that records no
-    # binding entry of its own (an unprovable producer).
-    bindings = _read_binding_runs(path)
-    if binding_entry is not None:
-        binding_id, entry = binding_entry
-        bindings[binding_id] = entry
-    if bindings:
-        payload["bindings"] = bindings
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    with _status_lock(path):
+        bindings = _read_binding_runs(path)
+        if binding_run is not None:
+            binding_id, plane = binding_run
+            previous = bindings.get(binding_id) or {}
+            bindings[binding_id] = {
+                "last_run_at": run_at.isoformat(),
+                "last_run_ok": ok,
+                "last_error_message": error_message,
+                "runs": {
+                    **(previous.get("runs") or {}),
+                    plane: _serialize_run(_last_runs[plane]),
+                },
+            }
+        if bindings:
+            payload["bindings"] = bindings
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+
+
+@contextmanager
+def _status_lock(path: Path) -> Iterator[None]:
+    with open(path.with_name(f".{path.name}.lock"), "a+") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _read_binding_runs(path: Path) -> dict[str, dict]:
@@ -167,21 +197,7 @@ def record_ingest_run(
         "malformed": malformed,
     }
     binding_id = vault_binding_id if vault_binding_id is not None else _producing_binding()
-    binding_entry = None
-    if binding_id:
-        binding_entry = (
-            binding_id,
-            {
-                "last_run_at": run_at.isoformat(),
-                "last_run_ok": ok_value,
-                "last_error_message": message,
-                "runs": {
-                    **(_read_binding_runs(_status_path()).get(binding_id, {}).get("runs") or {}),
-                    plane: _serialize_run(_last_runs[plane]),
-                },
-            },
-        )
-    _write_status(run_at, ok_value, message, binding_entry)
+    _write_status(run_at, ok_value, message, (binding_id, plane) if binding_id else None)
 
 
 def _serialize_run(meta: dict) -> dict:
