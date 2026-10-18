@@ -1272,6 +1272,32 @@ apply_changed_migrations() {
   rm -f "${migration_pending_file}"
 }
 
+rollback_runtime_complete_gate() {
+  local rows service result state health
+  rows="$(compose ps --all --format json)" || return $?
+  for service in api worker watcher; do
+    result="$(ROLLBACK_RUNTIME_ROWS="${rows}" ROLLBACK_RUNTIME_SERVICE="${service}" "${PYTHON}" -c '
+import json, os
+raw = os.environ["ROLLBACK_RUNTIME_ROWS"]
+try:
+    rows = json.loads(raw) if raw.startswith("[") else [json.loads(line) for line in raw.splitlines() if line]
+except Exception:
+    raise SystemExit(1)
+for row in rows:
+    if isinstance(row, dict) and row.get("Service") == os.environ["ROLLBACK_RUNTIME_SERVICE"]:
+        print(str(row.get("State", "")) + "\t" + str(row.get("Health", "")))
+        raise SystemExit(0)
+raise SystemExit(1)
+')" || return 1
+    IFS=$'\t' read -r state health <<<"${result}"
+    [ "${state}" = "running" ] || return 1
+    case "${health}" in
+      healthy|running|'') ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
 rollback_failed_startup() {
   local reason="$1" original_status="$2" forward_only_count="0"
   local current_floor_state="" inspection_rc=0 target_floor_state=""
@@ -1369,6 +1395,10 @@ rollback_failed_startup() {
         recreate_channel_services
     ); then
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
+    else
+      if ! rollback_runtime_complete_gate; then
+        echo "rollback runtime incomplete for previous pin ${current_sha}; retaining pending operation" >&2
+      fi
     fi
   else
     echo "${reason} (status ${original_status}); rollback unavailable because no previous pin was recorded; retaining the no-baseline migration marker for same-target retry" >&2
