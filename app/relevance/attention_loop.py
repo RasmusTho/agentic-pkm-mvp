@@ -20,10 +20,8 @@ from pathlib import Path
 from typing import Any, Literal, Sequence
 from uuid import uuid4
 
-from app.instance.compatibility_binding import (
-    compatibility_binding_for_root,
-    legacy_view_bindings,
-)
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+from app.instance.compatibility_binding import compatibility_binding_for_root
 from app.relevance.interruptibility import InterruptibilityThreshold, coerce_threshold
 from app.relevance.materialization import materialize_moment
 from app.relevance.patterns import DeclaredPattern, apply_patterns
@@ -295,14 +293,19 @@ class AttentionLoop:
 def reachout_dedup_view(binding: str) -> tuple[str | None, ...]:
     """Stamps a producer's reach-out dedup addresses (MVR-05B4c3).
 
-    The live compatibility producer spans its own binding, the legacy sentinel and
-    unstamped history (one vault's single-binding journey); any other producer
-    addresses exactly its own binding, so another vault's receipt for the same
-    moment UUID never suppresses its emission.
+    The no-registry producer spans the legacy sentinel and unstamped history; a
+    live registry binding addresses exactly its own stamp, so neither another
+    vault's receipt nor pre-upgrade legacy history suppresses its emission.
     """
 
-    legacy = legacy_view_bindings()
-    return legacy if binding in legacy else (binding,)
+    # Without a registry the producer IS the legacy sentinel: unstamped history is
+    # its own and keeps suppressing re-emission. Once a registry binding is live,
+    # only a receipt already stamped for that exact binding suppresses: an older
+    # unstamped/sentinel match is re-emitted once under the live binding, because
+    # scoped ``/now`` reads exclude legacy stamps and would otherwise never see it.
+    if binding == COMPATIBILITY_BINDING_ID:
+        return (COMPATIBILITY_BINDING_ID, None)
+    return (binding,)
 
 
 def _stamp_of(payload: dict[str, Any]) -> str | None:

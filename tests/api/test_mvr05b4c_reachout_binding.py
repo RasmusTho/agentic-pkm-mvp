@@ -169,9 +169,7 @@ def test_unstamped_legacy_receipts_are_never_shown_to_a_scoped_read(two_bindings
     assert collect_now_moments(_ctx(root_a))[0]["in_app_nudge"]["active"] is True
 
 
-def test_reachout_dedup_is_keyed_by_binding(
-    two_bindings, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_reachout_dedup_is_keyed_by_binding(two_bindings, monkeypatch: pytest.MonkeyPatch) -> None:
     _client, first, second, receipts, moments = two_bindings
     root_a, root_b = Path(first.path), Path(second.path)
     holder = {"live": first.vault_binding_id}
@@ -206,10 +204,12 @@ def test_reachout_dedup_is_keyed_by_binding(
     assert len(query_reachout_receipts(outbox_path=receipts)) == 2
 
 
-def test_unstamped_receipt_is_legacy_only_for_dedup(
+def test_unstamped_receipt_never_suppresses_a_live_binding_emission(
     two_bindings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _client, first, second, receipts, moments = two_bindings
+    """#6250 review: pre-upgrade history must not hide the scoped nudge forever."""
+
+    client, first, second, receipts, moments = two_bindings
     root_a = Path(first.path)
     holder = {"live": first.vault_binding_id}
     _set_live(monkeypatch, holder)
@@ -217,7 +217,16 @@ def test_unstamped_receipt_is_legacy_only_for_dedup(
     rows = [json.loads(line) for line in receipts.read_text(encoding="utf-8").splitlines()]
     rows[0]["payload"].pop(PRODUCING_BINDING_FIELD)
     receipts.write_text(json.dumps(rows[0]) + "\n", encoding="utf-8")
-    # The live compatibility view spans unstamped history: legacy dedup unchanged.
+    headers_a = _headers(client, first.vault_binding_id)
+    assert not any(moment.get("in_app_nudge") for moment in _now(client, headers_a))
+    # The live binding re-emits once under its own stamp, then dedups within it.
+    assert _tick(root_a, receipts, moments)["reachout_decisions"] == 1
+    stamps = [
+        r["payload"].get(PRODUCING_BINDING_FIELD)
+        for r in query_reachout_receipts(outbox_path=receipts)
+    ]
+    assert stamps == [None, first.vault_binding_id]
+    assert any(moment.get("in_app_nudge") for moment in _now(client, headers_a))
     assert _tick(root_a, receipts, moments)["reachout_decisions"] == 0
     # A producer for another binding never adopts it.
     [moment] = _moments_of(root_a)
