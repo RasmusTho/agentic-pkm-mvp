@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -312,12 +313,36 @@ def test_ci_workflow_change_selects_governance_contract_tests() -> None:
     assert "tests/governance" in selection.targets
 
 
-def test_ci_smoke_workflow_change_selects_full_shared_suite() -> None:
+def test_ci_smoke_workflow_change_selects_governance_contract_tests() -> None:
     selection = select_tests([".github/workflows/ci-smoke.yaml"])
 
-    assert selection.full_suite is True
-    assert selection.reason == "shared CI/test/runtime configuration changed"
+    assert selection.full_suite is False
+    assert selection.subsystems == ("governance",)
+    assert selection.reason == "governance-only PR"
     assert selection.unowned_paths == ()
+    assert "tests/ops/test_ci_workflow.py" in selection.targets
+    assert "tests/scripts" in selection.targets
+    assert "tests/deploy" not in selection.targets
+
+
+def test_scoped_deploy_ci_repair_shape_avoids_full_suite_self_validation() -> None:
+    selection = select_tests(
+        [
+            ".github/workflows/ci-smoke.yaml",
+            "docs/development/TEST_STRATEGY_HOT_PATH.md",
+            "scripts/run_scoped_test_partitions.py",
+            "scripts/select_pr_tests.py",
+            "tests/ops/test_ci_workflow.py",
+            "tests/scripts/test_select_pr_tests.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("ops", "ops_deploy")
+    assert selection.unowned_paths == ()
+    assert "tests/deploy" in selection.targets
+    assert "tests/ops" in selection.targets
+    assert "tests/scripts" in selection.targets
 
 
 def test_contract_selection_remains_conservative_after_deduplication() -> None:
@@ -1834,6 +1859,94 @@ def test_deploy_trigger_keeps_heavy_deploy_suite_on_pr_path(path: str) -> None:
         or (selection.full_suite and "--ignore=tests/deploy" not in selection.pytest_args)
         or selection.unowned_paths == (path,)
     )
+
+
+def test_scoped_deploy_partitions_preserve_selected_targets(tmp_path: Path) -> None:
+    changed = [
+        "app/ops/postgres_deploy_linux.py",
+        "scripts/postmerge_dev_test.py",
+        "tests/deploy/test_postmerge_dev_test.py",
+    ]
+    selection = select_tests(changed)
+    partitions = selector.scoped_deploy_partitions(selection)
+    assert selection.full_suite is False
+    assert selection.deferred_targets == ()
+    assert "tests/deploy" in selection.targets
+    assert "tests/deploy/test_postmerge_dev_test.py" in selection.targets
+    assert 1 <= len(partitions) <= 4
+    flattened = [target for partition in partitions for target in partition]
+    assert sorted(flattened) == sorted(selection.targets)
+    assert len(flattened) == len(set(flattened))
+    assert all(partition for partition in partitions)
+    assert all(target.split("::", 1)[0].startswith("tests/ops") for target in partitions[-1])
+    assert all(
+        not target.split("::", 1)[0].startswith("tests/ops")
+        for partition in partitions[:-1]
+        for target in partition
+    )
+    output = tmp_path / "github-output"
+    result = subprocess.run(
+        [
+            sys.executable, "scripts/select_pr_tests.py",
+            *(arg for path in changed for arg in ("--changed-file", path)),
+            "--github-output", str(output),
+        ],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert json.loads(fields["pytest_targets_json"]) == list(selection.targets)
+    assert json.loads(fields["scoped_partitions_json"]) == [
+        list(partition) for partition in partitions
+    ]
+    assert json.loads(fields["scoped_serial_boundary_json"]) == list(
+        selector.SCOPED_DEPLOY_SERIAL_BOUNDARY
+    )
+
+    release_output = tmp_path / "release-output"
+    release_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/select_pr_tests.py",
+            "--changed-file",
+            "app/release_channels/prepare_promotion.py",
+            "--github-output",
+            str(release_output),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert release_result.returncode == 0, release_result.stdout + release_result.stderr
+    release_fields = dict(
+        line.split("=", 1) for line in release_output.read_text().splitlines()
+    )
+    assert json.loads(release_fields["scoped_partitions_json"])
+    assert json.loads(release_fields["scoped_serial_boundary_json"]) == []
+
+    mixed_output = tmp_path / "mixed-output"
+    mixed_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/select_pr_tests.py",
+            "--changed-file",
+            "app/release_channels/prepare_promotion.py",
+            "--changed-file",
+            "app/instance/runtime.py",
+            "--github-output",
+            str(mixed_output),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert mixed_result.returncode == 0, mixed_result.stdout + mixed_result.stderr
+    mixed_fields = dict(line.split("=", 1) for line in mixed_output.read_text().splitlines())
+    assert json.loads(mixed_fields["scoped_serial_boundary_json"]) == [
+        "tests/ops/test_instance_state_volume_contract.py"
+    ]
 
 
 def test_changed_heavy_test_file_still_runs_on_pr_path() -> None:

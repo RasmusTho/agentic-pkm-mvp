@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,10 +45,6 @@ FULL_SUITE_REASONS = (
 )
 
 FULL_SUITE_EXACT = {
-    # CI Smoke owns the shared PR unit-test runtime. A change to its execution
-    # contract must prove the broad not-pg lane rather than only the workflow
-    # contract tests routed by the governance branch.
-    ".github/workflows/ci-smoke.yaml",
     # Shared CLI registration and path resolution affect many runtime
     # subsystems. Never narrow their coverage to a single feature owner.
     "app/cli.py",
@@ -330,6 +327,9 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "scripts/start_full_system.sh",
     ),
 }
+
+SCOPED_DEPLOY_PARALLEL_ROOTS = ("tests/deploy", "tests/scripts")
+SCOPED_DEPLOY_SERIAL_ROOT = "tests/ops"
 
 SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
@@ -1479,6 +1479,46 @@ def _defer_heavy(selection: Selection, paths: tuple[str, ...]) -> Selection:
     )
 
 
+def scoped_deploy_partitions(selection: Selection) -> tuple[tuple[str, ...], ...]:
+    """Partition source-triggered deploy coverage without changing its targets."""
+    if selection.full_suite or "tests/deploy" not in selection.targets:
+        return ()
+    buckets: list[list[str]] = [[] for _ in SCOPED_DEPLOY_PARALLEL_ROOTS]
+    remainder: list[str] = []
+    serial: list[str] = []
+    for target in selection.targets:
+        target_file = target.split("::", 1)[0]
+        if target_file == SCOPED_DEPLOY_SERIAL_ROOT or target_file.startswith(
+            f"{SCOPED_DEPLOY_SERIAL_ROOT}/"
+        ):
+            serial.append(target)
+            continue
+        for index, root in enumerate(SCOPED_DEPLOY_PARALLEL_ROOTS):
+            if target_file == root or target_file.startswith(f"{root}/"):
+                buckets[index].append(target)
+                break
+        else:
+            remainder.append(target)
+    partitions = [tuple(bucket) for bucket in buckets if bucket]
+    if remainder:
+        partitions.append(tuple(remainder))
+    if serial:
+        partitions.append(tuple(serial))
+    return tuple(partitions)
+
+
+SCOPED_DEPLOY_SERIAL_BOUNDARY = (
+    "tests/ops/test_dormant_ownership_initialization.py",
+    "tests/ops/test_git_hygiene.py",
+    "tests/ops/test_instance_state_deployment_lease.py",
+    "tests/ops/test_instance_state_volume_contract.py",
+    "tests/ops/test_instance_state_writer_inventory.py",
+    "tests/ops/test_mvr05_mixed_version_fence.py",
+    "tests/ops/test_native_journaling_acceptance.py",
+    "tests/ops/test_start_full_runtime_health.py",
+)
+
+
 def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     runtime_prefixes = ("app/", "companion-ui/")
     owned_prefixes = tuple(prefix for _, prefixes, _ in SUBSYSTEMS for prefix in prefixes)
@@ -1615,6 +1655,13 @@ def requires_runtime_checks(changed_files: list[str]) -> bool:
 
 def _write_github_output(path: str, selection: Selection, *, runtime_checks: bool = True) -> None:
     output = Path(path)
+    partitions = scoped_deploy_partitions(selection)
+    target_files = {target.split("::", 1)[0] for target in selection.targets}
+    serial_boundary = (
+        SCOPED_DEPLOY_SERIAL_BOUNDARY
+        if SCOPED_DEPLOY_SERIAL_ROOT in target_files
+        else tuple(path for path in SCOPED_DEPLOY_SERIAL_BOUNDARY if path in target_files)
+    )
     with output.open("a", encoding="utf-8") as handle:
         handle.write(f"full_suite={'true' if selection.full_suite else 'false'}\n")
         handle.write(f"subsystems={','.join(selection.subsystems) or 'all'}\n")
@@ -1622,6 +1669,12 @@ def _write_github_output(path: str, selection: Selection, *, runtime_checks: boo
         handle.write(f"reason={selection.reason}\n")
         handle.write(f"deferred_targets={' '.join(selection.deferred_targets)}\n")
         handle.write(f"runtime_checks={'true' if runtime_checks else 'false'}\n")
+        handle.write(f"pytest_targets_json={json.dumps(selection.targets, separators=(',', ':'))}\n")
+        handle.write(f"scoped_partitions_json={json.dumps(partitions, separators=(',', ':'))}\n")
+        handle.write(
+            "scoped_serial_boundary_json="
+            f"{json.dumps(serial_boundary, separators=(',', ':'))}\n"
+        )
 
 
 def main() -> int:
