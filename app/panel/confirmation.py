@@ -520,6 +520,28 @@ class ProposalStore:
             logger.warning("panel proposal store clear degraded to memory-only: %s", exc)
 
 
+_DURABLE_KEY_SEPARATOR = "\x1f"
+
+
+def _durable_key(binding: str | None, key: str) -> str:
+    """The SQLite primary key for an idempotency row: binding-qualified.
+
+    The table's key column is the conflict key, so a bare idempotency key would let
+    a confirmation under binding B overwrite binding A's durable response across a
+    rebind. Legacy (sentinel/unstamped) rows keep the bare key so pre-MVR-05B4c2
+    rows remain readable.
+    """
+
+    if binding is None or binding == COMPATIBILITY_BINDING_ID:
+        return key
+    return f"{binding}{_DURABLE_KEY_SEPARATOR}{key}"
+
+
+def _split_durable_key(durable: str) -> tuple[str | None, str]:
+    binding, sep, key = durable.partition(_DURABLE_KEY_SEPARATOR)
+    return (binding, key) if sep else (None, durable)
+
+
 class ConfirmIdempotencyStore:
     def __init__(
         self,
@@ -592,8 +614,8 @@ class ConfirmIdempotencyStore:
             cache: dict[tuple[str | None, str], ConfirmResponse] = {}
             for row in rows:
                 stamp, response_json = _unwrap_durable(str(row["response_json"]))
-                cache[(stamp, str(row["key"]))] = ConfirmResponse.model_validate_json(
-                    response_json
+                cache[(stamp, _split_durable_key(str(row["key"]))[1])] = (
+                    ConfirmResponse.model_validate_json(response_json)
                 )
             self._cache = cache
             self._degraded_reason = None
@@ -652,7 +674,7 @@ class ConfirmIdempotencyStore:
                         updated_at=excluded.updated_at
                     """,
                     (
-                        key,
+                        _durable_key(binding, key),
                         _wrap_durable(binding, response.model_dump_json()),
                         now,
                         now_iso,

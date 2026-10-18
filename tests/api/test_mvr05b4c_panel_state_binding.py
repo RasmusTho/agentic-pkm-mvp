@@ -759,3 +759,24 @@ def test_curation_pass_resolves_binding_before_touching_any_note(
 
     assert note.read_text(encoding="utf-8") == before
     assert not outbox.exists()
+
+
+def test_same_idempotency_key_in_two_bindings_survives_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6243 review: the durable key is binding-qualified, so B never overwrites A."""
+
+    holder = {"live": "binding-A"}
+    _set_live_binding(monkeypatch, holder)
+    db = tmp_path / "panel.sqlite3"
+    cache = ConfirmIdempotencyStore(db)
+    cache.set("shared-key", _response("art-a", "shared-key"))
+
+    holder["live"] = "binding-B"
+    ConfirmIdempotencyStore(db).set("shared-key", _response("art-b", "shared-key"))
+
+    reloaded = ConfirmIdempotencyStore(db)
+    a = reloaded.get("shared-key", binding="binding-A")
+    b = reloaded.get("shared-key", binding="binding-B")
+    assert a is not None and a.artifact_id == "art-a"
+    assert b is not None and b.artifact_id == "art-b"
