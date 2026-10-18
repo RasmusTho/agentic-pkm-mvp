@@ -42,6 +42,7 @@ from pathlib import Path
 from app.agents.panel_agent.runtime import _write_proposals_to_panel
 from app.curation.findings import CurationFinding
 from app.events.panel import NoteRef, PanelActionLoggedEvent, PanelEventSource
+from app.receipts.artifact_receipts import stamp_producing_binding
 from app.services.outbox import append_jsonl_outbox_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -191,13 +192,17 @@ def _emit_proposal_receipt(
 ) -> None:
     event = PanelActionLoggedEvent(
         source=PanelEventSource(component="curation.proposal_writer", trigger="curation_pass"),
-        payload={
-            "note": NoteRef(uuid=finding.note_uuid, path=str(note_path)).model_dump(mode="json"),
-            "finding_id": finding.finding_id,
-            "finding_class": finding.finding_class.value,
-            "track": finding.track.value,
-            "reason": "curation_finding_proposed",
-        },
+        # MVR-05B4c2: the curation pass is a carrier-free producer; stamp the sealed
+        # compatibility binding so scoped reads can attribute (and exclude) the receipt.
+        payload=stamp_producing_binding(
+            {
+                "note": NoteRef(uuid=finding.note_uuid, path=str(note_path)).model_dump(mode="json"),
+                "finding_id": finding.finding_id,
+                "finding_class": finding.finding_class.value,
+                "track": finding.track.value,
+                "reason": "curation_finding_proposed",
+            }
+        ),
     )
     append_jsonl_outbox_event(Path(outbox_path), event, default_source="curation.proposal_writer")
 

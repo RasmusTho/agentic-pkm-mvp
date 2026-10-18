@@ -25,6 +25,7 @@ from app.events.panel import (
     PanelRuntimeActionResult,
 )
 from app.events.schema import OutboxEvent
+from app.receipts.artifact_receipts import stamp_producing_binding
 
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
@@ -227,7 +228,12 @@ def _logged_event(
         # #984 attach bounded cognition-route observability so receipts surface
         # provider/model/fallback alongside the reason code.
         payload["cognition_metadata"] = dict(cognition_metadata)
-    return PanelActionLoggedEvent(trace_id=intent_event.trace_id, source=_build_panel_source(), payload=payload)
+    # MVR-05B4c2: every panel emitter is a carrier-free path; stamp the sealed compatibility binding.
+    return PanelActionLoggedEvent(
+        trace_id=intent_event.trace_id,
+        source=_build_panel_source(),
+        payload=stamp_producing_binding(payload),
+    )
 
 
 def _handle_action(
@@ -489,7 +495,7 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
         no_match_event = PanelActionLoggedEvent(
             trace_id=intent_event.trace_id,
             source=_build_panel_source(),
-            payload=no_match_payload,
+            payload=stamp_producing_binding(no_match_payload),
         )
         emitted.append(no_match_event)
 

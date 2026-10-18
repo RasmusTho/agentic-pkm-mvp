@@ -3054,11 +3054,30 @@ def _undo_available_for_session(*, session: object, applied_edits: list[object])
     return current_body == getattr(latest, "body_after", None)
 
 
-def _proposal_count_for_artifact(artifact_id: str | None) -> int:
+_PanelBindingView = tuple[bool, str | None]
+
+
+def _panel_binding_view() -> _PanelBindingView:
+    """(has_state, binding) for the panel proposal / idempotency stores.
+
+    A carrier-free request reads the legacy view (``binding=None``). A scoped
+    request reads exactly its own binding's state (MVR-05B4c2); a zero-binding
+    selection owns no state. A scoped read never consults an entry keyed only by
+    artifact id, and never writes.
+    """
+
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is None:
+        return True, None
+    if scoped.vault_binding_id is None:
+        return False, None
+    return True, scoped.vault_binding_id
+
+
+def _proposal_count_for_artifact(artifact_id: str | None, *, binding: str | None = None) -> int:
     if artifact_id is None:
         return 0
-    proposals = getattr(confirm_module._proposal_store, "_proposals", {})
-    return sum(1 for proposal in proposals.values() if proposal.artifact_id == artifact_id)
+    return confirm_module._proposal_store.count_for_artifact(artifact_id, binding=binding)
 
 
 def _panel_state(
@@ -3066,14 +3085,16 @@ def _panel_state(
     selectable_options: list[PanelSelectableOption] | None = None,
 ) -> PanelState:
     options = list(selectable_options or [])
-    # The proposal and idempotency stores are process-global and keyed only by
-    # artifact id, so a scoped read would show another binding's proposals for a
-    # shared UUID. A scoped panel omits them (fail closed) until MVR-05B4.
-    process_global = _SCOPED_COMPANION_READ.get() is None
-    proposal_count = _proposal_count_for_artifact(artifact_id) if process_global else 0
+    # The proposal and idempotency stores are keyed by the producing binding
+    # (MVR-05B4c2): a scoped panel shows the request binding's state only, even when
+    # another binding holds state for the same artifact id.
+    has_state, binding = _panel_binding_view()
+    proposal_count = (
+        _proposal_count_for_artifact(artifact_id, binding=binding) if has_state else 0
+    )
     selectable_count = sum(1 for option in options if option.selectable)
-    cache = getattr(confirm_module._idempotency_store, "_cache", {}) if process_global else {}
-    relevant = [resp for resp in cache.values() if resp.artifact_id == artifact_id]
+    responses = confirm_module._idempotency_store.responses_for(binding) if has_state else []
+    relevant = [resp for resp in responses if resp.artifact_id == artifact_id]
     latest = relevant[-1] if relevant else None
     blocked_reason = None
     latest_outcome = None
@@ -3089,9 +3110,9 @@ def _panel_state(
         state = "receipt-displayed"
     else:
         state = "idle"
-    staged = getattr(confirm_module._proposal_store, "_proposals", {}) if process_global else {}
+    staged = confirm_module._proposal_store.items_for(binding) if has_state else []
     proposal_rows = []
-    for proposal_id, proposal in staged.items():
+    for proposal_id, proposal in staged:
         if proposal.artifact_id != artifact_id:
             continue
         intent = proposal.intent_event
@@ -3854,19 +3875,19 @@ def _orientation_memory_mutation_intents(
 
 
 def _orientation_governance_summary() -> WorkspaceOrientationGovernance:
-    if _SCOPED_COMPANION_READ.get() is not None:
-        # Process-global source with no vault-binding predicate: a scoped read
-        # takes the degraded "unavailable" path (fail closed) until MVR-05B4.
-        raise RuntimeError("orientation source is not binding-aware")
-    proposals = getattr(confirm_module._proposal_store, "_proposals", {})
-    receipts = getattr(confirm_module._idempotency_store, "_cache", {})
-    receipt_values = list(receipts.values()) if isinstance(receipts, dict) else []
+    # Computed from the request binding's own proposal / idempotency state
+    # (MVR-05B4c2); the carrier-free view is unchanged.
+    has_state, binding = _panel_binding_view()
+    proposals = confirm_module._proposal_store.items_for(binding) if has_state else []
+    receipt_values = (
+        confirm_module._idempotency_store.responses_for(binding) if has_state else []
+    )
     latest = receipt_values[-1] if receipt_values else None
     latest_outcome = getattr(latest, "outcome", None) if latest is not None else None
     source_kind = "receipt" if receipt_values else "runtime_signal"
     source_ref = "panel.receipts" if receipt_values else "panel.governance_summary"
     return WorkspaceOrientationGovernance(
-        pending_proposal_count=len(proposals) if isinstance(proposals, dict) else 0,
+        pending_proposal_count=len(proposals),
         pending_receipt_count=len(receipt_values),
         latest_receipt_outcome=latest_outcome,
         source_ref=_orientation_source_ref(
@@ -4304,12 +4325,13 @@ def _attach_receipts_to_notes(
     *,
     vault_root: Path,
 ) -> list[VaultBrowserNoteState]:
-    if _SCOPED_COMPANION_READ.get() is not None:
-        # The receipt / review-queue sources are process-global and are not yet
-        # filtered by vault binding, so a scoped read would match another
-        # binding's artifacts on a shared UUID or note path. Omit the projection
-        # (fail closed) until MVR-05B4 makes it binding-aware.
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None and scoped.vault_binding_id is None:
+        # A zero-binding selection owns no receipts.
         return notes
+    # A scoped read returns only receipts stamped with the request binding at
+    # emission, so a UUID or note path shared across bindings never surfaces
+    # another binding's receipt (MVR-05B4c2).
     projection = receipts_for_artifacts(
         [
             ArtifactReceiptTarget(
@@ -4319,6 +4341,7 @@ def _attach_receipts_to_notes(
             for note in notes
         ],
         vault_root=vault_root,
+        binding=scoped.vault_binding_id if scoped is not None else None,
     )
     if projection is None:
         return notes

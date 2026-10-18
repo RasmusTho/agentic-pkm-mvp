@@ -333,22 +333,20 @@ def test_explicit_empty_selection_reads_inside_the_principal_effect_window(
     assert entered == [0]
 
 
-def test_scoped_reads_omit_process_global_artifact_projections(instance, client, monkeypatch) -> None:
-    """#6156 review: receipts and panel stores are not binding-aware yet.
+def test_scoped_reads_do_not_adopt_unstamped_artifact_projections(instance, client, monkeypatch) -> None:
+    """#6156 review: a scoped read never shows unstamped process-global artifact state.
 
-    Agent-memory posture is binding-aware since MVR-05B4c1 and is covered by
-    ``tests/api/test_mvr05b4c_review_queue_binding.py``.
+    Agent-memory posture (MVR-05B4c1) and panel state / receipts (MVR-05B4c2) are
+    binding-aware and covered by ``tests/api/test_mvr05b4c_*_binding.py``; here the
+    process stores hold only unstamped state, which a scoped read must not see.
     """
 
     from pathlib import Path
 
-    from app.api.routes import companion as companion_routes
+    import app.panel.confirmation as confirm_module
 
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("scoped read consulted a process-global artifact projection")
-
-    monkeypatch.setattr(companion_routes, "receipts_for_artifacts", forbidden)
-    monkeypatch.setattr(companion_routes, "_proposal_count_for_artifact", forbidden)
+    monkeypatch.setattr(confirm_module._proposal_store, "_proposals", {})
+    monkeypatch.setattr(confirm_module._idempotency_store, "_cache", {})
     runtime, first, _second = instance
     first_root = runtime.registry.lookup(first.vault_binding_id)
     assert first_root is not None
@@ -384,7 +382,6 @@ def test_scoped_now_orientation_and_browse_stay_inside_the_bound_vault(
 
     monkeypatch.setattr(now_surface, "query_reachout_receipts", forbidden)
     monkeypatch.setattr(companion_routes, "_orientation_memory_review_queue", forbidden)
-    monkeypatch.setattr(companion_routes, "_proposal_count_for_artifact", forbidden)
     monkeypatch.setattr(companion_routes, "_append_orientation_memory_intent_trace", forbidden)
     monkeypatch.setattr(companion_routes, "get_orientation_signals", forbidden)
     monkeypatch.setattr(companion_routes, "_orientation_leave_point", forbidden)
