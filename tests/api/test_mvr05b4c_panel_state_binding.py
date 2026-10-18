@@ -573,3 +573,142 @@ def test_unresolved_rebind_record_fails_closed(two_bindings, monkeypatch) -> Non
         live_compatibility_binding_id()
     with pytest.raises(CompatibilityBindingUnavailableError):
         ProposalStore().stage("p", StagedProposal(artifact_id="a", intent_event=_intent()))
+
+
+def _panel_note(tmp_path: Path) -> tuple[Path, Path, dict]:
+    import uuid
+
+    vault_root = tmp_path / "vault-b"
+    inbox = vault_root / "Inbox"
+    inbox.mkdir(parents=True)
+    note = inbox / "panel-note.md"
+    note.write_text(
+        f"---\nuuid: {uuid.uuid4()}\n---\n%% AI:Start %%\n## AI-instruktion\nGo.\n\n"
+        "## AI-åtgärder\n\n## AI-logg\n%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    payload = {
+        "vault_path": str(note),
+        "relative_path": "Inbox/panel-note.md",
+        "hash": "h",
+        "mtime": 1.0,
+    }
+    return vault_root, note, payload
+
+
+@pytest.mark.parametrize(
+    ("dispatch_binding", "expected"),
+    [("binding-B", "binding-B"), (COMPATIBILITY_BINDING_ID, None)],
+)
+def test_panel_scan_dispatch_carries_its_producing_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dispatch_binding: str, expected
+) -> None:
+    from types import SimpleNamespace
+
+    from app.workers import outbox_worker
+
+    vault_root, _note, payload = _panel_note(tmp_path)
+    seen: dict = {}
+
+    def run(note_id, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(emitted_count=0)
+
+    monkeypatch.setattr(outbox_worker, "run_panel_note_execution", run)
+    monkeypatch.setattr(outbox_worker, "refresh_panel_note_object", lambda **_k: None)
+    monkeypatch.setattr(outbox_worker, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(outbox_worker, "_outbox_audit_path", lambda: tmp_path / "audit.jsonl")
+
+    outbox_worker.handle_panel_scan_requested(
+        payload, vault_root=vault_root, source_vault_binding_id=dispatch_binding
+    )
+
+    assert seen["producing_binding_id"] == expected
+
+
+def test_panel_graph_stamps_the_dispatch_binding_on_every_logged_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real graph run for vault B stamps B (not the compatibility binding)."""
+
+    from app.agents.panel_agent.graph import run_panel_graph
+    from app.agents.panel_agent.state import PanelAgentState
+    from app.components.concurrency import IdempotencyGuard
+    from tests.agents.panel_agent.test_proposal_only_outputs import (
+        _proposal_only_catalog,
+        _StubReasoningFacade,
+    )
+
+    monkeypatch.setattr("app.agents.panel_agent.graph.get_default_action_wiring", lambda: {})
+    monkeypatch.setattr(
+        "app.agents.panel_agent.graph._IDEMPOTENCY_GUARD", IdempotencyGuard(ttl_seconds=86400.0)
+    )
+    monkeypatch.setattr(
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
+        lambda: _StubReasoningFacade(
+            {"actions": [{"id": "proposal.next_actions", "reason": "next steps"}]}
+        ),
+    )
+    note = NoteRef(uuid="panel-b-uuid", path="vault/B.md", origin="vault")
+    panel = PanelInfo(panel_id="p1", instruction="What should I do next?", raw_block=None)
+    intent = PanelIntentEvent(
+        payload=PanelIntentPayload(note=note, panel=panel, actions=[]), trace_id="trace-b"
+    )
+
+    def run(binding: str | None):
+        state = PanelAgentState(
+            trace_id=intent.trace_id,
+            note=note,
+            panel=panel,
+            actions=[],
+            intent_event=intent,
+            action_catalog=_proposal_only_catalog(),
+            producing_binding_id=binding,
+        )
+        result = run_panel_graph(state, decider_mode="llm")
+        return [
+            e.payload[PRODUCING_BINDING_FIELD]
+            for e in result.emitted_events
+            if getattr(e, "event", None) == "panel.action.logged"
+        ]
+
+    stamped = run("binding-B")
+    assert stamped and set(stamped) == {"binding-B"}
+    monkeypatch.setattr(
+        "app.agents.panel_agent.graph._IDEMPOTENCY_GUARD", IdempotencyGuard(ttl_seconds=86400.0)
+    )
+    carrier_free = run(None)
+    assert carrier_free and set(carrier_free) == {COMPATIBILITY_BINDING_ID}  # no registry bound
+
+
+def test_old_format_idempotency_row_is_not_replayed_after_rebind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    holder = {"live": COMPATIBILITY_BINDING_ID}
+    _set_live_binding(monkeypatch, holder)
+    db = tmp_path / "panel.sqlite3"
+    ConfirmIdempotencyStore(db)  # create schema
+    stale = _response("art", "reused-key", status="executed", outcome="success")
+    with sqlite3.connect(db) as conn:  # a pre-envelope row written before the upgrade
+        conn.execute(
+            "INSERT INTO panel_confirm_idempotency (key, response_json, created_at, updated_at) "
+            "VALUES ('reused-key', ?, ?, 'x')",
+            (stale.model_dump_json(), time.time()),
+        )
+    cache = ConfirmIdempotencyStore(db)
+    proposals = ProposalStore()
+    service = confirm_module.PanelConfirmationService(proposals, cache, same_turn_ttl=0)
+    request = confirm_module.ConfirmRequest(
+        proposal_id="nope", artifact_id="art", action="reject", idempotency_key="reused-key"
+    )
+
+    # No registry bound: the legacy replay is unchanged.
+    assert service.confirm(request).status == "executed"
+
+    # After a registry binding goes live (A -> B) the unstamped row is not B's replay.
+    holder["live"] = "binding-B"
+    with pytest.raises(confirm_module.UnknownProposalError):
+        service.confirm(request)
+    assert cache.get("reused-key", binding="binding-B") is None

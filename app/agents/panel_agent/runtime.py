@@ -128,6 +128,7 @@ def execute_panel_intent(
     vault_root: Path | None = None,
     vault_uuid: str | None = None,
     allow_legacy_promotion_without_trust_verb: bool = False,
+    producing_binding_id: str | None = None,
 ) -> PanelRuntimeResult:
     # Guard-at-seam (#2808, formal-model.md Divergence F-A): assert WriteGuard
     # here, at the write seam itself, before any filesystem mutation. API
@@ -251,6 +252,7 @@ def execute_panel_intent(
         executed_action_ids=sorted(executed_ids),
         policy_flags=policy_flags,
         vault_root=vault_root,
+        producing_binding_id=producing_binding_id,
         decider_mode=decider_mode,
         converged_rerun=converged_rerun,
     )

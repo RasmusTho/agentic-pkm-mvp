@@ -98,6 +98,7 @@ def run_panel_note_execution(
     vault_uuid: str | None = None,
     persist_created_to_db: bool = False,
     trigger: str = "cli",
+    producing_binding_id: str | None = None,
 ) -> PanelNoteExecutionResult:
     intent_events = run_panel_intent_for_note(
         note_uuid,
@@ -132,12 +133,18 @@ def run_panel_note_execution(
     # Thread the caller's already-resolved vault (the watcher/outbox-worker path
     # resolves it through its own canonical resolver) into the runtime so writeback
     # targets the bound vault without the panel runtime re-reading the env (#2476).
+    # MVR-05B4c2: a dispatch that knows its producing binding stamps it on the
+    # receipts it emits; a carrier-free run omits it (live compatibility binding).
+    binding_kwargs = (
+        {"producing_binding_id": producing_binding_id} if producing_binding_id else {}
+    )
     runtime_results = [
         execute_panel_intent(
             event,
             outbox_path=outbox_path,
             vault_root=vault_root,
             vault_uuid=vault_uuid,
+            **binding_kwargs,
         )
         for event in intent_events
     ]

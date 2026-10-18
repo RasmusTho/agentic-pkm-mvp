@@ -54,6 +54,8 @@ class PanelAgentState(RuntimeStateModel):
     # intentionally bounded and free of prompt bodies or secrets.
     cognition_metadata: dict[str, Any] = Field(default_factory=dict)
     vault_root: Path | None = None
+    # MVR-05B4c2: the vault binding that dispatched this run; ``None`` is a carrier-free run.
+    producing_binding_id: str | None = None
 
     # Runtime-populated fields
     intent_event: PanelIntentEvent | None = None

@@ -918,7 +918,13 @@ class PanelConfirmationService:
         self._ttl = same_turn_ttl
 
     def confirm(self, request: ConfirmRequest) -> ConfirmResponse:
-        cached = self._idempotency.get(request.idempotency_key)
+        live = live_compatibility_binding_id()
+        # Once a registry binding is live, only a response stamped with that exact
+        # binding is a replay of this vault's operation; an unstamped or other-binding
+        # row (e.g. written before the rebind) is never returned for it.
+        cached = self._idempotency.get(
+            request.idempotency_key, binding=None if live == COMPATIBILITY_BINDING_ID else live
+        )
         if cached is not None:
             return cached
 
@@ -926,7 +932,6 @@ class PanelConfirmationService:
         if proposal is None:
             raise UnknownProposalError(request.proposal_id)
 
-        live = live_compatibility_binding_id()
         if live != COMPATIBILITY_BINDING_ID and proposal.binding_id != live:
             raise RestageRequiredError(request.proposal_id)
 
