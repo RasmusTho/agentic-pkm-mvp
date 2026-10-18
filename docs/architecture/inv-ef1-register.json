@@ -2667,6 +2667,20 @@
       "why_load_bearing": "The fresh #6174 observer's immutable live-read envelope retains the public Bifrost repository identity from dispatcher output; this exact original evidence is neither Product data nor an operator vault binding.",
       "disposition": "stay",
       "issue": "#6174"
+    },
+    {
+      "artifact": "app/builderops/devui_ckm_snapshot.py",
+      "category": "iii",
+      "why_load_bearing": "The owner-approved #6194 single-operator private CKM transfer binds the existing local query source host to the fixed private DevUI target. This Builder-only policy identity prevents arbitrary source substitution; it contains no address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6194"
+    },
+    {
+      "artifact": "docs/CKM_MEASUREMENT_AND_ACCESS/README.md",
+      "category": "iii",
+      "why_load_bearing": "The owner-approved #6194 single-operator private CKM transfer binds the existing local query source host to the fixed private DevUI target. This Builder-only policy identity prevents arbitrary source substitution; it contains no address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6194"
     }
   ]
 }
