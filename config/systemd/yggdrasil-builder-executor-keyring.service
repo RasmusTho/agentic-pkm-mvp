@@ -1,0 +1,42 @@
+[Unit]
+Description=Dedicated native keyring for the BOB-1 Builder executor
+Requires=user@1000.service
+After=user@1000.service
+BindsTo=user@1000.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=ygg
+Group=ygg
+UMask=0077
+LoadCredentialEncrypted=builder-executor-keyring-master:/opt/builderops/executor-keyring/master.cred
+RuntimeDirectory=yggdrasil-builder-executor-keyring
+RuntimeDirectoryMode=0700
+StateDirectory=yggdrasil-builder-executor-keyring
+StateDirectoryMode=0700
+ExecStart=/usr/bin/python3 /opt/builderops/executor-keyring/runtime.py daemon
+ExecStartPost=/usr/bin/python3 /opt/builderops/executor-keyring/runtime.py ready
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=5
+KillMode=control-group
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

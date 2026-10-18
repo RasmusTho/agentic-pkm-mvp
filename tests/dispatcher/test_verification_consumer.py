@@ -7660,6 +7660,72 @@ def test_auth_preflight_requires_chatgpt_keyring_and_login_status(tmp_path) -> N
     assert calls[0][0] == ["codex", "login", "status"]
 
 
+@pytest.mark.parametrize("broken", [None, "address", "directory-mode", "socket-symlink", "root-mode"])
+def test_auth_preflight_and_coordinator_share_validated_linux_keyring_environment(
+    tmp_path, monkeypatch, broken, request
+) -> None:
+    import socket
+    import tempfile
+
+    # Unix-domain socket paths have a small OS limit; pytest's diagnostic root
+    # can exceed it. Keep this one fixture in a unique short owned directory.
+    short = tempfile.TemporaryDirectory(prefix="bk-", dir="/tmp")
+    request.addfinalizer(short.cleanup)
+    base = Path(short.name) / "user-runtime"
+    base.mkdir(mode=0o755)
+    runtime = base / str(os.geteuid())
+    runtime.mkdir(mode=0o700)
+    endpoint = socket.socket(socket.AF_UNIX)
+    endpoint.bind(str(runtime / "bus"))
+    monkeypatch.setattr(verification_consumer.sys, "platform", "linux")
+    monkeypatch.setattr(verification_consumer, "_LINUX_USER_RUNTIME_BASE", base)
+    monkeypatch.setattr(verification_consumer, "_LINUX_RUNTIME_ROOT_UID", os.geteuid())
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "synthetic-must-not-pass")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-must-not-pass")
+    config = tmp_path / "config.toml"
+    config.write_text('forced_login_method="chatgpt"\ncli_auth_credentials_store="keyring"\n')
+    calls = []
+
+    def auth_runner(command, **kwargs):
+        calls.append(kwargs["env"])
+        return type("Result", (), {"returncode": 0})()
+
+    if broken == "address":
+        monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "tcp:host=127.0.0.1,port=1")
+    elif broken == "directory-mode":
+        runtime.chmod(0o755)
+    elif broken == "socket-symlink":
+        (runtime / "bus").rename(runtime / "real-bus")
+        (runtime / "bus").symlink_to(runtime / "real-bus")
+    elif broken == "root-mode":
+        base.chmod(0o777)
+    try:
+        auth = CodexChatGPTAuthPreflight(config, runner=auth_runner).check()
+        launches: list[dict[str, object]] = []
+        launcher = _capturing_coordinator_launcher(tmp_path, launches)
+        if broken:
+            assert auth.ok is False
+            assert calls == []
+            with pytest.raises(RuntimeError, match="native keyring environment unavailable"):
+                launcher.launch({"head_sha": HEAD})
+            assert launches == []
+        else:
+            assert auth.ok is True
+            launcher.launch({"head_sha": HEAD})
+            selected = {"XDG_RUNTIME_DIR": str(runtime),
+                        "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus"}
+            for env in (calls[0], launches[0]["env"]):
+                assert isinstance(env, dict)
+                assert {key: env[key] for key in selected} == selected
+                assert "GH_TOKEN" not in env
+                assert "OPENAI_API_KEY" not in env
+                assert "CODEX_HOME" not in env
+    finally:
+        endpoint.close()
+
+
 def test_process_runner_injection_preserves_falsey_callable(tmp_path) -> None:
     class FalseRunner:
         def __bool__(self) -> bool:
