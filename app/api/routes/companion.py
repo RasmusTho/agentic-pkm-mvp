@@ -1549,12 +1549,15 @@ def read_companion_now() -> list[dict]:
     """
     context = _companion_read_vault_context()
     if context.status == "selected" and context.active_vault_path:
-        # Reach-out receipts are process-global and keyed only by moment UUID, so
-        # a scoped read omits the in-app nudge (fail closed) until MVR-05B4.
-        return collect_now_moments(
-            context,
-            include_in_app_nudges=_SCOPED_COMPANION_READ.get() is None,
-        )
+        # Reach-out receipts carry their producing binding (MVR-05B4c3): a scoped read
+        # shows the nudges stamped with the request binding only; a carrier-free read
+        # keeps the legacy view. A scoped read never writes.
+        scoped = _SCOPED_COMPANION_READ.get()
+        if scoped is not None:
+            if scoped.vault_binding_id is None:
+                return collect_now_moments(context, include_in_app_nudges=False)
+            return collect_now_moments(context, nudge_bindings=(scoped.vault_binding_id,))
+        return collect_now_moments(context)
     return []
 
 

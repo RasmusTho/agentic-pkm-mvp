@@ -10,10 +10,11 @@ performs no write, reads no external source, and emits no OS notification.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import yaml
 
+from app.instance.compatibility_binding import legacy_view_bindings
 from app.relevance.attention_loop import query_reachout_receipts
 from app.relevance.schema import URGENCY_ORDER, Moment, moment_from_frontmatter
 from app.vault.manager import VaultContext
@@ -33,6 +34,7 @@ def collect_now_moments(
     reachout_outbox_path: Path | None = None,
     strict: bool = False,
     include_in_app_nudges: bool = True,
+    nudge_bindings: Sequence[str | None] | None = None,
 ) -> list[dict[str, Any]]:
     """Return moments; strict derived consumers must name invalid source loss."""
 
@@ -43,10 +45,13 @@ def collect_now_moments(
     if not moments_dir.is_dir():
         return []
 
-    # The reach-out receipt source is process-global and keyed only by moment
-    # UUID; a caller that cannot attribute it to this vault opts out.
+    # The reach-out receipt source is process-global; receipts carry their producing
+    # binding (MVR-05B4c3). A scoped caller passes ``(request_binding,)``; omitted,
+    # the carrier-free view (live compatibility binding, sentinel, unstamped) applies.
+    # A caller that cannot attribute the source to this vault opts out entirely.
+    view = tuple(nudge_bindings) if nudge_bindings is not None else legacy_view_bindings()
     nudges = (
-        _in_app_nudges_by_moment(reachout_outbox_path=reachout_outbox_path)
+        _in_app_nudges_by_moment(reachout_outbox_path=reachout_outbox_path, bindings=view)
         if include_in_app_nudges
         else {}
     )
@@ -90,9 +95,13 @@ def _to_view(moment: Moment, *, in_app_nudge: dict[str, Any] | None = None) -> d
     return view
 
 
-def _in_app_nudges_by_moment(*, reachout_outbox_path: Path | None) -> dict[str, dict[str, Any]]:
+def _in_app_nudges_by_moment(
+    *, reachout_outbox_path: Path | None, bindings: Sequence[str | None]
+) -> dict[str, dict[str, Any]]:
     nudges: dict[str, dict[str, Any]] = {}
-    for record in query_reachout_receipts(outbox_path=reachout_outbox_path):
+    for record in query_reachout_receipts(
+        outbox_path=reachout_outbox_path, bindings=bindings
+    ):
         payload = record.get("payload") or {}
         moment_uuid = payload.get("moment_uuid")
         reachout = payload.get("reachout") or {}
