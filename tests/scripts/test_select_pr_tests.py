@@ -313,12 +313,36 @@ def test_ci_workflow_change_selects_governance_contract_tests() -> None:
     assert "tests/governance" in selection.targets
 
 
-def test_ci_smoke_workflow_change_selects_full_shared_suite() -> None:
+def test_ci_smoke_workflow_change_selects_governance_contract_tests() -> None:
     selection = select_tests([".github/workflows/ci-smoke.yaml"])
 
-    assert selection.full_suite is True
-    assert selection.reason == "shared CI/test/runtime configuration changed"
+    assert selection.full_suite is False
+    assert selection.subsystems == ("governance",)
+    assert selection.reason == "governance-only PR"
     assert selection.unowned_paths == ()
+    assert "tests/ops/test_ci_workflow.py" in selection.targets
+    assert "tests/scripts" in selection.targets
+    assert "tests/deploy" not in selection.targets
+
+
+def test_scoped_deploy_ci_repair_shape_avoids_full_suite_self_validation() -> None:
+    selection = select_tests(
+        [
+            ".github/workflows/ci-smoke.yaml",
+            "docs/development/TEST_STRATEGY_HOT_PATH.md",
+            "scripts/run_scoped_test_partitions.py",
+            "scripts/select_pr_tests.py",
+            "tests/ops/test_ci_workflow.py",
+            "tests/scripts/test_select_pr_tests.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("ops", "ops_deploy")
+    assert selection.unowned_paths == ()
+    assert "tests/deploy" in selection.targets
+    assert "tests/ops" in selection.targets
+    assert "tests/scripts" in selection.targets
 
 
 def test_contract_selection_remains_conservative_after_deduplication() -> None:
