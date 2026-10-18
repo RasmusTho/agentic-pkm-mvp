@@ -301,7 +301,9 @@ A read-only runtime-UID preflight authenticates that complete set and its ledger
 recovery receipt or Compose volume effect. A pending ownership-key rotation is a byte-preserving
 refusal at this boundary; the preflight never recovers or deletes its rotation journal. The same
 preflight re-observes the native controller PID, start token, and execution namespace, so a proof
-whose controller has exited or changed identity is refused before owner evidence is trusted. Under
+whose controller has exited or changed identity is refused before owner evidence is trusted. That
+native observation is host-only; the mounted producer revalidates the byte-bound proof and ledger
+without requiring its container namespace to equal the controller namespace. Under
 deployment-admission -> producer-transition -> ownership-ledger ->
 registry-store ordering it materializes only the proven TEST registrations through the existing
 snapshot/checksum/legacy-export APIs, leaves the registry dormant at inactive-fenced revision zero

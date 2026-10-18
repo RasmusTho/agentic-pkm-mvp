@@ -171,9 +171,6 @@ def validate_missing_test_instance_state_recovery_authority(
         channel_id="test", host_global_root=host,
         owner_receipt_path=owner_receipt,
     )
-    # A structurally valid receipt is not a live stopped window. Re-observe the
-    # native controller identity and namespace before trusting its owner census.
-    require_test_controller(proof, ())
     scratch = VaultRegistryStore(host / ".test-recovery-preflight-registry.json")
     owners = tuple(_load_legacy_owner_inventory(
         owner_receipt, registry=scratch._empty_snapshot(), channel="test",
@@ -215,6 +212,47 @@ def validate_missing_test_instance_state_recovery_authority(
         return digest
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, LedgerError) as exc:
         raise _test_refusal() from exc
+
+
+def validate_missing_test_instance_state_recovery_host_authority(
+    *, host_global_root: Path, authority_binding_id: str, authority_root: str,
+    owner_receipt_path: Path, expected_owner_receipt_sha256: str,
+    quiescence_proof_path: Path, expected_quiescence_proof_sha256: str,
+    expected_ledger_sha256: str | None = None,
+) -> str:
+    """Authenticate native controller freshness before shared evidence reads."""
+    from app.instance.runtime import _load_deployment_quiescence_proof
+
+    host = Path(host_global_root).expanduser().resolve(strict=True)
+    owner_receipt = Path(owner_receipt_path).expanduser().resolve(strict=True)
+    proof_path = Path(quiescence_proof_path).expanduser().resolve(strict=True)
+    if (
+        owner_receipt != host / "legacy-owner-inventory.json"
+        or proof_path != host / "deployment-quiescence-proof.json"
+    ):
+        raise _test_refusal()
+    _private_directory(host)
+    if _sha(_read_private_bytes(proof_path)) != expected_quiescence_proof_sha256:
+        raise _test_refusal()
+    proof = _load_deployment_quiescence_proof(proof_path)
+    proof.require_canonical_authority(
+        channel_id="test", host_global_root=host,
+        owner_receipt_path=owner_receipt,
+    )
+    # The host preflight can observe the native controller namespace. The
+    # mounted Compose producer cannot and instead revalidates the same bound
+    # proof, owner evidence, and ledger through the namespace-neutral helper.
+    require_test_controller(proof, ())
+    return validate_missing_test_instance_state_recovery_authority(
+        host_global_root=host,
+        authority_binding_id=authority_binding_id,
+        authority_root=authority_root,
+        owner_receipt_path=owner_receipt,
+        expected_owner_receipt_sha256=expected_owner_receipt_sha256,
+        quiescence_proof_path=proof_path,
+        expected_quiescence_proof_sha256=expected_quiescence_proof_sha256,
+        expected_ledger_sha256=expected_ledger_sha256,
+    )
 
 
 def reconstruct_missing_test_instance_state(

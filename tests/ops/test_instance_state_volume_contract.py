@@ -4584,26 +4584,18 @@ def test_missing_established_registry_remains_fail_closed_after_recovery_support
         )
 
 
-def _observe_canonical_test_controller(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        writer_inventory, "controller_token", lambda _pid: "linux:" + "0" * 64,
-    )
-    monkeypatch.setattr(
-        writer_inventory,
-        "controller_namespace_digest",
-        lambda _pid, _roots=(): "0" * 64,
-    )
-
-
 def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(
     tmp_path, monkeypatch,
 ) -> None:
     """The explicit TEST producer reconstructs only an existing dormant binding."""
     import app.instance.legacy_owner_recovery as recovery_module
 
-    _observe_canonical_test_controller(monkeypatch)
+    def refuse_native_observation(*_args, **_kwargs):
+        raise AssertionError("Compose producer attempted native controller observation")
+
+    monkeypatch.setattr(
+        recovery_module, "require_test_controller", refuse_native_observation,
+    )
 
     state_mount = tmp_path / "instance-state"
     host_global_root = tmp_path / "host-global"
@@ -4838,14 +4830,12 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(
 
 
 def test_missing_instance_state_recovery_requires_complete_unchanged_test_ledger(
-    tmp_path, monkeypatch,
+    tmp_path,
 ) -> None:
     """Owner evidence must cover the exact active TEST ledger on every pass."""
     from app.instance.legacy_owner_recovery import (
         validate_missing_test_instance_state_recovery_authority,
     )
-
-    _observe_canonical_test_controller(monkeypatch)
 
     state_mount = tmp_path / "instance-state"
     host_global_root = tmp_path / "host-global"
@@ -4904,14 +4894,12 @@ def test_missing_instance_state_recovery_requires_complete_unchanged_test_ledger
 
 
 def test_missing_instance_state_recovery_preflight_never_recovers_key_rotation(
-    tmp_path, monkeypatch,
+    tmp_path,
 ) -> None:
     """The advertised read-only proof refuses pending rotation byte-for-byte."""
     from app.instance.legacy_owner_recovery import (
         validate_missing_test_instance_state_recovery_authority,
     )
-
-    _observe_canonical_test_controller(monkeypatch)
 
     state_mount = tmp_path / "instance-state"
     host_global_root = tmp_path / "host-global"
@@ -4978,7 +4966,7 @@ def test_missing_instance_state_recovery_rejects_stale_controller_proof(
 ) -> None:
     """A stale native controller identity cannot authorize reconstruction."""
     from app.instance.legacy_owner_recovery import (
-        validate_missing_test_instance_state_recovery_authority,
+        validate_missing_test_instance_state_recovery_host_authority,
     )
 
     host_global_root = tmp_path / "host-global"
@@ -5000,6 +4988,30 @@ def test_missing_instance_state_recovery_rejects_stale_controller_proof(
         }],
     )
     proof_path = host_global_root / "deployment-quiescence-proof.json"
+    values = {
+        "host_global_root": host_global_root,
+        "authority_binding_id": registration.vault_binding_id,
+        "authority_root": str(vault_root.resolve()),
+        "owner_receipt_path": owner_receipt,
+        "expected_owner_receipt_sha256": hashlib.sha256(
+            owner_receipt.read_bytes()
+        ).hexdigest(),
+        "quiescence_proof_path": proof_path,
+        "expected_quiescence_proof_sha256": hashlib.sha256(
+            proof_path.read_bytes()
+        ).hexdigest(),
+    }
+    monkeypatch.setattr(
+        writer_inventory,
+        "controller_token",
+        lambda _pid: "linux:" + "0" * 64,
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "controller_namespace_digest",
+        lambda _pid, _roots=(): "0" * 64,
+    )
+    validate_missing_test_instance_state_recovery_host_authority(**values)
     before = {
         path.relative_to(host_global_root): path.read_bytes()
         for path in host_global_root.rglob("*") if path.is_file()
@@ -5013,18 +5025,8 @@ def test_missing_instance_state_recovery_rejects_stale_controller_proof(
         InstanceStatePreflightError,
         match="TEST dormant ownership preparation refused",
     ):
-        validate_missing_test_instance_state_recovery_authority(
-            host_global_root=host_global_root,
-            authority_binding_id=registration.vault_binding_id,
-            authority_root=str(vault_root.resolve()),
-            owner_receipt_path=owner_receipt,
-            expected_owner_receipt_sha256=hashlib.sha256(
-                owner_receipt.read_bytes()
-            ).hexdigest(),
-            quiescence_proof_path=proof_path,
-            expected_quiescence_proof_sha256=hashlib.sha256(
-                proof_path.read_bytes()
-            ).hexdigest(),
+        validate_missing_test_instance_state_recovery_host_authority(
+            **values,
         )
     after = {
         path.relative_to(host_global_root): path.read_bytes()

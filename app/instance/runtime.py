@@ -5649,13 +5649,13 @@ def _main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "deployment-preflight-missing-test-instance-state-recovery":
         from app.instance.legacy_owner_recovery import (
-            validate_missing_test_instance_state_recovery_authority,
+            validate_missing_test_instance_state_recovery_host_authority,
         )
 
         values = vars(args).copy()
         values.pop("command")
         try:
-            ledger_sha256 = validate_missing_test_instance_state_recovery_authority(
+            ledger_sha256 = validate_missing_test_instance_state_recovery_host_authority(
                 **values
             )
         except (

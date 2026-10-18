@@ -429,7 +429,8 @@ inventory must cover the complete active TEST lease set exactly. A read-only nat
 authenticates that set and its ledger digest before the recovery receipt or named-volume permission
 step. It also re-observes the proof's native controller PID, start token, and execution namespace;
 an exited, reused, or otherwise changed controller refuses without mutation. The mounted runtime
-producer revalidates the same digest before any instance-state write,
+producer revalidates the same proof and ledger digest before any instance-state write, but does not
+pretend that its container PID/mount namespace is the native controller namespace,
 then uses the canonical deployment-admission -> producer-transition ->
 ownership-ledger -> registry-store order and the existing registry snapshot, checksum, and
 legacy-export writers to materialize only receipt/ledger-proven dormant registrations. The result
