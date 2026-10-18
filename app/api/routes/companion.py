@@ -2647,8 +2647,10 @@ def _scoped_ingest_binding_state(scoped: _ScopedCompanionRead) -> IngestBindingR
         status = ingest_binding_status(selected_vault_path=str(scoped.root))
     except Exception:
         logger.warning("ingest binding status check failed", exc_info=True)
+        # Same visible degradation as the legacy branch: a failed probe must reach
+        # the operator as ``unbound`` (the renderer warns on it), not be hidden.
         return IngestBindingResponse(
-            state="unavailable",
+            state="unbound",
             bound=False,
             detail="ingest binding status could not be determined",
         )

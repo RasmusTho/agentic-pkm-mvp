@@ -100,3 +100,21 @@ def test_scoped_workspace_blank_carrier_never_publishes_watcher_root(two_binding
         headers={"X-Active-Context-Session": ""},
     )
     assert str(root_a) not in response.text
+
+
+def test_scoped_workspace_probe_failure_stays_visible(two_bindings, monkeypatch) -> None:
+    """#6204 review: a failed heartbeat probe degrades to a visible ``unbound``."""
+
+    from app.api.routes import companion as companion_routes
+
+    client, first, _second, _root_a, _root_b, _heartbeat = two_bindings
+
+    def boom(**_kwargs):
+        raise RuntimeError("heartbeat unreadable")
+
+    monkeypatch.setattr(companion_routes, "ingest_binding_status", boom)
+
+    failed = _ingest(client, first.vault_binding_id)
+
+    assert failed["state"] == "unbound" and failed["bound"] is False
+    assert failed["watcher_vault_path"] is None
