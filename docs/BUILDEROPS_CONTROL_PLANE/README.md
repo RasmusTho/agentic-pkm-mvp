@@ -210,7 +210,8 @@ each receipt read and one final receipt-epoch probe without reopening the admitt
 The default 120-request/minute source limit therefore withdraws a 118-task read even with no receipt
 reads; this P2 fanout limitation remains deferred, and source qualification must retain the actual
 quota/refusal evidence. A rate-limited read cannot claim completeness. GitHub check failures retain the existing partial
-per-head refusal; docs retain their own stale watermark. CKM remains independently unavailable. The first
+per-head refusal; docs retain their own stale watermark. CKM availability is conditional on a valid
+private snapshot; missing, stale or invalid captures retain an independent refusal. The first
 read-journey implementation owns its bounded adapter/asset wiring and failure tests. Those owned
 deliverables are not prerequisites for its own pickup. By contrast, a downstream harness consuming
 that production seam requires it to exist. No target transport may be treated as live until its
