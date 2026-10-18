@@ -297,9 +297,24 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
             "binding_ids": list(request.active_context.binding_ids),
             "selection_capability_digest": request.active_context.selection_capability_digest,
             "cache_key": cache_identity.key,
+            # The cache lookup is keyed by every participating binding at this
+            # context generation (MVR-05B4a); each is recorded with its source vault.
+            "bindings": [
+                {
+                    "vault_binding_id": binding.vault_binding_id,
+                    "vault_id": binding.vault_id,
+                    "binding_revision": binding.binding_revision,
+                    "context_generation": request.active_context.generation,
+                }
+                for binding in request.active_context.source_bindings
+            ],
         }
     if request.active_context is not None:
         allowed_bindings = set(request.active_context.binding_ids)
+        source_vault_by_binding = {
+            binding.vault_binding_id: binding.vault_id
+            for binding in request.active_context.source_bindings
+        }
         admitted: list[dict[str, Any]] = []
         rejected = 0
         # Count the complete candidate set, not only the already-ranked result
@@ -320,6 +335,7 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
                 continue
             bound = dict(raw)
             payload["context_generation"] = request.active_context.generation
+            payload["source_vault_id"] = source_vault_by_binding.get(binding_id)
             bound["payload"] = payload
             admitted.append(bound)
         raw_hits = admitted

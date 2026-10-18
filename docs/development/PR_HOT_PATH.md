@@ -47,7 +47,7 @@ Default rule:
 - required checks must be known, current, and attached to the current head SHA
 - relevant repo-standard checks that cover the changed surface must be current, even when GitHub branch protection does not require them
 - failing checks that cover the changed surface are hard stops until fixed, rerun green, or explicitly classified as unrelated by evidence; `Unit tests (not pg)` is a hard stop when red on an app/test/runtime-affecting PR
-- a green `Unit tests (not pg)` does not cover heavy targets the selector reported as `deferred_targets`. Those run after merge in `.github/workflows/post-merge-heavy-tests.yml`, which alerts through a rolling `prio:high` Issue when red. They are not a merge gate.
+- a green `Unit tests (not pg)` does not cover heavy targets the selector reported as `deferred_targets`. Those run after merge on the ygg `test` VM, with their verdict recorded by `.github/workflows/post-merge-heavy-tests.yml`, which alerts through a rolling `prio:high` Issue when red or missing. They are not a merge gate.
 
 ## Publication Routing
 

@@ -22,6 +22,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Callable
 from uuid import NAMESPACE_URL, UUID, uuid5
 from zipfile import ZipFile
@@ -209,7 +210,9 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
          deploy: Callable[[str, Candidate], dict[str, Any]] | None = None,
          resume: Callable[[str, Candidate], dict[str, Any]] | None = None,
          absence: Callable[[str, Candidate], dict[str, Any]] | None = None,
-         current_main: Callable[[], str] = _current_main) -> int:
+         current_main: Callable[[], str] = _current_main,
+         heavy: Callable[[Candidate], dict[str, Any]] | None = None,
+         dispatch: Callable[[Candidate, dict[str, Any]], None] | None = None) -> int:
     # No CI job runs this path. It is supervised on the existing private agent
     # host, which already owns credentials, SSH dispatch and terminal recovery.
     with checkpoint_lock(directory):
@@ -287,6 +290,10 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
             candidate = Candidate(**checkpoint['candidate'])
             return deliver(candidate, deploy=deploy or native_deploy, current_main=lambda: candidate.sha,
                            emit=lambda outcome: _save_outcome(path, candidate, outcome), channels=('test',))
+        if checkpoint and checkpoint['phase'] == 'passed' and checkpoint['channel'] == 'test' and (
+            checkpoint.get('heavy', {}).get('dispatch') is None
+        ):
+            return heavy_verdict(path, checkpoint, run=heavy or native_heavy, send=dispatch or dispatch_verdict)
         run_id = build()
         candidate = load(run_id)
         if checkpoint and (checkpoint['candidate']['run_id'], checkpoint['candidate']['run_attempt']) == (
@@ -307,7 +314,10 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
     try:
         _source_failure(checkpoint['outcome'])
         candidate = Candidate(**checkpoint['candidate'])
-        if (set(checkpoint) != {'candidate', 'phase', 'channel', 'outcome'}
+        if 'heavy' in checkpoint:
+            _validate_heavy(checkpoint['heavy'])
+        if (set(checkpoint) - {'heavy'} != {'candidate', 'phase', 'channel', 'outcome'}
+            or ('heavy' in checkpoint and (checkpoint['phase'], checkpoint['channel']) != ('passed', 'test'))
             or re.fullmatch(r'[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
             or any(type(value) is not int or value < 1
                    for value in (candidate.run_id, candidate.run_attempt, candidate.artifact_id))
@@ -322,6 +332,99 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
             raise ValueError()
     except Exception:
         raise CandidateRefused('checkpoint_refused') from None
+
+
+HEAVY_WORKFLOW = 'post-merge-heavy-tests.yml'
+HEAVY_COUNTS = ('selected', 'passed', 'failed', 'skipped', 'docker_skipped')
+
+
+def _validate_heavy(heavy: Any) -> dict[str, Any]:
+    from app.ops.heavy_acceptance import MAX_FAILURES, MAX_NODEID, VERDICTS
+    if (not isinstance(heavy, dict) or heavy.get('result') not in VERDICTS
+        or heavy.get('dispatch') not in {None, 'sent', 'failed'}
+        or set(heavy) - {'result', 'reason', 'failures', 'dispatch', *HEAVY_COUNTS}
+        or ('reason' in heavy and (heavy['result'] != 'refused'
+                                   or re.fullmatch(r'[a-z0-9_]{1,64}', str(heavy['reason'])) is None))
+        or any(key in heavy and (type(heavy[key]) is not int or heavy[key] < 0) for key in HEAVY_COUNTS)
+        or (heavy['result'] != 'refused' and any(key not in heavy for key in HEAVY_COUNTS))
+        or not isinstance(heavy.get('failures', []), list) or len(heavy.get('failures', [])) > MAX_FAILURES
+        or any(not isinstance(item, str) or not item or len(item) > MAX_NODEID
+               or re.search(r'[\x00-\x1f]', item) for item in heavy.get('failures', []))):
+        raise CandidateRefused('heavy_evidence_refused')
+    return heavy
+
+
+def native_heavy(candidate: Candidate) -> dict[str, Any]:
+    """Run the fixed `qualify-heavy` profile for the committed TEST operation.
+
+    The same launcher alias as the native deployment RPC; only the operation ID
+    crosses. A transport or evidence failure is a `refused` verdict, never green.
+    """
+    environment = {key: os.environ[key] for key in ('HOME', 'USER', 'LOGNAME', 'PATH', 'SSH_AUTH_SOCK')
+                   if key in os.environ}
+    command = ['/usr/bin/ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+               '-o', 'ServerAliveInterval=60', '--', 'ygg-test', 'sudo', '-n',
+               '/usr/local/libexec/yggdrasil-bws-deploy', 'qualify-heavy', 'test', candidate.operation_id('test')]
+    try:
+        result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False,
+                                timeout=2 * 3600)
+        lines = result.stdout.strip().splitlines()
+        if not lines or len(lines[-1]) > 16384:
+            raise ValueError()
+        receipt = json.loads(lines[-1])
+        from app.ops.heavy_acceptance import PROFILE_VERSION
+        if not isinstance(receipt, dict) or receipt.get('profile_version') != PROFILE_VERSION:
+            raise ValueError()
+        if receipt.get('result') == 'refused':
+            return _validate_heavy({'result': 'refused', 'reason': str(receipt.get('reason', ''))})
+        if (receipt.get('source_sha') != candidate.sha or receipt.get('image_digest') != candidate.digest
+            or receipt.get('channel') != 'test' or receipt.get('operation_id') != candidate.operation_id('test')
+            or (receipt.get('result') == 'passed') != (result.returncode == 0)):
+            raise ValueError()
+        return _validate_heavy({key: receipt[key] for key in ('result', 'failures', *HEAVY_COUNTS)})
+    except Exception:
+        return {'result': 'refused', 'reason': 'native_heavy_evidence_refused'}
+
+
+def dispatch_verdict(candidate: Candidate, heavy: dict[str, Any]) -> None:
+    """Send the bounded verdict to the fail-loud GitHub workflow (Actions write only)."""
+    counts = ' '.join(f'{key}={heavy[key]}' for key in HEAVY_COUNTS if key in heavy)
+    # Node IDs may hold any character; mask what the workflow's bounded input
+    # grammar refuses so a red verdict keeps its failing tests, never a ping.
+    failures = re.sub(r'[^A-Za-z0-9_./:\[\]+=, -]', '?', ','.join(heavy.get('failures', [])))[:1000]
+    fields = {'sha': candidate.sha, 'verdict': heavy['result'], 'operation_id': candidate.operation_id('test'),
+              'counts': counts, 'reason': heavy.get('reason', ''), 'failures': failures}
+    command = ['gh', 'workflow', 'run', HEAVY_WORKFLOW, '--repo', REPOSITORY, '--ref', 'main']
+    for key, value in fields.items():
+        command += ['-f', f'{key}={value}']
+    for attempt in range(3):
+        if subprocess.run(command, capture_output=True, timeout=60, check=False).returncode == 0:
+            return
+        if attempt < 2:
+            time.sleep(20)
+    raise CandidateRefused('heavy_dispatch_failed')
+
+
+def heavy_verdict(path: Path, checkpoint: dict[str, Any], *,
+                  run: Callable[[Candidate], dict[str, Any]],
+                  send: Callable[[Candidate, dict[str, Any]], None]) -> int:
+    # The heavy profile never gates channel advancement. One run and at most
+    # one dispatch per committed TEST candidate; a lost dispatch is surfaced by
+    # the workflow's missing-verdict watchdog, never retried into a stall.
+    candidate = Candidate(**checkpoint['candidate'])
+    heavy = checkpoint.get('heavy')
+    if heavy is None:
+        heavy = _validate_heavy(run(candidate))
+        checkpoint['heavy'] = heavy
+        _atomic_checkpoint(path, checkpoint)
+    try:
+        send(candidate, heavy)
+        heavy['dispatch'] = 'sent'
+    except Exception:
+        heavy['dispatch'] = 'failed'
+    _atomic_checkpoint(path, checkpoint)
+    print(json.dumps({'source_sha': candidate.sha, 'channel': 'test', 'heavy': heavy}, sort_keys=True))
+    return 0 if heavy['dispatch'] == 'sent' else 78
 
 
 def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:

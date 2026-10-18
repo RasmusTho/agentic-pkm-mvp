@@ -25,6 +25,34 @@ from tests.architecture.context_boundary_inventory import (
 )
 
 _MIGRATED_ROUTE_MODULES = ("app/api/routes/search.py",)
+# The carrier allowlist entries MVR-05B4a (#6160) migrated.
+_MIGRATED_CARRIER_ENTRIES = frozenset(
+    {
+        ("app/agents/ask/graph.py", "_active_recall_vault_id"),
+        ("app/agents/ask/graph.py", "_active_recall_vault_root"),
+        ("app/cli/__init__.py", "_resolve_mcp_vault_root_path"),
+        ("app/cli/__init__.py", "_resolve_vault_root_path"),
+        ("app/cli/briefing.py", "_resolve_vault_context"),
+        ("app/cli/episodes.py", "_default_vault_root"),
+        ("app/cli/health.py", "_check_companion_diagnostics"),
+        ("app/cli/settings_explain.py", "build_settings_explain_payload"),
+        ("app/cli/vault.py", "vault_init"),
+        ("app/cli/youtube_inbox_dev.py", "_build_youtube_inbox_dev_services.global_sync_enabled"),
+        ("app/cli/youtube_inbox_dev.py", "drain"),
+        ("app/mcp/vault_tools.py", "_resolve_mcp_env_root"),
+        ("app/mcp/vault_tools.py", "get_vault_root"),
+    }
+)
+# Vault-bound CLI modules that now resolve only through app/cli/vault_context.py.
+_MIGRATED_CARRIER_MODULES = (
+    "app/cli/__init__.py",
+    "app/cli/briefing.py",
+    "app/cli/episodes.py",
+    "app/cli/health.py",
+    "app/cli/settings_explain.py",
+    "app/cli/vault.py",
+    "app/cli/youtube_inbox_dev.py",
+)
 
 
 def _names_in(relative: str, scope: str) -> set[str]:
@@ -89,6 +117,11 @@ def test_context_boundary_inventory_and_allowlist_are_exact() -> None:
 
     keys = [adapter_key(entry) for entry in COMPATIBILITY_ADAPTERS]
     assert len(keys) == len(set(keys)), "duplicate allowlist entry"
+    # MVR-05B4a migrated every agent/MCP/CLI carrier entry; none may come back.
+    assert set(keys).isdisjoint(_MIGRATED_CARRIER_ENTRIES)
+    assert "05B4" not in inventory.RETIRING_STAGES
+    for module in _MIGRATED_CARRIER_MODULES:
+        assert not [k for k in measured if k[0] == module], module
     for entry in COMPATIBILITY_ADAPTERS:
         assert entry.module in modules, entry
         assert entry.why.strip(), entry
@@ -198,6 +231,65 @@ def test_gate_fails_on_stale_allowlist_entry() -> None:
 def test_detector_sees_structural_forms_not_substrings(source: str, expected: set[str]) -> None:
     found = scan_source(source)
     assert set().union(*found.values()) == expected
+
+
+def test_gate_tracks_all_vault_env_keys_nested_modules_and_environ_aliases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """MVR-05B4a closes KD-55D38D90BD05, KD-88B6B1EC0D9A and KD-6BC9153BD3A2."""
+
+    # KD-55D38D90BD05: every process-global vault env key is a recorded read.
+    keys = ("VAULT_ROOT", "VAULT_DIR", "MCP_VAULT_ROOT", "EPISODES_VAULT_ROOT", "WATCHER_VAULT_PATH")
+    assert inventory.GLOBAL_ENV_NAMES == frozenset(keys)
+    for key in keys:
+        found = scan_source(f"import os\ndef f():\n    return os.getenv({key!r})\n")
+        assert found == {"f": frozenset({f"env:{key}"})}, key
+    candidates = scan_source(
+        "import os\nCANDIDATES = ('EPISODES_VAULT_ROOT', 'WATCHER_VAULT_PATH')\n"
+        "def f():\n    for name in CANDIDATES:\n        os.getenv(name)\n"
+    )
+    assert candidates == {"f": frozenset({"env:EPISODES_VAULT_ROOT", "env:WATCHER_VAULT_PATH"})}
+
+    # KD-6BC9153BD3A2: an assigned os.environ alias is still an environment read,
+    # including chains, `or`/conditional fallbacks and parameter defaults.
+    aliased = {
+        "import os\ndef f():\n    env = os.environ\n    return env.get('VAULT_ROOT')\n": "VAULT_ROOT",
+        "import os\nENV = os.environ\ndef f():\n    return ENV['MCP_VAULT_ROOT']\n": "MCP_VAULT_ROOT",
+        "import os\ndef f():\n    a = os.environ\n    b = a\n    return b.get('VAULT_DIR')\n": "VAULT_DIR",
+        "import os\ndef f(m=None):\n    env = m or os.environ\n    return env.get('WATCHER_VAULT_PATH')\n": (
+            "WATCHER_VAULT_PATH"
+        ),
+        "import os\ndef f(m=None):\n    env = m if m is not None else os.environ\n"
+        "    return env.get('EPISODES_VAULT_ROOT')\n": "EPISODES_VAULT_ROOT",
+        "import os\ndef f(env=os.environ):\n    return env.get('VAULT_ROOT')\n": "VAULT_ROOT",
+        "import os\ndef f(*, env=os.environ):\n    return env['VAULT_DIR']\n": "VAULT_DIR",
+        "from os import environ as E\ndef f():\n    env = E\n    return env.get('VAULT_ROOT')\n": "VAULT_ROOT",
+    }
+    for source, key in aliased.items():
+        assert set().union(*scan_source(source).values()) == {f"env:{key}"}, source
+    # A plain mapping that is not the environment is not a process-global read.
+    assert scan_source("def f():\n    env = {}\n    return env.get('VAULT_ROOT')\n") == {}
+
+    # KD-88B6B1EC0D9A: nested route/CLI modules are part of the population and are
+    # classified like top-level ones.
+    fake_root = tmp_path
+    for relative in (
+        "app/api/routes/__init__.py",
+        "app/api/routes/helpers/__init__.py",
+        "app/api/routes/helpers/vault.py",
+        "app/cli/__init__.py",
+        "app/cli/tools/deep.py",
+    ):
+        path = fake_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(inventory, "ROOT", fake_root)
+    assert inventory._python_modules(inventory.API_ROUTES_DIR) == frozenset(
+        {"app/api/routes/helpers/__init__.py", "app/api/routes/helpers/vault.py"}
+    )
+    assert inventory._python_modules(inventory.CLI_DIR) == frozenset({"app/cli/tools/deep.py"})
+    monkeypatch.setattr(inventory, "registered_router_modules", lambda: frozenset())
+    assert "app/api/routes/helpers/vault.py" in inventory.unclassified_route_modules()
 
 
 def test_detector_ignores_import_only_comments_and_docstrings() -> None:

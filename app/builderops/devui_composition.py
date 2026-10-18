@@ -228,6 +228,8 @@ def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
         raise TypeError("CKM completeness must use the exact public manifest type")
     if type(result.projection) is not ProjectionMarker:
         raise TypeError("CKM projection must use the exact public marker type")
+    if result.projection.status != "derived_projection" or result.projection.authoritative is not False:
+        raise ValueError("CKM result must remain a non-authoritative projection")
     versions = (
         (result.schema_version, ENVELOPE_SCHEMA_VERSION),
         (snapshot.ckm_schema_version, CKM_SCHEMA_VERSION),

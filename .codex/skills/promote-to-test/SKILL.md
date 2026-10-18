@@ -12,6 +12,11 @@ description: "Staged workflow: move a candidate commit into the isolated test ch
 > **dormant** and is not an ancestor of `origin/main`. This skill's test-channel mechanics are
 > current and safe to run; the prod-facing handoff to `promote-test-to-prod` is not yet the live
 > baseline — confirm with the operator before invoking.
+>
+> **Target flow (ADR-0068, owner-directed 2026-10-18):** delivery becomes `main` → `dev` → `test`
+> (UAT) → `stable` (prod), and this gated-`stable` model is the target again. `stable` advances only
+> from a `test`-passed candidate. Enactment is tracked under #6207; until the prod-promotion slice
+> lands, the status above governs. See [ADR-0068](../../../docs/adr/ADR-0068-continuous-dev-delivery-flow.md).
 
 Use this skill to advance a candidate commit into the **test channel** before considering prod promotion. This is the mandatory first stage of the normal promotion path.
 

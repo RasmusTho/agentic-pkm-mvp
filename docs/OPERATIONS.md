@@ -555,6 +555,12 @@ Companion docs:
   retire unknown cleanup. Retry the owning qualifier, not the other journey.
   Follow the same linked deployment/testing contracts above. Repository delivery of #6050 is
   not actual TEST PASS or parent #3347 acceptance.
+- Fixed `qualify-heavy test <committed-operation-uuid>` (admitted by the installed launcher's action allowlist from #6205) runs the post-merge heavy test targets
+  (`postmerge-heavy.v1`, #6158) for the committed TEST candidate. The post-merge host controller
+  calls it after each committed TEST deployment and dispatches the bounded verdict to
+  `post-merge-heavy-tests.yml`. It takes no channel lock, never gates channel advancement, and its
+  operation-owned container and work tree are removed after every run. A rerun by hand is safe. See
+  [Post-merge heavy tests](development/TEST_STRATEGY_HOT_PATH.md#post-merge-heavy-tests).
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.

@@ -33,12 +33,25 @@ def pull_repositories(
     *,
     configured_repositories: tuple[str, ...],
     source: GitHubIssueSource | None = None,
+    readiness_repo: str | None = None,
+    readiness_repo_root: str | None = None,
 ) -> PullBatchResult:
     """Pull each selected repository once and persist truthful batch coverage."""
     selected = normalize_repositories(repositories)
     configured = normalize_repositories(configured_repositories)
+    if readiness_repo_root is not None and (
+        readiness_repo is None or readiness_repo not in selected
+    ):
+        raise ValueError(
+            "readiness repository root requires its exact repository in the selected pull set"
+        )
     issue_source = source or GhCliIssueSource()
-    adapter = PullSyncAdapter(store=store, source=issue_source)
+    adapter = PullSyncAdapter(
+        store=store,
+        source=issue_source,
+        readiness_repo=readiness_repo,
+        readiness_repo_root=readiness_repo_root,
+    )
 
     total_upserted = 0
     total_reconciled = 0

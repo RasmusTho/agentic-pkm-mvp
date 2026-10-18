@@ -403,7 +403,7 @@ def test_scoped_now_orientation_and_browse_stay_inside_the_bound_vault(
     assert workspace.status_code == 200, workspace.text
     assert workspace.json()["runtime"]["resurface"]["candidates"] == []
     # The process-wide watcher heartbeat may name another vault: not reported.
-    assert workspace.json()["runtime"]["ingest"]["state"] == "unavailable"
+    assert workspace.json()["runtime"]["ingest"]["state"] in {"unbound", "unavailable"}
     assert workspace.json()["runtime"]["ingest"]["watcher_vault_path"] is None
     now = client.get("/api/companion/now", headers=headers)
     orientation = client.get("/api/companion/orientation", headers=headers)

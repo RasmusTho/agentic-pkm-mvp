@@ -74,6 +74,77 @@ def test_production_retrieval_preserves_binding_provenance(monkeypatch) -> None:
                 )
             ).metadata["provenance"]["active_context"]["cache_key"]
         )
+
+        # MVR-05B4a: one production request over several bindings. Every result
+        # carries its own source binding, source vault and the request's context
+        # generation, and the cache lookup is keyed by every binding at that
+        # generation, so it can never be served across bindings or generations.
+        many = replace(
+            _scoped_context(),
+            context_id="ctx-many",
+            generation=5,
+            source_bindings=(
+                ActiveContextBinding("binding-a", 1, "epoch-a", vault_id="vault-a"),
+                ActiveContextBinding("binding-b", 4, "epoch-b", vault_id="vault-b"),
+            ),
+        )
+        combined = retrieve(
+            RetrievalRequest(
+                query="needle",
+                k=3,
+                scope="core",
+                active_context=many,
+                settings_bundle_digest="effective-a-and-b",
+            )
+        )
+        assert {hit.doc_id for hit in combined.hits} == {"a", "wrong-binding"}
+        provenance = {
+            hit.doc_id: (
+                hit.payload["vault_binding_id"],
+                hit.payload["source_vault_id"],
+                hit.payload["context_generation"],
+            )
+            for hit in combined.hits
+        }
+        assert provenance == {
+            "a": ("binding-a", "vault-a", 5),
+            "wrong-binding": ("binding-b", "vault-b", 5),
+        }
+        lookup = combined.metadata["provenance"]["active_context"]
+        assert lookup["generation"] == 5
+        assert lookup["bindings"] == [
+            {"vault_binding_id": "binding-a", "vault_id": "vault-a", "binding_revision": 1, "context_generation": 5},
+            {"vault_binding_id": "binding-b", "vault_id": "vault-b", "binding_revision": 4, "context_generation": 5},
+        ]
+        assert lookup["rejected_unbound_hits"] == 1
+
+        def _key(context) -> str:  # type: ignore[no-untyped-def]
+            return retrieve(
+                RetrievalRequest(
+                    query="needle",
+                    k=3,
+                    scope="core",
+                    active_context=context,
+                    settings_bundle_digest="effective-a-and-b",
+                )
+            ).metadata["provenance"]["active_context"]["cache_key"]
+
+        keys = {
+            _key(many),
+            _key(replace(many, generation=6)),
+            _key(replace(many, source_bindings=many.source_bindings[:1])),
+            _key(
+                replace(
+                    many,
+                    source_bindings=(
+                        many.source_bindings[0],
+                        ActiveContextBinding("binding-b", 5, "epoch-b", vault_id="vault-b"),
+                    ),
+                )
+            ),
+        }
+        assert len(keys) == 4
+        assert _key(many) == lookup["cache_key"]
     finally:
         get_store().set_documents([])
 

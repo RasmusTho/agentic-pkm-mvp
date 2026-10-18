@@ -153,7 +153,34 @@ credentials. The existing source owners still decide whether the configured acce
 | GitHub / CI / delivery references | Existing `cockpit_github_plane.default_github_reader`, bounded REST via `gh`, for one explicitly configured repository; server-side credential custody stays with the existing source owner | Required when work/PR/check claims use it. #5520 packages `gh` in the Builder image and uses its existing REST pagination/timeout policy for the explicit repository. The optional source overlay supplies a fixed read-only host-owned gh configuration reference. Live credentials and source access still require qualification; no hub default, browser token, GraphQL substitution or inferred closed/merged readiness. Missing/refused/partial reads withdraw affected claims. |
 | Feature intent and architecture documents | Existing `cockpit_docs_plane.read_docs_plane`, addressed candidate repository docs, capability YAML and issue-capability matrix with immutable source refs | Required for M1 intent/requirement inspection. #5520 bakes docs, capability YAML and the traceability matrix into the image, with a build-time repository/SHA and complete file-hash manifest. Every GET checks that exact candidate and file set before the existing docs reader runs. Missing or changed inputs withdraw the source; arbitrary document-root selection is refused. Missing docs cannot become empty requirements. |
 | VM102 deployment evidence | Existing read-only `/opt/builderops/receipts` mount and `read_vm102_receipt_provider`, validated through the owner producers and retained `devui-runtime-prerequisites.json` | The retained independently composed managed evidence transport. It rereads each request and withdraws missing, stale, malformed, partial-update or mismatched candidate evidence. |
-| CKM/Kvasir capability context | Existing local-only `CkmQueryService` policy; no remote transport is admitted by that policy | Optional for the first bounded work journey and currently unavailable. Do not turn a local policy into a remote query, add a DB mount, or present missing context as empty/complete. A later required CKM lens needs its own source admission. |
+| CKM/Kvasir capability context | Existing local-only `CkmQueryService` and the separately owner-approved private snapshot transfer in #6194 | Managed Overview and Builder System Control may consume the fixed complete captured export under `ckm-single-operator-private-devui-v1`. The original local query policy remains intact; this admits no remote query or DB mount. Missing, stale or invalid publication stays a typed refusal and never an empty/complete source. |
+
+#### Private CKM publication and refresh
+
+On Demerzel, use the existing admitted local BuilderOps source and the reviewed checkout:
+
+```bash
+python3 scripts/devui_ckm_sync.py publish
+```
+
+The command performs the existing complete read-only CKM query, then sends the bounded captured
+envelope through stdin over the fixed `bob-1-builder-system` SSH alias. No VM password or manual
+VM login is needed. Its reviewed fixed receiver requires guest `builder-system`, validates with
+the actual non-root DevUI container on `unix:///run/docker-builderops.sock`, and only then atomically
+replaces `/opt/builderops/receipts/devui-ckm-capabilities.json` with numeric ownership `0:101` and
+mode `0640`. The existing receipt-directory mount is sufficient; no new mount or credential is
+added. File and directory fsync complete publication. An older capture cannot replace a newer one.
+Only status, content digest and capability count are printed by `publish`; `export` deliberately
+returns the complete source envelope for operator inspection.
+
+The installed DevUI image must contain this consumer before publication. Publication failure or
+an uncertain SSH result requires inspection of that exact fixed source before retrying; it does
+not authorize another target or fallback source. The runtime rereads the file for every Overview
+and Builder System Control request. Original CKM snapshot identity/watermarks remain visible;
+the trust frame also names private transfer capture and expiry. Repeat the explicit command after
+source updates and before the 24-hour expiry when this context is needed. There is no scheduler,
+automatic query retention or silent stale-data fallback. This bounded capability context supplies
+no full-system qualification, deployment, owner trial or acceptance fact.
 
 The source adapter retains observation time, immutable reference and typed refusal for each
 provider; one optional provider failure must not erase healthy independent evidence. The existing
@@ -183,7 +210,8 @@ each receipt read and one final receipt-epoch probe without reopening the admitt
 The default 120-request/minute source limit therefore withdraws a 118-task read even with no receipt
 reads; this P2 fanout limitation remains deferred, and source qualification must retain the actual
 quota/refusal evidence. A rate-limited read cannot claim completeness. GitHub check failures retain the existing partial
-per-head refusal; docs retain their own stale watermark. CKM remains independently unavailable. The first
+per-head refusal; docs retain their own stale watermark. CKM availability is conditional on a valid
+private snapshot; missing, stale or invalid captures retain an independent refusal. The first
 read-journey implementation owns its bounded adapter/asset wiring and failure tests. Those owned
 deliverables are not prerequisites for its own pickup. By contrast, a downstream harness consuming
 that production seam requires it to exist. No target transport may be treated as live until its

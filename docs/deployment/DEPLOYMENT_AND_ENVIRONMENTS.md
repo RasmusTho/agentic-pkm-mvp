@@ -190,6 +190,12 @@ PG PR coverage transfers to the shared isolated native profile only after actual
 execution is verified under #5675. Non-PG PR and bounded nightly checks remain; production promotion
 is separately governed.
 
+Target flow: [ADR-0068](../adr/ADR-0068-continuous-dev-delivery-flow.md) (owner-directed 2026-10-18,
+parent #6207) keeps this controller running through deploy problems. A red candidate files a rolling
+channel bug Issue and the next candidate proceeds. A hold pins the `dev` ref or engages a kill switch
+with an Issue and an expiry. Unloading the LaunchAgent is not a pause mechanism, and an absent
+controller is an alert. Until those slices land, the mechanics above are current.
+
 RCA on 2026-06-29 (BuilderOps LearningSignal `lrn_20260629093241_59713bc1`) found that the system had **no deployment source-of-truth**. The observed reality:
 
 - All three docker API stacks bind-mount a single shared host checkout (`./:/app`) — there is **no code isolation between channels**; every channel runs whatever is checked out in that one tree.
@@ -660,6 +666,17 @@ restart. An interrupted stage uses native same-request terminal reconciliation; 
 mismatched evidence cannot start a fresh operation or advance the candidate. Failures emit bounded
 SHA/digest/run/channel/result JSON in the private controller log. A newer candidate can supersede
 an older one before deployment begins; a started chain completes with its original identity.
+
+After a candidate's `test` deployment commits, the controller runs the fixed post-merge heavy-test
+profile once: `qualify-heavy test <operation-id>` through the same `yggdrasil-bws-deploy` launcher
+(#6158). It reads only the committed receipt and its PG proof, takes no channel lock and touches no
+channel resource; an operation-owned network-none container from the admitted image runs the
+selector's heavy targets against a scratch depth-1 checkout of the exact candidate SHA, with the host Docker
+CLI mounted read-only and no socket. The result never gates channel advancement. The controller then
+dispatches `.github/workflows/post-merge-heavy-tests.yml` once with the bounded verdict, using a
+GitHub client limited to Actions write for that dispatch. A failed dispatch does not stall later
+candidates; the workflow's missing-verdict watchdog makes it visible. The VM tooling must be at a
+revision that contains `qualify-heavy`; see `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`.
 
 Install from a clean retained tooling checkout contained in reviewed `main` of
 `RasmusTho/agentic-pkm-mvp`, with its own working Python environment and the existing `gh` read

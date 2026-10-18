@@ -43,7 +43,7 @@ def _candidate(*, applied_scope_id: str | None = None) -> RecallCandidate:
 def _prepare_recall_node(tmp_path: Path, monkeypatch, captured: dict[str, object]) -> Path:
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
-    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: vault_root)
+    monkeypatch.setattr(ask_graph, "_compatibility_recall_vault_root", lambda: vault_root)
     monkeypatch.setattr(
         ask_graph,
         "retrieve_relevant_provisional",

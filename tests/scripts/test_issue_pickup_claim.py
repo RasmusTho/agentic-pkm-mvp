@@ -1020,3 +1020,85 @@ def test_complete_sync_missing_task_keeps_opaque_claim_failure(
     commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
     assert "dispatcher -m app.dispatcher claim" not in commands
     assert "gh api --method PUT repos/" not in commands
+
+
+def test_pickup_forwards_readiness_repo_root(tmp_path: Path) -> None:
+    dispatcher_dir = tmp_path / "dispatcher-case"
+    dispatcher_dir.mkdir()
+    dispatcher_root = dispatcher_dir / "bifrost"
+    dispatcher_root.mkdir()
+    worktree, env = _make_harness(
+        dispatcher_dir,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        claim_json=_dispatcher_claim(),
+    )
+
+    dispatcher_result = _run(
+        worktree,
+        env,
+        "--readiness-repo-root",
+        str(dispatcher_root),
+    )
+
+    assert dispatcher_result.returncode == 0, dispatcher_result.stdout + dispatcher_result.stderr
+    dispatcher_commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    refresh_call = next(
+        line for line in dispatcher_commands.splitlines() if "pickup-refresh" in line
+    )
+    assert f"--readiness-repo-root {dispatcher_root}" in refresh_call
+
+    fallback_dir = tmp_path / "fallback-case"
+    fallback_dir.mkdir()
+    fallback_root = fallback_dir / "bifrost"
+    fallback_target = fallback_root / "app" / "selected_repository_verify.py"
+    fallback_target.parent.mkdir(parents=True)
+    fallback_target.write_text("def test_selected_root(): pass\n", encoding="utf-8")
+    fallback_body = VALID_READY_BODY.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        "app/selected_repository_verify.py::test_selected_root",
+    )
+    fallback_issue = json.dumps(
+        {
+            "number": 3301,
+            "state": "open",
+            "labels": [
+                {"name": "type:task"},
+                {"name": "prio:high"},
+                {"name": "lane:governance"},
+                {"name": "agent:ready"},
+            ],
+            "body": fallback_body,
+        }
+    )
+    fallback_worktree, fallback_env = _make_harness(
+        fallback_dir,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": False,
+                "coordination_mode": "github-label-only-fallback",
+                "fallback_reason": "dispatcher_db_missing",
+            }
+        ),
+        issue_json=fallback_issue,
+    )
+
+    fallback_result = _run(
+        fallback_worktree,
+        fallback_env,
+        "--coordination-mode",
+        "github-label-only-fallback",
+        "--fallback-reason",
+        "dispatcher_db_missing",
+        "--readiness-repo-root",
+        str(fallback_root),
+    )
+
+    assert fallback_result.returncode == 0, fallback_result.stdout + fallback_result.stderr

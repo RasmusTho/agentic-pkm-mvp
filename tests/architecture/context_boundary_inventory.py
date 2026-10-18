@@ -44,7 +44,12 @@ GLOBAL_RESOLUTION_SYMBOLS = frozenset(
         "active_vault_selection_window",
     }
 )
-GLOBAL_ENV_NAMES = frozenset({"VAULT_ROOT", "VAULT_DIR"})
+# Every process-global environment key that names a vault root (KD-55D38D90BD05):
+# the channel binding, the legacy MCP/CLI roots, the episodes CLI root, and the
+# watcher's boot-time binding.
+GLOBAL_ENV_NAMES = frozenset(
+    {"VAULT_ROOT", "VAULT_DIR", "MCP_VAULT_ROOT", "EPISODES_VAULT_ROOT", "WATCHER_VAULT_PATH"}
+)
 ENV_SYMBOL_PREFIX = "env:"
 
 API_APP_MODULE = "app/api/app.py"
@@ -69,9 +74,11 @@ RETIRING_STAGES = frozenset(
     {
         "05B2",
         "05B3",
-        "05B4",
         "retained:MVR-05C",
         "retained:MVR-06",
+        # MCP context semantics and packaging are owned by #3368; until it defines
+        # them, the carrier-free MCP journey keeps one named env adapter.
+        "retained:#3368",
     }
 )
 
@@ -113,15 +120,33 @@ _RESOLUTION_PRIMITIVE = (
     "shared global-resolution primitive every legacy route delegates to; retired with the "
     "single-binding compatibility selector"
 )
-_CARRIER_NOTE = (
-    "agent/MCP carrier resolves its vault from process selection or environment, not from a "
-    "request-carried ActiveContextSet"
+_ASK_LEGACY_RECALL = (
+    "carrier-free ASK recall journey (MVR-05B4a: run_ask_graph resolves a scoped turn's recall "
+    "sources once from its ActiveContextSet and no graph node resolves a vault; a turn without a "
+    "context -- legacy /api/ask, voice, the smoke CLI -- still reads the process-wide "
+    "single-binding selection once per turn through these named adapters)"
 )
-_CLI_NOTE = "operator CLI resolves its vault from process environment or selection, not a request"
+_MCP_COMPATIBILITY = (
+    "carrier-free MCP vault journey (MVR-05B4a: a VaultCarrier argument or the vault_carrier "
+    "setting is the whole answer and no environment key is read; a call with neither a carrier "
+    "nor an explicit path keeps the MCP_VAULT_ROOT/VAULT_DIR/VAULT_ROOT fallback until #3368 "
+    "defines MCP context semantics)"
+)
+_CLI_COMPATIBILITY = (
+    "compatibility branch of the CLI's one-context-per-invocation resolver (MVR-05B4a: every "
+    "vault-bound CLI entrypoint calls resolve_cli_vault_context once and passes the carrier down; "
+    "an explicit option or the instance registry wins, and only without a registry do these named "
+    "adapters read the legacy env keys or the process selection)"
+)
+_WATCHER_LIFECYCLE = (
+    "background watcher lifecycle reports the boot-time WATCHER_VAULT_PATH binding it idles on; "
+    "background lifecycles are bound per binding in MVR-06 (surfaced by the KD-55D38D90BD05 env-key "
+    "hardening, not a new read)"
+)
 
 COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
-    _a("app/agents/ask/graph.py", "_active_recall_vault_id", "get_vault_manager", _CARRIER_NOTE, "05B4"),
-    _a("app/agents/ask/graph.py", "_active_recall_vault_root", "get_vault_manager resolve_optional_vault_root", _CARRIER_NOTE, "05B4"),
+    _a("app/agents/ask/graph.py", "_compatibility_recall_vault_id", "get_vault_manager", _ASK_LEGACY_RECALL, "retained:MVR-06"),
+    _a("app/agents/ask/graph.py", "_compatibility_recall_vault_root", "get_vault_manager resolve_optional_vault_root", _ASK_LEGACY_RECALL, "retained:MVR-06"),
     _a(_COMPANION, "_legacy_companion_vault_manager", "get_vault_manager", _COMPANION_LEGACY_READ, "retained:MVR-06"),
     _a(_COMPANION, "_legacy_configured_vault_root", "resolve_optional_vault_root", _COMPANION_LEGACY_READ, "retained:MVR-06"),
     _a(_COMPANION, "_legacy_vault_root_env_value", "env:VAULT_ROOT", _COMPANION_LEGACY_READ, "retained:MVR-06"),
@@ -135,17 +160,11 @@ COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
     _a("app/api/routes/vault_resolution.py", "active_vault_root_or_selection_required", "resolve_active_vault_root", _RESOLUTION_PRIMITIVE, "retained:MVR-06"),
     _a("app/api/routes/vault_resolution.py", "active_vault_selection_window", "get_vault_manager", _RESOLUTION_PRIMITIVE, "retained:MVR-06"),
     _a("app/api/routes/vault_resolution.py", "resolve_active_vault_root", "get_vault_manager resolve_optional_vault_root", _RESOLUTION_PRIMITIVE, "retained:MVR-06"),
-    _a("app/cli/__init__.py", "_resolve_mcp_vault_root_path", "env:VAULT_DIR", _CLI_NOTE, "05B4"),
-    _a("app/cli/__init__.py", "_resolve_vault_root_path", "resolve_optional_vault_root", _CLI_NOTE, "05B4"),
-    _a("app/cli/briefing.py", "_resolve_vault_context", "get_vault_manager", _CLI_NOTE, "05B4"),
-    _a("app/cli/episodes.py", "_default_vault_root", "env:VAULT_ROOT", _CLI_NOTE, "05B4"),
-    _a("app/cli/health.py", "_check_companion_diagnostics", "env:VAULT_ROOT", _CLI_NOTE, "05B4"),
-    _a("app/cli/settings_explain.py", "build_settings_explain_payload", "env:VAULT_ROOT", _CLI_NOTE, "05B4"),
-    _a("app/cli/vault.py", "vault_init", "get_vault_manager", _CLI_NOTE, "05B4"),
-    _a("app/cli/youtube_inbox_dev.py", "_build_youtube_inbox_dev_services.global_sync_enabled", "get_vault_manager", _CLI_NOTE, "05B4"),
-    _a("app/cli/youtube_inbox_dev.py", "drain", "get_vault_manager", _CLI_NOTE, "05B4"),
-    _a("app/mcp/vault_tools.py", "_resolve_mcp_env_root", "env:VAULT_DIR", _CARRIER_NOTE, "05B4"),
-    _a("app/mcp/vault_tools.py", "get_vault_root", "resolve_optional_vault_root", _CARRIER_NOTE, "05B4"),
+    _a("app/cli/vault_context.py", "_compatibility_channel_root", "resolve_optional_vault_root", _CLI_COMPATIBILITY, "retained:MVR-06"),
+    _a("app/cli/vault_context.py", "_compatibility_process_selection", "get_vault_manager", _CLI_COMPATIBILITY, "retained:MVR-06"),
+    _a("app/cli/vault_context.py", "_legacy_env_snapshot", "env:EPISODES_VAULT_ROOT env:MCP_VAULT_ROOT env:VAULT_DIR env:VAULT_ROOT env:WATCHER_VAULT_PATH", _CLI_COMPATIBILITY, "retained:MVR-06"),
+    _a("app/cli/watcher.py", "_vault_idle_reason", "env:WATCHER_VAULT_PATH", _WATCHER_LIFECYCLE, "retained:MVR-06"),
+    _a("app/mcp/vault_tools.py", "_compatibility_env_vault_root", "env:MCP_VAULT_ROOT env:VAULT_DIR resolve_optional_vault_root", _MCP_COMPATIBILITY, "retained:#3368"),
 )
 
 
@@ -191,10 +210,18 @@ def registered_router_modules() -> frozenset[str]:
 
 
 def _python_modules(relative_dir: str) -> frozenset[str]:
+    """Every module under ``relative_dir``, nested packages included (KD-88B6B1EC0D9A).
+
+    Only the directory's own top-level ``__init__.py`` is left out (the gate adds
+    ``app/cli/__init__.py`` explicitly); a nested package's ``__init__.py`` is a
+    module like any other and is scanned.
+    """
+
+    base = ROOT / relative_dir
     return frozenset(
         p.relative_to(ROOT).as_posix()
-        for p in (ROOT / relative_dir).glob("*.py")
-        if p.name != "__init__.py"
+        for p in base.rglob("*.py")
+        if p != base / "__init__.py"
     )
 
 
@@ -291,6 +318,60 @@ def _module_env_tuples(tree: ast.Module) -> dict[str, tuple[str, ...]]:
         if isinstance(target, ast.Name) and names:
             bound[target.id] = names
     return bound
+
+
+def _may_be_environ(node: ast.AST | None, aliases: set[str]) -> bool:
+    """Whether an expression can evaluate to the process environment mapping."""
+
+    if node is None:
+        return False
+    if _is_environ(node) or (isinstance(node, ast.Name) and node.id in aliases):
+        return True
+    if isinstance(node, ast.BoolOp):
+        # ``env = environ_arg or os.environ``
+        return any(_may_be_environ(value, aliases) for value in node.values)
+    if isinstance(node, ast.IfExp):
+        # ``env = mapping if mapping is not None else os.environ``
+        return _may_be_environ(node.body, aliases) or _may_be_environ(node.orelse, aliases)
+    return False
+
+
+def _assigned_environ_aliases(tree: ast.Module, imported: set[str]) -> set[str]:
+    """Names bound to ``os.environ`` by assignment or a parameter default (KD-6BC9153BD3A2).
+
+    ``env = os.environ`` then ``env.get("VAULT_ROOT")`` is the same process-global
+    read as the direct form. Chains (``a = os.environ; b = a``) resolve to a fixed
+    point. Binding is tracked by name across the module, which over-approximates
+    rather than lets an alias escape.
+    """
+
+    aliases = set(imported)
+    while True:
+        before = len(aliases)
+        for node in ast.walk(tree):
+            targets: list[ast.AST] = []
+            value: ast.AST | None = None
+            if isinstance(node, ast.Assign):
+                targets, value = list(node.targets), node.value
+            elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+                targets, value = [node.target], node.value
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                args = node.args
+                positional = [*args.posonlyargs, *args.args]
+                for arg, default in zip(positional[len(positional) - len(args.defaults):], args.defaults):
+                    if _may_be_environ(default, aliases):
+                        aliases.add(arg.arg)
+                for arg, kw_default in zip(args.kwonlyargs, args.kw_defaults):
+                    if _may_be_environ(kw_default, aliases):
+                        aliases.add(arg.arg)
+                continue
+            if value is None or not _may_be_environ(value, aliases):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    aliases.add(target.id)
+        if len(aliases) == before:
+            return aliases
 
 
 class _Scanner(ast.NodeVisitor):
@@ -434,6 +515,15 @@ def scan_source(source: str, filename: str = "<memory>") -> dict[str, frozenset[
     tree = ast.parse(source, filename=filename)
     scanner = _Scanner()
     scanner.env_tuples = _module_env_tuples(tree)
+    imported_environ = {
+        alias.asname
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name == "environ" and alias.asname
+    }
+    for name in _assigned_environ_aliases(tree, imported_environ):
+        scanner.env_aliases[name] = "environ"
     scanner.visit(tree)
     return {scope: frozenset(symbols) for scope, symbols in scanner.found.items()}
 

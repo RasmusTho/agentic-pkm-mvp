@@ -3,6 +3,7 @@ set -euo pipefail
 
 ISSUE_NUMBER=""
 REPO=""
+READINESS_REPO_ROOT=""
 AGENT_ID=""
 SESSION_ID=""
 PREFLIGHT_ONLY=0
@@ -12,6 +13,7 @@ TASK_ID=""
 TTL_MINUTES=90
 PYTHON_BIN="${PYTHON:-python3}"
 JSON_PYTHON_BIN="${JSON_PYTHON:-python3}"
+SCRIPT_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -21,6 +23,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --repo)
       REPO="$2"
+      shift 2
+      ;;
+    --readiness-repo-root)
+      READINESS_REPO_ROOT="$2"
       shift 2
       ;;
     --agent)
@@ -346,13 +352,23 @@ if agent_state_labels != {"agent:ready"}:
 body = issue.get("body")
 if not isinstance(body, str):
     body = ""
-repository_root = os.environ.get("ISSUE_READINESS_REPO_ROOT")
-if not isinstance(repository_root, str) or not repository_root:
+validator_repository_root = os.environ.get("ISSUE_READINESS_REPO_ROOT")
+if not isinstance(validator_repository_root, str) or not validator_repository_root:
     raise SystemExit("issue readiness validator path is unavailable")
-sys.path.insert(0, repository_root)
+verification_repository_root = (
+    os.environ.get("ISSUE_VERIFY_REPO_ROOT") or validator_repository_root
+)
+if not verification_repository_root:
+    raise SystemExit("issue verification repository root is unavailable")
+sys.path.insert(0, validator_repository_root)
 from scripts.validate_issue_readiness import classify_issue_body
 
-report = classify_issue_body(body, issue_number=expected_number, labels=names)
+report = classify_issue_body(
+    body,
+    issue_number=expected_number,
+    labels=names,
+    repo_root=verification_repository_root,
+)
 if report.readiness_classification != "ready_candidate":
     raise SystemExit(
         "fresh GitHub issue failed strict readiness validation: "
@@ -390,11 +406,18 @@ if task.get("claimed_by") is not None or task.get("lease_id") is not None:
 PY
 }
 
+run_pickup_refresh() {
+  if [[ -n "$READINESS_REPO_ROOT" ]]; then
+    "$PYTHON_BIN" -m app.dispatcher pickup-refresh "$TASK_ID" --repo "$REPO" \
+      --readiness-repo-root "$READINESS_REPO_ROOT" --json
+  else
+    "$PYTHON_BIN" -m app.dispatcher pickup-refresh "$TASK_ID" --repo "$REPO" --json
+  fi
+}
+
 if [[ "$RECEIPT_COORDINATION_MODE" == "dispatcher-backed" ]]; then
   pickup_refresh_json=""
-  if ! pickup_refresh_json="$(
-    "$PYTHON_BIN" -m app.dispatcher pickup-refresh "$TASK_ID" --repo "$REPO" --json
-  )"; then
+  if ! pickup_refresh_json="$(run_pickup_refresh)"; then
     pickup_reason="$(
       PICKUP_REFRESH_JSON="$pickup_refresh_json" "$JSON_PYTHON_BIN" - <<'PY'
 import json
@@ -529,7 +552,8 @@ PY
 fi
 
 claimant_receipt="Pickup intent receipt: agent=$AGENT_ID session=$SESSION_ID branch=$EXPECTED_BRANCH worktree=$EXPECTED_WORKTREE coordination_mode=$RECEIPT_COORDINATION_MODE fallback_reason=$RECEIPT_FALLBACK_REASON issue=$ISSUE_NUMBER"
-if ! ISSUE_READINESS_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" \
+if ! ISSUE_READINESS_REPO_ROOT="$SCRIPT_REPO_ROOT" \
+  ISSUE_VERIFY_REPO_ROOT="${READINESS_REPO_ROOT:-$SCRIPT_REPO_ROOT}" \
   ISSUE_NUMBER="$ISSUE_NUMBER" verify_current_ready_issue; then
   echo "GitHub-label-only pickup refused; exact issue is not freshly open and strictly ready; agent:ready was not removed" >&2
   exit 1

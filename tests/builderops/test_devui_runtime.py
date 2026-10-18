@@ -587,6 +587,27 @@ def test_managed_overview_reads_admitted_sources(managed_sources) -> None:
     )
 
 
+def test_managed_ckm_snapshot_reaches_overview_and_system_control(managed_sources, tmp_path) -> None:
+    from app.builderops.devui_ckm_snapshot import FILENAME
+    from tests.builderops.test_devui_ckm_snapshot import make_snapshot
+
+    source = managed_sources
+    value, _ = make_snapshot(tmp_path)
+    receipt_dir = Path(source.environment["DEVUI_VM102_RECEIPT_DIR"])
+    (receipt_dir / FILENAME).write_text(json.dumps(value))
+    with source.client() as client:
+        overview = client.get("/api/devui/overview")
+        control = client.get("/api/devui/builder-system-control")
+    assert overview.status_code == control.status_code == 200
+    provider = next(row for row in overview.json()["trust_frame"]["provider_states"]
+                    if row["role"] == "capabilities")
+    other = control.json()["composition"]["providers"]["capabilities"]
+    assert provider["status"] == other["status"] == "available"
+    assert provider["snapshot"] == other["snapshot"] == value["result"]["snapshot"]
+    assert provider["completeness"]["private_transfer"]["content_sha256"] == value["content_sha256"]
+    assert _managed_source(overview.json(), "github-live")["state"] == "fresh"
+
+
 def test_managed_overview_exposes_owner_work_context(managed_sources, monkeypatch) -> None:
     source = managed_sources
     row = source.tasks[0]

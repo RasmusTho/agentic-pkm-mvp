@@ -2482,11 +2482,36 @@ class SshDeployRemote:
         return expected
 
 
+def qualify_heavy(config: LinuxConfig, operation_id: str) -> dict[str, Any]:
+    """Fixed post-merge heavy-test profile for a committed native operation (#6158).
+
+    It reads the committed receipt only, holds no channel lock and touches no
+    channel resource: the disposable container and work tree are owned by this
+    operation under the journal directory. It never gates channel advancement.
+    """
+    from app.ops.heavy_acceptance import HeavyAcceptanceError
+    from app.ops.heavy_acceptance_runner import HeavyAcceptanceRunner
+    from app.ops.pg_acceptance import require_pass
+    if config.channel not in {'dev', 'test'} or str(UUID(operation_id)) != operation_id:
+        raise HeavyAcceptanceError('expected_committed_native_operation_required')
+    receipt = config.journal.read()
+    if (receipt is None or receipt.operation_id != operation_id or receipt.terminal_result != 'committed'
+        or receipt.pg_acceptance is None):
+        raise HeavyAcceptanceError('expected_committed_native_operation_required')
+    proof = receipt.pg_acceptance
+    require_pass(proof, proof['source_sha'], proof['image_digest'], config.channel, operation_id)
+    ensure_candidate_object(config, proof['source_sha'])
+    return HeavyAcceptanceRunner(config.root, config.journal.directory, sha=proof['source_sha'],
+                                 digest=proof['image_digest'], channel=config.channel,
+                                 operation_id=operation_id).verify()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=(
         'serve', 'rpc', 'guard', 'cleanup', 'token-push', 'token-push-worker',
-        'token-push-status', 'token-push-inspect', 'qualify-web', 'qualify-journaling', 'karakeep-boot',
+        'token-push-status', 'token-push-inspect', 'qualify-web', 'qualify-journaling', 'qualify-heavy',
+        'karakeep-boot',
         'karakeep-acquire', 'karakeep-project',
     ))
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
@@ -2520,6 +2545,20 @@ def main(argv: list[str] | None = None) -> int:
                 selected,
                 app_root=LinuxConfig.load(args.channel, require_runtime_env=False).root,
             )
+        if args.action == 'qualify-heavy':
+            from app.ops.heavy_acceptance import HeavyAcceptanceError, refusal
+            if (args.channel not in {'dev', 'test'} or args.operation_id is None or args.attempt_id is not None
+                or args.prior_generation is not None or args.compose_command):
+                result = refusal('fixed_dev_test_invocation_required')
+            else:
+                try:
+                    result = qualify_heavy(LinuxConfig.load(args.channel), args.operation_id)
+                except HeavyAcceptanceError as exc:
+                    result = refusal(exc.reason)
+                except Exception:
+                    result = refusal('native_heavy_boundary_unavailable')
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result['result'] == 'passed' else 78
         if args.action == 'qualify-journaling':
             if (args.channel != 'test' or args.operation_id is None
                 or args.attempt_id is not None or args.prior_generation is not None or args.compose_command):

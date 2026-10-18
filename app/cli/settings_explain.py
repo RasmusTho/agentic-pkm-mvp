@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import quote
 
+from app.cli.vault_context import CliVaultContextError, resolve_cli_vault_context
 from app.config.database import default_database_name
 from app.config.environment import ENV_DEV, ENV_TEST, active_environment
 from app.health_contract import DEFAULT_CONTRACT
@@ -67,7 +68,18 @@ def _display_database_url() -> str:
     return f"postgresql+psycopg://{quote(user)}:***@{host}:{port}/{db_name}"
 
 
-def build_settings_explain_payload() -> dict[str, Any]:
+def _explain_vault_root() -> Path:
+    """This invocation's one vault root (MVR-05B4a); explain never fails on it."""
+
+    try:
+        root = resolve_cli_vault_context(env_policy="channel", default_path=Path("vault")).root
+    except CliVaultContextError:
+        root = None
+    return root if root is not None else Path("vault")
+
+
+def build_settings_explain_payload(vault_root: Path | None = None) -> dict[str, Any]:
+    explain_root = vault_root if vault_root is not None else _explain_vault_root()
     db_url = _display_database_url()
     panel_settings = load_panel_actions_settings()
     watcher_settings = load_watcher_settings()
@@ -105,7 +117,7 @@ def build_settings_explain_payload() -> dict[str, Any]:
         pass
     if settings_provider is None and settings_model is None and settings_base_url is None:
         providers_md = resolve_settings_file(
-            Path(os.getenv("VAULT_ROOT", "vault")),
+            explain_root,
             "providers.md",
             legacy_paths=(LEGACY_COMPILED_DIR / "providers.md",),
         )
