@@ -997,6 +997,18 @@ path: no overall score, readiness threshold, automatic rotation, compression, po
 worker launch, or Product/runtime memory change follows from its results. Field, telemetry and
 manual artifact details remain in `docs/AGENT_ISSUE_DISPATCHER.md :: Manual shadow rehydration probe`.
 
+The retained `shadow_rehydration_3798_live_access.v2` repeat now qualifies the observer's own
+successful GitHub Issue/PR/complete review-thread, direct `origin` / `refs/heads/main`, and
+dispatcher reads through the unchanged manual v2 consumers. The packet carries exact semantic
+provenance and sanctioned read-only invocation instructions; parent/source access is not borrowed
+as observer proof. A first response with invalid agent-reporting provenance remains refused and
+immutable; a separately admitted fresh retry supplies the qualifying receipt. Its comparable
+fields matched and required no refresh at capture, while fabrication remained unknown and the live
+next action remained not comparable. Historical CI-rollup classification is not a current merge
+gate. Exact byte, wall-clock, event and limitation evidence remains in the manual owner passage
+and retained artifacts, with failed-attempt, between-attempt and delivery counts kept separate.
+This empirical qualification adds no rotation, dispatch, takeover, launch or Product-memory authority.
+
 ### Run-state authority
 
 Persisted and dry-run epic run-state is evidence only. It cannot authorize parent closure, GitHub

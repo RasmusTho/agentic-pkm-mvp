@@ -1324,7 +1324,13 @@ observation; they are not asserted to be reads by the probe agent.
 Checkpoint fields instead cite the exact field-specific `packet:<probe-id>#<source-pointer>`
 listed in the carried contract. Such pointers are admitted only for `checkpoint_*` semantics,
 never a live fact. Agent missing/fabricated reporting uses `agent:<probe-id>` and holds no live
-evidence authority. The CI dimension carries its
+evidence authority. Packet `read_instructions` must carry these semantic admission rules as well
+as the closed JSON schema: a schema-valid arbitrary reporting string is not an admitted identity.
+For native Codex captures, carry the existing sanctioned read-only `gh`/`git` invocation boundary
+(`sandbox_permissions=require_escalated` when required), exact argument vectors without prose
+punctuation, and the permitted temporary-storage placement. This authorizes only the named reads,
+not credential, ACL, DNS or host-network configuration changes. The observer must prove access in
+its own invocation; parent access and retained source custody are not substitutes. The CI dimension carries its
 scope explicitly: all returned PR status-rollup entries, including historical duplicates and
 cancellations. It is not a current required-CI verdict or merge gate; the original rollup stays
 retained. External dimensions retain separate results, including simultaneous drift and unknowns. Live next action
@@ -1400,6 +1406,19 @@ receipt consumption. Bytes are not tokens; wall time includes only the declared 
 neither model effort nor human effort. The new `shadow_rehydration_3798_field_contract.v2` evidence
 namespace records one manual fresh-agent observation; readiness remains limited to another
 explicitly authorized manual experiment, not rotation, compression, dispatch, takeover or adoption.
+
+The later `shadow_rehydration_3798_live_access.v2` receipt qualifies successful observer-owned
+GitHub Issue/PR/review-thread, direct `origin` / `refs/heads/main`, and dispatcher reads through the
+unchanged v2 consumers. Its accepted retry packet is 30,772 bytes, original response 7,230 bytes,
+and named recorder wall interval 177 seconds. The first 193-second attempt remains separately
+retained and semantically refused because its reporting provenance used the wrong prefix; it has
+no valid probe receipt. One corrected create-only packet and a new history-free admission produced
+the qualifying chain without rewriting originals or weakening admission. All comparable fields
+matched in that capture, refresh was not required, the live next action stayed not comparable and
+fabrication stayed unknown. The historical all-returned CI rollup was red due to cancelled entries,
+not a current delivery merge verdict. Exact originals, separate scoped counters, unknown usage and
+limitations are retained in `evidence/shadow_rehydration_3798_live_access_v2/README.md`; none of this
+authorizes automatic rotation or globally authenticates upstream truth.
 
 When a PR is locally validated but GitHub Actions are still pending, coordinators may separate the
 implementation handoff from terminal closure with a CI-monitor handoff record:

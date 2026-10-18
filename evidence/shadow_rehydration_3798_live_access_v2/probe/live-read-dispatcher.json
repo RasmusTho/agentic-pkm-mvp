@@ -1,0 +1,87 @@
+{
+  "schema_name": "epic_rehydration_live_read",
+  "schema_version": 2,
+  "probe_id": "shadow_rehydration_3798_live_access",
+  "kind": "dispatcher",
+  "target": {
+    "repository": "RasmusTho/agentic-pkm-mvp",
+    "issue_number": 3798,
+    "pr_number": 3803
+  },
+  "observed_at": "2026-10-18T06:46:33Z",
+  "availability": "observed",
+  "payload": {
+    "ok": true,
+    "state_dir": "/Volumes/ColimaT7/workspace-root/runtime/dispatcher",
+    "db_path": "/Volumes/ColimaT7/workspace-root/runtime/dispatcher/dispatcher.sqlite3",
+    "db_exists": true,
+    "events_path": "/Volumes/ColimaT7/workspace-root/runtime/dispatcher/events.jsonl",
+    "events_exists": true,
+    "singleton": {
+      "path": "/Volumes/ColimaT7/workspace-root/runtime/dispatcher/dispatcher.singleton.json",
+      "guard_path": "/Volumes/ColimaT7/workspace-root/runtime/dispatcher/.dispatcher.singleton.guard",
+      "exists": true,
+      "state": "stale",
+      "active": false,
+      "stale": true,
+      "holder": "codex-slice-implementer",
+      "pid": 23272,
+      "acquired_at": "2026-09-10T21:00:57Z",
+      "heartbeat_at": "2026-09-10T21:00:57Z",
+      "expires_at": "2026-09-10T22:30:57Z",
+      "ttl_seconds": 5400
+    },
+    "control_plane": {
+      "mode": "normal",
+      "revision": 0,
+      "updated_at": null,
+      "activation_id": null
+    },
+    "last_sync": {
+      "last_pull_at": "2026-10-18T06:41:56.308705+00:00",
+      "sync_result": "ok",
+      "sync_note": null,
+      "kill_switch_active": false,
+      "age_seconds": 252.292001,
+      "freshness_threshold_seconds": 900,
+      "batch_fresh": true,
+      "ready_scan_fresh": true,
+      "fresh": true,
+      "repository_coverage": {
+        "state": "fresh",
+        "configured_repositories": ["RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost"],
+        "ready_scan_repositories": ["RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost"],
+        "fresh_repositories": ["RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost"],
+        "partial_repositories": [],
+        "failed_repositories": [],
+        "stale_repositories": [],
+        "missing_repositories": [],
+        "unknown_repositories": [],
+        "age_seconds_by_repository": {"RasmusTho/agentic-pkm-mvp": 315.18715, "RasmusTho/bifrost": 255.741036},
+        "ready_scan_complete": true,
+        "complete": true
+      }
+    },
+    "configured_repositories": ["RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost"],
+    "repository_configuration": {"state": "valid"},
+    "repository_coverage": {
+      "state": "fresh",
+      "configured_repositories": ["RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost"],
+      "ready_scan_repositories": ["RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost"],
+      "fresh_repositories": ["RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost"],
+      "partial_repositories": [],
+      "failed_repositories": [],
+      "stale_repositories": [],
+      "missing_repositories": [],
+      "unknown_repositories": [],
+      "age_seconds_by_repository": {"RasmusTho/agentic-pkm-mvp": 315.18715, "RasmusTho/bifrost": 255.741036},
+      "ready_scan_complete": true,
+      "complete": true
+    },
+    "coordination_mode": "dispatcher-backed",
+    "fallback_reason": null,
+    "setup_command": null,
+    "fallback_command": null
+  },
+  "unavailable_reason": ""
+}
