@@ -4001,7 +4001,28 @@ def _release_instance_state_deployment_lease(
         _require_completed_dormant_ownership_preparation(ownership_root)
         lease_path = _deployment_lease_path(ownership_root)
         if not lease_path.exists():
-            return {"released": False, "reason": "no-active-lease"}
+            root_lease_path = _legacy_deployment_lease_path(ownership_root)
+            if not root_lease_path.exists():
+                return {"released": False, "reason": "no-active-lease"}
+            try:
+                root_lease = _read_legacy_deployment_lease(ownership_root)
+            except InstanceStatePreflightError:
+                return {"released": False, "reason": "lease-unreadable"}
+            if root_lease.get("channel_id") != channel:
+                return {"released": False, "reason": "channel-mismatch"}
+            if root_lease.get("controller") != controller:
+                return {"released": False, "reason": "controller-mismatch"}
+            existing_result = root_lease.get("result")
+            if (
+                root_lease.get("schema")
+                != _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+                or root_lease.get("phase") != "cleanup"
+                or not isinstance(existing_result, dict)
+                or existing_result.get("channel") != channel
+            ):
+                return {"released": False, "reason": "no-active-lease"}
+            receipt = _complete_instance_state_deployment_cleanup(ownership_root)
+            return receipt | {"released": True, "reason": "already-in-cleanup"}
         try:
             lease = _read_deployment_lease(ownership_root)
         except InstanceStatePreflightError:

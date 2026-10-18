@@ -2293,29 +2293,67 @@ class LinuxEffects:
             }
         if (
             not self.recovery_quiescent()
-            or not public_lease_exists
             or not legacy_lease_exists
-            or public_lease.is_symlink()
             or legacy_lease.is_symlink()
-            or not public_lease.is_file()
             or not legacy_lease.is_file()
+            or (public_lease_exists and (
+                public_lease.is_symlink() or not public_lease.is_file()
+            ))
         ):
             raise PostgresDeployError()
-        proof_path = root / 'deployment-quiescence-proof.json'
         try:
-            proof_bytes = proof_path.read_bytes()
-        except OSError:
-            raise PostgresDeployError() from None
-        if hashlib.sha256(proof_bytes).hexdigest() != receipt.get('quiescence_proof_sha256'):
-            raise PostgresDeployError()
-        try:
-            proof = _private_recovery_json(proof_path, self.config.uid)
+            root_lease = _private_recovery_json(legacy_lease, self.config.uid)
+            public = (
+                _private_recovery_json(public_lease, self.config.uid)
+                if public_lease_exists else None
+            )
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             raise PostgresDeployError() from None
-        controller = proof.get('controller')
+        cleanup_lease = public if public is not None else root_lease
+        cleanup_controller = cleanup_lease.get('controller')
+        cleanup_shape = (
+            cleanup_lease.get('channel_id') == 'test'
+            and cleanup_lease.get('phase') == 'cleanup'
+            and isinstance(cleanup_lease.get('result'), dict)
+            and cleanup_lease['result'].get('channel') == 'test'
+            and isinstance(cleanup_controller, dict)
+        )
+        if public is None and (
+            root_lease.get('schema')
+            != 'agentic-pkm.host-deployment-compatibility-block.v1'
+            or not cleanup_shape
+        ):
+            raise PostgresDeployError()
+        if public is not None and cleanup_shape:
+            if (
+                public.get('schema') != 'agentic-pkm.host-deployment-lease.v3'
+                or root_lease.get('schema')
+                != 'agentic-pkm.host-deployment-compatibility-block.v1'
+                or any(
+                    root_lease.get(key) != public.get(key)
+                    for key in ('channel_id', 'nonce', 'phase', 'controller', 'result')
+                )
+            ):
+                raise PostgresDeployError()
+            controller = cleanup_controller
+        elif public is not None:
+            proof_path = root / 'deployment-quiescence-proof.json'
+            try:
+                proof_bytes = proof_path.read_bytes()
+                proof = _private_recovery_json(proof_path, self.config.uid)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                raise PostgresDeployError() from None
+            if (
+                hashlib.sha256(proof_bytes).hexdigest()
+                != receipt.get('quiescence_proof_sha256')
+                or proof.get('channel_id') != 'test'
+            ):
+                raise PostgresDeployError()
+            controller = proof.get('controller')
+        else:
+            controller = cleanup_controller
         if (
-            proof.get('channel_id') != 'test'
-            or not isinstance(controller, dict)
+            not isinstance(controller, dict)
             or set(controller) != {'pid', 'start_token'}
             or not isinstance(controller.get('pid'), int)
             or controller['pid'] <= 0

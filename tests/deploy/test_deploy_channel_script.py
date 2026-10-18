@@ -5634,6 +5634,8 @@ def test_linux_recovery_releases_authenticated_lease_after_durable_result(tmp_pa
     result_path.chmod(0o600)
     (public_root / 'deployment-host-global-lease.json').write_text('{}\n')
     (ownership_root / 'deployment-host-global-lease.json').write_text('{}\n')
+    (public_root / 'deployment-host-global-lease.json').chmod(0o600)
+    (ownership_root / 'deployment-host-global-lease.json').chmod(0o600)
 
     config = SimpleNamespace(
         channel='test', root=tmp_path, uid=os.geteuid(), gid=os.getegid(), journal=object(),
@@ -5660,7 +5662,41 @@ def test_linux_recovery_releases_authenticated_lease_after_durable_result(tmp_pa
     )
     assert calls[0][1] == {'cutover': authority, 'candidate': plan}
 
+    cleanup_result = {
+        'channel': 'test', 'restart_fence_cleared': True, 'aborted': True,
+    }
+    controller = proof['controller']
+    public_cleanup = {
+        'schema': 'agentic-pkm.host-deployment-lease.v3',
+        'channel_id': 'test', 'nonce': 'n' * 32, 'phase': 'cleanup',
+        'controller': controller, 'result': cleanup_result,
+    }
+    root_cleanup = {
+        **public_cleanup,
+        'schema': 'agentic-pkm.host-deployment-compatibility-block.v1',
+        'compatibility_v3_nonce': 'n' * 32,
+    }
+    (public_root / 'deployment-host-global-lease.json').write_text(
+        json.dumps(public_cleanup) + '\n', encoding='utf-8',
+    )
+    (ownership_root / 'deployment-host-global-lease.json').write_text(
+        json.dumps(root_cleanup) + '\n', encoding='utf-8',
+    )
+    (public_root / 'deployment-host-global-lease.json').chmod(0o600)
+    (ownership_root / 'deployment-host-global-lease.json').chmod(0o600)
+    proof_path.unlink()
+    effects.compose = lambda *_args, **_kwargs: json.dumps({
+        **cleanup_result, 'released': True, 'reason': 'already-in-cleanup',
+    })
+    assert effects.release_test_instance_state_recovery_lease(request)['reason'] == (
+        'already-in-cleanup'
+    )
+
     (public_root / 'deployment-host-global-lease.json').unlink()
+    assert effects.release_test_instance_state_recovery_lease(request)['reason'] == (
+        'already-in-cleanup'
+    )
+
     (ownership_root / 'deployment-host-global-lease.json').unlink()
     effects.recovery_quiescent = lambda: False
     effects.compose = lambda *_args, **_kwargs: pytest.fail('idempotent release called Compose')

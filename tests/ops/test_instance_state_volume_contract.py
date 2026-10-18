@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -1152,6 +1153,80 @@ def test_deployment_begin_preserves_root_only_claim_from_live_controller(
         )
     assert root_lease_path.read_bytes() == before
     assert not _deployment_lease_path(ownership).exists()
+
+
+def test_deployment_release_resumes_root_only_cleanup(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    ownership = tmp_path / "ownership"
+    public_root = ownership / "deployment-public"
+    public_root.mkdir(parents=True)
+    controller = {
+        "pid": 456,
+        "start_token": f"linux:{'2' * 64}",
+    }
+    cleanup_result = {
+        "channel": "test",
+        "restart_fence_cleared": True,
+        "aborted": True,
+    }
+    root_lease = ownership / "deployment-host-global-lease.json"
+    root_lease.write_text(
+        json.dumps(
+            {
+                "schema": (
+                    "agentic-pkm.host-deployment-compatibility-block.v1"
+                ),
+                "channel_id": "test",
+                "nonce": "n" * 32,
+                "compatibility_v3_nonce": "n" * 32,
+                "phase": "cleanup",
+                "controller": controller,
+                "legacy_path": str(tmp_path / "legacy.md"),
+                "result": cleanup_result,
+            }
+        ),
+        encoding="utf-8",
+    )
+    root_lease.chmod(0o600)
+
+    @contextmanager
+    def unlocked(_root):
+        yield
+
+    @contextmanager
+    def no_native_operation(_root):
+        yield lambda: None
+
+    monkeypatch.setattr(
+        runtime_module, "_assert_mount_root", lambda root, _label: root
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_require_completed_dormant_ownership_preparation",
+        lambda _root: None,
+    )
+    monkeypatch.setattr(
+        runtime_module, "_deployment_admission_locked", unlocked
+    )
+    monkeypatch.setattr(
+        "app.instance.legacy_owner_recovery.native_operation_refusal",
+        no_native_operation,
+    )
+
+    receipt = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ownership,
+        controller_pid=controller["pid"],
+        controller_start_token=controller["start_token"],
+    )
+
+    assert receipt == cleanup_result | {
+        "released": True,
+        "reason": "already-in-cleanup",
+    }
+    assert not root_lease.exists()
 
 
 def test_deployment_begin_migrates_a_dead_legacy_claim_without_bypassing_it(
