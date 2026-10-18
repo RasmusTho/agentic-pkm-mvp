@@ -5568,6 +5568,7 @@ def test_linux_recovery_refuses_before_first_effect_when_writers_are_live(tmp_pa
 
 def test_linux_recovery_rejects_active_supervised_operation(monkeypatch, tmp_path):
     """The reconstruction RPC cannot race a newly admitted deployment."""
+    from dataclasses import replace
     from types import SimpleNamespace
     from uuid import uuid4
 
@@ -5583,9 +5584,13 @@ def test_linux_recovery_rejects_active_supervised_operation(monkeypatch, tmp_pat
     authority = AuthorityCutover(
         'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
     )
+    failed_operation_id = str(uuid4())
+    source_operation_id = str(uuid4())
     config = SimpleNamespace(channel='test', root=tmp_path, journal=object())
     supervisor = linux.DeploymentSupervisor(config)
-    supervisor.operation = object()
+    active = linux.SupervisedOperation(
+        linux.LinuxEffects(config), failed_operation_id, plan, False,
+    )
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
     monkeypatch.setattr(
         linux.LinuxEffects,
@@ -5596,8 +5601,8 @@ def test_linux_recovery_rejects_active_supervised_operation(monkeypatch, tmp_pat
     request = {
         'action': 'test-recovery-reconstruct-instance-state',
         **{
-            'failed_operation_id': str(uuid4()),
-            'source_operation_id': str(uuid4()),
+            'failed_operation_id': failed_operation_id,
+            'source_operation_id': source_operation_id,
             'source_plan': plan.payload(),
             'plan': plan.payload(),
             'authority_cutover': {
@@ -5607,8 +5612,20 @@ def test_linux_recovery_rejects_active_supervised_operation(monkeypatch, tmp_pat
             },
         },
     }
-    with pytest.raises(PostgresDeployError):
-        supervisor.request(request)
+    foreign = linux.SupervisedOperation(
+        linux.LinuxEffects(config), str(uuid4()), plan, False,
+    )
+    mismatched = linux.SupervisedOperation(
+        linux.LinuxEffects(config), failed_operation_id,
+        replace(plan, revision='d' * 40, image_digest='sha256:' + 'd' * 64), False,
+    )
+    for operation in (foreign, mismatched):
+        operation.failed = True
+        operation.finished.set()
+    for operation in (active, foreign, mismatched):
+        supervisor.operation = operation
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(request)
 
 
 def test_linux_recovery_accepts_runtime_owned_receipt_under_root_supervisor(monkeypatch, tmp_path):
@@ -5788,6 +5805,13 @@ def test_linux_reconstruction_uses_retained_reset_request_after_journal_rollover
 
     monkeypatch.setattr(linux.LinuxEffects, 'compose', compose)
     supervisor = linux.DeploymentSupervisor(config)
+    retained = linux.SupervisedOperation(
+        linux.LinuxEffects(config), failed_successor_operation_id,
+        source_request_plan, False,
+    )
+    retained.failed = True
+    retained.finished.set()
+    supervisor.operation = retained
 
     def run_rpc(_argv, **kwargs):
         response = supervisor.request(json.loads(kwargs['input']))
@@ -5802,6 +5826,7 @@ def test_linux_reconstruction_uses_retained_reset_request_after_journal_rollover
 
     payload = json.loads(receipt_path.read_text())
     assert result['activation'] == 'inactive_fenced'
+    assert supervisor.operation is None
     assert payload['source_operation_id'] == source_operation_id
     assert payload['failed_successor_operation_id'] == failed_successor_operation_id
     assert payload['candidate_revision'] == fresh_candidate.revision

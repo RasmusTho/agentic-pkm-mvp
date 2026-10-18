@@ -2587,9 +2587,33 @@ class DeploymentSupervisor:
             raise PostgresDeployError()
         # Reset and reconstruction are separate RPCs. A fresh deployment may
         # have been admitted in between them; never let reconstruction run
-        # while the supervisor owns an active worker.
-        if self.operation is not None:
-            raise PostgresDeployError()
+        # while the supervisor owns an active or foreign worker. The exact
+        # failed automatic successor may remain as a finished in-memory object
+        # after reconciliation, so retire only that terminal same-ID state.
+        operation = self.operation
+        if operation is not None:
+            if (
+                request.source_plan is None
+                or operation.operation_id != request.failed_operation_id
+                or operation.plan != request.source_plan
+                or operation.bootstrap
+                or not operation.finished.is_set()
+                or operation.thread.is_alive()
+                or not operation.failed
+            ):
+                raise PostgresDeployError()
+            receipt = self.config.journal.read()
+            if (
+                receipt is None
+                or receipt.operation_id != request.failed_operation_id
+                or receipt.terminal_result != 'failed'
+            ):
+                raise PostgresDeployError()
+            self.config.journal.bind_request(
+                operation.operation_id, operation.plan, operation.bootstrap,
+            )
+            receipt.require_profile(operation.plan)
+            self.operation = None
         result = LinuxEffects(self.config).reconstruct_missing_test_instance_state(request)
         return {'result': result, 'recovery': 'test-instance-state-reconstructed'}
 
