@@ -3934,7 +3934,8 @@ def test_test_recovery_accepts_exact_failed_cutover_plan_with_automatic_successo
         'sha256:' + 'f' * 64, True,
     )
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
-    failed = replace(successor, automatic=False, authority_cutover=authority)
+    failed = replace(successor, automatic=False, ack_forward_only=True,
+                     authority_cutover=authority)
     receipt = DeployReceipt(
         operation_id, 'test', 'deploy', 'failed', 'failed',
         source_failure='legacy_identity_persistence_refused',
@@ -4025,7 +4026,6 @@ def test_test_recovery_refuses_failed_cutover_plan_drift_without_mutation(tmp_pa
         replace(successor, revision='d' * 40),
         replace(successor, image_digest='sha256:' + 'd' * 64),
         replace(successor, services=('db', 'api')),
-        replace(successor, ack_forward_only=True),
     )
     for candidate in drifts:
         with pytest.raises(PostgresDeployError):

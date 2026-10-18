@@ -1182,8 +1182,9 @@ python3 -m app.ops.postgres_deploy_host test <candidate-revision> \
 It accepts only the authenticated pending TEST deployment operation, the exact candidate
 revision/digest, and the qualified authority tuple. The retained failed plan is reconstructed
 from that operation's private journal binding: it must be a non-automatic TEST authority-cutover
-plan whose revision, digest, services, consumers, and forward-only acknowledgement exactly match
-the separately authenticated automatic successor plan. The successor is a distinct automatic
+plan whose revision, digest, services, and consumers match the separately authenticated automatic
+successor plan. Its forward-only acknowledgement remains an authorization on that retained failed
+cutover; the automatic successor keeps acknowledgement disabled. The successor is a distinct automatic
 plan without an embedded authority cutover; the failed cutover is never replayed as the fresh
 deployment. The VM-side reset refuses PROD/DEV, candidate/operation/authority/ownership/journal/
 lock drift, and concurrent or non-quiescent writers; after the journal is terminalized as failed,

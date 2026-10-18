@@ -178,8 +178,11 @@ class TestRecoveryRequest:
             or failed_plan.authority_cutover is None
             or failed_plan.authority_cutover != self.authority_cutover):
             raise PostgresDeployError()
-        for field in ('channel', 'revision', 'services', 'consumers',
-                      'ack_forward_only', 'image_digest'):
+        # Forward-only acknowledgement is an authorization attached to the
+        # retained failed cutover. Automatic successors must keep the
+        # request-level acknowledgement disabled, so it is not a successor
+        # compatibility field.
+        for field in ('channel', 'revision', 'services', 'consumers', 'image_digest'):
             if getattr(failed_plan, field) != getattr(self.plan, field):
                 raise PostgresDeployError()
 
