@@ -29,6 +29,7 @@ from app.builderops.devui_assets import (
     validate_packaged_assets,
 )
 from app.builderops.devui_composition import compose_owner_snapshot
+from app.builderops.devui_ckm_snapshot import read_private_ckm
 from app.builderops.devui_control import (
     ControlInputError, read_system_control, render_system_control,
     validate_control_destination, validate_return_subject,
@@ -342,13 +343,21 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
                 {"detail": "DevUI Focus subject is unavailable or unsupported"}, status_code=404
             )
 
-    @app.get("/api/devui/overview")
-    def overview(request: Request) -> dict[str, Any]:
+    def owner_snapshot() -> dict[str, Any]:
+        ckm = read_private_ckm(configuration.receipt_dir, repository=configuration.sources.repository)
         snapshot = compose_owner_snapshot(
             cockpit_reader=lambda: read_managed_cockpit(configuration.sources),
-            ckm_reader=_unavailable_provider,
+            ckm_reader=lambda: ckm.result,
             receipt_reader=receipt_provider,
         )
+        provider = snapshot["providers"]["capabilities"]
+        if ckm.transfer is not None and provider["status"] == "available":
+            provider["completeness"] = {**provider["completeness"], "private_transfer": ckm.transfer}
+        return snapshot
+
+    @app.get("/api/devui/overview")
+    def overview(request: Request) -> dict[str, Any]:
+        snapshot = owner_snapshot()
         owner_facts = read_owner_fact_transport(repository=configuration.sources.repository,
             environment=configuration.sources.api_environment, authority_epoch=configuration.sources.authority_epoch)
         snapshot["providers"]["owner_facts"] = owner_fact_trust(owner_facts, snapshot["captured_at"])
@@ -365,11 +374,7 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
     def system_control_projection(request: Request) -> dict[str, Any]:
         if configuration.sources.repository is None:
             raise ControlInputError("Builder System Control requires an explicit repository binding")
-        snapshot = compose_owner_snapshot(
-            cockpit_reader=lambda: read_managed_cockpit(configuration.sources),
-            ckm_reader=_unavailable_provider,
-            receipt_reader=receipt_provider,
-        )
+        snapshot = owner_snapshot()
         return read_system_control(
             configuration.sources, snapshot, return_subject=request.state.return_subject,
             diagnostic_origin=configuration.diagnostic_origin, ckm_overview_url=configuration.ckm_overview_url,

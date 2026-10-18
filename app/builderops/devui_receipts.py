@@ -227,6 +227,10 @@ def _load_latest_by_type(receipt_dir: Path) -> dict[str, Mapping[str, Any]]:
     except OSError as exc:
         raise Vm102ReceiptError("authoritative VM-102 receipt source is unavailable") from exc
     for path in paths:
+        # This fixed file belongs to the separately validated private CKM
+        # source. Its failure must not withdraw the independent VM chain.
+        if path.name == "devui-ckm-capabilities.json":
+            continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
