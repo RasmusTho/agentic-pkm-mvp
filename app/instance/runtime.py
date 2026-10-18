@@ -3600,14 +3600,26 @@ def _materialize_authenticated_channel_registrations(
     }
     for binding_id in registered_binding_ids & owner_binding_ids:
         existing = snapshot.registrations[binding_id]
-        if (
-            existing.extensions.get("provenance")
-            == "authenticated_legacy_owner_inventory"
-            and existing != expected_registrations[binding_id]
-        ):
-            raise InstanceStatePreflightError(
-                "authenticated owner registry entry does not match its binding"
-            )
+        if existing.extensions.get("provenance") == "authenticated_legacy_owner_inventory":
+            identities = (existing.vault_id, existing.local_instance_id)
+            if (
+                (owners_authenticated and existing != expected_registrations[binding_id])
+                or not (
+                    identities == (None, None)
+                    or all(isinstance(value, str) and value.strip() for value in identities)
+                )
+                or replace(
+                    existing, vault_id=None, local_instance_id=None,
+                    vault_name=None, last_opened_at=None,
+                ) != expected_registrations[binding_id]
+            ):
+                raise InstanceStatePreflightError(
+                    "authenticated owner registry entry does not match its binding"
+                )
+            # A source-owning producer may have completed stable identities and
+            # picker metadata since recovery. Preserve that exact registration
+            # during finalization and any pending tombstone/lineage continuation.
+            expected_registrations[binding_id] = existing
     registrations_pending = registered_binding_ids < owner_binding_ids
     tombstones_pending = existing_tombstone_ids != expected_tombstone_ids
     lineage_pending = existing_lineage_ids != expected_lineage_ids

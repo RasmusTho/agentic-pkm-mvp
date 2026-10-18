@@ -311,7 +311,17 @@ registry-store ordering it materializes only the proven TEST registrations throu
 snapshot/checksum/legacy-export APIs, leaves the registry dormant at inactive-fenced revision zero
 before its first registration, and records a crash-idempotent result. It cannot mint or rotate
 ownership, infer a binding from path order, activate runtime authority, edit vault/source bytes, or
-run as an ordinary startup side effect; divergent retries remain refused. In the Compose producer,
+run as an ordinary startup side effect; divergent retries remain refused.
+
+Later deployment finalization preserves a receipt-materialized registration whose source-owning
+producer has completed both stable identity fields, including its existing display name and
+last-opened metadata. Binding, ref, path, status, content epoch, and provenance must still match
+the receipt-derived registration exactly; a partial identity pair or authority drift refuses
+before materialization or backup. Finalization does not erase completed identities to reproduce
+the earlier minimal recovery representation. Explicit missing-state reconstruction retains its
+stricter requirement for the exact minimal receipt-derived registration on retries.
+
+In the Compose producer,
 `/app/instance-ownership` is the authenticated fixed mount for the host ownership directory; the
 host-side ownership path remains in the exact authority tuple and is never inferred from the mount
 path. A retry that finds the registry transaction journal uses the registry store's canonical

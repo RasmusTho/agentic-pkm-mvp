@@ -4468,6 +4468,119 @@ def test_recovery_resumes_tombstone_materialization_after_complete_registration(
     assert retry == materialized
 
 
+def _completed_authenticated_registration_fixture(tmp_path):
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    original = runtime.bootstrap_env_binding(vault_root=vault, watcher_vault_path=vault)
+    registration = replace(
+        original,
+        vault_id=original.vault_id or "vault-retained",
+        local_instance_id=original.local_instance_id or "local-retained",
+        vault_name="Retained vault",
+        last_opened_at="2026-10-18T08:58:55Z",
+        extensions={
+            "status": "initialized",
+            "contentEpoch": 1,
+            "provenance": "authenticated_legacy_owner_inventory",
+        },
+    )
+    runtime.registry.update_registration(
+        registration, _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    runtime.ledger.bootstrap_legacy_owners(
+        [], inventory_complete=True, writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    return runtime, vault, registration
+
+
+def test_materializer_accepts_identity_completed_authenticated_registration(tmp_path) -> None:
+    """Normal finalization preserves identities completed after receipt recovery."""
+    runtime, vault, registration = _completed_authenticated_registration_fixture(tmp_path)
+    missing_legacy = tmp_path / "missing-legacy.md"
+    proof, receipt = _canonical_test_quiescence_authority(
+        layout=runtime.layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=missing_legacy,
+        owners=[{
+            "channel_id": "test",
+            "vault_binding_id": registration.vault_binding_id,
+            "root": str(vault),
+        }],
+    )
+    before = {
+        path: path.read_bytes()
+        for path in (
+            runtime.registry.path, runtime.registry.snapshot_path,
+            runtime.registry.snapshot_checksum_path, runtime.registry.rollback_export_path,
+        )
+    }
+    # Finalization consumes host-proven identity without a content-root mount.
+    vault.rename(tmp_path / "vault-unmounted")
+    result = _finish_instance_state_deployment(
+        channel="test",
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=missing_legacy,
+        inventory_path=receipt,
+        backup_root=tmp_path / "backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+    assert result["restart_fence_cleared"] is True
+    assert runtime.registry.load().registrations[registration.vault_binding_id] == registration
+    assert {path: path.read_bytes() for path in before} == before
+    assert (tmp_path / "backup/vault-registry.md").read_bytes() == before[runtime.registry.path]
+    assert not _deployment_lease_path(runtime.ledger.root).exists()
+    assert not (runtime.ledger.root / "deployment-quiescence-proof.json").exists()
+
+
+@pytest.mark.parametrize("drift", [
+    "path", "ref", "status", "content_epoch", "extra_extension", "vault_id_only", "local_id_only",
+    "reconstruction_completion",
+])
+def test_materializer_rejects_divergent_authenticated_registration(tmp_path, drift) -> None:
+    """Metadata completion cannot conceal authority drift or a partial identity."""
+    runtime, vault, registration = _completed_authenticated_registration_fixture(tmp_path)
+    if drift == "path":
+        divergent = replace(registration, path=str(tmp_path / "foreign-vault"))
+    elif drift == "ref":
+        divergent = replace(registration, ref="path:/foreign-vault")
+    elif drift == "vault_id_only":
+        divergent = replace(registration, local_instance_id=None)
+    elif drift == "local_id_only":
+        divergent = replace(registration, vault_id=None)
+    elif drift == "reconstruction_completion":
+        divergent = registration
+    else:
+        key, value = {
+            "status": ("status", "provisional"),
+            "content_epoch": ("contentEpoch", 2),
+            "extra_extension": ("unproven", True),
+        }[drift]
+        divergent = replace(registration, extensions=registration.extensions | {key: value})
+    runtime.registry.commit_state(
+        registrations={registration.vault_binding_id: divergent},
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*") if path.is_file()
+    }
+    with pytest.raises(InstanceStatePreflightError, match="registry entry does not match its binding"):
+        _materialize_authenticated_channel_registrations(
+            channel="test", registry=runtime.registry, ledger=runtime.ledger,
+            owners=(LegacyOwner("test", registration.vault_binding_id, vault),),
+            owners_authenticated=drift == "reconstruction_completion",
+        )
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*") if path.is_file()
+    } == before
+
+
 def test_recovery_rejects_complete_divergent_registration(tmp_path) -> None:
     """A complete-looking generation must still match the owner receipt."""
     from contextlib import contextmanager
