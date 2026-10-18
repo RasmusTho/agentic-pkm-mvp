@@ -4390,6 +4390,121 @@ def test_recovery_resumes_tombstone_materialization_after_complete_registration(
     assert retry == materialized
 
 
+def test_recovery_rejects_complete_divergent_registration(tmp_path) -> None:
+    """A complete-looking generation must still match the owner receipt."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
+    layout.ensure()
+    registry = VaultRegistryStore(layout.registry_path)
+    registry.load()
+    expected_root = tmp_path / "expected-vault"
+    foreign_root = tmp_path / "foreign-vault"
+    expected_root.mkdir()
+    foreign_root.mkdir()
+    owner = LegacyOwner("test", "binding-live", expected_root)
+    registry.register(
+        VaultRegistration(
+            vault_binding_id="binding-live",
+            ref=f"path:{foreign_root}",
+            path=str(foreign_root),
+            extensions={
+                "status": "initialized",
+                "contentEpoch": 1,
+                "provenance": "authenticated_legacy_owner_inventory",
+            },
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    before = registry.load()
+
+    class Ledger:
+        def __init__(self) -> None:
+            self.root = tmp_path / "host-global"
+            self.root.mkdir(mode=0o700)
+
+        @contextmanager
+        def _locked(self, **_kwargs):
+            yield
+
+        def _load_or_create_key_locked(self, *, allow_create):
+            assert allow_create is False
+            return object()
+
+        def _load_or_create_ledger_locked(self, _key, *, allow_create, allow_legacy):
+            assert allow_create is False
+            assert allow_legacy is True
+            return SimpleNamespace(tombstones={}, transfer_lineage=())
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="registry entry does not match its binding",
+    ):
+        _materialize_authenticated_channel_registrations(
+            channel="test",
+            registry=registry,
+            ledger=Ledger(),
+            owners=(owner,),
+            owners_authenticated=True,
+        )
+
+    assert registry.load() == before
+
+
+def test_recovery_authenticates_explicit_owner_before_partial_registry_write(
+    tmp_path,
+) -> None:
+    """A divergent explicit binding refuses before materializing a registry."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
+    layout.ensure()
+    registry = VaultRegistryStore(layout.registry_path)
+    before = registry.load()
+    owner_root = tmp_path / "unproven-vault"
+    owner_root.mkdir()
+    owner = LegacyOwner("test", "binding-live", owner_root)
+
+    class Ledger:
+        def __init__(self) -> None:
+            self.root = tmp_path / "host-global"
+            self.root.mkdir(mode=0o700)
+
+        @contextmanager
+        def _locked(self, **_kwargs):
+            yield
+
+        def _load_or_create_key_locked(self, *, allow_create):
+            assert allow_create is False
+            return object()
+
+        def _load_or_create_ledger_locked(self, _key, *, allow_create, allow_legacy):
+            assert allow_create is False
+            assert allow_legacy is True
+            return SimpleNamespace(tombstones={}, transfer_lineage=())
+
+        def resolve_live_owner_bindings(self, *_args, **_kwargs):
+            raise LedgerError("owner root is not leased")
+
+        def recover_or_require_active_from_host_receipt(self, *_args, **_kwargs):
+            raise LedgerError("receipt does not match the bound root")
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="does not match an active ownership lease",
+    ):
+        _materialize_authenticated_channel_registrations(
+            channel="test",
+            registry=registry,
+            ledger=Ledger(),
+            owners=(owner,),
+        )
+
+    assert registry.load() == before
+
+
 def test_recovery_preserves_established_transfer_lineage(tmp_path) -> None:
     """A missing TEST registry retains completed host-ledger transfer lineage."""
     from contextlib import contextmanager

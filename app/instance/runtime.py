@@ -3504,24 +3504,6 @@ def _materialize_authenticated_channel_registrations(
         for owner in owners
         if owner.channel_id == channel and owner.vault_binding_id
     )
-    if not owners_authenticated:
-        for owner in channel_owners:
-            try:
-                resolved = ledger.resolve_live_owner_bindings(
-                    (replace(owner, vault_binding_id=""),),
-                    allow_legacy=True,
-                )
-            except LedgerError as exc:
-                raise InstanceStatePreflightError(
-                    "authenticated owner does not match an active ownership lease"
-                ) from exc
-            if (
-                len(resolved) != 1
-                or resolved[0].vault_binding_id != owner.vault_binding_id
-            ):
-                raise InstanceStatePreflightError(
-                    "authenticated owner does not match its ownership binding"
-                )
     # Ledger evidence is read before the registry lock.  Recovery therefore
     # follows the canonical ownership-ledger -> registry-store order even when
     # retired TEST bindings need dormant tombstones materialized.
@@ -3603,6 +3585,29 @@ def _materialize_authenticated_channel_registrations(
         == "authenticated_legacy_owner_inventory"
         for registration in snapshot.registrations.values()
     )
+    expected_registrations = {
+        owner.vault_binding_id: VaultRegistration(
+            vault_binding_id=owner.vault_binding_id,
+            ref=f"path:{str(owner.root.expanduser().resolve(strict=False))}",
+            path=str(owner.root.expanduser().resolve(strict=False)),
+            extensions={
+                "status": "initialized",
+                "contentEpoch": 1,
+                "provenance": "authenticated_legacy_owner_inventory",
+            },
+        )
+        for owner in channel_owners
+    }
+    for binding_id in registered_binding_ids & owner_binding_ids:
+        existing = snapshot.registrations[binding_id]
+        if (
+            existing.extensions.get("provenance")
+            == "authenticated_legacy_owner_inventory"
+            and existing != expected_registrations[binding_id]
+        ):
+            raise InstanceStatePreflightError(
+                "authenticated owner registry entry does not match its binding"
+            )
     registrations_pending = registered_binding_ids < owner_binding_ids
     tombstones_pending = existing_tombstone_ids != expected_tombstone_ids
     lineage_pending = existing_lineage_ids != expected_lineage_ids
@@ -3619,18 +3624,39 @@ def _materialize_authenticated_channel_registrations(
         return snapshot
     if not channel_owners:
         return snapshot
+    if not owners_authenticated:
+        for owner in channel_owners:
+            resolved: tuple[LegacyOwner, ...] = ()
+            try:
+                resolved = ledger.resolve_live_owner_bindings(
+                    (replace(owner, vault_binding_id=""),),
+                    allow_legacy=True,
+                )
+            except LedgerError:
+                # A committed registration may still carry a pending lease.
+                # Authenticate that receipt without persisting activation; the
+                # deployment-finish consistency transaction owns the write.
+                try:
+                    ledger.recover_or_require_active_from_host_receipt(
+                        owner,
+                        channel_id=channel,
+                        persist=False,
+                        _capability=_STORAGE_MUTATION_CAPABILITY,
+                    )
+                except LedgerError as exc:
+                    raise InstanceStatePreflightError(
+                        "authenticated owner does not match an active ownership lease"
+                    ) from exc
+                continue
+            if (
+                len(resolved) != 1
+                or resolved[0].vault_binding_id != owner.vault_binding_id
+            ):
+                raise InstanceStatePreflightError(
+                    "authenticated owner does not match its ownership binding"
+                )
     for owner in channel_owners:
-        root = str(owner.root.expanduser().resolve(strict=False))
-        registration = VaultRegistration(
-            vault_binding_id=owner.vault_binding_id,
-            ref=f"path:{root}",
-            path=root,
-            extensions={
-                "status": "initialized",
-                "contentEpoch": 1,
-                "provenance": "authenticated_legacy_owner_inventory",
-            },
-        )
+        registration = expected_registrations[owner.vault_binding_id]
         existing = snapshot.registrations.get(owner.vault_binding_id)
         if existing is not None:
             if existing != registration:
@@ -4423,7 +4449,6 @@ def _finish_instance_state_deployment_locked(
         registry=store,
         ledger=ledger,
         owners=tuple(owners),
-        owners_authenticated=True,
     )
     try:
         ledger_snapshot = backup._require_registry_ledger_consistency(
