@@ -28,7 +28,7 @@ from app.agents.panel.writeback import (
 )
 from app.events.panel import PanelIntentEvent
 from app.events.schema import make_outbox_event
-from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+from app.instance.compatibility_binding import legacy_view_bindings, live_compatibility_binding_id
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.receipts.artifact_receipts import stamp_producing_binding
 from app.services.outbox import (
@@ -49,19 +49,26 @@ DEFAULT_PANEL_STAGING_DB_NAME = "panel_confirmation.sqlite3"
 DEFAULT_PANEL_STAGING_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 # MVR-05B4c2: staged proposals and idempotent confirm responses are keyed by the
-# vault binding that produced them. A carrier-free (legacy single-binding) view
-# addresses entries stamped with the sealed compatibility binding and entries with no
-# stamp (``None``: reloaded from the durable staging DB, which does not persist a
-# stamp). A scoped view addresses exactly its own binding and never the ``None`` bucket.
-_LEGACY_VIEW_BINDINGS: tuple[str | None, ...] = (COMPATIBILITY_BINDING_ID, None)
+# vault binding that produced them. Every production stager and confirm path is a
+# carrier-free compatibility write, so the default stamp is the LIVE compatibility
+# binding (the registered id a scoped request for that vault presents; the sentinel
+# only when no registry is bound). A carrier-free view addresses that binding, the
+# legacy sentinel and unstamped (``None``: reloaded from the durable staging DB,
+# which does not persist a stamp) entries. A scoped view addresses exactly its own
+# binding and never the ``None`` bucket.
+_DEFAULT_BINDING: Any = object()
+
+
+def _resolve_stamp(binding: Any) -> str | None:
+    return live_compatibility_binding_id() if binding is _DEFAULT_BINDING else binding
 
 
 def _is_legacy_binding(binding: str | None) -> bool:
-    return binding in _LEGACY_VIEW_BINDINGS
+    return binding in legacy_view_bindings()
 
 
 def _view_bindings(binding: str | None) -> tuple[str | None, ...]:
-    return _LEGACY_VIEW_BINDINGS if binding is None else (binding,)
+    return legacy_view_bindings() if binding is None else (binding,)
 
 
 def _utc_now_iso() -> str:
@@ -365,7 +372,7 @@ class ProposalStore:
         proposal_id: str,
         proposal: StagedProposal,
         *,
-        binding: str | None = COMPATIBILITY_BINDING_ID,
+        binding: str | None = _DEFAULT_BINDING,
     ) -> None:
         """Stage ``proposal`` stamped with its producing ``binding``.
 
@@ -375,6 +382,7 @@ class ProposalStore:
         is process-local.
         """
 
+        binding = _resolve_stamp(binding)
         with self._lock:
             proposal.binding_id = binding
             self._proposals[(binding, proposal_id)] = proposal
@@ -584,10 +592,11 @@ class ConfirmIdempotencyStore:
         key: str,
         response: ConfirmResponse,
         *,
-        binding: str | None = COMPATIBILITY_BINDING_ID,
+        binding: str | None = _DEFAULT_BINDING,
     ) -> None:
         """Cache ``response`` stamped with its producing ``binding`` (default: sealed compat)."""
 
+        binding = _resolve_stamp(binding)
         with self._lock:
             self._cache[(binding, key)] = response
         if self._db_path is None or self.degraded or not _is_legacy_binding(binding):

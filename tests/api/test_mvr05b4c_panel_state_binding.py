@@ -41,7 +41,9 @@ from app.receipts.artifact_receipts import (
     ArtifactReceiptTarget,
     receipts_for_artifacts,
 )
+from app.instance.settings_rebind import _install_dormant_settings_rebind
 from tests._mvr03_principal_harness import provisioned_instance
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
@@ -56,6 +58,12 @@ def two_bindings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     runtime, first, extra, _record = provisioned_instance(tmp_path, extra_roots=("two",))
     second = extra[0]
+    # The compatibility vault is the first binding: a registered id, not the sentinel.
+    _install_dormant_settings_rebind(
+        runtime.registry,
+        binding_id=first.vault_binding_id,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
     for root in (Path(first.path), Path(second.path)):
         initialize_test_vault(root)
         (root / SHARED_NOTE_PATH).write_text(
@@ -163,10 +171,11 @@ def test_scoped_workspace_panel_state_matches_only_request_binding(two_bindings)
     # A scoped read never writes.
     assert proposals._proposals == before_p and idempotency._cache == before_i
 
-    # Carrier-free behavior: the legacy view is the unstamped entry only.
+    # Carrier-free behavior: the legacy view is the live compatibility binding's
+    # (here: the first binding's) entries plus unstamped ones, never the second's.
     legacy = companion_routes._panel_state(artifact_id)
-    assert [p["proposal_id"] for p in legacy.proposals] == ["prop-legacy"]
-    assert legacy.receipt_count == 0
+    assert sorted(p["proposal_id"] for p in legacy.proposals) == ["prop-a", "prop-legacy"]
+    assert legacy.receipt_count == 1
 
 
 def test_blank_carrier_workspace_never_reads_panel_state(two_bindings) -> None:
@@ -227,13 +236,15 @@ def test_scoped_vault_browser_restores_receipts_for_binding(two_bindings) -> Non
     assert _receipt_ids(client, _headers(client, b)) == ["blocked-b", "logged-b"]
     assert outbox.read_text(encoding="utf-8") == before
 
-    # Carrier-free: the legacy view shows unstamped and compatibility-stamped receipts,
+    # Carrier-free: the legacy view shows unstamped and live-compatibility-stamped receipts,
     # never a scoped binding's, and keeps the None-versus-empty distinction.
     targets = [ArtifactReceiptTarget(artifact_uuid=SHARED_NOTE_UUID, note_path=SHARED_NOTE_PATH)]
     legacy = receipts_for_artifacts(targets, vault_root=Path(first.path), outbox_path=outbox)
     assert legacy is not None
     assert sorted(r["receipt_id"] for r in legacy[SHARED_NOTE_PATH]) == [
+        "blocked-a",
         "blocked-legacy",
+        "logged-a",
         "logged-legacy",
     ]
     assert (
@@ -295,7 +306,7 @@ def test_scoped_orientation_restores_memory_and_governance_summaries_for_binding
     assert b["governance"]["latest_receipt_outcome"] == "rejected"
 
     legacy = companion_routes._orientation_governance_summary()
-    assert legacy.pending_proposal_count == 1 and legacy.pending_receipt_count == 0
+    assert legacy.pending_proposal_count == 2 and legacy.pending_receipt_count == 0
 
 
 def test_store_views_are_keyed_by_binding() -> None:
@@ -378,3 +389,62 @@ def test_every_panel_receipt_emitter_stamps_the_compatibility_binding(tmp_path: 
     )
     curated = json.loads(curation_outbox.read_text(encoding="utf-8").splitlines()[0])
     assert curated["payload"][PRODUCING_BINDING_FIELD] == COMPATIBILITY_BINDING_ID
+
+
+def test_production_paths_stamp_the_live_compatibility_binding(two_bindings) -> None:
+    """Review repair: no injected binding; production stagers/confirm/emitters only.
+
+    The compatibility vault is a registered binding with a real id. Producers must
+    stamp that id (not the transitional sentinel) so a scoped request for that vault
+    sees the state, another binding does not, and the carrier-free view is unchanged.
+    """
+
+    from unittest.mock import MagicMock
+
+    from app.instance.compatibility_binding import live_compatibility_binding_id
+    from app.write_guard import WriteGuard, WritesBlockedError
+
+    client, first, second, proposals, idempotency, outbox = two_bindings
+    live = live_compatibility_binding_id()
+    assert live == first.vault_binding_id, "fixture must bind the compatibility vault"
+    headers_a = _headers(client, first.vault_binding_id)
+    headers_b = _headers(client, second.vault_binding_id)
+    artifact_id = _artifact_id(client, headers_a)
+
+    # Production stager (no binding argument).
+    proposal_id = companion_routes._stage_queue_review_panel_proposal(
+        {"note_path": SHARED_NOTE_PATH, "artifact_uuid": artifact_id}
+    )
+    assert proposals.get(proposal_id).binding_id == live
+
+    # Production confirm path with a blocked guard: real emitter + idempotency set.
+    guard = MagicMock(spec=WriteGuard)
+    guard.assert_writes_allowed.side_effect = WritesBlockedError("blocked", "gate", "panel.confirm")
+    service = confirm_module.PanelConfirmationService(
+        proposals, idempotency, write_guard=guard, same_turn_ttl=0
+    )
+    response = service.confirm(
+        confirm_module.ConfirmRequest(
+            proposal_id=proposal_id, artifact_id=artifact_id, action="confirm", idempotency_key="k1"
+        )
+    )
+    assert response.status == "blocked"
+    record = json.loads(outbox.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["event"] == "panel.action.blocked"
+    assert record["payload"][PRODUCING_BINDING_FIELD] == live
+
+    panel_a = _workspace(client, headers_a)["panel"]
+    panel_b = _workspace(client, headers_b)["panel"]
+    assert [p["proposal_id"] for p in panel_a["proposals"]] == [proposal_id]
+    assert panel_a["receipt_count"] == 1 and panel_a["blocked_reason"]
+    assert panel_b["proposals"] == [] and panel_b["receipt_count"] == 0
+    summary = client.get("/api/companion/orientation", headers=headers_a).json()["governance"]
+    assert summary["pending_proposal_count"] == 1 and summary["pending_receipt_count"] == 1
+    other = client.get("/api/companion/orientation", headers=headers_b).json()["governance"]
+    assert other["pending_proposal_count"] == 0
+
+    assert _receipt_ids(client, headers_a) != []
+    assert _receipt_ids(client, headers_b) == []
+    # Carrier-free view still sees the compatibility-stamped state.
+    legacy = companion_routes._panel_state(artifact_id)
+    assert legacy.receipt_count == 1 and len(legacy.proposals) == 1
