@@ -2009,6 +2009,12 @@ class LinuxEffects:
                         stream.flush()
                         os.fsync(stream.fileno())
                     os.replace(temporary, path)
+                    # The recovery one-shot first normalizes the mounted
+                    # ownership tree for the configured runtime identity. Set
+                    # this receipt to that identity now so the subsequent
+                    # runtime-UID producer can retry it without a root-only
+                    # ownership assumption.
+                    os.chown(path, self.config.uid, self.config.gid)
                     directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                     try:
                         os.fsync(directory_fd)

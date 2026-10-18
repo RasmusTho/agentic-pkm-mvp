@@ -29,7 +29,7 @@ from app.instance.instance_state import (
     preflight_instance_state,
     validate_registry_disjoint_from_content,
 )
-from app.instance.ownership_ledger import LedgerCollisionError, LedgerError
+from app.instance.ownership_ledger import LegacyOwner, LedgerCollisionError, LedgerError
 from app.instance.filesystem_identity import FilesystemIdentityError, FilesystemRootIdentity
 from app.instance.runtime import (
     InstanceRegistryRuntime,
@@ -39,6 +39,7 @@ from app.instance.runtime import (
     _deployment_lease_path,
     _finish_instance_state_deployment,
     _load_legacy_owner_inventory,
+    _materialize_authenticated_channel_registrations,
     _recover_lost_ownership_lease,
     _preflight_runtime,
     _prove_instance_state_quiescence,
@@ -4323,6 +4324,125 @@ def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
         assert "INSTANCE_STATE_LEGACY_ROLLBACK" in service["command"][2]
         assert f"--consumer {consumer}" in service["command"][2]
         assert service["depends_on"]["instance-state-init"]["condition"] == "service_completed_successfully"
+
+
+def test_recovery_resumes_tombstone_materialization_after_complete_registration(tmp_path) -> None:
+    """A crash after the live registration still commits expected tombstones."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    state_mount = tmp_path / "instance-state"
+    layout = InstanceStateLayout.for_channel(state_mount, "test")
+    layout.ensure()
+    registry = VaultRegistryStore(layout.registry_path)
+    registry.load()
+    live_root = tmp_path / "live-vault"
+    retired_root = tmp_path / "retired-vault"
+    live_root.mkdir()
+    retired_root.mkdir()
+    owner = LegacyOwner("test", "binding-live", live_root)
+
+    class Ledger:
+        def __init__(self) -> None:
+            self.root = tmp_path / "host-global"
+            self.root.mkdir(mode=0o700, exist_ok=True)
+
+        @contextmanager
+        def _locked(self, **_kwargs):
+            yield
+
+        def _load_or_create_key_locked(self, *, allow_create):
+            assert allow_create is False
+            return object()
+
+        def _load_or_create_ledger_locked(self, _key, *, allow_create, allow_legacy):
+            assert allow_create is False
+            assert allow_legacy is True
+            return SimpleNamespace(
+                tombstones={
+                    "binding-retired": SimpleNamespace(channel_id="test", sealed_root="retired"),
+                },
+                transfer_lineage=(),
+            )
+
+        def _open_root(self, sealed_root, _key):
+            assert sealed_root == "retired"
+            return retired_root
+
+    materialized = _materialize_authenticated_channel_registrations(
+        channel="test",
+        registry=registry,
+        ledger=Ledger(),
+        owners=(owner,),
+        owners_authenticated=True,
+    )
+    assert set(materialized.registrations) == {"binding-live"}
+    assert set(materialized.removal_tombstones) == {"binding-retired"}
+    assert materialized.removal_tombstones["binding-retired"].path == str(retired_root)
+
+    retry = _materialize_authenticated_channel_registrations(
+        channel="test",
+        registry=registry,
+        ledger=Ledger(),
+        owners=(owner,),
+        owners_authenticated=True,
+    )
+    assert retry == materialized
+
+
+def test_recovery_preserves_established_transfer_lineage(tmp_path) -> None:
+    """A missing TEST registry retains completed host-ledger transfer lineage."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
+    layout.ensure()
+    registry = VaultRegistryStore(layout.registry_path)
+    registry.load()
+    live_root = tmp_path / "transferred-vault"
+    live_root.mkdir()
+    owner = LegacyOwner("test", "binding-destination", live_root)
+
+    class Ledger:
+        def __init__(self) -> None:
+            self.root = tmp_path / "host-global"
+            self.root.mkdir(mode=0o700)
+
+        @contextmanager
+        def _locked(self, **_kwargs):
+            yield
+
+        def _load_or_create_key_locked(self, *, allow_create):
+            assert allow_create is False
+            return object()
+
+        def _load_or_create_ledger_locked(self, _key, *, allow_create, allow_legacy):
+            assert allow_create is False
+            assert allow_legacy is True
+            return SimpleNamespace(
+                tombstones={},
+                transfer_lineage=(SimpleNamespace(
+                    transfer_id="transfer-1",
+                    source_channel_id="dev",
+                    source_binding_id="binding-source",
+                    destination_channel_id="test",
+                    destination_binding_id="binding-destination",
+                ),),
+            )
+
+    materialized = _materialize_authenticated_channel_registrations(
+        channel="test",
+        registry=registry,
+        ledger=Ledger(),
+        owners=(owner,),
+        owners_authenticated=True,
+    )
+    assert len(materialized.transfer_lineage) == 1
+    lineage = materialized.transfer_lineage[0]
+    assert lineage.ownership_transfer_id == "transfer-1"
+    assert lineage.source_channel_id == "dev"
+    assert lineage.destination_channel_id == "test"
+    assert lineage.destination_binding_id == "binding-destination"
 
 
 def test_missing_established_registry_remains_fail_closed_after_recovery_support(tmp_path) -> None:

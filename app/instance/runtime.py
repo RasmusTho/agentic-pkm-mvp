@@ -3563,17 +3563,53 @@ def _materialize_authenticated_channel_registrations(
     snapshot = registry.load()
     registered_binding_ids = set(snapshot.registrations)
     owner_binding_ids = {owner.vault_binding_id for owner in channel_owners}
-    resumable_partial_materialization = (
-        bool(snapshot.registrations)
-        and not snapshot.removal_tombstones
-        and not snapshot.transfer_lineage
-        and registered_binding_ids < owner_binding_ids
-        and registered_binding_ids.issubset(owner_binding_ids)
-        and all(
-            registration.extensions.get("provenance")
-            == "authenticated_legacy_owner_inventory"
-            for registration in snapshot.registrations.values()
+    expected_tombstone_ids = set(tombstone_paths)
+    existing_tombstone_ids = set(snapshot.removal_tombstones)
+    if not existing_tombstone_ids.issubset(expected_tombstone_ids):
+        raise InstanceStatePreflightError(
+            "recovered registry contains an unexpected ownership tombstone"
         )
+    for binding_id, tombstone in snapshot.removal_tombstones.items():
+        if str(Path(tombstone.path).expanduser().resolve(strict=False)) != tombstone_paths[binding_id]:
+            raise InstanceStatePreflightError(
+                "recovered registry tombstone does not match the ownership ledger"
+            )
+    expected_lineage_ids = {
+        (
+            item.ownership_transfer_id,
+            item.source_channel_id,
+            item.source_binding_id,
+            item.destination_channel_id,
+            item.destination_binding_id,
+        )
+        for item in transfer_lineage
+    }
+    existing_lineage_ids = {
+        (
+            item.ownership_transfer_id,
+            item.source_channel_id,
+            item.source_binding_id,
+            item.destination_channel_id,
+            item.destination_binding_id,
+        )
+        for item in snapshot.transfer_lineage
+    }
+    if not existing_lineage_ids.issubset(expected_lineage_ids):
+        raise InstanceStatePreflightError(
+            "recovered registry contains unexpected ownership transfer lineage"
+        )
+    registrations_authenticated = all(
+        registration.extensions.get("provenance")
+        == "authenticated_legacy_owner_inventory"
+        for registration in snapshot.registrations.values()
+    )
+    registrations_pending = registered_binding_ids < owner_binding_ids
+    tombstones_pending = existing_tombstone_ids != expected_tombstone_ids
+    lineage_pending = existing_lineage_ids != expected_lineage_ids
+    resumable_partial_materialization = (
+        registrations_authenticated
+        and registered_binding_ids.issubset(owner_binding_ids)
+        and (registrations_pending or tombstones_pending or lineage_pending)
     )
     if (
         snapshot.registrations
