@@ -290,9 +290,23 @@ the rebuildable PostgreSQL projection and runtime-temporary volume; ordinary con
 therefore continues to refuse a genuinely absent or corrupt registry without initializing it. The
 one already-observed TEST total-loss shape has a separate explicit producer,
 `deployment-reconstruct-missing-test-instance-state`. That command is admitted only for the exact
-terminal failed successor and completed recovery disposition, a fresh two-pass owner inventory and
-quiescence proof, the existing host-global ownership key/ledger, and the exact candidate revision
-and image digest. Under deployment-admission -> producer-transition -> ownership-ledger ->
+terminal failed successor and the distinct completed original recovery disposition, a fresh
+two-pass owner inventory and stopped-writer proof, the existing host-global ownership key/ledger,
+and the exact candidate revision and image digest. The receipt must cover every active TEST lease;
+a reconstruction does not assume that the VM's single-slot request journal retains the original
+reset operation after the failed successor is admitted: that journal authenticates the current
+terminal successor, while the private completed disposition is matched to the host-retained reset
+request's operation ID, revision, image digest, authority tuple, and bounded runtime surface.
+A read-only runtime-UID preflight authenticates that complete set and its ledger digest before the
+recovery receipt or Compose volume effect. A pending ownership-key rotation is a byte-preserving
+refusal at this boundary; the preflight never recovers or deletes its rotation journal. The same
+preflight re-observes the native controller PID, start token, and execution namespace, so a proof
+whose controller has exited or changed identity is refused before owner evidence is trusted. That
+native observation is host-only; the mounted producer revalidates the byte-bound proof and ledger
+without requiring its container namespace to equal the controller namespace or exposing the native
+content root. The host preflight matches the materialized root; the producer consumes the receipt's
+authenticated physical identity and exact ledger coverage. Under
+deployment-admission -> producer-transition -> ownership-ledger ->
 registry-store ordering it materializes only the proven TEST registrations through the existing
 snapshot/checksum/legacy-export APIs, leaves the registry dormant at inactive-fenced revision zero
 before its first registration, and records a crash-idempotent result. It cannot mint or rotate
@@ -303,8 +317,9 @@ host-side ownership path remains in the exact authority tuple and is never infer
 path. A retry that finds the registry transaction journal uses the registry store's canonical
 recovery path before accepting the byte-identical dormant generation, and a source-reset-only host
 checkpoint never counts as reconstruction evidence. The producer first runs the existing root-owned
-permission-only one-shot for a genuinely new named volume; that step creates no registry or
-authority before the runtime-UID reconstruction command runs. The supervisor validates the
+permission-only one-shot for a genuinely new named volume only after the preflight; both that
+one-shot and the runtime-UID producer execute the authenticated candidate image, not an ambient
+channel pin. The supervisor validates the
 authenticated ownership directory against the configured runtime UID and accepts only the
 root-to-runtime private receipt handoff, so a retry remains readable after permission preparation
 without broadening the checkpoint's authority.

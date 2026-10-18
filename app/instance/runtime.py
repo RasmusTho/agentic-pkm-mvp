@@ -4001,7 +4001,28 @@ def _release_instance_state_deployment_lease(
         _require_completed_dormant_ownership_preparation(ownership_root)
         lease_path = _deployment_lease_path(ownership_root)
         if not lease_path.exists():
-            return {"released": False, "reason": "no-active-lease"}
+            root_lease_path = _legacy_deployment_lease_path(ownership_root)
+            if not root_lease_path.exists():
+                return {"released": False, "reason": "no-active-lease"}
+            try:
+                root_lease = _read_legacy_deployment_lease(ownership_root)
+            except InstanceStatePreflightError:
+                return {"released": False, "reason": "lease-unreadable"}
+            if root_lease.get("channel_id") != channel:
+                return {"released": False, "reason": "channel-mismatch"}
+            if root_lease.get("controller") != controller:
+                return {"released": False, "reason": "controller-mismatch"}
+            existing_result = root_lease.get("result")
+            if (
+                root_lease.get("schema")
+                != _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+                or root_lease.get("phase") != "cleanup"
+                or not isinstance(existing_result, dict)
+                or existing_result.get("channel") != channel
+            ):
+                return {"released": False, "reason": "no-active-lease"}
+            receipt = _complete_instance_state_deployment_cleanup(ownership_root)
+            return receipt | {"released": True, "reason": "already-in-cleanup"}
         try:
             lease = _read_deployment_lease(ownership_root)
         except InstanceStatePreflightError:
@@ -5445,6 +5466,19 @@ def _main(argv: list[str] | None = None) -> int:
     reconstruct.add_argument("--expected-owner-receipt-sha256", required=True)
     reconstruct.add_argument("--quiescence-proof-path", type=Path, required=True)
     reconstruct.add_argument("--expected-quiescence-proof-sha256", required=True)
+    reconstruct.add_argument("--expected-ledger-sha256", required=True)
+    reconstruct.add_argument("--source-operation-id", required=True)
+    recovery_preflight = subparsers.add_parser(
+        "deployment-preflight-missing-test-instance-state-recovery"
+    )
+    recovery_preflight.add_argument("--host-global-root", type=Path, required=True)
+    recovery_preflight.add_argument("--authority-binding-id", required=True)
+    recovery_preflight.add_argument("--authority-root", required=True)
+    recovery_preflight.add_argument("--owner-receipt-path", type=Path, required=True)
+    recovery_preflight.add_argument("--expected-owner-receipt-sha256", required=True)
+    recovery_preflight.add_argument("--quiescence-proof-path", type=Path, required=True)
+    recovery_preflight.add_argument("--expected-quiescence-proof-sha256", required=True)
+    recovery_preflight.add_argument("--expected-ledger-sha256")
     read = subparsers.add_parser("read-revision")
     read.add_argument("--registry-path", type=Path, required=True)
     read.add_argument("--consumer", required=True)
@@ -5634,6 +5668,28 @@ def _main(argv: list[str] | None = None) -> int:
             command.add_argument("--kind", choices=("human", "agent"), required=True)
             command.add_argument("--label", required=True)
     args = parser.parse_args(argv)
+    if args.command == "deployment-preflight-missing-test-instance-state-recovery":
+        from app.instance.legacy_owner_recovery import (
+            validate_missing_test_instance_state_recovery_host_authority,
+        )
+
+        values = vars(args).copy()
+        values.pop("command")
+        try:
+            ledger_sha256 = validate_missing_test_instance_state_recovery_host_authority(
+                **values
+            )
+        except (
+            InstanceStatePreflightError, RegistryError, LedgerError, OSError,
+            RuntimeError, ValueError, KeyError, TypeError,
+        ):
+            print(json.dumps({"channel": "test", "outcome": "refused"}))
+            return 1
+        print(json.dumps({
+            "channel": "test", "outcome": "authenticated",
+            "ledger_sha256": ledger_sha256,
+        }, sort_keys=True))
+        return 0
     if args.command == "deployment-reconstruct-missing-test-instance-state":
         from app.instance.legacy_owner_recovery import reconstruct_missing_test_instance_state
 

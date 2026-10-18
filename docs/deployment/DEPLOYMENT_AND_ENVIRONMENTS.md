@@ -422,17 +422,27 @@ startup paths never create it as a side effect.
 
 For the already-observed TEST total-loss case, the host controller exposes the explicit
 `--reconstruct-missing-test-instance-state` operation. It binds the terminal failed successor and
-completed source-recovery disposition to a fresh owner-inventory receipt and two-pass quiescence
-proof, the exact selected TEST authority tuple, the existing host-global key/ledger, and the new
-candidate revision/image digest. The mounted runtime producer validates those bytes before any
-instance-state write, then uses the canonical deployment-admission -> producer-transition ->
+completed source-recovery disposition as distinct operation identities, then binds both to a fresh
+owner-inventory receipt and two-pass stopped-writer proof, the exact selected TEST authority tuple,
+the existing host-global key/ledger, and the new candidate revision/image digest. The owner
+inventory must cover the complete active TEST lease set exactly. A read-only native preflight
+authenticates that set and its ledger digest before the recovery receipt or named-volume permission
+step. It also re-observes the proof's native controller PID, start token, and execution namespace;
+an exited, reused, or otherwise changed controller refuses without mutation. The mounted runtime
+producer revalidates the same proof and ledger digest before any instance-state write, but does not
+pretend that its container PID/mount namespace is the native controller namespace or require a
+content-root mount. Physical root matching stays in the host preflight; the producer consumes its
+proof-bound identity evidence,
+then uses the canonical deployment-admission -> producer-transition ->
 ownership-ledger -> registry-store order and the existing registry snapshot, checksum, and
 legacy-export writers to materialize only receipt/ledger-proven dormant registrations. The result
 is inactive-fenced and does not activate runtime authority or alter vault/source/database bytes.
-The request receipt and result are byte-bound for crash-safe retries; changed candidate,
-operation, disposition, owner evidence, proof, binding, root, channel, or lock evidence refuses
-without mutation. A successful reconstruction is still only a stopped-window producer: a separate
-fresh normal TEST deployment and the parent acceptance gates remain required.
+The request receipt and result are byte-bound for crash-safe retries; changed candidate, source or
+successor operation, disposition, owner evidence, proof, ledger digest, binding, root, channel, or
+lock evidence refuses without mutation. Both recovery one-shots execute the request's immutable
+candidate image selector rather than an ambient channel pin. A successful reconstruction is still
+only a stopped-window producer: a separate fresh normal TEST deployment and the parent acceptance
+gates remain required.
 
 #### Legacy owner root namespace authority (#4539)
 
@@ -1244,8 +1254,21 @@ qualified against the configured data directory before the reset is marked compl
 instance-state authority volume is preserved, and only the derived `pkm-test_runtime-tmp` volume
 is removed for normal Compose recreation. For the historical total-loss case, the explicit
 `--reconstruct-missing-instance-state` flag runs after that exact reset and before the fresh
-successor: it consumes the completed reset disposition, existing host-global ownership ledger/key,
-and proof-bound owner inventory, then writes only dormant, inactive-fenced registry state. The
+successor: it authenticates the completed original reset and the distinct terminal failed automatic
+successor, allocates a third operation ID for the new candidate, and consumes the existing
+host-global ownership ledger/key plus proof-bound owner inventory. That inventory must cover the
+exact active TEST lease set. A read-only runtime-UID preflight authenticates the complete ledger and
+records its digest before any receipt, volume, or Compose effect; later boundaries recheck strict
+stopped-writer state and the same digest before writing only dormant, inactive-fenced registry state.
+A controller proof is live authority only while its native PID, start token, and execution namespace
+still match; the preflight re-observes all three and refuses stale controller evidence without mutation.
+A pending ownership-key rotation refuses byte-for-byte at this preflight; it is never recovered or
+deleted by the read-only path. The
+VM's single-slot native request journal authenticates only the current terminal failed successor;
+reconstruction does not require it to retain the original reset binding after rollover. Instead,
+the private completed reset disposition must match the host recovery marker's retained reset
+request by source operation ID, revision, image digest, authority tuple, and runtime surface before
+the successor-bound journal can authorize the new candidate.
 container receives the host ownership directory through the fixed `/app/instance-ownership` bind
 mount; the host ownership path remains part of the authenticated authority tuple and is never
 replaced by path inference. The host recovery marker carries separate reset and reconstruction
@@ -1255,8 +1278,9 @@ failed-plan/successor mismatch leaves no misleading local marker. A retry may re
 read/repair because the VM disposition and failed operation are idempotent; a retry with a registry
 transaction journal uses the canonical store recovery path before validating the byte-identical
 result. On a genuinely new named volume, the producer first runs the existing root-owned
-permission-only one-shot (which creates no registry or authority) before dropping to the configured
-runtime UID. The supervisor validates the authenticated ownership directory against that runtime UID
+permission-only one-shot only after that preflight, then drops to the configured runtime UID. Both
+permission and producer one-shots pin `APP_IMAGE_TAG`/`APP_IMAGE_DIGEST_SUFFIX` to the authenticated
+new candidate rather than the ambient channel image. The supervisor validates the authenticated ownership directory against that runtime UID
 and accepts only the root-to-runtime private recovery-receipt handoff, keeping a retry readable after
 permission preparation without broadening the checkpoint's authority. The same command then
 runs the normal candidate deployment gates. It never resets the source vault, identity,
