@@ -29,7 +29,7 @@ from app.instance.instance_state import (
     preflight_instance_state,
     validate_registry_disjoint_from_content,
 )
-from app.instance.ownership_ledger import LedgerCollisionError, LedgerError
+from app.instance.ownership_ledger import LegacyOwner, LedgerCollisionError, LedgerError
 from app.instance.filesystem_identity import FilesystemIdentityError, FilesystemRootIdentity
 from app.instance.runtime import (
     InstanceRegistryRuntime,
@@ -39,6 +39,7 @@ from app.instance.runtime import (
     _deployment_lease_path,
     _finish_instance_state_deployment,
     _load_legacy_owner_inventory,
+    _materialize_authenticated_channel_registrations,
     _recover_lost_ownership_lease,
     _preflight_runtime,
     _prove_instance_state_quiescence,
@@ -4325,6 +4326,488 @@ def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
         assert service["depends_on"]["instance-state-init"]["condition"] == "service_completed_successfully"
 
 
+def test_recovery_resumes_tombstone_materialization_after_complete_registration(tmp_path) -> None:
+    """A crash after the live registration still commits expected tombstones."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    state_mount = tmp_path / "instance-state"
+    layout = InstanceStateLayout.for_channel(state_mount, "test")
+    layout.ensure()
+    registry = VaultRegistryStore(layout.registry_path)
+    registry.load()
+    live_root = tmp_path / "live-vault"
+    retired_root = tmp_path / "retired-vault"
+    live_root.mkdir()
+    retired_root.mkdir()
+    owner = LegacyOwner("test", "binding-live", live_root)
+
+    class Ledger:
+        def __init__(self) -> None:
+            self.root = tmp_path / "host-global"
+            self.root.mkdir(mode=0o700, exist_ok=True)
+
+        @contextmanager
+        def _locked(self, **_kwargs):
+            yield
+
+        def _load_or_create_key_locked(self, *, allow_create):
+            assert allow_create is False
+            return object()
+
+        def _load_or_create_ledger_locked(self, _key, *, allow_create, allow_legacy):
+            assert allow_create is False
+            assert allow_legacy is True
+            return SimpleNamespace(
+                tombstones={
+                    "binding-retired": SimpleNamespace(channel_id="test", sealed_root="retired"),
+                },
+                transfer_lineage=(),
+            )
+
+        def _open_root(self, sealed_root, _key):
+            assert sealed_root == "retired"
+            return retired_root
+
+    materialized = _materialize_authenticated_channel_registrations(
+        channel="test",
+        registry=registry,
+        ledger=Ledger(),
+        owners=(owner,),
+        owners_authenticated=True,
+    )
+    assert set(materialized.registrations) == {"binding-live"}
+    assert set(materialized.removal_tombstones) == {"binding-retired"}
+    assert materialized.removal_tombstones["binding-retired"].path == str(retired_root)
+
+    retry = _materialize_authenticated_channel_registrations(
+        channel="test",
+        registry=registry,
+        ledger=Ledger(),
+        owners=(owner,),
+        owners_authenticated=True,
+    )
+    assert retry == materialized
+
+
+def test_recovery_rejects_complete_divergent_registration(tmp_path) -> None:
+    """A complete-looking generation must still match the owner receipt."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
+    layout.ensure()
+    registry = VaultRegistryStore(layout.registry_path)
+    registry.load()
+    expected_root = tmp_path / "expected-vault"
+    foreign_root = tmp_path / "foreign-vault"
+    expected_root.mkdir()
+    foreign_root.mkdir()
+    owner = LegacyOwner("test", "binding-live", expected_root)
+    registry.register(
+        VaultRegistration(
+            vault_binding_id="binding-live",
+            ref=f"path:{foreign_root}",
+            path=str(foreign_root),
+            extensions={
+                "status": "initialized",
+                "contentEpoch": 1,
+                "provenance": "authenticated_legacy_owner_inventory",
+            },
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    before = registry.load()
+
+    class Ledger:
+        def __init__(self) -> None:
+            self.root = tmp_path / "host-global"
+            self.root.mkdir(mode=0o700)
+
+        @contextmanager
+        def _locked(self, **_kwargs):
+            yield
+
+        def _load_or_create_key_locked(self, *, allow_create):
+            assert allow_create is False
+            return object()
+
+        def _load_or_create_ledger_locked(self, _key, *, allow_create, allow_legacy):
+            assert allow_create is False
+            assert allow_legacy is True
+            return SimpleNamespace(tombstones={}, transfer_lineage=())
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="registry entry does not match its binding",
+    ):
+        _materialize_authenticated_channel_registrations(
+            channel="test",
+            registry=registry,
+            ledger=Ledger(),
+            owners=(owner,),
+            owners_authenticated=True,
+        )
+
+    assert registry.load() == before
+
+
+def test_recovery_authenticates_explicit_owner_before_partial_registry_write(
+    tmp_path,
+) -> None:
+    """A divergent explicit binding refuses before materializing a registry."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
+    layout.ensure()
+    registry = VaultRegistryStore(layout.registry_path)
+    before = registry.load()
+    owner_root = tmp_path / "unproven-vault"
+    owner_root.mkdir()
+    owner = LegacyOwner("test", "binding-live", owner_root)
+
+    class Ledger:
+        def __init__(self) -> None:
+            self.root = tmp_path / "host-global"
+            self.root.mkdir(mode=0o700)
+
+        @contextmanager
+        def _locked(self, **_kwargs):
+            yield
+
+        def _load_or_create_key_locked(self, *, allow_create):
+            assert allow_create is False
+            return object()
+
+        def _load_or_create_ledger_locked(self, _key, *, allow_create, allow_legacy):
+            assert allow_create is False
+            assert allow_legacy is True
+            return SimpleNamespace(tombstones={}, transfer_lineage=())
+
+        def resolve_live_owner_bindings(self, *_args, **_kwargs):
+            raise LedgerError("owner root is not leased")
+
+        def recover_or_require_active_from_host_receipt(self, *_args, **_kwargs):
+            raise LedgerError("receipt does not match the bound root")
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="does not match an active ownership lease",
+    ):
+        _materialize_authenticated_channel_registrations(
+            channel="test",
+            registry=registry,
+            ledger=Ledger(),
+            owners=(owner,),
+        )
+
+    assert registry.load() == before
+
+
+def test_recovery_preserves_established_transfer_lineage(tmp_path) -> None:
+    """A missing TEST registry retains completed host-ledger transfer lineage."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
+    layout.ensure()
+    registry = VaultRegistryStore(layout.registry_path)
+    registry.load()
+    live_root = tmp_path / "transferred-vault"
+    live_root.mkdir()
+    owner = LegacyOwner("test", "binding-destination", live_root)
+
+    class Ledger:
+        def __init__(self) -> None:
+            self.root = tmp_path / "host-global"
+            self.root.mkdir(mode=0o700)
+
+        @contextmanager
+        def _locked(self, **_kwargs):
+            yield
+
+        def _load_or_create_key_locked(self, *, allow_create):
+            assert allow_create is False
+            return object()
+
+        def _load_or_create_ledger_locked(self, _key, *, allow_create, allow_legacy):
+            assert allow_create is False
+            assert allow_legacy is True
+            return SimpleNamespace(
+                tombstones={},
+                transfer_lineage=(SimpleNamespace(
+                    transfer_id="transfer-1",
+                    source_channel_id="dev",
+                    source_binding_id="binding-source",
+                    destination_channel_id="test",
+                    destination_binding_id="binding-destination",
+                ),),
+            )
+
+    materialized = _materialize_authenticated_channel_registrations(
+        channel="test",
+        registry=registry,
+        ledger=Ledger(),
+        owners=(owner,),
+        owners_authenticated=True,
+    )
+    assert len(materialized.transfer_lineage) == 1
+    lineage = materialized.transfer_lineage[0]
+    assert lineage.ownership_transfer_id == "transfer-1"
+    assert lineage.source_channel_id == "dev"
+    assert lineage.destination_channel_id == "test"
+    assert lineage.destination_binding_id == "binding-destination"
+
+
+def test_missing_established_registry_remains_fail_closed_after_recovery_support(tmp_path) -> None:
+    """The new TEST producer does not weaken ordinary consumer preflight."""
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
+    layout.ensure()
+    store = VaultRegistryStore(layout.registry_path)
+    store.load()
+    layout.registry_path.unlink()
+    store.snapshot_path.unlink()
+    store.snapshot_checksum_path.unlink()
+
+    with pytest.raises(InstanceStatePreflightError, match="producer has not initialized"):
+        preflight_instance_state(
+            layout,
+            consumer_paths={
+                "api": layout.registry_path,
+                "worker": layout.registry_path,
+                "watcher": layout.registry_path,
+                "heimdal-capture-watch": layout.registry_path,
+            },
+        )
+
+
+def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(tmp_path) -> None:
+    """The explicit TEST producer reconstructs only an existing dormant binding."""
+    import app.instance.legacy_owner_recovery as recovery_module
+
+    state_mount = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    host_ownership_source = tmp_path / "host-ownership-source"
+    layout = InstanceStateLayout.for_channel(state_mount, "test")
+    runtime = InstanceRegistryRuntime.for_paths(layout, host_global_root)
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=vault_root,
+        watcher_vault_path=vault_root,
+    )
+    legacy_path = tmp_path / "missing-legacy.md"
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        owners=[
+            {
+                "channel_id": "test",
+                "vault_binding_id": registration.vault_binding_id,
+                "root": str(vault_root.resolve()),
+            }
+        ],
+    )
+    # Simulate the source-recovery reset's lost volume while preserving the
+    # host-global ownership authority and its stopped-window proof.
+    shutil.rmtree(layout.root)
+    state_mount.chmod(0o700)
+    recovery_receipt = host_global_root / (
+        "test-instance-state-recovery-" + "11111111-1111-4111-8111-111111111111" + ".json"
+    )
+    candidate_revision = "a" * 40
+    candidate_digest = "sha256:" + "a" * 64
+    request_payload = {
+        "schema": "test-instance-state-recovery.v1",
+        "channel": "test",
+        "failed_operation_id": "11111111-1111-4111-8111-111111111111",
+        "candidate_revision": candidate_revision,
+        "candidate_image_digest": candidate_digest,
+        "authority_cutover": {
+            "binding_id": registration.vault_binding_id,
+            "root": str(vault_root.resolve()),
+            "ownership_root": str(host_ownership_source.resolve()),
+        },
+        "disposition": "complete",
+        "owner_receipt_sha256": hashlib.sha256(owner_receipt.read_bytes()).hexdigest(),
+        "quiescence_proof_sha256": hashlib.sha256(
+            (host_global_root / "deployment-quiescence-proof.json").read_bytes()
+        ).hexdigest(),
+    }
+    recovery_receipt.write_text(
+        json.dumps(request_payload, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    recovery_receipt.chmod(0o600)
+
+    # Simulate a crash before the registry's main file was published: the
+    # canonical transaction journal contains a valid prepared empty generation
+    # but no registry artifacts are visible yet.  Recovery must roll this back
+    # first, then continue the authenticated dormant materialization.
+    import app.instance.vault_registry as vault_registry_module
+
+    layout.root.mkdir(mode=0o700)
+    recovered_store = VaultRegistryStore(layout.registry_path)
+    empty_snapshot = recovered_store._empty_snapshot()
+    empty_payload = vault_registry_module._render_markdown_settings(
+        recovered_store._frontmatter_from_snapshot(empty_snapshot),
+        "# Instance Vault Registry\nMechanical instance-local state; registration does not grant vault authority.\n",
+    ).encode("utf-8")
+    empty_generation = {
+        recovered_store.path: empty_payload,
+        recovered_store.snapshot_path: empty_payload,
+        recovered_store.snapshot_checksum_path: (
+            hashlib.sha256(empty_payload).hexdigest() + "\n"
+        ).encode("ascii"),
+        recovered_store.rollback_export_path: recovered_store._rollback_export_payload(
+            empty_snapshot
+        ),
+        recovered_store.scalar_rollback_session_path: None,
+    }
+    empty_previous = {path: None for path in empty_generation}
+    vault_registry_module._atomic_private_write(
+        recovered_store.transaction_path,
+        recovered_store._transaction_manifest("prepared", empty_previous, empty_generation),
+    )
+
+    result = recovery_module.reconstruct_missing_test_instance_state(
+        channel="test",
+        failed_operation_id=request_payload["failed_operation_id"],
+        candidate_revision=candidate_revision,
+        candidate_image_digest=candidate_digest,
+        authority_binding_id=registration.vault_binding_id,
+        authority_root=str(vault_root.resolve()),
+        authority_ownership_root=str(host_ownership_source.resolve()),
+        instance_state_root=state_mount,
+        host_global_root=host_global_root,
+        recovery_receipt_path=recovery_receipt,
+        owner_receipt_path=owner_receipt,
+        expected_owner_receipt_sha256=request_payload["owner_receipt_sha256"],
+        quiescence_proof_path=host_global_root / "deployment-quiescence-proof.json",
+        expected_quiescence_proof_sha256=request_payload["quiescence_proof_sha256"],
+        authority_ownership_mount_root=str(host_global_root.resolve()),
+    )
+
+    assert result["activation"] == "inactive_fenced"
+    restored = VaultRegistryStore(layout.registry_path).load()
+    assert restored.authority == "dormant"
+    assert restored.revision == 1
+    assert set(restored.registrations) == {registration.vault_binding_id}
+    assert preflight_instance_state(
+        layout,
+        consumer_paths={
+            "api": layout.registry_path,
+            "worker": layout.registry_path,
+            "watcher": layout.registry_path,
+            "heimdal-capture-watch": layout.registry_path,
+        },
+    ).registry_path == str(layout.registry_path.resolve())
+    # Simulate a crash after the registry transaction became durable but before
+    # the recovery result marker was observed.  The retry must use the store's
+    # canonical journal recovery path instead of read_existing(), which is
+    # intentionally fail-closed for this crash window.
+    recovered_store = VaultRegistryStore(layout.registry_path)
+    generation = {
+        path: path.read_bytes() if path.exists() else None
+        for path in recovered_store._transaction_artifacts().values()
+    }
+    vault_registry_module._atomic_private_write(
+        recovered_store.transaction_path,
+        recovered_store._transaction_manifest("committed", generation, generation),
+    )
+    assert recovery_module.reconstruct_missing_test_instance_state(
+        channel="test",
+        failed_operation_id=request_payload["failed_operation_id"],
+        candidate_revision=candidate_revision,
+        candidate_image_digest=candidate_digest,
+        authority_binding_id=registration.vault_binding_id,
+        authority_root=str(vault_root.resolve()),
+        authority_ownership_root=str(host_ownership_source.resolve()),
+        instance_state_root=state_mount,
+        host_global_root=host_global_root,
+        recovery_receipt_path=recovery_receipt,
+        owner_receipt_path=owner_receipt,
+        expected_owner_receipt_sha256=request_payload["owner_receipt_sha256"],
+        quiescence_proof_path=host_global_root / "deployment-quiescence-proof.json",
+        expected_quiescence_proof_sha256=request_payload["quiescence_proof_sha256"],
+        authority_ownership_mount_root=str(host_global_root.resolve()),
+    ) == result
+
+    # Both marker-present and marker-lost retries must revalidate the durable
+    # generation before any write. Matching IDs and provenance cannot make a
+    # foreign path/ref acceptable.
+    result_marker = host_global_root / (
+        "test-instance-state-recovery-result-"
+        + request_payload["failed_operation_id"]
+        + ".json"
+    )
+    foreign_root = tmp_path / "foreign-vault"
+    foreign_root.mkdir()
+    current = recovered_store.load()
+    binding_id = registration.vault_binding_id
+    divergent = replace(
+        current.registrations[binding_id],
+        ref=f"path:{foreign_root}",
+        path=str(foreign_root),
+    )
+    recovered_store.commit_state(
+        registrations=dict(current.registrations) | {binding_id: divergent},
+        expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    def retry_divergent_generation() -> dict[str, object]:
+        return recovery_module.reconstruct_missing_test_instance_state(
+            channel="test",
+            failed_operation_id=request_payload["failed_operation_id"],
+            candidate_revision=candidate_revision,
+            candidate_image_digest=candidate_digest,
+            authority_binding_id=registration.vault_binding_id,
+            authority_root=str(vault_root.resolve()),
+            authority_ownership_root=str(host_ownership_source.resolve()),
+            instance_state_root=state_mount,
+            host_global_root=host_global_root,
+            recovery_receipt_path=recovery_receipt,
+            owner_receipt_path=owner_receipt,
+            expected_owner_receipt_sha256=request_payload["owner_receipt_sha256"],
+            quiescence_proof_path=host_global_root
+            / "deployment-quiescence-proof.json",
+            expected_quiescence_proof_sha256=request_payload[
+                "quiescence_proof_sha256"
+            ],
+            authority_ownership_mount_root=str(host_global_root.resolve()),
+        )
+
+    protected_before = {
+        path: path.read_bytes()
+        for path in (
+            recovered_store.path,
+            recovered_store.snapshot_path,
+            recovered_store.snapshot_checksum_path,
+            recovered_store.rollback_export_path,
+        )
+    }
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="TEST dormant ownership preparation refused",
+    ):
+        retry_divergent_generation()
+    assert {
+        path: path.read_bytes() for path in protected_before
+    } == protected_before
+    assert result_marker.exists()
+
+    result_marker.unlink()
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="TEST dormant ownership preparation refused",
+    ):
+        retry_divergent_generation()
+    assert not result_marker.exists()
+
+
 def test_runtime_preflight_rejects_foreign_channel_host_global_lease_without_mutation(
     tmp_path,
 ) -> None:
@@ -6507,6 +6990,70 @@ def test_deployment_finish_recovers_pending_legacy_owner_lease_before_consistenc
     )
 
     assert result["restart_fence_cleared"] is True
+    assert runtime.ledger.load().leases[registration.vault_binding_id].state == "active"
+
+
+def test_deployment_finish_recovers_pending_owner_before_missing_registration(
+    tmp_path,
+) -> None:
+    """A pending receipt owner reaches consistency with its new registration."""
+
+    host_global_root = tmp_path / "host-global"
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod"),
+        host_global_root,
+    )
+    vault_root = tmp_path / "prod-vault"
+    vault_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=vault_root, watcher_vault_path=vault_root
+    )
+    runtime.ledger.bootstrap_legacy_owners(
+        [],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger_payload = json.loads(runtime.ledger.path.read_text(encoding="utf-8"))
+    ledger_payload["leases"][registration.vault_binding_id]["state"] = "pending"
+    runtime.ledger.path.write_text(json.dumps(ledger_payload), encoding="utf-8")
+    os.chmod(runtime.ledger.path, 0o600)
+    for path in (
+        runtime.layout.registry_path,
+        runtime.registry.snapshot_path,
+        runtime.registry.snapshot_checksum_path,
+        runtime.registry.rollback_export_path,
+    ):
+        path.unlink(missing_ok=True)
+
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=runtime.layout,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {
+                "channel_id": "prod",
+                "vault_binding_id": registration.vault_binding_id,
+                "root": str(vault_root),
+            }
+        ],
+    )
+
+    result = _finish_instance_state_deployment(
+        channel="prod",
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        inventory_path=owner_receipt,
+        backup_root=tmp_path / "backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+
+    assert result["restart_fence_cleared"] is True
+    assert set(runtime.registry.load().registrations) == {
+        registration.vault_binding_id
+    }
     assert runtime.ledger.load().leases[registration.vault_binding_id].state == "active"
 
 

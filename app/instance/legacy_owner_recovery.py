@@ -10,6 +10,7 @@ import hmac
 import importlib
 import json
 import os
+import re
 import stat
 import secrets
 import tempfile
@@ -20,6 +21,7 @@ from dataclasses import dataclass, replace
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from uuid import UUID
 
 from app.instance.instance_state import (
     DeploymentQuiescenceProof,
@@ -32,7 +34,7 @@ from app.instance.instance_state import (
 )
 from app.instance.ownership_ledger import (
     LEGACY_LEDGER_SCHEMA, LEDGER_SCHEMA, LegacyOwner, LedgerSnapshot,
-    OwnershipLedger, _KeyMaterial,
+    OwnershipLedger, LedgerError, _KeyMaterial,
 )
 from app.instance.vault_registry import VaultRegistryStore
 
@@ -134,6 +136,341 @@ def require_test_controller(proof: DeploymentQuiescenceProof, roots: tuple[Path,
         ):
             raise _test_refusal()
     except (OSError, RuntimeError) as exc:
+        raise _test_refusal() from exc
+
+
+_TEST_INSTANCE_STATE_RECOVERY_SCHEMA = "test-instance-state-recovery.v1"
+
+
+def reconstruct_missing_test_instance_state(
+    *,
+    channel: str,
+    failed_operation_id: str,
+    candidate_revision: str,
+    candidate_image_digest: str,
+    authority_binding_id: str,
+    authority_root: str,
+    authority_ownership_root: str,
+    instance_state_root: Path,
+    host_global_root: Path,
+    recovery_receipt_path: Path,
+    owner_receipt_path: Path,
+    expected_owner_receipt_sha256: str,
+    quiescence_proof_path: Path,
+    expected_quiescence_proof_sha256: str,
+    authority_ownership_mount_root: str | None = None,
+) -> dict[str, object]:
+    """Reconstruct only the already-lost TEST instance-state authority.
+
+    This is an explicit producer for the one known TEST-only total-loss shape.
+    It is deliberately separate from consumer preflight and ordinary startup:
+    every input is authenticated before the state root is touched, and retries
+    are admitted only when the durable recovery receipt and source evidence are
+    byte-identical.  Ownership remains in the existing host-global ledger; the
+    operation never creates or rotates a key, lease, binding, or vault.
+    """
+
+    try:
+        canonical_operation_id = str(UUID(failed_operation_id))
+    except (ValueError, TypeError, AttributeError):
+        raise _test_refusal() from None
+    if (
+        channel != "test"
+        or canonical_operation_id != failed_operation_id
+        or not isinstance(candidate_revision, str)
+        or len(candidate_revision) != 40
+        or any(char not in "0123456789abcdef" for char in candidate_revision)
+        or not isinstance(candidate_image_digest, str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", candidate_image_digest)
+        or not authority_binding_id.strip()
+        or not authority_root.startswith("/")
+        or not authority_ownership_root.startswith("/")
+        or str(Path(authority_root).expanduser().resolve(strict=False)) != authority_root
+    ):
+        raise _test_refusal()
+    for digest in (expected_owner_receipt_sha256, expected_quiescence_proof_sha256):
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise _test_refusal()
+
+    state = Path(instance_state_root).expanduser()
+    host = Path(host_global_root).expanduser()
+    authority_mount = Path(
+        authority_ownership_mount_root or host_global_root
+    ).expanduser()
+    recovery_receipt = Path(recovery_receipt_path).expanduser()
+    owner_receipt = Path(owner_receipt_path).expanduser()
+    proof_path = Path(quiescence_proof_path).expanduser()
+    try:
+        state = state.resolve(strict=False)
+        host = host.resolve(strict=True)
+        authority_mount = authority_mount.resolve(strict=True)
+        recovery_receipt = recovery_receipt.resolve(strict=True)
+        owner_receipt = owner_receipt.resolve(strict=True)
+        proof_path = proof_path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise _test_refusal() from exc
+    if (
+        not state.is_absolute()
+        or not host.is_absolute()
+        or not authority_mount.is_absolute()
+        or authority_mount != host
+        or any(parent.is_symlink() for parent in (host, *host.parents))
+        or any(parent.is_symlink() for parent in (state, *state.parents) if parent.exists())
+        or owner_receipt != host / "legacy-owner-inventory.json"
+        or proof_path != host / "deployment-quiescence-proof.json"
+        or recovery_receipt.parent != host
+        or recovery_receipt.name
+        != "test-instance-state-recovery-" + failed_operation_id + ".json"
+    ):
+        raise _test_refusal()
+    _private_directory(host)
+    try:
+        recovery = _read_private_json(recovery_receipt)
+        if set(recovery) != {
+            "schema",
+            "channel",
+            "failed_operation_id",
+            "candidate_revision",
+            "candidate_image_digest",
+            "authority_cutover",
+            "disposition",
+            "owner_receipt_sha256",
+            "quiescence_proof_sha256",
+        }:
+            raise ValueError
+        expected_recovery = {
+            "schema": _TEST_INSTANCE_STATE_RECOVERY_SCHEMA,
+            "channel": "test",
+            "failed_operation_id": failed_operation_id,
+            "candidate_revision": candidate_revision,
+            "candidate_image_digest": candidate_image_digest,
+            "authority_cutover": {
+                "binding_id": authority_binding_id,
+                "root": authority_root,
+                "ownership_root": authority_ownership_root,
+            },
+            "disposition": "complete",
+            "owner_receipt_sha256": expected_owner_receipt_sha256,
+            "quiescence_proof_sha256": expected_quiescence_proof_sha256,
+        }
+        if recovery != expected_recovery:
+            raise ValueError
+        owner_bytes = _read_private_bytes(owner_receipt)
+        proof_bytes = _read_private_bytes(proof_path)
+        if (
+            _sha(owner_bytes) != expected_owner_receipt_sha256
+            or _sha(proof_bytes) != expected_quiescence_proof_sha256
+        ):
+            raise ValueError
+        proof = _read_private_json(proof_path)
+        if proof.get("channel_id") != "test":
+            raise ValueError
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        raise _test_refusal() from exc
+
+    from app.instance.runtime import (
+        _deployment_admission_locked,
+        _load_deployment_quiescence_proof,
+        _load_legacy_owner_inventory,
+        _materialize_authenticated_channel_registrations,
+        _producer_transition_locked,
+    )
+
+    layout = InstanceStateLayout.for_channel(state, "test")
+    # The mounted root must already exist, but the explicit producer may create
+    # only its managed app-local child.  No arbitrary path or symlink is adopted.
+    if not state.is_dir():
+        raise _test_refusal()
+    try:
+        _private_directory(state)
+    except OSError as exc:
+        raise _test_refusal() from exc
+
+    ledger = OwnershipLedger(host)
+    # Existing authority is a hard prerequisite.  Check artifact presence
+    # before creating the recovered app-local lock directory; the authenticated
+    # ledger read itself occurs after the deployment and producer locks below.
+    try:
+        if not ledger.path.is_file() or not ledger.key_path.is_file():
+            raise _test_refusal()
+        proof_object = _load_deployment_quiescence_proof(proof_path)
+        proof_object.require_canonical_authority(
+            channel_id="test", host_global_root=host, owner_receipt_path=owner_receipt
+        )
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, LedgerError,
+            InstanceStatePreflightError) as exc:
+        raise _test_refusal() from exc
+
+    from app.instance.vault_registry import VaultRegistryStore
+
+    store = VaultRegistryStore(layout.registry_path)
+    marker_result_path = host / (
+        "test-instance-state-recovery-result-" + failed_operation_id + ".json"
+    )
+    # Parse and bind the immutable owner receipt before creating the recovered
+    # app-local root.  A caller-supplied authority tuple that drifts from the
+    # stopped-window receipt therefore leaves the missing state volume wholly
+    # untouched.
+    try:
+        snapshot = store._empty_snapshot()
+        owners = tuple(
+            _load_legacy_owner_inventory(
+                owner_receipt,
+                registry=snapshot,
+                channel="test",
+                quiescence_proof=proof_object,
+                expected_sha256=expected_owner_receipt_sha256,
+                require_receipt_integrity=True,
+            )
+        )
+        if not owners or any(
+            owner.channel_id not in {"dev", "native", "prod", "test"}
+            for owner in owners
+        ):
+            raise _test_refusal()
+        selected_owners = [
+            owner
+            for owner in owners
+            if str(owner.root.expanduser().resolve(strict=False)) == authority_root
+            and owner.channel_id == "test"
+        ]
+        if len(selected_owners) != 1:
+            raise _test_refusal()
+        if (
+            selected_owners[0].vault_binding_id
+            and selected_owners[0].vault_binding_id != authority_binding_id
+        ):
+            raise _test_refusal()
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+            InstanceStatePreflightError) as exc:
+        raise _test_refusal() from exc
+    # The normal producer lock lives inside the managed app-local root.  The
+    # immutable evidence and authority tuple have already been checked above;
+    # only now may this explicit producer create that missing lock directory.
+    try:
+        layout.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _private_directory(layout.root)
+    except OSError as exc:
+        raise _test_refusal() from exc
+    try:
+        with _deployment_admission_locked(host), _producer_transition_locked(layout):
+            ledger.require_existing()
+            # The existing runtime materializer uses the canonical store
+            # transaction/snapshot/export APIs and validates every owner against
+            # the established ledger.  The receipt was parsed above from an
+            # in-memory dormant revision-zero snapshot, before any state write.
+            try:
+                # Resolve from physical identities rather than trusting a
+                # caller- or receipt-supplied binding string.  The existing
+                # ledger is the authority; returned bindings are the only
+                # values allowed into the new dormant registry.
+                resolved_owners = ledger.resolve_live_owner_bindings(
+                    tuple(replace(owner, vault_binding_id="") for owner in owners),
+                    allow_legacy=True,
+                )
+            except LedgerError as exc:
+                raise _test_refusal() from exc
+            selected_resolved = [
+                owner
+                for owner in resolved_owners
+                if owner.channel_id == "test"
+                and owner.vault_binding_id == authority_binding_id
+                and str(owner.root.expanduser().resolve(strict=False)) == authority_root
+            ]
+            if len(selected_resolved) != 1:
+                raise _test_refusal()
+
+            # Recover an early transaction journal before inspecting the main
+            # registry.  A crash can leave only the journal (or a partial
+            # generation) while the main file is absent; the canonical store
+            # recovery path must roll that back to an authenticated empty
+            # materialization point instead of treating it as foreign state.
+            materialized = None
+            if os.path.lexists(store.transaction_path):
+                with store._locked(recover_transactions=True):
+                    if store.path.is_file():
+                        materialized = store._read_current_locked(recover=False)
+
+            # Existing artifacts are accepted only as the exact idempotent
+            # result of this request.  A foreign or partial generation refuses
+            # after any canonical journal recovery has completed.
+            artifacts = (
+                layout.registry_path,
+                store.snapshot_path,
+                store.snapshot_checksum_path,
+                store.rollback_export_path,
+            )
+            has_artifacts = any(os.path.lexists(path) for path in artifacts)
+            if marker_result_path.exists() and not has_artifacts and materialized is None:
+                raise _test_refusal()
+            if materialized is None and has_artifacts:
+                if not store.path.is_file():
+                    raise _test_refusal()
+                with store._locked(recover_transactions=True):
+                    materialized = store._read_current_locked(recover=False)
+            # A durable result marker binds the exact already-validated
+            # generation. Validate it before calling the materializer because
+            # that path may resume partial state with registry writes.
+            if marker_result_path.is_file():
+                if materialized is None:
+                    raise _test_refusal()
+                prior = _read_private_json(marker_result_path)
+                if (
+                    prior.get("request") != recovery
+                    or prior.get("registry_revision") != materialized.revision
+                    or prior.get("registry_sha256")
+                    != _sha(_read_private_bytes(store.path))
+                ):
+                    raise _test_refusal()
+                return prior
+            # Always route the current generation through the canonical
+            # materializer. Besides resuming authenticated partial writes, it
+            # validates complete recovery-provenance registrations against the
+            # receipt-derived path/ref before an idempotent result is accepted.
+            materialized = _materialize_authenticated_channel_registrations(
+                channel="test",
+                registry=store,
+                ledger=ledger,
+                owners=resolved_owners,
+                owners_authenticated=True,
+            )
+            if (
+                materialized.authority != "dormant"
+                or materialized.revision < 1
+                or not materialized.registrations
+                or set(materialized.registrations)
+                != {
+                    owner.vault_binding_id
+                    for owner in resolved_owners
+                    if owner.channel_id == "test"
+                }
+                or any(
+                    item.extensions.get("provenance")
+                    != "authenticated_legacy_owner_inventory"
+                    for item in materialized.registrations.values()
+                )
+            ):
+                raise _test_refusal()
+            result = {
+                "schema": _TEST_INSTANCE_STATE_RECOVERY_SCHEMA,
+                "channel": "test",
+                "request": recovery,
+                "registry_revision": materialized.revision,
+                "registry_sha256": _sha(_read_private_bytes(store.path)),
+                "activation": "inactive_fenced",
+                "registered_bindings": sorted(materialized.registrations),
+            }
+            _atomic_private_write(
+                marker_result_path,
+                (json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+            )
+            return result
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, LedgerError,
+            InstanceStatePreflightError) as exc:
         raise _test_refusal() from exc
 
 

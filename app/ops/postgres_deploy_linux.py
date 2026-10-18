@@ -11,6 +11,7 @@ import argparse
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -456,6 +457,20 @@ def _private_json(path: Path) -> dict[str, Any]:
         return result
 
 
+def _private_recovery_json(path: Path, runtime_uid: int) -> dict[str, Any]:
+    """Read a recovery checkpoint across the root-to-runtime ownership handoff."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'r') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid not in {0, runtime_uid}
+            or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1 or info.st_size > 65536):
+            raise PostgresDeployError()
+        result = json.load(stream)
+        if not isinstance(result, dict):
+            raise PostgresDeployError()
+        return result
+
+
 def _root_directory(path: Path) -> None:
     if not path.is_absolute():
         raise PostgresDeployError()
@@ -880,9 +895,13 @@ class LinuxEffects:
             env['COMPOSE_PROFILES'] = ''
         return env
 
-    def compose(self, *args: str) -> str:
+    def compose(self, *args: str, cutover: AuthorityCutover | None = None) -> str:
         cfg = self.config
-        env = self.environment()
+        # Recovery Compose must inherit the authenticated ownership source from
+        # the request.  Falling back to the supervisor's ambient/default root
+        # could make the container inspect a different host ledger than the
+        # one qualified for this failed operation.
+        env = self.environment(cutover)
         overlays = ['-f', str(cfg.root / 'docker-compose.bws.yml')]
         if env['BWS_DATABASE_TARGET'] == 'external':
             overlays += ['-f', str(cfg.root / 'docker-compose.bws-external.yml')]
@@ -1901,7 +1920,12 @@ class LinuxEffects:
             # pending rather than marking a non-bootstrapable reset complete.
             if self.initialized():
                 raise PostgresDeployError()
-            for volume in ('pkm-test_instance-state', 'pkm-test_runtime-tmp'):
+            # Instance-state is durable authority, not a rebuildable projection.
+            # A source-recovery reset may only discard the derived runtime
+            # scratch volume; deleting the registry volume strands the next
+            # candidate because ordinary consumer preflight is intentionally
+            # read-only for missing authority.
+            for volume in ('pkm-test_runtime-tmp',):
                 self._test_recovery_remove_volume(volume)
             self._write_test_recovery_disposition(request, 'complete')
             final = self.config.journal.read()
@@ -1910,6 +1934,168 @@ class LinuxEffects:
                 raise PostgresDeployError()
             self.retire_reconciled_channel_lock(handle)
             return final
+
+    def _test_instance_state_recovery_receipt_path(
+        self, request: TestRecoveryRequest,
+    ) -> Path:
+        request.validate()
+        root = Path(request.authority_cutover.ownership_root)
+        if (
+            not root.is_absolute()
+            or root.is_symlink()
+            or any(parent.is_symlink() for parent in root.parents)
+        ):
+            raise PostgresDeployError()
+        return root / (
+            'test-instance-state-recovery-' + request.failed_operation_id + '.json'
+        )
+
+    def _write_test_instance_state_recovery_receipt(
+        self, request: TestRecoveryRequest,
+    ) -> tuple[Path, str, str]:
+        """Bind the explicit reconstruction to terminal reset evidence.
+
+        The receipt is a private recovery checkpoint, not a new authority
+        store.  It is written only after the VM journal and completed reset
+        disposition match the exact failed operation and candidate request.
+        """
+        request.validate()
+        journal = self.config.journal.read()
+        failed_plan = self.config.journal.bound_plan(request.failed_operation_id)
+        disposition = self._read_test_recovery_disposition(request)
+        if (
+            self.config.channel != 'test'
+            or journal is None
+            or journal.operation_id != request.failed_operation_id
+            or journal.terminal_result != 'failed'
+            or failed_plan is None
+            or failed_plan.authority_cutover != request.authority_cutover
+            or failed_plan.revision != request.plan.revision
+            or disposition is None
+            or disposition.get('state') != 'complete'
+        ):
+            raise PostgresDeployError()
+        request.validate_failed_plan(failed_plan)
+        root = Path(request.authority_cutover.ownership_root)
+        owner = root / 'legacy-owner-inventory.json'
+        proof = root / 'deployment-quiescence-proof.json'
+        try:
+            owner_bytes = owner.read_bytes()
+            proof_bytes = proof.read_bytes()
+        except OSError:
+            raise PostgresDeployError() from None
+        owner_sha = hashlib.sha256(owner_bytes).hexdigest()
+        proof_sha = hashlib.sha256(proof_bytes).hexdigest()
+        path = self._test_instance_state_recovery_receipt_path(request)
+        payload = {
+            'schema': 'test-instance-state-recovery.v1',
+            'channel': 'test',
+            'failed_operation_id': request.failed_operation_id,
+            'candidate_revision': request.plan.revision,
+            'candidate_image_digest': request.plan.image_digest,
+            'authority_cutover': {
+                'binding_id': request.authority_cutover.binding_id,
+                'root': request.authority_cutover.root,
+                'ownership_root': request.authority_cutover.ownership_root,
+            },
+            'disposition': 'complete',
+            'owner_receipt_sha256': owner_sha,
+            'quiescence_proof_sha256': proof_sha,
+        }
+        directory = path.parent
+        try:
+            info = directory.stat()
+            if info.st_uid != self.config.uid or stat.S_IMODE(info.st_mode) != 0o700:
+                raise PostgresDeployError()
+            if path.exists():
+                if _private_recovery_json(path, self.config.uid) != payload:
+                    raise PostgresDeployError()
+            else:
+                descriptor, temporary_name = tempfile.mkstemp(
+                    dir=directory, prefix='.' + path.name + '.', text=True,
+                )
+                temporary = Path(temporary_name)
+                try:
+                    os.fchmod(descriptor, 0o600)
+                    with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+                        json.dump(payload, stream, sort_keys=True)
+                        stream.write('\n')
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temporary, path)
+                    # The recovery one-shot first normalizes the mounted
+                    # ownership tree for the configured runtime identity. Set
+                    # this receipt to that identity now so the subsequent
+                    # runtime-UID producer can retry it without a root-only
+                    # ownership assumption.
+                    os.chown(path, self.config.uid, self.config.gid)
+                    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                finally:
+                    temporary.unlink(missing_ok=True)
+        except OSError:
+            raise PostgresDeployError() from None
+        return path, owner_sha, proof_sha
+
+    def reconstruct_missing_test_instance_state(
+        self, request: TestRecoveryRequest,
+    ) -> dict[str, object]:
+        """Run the explicit TEST-only producer before a fresh normal deploy."""
+        request.validate()
+        if self.config.channel != 'test' or not self.local_database():
+            raise PostgresDeployError()
+        receipt_path, owner_sha, proof_sha = self._write_test_instance_state_recovery_receipt(request)
+        # A lost named volume is created by Compose with root ownership. Run
+        # the existing permission-only one-shot as root before dropping to the
+        # runtime identity for the authenticated producer; it creates no
+        # registry, ledger, binding, or other authority.
+        self.compose(
+            'run', '--rm', '--no-deps', '-T', 'instance-state-init',
+            cutover=request.authority_cutover,
+        )
+        # The permission-only step must not become a window in which a new
+        # writer can start. Re-probe the live Docker census immediately before
+        # the state producer, so a deployment that began after reset is denied
+        # rather than racing the reconstruction.
+        if not self.quiescent():
+            raise PostgresDeployError()
+        result = self.compose(
+            'run', '--rm', '--no-deps', '-T', '--user', str(self.config.uid),
+            'instance-state-init', 'python', '-m', 'app.instance.runtime',
+            'deployment-reconstruct-missing-test-instance-state',
+            '--channel', 'test',
+            '--instance-state-root', '/app/instance-state',
+            '--host-global-root', '/app/instance-ownership',
+            '--recovery-receipt-path', '/app/instance-ownership/' + receipt_path.name,
+            '--failed-operation-id', request.failed_operation_id,
+            '--candidate-revision', request.plan.revision,
+            '--candidate-image-digest', request.plan.image_digest or '',
+            '--authority-binding-id', request.authority_cutover.binding_id,
+            '--authority-root', request.authority_cutover.root,
+            '--authority-ownership-root', request.authority_cutover.ownership_root,
+            '--authority-ownership-mount-root', '/app/instance-ownership',
+            '--owner-receipt-path', '/app/instance-ownership/legacy-owner-inventory.json',
+            '--expected-owner-receipt-sha256', owner_sha,
+            '--quiescence-proof-path', '/app/instance-ownership/deployment-quiescence-proof.json',
+            '--expected-quiescence-proof-sha256', proof_sha,
+            cutover=request.authority_cutover,
+        )
+        try:
+            output = json.loads(result)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        if (
+            not isinstance(output, dict)
+            or output.get('schema') != 'test-instance-state-recovery.v1'
+            or output.get('channel') != 'test'
+            or output.get('activation') != 'inactive_fenced'
+            or output.get('request', {}).get('failed_operation_id') != request.failed_operation_id
+        ):
+            raise PostgresDeployError()
+        return output
 
     @contextmanager
     def channel_lock(self, *, journal: DeployJournal | None = None,
@@ -2246,6 +2432,26 @@ class DeploymentSupervisor:
             self.operation = None
         return {'receipt': receipt.payload(), 'recovery': 'test-derived-reset-complete'}
 
+    def _test_recovery_reconstruct_instance_state(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Run the explicit TEST-only missing-instance-state producer."""
+        self._require_current_config()
+        if set(data) != {'action', 'failed_operation_id', 'plan', 'authority_cutover'}:
+            raise PostgresDeployError()
+        request = TestRecoveryRequest.from_payload({
+            'failed_operation_id': data['failed_operation_id'],
+            'plan': data['plan'],
+            'authority_cutover': data['authority_cutover'],
+        })
+        if request.plan.channel != self.config.channel or self.config.channel != 'test':
+            raise PostgresDeployError()
+        # Reset and reconstruction are separate RPCs. A fresh deployment may
+        # have been admitted in between them; never let reconstruction run
+        # while the supervisor owns an active worker.
+        if self.operation is not None:
+            raise PostgresDeployError()
+        result = LinuxEffects(self.config).reconstruct_missing_test_instance_state(request)
+        return {'result': result, 'recovery': 'test-instance-state-reconstructed'}
+
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
         if data.get('action') in {'karakeep-acquire', 'karakeep-project'}:
             from app.ops.karakeep_runtime import dispatch
@@ -2264,6 +2470,9 @@ class DeploymentSupervisor:
         if data.get('action') == 'test-recovery-reset':
             with self.mutex:
                 return self._test_recovery_reset(data)
+        if data.get('action') == 'test-recovery-reconstruct-instance-state':
+            with self.mutex:
+                return self._test_recovery_reconstruct_instance_state(data)
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
         operation_id = str(data['operation_id'])
@@ -2419,6 +2628,41 @@ class SshDeployRemote:
             or receipt.channel != 'test' or receipt.terminal_result != 'failed'):
             raise PostgresDeployError()
         return receipt
+
+    def test_recovery_reconstruct_instance_state(
+        self, request: TestRecoveryRequest,
+    ) -> dict[str, object]:
+        request.validate()
+        payload = {
+            'action': 'test-recovery-reconstruct-instance-state',
+            **request.payload(),
+        }
+        result = subprocess.run(
+            [
+                'ssh', '-o', 'BatchMode=yes', '--', self.host,
+                'sudo', '-n', '/usr/local/libexec/yggdrasil-bws-deploy',
+                'rpc', 'test',
+            ],
+            input=json.dumps(payload) + '\n',
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode:
+            raise PostgresDeployError()
+        try:
+            response = json.loads(result.stdout)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        if (
+            not isinstance(response, dict)
+            or response.get('recovery') != 'test-instance-state-reconstructed'
+            or not isinstance(response.get('result'), dict)
+            or response['result'].get('channel') != 'test'
+            or response['result'].get('activation') != 'inactive_fenced'
+        ):
+            raise PostgresDeployError()
+        return response['result']
 
     def prepare(self, operation_id: str, plan: DeployPlan, *, bootstrap: bool) -> bool:
         self.bootstrap = bootstrap

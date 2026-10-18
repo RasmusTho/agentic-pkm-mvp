@@ -3915,6 +3915,237 @@ def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_p
     assert len(recovered) == 1
 
 
+def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_starts_fresh_successor(monkeypatch, tmp_path, capsys):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
+
+    failed_operation_id = str(uuid4())
+    digest = 'sha256:' + 'a' * 64
+    plan = DeployPlan(
+        'test', 'b' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    controller = SimpleNamespace(directory=tmp_path)
+    class Operation:
+        completed_result = None
+
+        def finish(self, evidence):
+            self.completed_result = evidence.result
+
+    @contextmanager
+    def deploy_operation(target, *, allow_bootstrap, operation_id):
+        assert (target, allow_bootstrap, operation_id) == ('test', False, failed_operation_id)
+        yield Operation(), True
+
+    controller.deploy_operation = deploy_operation
+    calls: list[TestRecoveryRequest] = []
+    deployed: list[tuple[DeployPlan, str]] = []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def test_recovery_reset(self, request):
+            assert request.failed_operation_id == failed_operation_id
+            return host.DeployReceipt(
+                failed_operation_id, 'test', 'deploy', 'failed', 'failed'
+            )
+
+        def test_recovery_reconstruct_instance_state(self, request):
+            calls.append(request)
+            return {
+                'schema': 'test-instance-state-recovery.v1',
+                'channel': 'test',
+                'activation': 'inactive_fenced',
+                'request': {'failed_operation_id': request.failed_operation_id},
+                'registry_revision': 1,
+                'registry_sha256': 'c' * 64,
+                'registered_bindings': ['test-binding'],
+            }
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+
+    def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap, operation_id):
+        qualified()
+        assert allow_bootstrap is False
+        deployed.append((selected, operation_id))
+        return host.DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
+
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+    args = [
+        'test', plan.revision, '--automatic', '--image-digest', digest,
+        '--existing-secrets-only', '--reconstruct-missing-instance-state',
+        '--failed-operation-id', failed_operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+    assert host.main(args) == 0
+    assert calls == [TestRecoveryRequest(failed_operation_id, plan, authority)]
+    assert len(deployed) == 1
+    assert deployed[0][0] == plan
+    assert deployed[0][1] != failed_operation_id
+    assert capsys.readouterr().out
+
+    # The producer is never a general startup side effect and cannot be used
+    # for another channel or a non-automatic candidate.
+    assert host.main(['dev', plan.revision, '--reconstruct-missing-instance-state']) == 78
+
+
+def test_missing_instance_state_recovery_refuses_authority_drift_without_mutation(monkeypatch, tmp_path):
+    """The VM producer rejects a changed authority tuple before Compose."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError,
+        TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    digest = 'sha256:' + 'b' * 64
+    plan = DeployPlan(
+        'test', 'c' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    failed = replace(plan, automatic=False, image_digest=None, authority_cutover=authority)
+    receipt = DeployReceipt(
+        operation_id, 'test', 'deploy', 'failed', 'failed',
+        source_failure='legacy_identity_persistence_refused',
+    )
+
+    class Journal:
+        directory = tmp_path / 'journal'
+        channel = 'test'
+
+        def read(self):
+            return receipt
+
+        def bound_plan(self, selected):
+            assert selected == operation_id
+            return failed
+
+    effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path, journal=Journal()))
+    effects.local_database = lambda: True
+    composed: list[object] = []
+    effects.compose = lambda *args: composed.append(args) or ''
+    drifted = AuthorityCutover('other-binding', authority.root, authority.ownership_root)
+    request = TestRecoveryRequest(operation_id, plan, drifted)
+    with pytest.raises(PostgresDeployError):
+        effects.reconstruct_missing_test_instance_state(request)
+    assert composed == []
+
+
+def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_path, capsys):
+    """A host retry reuses the durable successor checkpoint."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
+
+    operation_id = str(uuid4())
+    expected_failed_operation_id = operation_id
+    digest = 'sha256:' + 'd' * 64
+    plan = DeployPlan(
+        'test', 'e' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    controller = SimpleNamespace(directory=tmp_path)
+    class Operation:
+        completed_result = None
+
+        def finish(self, evidence):
+            self.completed_result = evidence.result
+
+    @contextmanager
+    def deploy_operation(target, *, allow_bootstrap, operation_id):
+        assert (target, allow_bootstrap, operation_id) == (
+            'test', False, expected_failed_operation_id
+        )
+        yield Operation(), True
+
+    controller.deploy_operation = deploy_operation
+    reconstruct_calls: list[object] = []
+    deploy_calls: list[str] = []
+
+    class Remote:
+        def __init__(self, _hostname):
+            pass
+
+        def test_recovery_reset(self, request):
+            assert request.failed_operation_id == operation_id
+            return host.DeployReceipt(operation_id, 'test', 'deploy', 'failed', 'failed')
+
+        def test_recovery_reconstruct_instance_state(self, _request):
+            reconstruct_calls.append('reconstruct')
+            return {
+                'schema': 'test-instance-state-recovery.v1',
+                'channel': 'test',
+                'activation': 'inactive_fenced',
+                'request': {'failed_operation_id': operation_id},
+            }
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+
+    def deploy(_admin, _remote, _selected, *, qualified, allow_bootstrap, operation_id):
+        qualified()
+        deploy_calls.append(operation_id)
+        return host.DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
+
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+    args = [
+        'test', plan.revision, '--automatic', '--image-digest', digest,
+        '--existing-secrets-only', '--reconstruct-missing-instance-state',
+        '--failed-operation-id', operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+    # An older source-reset-only checkpoint is still a valid reset receipt, but
+    # it is not reconstruction evidence.  The explicit producer must run once
+    # and upgrade the marker before the successor deploy is admitted.
+    old_request = TestRecoveryRequest(operation_id, plan, authority)
+    old_marker = host._test_recovery_marker_path(controller, old_request)
+    old_marker.write_text(
+        json.dumps({
+            'schema': host._TEST_RECOVERY_MARKER_SCHEMA,
+            'state': 'ready',
+            'request': old_request.payload(),
+            'fresh_operation_id': str(uuid4()),
+        }, sort_keys=True) + '\n',
+        encoding='utf-8',
+    )
+    old_marker.chmod(0o600)
+    assert host.main(args) == 0
+    assert host.main(args) == 0
+    assert reconstruct_calls == ['reconstruct']
+    assert len(deploy_calls) == 2
+    assert deploy_calls[0] == deploy_calls[1]
+    capsys.readouterr()
+
+
 def test_test_recovery_accepts_exact_failed_cutover_plan_with_automatic_successor(tmp_path):
     from contextlib import contextmanager
     from dataclasses import replace
@@ -4233,7 +4464,7 @@ def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch
         supervisor.request({'action': 'test-recovery-reset', **request.payload()})
 
 
-def test_test_recovery_reset_resumes_prepared_disposition_without_requalification(tmp_path):
+def test_test_recovery_reset_preserves_instance_state_authority(tmp_path):
     from dataclasses import replace
     from types import SimpleNamespace
     from uuid import uuid4
@@ -4284,7 +4515,7 @@ def test_test_recovery_reset_resumes_prepared_disposition_without_requalificatio
     receipt = effects.reset_test_source_projection(request)
 
     assert receipt.terminal_result == 'failed'
-    assert removed == ['pkm-test_pgdata', 'pkm-test_instance-state', 'pkm-test_runtime-tmp']
+    assert removed == ['pkm-test_pgdata', 'pkm-test_runtime-tmp']
     assert recreated == ['pkm-test_pgdata']
     assert len(composed) == 2
     assert disposition_states == ['prepared', 'complete']
@@ -5158,6 +5389,199 @@ def test_linux_effects_authenticates_effective_compose_connection(tmp_path, monk
     with pytest.raises(PostgresDeployError):
         effects.compose('up', '-d', 'api')
     assert len(compose_environments) == 1
+
+
+def test_linux_recovery_compose_binds_authenticated_cutover_ownership_root(tmp_path, monkeypatch):
+    """The recovery one-shot cannot inherit an ambient host-global root."""
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import AuthorityCutover
+
+    cfg = linux.LinuxConfig('test', tmp_path, tmp_path / 'data', 1000, 1000, '', '')
+    (tmp_path / 'config/deploy').mkdir(parents=True)
+    (tmp_path / 'config/deploy/test.env').write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    monkeypatch.delenv('INSTANCE_OWNERSHIP_HOST_STATE_DIR', raising=False)
+    commands, environments = [], []
+
+    def command(argv, **kwargs):
+        commands.append(argv)
+        environments.append(kwargs['env'])
+        return ''
+
+    monkeypatch.setattr(linux, '_command', command)
+    cutover = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
+    )
+    linux.LinuxEffects(cfg).compose('run', 'instance-state-init', cutover=cutover)
+
+    assert len(commands) == 1
+    assert environments[0]['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] == cutover.ownership_root
+
+
+def test_linux_recovery_prepares_new_volume_before_runtime_uid(monkeypatch, tmp_path):
+    """A fresh named volume is permission-prepared before reconstruction."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
+
+    operation_id = str(uuid4())
+    digest = 'sha256:' + 'a' * 64
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    cutover = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
+    )
+    request = TestRecoveryRequest(operation_id, plan, cutover)
+    config = SimpleNamespace(channel='test', root=tmp_path, uid=1000, journal=object())
+    effects = linux.LinuxEffects(config)
+    effects.local_database = lambda: True
+    effects._write_test_instance_state_recovery_receipt = lambda _request: (
+        tmp_path / 'receipt.json', 'a' * 64, 'b' * 64,
+    )
+    effects.quiescent = lambda: True
+    calls = []
+
+    def compose(*args, **kwargs):
+        calls.append((args, kwargs))
+        if '--user' in args:
+            return json.dumps({
+                'schema': 'test-instance-state-recovery.v1',
+                'channel': 'test',
+                'activation': 'inactive_fenced',
+                'request': {'failed_operation_id': operation_id},
+            })
+        return ''
+
+    effects.compose = compose
+    assert effects.reconstruct_missing_test_instance_state(request)['activation'] == 'inactive_fenced'
+
+    assert calls[0][0] == ('run', '--rm', '--no-deps', '-T', 'instance-state-init')
+    assert '--user' not in calls[0][0]
+    assert '--user' in calls[1][0]
+    assert calls[0][1]['cutover'] == cutover
+    assert calls[1][1]['cutover'] == cutover
+
+
+def test_linux_recovery_rejects_active_supervised_operation(monkeypatch, tmp_path):
+    """The reconstruction RPC cannot race a newly admitted deployment."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, PostgresDeployError
+
+    plan = DeployPlan(
+        'test', 'b' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), True,
+        'sha256:' + 'c' * 64, False,
+    )
+    authority = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
+    )
+    config = SimpleNamespace(channel='test', root=tmp_path, journal=object())
+    supervisor = linux.DeploymentSupervisor(config)
+    supervisor.operation = object()
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    monkeypatch.setattr(
+        linux.LinuxEffects,
+        'reconstruct_missing_test_instance_state',
+        lambda *_args: pytest.fail('active deployment must block reconstruction'),
+    )
+
+    request = {
+        'action': 'test-recovery-reconstruct-instance-state',
+        **{
+            'failed_operation_id': str(uuid4()),
+            'plan': plan.payload(),
+            'authority_cutover': {
+                'binding_id': authority.binding_id,
+                'root': authority.root,
+                'ownership_root': authority.ownership_root,
+            },
+        },
+    }
+    with pytest.raises(PostgresDeployError):
+        supervisor.request(request)
+
+
+def test_linux_recovery_accepts_runtime_owned_receipt_under_root_supervisor(monkeypatch, tmp_path):
+    """A retry accepts the runtime-owned checkpoint after permission preparation."""
+    import hashlib
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    authority = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
+    )
+    ownership_root = Path(authority.ownership_root)
+    ownership_root.mkdir(mode=0o700)
+    owner_bytes = b'{"owner":"runtime"}\n'
+    proof_bytes = b'{"proof":"quiescent"}\n'
+    (ownership_root / 'legacy-owner-inventory.json').write_bytes(owner_bytes)
+    (ownership_root / 'deployment-quiescence-proof.json').write_bytes(proof_bytes)
+    plan = DeployPlan(
+        'test', 'd' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'e' * 64, True,
+    )
+    request = TestRecoveryRequest(operation_id, plan, authority)
+    failed_plan = DeployPlan(
+        'test', plan.revision, plan.services, plan.consumers, True,
+        None, False, authority,
+    )
+
+    class Journal:
+        def read(self):
+            return DeployReceipt(operation_id, 'test', 'deploy', 'failed', 'failed')
+
+        def bound_plan(self, selected):
+            assert selected == operation_id
+            return failed_plan
+
+    config = SimpleNamespace(
+        channel='test', uid=os.geteuid(), gid=os.getegid(), journal=Journal(), root=tmp_path,
+    )
+    effects = linux.LinuxEffects(config)
+    monkeypatch.setattr(effects, '_read_test_recovery_disposition', lambda _request: {'state': 'complete'})
+    receipt_path = ownership_root / ('test-instance-state-recovery-' + operation_id + '.json')
+    payload = {
+        'schema': 'test-instance-state-recovery.v1',
+        'channel': 'test',
+        'failed_operation_id': operation_id,
+        'candidate_revision': plan.revision,
+        'candidate_image_digest': plan.image_digest,
+        'authority_cutover': {
+            'binding_id': authority.binding_id,
+            'root': authority.root,
+            'ownership_root': authority.ownership_root,
+        },
+        'disposition': 'complete',
+        'owner_receipt_sha256': hashlib.sha256(owner_bytes).hexdigest(),
+        'quiescence_proof_sha256': hashlib.sha256(proof_bytes).hexdigest(),
+    }
+    receipt_path.write_text(json.dumps(payload, sort_keys=True) + '\n')
+    receipt_path.chmod(0o600)
+    monkeypatch.setattr(linux.os, 'geteuid', lambda: 0)
+
+    result = effects._write_test_instance_state_recovery_receipt(request)
+    assert result == (
+        receipt_path,
+        hashlib.sha256(owner_bytes).hexdigest(),
+        hashlib.sha256(proof_bytes).hexdigest(),
+    )
+    assert receipt_path.stat().st_uid == config.uid
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])

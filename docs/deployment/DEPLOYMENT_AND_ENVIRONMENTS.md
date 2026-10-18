@@ -412,6 +412,28 @@ preparation window. A separately authorized ordinary B47 producer must create it
 proof; no manual state edit, migration retarget, B47 completion, live TEST repair or activation is
 inferred. This source preparation does not itself authorize the future live operation or owner ACK.
 
+#### TEST source-recovery instance-state preservation and explicit reconstruction
+
+The TEST source-projection recovery reset preserves `pkm-test_instance-state`. It removes only
+the managed `pgdata` and runtime-temporary projection volumes, because the instance registry and
+host-global ownership ledger are durable authority rather than rebuildable runtime state. A
+missing or corrupt registry remains a fail-closed consumer-preflight error; the normal deploy and
+startup paths never create it as a side effect.
+
+For the already-observed TEST total-loss case, the host controller exposes the explicit
+`--reconstruct-missing-test-instance-state` operation. It binds the terminal failed successor and
+completed source-recovery disposition to a fresh owner-inventory receipt and two-pass quiescence
+proof, the exact selected TEST authority tuple, the existing host-global key/ledger, and the new
+candidate revision/image digest. The mounted runtime producer validates those bytes before any
+instance-state write, then uses the canonical deployment-admission -> producer-transition ->
+ownership-ledger -> registry-store order and the existing registry snapshot, checksum, and
+legacy-export writers to materialize only receipt/ledger-proven dormant registrations. The result
+is inactive-fenced and does not activate runtime authority or alter vault/source/database bytes.
+The request receipt and result are byte-bound for crash-safe retries; changed candidate,
+operation, disposition, owner evidence, proof, binding, root, channel, or lock evidence refuses
+without mutation. A successful reconstruction is still only a stopped-window producer: a separate
+fresh normal TEST deployment and the parent acceptance gates remain required.
+
 #### Legacy owner root namespace authority (#4539)
 
 The owner-authorized decision recorded on 2026-08-30 is host-side validation (Option B). The
@@ -1219,10 +1241,24 @@ Embedding identity/model preflight refusals that occur before writer drain are n
 they remain ordinary admission failures.
 The external `pkm-test_pgdata` volume is recreated as an empty, exact managed volume and
 qualified against the configured data directory before the reset is marked complete; the
-instance-state and runtime-tmp volumes are removed for normal Compose recreation. The host writes
+instance-state authority volume is preserved, and only the derived `pkm-test_runtime-tmp` volume
+is removed for normal Compose recreation. For the historical total-loss case, the explicit
+`--reconstruct-missing-instance-state` flag runs after that exact reset and before the fresh
+successor: it consumes the completed reset disposition, existing host-global ownership ledger/key,
+and proof-bound owner inventory, then writes only dormant, inactive-fenced registry state. The
+container receives the host ownership directory through the fixed `/app/instance-ownership` bind
+mount; the host ownership path remains part of the authenticated authority tuple and is never
+replaced by path inference. The host recovery marker carries separate reset and reconstruction
+evidence, so an older source-reset-only `ready` marker cannot skip this producer. The host writes
 its recovery marker only after the VM has accepted and completed the exact reset; therefore a
 failed-plan/successor mismatch leaves no misleading local marker. A retry may repeat the remote
-read/repair because the VM disposition and failed operation are idempotent. The same command then
+read/repair because the VM disposition and failed operation are idempotent; a retry with a registry
+transaction journal uses the canonical store recovery path before validating the byte-identical
+result. On a genuinely new named volume, the producer first runs the existing root-owned
+permission-only one-shot (which creates no registry or authority) before dropping to the configured
+runtime UID. The supervisor validates the authenticated ownership directory against that runtime UID
+and accepts only the root-to-runtime private recovery-receipt handoff, keeping a retry readable after
+permission preparation without broadening the checkpoint's authority. The same command then
 runs the normal candidate deployment gates. It never resets the source vault, identity,
 ownership authority, or production state, and local reset scripts, direct host repair, source
 healing, and direct SQL remain invalid substitutes. This repository support and its deterministic

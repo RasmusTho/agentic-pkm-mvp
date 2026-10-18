@@ -75,6 +75,7 @@ from app.instance.vault_registry import (
     RegistrySnapshot,
     REGISTRY_AUTHORITY_ACTIVE,
     RemovalTombstone,
+    TransferLineage,
     VaultRegistration,
     VaultRegistryStore,
 )
@@ -3484,6 +3485,7 @@ def _materialize_authenticated_channel_registrations(
     registry: VaultRegistryStore,
     ledger: OwnershipLedger,
     owners: tuple[LegacyOwner, ...],
+    owners_authenticated: bool = False,
 ) -> RegistrySnapshot:
     """Materialize an empty registry from the already-authenticated owner receipt.
 
@@ -3502,74 +3504,35 @@ def _materialize_authenticated_channel_registrations(
         for owner in owners
         if owner.channel_id == channel and owner.vault_binding_id
     )
-    snapshot = registry.load()
-    registered_binding_ids = set(snapshot.registrations)
-    owner_binding_ids = {owner.vault_binding_id for owner in channel_owners}
-    resumable_partial_materialization = (
-        bool(snapshot.registrations)
-        and not snapshot.removal_tombstones
-        and not snapshot.transfer_lineage
-        and registered_binding_ids < owner_binding_ids
-        and registered_binding_ids.issubset(owner_binding_ids)
-        and all(
-            registration.extensions.get("provenance")
-            == "authenticated_legacy_owner_inventory"
-            for registration in snapshot.registrations.values()
-        )
-    )
-    if (
-        snapshot.registrations
-        or snapshot.removal_tombstones
-        or snapshot.transfer_lineage
-    ) and not resumable_partial_materialization:
-        return snapshot
-    if not channel_owners:
-        return snapshot
-    for owner in channel_owners:
-        try:
-            resolved = ledger.resolve_live_owner_bindings(
-                (replace(owner, vault_binding_id=""),),
-                allow_legacy=True,
-            )
-        except LedgerError as exc:
-            raise InstanceStatePreflightError(
-                "authenticated owner does not match an active ownership lease"
-            ) from exc
-        if (
-            len(resolved) != 1
-            or resolved[0].vault_binding_id != owner.vault_binding_id
-        ):
-            raise InstanceStatePreflightError(
-                "authenticated owner does not match its ownership binding"
-            )
-    for owner in channel_owners:
-        root = str(owner.root.expanduser().resolve(strict=False))
-        registration = VaultRegistration(
-            vault_binding_id=owner.vault_binding_id,
-            ref=f"path:{root}",
-            path=root,
-            extensions={
-                "status": "initialized",
-                "contentEpoch": 1,
-                "provenance": "authenticated_legacy_owner_inventory",
-            },
-        )
-        existing = snapshot.registrations.get(owner.vault_binding_id)
-        if existing is not None:
-            if existing != registration:
-                raise InstanceStatePreflightError(
-                    "authenticated owner registry entry does not match its binding"
-                )
-            continue
-        snapshot = registry.register(
-            registration,
-            expected_revision=snapshot.revision,
-            _capability=_STORAGE_MUTATION_CAPABILITY,
-        )
+    # Ledger evidence is read before the registry lock.  Recovery therefore
+    # follows the canonical ownership-ledger -> registry-store order even when
+    # retired TEST bindings need dormant tombstones materialized.
     tombstone_paths: dict[str, str] = {}
-    with ledger._locked():
+    transfer_lineage: tuple[TransferLineage, ...] = ()
+    with ledger._locked(allow_legacy_rotation=True):
         key = ledger._load_or_create_key_locked(allow_create=False)
-        current = ledger._load_or_create_ledger_locked(key, allow_create=False)
+        current = ledger._load_or_create_ledger_locked(
+            key, allow_create=False, allow_legacy=True
+        )
+        transfer_lineage = tuple(
+            TransferLineage(
+                source_binding_id=item.source_binding_id,
+                destination_binding_id=item.destination_binding_id,
+                local_instance_id=None,
+                vault_id=None,
+                source_channel_id=item.source_channel_id,
+                destination_channel_id=item.destination_channel_id,
+                # The host ledger authenticates the transfer identity and root
+                # lineage, but does not retain either registry's revision. A
+                # reconstructed registry records the bounded recovery epoch
+                # rather than inventing source-registry metadata.
+                source_registry_revision=0,
+                destination_registry_revision=0,
+                ownership_transfer_id=item.transfer_id,
+            )
+            for item in current.transfer_lineage
+            if item.destination_channel_id == channel
+        )
         for binding_id, lease in current.tombstones.items():
             if lease.channel_id != channel:
                 continue
@@ -3579,7 +3542,138 @@ def _materialize_authenticated_channel_registrations(
                 .resolve(strict=False)
             )
             tombstone_paths[binding_id] = root
-    if tombstone_paths:
+    snapshot = registry.load()
+    registered_binding_ids = set(snapshot.registrations)
+    owner_binding_ids = {owner.vault_binding_id for owner in channel_owners}
+    expected_tombstone_ids = set(tombstone_paths)
+    existing_tombstone_ids = set(snapshot.removal_tombstones)
+    if not existing_tombstone_ids.issubset(expected_tombstone_ids):
+        raise InstanceStatePreflightError(
+            "recovered registry contains an unexpected ownership tombstone"
+        )
+    for binding_id, tombstone in snapshot.removal_tombstones.items():
+        if str(Path(tombstone.path).expanduser().resolve(strict=False)) != tombstone_paths[binding_id]:
+            raise InstanceStatePreflightError(
+                "recovered registry tombstone does not match the ownership ledger"
+            )
+    expected_lineage_ids = {
+        (
+            item.ownership_transfer_id,
+            item.source_channel_id,
+            item.source_binding_id,
+            item.destination_channel_id,
+            item.destination_binding_id,
+        )
+        for item in transfer_lineage
+    }
+    existing_lineage_ids = {
+        (
+            item.ownership_transfer_id,
+            item.source_channel_id,
+            item.source_binding_id,
+            item.destination_channel_id,
+            item.destination_binding_id,
+        )
+        for item in snapshot.transfer_lineage
+    }
+    if not existing_lineage_ids.issubset(expected_lineage_ids):
+        raise InstanceStatePreflightError(
+            "recovered registry contains unexpected ownership transfer lineage"
+        )
+    registrations_authenticated = all(
+        registration.extensions.get("provenance")
+        == "authenticated_legacy_owner_inventory"
+        for registration in snapshot.registrations.values()
+    )
+    expected_registrations = {
+        owner.vault_binding_id: VaultRegistration(
+            vault_binding_id=owner.vault_binding_id,
+            ref=f"path:{str(owner.root.expanduser().resolve(strict=False))}",
+            path=str(owner.root.expanduser().resolve(strict=False)),
+            extensions={
+                "status": "initialized",
+                "contentEpoch": 1,
+                "provenance": "authenticated_legacy_owner_inventory",
+            },
+        )
+        for owner in channel_owners
+    }
+    for binding_id in registered_binding_ids & owner_binding_ids:
+        existing = snapshot.registrations[binding_id]
+        if (
+            existing.extensions.get("provenance")
+            == "authenticated_legacy_owner_inventory"
+            and existing != expected_registrations[binding_id]
+        ):
+            raise InstanceStatePreflightError(
+                "authenticated owner registry entry does not match its binding"
+            )
+    registrations_pending = registered_binding_ids < owner_binding_ids
+    tombstones_pending = existing_tombstone_ids != expected_tombstone_ids
+    lineage_pending = existing_lineage_ids != expected_lineage_ids
+    resumable_partial_materialization = (
+        registrations_authenticated
+        and registered_binding_ids.issubset(owner_binding_ids)
+        and (registrations_pending or tombstones_pending or lineage_pending)
+    )
+    if (
+        snapshot.registrations
+        or snapshot.removal_tombstones
+        or snapshot.transfer_lineage
+    ) and not resumable_partial_materialization:
+        return snapshot
+    if not channel_owners:
+        return snapshot
+    if not owners_authenticated:
+        for owner in channel_owners:
+            resolved: tuple[LegacyOwner, ...] = ()
+            try:
+                resolved = ledger.resolve_live_owner_bindings(
+                    (replace(owner, vault_binding_id=""),),
+                    allow_legacy=True,
+                )
+            except LedgerError:
+                # A committed registration may still carry a pending lease.
+                # Authenticate that receipt without persisting activation; the
+                # deployment-finish consistency transaction owns the write.
+                try:
+                    ledger.recover_or_require_active_from_host_receipt(
+                        owner,
+                        channel_id=channel,
+                        persist=False,
+                        _capability=_STORAGE_MUTATION_CAPABILITY,
+                    )
+                except LedgerError as exc:
+                    raise InstanceStatePreflightError(
+                        "authenticated owner does not match an active ownership lease"
+                    ) from exc
+                continue
+            if (
+                len(resolved) != 1
+                or resolved[0].vault_binding_id != owner.vault_binding_id
+            ):
+                raise InstanceStatePreflightError(
+                    "authenticated owner does not match its ownership binding"
+                )
+    for owner in channel_owners:
+        registration = expected_registrations[owner.vault_binding_id]
+        existing_registration = snapshot.registrations.get(owner.vault_binding_id)
+        if existing_registration is not None:
+            if existing_registration != registration:
+                raise InstanceStatePreflightError(
+                    "authenticated owner registry entry does not match its binding"
+                )
+            continue
+        snapshot = registry.register(
+            registration,
+            expected_revision=snapshot.revision,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+    if tombstone_paths or transfer_lineage:
+        transfer_lineage = tuple(
+            replace(item, destination_registry_revision=snapshot.revision + 1)
+            for item in transfer_lineage
+        )
         tombstones = {
             binding_id: RemovalTombstone(
                 vault_binding_id=binding_id,
@@ -3593,7 +3687,8 @@ def _materialize_authenticated_channel_registrations(
         }
         snapshot = registry.commit_state(
             registrations=dict(snapshot.registrations),
-            removal_tombstones=tombstones,
+            removal_tombstones=tombstones if tombstone_paths else None,
+            transfer_lineage=transfer_lineage,
             expected_revision=snapshot.revision,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
@@ -4238,33 +4333,20 @@ def _finish_instance_state_deployment_locked(
     if established is not None and established.legacy_bootstrap_complete:
         recovery_failed = False
         try:
-            # Only pending registrations need the recovery transition here.
-            # Active leases must reach the canonical consistency check below
-            # first; otherwise a corrupted stored identity is misreported as
-            # generic recovery failure instead of the specific consistency
-            # failure that governs this finish path.
-            for registration in registry.registrations.values():
+            # Receipt-proven pending owners need the recovery transition even
+            # when an interrupted materialization has not written their
+            # registration yet. Active and missing leases still reach the
+            # canonical consistency path below so its diagnostics stay stable.
+            for pending_owner in owners:
                 registration_lease = established.leases.get(
-                    registration.vault_binding_id
+                    pending_owner.vault_binding_id
                 )
                 if (
-                    registration_lease is not None
+                    pending_owner.channel_id == channel
+                    and pending_owner.vault_binding_id
+                    and registration_lease is not None
                     and registration_lease.state == "pending"
                 ):
-                    pending_owner = next(
-                        (
-                            owner
-                            for owner in owners
-                            if owner.channel_id == channel
-                            and owner.vault_binding_id
-                            == registration.vault_binding_id
-                        ),
-                        None,
-                    )
-                    if pending_owner is None:
-                        raise LedgerError(
-                            "pending registration has no host-validated owner receipt"
-                        )
                     ledger.recover_or_require_active_from_host_receipt(
                         pending_owner,
                         channel_id=channel,
@@ -5345,6 +5427,24 @@ def _main(argv: list[str] | None = None) -> int:
             explicit_test.add_argument("--expected-registry-sha256", required=True)
             explicit_test.add_argument("--backup-root", type=Path, required=True)
             explicit_test.add_argument("--acknowledge-new-ownership-epoch", action="store_true")
+    reconstruct = subparsers.add_parser(
+        "deployment-reconstruct-missing-test-instance-state"
+    )
+    reconstruct.add_argument("--channel", required=True)
+    reconstruct.add_argument("--instance-state-root", type=Path, required=True)
+    reconstruct.add_argument("--host-global-root", type=Path, required=True)
+    reconstruct.add_argument("--recovery-receipt-path", type=Path, required=True)
+    reconstruct.add_argument("--failed-operation-id", required=True)
+    reconstruct.add_argument("--candidate-revision", required=True)
+    reconstruct.add_argument("--candidate-image-digest", required=True)
+    reconstruct.add_argument("--authority-binding-id", required=True)
+    reconstruct.add_argument("--authority-root", required=True)
+    reconstruct.add_argument("--authority-ownership-root", required=True)
+    reconstruct.add_argument("--authority-ownership-mount-root")
+    reconstruct.add_argument("--owner-receipt-path", type=Path, required=True)
+    reconstruct.add_argument("--expected-owner-receipt-sha256", required=True)
+    reconstruct.add_argument("--quiescence-proof-path", type=Path, required=True)
+    reconstruct.add_argument("--expected-quiescence-proof-sha256", required=True)
     read = subparsers.add_parser("read-revision")
     read.add_argument("--registry-path", type=Path, required=True)
     read.add_argument("--consumer", required=True)
@@ -5534,6 +5634,27 @@ def _main(argv: list[str] | None = None) -> int:
             command.add_argument("--kind", choices=("human", "agent"), required=True)
             command.add_argument("--label", required=True)
     args = parser.parse_args(argv)
+    if args.command == "deployment-reconstruct-missing-test-instance-state":
+        from app.instance.legacy_owner_recovery import reconstruct_missing_test_instance_state
+
+        values = vars(args).copy()
+        values.pop("command")
+        try:
+            reconstruct_result = reconstruct_missing_test_instance_state(**values)
+        except (
+            InstanceStatePreflightError,
+            RegistryError,
+            LedgerError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ):
+            print(json.dumps({"channel": "test", "outcome": "refused", "prepared": False}))
+            return 1
+        print(json.dumps(reconstruct_result, sort_keys=True))
+        return 0
     if args.command in {"deployment-initialize-dormant-ownership", "deployment-bind-owner-proof", "deployment-qualify-native"}:
         from app.instance.legacy_owner_recovery import initialize_dormant_ownership, qualify_test_native_source
         values = vars(args).copy()

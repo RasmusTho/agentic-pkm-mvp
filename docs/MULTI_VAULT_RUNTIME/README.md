@@ -285,6 +285,30 @@ default selection, retained identities and source bytes; it does not recover los
 infer prior effects. DEV, PROD, partial/divergent evidence and implicit ordinary-deploy recovery
 remain refused.
 
+Source-projection recovery preserves the managed TEST `instance-state` volume. It may remove only
+the rebuildable PostgreSQL projection and runtime-temporary volume; ordinary consumer preflight
+therefore continues to refuse a genuinely absent or corrupt registry without initializing it. The
+one already-observed TEST total-loss shape has a separate explicit producer,
+`deployment-reconstruct-missing-test-instance-state`. That command is admitted only for the exact
+terminal failed successor and completed recovery disposition, a fresh two-pass owner inventory and
+quiescence proof, the existing host-global ownership key/ledger, and the exact candidate revision
+and image digest. Under deployment-admission -> producer-transition -> ownership-ledger ->
+registry-store ordering it materializes only the proven TEST registrations through the existing
+snapshot/checksum/legacy-export APIs, leaves the registry dormant at inactive-fenced revision zero
+before its first registration, and records a crash-idempotent result. It cannot mint or rotate
+ownership, infer a binding from path order, activate runtime authority, edit vault/source bytes, or
+run as an ordinary startup side effect; divergent retries remain refused. In the Compose producer,
+`/app/instance-ownership` is the authenticated fixed mount for the host ownership directory; the
+host-side ownership path remains in the exact authority tuple and is never inferred from the mount
+path. A retry that finds the registry transaction journal uses the registry store's canonical
+recovery path before accepting the byte-identical dormant generation, and a source-reset-only host
+checkpoint never counts as reconstruction evidence. The producer first runs the existing root-owned
+permission-only one-shot for a genuinely new named volume; that step creates no registry or
+authority before the runtime-UID reconstruction command runs. The supervisor validates the
+authenticated ownership directory against the configured runtime UID and accepts only the
+root-to-runtime private receipt handoff, so a retry remains readable after permission preparation
+without broadening the checkpoint's authority.
+
 The existing private backup manifest binds the absent-pair before-image and one authenticated
 prepared epoch. Reservation evidence in the existing TEST deployment safety records fences retries
 to that package, including interrupted directory durability; generic restore and rotation do not
