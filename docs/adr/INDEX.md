@@ -64,3 +64,4 @@
 - [ADR-0065: BuilderOps temporal-intention lifecycle evidence is PostgreSQL-only, opaque-first, and receipt-backed (Accepted 2026-07-29)](./ADR-0065-builderops-temporal-intention-authority.md)
 - [ADR-0066: Shared model-access facade with separate policy authorities and governed catalog discovery (Accepted 2026-09-22)](./ADR-0066-shared-model-access-router-and-catalogs.md)
 - [ADR-0067: Mac mini is the Product model-access portal (Accepted target state, owner-directed 2026-10-07)](./ADR-0067-mac-mini-product-model-access-portal.md)
+- [ADR-0068: Continuous dev delivery — merge on risk, then dev → test → prod (Accepted target state, owner-directed 2026-10-18)](./ADR-0068-continuous-dev-delivery-flow.md)

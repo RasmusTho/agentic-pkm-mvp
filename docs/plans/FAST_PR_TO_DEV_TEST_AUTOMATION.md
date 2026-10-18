@@ -4,7 +4,7 @@ Authority: Proposes the post-merge Product Runtime `dev` → `test` automation b
 Temporal class: operational
 Review cadence: before implementation and after the first ten merged candidates
 Source of truth: repository workflows/scripts plus fresh, redaction-safe runtime receipts
-Last reviewed: 2026-10-11
+Last reviewed: 2026-10-18
 Last verified against: #5922, #5932 and #5950; `.github/workflows/postmerge-dev-test.yml`, `scripts/postmerge_dev_test.py`, `scripts/install_postmerge_controller.py`, native DeployPlan/RPC and digest-pin tests; [actual same-candidate native DEV/TEST receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) under #5675
 
 # Fast PR-to-merge with automatic dev/test delivery
@@ -64,6 +64,31 @@ belong to `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: CI deployment autom
 | Nightly fails | Bind the failure to the tested SHA and channel, publish actionable test/run evidence, and create/update an issue. Do not block an already-merged PR or newer candidates from entering dev/test. | This plan adds no production eligibility rule from a nightly result. Production remains governed by `docs/RELEASE_CHANNELS/README.md` and its required receipts. The bounded PostgreSQL nightly's role remains for the owner decision in #5676. |
 
 No automated database rollback is part of this plan. A failed health check must not imply that restoring an older image restores database state. Keep the channel failure visible and use the existing operator-governed recovery/rollback procedure; any future automatic recovery needs its own migration-aware contract and acceptance evidence.
+
+## Continuous dev delivery target (ADR-0068)
+
+[ADR-0068](../adr/ADR-0068-continuous-dev-delivery-flow.md) (owner-directed 2026-10-18) sets the target for this pipeline: **merge on risk, then `main` → `dev` → `test` → `prod`**. It never stops development for a deploy problem. Until each slice below lands, the current policy above applies. The parent contract Issue is #6207.
+
+- **Merge on risk.** No post-merge stage gates or reverts a merge. Problems found after merge become bug Issues.
+- **Latest wins.** `dev` gets the newest admitted `main` build, and intermediate commits are batched.
+- **A failure files a bug, never a pause.** A red candidate opens or updates one rolling bug Issue per channel, with the SHA, the commit range since the last good candidate, the failing gate and the receipt. The next candidate proceeds. Recovery is roll-forward. A last-good redeploy is allowed only when no forward-only migration was applied.
+- **Refs record channel state.** `dev` is the last green dev verdict, and differs from `main` only by a documented technical hold. `test` is the last candidate promoted for UAT after a green dev verdict. `stable` is prod, advanced only from a `test`-passed candidate through human-approved promotion (superseding ADR-0040 once enacted).
+- **Pause only the machinery.** A kill switch needs a linked Issue and an expiry. Unloading the controller is not a pause mechanism.
+- **Liveness is loud.** A GitHub check turns red when no dev verdict follows a newer admitted build within the grace period.
+- **Pinned controller tooling,** separate from candidate code.
+
+Enactment slices (children of #6207):
+
+| Slice | ADR-0068 decision |
+| --- | --- |
+| Controller liveness check | D6 |
+| Automatic rolling channel bug Issue | D3 |
+| `dev` and `test` refs advanced on green verdicts | D4 |
+| Kill switch with Issue and expiry, replacing unload-as-pause | D5 |
+| Pinned controller tooling | D7 |
+| Safe last-good redeploy without forward-only migration | D3 |
+| Heavy tests on `dev` as part of the dev verdict (#6205) | D4 |
+| Prod promotion from `test` to `stable` | D4 |
 
 ## Preconditions and delivery sequence
 
