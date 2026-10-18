@@ -1241,10 +1241,20 @@ Embedding identity/model preflight refusals that occur before writer drain are n
 they remain ordinary admission failures.
 The external `pkm-test_pgdata` volume is recreated as an empty, exact managed volume and
 qualified against the configured data directory before the reset is marked complete; the
-instance-state and runtime-tmp volumes are removed for normal Compose recreation. The host writes
+instance-state authority volume is preserved, and only the derived `pkm-test_runtime-tmp` volume
+is removed for normal Compose recreation. For the historical total-loss case, the explicit
+`--reconstruct-missing-instance-state` flag runs after that exact reset and before the fresh
+successor: it consumes the completed reset disposition, existing host-global ownership ledger/key,
+and proof-bound owner inventory, then writes only dormant, inactive-fenced registry state. The
+container receives the host ownership directory through the fixed `/app/instance-ownership` bind
+mount; the host ownership path remains part of the authenticated authority tuple and is never
+replaced by path inference. The host recovery marker carries separate reset and reconstruction
+evidence, so an older source-reset-only `ready` marker cannot skip this producer. The host writes
 its recovery marker only after the VM has accepted and completed the exact reset; therefore a
 failed-plan/successor mismatch leaves no misleading local marker. A retry may repeat the remote
-read/repair because the VM disposition and failed operation are idempotent. The same command then
+read/repair because the VM disposition and failed operation are idempotent; a retry with a registry
+transaction journal uses the canonical store recovery path before validating the byte-identical
+result. The same command then
 runs the normal candidate deployment gates. It never resets the source vault, identity,
 ownership authority, or production state, and local reset scripts, direct host repair, source
 healing, and direct SQL remain invalid substitutes. This repository support and its deterministic

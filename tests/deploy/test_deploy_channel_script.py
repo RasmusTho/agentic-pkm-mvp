@@ -3916,6 +3916,7 @@ def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_p
 
 
 def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_starts_fresh_successor(monkeypatch, tmp_path, capsys):
+    from contextlib import contextmanager
     from types import SimpleNamespace
     from uuid import uuid4
 
@@ -3931,12 +3932,30 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
     )
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
     controller = SimpleNamespace(directory=tmp_path)
+    class Operation:
+        completed_result = None
+
+        def finish(self, evidence):
+            self.completed_result = evidence.result
+
+    @contextmanager
+    def deploy_operation(target, *, allow_bootstrap, operation_id):
+        assert (target, allow_bootstrap, operation_id) == ('test', False, failed_operation_id)
+        yield Operation(), True
+
+    controller.deploy_operation = deploy_operation
     calls: list[TestRecoveryRequest] = []
     deployed: list[tuple[DeployPlan, str]] = []
 
     class Remote:
         def __init__(self, hostname):
             assert hostname == 'ygg-test'
+
+        def test_recovery_reset(self, request):
+            assert request.failed_operation_id == failed_operation_id
+            return host.DeployReceipt(
+                failed_operation_id, 'test', 'deploy', 'failed', 'failed'
+            )
 
         def test_recovery_reconstruct_instance_state(self, request):
             calls.append(request)
@@ -4033,14 +4052,16 @@ def test_missing_instance_state_recovery_refuses_authority_drift_without_mutatio
 
 def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_path, capsys):
     """A host retry reuses the durable successor checkpoint."""
+    from contextlib import contextmanager
     from types import SimpleNamespace
     from uuid import uuid4
 
     from app.ops import postgres_deploy_host as host
     from app.ops.host_secret_contract import DATABASE_CONSUMERS
-    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
 
     operation_id = str(uuid4())
+    expected_failed_operation_id = operation_id
     digest = 'sha256:' + 'd' * 64
     plan = DeployPlan(
         'test', 'e' * 40, tuple(DATABASE_CONSUMERS.values()),
@@ -4048,12 +4069,30 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
     )
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
     controller = SimpleNamespace(directory=tmp_path)
+    class Operation:
+        completed_result = None
+
+        def finish(self, evidence):
+            self.completed_result = evidence.result
+
+    @contextmanager
+    def deploy_operation(target, *, allow_bootstrap, operation_id):
+        assert (target, allow_bootstrap, operation_id) == (
+            'test', False, expected_failed_operation_id
+        )
+        yield Operation(), True
+
+    controller.deploy_operation = deploy_operation
     reconstruct_calls: list[object] = []
     deploy_calls: list[str] = []
 
     class Remote:
         def __init__(self, _hostname):
             pass
+
+        def test_recovery_reset(self, request):
+            assert request.failed_operation_id == operation_id
+            return host.DeployReceipt(operation_id, 'test', 'deploy', 'failed', 'failed')
 
         def test_recovery_reconstruct_instance_state(self, _request):
             reconstruct_calls.append('reconstruct')
@@ -4084,6 +4123,21 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
         '--authority-cutover-root', authority.root,
         '--authority-cutover-ownership-root', authority.ownership_root,
     ]
+    # An older source-reset-only checkpoint is still a valid reset receipt, but
+    # it is not reconstruction evidence.  The explicit producer must run once
+    # and upgrade the marker before the successor deploy is admitted.
+    old_request = TestRecoveryRequest(operation_id, plan, authority)
+    old_marker = host._test_recovery_marker_path(controller, old_request)
+    old_marker.write_text(
+        json.dumps({
+            'schema': host._TEST_RECOVERY_MARKER_SCHEMA,
+            'state': 'ready',
+            'request': old_request.payload(),
+            'fresh_operation_id': str(uuid4()),
+        }, sort_keys=True) + '\n',
+        encoding='utf-8',
+    )
+    old_marker.chmod(0o600)
     assert host.main(args) == 0
     assert host.main(args) == 0
     assert reconstruct_calls == ['reconstruct']

@@ -297,7 +297,12 @@ registry-store ordering it materializes only the proven TEST registrations throu
 snapshot/checksum/legacy-export APIs, leaves the registry dormant at inactive-fenced revision zero
 before its first registration, and records a crash-idempotent result. It cannot mint or rotate
 ownership, infer a binding from path order, activate runtime authority, edit vault/source bytes, or
-run as an ordinary startup side effect; divergent retries remain refused.
+run as an ordinary startup side effect; divergent retries remain refused. In the Compose producer,
+`/app/instance-ownership` is the authenticated fixed mount for the host ownership directory; the
+host-side ownership path remains in the exact authority tuple and is never inferred from the mount
+path. A retry that finds the registry transaction journal uses the registry store's canonical
+recovery path before accepting the byte-identical dormant generation, and a source-reset-only host
+checkpoint never counts as reconstruction evidence.
 
 The existing private backup manifest binds the absent-pair before-image and one authenticated
 prepared epoch. Reservation evidence in the existing TEST deployment safety records fences retries

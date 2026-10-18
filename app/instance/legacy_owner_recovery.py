@@ -158,6 +158,7 @@ def reconstruct_missing_test_instance_state(
     expected_owner_receipt_sha256: str,
     quiescence_proof_path: Path,
     expected_quiescence_proof_sha256: str,
+    authority_ownership_mount_root: str | None = None,
 ) -> dict[str, object]:
     """Reconstruct only the already-lost TEST instance-state authority.
 
@@ -197,12 +198,16 @@ def reconstruct_missing_test_instance_state(
 
     state = Path(instance_state_root).expanduser()
     host = Path(host_global_root).expanduser()
+    authority_mount = Path(
+        authority_ownership_mount_root or host_global_root
+    ).expanduser()
     recovery_receipt = Path(recovery_receipt_path).expanduser()
     owner_receipt = Path(owner_receipt_path).expanduser()
     proof_path = Path(quiescence_proof_path).expanduser()
     try:
         state = state.resolve(strict=False)
         host = host.resolve(strict=True)
+        authority_mount = authority_mount.resolve(strict=True)
         recovery_receipt = recovery_receipt.resolve(strict=True)
         owner_receipt = owner_receipt.resolve(strict=True)
         proof_path = proof_path.resolve(strict=True)
@@ -211,7 +216,8 @@ def reconstruct_missing_test_instance_state(
     if (
         not state.is_absolute()
         or not host.is_absolute()
-        or authority_ownership_root != str(host)
+        or not authority_mount.is_absolute()
+        or authority_mount != host
         or any(parent.is_symlink() for parent in (host, *host.parents))
         or any(parent.is_symlink() for parent in (state, *state.parents) if parent.exists())
         or owner_receipt != host / "legacy-owner-inventory.json"
@@ -391,12 +397,14 @@ def reconstruct_missing_test_instance_state(
                 raise _test_refusal()
             if has_artifacts:
                 # A crash may have committed the registry's atomic transaction
-                # immediately before the result marker.  Read that durable
-                # generation without repair; only the exact expected dormant
-                # snapshot may complete the marker on retry.
+                # immediately before the result marker.  Let the canonical
+                # store recovery path finish or roll back its journal before
+                # validating the exact expected dormant snapshot; read_existing
+                # intentionally refuses this crash window.
                 if not store.path.is_file():
                     raise _test_refusal()
-                materialized = store.read_existing()
+                with store._locked(recover_transactions=True):
+                    materialized = store._read_current_locked(recover=False)
             else:
                 materialized = _materialize_authenticated_channel_registrations(
                     channel="test",

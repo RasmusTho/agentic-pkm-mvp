@@ -2038,6 +2038,7 @@ class LinuxEffects:
             '--authority-binding-id', request.authority_cutover.binding_id,
             '--authority-root', request.authority_cutover.root,
             '--authority-ownership-root', request.authority_cutover.ownership_root,
+            '--authority-ownership-mount-root', '/app/instance-ownership',
             '--owner-receipt-path', '/app/instance-ownership/legacy-owner-inventory.json',
             '--expected-owner-receipt-sha256', owner_sha,
             '--quiescence-proof-path', '/app/instance-ownership/deployment-quiescence-proof.json',

@@ -3525,9 +3525,11 @@ def _materialize_authenticated_channel_registrations(
     # follows the canonical ownership-ledger -> registry-store order even when
     # retired TEST bindings need dormant tombstones materialized.
     tombstone_paths: dict[str, str] = {}
-    with ledger._locked():
+    with ledger._locked(allow_legacy_rotation=True):
         key = ledger._load_or_create_key_locked(allow_create=False)
-        current = ledger._load_or_create_ledger_locked(key, allow_create=False)
+        current = ledger._load_or_create_ledger_locked(
+            key, allow_create=False, allow_legacy=True
+        )
         for binding_id, lease in current.tombstones.items():
             if lease.channel_id != channel:
                 continue
@@ -5363,6 +5365,7 @@ def _main(argv: list[str] | None = None) -> int:
     reconstruct.add_argument("--authority-binding-id", required=True)
     reconstruct.add_argument("--authority-root", required=True)
     reconstruct.add_argument("--authority-ownership-root", required=True)
+    reconstruct.add_argument("--authority-ownership-mount-root")
     reconstruct.add_argument("--owner-receipt-path", type=Path, required=True)
     reconstruct.add_argument("--expected-owner-receipt-sha256", required=True)
     reconstruct.add_argument("--quiescence-proof-path", type=Path, required=True)

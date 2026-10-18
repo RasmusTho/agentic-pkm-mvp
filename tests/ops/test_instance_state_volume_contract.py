@@ -4353,6 +4353,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
 
     state_mount = tmp_path / "instance-state"
     host_global_root = tmp_path / "host-global"
+    host_ownership_source = tmp_path / "host-ownership-source"
     layout = InstanceStateLayout.for_channel(state_mount, "test")
     runtime = InstanceRegistryRuntime.for_paths(layout, host_global_root)
     vault_root = tmp_path / "vault"
@@ -4392,7 +4393,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
         "authority_cutover": {
             "binding_id": registration.vault_binding_id,
             "root": str(vault_root.resolve()),
-            "ownership_root": str(host_global_root.resolve()),
+            "ownership_root": str(host_ownership_source.resolve()),
         },
         "disposition": "complete",
         "owner_receipt_sha256": hashlib.sha256(owner_receipt.read_bytes()).hexdigest(),
@@ -4413,7 +4414,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
         candidate_image_digest=candidate_digest,
         authority_binding_id=registration.vault_binding_id,
         authority_root=str(vault_root.resolve()),
-        authority_ownership_root=str(host_global_root.resolve()),
+        authority_ownership_root=str(host_ownership_source.resolve()),
         instance_state_root=state_mount,
         host_global_root=host_global_root,
         recovery_receipt_path=recovery_receipt,
@@ -4421,6 +4422,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
         expected_owner_receipt_sha256=request_payload["owner_receipt_sha256"],
         quiescence_proof_path=host_global_root / "deployment-quiescence-proof.json",
         expected_quiescence_proof_sha256=request_payload["quiescence_proof_sha256"],
+        authority_ownership_mount_root=str(host_global_root.resolve()),
     )
 
     assert result["activation"] == "inactive_fenced"
@@ -4437,6 +4439,21 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
             "heimdal-capture-watch": layout.registry_path,
         },
     ).registry_path == str(layout.registry_path.resolve())
+    # Simulate a crash after the registry transaction became durable but before
+    # the recovery result marker was observed.  The retry must use the store's
+    # canonical journal recovery path instead of read_existing(), which is
+    # intentionally fail-closed for this crash window.
+    import app.instance.vault_registry as vault_registry_module
+
+    recovered_store = VaultRegistryStore(layout.registry_path)
+    generation = {
+        path: path.read_bytes() if path.exists() else None
+        for path in recovered_store._transaction_artifacts().values()
+    }
+    vault_registry_module._atomic_private_write(
+        recovered_store.transaction_path,
+        recovered_store._transaction_manifest("committed", generation, generation),
+    )
     assert recovery_module.reconstruct_missing_test_instance_state(
         channel="test",
         failed_operation_id=request_payload["failed_operation_id"],
@@ -4444,7 +4461,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
         candidate_image_digest=candidate_digest,
         authority_binding_id=registration.vault_binding_id,
         authority_root=str(vault_root.resolve()),
-        authority_ownership_root=str(host_global_root.resolve()),
+        authority_ownership_root=str(host_ownership_source.resolve()),
         instance_state_root=state_mount,
         host_global_root=host_global_root,
         recovery_receipt_path=recovery_receipt,
@@ -4452,6 +4469,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
         expected_owner_receipt_sha256=request_payload["owner_receipt_sha256"],
         quiescence_proof_path=host_global_root / "deployment-quiescence-proof.json",
         expected_quiescence_proof_sha256=request_payload["quiescence_proof_sha256"],
+        authority_ownership_mount_root=str(host_global_root.resolve()),
     ) == result
 def test_runtime_preflight_rejects_foreign_channel_host_global_lease_without_mutation(
     tmp_path,

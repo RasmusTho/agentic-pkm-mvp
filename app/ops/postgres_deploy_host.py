@@ -183,9 +183,13 @@ def _read_test_recovery_marker(controller: HostSecretController,
             raise PostgresDeployError()
         marker = json.load(source, object_pairs_hook=_unique_metadata_object)
     if (not isinstance(marker, dict)
-            or set(marker) != {'schema', 'state', 'request', 'fresh_operation_id'}
+            or set(marker) not in ({'schema', 'state', 'request', 'fresh_operation_id'},
+                                   {'schema', 'state', 'request', 'fresh_operation_id',
+                                    'instance_state_reconstructed'})
             or marker['schema'] != _TEST_RECOVERY_MARKER_SCHEMA
-            or marker['state'] not in {'resetting', 'ready'}):
+            or marker['state'] not in {'resetting', 'ready'}
+            or ('instance_state_reconstructed' in marker
+                and type(marker['instance_state_reconstructed']) is not bool)):
         raise PostgresDeployError()
     try:
         fresh_operation_id = _canonical_uuid(marker['fresh_operation_id'])
@@ -196,12 +200,17 @@ def _read_test_recovery_marker(controller: HostSecretController,
     stored = TestRecoveryRequest.from_payload(marker['request'])
     if stored != request:
         raise PostgresDeployError()
+    # A marker written by the source-reset-only producer predates the explicit
+    # instance-state producer.  Treat it as an authenticated reset checkpoint,
+    # never as proof that reconstruction happened.
+    marker.setdefault('instance_state_reconstructed', False)
     return marker
 
 
 def _write_test_recovery_marker(controller: HostSecretController,
                                 request: TestRecoveryRequest, state: str,
-                                fresh_operation_id: str) -> None:
+                                fresh_operation_id: str,
+                                *, instance_state_reconstructed: bool = False) -> None:
     if state not in {'resetting', 'ready'}:
         raise PostgresDeployError()
     fresh_operation_id = _canonical_uuid(fresh_operation_id)
@@ -217,13 +226,15 @@ def _write_test_recovery_marker(controller: HostSecretController,
     if prior is not None:
         if prior['fresh_operation_id'] != fresh_operation_id:
             raise PostgresDeployError()
-        if prior['state'] == state:
+        if (prior['state'] == state
+                and (prior['instance_state_reconstructed'] or not instance_state_reconstructed)):
             return
     payload = {
         'schema': _TEST_RECOVERY_MARKER_SCHEMA,
         'state': state,
         'request': request.payload(),
         'fresh_operation_id': fresh_operation_id,
+        'instance_state_reconstructed': instance_state_reconstructed,
     }
     descriptor, temporary_name = tempfile.mkstemp(
         dir=directory, prefix='.' + path.name + '.', text=True,
@@ -356,24 +367,6 @@ def main(argv: list[str] | None = None) -> int:
             }
             print(json.dumps(proof, sort_keys=True))
             return 0
-        if args.reconstruct_missing_instance_state:
-            if recovery_request is None:
-                raise PostgresDeployError()
-            # The explicit producer is itself crash-idempotent on the VM.  The
-            # host checkpoint binds its fresh successor so a host interruption
-            # after reconstruction cannot start a second deployment operation.
-            marker = _read_test_recovery_marker(controller, recovery_request)
-            if marker is None:
-                result = SshDeployRemote('ygg-test').test_recovery_reconstruct_instance_state(
-                    recovery_request
-                )
-                if result.get('activation') != 'inactive_fenced':
-                    raise PostgresDeployError()
-                _write_test_recovery_marker(
-                    controller, recovery_request, 'ready', str(uuid4())
-                )
-            elif marker['state'] != 'ready':
-                raise PostgresDeployError()
         if recovery_request is not None:
             remote = SshDeployRemote('ygg-test')
             marker = _read_test_recovery_marker(controller, recovery_request)
@@ -408,6 +401,22 @@ def main(argv: list[str] | None = None) -> int:
                     _write_test_recovery_marker(
                         controller, recovery_request, 'ready', fresh_operation_id,
                     )
+            if args.reconstruct_missing_instance_state:
+                marker = _read_test_recovery_marker(controller, recovery_request)
+                if marker is None or not marker['instance_state_reconstructed']:
+                    # The source reset must have completed before this producer
+                    # can consume its disposition and immutable owner proof.
+                    result = remote.test_recovery_reconstruct_instance_state(
+                        recovery_request
+                    )
+                    if result.get('activation') != 'inactive_fenced':
+                        raise PostgresDeployError()
+                    _write_test_recovery_marker(
+                        controller, recovery_request, 'ready', fresh_operation_id,
+                        instance_state_reconstructed=True,
+                    )
+                elif marker['state'] != 'ready':
+                    raise PostgresDeployError()
             admin = SecretAdmin(_configured_host_admin(), controller=controller)
             receipt = deploy_from_host(
                 admin, remote, plan, qualified=lambda: require_qualification(controller),
