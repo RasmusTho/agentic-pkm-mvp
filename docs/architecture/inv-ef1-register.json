@@ -2891,6 +2891,20 @@
       "why_load_bearing": "The actual #6236 strict-refusal subprocess receipt retains its supported local-interpreter argv and exact captured source/input bindings. Those immutable historical bytes distinguish refusal from the later explicit nonconforming report; they are not Product configuration or credentials.",
       "disposition": "stay",
       "issue": "#6236"
+    },
+    {
+      "artifact": "docs/audits/SYSTEM_WIDE_CREDENTIAL_ROUTES_2026-10-18.md",
+      "category": "iii",
+      "why_load_bearing": "The owner-requested value-free credential review binds the accepted admin custody host and the documented Mac consumer role to distinct credential boundaries. It repeats only named host roles/names already in owner contracts, without addresses, endpoints, secret values or live access grants.",
+      "disposition": "stay",
+      "issue": "#5667; PR #6242"
+    },
+    {
+      "artifact": "docs/audits/SYSTEM_WIDE_CREDENTIAL_ROUTES_2026-10-18.md",
+      "category": "iv",
+      "why_load_bearing": "The review names the governed public Bifrost constituent repository and its local-device consumer source to bound cross-repository coverage; these are repository/consumer references, not personal vault data.",
+      "disposition": "stay",
+      "issue": "ADR-0050; PR #6242"
     }
   ]
 }

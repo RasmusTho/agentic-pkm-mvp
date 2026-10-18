@@ -71,6 +71,6 @@ requested scope and current authority; do not paste credentials or tokens into t
 ## Workflow continuation
 
 Follow `.codex/skills/README.md :: Workflow continuation`. For docs-only policy work, continue
-through `docs-governance` and `docs-authoring`. For executable behavior, use the governing Issue and
-`issue-to-code`; for live provisioning or access, continue only through the credential owner's
+through `docs-governance` and execute `docs-authoring`. For executable behavior, use the governing
+Issue and `issue-to-code`; for live provisioning or access, continue only through the credential owner's
 authorized runtime procedure.
