@@ -196,3 +196,28 @@ def test_qualify_heavy_is_fixed_dev_test_and_refuses_uncommitted(monkeypatch, ca
         lambda cls, channel, **_kw: type('Config', (), {'channel': channel, 'journal': Journal})()))
     assert linux.main(['qualify-heavy', 'test', OPERATION]) == 78
     assert json.loads(capsys.readouterr().out)['reason'] == 'expected_committed_native_operation_required'
+
+
+def test_launcher_admits_qualify_heavy(monkeypatch):
+    # The installed launcher is a fixed action/arity allowlist; the controller's
+    # exact `qualify-heavy dev <operation-id>` call must pass it and reach the
+    # root-owned channel configuration read.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location('launcher', ROOT / 'scripts' / 'postgres_deploy_service.py')
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+    opened = []
+
+    def refuse(path, *_args, **_kwargs):
+        opened.append(str(path))
+        raise PermissionError()
+
+    monkeypatch.setattr(launcher.os, 'open', refuse)
+    for argv, admitted in ((['qualify-heavy', 'dev', OPERATION], True), (['qualify-heavy', 'test', OPERATION], True),
+                           (['qualify-heavy', 'dev'], False), (['qualify-heavy', 'stage', OPERATION], False),
+                           (['qualify-anything', 'dev', OPERATION], False)):
+        opened.clear()
+        monkeypatch.setattr(launcher.sys, 'argv', ['yggdrasil-bws-deploy', *argv])
+        assert launcher.run() == 78  # the config read is refused in this sandbox either way
+        assert bool(opened) is admitted, argv

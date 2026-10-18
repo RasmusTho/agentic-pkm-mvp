@@ -241,7 +241,7 @@ E2E_OWNER_BY_FILE["tests/e2e/test_panel_llm_e2e.py"] = "promotion_panel"
 GENERIC_PR_EXCLUDED_TARGETS = frozenset({"tests/e2e/test_panel_llm_e2e.py"})
 
 # Heavy test targets run on the PR path only when the PR changes a source they
-# exercise; otherwise they run after merge on the ygg `test` VM, and
+# exercise; otherwise they run after merge on the ygg `dev` VM, and
 # .github/workflows/post-merge-heavy-tests.yml records the verdict and files a
 # high-priority alert Issue when it is red or missing (#6154, #6158). Admit
 # a target here only with a timing receipt. `tests/deploy` was ~1497 s of PR

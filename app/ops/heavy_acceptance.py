@@ -1,14 +1,15 @@
-"""Post-merge heavy-test profile run on the ygg `test` VM (#6158).
+"""Post-merge heavy-test profile run on the ygg `dev` VM (#6158, #6205).
 
 `scripts/select_pr_tests.py :: HEAVY_PR_DEFERRED_TARGETS` defers heavy targets
-from the required PR check. After a candidate's native `test` deployment
+from the required PR check. After a candidate's native `dev` deployment
 commits, the host controller runs this fixed profile on the VM and dispatches
 its bounded verdict to `.github/workflows/post-merge-heavy-tests.yml`.
 
 The profile runs inside the admitted image against the exact candidate tree
 at `/work`, with the selector's own heavy targets, the PR marker expression and
 the 120-second thread watchdog, matching the GitHub-hosted run it replaces.
-It does not gate channel advancement or rewrite `postmerge-pg.v1`.
+Its verdict decides the candidate's promotion from dev to test, never the
+merge to `main`; it does not rewrite `postmerge-pg.v1`.
 """
 from __future__ import annotations
 

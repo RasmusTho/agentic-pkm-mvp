@@ -2,7 +2,8 @@ name: Post-merge heavy tests
 
 # Heavy test targets that scripts/select_pr_tests.py defers from the required
 # PR check `Unit tests (not pg)` (#6154, owner decision 2026-10-16) run on the
-# ygg `test` VM after each candidate's native test deployment (#6158). The
+# ygg `dev` VM after each candidate's native dev deployment (#6158, #6205);
+# a red dev verdict holds the candidate from test promotion, never the merge. The
 # private host controller dispatches this workflow with a bounded verdict; the
 # run records it as the `post-merge-heavy-tests/ygg` commit status and goes red
 # unless it passed. An hourly watchdog turns a missing verdict into red plus a
@@ -237,9 +238,11 @@ jobs:
             REASON="$REASON (fallback $FALLBACK_RESULT)"
           fi
           title="$(python -c 'import sys; sys.path.insert(0, "scripts"); import post_merge_heavy_tests_alert as a; print(a.ALERT_TITLE)')"
-          export ALERT_TITLE="$title"
+          legacy="$(python -c 'import sys; sys.path.insert(0, "scripts"); import post_merge_heavy_tests_alert as a; print(a.LEGACY_ALERT_TITLE)')"
+          export ALERT_TITLE="$title" LEGACY_ALERT_TITLE="$legacy"
           existing="$(gh issue list --repo "$REPO" --state open --label type:bug --limit 200 \
-            --json number,title --jq '.[] | select(.title == env.ALERT_TITLE) | .number' | head -n 1)"
+            --json number,title \
+            --jq '.[] | select(.title == env.ALERT_TITLE or .title == env.LEGACY_ALERT_TITLE) | .number' | head -n 1)"
           if [[ "$result" == "success" ]]; then
             if [[ -n "$existing" ]]; then
               gh issue close "$existing" --repo "$REPO" \

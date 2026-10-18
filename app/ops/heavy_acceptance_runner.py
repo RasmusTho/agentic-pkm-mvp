@@ -1,4 +1,4 @@
-"""Disposable heavy-test effects on the ygg `test` VM (#6158).
+"""Disposable heavy-test effects on the ygg `dev` VM (#6158, #6205).
 
 The candidate runs in the admitted image with a network-none namespace, a
 read-only root, dropped capabilities and a writable depth-1 Git checkout of

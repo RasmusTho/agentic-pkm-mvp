@@ -46,7 +46,7 @@ def test_verdict_mode_and_watchdog_fail_loud() -> None:
     # A host verdict for a commit on main records a ygg status.
     resolution = verdict.resolve("workflow_dispatch", INPUTS, "f" * 40, "o/r", api=_api())
     assert (resolution.mode, resolution.sha) == ("verdict", SHA)
-    assert resolution.description.startswith("ygg-test passed: selected=500")
+    assert resolution.description.startswith("ygg-dev passed: selected=500")
     failed = verdict.resolve("workflow_dispatch", {**INPUTS, "verdict": "failed",
                                                    "failures": "tests/deploy/test_a.py::test_x"},
                              "f" * 40, "o/r", api=_api())
@@ -141,6 +141,7 @@ def test_workflow_records_status_and_keeps_rolling_alert() -> None:
     script = alert["steps"][-1]["run"]
     assert "gh issue create" in script and "scripts/post_merge_heavy_tests_alert.py" in script
     assert "gh issue comment" in script and "gh issue close" in script
+    assert "env.LEGACY_ALERT_TITLE" in script and "LEGACY_ALERT_TITLE" in script
     # Green only for a recorded passing verdict or a manual run; a watchdog
     # fallback is red even when its tests pass.
     assert 'MODE" == "verdict" && "$VERDICT_RESULT" == "success"' in script
@@ -150,11 +151,13 @@ def test_workflow_records_status_and_keeps_rolling_alert() -> None:
 def test_owner_docs_describe_vm_verdict() -> None:
     strategy = (ROOT / "docs/development/TEST_STRATEGY_HOT_PATH.md").read_text(encoding="utf-8")
     section = strategy.split("## Post-merge heavy tests", 1)[1].split("\n## ", 1)[0]
-    for phrase in ("qualify-heavy", "postmerge-heavy.v1", "post-merge-heavy-tests/ygg",
+    for phrase in ("qualify-heavy dev", "postmerge-heavy.v1", "post-merge-heavy-tests/ygg",
+                   "`main` → `dev` → `test` → `prod`", "No `dev` or `test` git refs are added",
+                   "dev_deploy_failed",
                    "post-merge-heavy-tests/fallback", "6 hours", "per-push GitHub-hosted run is retired",
                    "prio:high"):
         assert phrase in section, phrase
     deployment = (ROOT / "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md").read_text(encoding="utf-8")
-    assert "qualify-heavy test <operation-id>" in deployment
+    assert "qualify-heavy dev <operation-id>" in deployment
     testing = (ROOT / "docs/TESTING.md").read_text(encoding="utf-8")
     assert "post-merge-heavy-tests/ygg" in testing
