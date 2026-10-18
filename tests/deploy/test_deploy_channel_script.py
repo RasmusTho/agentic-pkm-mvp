@@ -5581,6 +5581,7 @@ def test_linux_recovery_accepts_runtime_owned_receipt_under_root_supervisor(monk
         hashlib.sha256(owner_bytes).hexdigest(),
         hashlib.sha256(proof_bytes).hexdigest(),
     )
+    assert receipt_path.stat().st_uid == config.uid
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
