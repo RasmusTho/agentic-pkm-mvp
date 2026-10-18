@@ -1,0 +1,20 @@
+{
+  "schema_name": "manual_rotation_operator_decision",
+  "schema_version": 2,
+  "experiment_id": "manual_coordinator_rotation_6195_conformant",
+  "actor": "/root",
+  "at": "2026-10-18T16:51:44Z",
+  "probe_receipt": {
+    "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/writer/initial-probe-receipt.json",
+    "sha256": "607a13eccb3bb0758108d43e4d5c76a981f1a2fd28fd5b6f7199a792f291796a",
+    "bytes_length": 18050
+  },
+  "initial_fidelity": {
+    "bytes_length": 13177,
+    "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/initial/capture-fidelity.original.json",
+    "sha256": "693ddc95b40dc678794c59a75f38f2d687871941b5acd59763d83c1f6f5ea252"
+  },
+  "decision": "activate_read_only_successor",
+  "rationale": "I independently inspected the exact initial v2 comparison/probe receipt, raw/native clock fidelity and the admission-derived six-field metadata. Seven field results match, missing claims are empty, fabrication remains unknown, next action is not comparable and external refresh is not currently required. Within the owner's explicit manual-only mandate I choose to exercise one bounded read-only terminal-reconciliation role continuation, which must refresh live truth again. This is my separate operator decision, not a score, threshold, comparison-derived activation or whole-session/writer/lease transfer. Unknown engine identity and all normal delivery quality gates remain unchanged.",
+  "decision_source": "explicit_operator_action_not_comparison_rule"
+}
