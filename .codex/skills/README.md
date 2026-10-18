@@ -227,6 +227,9 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
   - single entry point for routing Jev calls, Mac Keychain secrets, Linux BWS, Heimdal credentials,
     and planned infrastructure credentials to their existing owner contracts and current
     qualification state; it never stores or defines secret policy
+- `secret-management`
+  - cross-owner secret architecture and access-policy maintenance; uses existing owner contracts,
+    stores, and interfaces, with a reusable update prompt and metadata-only routing where implemented
 - `jev-direct`
   - run one bounded, typed development-time Jev call through the local helper; the provider key
     stays inside that helper, and the tool does not change Codex/Claude models or runtime routes

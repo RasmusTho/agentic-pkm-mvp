@@ -123,7 +123,11 @@ current-state claims and procedures to the documents below.
 
 ### Proposed separate infrastructure repository and disposable pilot (Issue #5856; preparation only)
 
-The repository split remains a proposal. This issue creates no repository, provider token, backend,
+The following preparation text records the proposal at #5856. Subsequent implementation now lives
+in `RasmusTho/yggdrasil-infra`; its current README and Issue #1 own the VM104-only credential,
+native encrypted local state/plan, and import-acceptance contract. Do not use this preparation
+proposal to infer that the repository or credential path is absent, or to require a remote backend.
+The repository split at the time of this preparation remained a proposal. This issue creates no repository, provider token, backend,
 state object, imported binding, VM, network, or deployment. If the owner approves the split, the
 private repository candidate is `yggdrasil-infra` (the final name is an owner decision). Its boundary
 is the Platform and Operations System and its first slice should be deliberately small:

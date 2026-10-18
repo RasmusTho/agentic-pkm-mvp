@@ -1,4 +1,5 @@
-State: BMI-01 through BMI-05 are implemented; parent acceptance remains pending under #3288. The
+State: BMI-01 through BMI-05 are implemented; parent #3288 closed on 2026-09-02. That delivered
+acceptance is historical evidence, not proof of a current usable host session. The
 durable Model Inquiry contract is provider-neutral and capability-resolved. The current operational
 profile enables only the Codex subscription transport; future provider/model changes require
 declared configuration plus an explicitly registered compatible transport. The
