@@ -9,8 +9,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
+import time
 from typing import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +23,7 @@ from scripts.select_pr_tests import PR_MARKER_EXPRESSION
 
 MAX_PARTITIONS = 4
 MAX_SHARD_TIMEOUT_SECONDS = 3300
+PROCESS_GROUP_GRACE_SECONDS = 1.0
 
 
 def _string_list(value: object, *, name: str) -> tuple[str, ...]:
@@ -51,6 +54,19 @@ def validate_inventory(
     return partitions
 
 
+def _terminate_process_group(process_group: int) -> None:
+    """Terminate every descendant in one shard's private process group."""
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except (PermissionError, ProcessLookupError):
+        return
+    time.sleep(PROCESS_GROUP_GRACE_SECONDS)
+    try:
+        os.killpg(process_group, signal.SIGKILL)
+    except (PermissionError, ProcessLookupError):
+        pass
+
+
 def _run_partition(
     index: int, targets: Sequence[str], *, log_dir: Path, timeout_seconds: int
 ) -> tuple[int, int, Path, bool]:
@@ -72,16 +88,15 @@ def _run_partition(
             stderr=subprocess.STDOUT,
             text=True,
             env=os.environ.copy(),
+            start_new_session=True,
         )
         try:
-            return index, process.wait(timeout=timeout_seconds), log_path, False
+            returncode = process.wait(timeout=timeout_seconds)
+            _terminate_process_group(process.pid)
+            return index, returncode, log_path, False
         except subprocess.TimeoutExpired:
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+            _terminate_process_group(process.pid)
+            process.wait()
             log.write(f"\nPARTITION TIMED OUT after {timeout_seconds}s\n")
             log.flush()
             return index, 124, log_path, True

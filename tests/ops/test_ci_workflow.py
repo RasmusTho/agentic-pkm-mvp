@@ -503,10 +503,15 @@ def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None
     fake_pytest.write_text(
         f"#!{sys.executable}\n" + r'''
 import os
+from pathlib import Path
+import subprocess
 import sys
 import time
 target_text = " ".join(sys.argv[1:])
 print(target_text, flush=True)
+if child_pid_path := os.environ.get("FAKE_CHILD_PID_PATH"):
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    Path(child_pid_path).write_text(str(child.pid))
 if (timeout_target := os.environ.get("FAKE_TIMEOUT_TARGET")) and timeout_target in target_text:
     time.sleep(5)
 if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target_text:
@@ -547,6 +552,19 @@ if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target
     timed_out = run(env={"FAKE_TIMEOUT_TARGET": "tests/deploy"}, timeout=1)
     assert timed_out.returncode == 1
     assert "PARTITION TIMED OUT after 1s" in timed_out.stderr
+    child_pid_path = tmp_path / "child.pid"
+    child_cleanup = run(env={"FAKE_CHILD_PID_PATH": str(child_pid_path)})
+    assert child_cleanup.returncode == 0, child_cleanup.stdout + child_cleanup.stderr
+    child_pid = int(child_pid_path.read_text())
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"partition descendant {child_pid} survived process-group cleanup")
 
 
 @pytest.mark.parametrize("mode", ["shard-failure", "incomplete", "serial-failure"])
