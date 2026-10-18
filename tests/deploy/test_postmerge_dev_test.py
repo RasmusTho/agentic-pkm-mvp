@@ -477,6 +477,7 @@ def test_absence_proof_requires_exact_checkpoint_binding_and_complete_evidence(t
             ),
             absence=lambda *_args: proof,
             deploy=lambda *_args: pytest.fail('ambiguous absence advanced deployment'),
+            current_main=lambda: 'b' * 40,
         )
     assert json.loads(path.read_text())['phase'] == 'pending'
 
