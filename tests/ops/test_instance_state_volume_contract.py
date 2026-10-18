@@ -1726,6 +1726,7 @@ def test_quiescence_proof_serializes_claim_adoption_from_its_first_read(
                 "all_consumers_stopped": True,
                 "probe_count": 2,
                 "controller": first_lease["controller"],
+                "controller_namespace_digest": "0" * 64,
                 "domains": domains,
                 "snapshot_digests": [empty_digest, empty_digest],
             }
