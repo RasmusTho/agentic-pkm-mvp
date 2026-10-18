@@ -3934,7 +3934,7 @@ def test_test_recovery_accepts_exact_failed_cutover_plan_with_automatic_successo
         'sha256:' + 'f' * 64, True,
     )
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
-    failed = replace(successor, automatic=False, ack_forward_only=True,
+    failed = replace(successor, automatic=False, ack_forward_only=True, image_digest=None,
                      authority_cutover=authority)
     receipt = DeployReceipt(
         operation_id, 'test', 'deploy', 'failed', 'failed',

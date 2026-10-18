@@ -182,9 +182,15 @@ class TestRecoveryRequest:
         # retained failed cutover. Automatic successors must keep the
         # request-level acknowledgement disabled, so it is not a successor
         # compatibility field.
-        for field in ('channel', 'revision', 'services', 'consumers', 'image_digest'):
+        for field in ('channel', 'revision', 'services', 'consumers'):
             if getattr(failed_plan, field) != getattr(self.plan, field):
                 raise PostgresDeployError()
+        # The manual failed cutover producer may not have selected an image
+        # digest.  The automatic successor must always carry its own digest;
+        # when the retained plan has one, bind it to that successor as well.
+        if (failed_plan.image_digest is not None
+            and failed_plan.image_digest != self.plan.image_digest):
+            raise PostgresDeployError()
 
     def payload(self) -> dict[str, Any]:
         self.validate()
