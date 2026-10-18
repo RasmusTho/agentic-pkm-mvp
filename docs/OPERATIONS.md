@@ -555,7 +555,7 @@ Companion docs:
   retire unknown cleanup. Retry the owning qualifier, not the other journey.
   Follow the same linked deployment/testing contracts above. Repository delivery of #6050 is
   not actual TEST PASS or parent #3347 acceptance.
-- Fixed `qualify-heavy test <committed-operation-uuid>` runs the post-merge heavy test targets
+- Fixed `qualify-heavy test <committed-operation-uuid>` (admitted by the installed launcher's action allowlist from #6205) runs the post-merge heavy test targets
   (`postmerge-heavy.v1`, #6158) for the committed TEST candidate. The post-merge host controller
   calls it after each committed TEST deployment and dispatches the bounded verdict to
   `post-merge-heavy-tests.yml`. It takes no channel lock, never gates channel advancement, and its
