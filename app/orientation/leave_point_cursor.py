@@ -36,6 +36,7 @@ ALLOWED_CURSOR_FIELDS = {
     "source_ref",
     "content_hash_at_capture",
     "capture_reason",
+    "vault_binding_id",
 }
 ALLOWED_SOURCE_REF_FIELDS = {"kind", "ref_id"}
 
@@ -118,8 +119,49 @@ def _connect() -> sqlite3.Connection:
         ON leave_point_trace_events(vault_id, channel, captured_at, id)
         """
     )
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(leave_point_trace_events)")}
+    if "vault_binding_id" not in columns:
+        # MVR-05B4c4: rows captured before binding keying stay NULL (legacy-only).
+        conn.execute("ALTER TABLE leave_point_trace_events ADD COLUMN vault_binding_id TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_leave_point_trace_binding_scope
+        ON leave_point_trace_events(vault_binding_id, channel, captured_at, id)
+        """
+    )
     conn.commit()
     return conn
+
+
+def _binding_rows(vault_binding_id: str, channel: str) -> list[sqlite3.Row]:
+    """A scoped read: open the cursor DB read-only and never create or migrate it.
+
+    An absent DB, or one written before binding keying, is an empty projection.
+    """
+
+    path = _db_path()
+    if not path.is_file():
+        return []
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        conn.row_factory = sqlite3.Row
+        return conn.execute(
+            """
+            SELECT payload
+            FROM leave_point_trace_events
+            WHERE vault_binding_id = ? AND channel = ?
+            ORDER BY captured_at DESC, id DESC
+            LIMIT 50
+            """,
+            (vault_binding_id, channel),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
 
 
 def _safe_str(value: object) -> str | None:
@@ -184,7 +226,13 @@ def capture_leave_point_cursor(
     content_hash_at_capture: str | None = None,
     captured_at: datetime | None = None,
     ttl: timedelta = DEFAULT_TTL,
+    vault_binding_id: str | None = None,
 ) -> dict[str, Any]:
+    """Append one cursor event; ``vault_binding_id`` keys it to the producing binding.
+
+    An unstamped event (no proven binding) is visible only to the carrier-free,
+    display-name keyed read.
+    """
     if source_kind not in ALLOWED_SOURCE_KINDS:
         raise ValueError("invalid leave-point source kind")
     if capture_reason not in ALLOWED_CAPTURE_REASONS:
@@ -216,12 +264,16 @@ def capture_leave_point_cursor(
         "content_hash_at_capture": _safe_str(content_hash_at_capture),
         "capture_reason": capture_reason,
     }
+    binding_id = _safe_str(vault_binding_id)
+    if binding_id is not None:
+        event["vault_binding_id"] = binding_id
     with _connect() as conn:
         conn.execute(
             """
             INSERT INTO leave_point_trace_events (
-                event_type, vault_id, channel, artifact_uuid, captured_at, trace_id, payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                event_type, vault_id, channel, artifact_uuid, captured_at, trace_id, payload,
+                vault_binding_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 LEAVE_POINT_EVENT_TYPE,
@@ -231,13 +283,21 @@ def capture_leave_point_cursor(
                 event["captured_at"],
                 resolved_trace_id,
                 json.dumps(event, sort_keys=True, separators=(",", ":")),
+                binding_id,
             ),
         )
         conn.commit()
     return event
 
 
-def _valid_cursor_event(payload: Any, *, vault_id: str, channel: str, now: datetime) -> dict[str, Any] | None:
+def _valid_cursor_event(
+    payload: Any,
+    *,
+    vault_id: str | None,
+    channel: str,
+    now: datetime,
+    vault_binding_id: str | None = None,
+) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     if set(payload) - ALLOWED_CURSOR_FIELDS:
@@ -249,7 +309,12 @@ def _valid_cursor_event(payload: Any, *, vault_id: str, channel: str, now: datet
         return None
     if payload.get("event_type") != LEAVE_POINT_EVENT_TYPE:
         return None
-    if payload.get("vault_id") != vault_id or payload.get("channel") != channel:
+    if payload.get("channel") != channel:
+        return None
+    if vault_binding_id is not None:
+        if payload.get("vault_binding_id") != vault_binding_id:
+            return None
+    elif payload.get("vault_id") != vault_id:
         return None
     if not _safe_str(payload.get("artifact_uuid")) or not _safe_str(payload.get("trace_id")):
         return None
@@ -292,17 +357,10 @@ def _projection(
     )
 
 
-def latest_leave_point_projection(
-    *,
-    vault_id: str,
-    channel: str,
-    vault_root: Path,
-    derived_label: str | None = None,
-    derived_at: str | None = None,
-) -> LeavePointProjection:
+def _display_name_rows(vault_id: str, channel: str) -> list[sqlite3.Row]:
     try:
         with _connect() as conn:
-            rows = conn.execute(
+            return conn.execute(
                 """
                 SELECT payload
                 FROM leave_point_trace_events
@@ -313,15 +371,42 @@ def latest_leave_point_projection(
                 (vault_id, channel),
             ).fetchall()
     except Exception:
-        rows = []
+        return []
 
+
+def latest_leave_point_projection(
+    *,
+    vault_id: str,
+    channel: str,
+    vault_root: Path,
+    derived_label: str | None = None,
+    derived_at: str | None = None,
+    vault_binding_id: str | None = None,
+) -> LeavePointProjection:
+    """Latest valid cursor for the carrier-free display-name key, or one binding.
+
+    With ``vault_binding_id`` (a scoped read, MVR-05B4c4) the cursor is keyed by
+    binding, so two bindings sharing a display name keep separate cursors, and the
+    DB is opened read-only: the read never creates, migrates or writes it.
+    """
+
+    if vault_binding_id is not None:
+        rows = _binding_rows(vault_binding_id, channel)
+    else:
+        rows = _display_name_rows(vault_id, channel)
     now = _now()
     for row in rows:
         try:
             payload = json.loads(row["payload"])
         except Exception:
             continue
-        event = _valid_cursor_event(payload, vault_id=vault_id, channel=channel, now=now)
+        event = _valid_cursor_event(
+            payload,
+            vault_id=vault_id,
+            channel=channel,
+            now=now,
+            vault_binding_id=vault_binding_id,
+        )
         if event is None:
             continue
         artifact_uuid = str(event["artifact_uuid"])

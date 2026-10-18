@@ -18,7 +18,7 @@ from app.agents.panel.writeback import strip_ai_status_block
 from app.ingest.config import resolve_ingest_config
 from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.index.outbox import append_jsonl
-from app.observability.ingest_meta import record_ingest_run
+from app.observability.ingest_meta import ingest_binding_for_root, record_ingest_run
 from app.observability.log import with_trace_id
 from app.search.service import VectorProjectionFailure, ingest_object as index_ingest_object
 from app.settings.runtime import get_settings_bundle
@@ -1203,6 +1203,7 @@ def _ingest_candidates(
             malformed=summary.malformed,
             ok=summary.errors == 0,
             message=None if summary.errors == 0 else "ingest errors",
+            vault_binding_id=ingest_binding_for_root(vault_root) or "",
         )
     except Exception:
         pass
