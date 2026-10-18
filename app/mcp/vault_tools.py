@@ -11,6 +11,7 @@ from uuid import uuid4
 import yaml
 
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
+from app.instance.vault_carrier import VaultCarrier
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import (
     KNOWLEDGE_WRITE_ACTION,
@@ -38,7 +39,29 @@ def _as_path(value: Any) -> Path | None:
     return None
 
 
-def _resolve_mcp_env_root() -> Path | None:
+VAULT_CARRIER_SETTING = "vault_carrier"
+
+
+def _settings_carrier(settings: Mapping[str, Any] | None) -> VaultCarrier | None:
+    if not settings:
+        return None
+    carrier = settings.get(VAULT_CARRIER_SETTING)
+    if carrier is None:
+        return None
+    if not isinstance(carrier, VaultCarrier):
+        raise VaultToolError("vault_carrier must be a resolved VaultCarrier")
+    return carrier
+
+
+def _compatibility_env_vault_root() -> Path | None:
+    """Named compatibility adapter: the process-global MCP vault environment.
+
+    Used only when the caller supplied neither a carrier nor an explicit path.
+    It keeps the pre-carrier MCP journey (``MCP_VAULT_ROOT``, ``VAULT_DIR``, then
+    the configured channel ``VAULT_ROOT``) until #3368 defines MCP context
+    semantics; a carrier-bearing call never reaches it.
+    """
+
     for env_var in ("MCP_VAULT_ROOT", "VAULT_DIR"):
         env_root = os.getenv(env_var)
         if not env_root or not env_root.strip():
@@ -47,12 +70,28 @@ def _resolve_mcp_env_root() -> Path | None:
         if not path.exists():
             raise VaultRootMisconfiguredError(env_var, path)
         return path.resolve()
-    return None
+    return resolve_optional_vault_root()
 
 
-def get_vault_root(settings: Mapping[str, Any] | None = None) -> Path:
-    """Return the configured vault root directory."""
+def get_vault_root(
+    settings: Mapping[str, Any] | None = None,
+    *,
+    carrier: VaultCarrier | None = None,
+) -> Path:
+    """Return the vault root for one MCP tool call.
 
+    Precedence is explicit-first (MVR-05B4a): a ``VaultCarrier`` (argument or the
+    ``vault_carrier`` setting) is the whole answer -- its root, or a refusal for a
+    no-vault carrier -- and no environment key or process selection is read.
+    Without a carrier an explicit settings path wins; only a call with neither
+    reaches the named compatibility adapter.
+    """
+
+    carrier = carrier or _settings_carrier(settings)
+    if carrier is not None:
+        if carrier.root is None:
+            raise VaultToolError("no vault is bound to this MCP carrier")
+        return carrier.root
     candidates: list[Any] = []
     if settings:
         for key in ("vault_root", "root", "path"):
@@ -68,17 +107,34 @@ def get_vault_root(settings: Mapping[str, Any] | None = None) -> Path:
         if path:
             return path
     try:
-        env_root = _resolve_mcp_env_root()
-        if env_root is not None:
-            return env_root
-        resolved = resolve_optional_vault_root()
+        resolved = _compatibility_env_vault_root()
     except VaultRootMisconfiguredError as exc:
         raise VaultToolError(str(exc)) from exc
     if resolved is not None:
         return resolved
     raise VaultToolError(
-        "vault root is required; pass vault_root/settings or configure MCP_VAULT_ROOT, VAULT_DIR, or VAULT_ROOT"
+        "vault root is required; pass a vault carrier, vault_root/settings, or configure "
+        "MCP_VAULT_ROOT, VAULT_DIR, or VAULT_ROOT"
     )
+
+
+def get_write_vault_root(
+    settings: Mapping[str, Any] | None = None,
+    *,
+    carrier: VaultCarrier | None = None,
+) -> Path:
+    """The vault root an MCP *write* targets, with the pre-05C mutation seal.
+
+    A write carrying a scoped session/override context fails before any
+    filesystem seam (``capability_not_ready``), exactly like the HTTP mutation
+    routes; an operator carrier (explicit selection, instance default) and the
+    carrier-free compatibility journey keep their single-binding write.
+    """
+
+    carrier = carrier or _settings_carrier(settings)
+    if carrier is not None and carrier.is_scoped:
+        raise VaultToolError("capability_not_ready: scoped MCP writes are sealed until MVR-05C")
+    return get_vault_root(settings, carrier=carrier)
 
 
 def _slugify(value: str) -> str:
@@ -234,6 +290,7 @@ def append_note(
     vault_root: Path | str | None = None,
     settings: Mapping[str, Any] | None = None,
     relative_dir: str = "_mcp",
+    carrier: VaultCarrier | None = None,
 ) -> Path:
     """Create a markdown note with frontmatter inside the vault."""
 
@@ -241,7 +298,10 @@ def append_note(
         raise VaultToolError("title is required")
     if not isinstance(body, str) or not body.strip():
         raise VaultToolError("body is required")
-    root = _as_path(vault_root) if vault_root else get_vault_root(settings)
+    carrier = carrier or _settings_carrier(settings)
+    if carrier is not None and vault_root:
+        raise VaultToolError("pass either a vault carrier or an explicit vault_root, not both")
+    root = _as_path(vault_root) if vault_root else get_write_vault_root(settings, carrier=carrier)
     if root is None:
         raise VaultToolError("vault root is required")
     root = root.expanduser().resolve()
@@ -326,4 +386,10 @@ def append_note(
     return published_path
 
 
-__all__ = ["VaultToolError", "append_note", "get_vault_root"]
+__all__ = [
+    "VAULT_CARRIER_SETTING",
+    "VaultToolError",
+    "append_note",
+    "get_vault_root",
+    "get_write_vault_root",
+]

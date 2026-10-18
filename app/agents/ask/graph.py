@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, List, Optional, Sequence
 
 from langgraph.graph import END, START, StateGraph
 
@@ -44,6 +45,7 @@ from app.retrieval.capability import RetrievalRequest, retrieve
 from app.instance.context_bound_read import resolve_context_read_roots
 from app.instance.vault_registry import VaultRegistryStore
 from app.settings.models import LLMRoutingSettings, RetrievalTuning
+from app.vault.active_context_v1 import ActiveContextSetV1
 from app.vault.manager import get_vault_manager
 
 logger = logging.getLogger(__name__)
@@ -208,7 +210,62 @@ def _provisional_recall_receipt_path() -> Path:
     return DEFAULT_PROVISIONAL_RECALL_RECEIPTS_PATH
 
 
-def _active_recall_vault_root() -> Path | None:
+@dataclass(frozen=True)
+class RecallSource:
+    """One vault the recall node reads, fixed before the graph runs (MVR-05B4a).
+
+    The recall node never resolves a vault itself: ``run_ask_graph`` resolves the
+    turn's sources exactly once, from the request's immutable ActiveContextSet
+    when one is carried, and only for a carrier-free turn from the named
+    compatibility adapters below. A selection change while the graph runs can
+    therefore not move recall to another binding.
+    """
+
+    root: Path | None
+    vault_id: str | None
+    vault_binding_id: str | None = None
+    context_generation: int | None = None
+
+
+def context_recall_sources(active_context: ActiveContextSetV1) -> tuple[RecallSource, ...]:
+    """Resolve a scoped turn's recall sources from its own immutable context only."""
+
+    registry_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+    if not registry_path:
+        raise RuntimeError("instance registry is not bound for scoped ASK recall")
+    roots = resolve_context_read_roots(
+        active_context,
+        registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
+    )
+    binding_by_id = {binding.vault_binding_id: binding for binding in active_context.source_bindings}
+    return tuple(
+        RecallSource(
+            root=source.root,
+            vault_id=binding_by_id[source.vault_binding_id].vault_id,
+            vault_binding_id=source.vault_binding_id,
+            context_generation=source.context_generation,
+        )
+        for source in roots
+        if source.vault_binding_id in binding_by_id
+    )
+
+
+def compatibility_recall_sources(active_scope: str | None) -> tuple[RecallSource, ...]:
+    """Carrier-free compatibility journey: the process selection's recall vault.
+
+    Only a turn without an ActiveContextSet (legacy ``/api/ask``, voice, the smoke
+    CLI) reaches this, and only once per turn. It retires with the single-binding
+    compatibility selector (MVR-06).
+    """
+
+    vault_root = _compatibility_recall_vault_root()
+    vault_id = _compatibility_recall_vault_id(vault_root) if active_scope is not None else None
+    # Preserve the legacy unbound seam: the retrieval helper may be replaced by
+    # an in-memory/test provider even when no filesystem vault is configured.
+    return (RecallSource(root=vault_root, vault_id=vault_id),)
+
+
+def _compatibility_recall_vault_root() -> Path | None:
     manager = get_vault_manager()
     context = manager.context
     try:
@@ -236,7 +293,7 @@ def _active_recall_vault_root() -> Path | None:
     return None
 
 
-def _active_recall_vault_id(vault_root: Path | None) -> str | None:
+def _compatibility_recall_vault_id(vault_root: Path | None) -> str | None:
     if vault_root is None:
         return None
     resolved_root = vault_root.expanduser().resolve()
@@ -278,35 +335,19 @@ def _recall_node(
     ask_settings,
     consuming_authority: ConsumingAuthority = ConsumingAuthority.READ_ONLY,
     citation_reference: str | None = None,
+    recall_sources: Sequence[RecallSource] | None = None,
 ) -> AgentState:
     # The same scope retrieval used for this turn (#2921), under the same precedence rule.
     active_scope = _active_scope(state)
-    sources: list[tuple[Path | None, str | None]] = []
-    if state.active_context is not None:
-        registry_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
-        if not registry_path:
-            raise RuntimeError("instance registry is not bound for scoped ASK recall")
-        roots = resolve_context_read_roots(
-            state.active_context,
-            registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
+    if recall_sources is None:
+        # A direct node call (tests, tooling) resolves exactly as run_ask_graph
+        # would; the production graph always passes the turn's fixed sources.
+        recall_sources = (
+            context_recall_sources(state.active_context)
+            if state.active_context is not None
+            else compatibility_recall_sources(active_scope)
         )
-        binding_by_id = {
-            binding.vault_binding_id: binding
-            for binding in state.active_context.source_bindings
-        }
-        sources = [
-            (source.root, binding_by_id[source.vault_binding_id].vault_id)
-            for source in roots
-            if source.vault_binding_id in binding_by_id
-        ]
-    else:
-        vault_root = _active_recall_vault_root()
-        active_vault_id = (
-            _active_recall_vault_id(vault_root) if active_scope is not None else None
-        )
-        # Preserve the legacy unbound seam: the retrieval helper may be replaced by
-        # an in-memory/test provider even when no filesystem vault is configured.
-        sources = [(vault_root, active_vault_id)]
+    sources = [(source.root, source.vault_id) for source in recall_sources]
 
     candidate_sources: list[tuple[RecallCandidate, Path | None]] = []
     provisional_sources: list[tuple[Any, Path | None]] = []
@@ -708,6 +749,7 @@ def build_ask_graph(
     *,
     retrieval_tuning: RetrievalTuning | None = None,
     llm_routing: LLMRoutingSettings | None = None,
+    recall_sources: Sequence[RecallSource] | None = None,
 ):
     ask_settings = ask_settings or get_ask_settings()
     graph = StateGraph(AgentState)
@@ -722,7 +764,10 @@ def build_ask_graph(
     )
     graph.add_node("orientation", _orientation_node)
     graph.add_node("rerank", lambda s: _rerank_node(s, ask_settings=ask_settings))
-    graph.add_node("recall", lambda s: _recall_node(s, ask_settings=ask_settings))
+    graph.add_node(
+        "recall",
+        lambda s: _recall_node(s, ask_settings=ask_settings, recall_sources=recall_sources),
+    )
     graph.add_node(
         "answer", lambda s: _answer_node(
             s,
@@ -756,14 +801,25 @@ def run_ask_graph(
     ONCE here — request binding first, ambient ``ASK_DOMAIN_SCOPE`` as the process-level default —
     and then carried on the state, so retrieval, recall, and envelope assembly all speak about the
     same scope.
+
+    ``active_context`` is the request's immutable ActiveContextSet (MVR-05B4a). The vaults recall
+    reads are resolved ONCE here as well: from that context when it is carried, and only for a
+    carrier-free turn from the named compatibility adapter. No graph node resolves a vault, so a
+    selection change while the turn runs cannot rebind it.
     """
     ask_settings = ask_settings or get_ask_settings()
+    resolved_scope = (active_scope or "").strip() or _resolve_domain_scope()
+    recall_sources = (
+        context_recall_sources(active_context)
+        if active_context is not None
+        else compatibility_recall_sources(resolved_scope)
+    )
     compiled = build_ask_graph(
         ask_settings,
         retrieval_tuning=retrieval_tuning,
         llm_routing=llm_routing,
+        recall_sources=recall_sources,
     )
-    resolved_scope = (active_scope or "").strip() or _resolve_domain_scope()
     initial = AgentState(
         trace_id=trace_id,
         query=query,
@@ -790,4 +846,11 @@ def run_ask_graph(
         )
 
 
-__all__ = ["run_ask_graph", "build_ask_graph", "TOP_K_INITIAL"]
+__all__ = [
+    "RecallSource",
+    "TOP_K_INITIAL",
+    "build_ask_graph",
+    "compatibility_recall_sources",
+    "context_recall_sources",
+    "run_ask_graph",
+]

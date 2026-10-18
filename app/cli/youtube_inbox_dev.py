@@ -53,7 +53,22 @@ from app.knowledge_acquisition.youtube_token_store import (
     YouTubeTokenStore,
     resolve_token_store_key,
 )
-from app.vault.manager import get_vault_manager
+from app.cli.vault_context import (
+    CliVaultContextError,
+    carrier_vault_context,
+    resolve_cli_vault_context,
+)
+from app.vault.manager import VaultContext
+
+
+def invocation_vault_context() -> VaultContext:
+    """This invocation's one vault context: the instance default, else the picker's selection."""
+
+    try:
+        carrier = resolve_cli_vault_context(env_policy="none", use_process_selection=True)
+    except CliVaultContextError as exc:
+        raise click.ClickException(str(exc)) from exc
+    return carrier_vault_context(carrier)
 
 
 @dataclass(frozen=True)
@@ -133,10 +148,13 @@ def _build_youtube_inbox_dev_services(
     )
     api_client = YouTubeApiClient(token_provider=token_provider)
 
+    # Resolved once per invocation (MVR-05B4a); the gate never re-reads selection.
+    vault_context = invocation_vault_context()
+
     def global_sync_enabled() -> bool:
         from app.knowledge_acquisition.sync_runtime import is_youtube_sync_globally_enabled
 
-        return is_youtube_sync_globally_enabled(get_vault_manager().context())
+        return is_youtube_sync_globally_enabled(vault_context)
 
     sync = YouTubeInboxSyncV1(
         account_binding_id=account_binding_id,
@@ -303,7 +321,7 @@ def drain(max_requests: int) -> None:
     claimed without a writable target could not be drained and would block the
     next pass.
     """
-    vault_context = get_vault_manager().context()
+    vault_context = invocation_vault_context()
     if not vault_context.is_selected:
         raise click.ClickException(
             "no vault is selected; drain writes candidate notes and requires a selected vault"

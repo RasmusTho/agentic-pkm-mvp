@@ -28,7 +28,7 @@ from app.api.routes.vault_resolution import (
 )
 from app.config.paths import VaultRootMisconfiguredError
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_effect_window
-from app.instance.context_settings import resolve_context_settings
+from app.instance.context_settings import IncompatibleBindingSettingsError, resolve_context_settings
 from app.instance.vault_registry import VaultRegistryStore
 from app.agents.ask.utils import get_ask_settings
 from app.components.llm.fabric import LLMBackendTimeout
@@ -306,6 +306,10 @@ def ask_scoped(
             # serialization after this block would create a stale-data
             # publication gap during revoke/relocation.
             return JSONResponse(content=response.model_dump(mode="json"))
+    except IncompatibleBindingSettingsError as exc:
+        # The whole request fails before any read, cache fill, model call or
+        # retrieval; no binding's settings are chosen by iteration order.
+        raise HTTPException(status_code=409, detail="incompatible_binding_settings") from exc
     except ContextBoundReadError as exc:
         raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
 
