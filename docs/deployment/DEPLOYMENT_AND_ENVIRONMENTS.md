@@ -170,7 +170,15 @@ objects from the public repository under the native channel lock, without moving
 checkout or passing credentials. A private atomic checkpoint deduplicates build attempts. Stable
 candidate/channel operation IDs resume an interrupted call through the existing native journals,
 including a terminal result written before the checkpoint; unknown outcomes are retried with that
-same ID and never silently treated as completed. A failed candidate does not veto later candidates.
+same ID and never silently treated as completed. A pending checkpoint may be retired as
+`superseded_before_deployment` only when a read-only, exact candidate/channel/operation-bound probe
+proves that the operation ID never entered the append-only host admission history and that the native
+channel has no matching journal, request, worker, or lock footprint. The probe crosses the host
+boundary with fixed content-free fields only, then appends a durable same-ID retirement fence while
+the host admission lock is still held; a crash before the local checkpoint write reuses that fence,
+and the fenced ID can never enter deployment admission. A timeout, malformed or mismatched proof, active native
+footprint, nonterminal evidence, or any ambiguity preserves the pending checkpoint and its same-ID
+recovery path. A failed candidate does not veto later candidates.
 
 Automatic deployment uses existing secrets only and follows the ordinary dev/test migration policy:
 forward-only work is classified and recorded without requiring operator acknowledgement. Native

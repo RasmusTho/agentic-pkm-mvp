@@ -2182,6 +2182,45 @@ class DeploymentSupervisor:
             effects.retire_reconciled_channel_lock(lock)
         return {'receipt': receipt.payload()}
 
+    def _prove_absence(self, operation_id: str, plan: DeployPlan) -> dict[str, Any]:
+        """Return only fixed fields after proving this ID has no native footprint."""
+        self._require_current_config()
+        previous = self.config.journal.read()
+        if (
+            previous is None
+            or previous.operation_id == operation_id
+            or previous.terminal_result not in {'committed', 'aborted', 'failed'}
+        ):
+            raise PostgresDeployError()
+        # The private request must remain exactly bound to the foreign terminal
+        # receipt. A missing, malformed, or differently bound request is ambiguous.
+        self.config.journal.bound_plan(previous.operation_id)
+        lock_path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
+        try:
+            os.stat(lock_path, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise PostgresDeployError()
+        operation = self.operation
+        if operation is not None and (
+            operation.operation_id == operation_id
+            or not operation.finished.is_set()
+            or operation.thread.is_alive()
+        ):
+            raise PostgresDeployError()
+        return {
+            'contract': 'native-deploy-operation-absence.v1',
+            'operation_id': operation_id,
+            'channel': plan.channel,
+            'candidate_sha': plan.revision,
+            'image_digest': plan.image_digest or '',
+            'native_operation_absent': True,
+            'native_worker_absent': True,
+            'native_lock_absent': True,
+            'native_request_absent': True,
+        }
+
     def _test_recovery_reset(self, data: dict[str, Any]) -> dict[str, Any]:
         """Run the exact, TEST-only derived-state reset behind the VM RPC."""
         self._require_current_config()
@@ -2234,10 +2273,14 @@ class DeploymentSupervisor:
         if (plan.automatic or plan.authority_cutover is not None) and data['bootstrap']:
             raise PostgresDeployError()
         if plan.channel != self.config.channel or data['action'] not in {
-            'prepare', 'activate', 'join', 'reconcile-failed'
+            'prepare', 'activate', 'join', 'reconcile-failed', 'prove-absence'
         }:
             raise PostgresDeployError()
         with self.mutex:
+            if data['action'] == 'prove-absence':
+                if data['bootstrap'] is not False or not plan.automatic:
+                    raise PostgresDeployError()
+                return self._prove_absence(operation_id, plan)
             if data['action'] == 'reconcile-failed':
                 return self._reconcile_failed(operation_id, plan, data['bootstrap'])
             previous = self.config.journal.read()
@@ -2419,6 +2462,24 @@ class SshDeployRemote:
             or receipt.terminal_result not in {'committed', 'aborted', 'failed'}):
             raise PostgresDeployError()
         return receipt
+
+    def prove_absence(self, operation_id: str, plan: DeployPlan) -> dict[str, str | bool]:
+        self.bootstrap = False
+        response = self._request('prove-absence', operation_id, plan)
+        expected: dict[str, str | bool] = {
+            'contract': 'native-deploy-operation-absence.v1',
+            'operation_id': operation_id,
+            'channel': plan.channel,
+            'candidate_sha': plan.revision,
+            'image_digest': plan.image_digest or '',
+            'native_operation_absent': True,
+            'native_worker_absent': True,
+            'native_lock_absent': True,
+            'native_request_absent': True,
+        }
+        if response != expected:
+            raise PostgresDeployError()
+        return expected
 
 
 def qualify_heavy(config: LinuxConfig, operation_id: str) -> dict[str, Any]:
