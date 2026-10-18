@@ -303,7 +303,9 @@ refusal at this boundary; the preflight never recovers or deletes its rotation j
 preflight re-observes the native controller PID, start token, and execution namespace, so a proof
 whose controller has exited or changed identity is refused before owner evidence is trusted. That
 native observation is host-only; the mounted producer revalidates the byte-bound proof and ledger
-without requiring its container namespace to equal the controller namespace. Under
+without requiring its container namespace to equal the controller namespace or exposing the native
+content root. The host preflight matches the materialized root; the producer consumes the receipt's
+authenticated physical identity and exact ledger coverage. Under
 deployment-admission -> producer-transition -> ownership-ledger ->
 registry-store ordering it materializes only the proven TEST registrations through the existing
 snapshot/checksum/legacy-export APIs, leaves the registry dormant at inactive-fenced revision zero

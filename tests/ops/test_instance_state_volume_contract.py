@@ -4621,6 +4621,10 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(
             }
         ],
     )
+    # The mounted instance-state producer deliberately has no content-root
+    # mount. It must consume the proof-bound host identity instead of stat'ing
+    # the native path in its container namespace.
+    shutil.rmtree(vault_root)
     # Simulate the source-recovery reset's lost volume while preserving the
     # host-global ownership authority and its stopped-window proof.
     shutil.rmtree(layout.root)
@@ -5012,6 +5016,14 @@ def test_missing_instance_state_recovery_rejects_stale_controller_proof(
         lambda _pid, _roots=(): "0" * 64,
     )
     validate_missing_test_instance_state_recovery_host_authority(**values)
+    hidden_root = tmp_path / "vault-outside-host-view"
+    vault_root.rename(hidden_root)
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="TEST dormant ownership preparation refused",
+    ):
+        validate_missing_test_instance_state_recovery_host_authority(**values)
+    hidden_root.rename(vault_root)
     before = {
         path.relative_to(host_global_root): path.read_bytes()
         for path in host_global_root.rglob("*") if path.is_file()

@@ -430,7 +430,9 @@ authenticates that set and its ledger digest before the recovery receipt or name
 step. It also re-observes the proof's native controller PID, start token, and execution namespace;
 an exited, reused, or otherwise changed controller refuses without mutation. The mounted runtime
 producer revalidates the same proof and ledger digest before any instance-state write, but does not
-pretend that its container PID/mount namespace is the native controller namespace,
+pretend that its container PID/mount namespace is the native controller namespace or require a
+content-root mount. Physical root matching stays in the host preflight; the producer consumes its
+proof-bound identity evidence,
 then uses the canonical deployment-admission -> producer-transition ->
 ownership-ledger -> registry-store order and the existing registry snapshot, checksum, and
 legacy-export writers to materialize only receipt/ledger-proven dormant registrations. The result

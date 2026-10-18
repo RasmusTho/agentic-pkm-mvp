@@ -147,8 +147,14 @@ def validate_missing_test_instance_state_recovery_authority(
     owner_receipt_path: Path, expected_owner_receipt_sha256: str,
     quiescence_proof_path: Path, expected_quiescence_proof_sha256: str,
     expected_ledger_sha256: str | None = None,
+    require_materialized_roots: bool = False,
 ) -> str:
-    """Authenticate complete TEST owner/ledger evidence without writing state."""
+    """Authenticate complete TEST owner/ledger evidence without writing state.
+
+    The mounted producer consumes host-captured physical identities and cannot
+    stat native content roots. Only the native host wrapper requests an
+    additional materialized-root comparison.
+    """
     from app.instance.runtime import (
         _load_deployment_quiescence_proof,
         _load_legacy_owner_inventory,
@@ -178,6 +184,8 @@ def validate_missing_test_instance_state_recovery_authority(
         require_receipt_integrity=True,
     ))
     try:
+        if type(require_materialized_roots) is not bool:
+            raise _test_refusal()
         ledger = OwnershipLedger(host)
         resolved = ledger.resolve_live_owner_bindings(
             tuple(replace(owner, vault_binding_id="") for owner in owners),
@@ -195,12 +203,20 @@ def validate_missing_test_instance_state_recovery_authority(
                 != authority_root):
             raise _test_refusal()
         ledger.require_scalar_rollback_ready(
-            channel_id="test", registrations=registrations,
+            channel_id="test",
+            registrations={
+                binding_id: root if require_materialized_roots else None
+                for binding_id, root in registrations.items()
+            },
             recover_rotation=False,
         )
         first = _read_private_bytes(ledger.path)
         ledger.require_scalar_rollback_ready(
-            channel_id="test", registrations=registrations,
+            channel_id="test",
+            registrations={
+                binding_id: root if require_materialized_roots else None
+                for binding_id, root in registrations.items()
+            },
             recover_rotation=False,
         )
         second = _read_private_bytes(ledger.path)
@@ -252,6 +268,7 @@ def validate_missing_test_instance_state_recovery_host_authority(
         quiescence_proof_path=proof_path,
         expected_quiescence_proof_sha256=expected_quiescence_proof_sha256,
         expected_ledger_sha256=expected_ledger_sha256,
+        require_materialized_roots=True,
     )
 
 
