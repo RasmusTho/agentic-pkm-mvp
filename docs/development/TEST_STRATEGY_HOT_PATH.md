@@ -115,10 +115,12 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   executes that YAML command against finite success/failure producers to verify selected arguments,
   watchdog, visible diagnostics, retained log and failure exit propagation.
 - When `tests/deploy` is retained pre-merge because a changed source triggers its heavy coverage,
-  the scoped lane uses four deterministic process partitions: deploy, ops, scripts, and the
-  remaining selected targets. The selector emits both the expected target inventory and the
-  partitions; the runner refuses an empty, missing, duplicate, or non-exact union, caps concurrency
-  at four and each partition at 55 minutes, and aggregates per-partition logs. Every pytest process
+  the scoped lane uses four deterministic process partitions: deploy, scripts, the remaining
+  selected targets, and ops. The first three run with bounded parallelism; the host/process-census
+  sensitive ops partition starts only after all parallel processes exit. The selector emits both
+  the expected target inventory and the partitions; the runner refuses an empty, missing,
+  duplicate, or non-exact union, caps concurrency at four and each partition at 55 minutes, and
+  aggregates per-partition logs. Every pytest process
   retains the PR marker expression and 120-second per-test thread watchdog. Any failed, timed-out,
   or absent partition fails the single required `Unit tests (not pg)` verdict. Other scoped
   selections retain the existing single pytest invocation.

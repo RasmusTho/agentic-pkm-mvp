@@ -332,7 +332,8 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-SCOPED_DEPLOY_PARTITION_ROOTS = ("tests/deploy", "tests/ops", "tests/scripts")
+SCOPED_DEPLOY_PARALLEL_ROOTS = ("tests/deploy", "tests/scripts")
+SCOPED_DEPLOY_SERIAL_ROOT = "tests/ops"
 
 SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
@@ -1486,11 +1487,17 @@ def scoped_deploy_partitions(selection: Selection) -> tuple[tuple[str, ...], ...
     """Partition source-triggered deploy coverage without changing its targets."""
     if selection.full_suite or "tests/deploy" not in selection.targets:
         return ()
-    buckets: list[list[str]] = [[] for _ in SCOPED_DEPLOY_PARTITION_ROOTS]
+    buckets: list[list[str]] = [[] for _ in SCOPED_DEPLOY_PARALLEL_ROOTS]
     remainder: list[str] = []
+    serial: list[str] = []
     for target in selection.targets:
         target_file = target.split("::", 1)[0]
-        for index, root in enumerate(SCOPED_DEPLOY_PARTITION_ROOTS):
+        if target_file == SCOPED_DEPLOY_SERIAL_ROOT or target_file.startswith(
+            f"{SCOPED_DEPLOY_SERIAL_ROOT}/"
+        ):
+            serial.append(target)
+            continue
+        for index, root in enumerate(SCOPED_DEPLOY_PARALLEL_ROOTS):
             if target_file == root or target_file.startswith(f"{root}/"):
                 buckets[index].append(target)
                 break
@@ -1499,6 +1506,8 @@ def scoped_deploy_partitions(selection: Selection) -> tuple[tuple[str, ...], ...
     partitions = [tuple(bucket) for bucket in buckets if bucket]
     if remainder:
         partitions.append(tuple(remainder))
+    if serial:
+        partitions.append(tuple(serial))
     return tuple(partitions)
 
 

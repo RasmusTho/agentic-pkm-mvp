@@ -109,23 +109,45 @@ def run_partitions(
     aggregate_log: Path,
     jobs: int,
     timeout_seconds: int,
+    serial_last: bool,
 ) -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     results: dict[int, tuple[int, Path, bool]] = {}
-    with ThreadPoolExecutor(max_workers=min(jobs, len(partitions))) as executor:
-        futures = {
-            executor.submit(
-                _run_partition, index, targets, log_dir=log_dir, timeout_seconds=timeout_seconds
-            ): index
-            for index, targets in enumerate(partitions)
-        }
-        for future in as_completed(futures):
-            index, returncode, log_path, timed_out = future.result()
-            results[index] = (returncode, log_path, timed_out)
-            print(
-                f"PARTITION FINISHED ({returncode}): {index} targets={len(partitions[index])}",
-                flush=True,
-            )
+    parallel_count = len(partitions) - 1 if serial_last else len(partitions)
+    if parallel_count:
+        with ThreadPoolExecutor(max_workers=min(jobs, parallel_count)) as executor:
+            futures = {
+                executor.submit(
+                    _run_partition,
+                    index,
+                    targets,
+                    log_dir=log_dir,
+                    timeout_seconds=timeout_seconds,
+                ): index
+                for index, targets in enumerate(partitions[:parallel_count])
+            }
+            for future in as_completed(futures):
+                index, returncode, log_path, timed_out = future.result()
+                results[index] = (returncode, log_path, timed_out)
+                print(
+                    f"PARTITION FINISHED ({returncode}): {index} "
+                    f"targets={len(partitions[index])}",
+                    flush=True,
+                )
+    if serial_last:
+        index = len(partitions) - 1
+        result_index, returncode, log_path, timed_out = _run_partition(
+            index,
+            partitions[index],
+            log_dir=log_dir,
+            timeout_seconds=timeout_seconds,
+        )
+        results[result_index] = (returncode, log_path, timed_out)
+        print(
+            f"PARTITION FINISHED ({returncode}): {index} "
+            f"targets={len(partitions[index])}",
+            flush=True,
+        )
     if len(results) != len(partitions):
         print(
             f"Partition runner incomplete: expected={len(partitions)} actual={len(results)}",
@@ -154,6 +176,11 @@ def main() -> int:
     parser.add_argument("--log-dir", required=True)
     parser.add_argument("--aggregate-log", required=True)
     parser.add_argument("--jobs", type=int, default=MAX_PARTITIONS)
+    parser.add_argument(
+        "--serial-last",
+        action="store_true",
+        help="Run the final host-sensitive partition after every parallel process exits.",
+    )
     parser.add_argument("--shard-timeout-seconds", type=int, default=MAX_SHARD_TIMEOUT_SECONDS)
     args = parser.parse_args()
     if not 1 <= args.jobs <= MAX_PARTITIONS:
@@ -172,6 +199,7 @@ def main() -> int:
         aggregate_log=Path(args.aggregate_log),
         jobs=args.jobs,
         timeout_seconds=args.shard_timeout_seconds,
+        serial_last=args.serial_last,
     )
 
 

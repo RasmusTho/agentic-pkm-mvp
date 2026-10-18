@@ -1854,6 +1854,12 @@ def test_scoped_deploy_partitions_preserve_selected_targets(tmp_path: Path) -> N
     assert sorted(flattened) == sorted(selection.targets)
     assert len(flattened) == len(set(flattened))
     assert all(partition for partition in partitions)
+    assert all(target.split("::", 1)[0].startswith("tests/ops") for target in partitions[-1])
+    assert all(
+        not target.split("::", 1)[0].startswith("tests/ops")
+        for partition in partitions[:-1]
+        for target in partition
+    )
     output = tmp_path / "github-output"
     result = subprocess.run(
         [

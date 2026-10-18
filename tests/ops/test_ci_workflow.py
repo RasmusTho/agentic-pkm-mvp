@@ -491,6 +491,7 @@ def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None
     )
     assert "scripts/run_scoped_test_partitions.py" in step["run"]
     assert "--jobs 4" in step["run"]
+    assert "--serial-last" in step["run"]
     assert "--shard-timeout-seconds 3300" in step["run"]
     assert "set -euo pipefail" in step["run"]
     upload = next(s for s in job["steps"] if s.get("name") == "Upload scoped partition logs")
@@ -509,6 +510,17 @@ import sys
 import time
 target_text = " ".join(sys.argv[1:])
 print(target_text, flush=True)
+if active_dir_value := os.environ.get("FAKE_ACTIVE_DIR"):
+    active_dir = Path(active_dir_value)
+    active_dir.mkdir(exist_ok=True)
+    token = active_dir / str(os.getpid())
+    token.touch()
+    if "tests/deploy" in target_text:
+        time.sleep(0.3)
+    if "tests/ops" in target_text and len(list(active_dir.iterdir())) != 1:
+        print("host-sensitive ops partition overlapped another process", file=sys.stderr)
+        raise SystemExit(9)
+    token.unlink()
 if child_pid_path := os.environ.get("FAKE_CHILD_PID_PATH"):
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     Path(child_pid_path).write_text(str(child.pid))
@@ -520,7 +532,7 @@ if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target
 ''', encoding="utf-8")
     fake_pytest.chmod(0o755)
     expected = ["tests/deploy", "tests/ops", "tests/scripts", "tests/ci"]
-    partitions = [["tests/deploy"], ["tests/ops"], ["tests/scripts"], ["tests/ci"]]
+    partitions = [["tests/deploy"], ["tests/scripts"], ["tests/ci"], ["tests/ops"]]
 
     def run(*, expected_targets=expected, env: dict[str, str] | None = None, timeout: int = 10):
         return subprocess.run(
@@ -530,7 +542,7 @@ if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target
                 "--expected-targets-json", json.dumps(expected_targets),
                 "--log-dir", str(tmp_path / "logs"),
                 "--aggregate-log", str(tmp_path / "aggregate.log"),
-                "--jobs", "4", "--shard-timeout-seconds", str(timeout),
+                "--jobs", "4", "--serial-last", "--shard-timeout-seconds", str(timeout),
             ],
             cwd=REPO_ROOT, capture_output=True, text=True,
             env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -542,6 +554,8 @@ if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target
     assert success.returncode == 0, success.stdout + success.stderr
     aggregate = (tmp_path / "aggregate.log").read_text()
     assert all(target in aggregate for target in expected)
+    boundary = run(env={"FAKE_ACTIVE_DIR": str(tmp_path / "active")})
+    assert boundary.returncode == 0, boundary.stdout + boundary.stderr
     failure = run(env={"FAKE_FAIL_TARGET": "tests/ops"})
     assert failure.returncode == 1
     assert "PARTITION FAILED (7)" in failure.stderr

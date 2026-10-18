@@ -984,6 +984,7 @@ jobs:
               --log-dir "$scoped_log_dir" \
               --aggregate-log pytest-not-pg.log \
               --jobs 4 \
+              --serial-last \
               --shard-timeout-seconds 3300
           fi
 
