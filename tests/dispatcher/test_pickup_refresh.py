@@ -267,7 +267,7 @@ def test_pickup_refresh_uses_readiness_repo_root_for_target_repository(
         "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
         f"{target_verify_path}::testCaptureLoop",
     )
-    target_root = tmp_path / "bifrost"
+    target_root = tmp_path / "constituent"
     target_file = target_root / target_verify_path
     target_file.parent.mkdir(parents=True)
     target_file.write_text("final class ScreenObserverSmokeTests {}\n", encoding="utf-8")
