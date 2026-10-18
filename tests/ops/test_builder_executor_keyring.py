@@ -213,7 +213,8 @@ def test_interrupted_installation_and_disable_preserve_owned_state(host):
     assert not any("terminate-user" in args or "disable-linger" in args for args, _ in fake.calls)
 
 
-@pytest.mark.parametrize("failure", [None, "owner", "locked", "timeout"])
+@pytest.mark.parametrize("failure", [None, "owner", "locked", "timeout", "final-backend-error",
+                                      "final-unexpected-exit", "final-owner-missing", "final-locked"])
 def test_service_readiness_and_session_lifetime_are_fail_closed(host, monkeypatch, failure):
     fake, package = host
     assert invoke(package, "apply", plan=invoke(package))["native"]["unlocked"]
@@ -224,6 +225,8 @@ def test_service_readiness_and_session_lifetime_are_fail_closed(host, monkeypatc
         nonlocal stored, cleared
         if args[0].endswith("busctl"):
             output = b"b true"
+            if "NameHasOwner" in args and cleared and failure == "final-owner-missing":
+                output = b"b false"
             if "GetConnectionUnixUser" in args:
                 output = f"u {keyring.UID}".encode()
             elif "GetConnectionUnixProcessID" in args:
@@ -231,7 +234,7 @@ def test_service_readiness_and_session_lifetime_are_fail_closed(host, monkeypatc
             elif "ReadAlias" in args:
                 output = b'o "/org/freedesktop/secrets/collection/login"'
             elif "Locked" in args:
-                output = b"b true" if failure == "locked" else b"b false"
+                output = b"b true" if failure == "locked" or cleared and failure == "final-locked" else b"b false"
             return subprocess.CompletedProcess(args, 0, output, b"")
         if args[0].endswith("secret-tool"):
             if "store" in args:
@@ -241,7 +244,9 @@ def test_service_readiness_and_session_lifetime_are_fail_closed(host, monkeypatc
             elif "lookup" in args:
                 if failure == "timeout":
                     raise subprocess.TimeoutExpired(args, 3)
-                return subprocess.CompletedProcess(args, 1 if cleared else 0, b"" if cleared else stored, b"")
+                code = 2 if cleared and failure == "final-unexpected-exit" else 1 if cleared else 0
+                error = b"secret-tool: Cannot autolaunch D-Bus" if cleared and failure == "final-backend-error" else b""
+                return subprocess.CompletedProcess(args, code, b"" if cleared else stored, error)
             return subprocess.CompletedProcess(args, 0, b"", b"")
         return fake.run(args, input=input, **kwargs)
 
@@ -249,7 +254,7 @@ def test_service_readiness_and_session_lifetime_are_fail_closed(host, monkeypatc
     if failure:
         with pytest.raises(keyring.Refusal):
             keyring.ready()
-        if failure == "timeout":
+        if failure == "timeout" or failure.startswith("final-"):
             assert cleared
     else:
         assert keyring.ready()["synthetic_roundtrip_and_cleanup"]

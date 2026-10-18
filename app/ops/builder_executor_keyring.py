@@ -175,7 +175,11 @@ def ready() -> dict[str, object]:
     finally:
         checked(args + ["clear", "executor-readiness", identity], timeout=3, env=env)
     absent = command(args + ["lookup", "executor-readiness", identity], timeout=3, env=env)
-    require(absent.returncode != 0 and not absent.stdout, "synthetic_cleanup_unproven")
+    # libsecret uses exit1 for both absence and backend errors. A diagnostic is
+    # never proof of deletion; also revalidate the live owned unlocked backend.
+    require(absent.returncode == 1 and not absent.stdout and not absent.stderr,
+            "synthetic_cleanup_unproven")
+    result = native_status()
     return {**result, "synthetic_roundtrip_and_cleanup": True}
 
 
