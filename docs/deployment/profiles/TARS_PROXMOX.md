@@ -126,8 +126,13 @@ directory. Existing foreign/default keyrings, unowned units and incompatible par
 refused. A retry reconciles the same published installation and retains its original master.
 Encryption runs in a finite transient systemd service with the host-key file and its parent
 read-only: `systemd-creds` cannot generate or replace shared host custody, including when an
-existing key belongs to another machine. The decrypted credential accepts systemd's exact root-owned
-read ACL for `ygg`, or its UID-owned `0400` fallback; additional ACL grants are refused.
+existing key belongs to another machine. Validation uses the same sandbox. `LoadCredential` copies
+ciphertext only; PID1 never decrypts it. The fixed `ExecStart=!` bootstrap retains only the capabilities
+needed to drop user/group identity, checks that the host-key file and parent are read-only, decrypts
+through descriptors, clears supplementary groups, permanently drops to `ygg`, and execs GNOME with
+an anonymous stdin pipe. Readiness runs as `ygg`. This ordering also protects automatic restart/boot.
+Ciphertext custody accepts systemd's exact root-owned read ACL for `ygg`, or its UID-owned `0400`
+fallback; additional ACL grants are refused.
 
 The concrete activation step enables `ygg` lingering and
 `yggdrasil-builder-executor-keyring.service`, retaining the user bus across SSH logout. Existing
@@ -150,6 +155,7 @@ without replacing its source or master. The service retries failures at most thr
 manual stop/disable suppresses those retries. Disable stops only the owned service, proves its cgroup is empty/reclaimed, and
 retains encrypted state and lingering. It does not revoke ChatGPT/GitHub sessions or stop other user
 services. Any later removal of retained credentials or lingering needs its own explicit scope.
+Owned status/disable remain available when the shared host key is missing or unusable.
 
 The master never becomes a plaintext password file or an argument/environment value. Root can
 decrypt host-key-protected credentials, and same-UID processes can read an unlocked user-bus

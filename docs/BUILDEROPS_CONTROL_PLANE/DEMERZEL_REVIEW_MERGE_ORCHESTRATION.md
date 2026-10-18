@@ -144,13 +144,17 @@ sanitized-environment integration; it does not establish production activation, 
 the installed-main qualification under #6146. The API and GitHub bootstrap identities remain separate.
 
 An explicitly approved apply uses an existing private systemd host key to encrypt a newly generated
-native-keyring master on the VM. The master is delivered by `LoadCredentialEncrypted` and stdin to
-the foreground GNOME secrets daemon as the existing `ygg` user. No master value crosses SSH, enters
+native-keyring master on the VM. `LoadCredential` transports ciphertext only. A short root bootstrap
+inside the service's already-applied read-only mount namespace decrypts through descriptors, clears
+supplementary groups, permanently drops user/group identity to `ygg`, and execs the foreground GNOME
+secrets daemon with the master on an anonymous stdin pipe. No master value crosses SSH, enters
 argv/environment/Git, or becomes a BWS reader/DevUI identity. Missing or wrong-custody host keys,
 foreign state, a competing native owner, source/plan drift and unknown startup outcomes fail closed.
-Encryption uses a finite transient service with read-only host-key file/parent mounts, preventing
-the tool's implicit generation or replacement of shared OS custody. Decrypted input admits only
-systemd's root-owned ACL granting `ygg` read access, or its UID-owned `0400` fallback.
+Encryption and validation use finite transient services with read-only host-key file/parent mounts,
+preventing implicit generation or replacement of shared OS custody. Automatic native restart/boot
+also decrypts only after those mounts are active; PID1 never decrypts this credential. Ciphertext
+input admits only systemd's exact root-owned ACL granting `ygg` read access, or its UID-owned `0400`
+fallback. The long-running native process has no root identity or supplementary groups.
 An existing encrypted keyring never causes automatic master regeneration. The actual auth-preflight
 and model-child environment admit only the current UID's validated private local bus/runtime pair;
 ambient provider/GitHub credentials and `CODEX_HOME` remain excluded.
@@ -168,6 +172,7 @@ empty/reclaimed owned cgroup. It retains encrypted master/keyring state and ling
 stop unrelated user services or pretend to revoke provider sessions. Production activation, personal
 device login and any reboot proof remain separately authorized steps; neither a unit file nor green
 CI proves unattended operation or completes #6146.
+Status and owned withdrawal do not require the shared host key to exist or decrypt successfully.
 
 ## Acceptance Criteria
 

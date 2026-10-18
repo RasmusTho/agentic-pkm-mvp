@@ -138,7 +138,7 @@ def test_installer_plan_apply_binding_and_existing_state_refusal(host, tmp_path,
                 output = "https://github.com/RasmusTho/agentic-pkm-mvp.git"
             return subprocess.CompletedProcess(args, 0, output, "")
         assert args[0] == "ssh" and installer.ALIAS in args
-        assert args[-1] == "sudo -n /usr/bin/python3 -"
+        assert args[-1] == "sudo -n /usr/bin/python3 -I -"
         parsed = ast.parse(kwargs["input"])
         request = ast.literal_eval(parsed.body[-1].value.args[0].args[0].args[0])
         return subprocess.CompletedProcess(args, 0, json.dumps(keyring.remote(request)), "")
@@ -184,7 +184,8 @@ def test_apply_uses_encrypted_stdin_handoff_and_rejects_bad_custody(host):
     for path in keyring.BUNDLE.iterdir():
         assert master not in path.read_bytes()
     assert (keyring.BUNDLE / "master.cred").stat().st_mode & 0o777 == 0o400
-    assert b"LoadCredentialEncrypted=" in (keyring.BUNDLE / keyring.UNIT).read_bytes()
+    assert b"LoadCredential=" in (keyring.BUNDLE / keyring.UNIT).read_bytes()
+    assert b"LoadCredentialEncrypted=" not in (keyring.BUNDLE / keyring.UNIT).read_bytes()
     assert b"User=ygg" in (keyring.BUNDLE / keyring.UNIT).read_bytes()
     metadata = keyring.BUNDLE / "installation.json"
     alias = metadata.with_name("alias")
@@ -346,15 +347,16 @@ def test_remaining_owned_cgroup_blocks_withdrawal_success_and_reactivation(host)
 
 
 @pytest.mark.parametrize("failure", [None, "empty", "public", "symlink", "hardlink", "acl", "foreign-acl",
-                                         "group-acl", "write-acl", "malformed-acl", "root-no-acl"])
+                                         "group-acl", "write-acl", "malformed-acl", "root-no-acl",
+                                         "writable-key", "writable-parent", "decrypt", "drop", "owner"])
 def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, monkeypatch, failure):
     _, _package = host
     root = tmp_path / "credentials"
     directory = root / keyring.UNIT
     directory.mkdir(mode=0o700, parents=True)
     credential = directory / keyring.CREDENTIAL
-    value = b"synthetic-native-master-" + b"x" * 40
-    credential.write_bytes(b"" if failure == "empty" else value)
+    value, ciphertext = b"s" * 64, b"synthetic-encrypted-master"
+    credential.write_bytes(b"" if failure == "empty" else ciphertext)
     credential.chmod(0o644 if failure == "public" else 0o400)
     if failure in ("symlink", "hardlink"):
         original = directory / "original"
@@ -365,23 +367,20 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
             credential.hardlink_to(original)
     monkeypatch.setattr(keyring, "CREDENTIAL_DIRECTORY_ROOT", root)
     monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(directory))
-    monkeypatch.setattr(keyring, "bus_owner", lambda: None)
     fstat = os.fstat
+    target_uid = os.geteuid() + 100
+    monkeypatch.setattr(keyring, "UID", target_uid)
+    monkeypatch.setattr(keyring.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_dir=str(tmp_path / 'home')))
     acl_cases = {"acl", "foreign-acl", "group-acl", "write-acl", "malformed-acl", "root-no-acl"}
-    # Metadata/ACL substitute models the systemd producer; the file descriptor and
-    # stdin/exec path remain real. The native Linux fixture exercises actual ACLs.
-    root_uid = os.geteuid() + 100
-    monkeypatch.setattr(keyring, "ROOT_UID", root_uid)
     if failure in acl_cases:
-        credential.chmod(0o440)
+        credential.chmod(0o400 if failure == "root-no-acl" else 0o440)
 
-        def root_metadata(fd):
-            result = fstat(fd)
-            values = list(result)
-            values[4] = root_uid
-            return os.stat_result(values)
+    def credential_metadata(fd):
+        result = list(fstat(fd))
+        result[4] = keyring.ROOT_UID if failure in acl_cases else target_uid
+        return os.stat_result(result)
 
-        monkeypatch.setattr(keyring.os, "fstat", root_metadata)
+    monkeypatch.setattr(keyring.os, "fstat", credential_metadata)
 
     def credential_acl(fd, name):
         assert name == "system.posix_acl_access" and fstat(fd).st_size >= 0
@@ -389,14 +388,48 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
             raise OSError(errno.ENODATA, "synthetic no ACL")
         undefined = 0xffffffff
         entries = [(1, 4, undefined), (2, 6 if failure == "write-acl" else 4,
-                                      keyring.UID + 1 if failure == "foreign-acl" else keyring.UID),
+                                      target_uid + 1 if failure == "foreign-acl" else target_uid),
                    (4, 4 if failure == "group-acl" else 0, undefined),
                    (16, 4, undefined), (32, 0, undefined)]
         return (b"bad" if failure == "malformed-acl" else struct.pack("<I", 2)) + b"".join(
             struct.pack("<HHI", *entry) for entry in entries)
 
     monkeypatch.setattr(keyring.os, "getxattr", credential_acl, raising=False)
-    executed = []
+    monkeypatch.setattr(keyring.os, "statvfs", lambda path: SimpleNamespace(
+        f_flag=0 if path == (keyring.MACHINE_KEY if failure == "writable-key" else
+                             keyring.MACHINE_KEY.parent if failure == "writable-parent" else None)
+        else os.ST_RDONLY))
+    drops, decrypts, executed = [], [], []
+    identity = {"uid": keyring.ROOT_UID, "gid": keyring.ROOT_UID, "groups": [keyring.ROOT_UID]}
+    monkeypatch.setattr(keyring.os, "getuid", lambda: identity['uid'])
+    monkeypatch.setattr(keyring.os, "geteuid", lambda: identity['uid'])
+    monkeypatch.setattr(keyring.os, "getgid", lambda: identity['gid'])
+    monkeypatch.setattr(keyring.os, "getegid", lambda: identity['gid'])
+    monkeypatch.setattr(keyring.os, "getgroups", lambda: identity['groups'])
+
+    def drop(kind, setting):
+        drops.append(kind)
+        if failure != "drop":
+            identity[kind] = setting
+
+    monkeypatch.setattr(keyring.os, "setgroups", lambda setting: drop('groups', setting))
+    monkeypatch.setattr(keyring.os, "setgid", lambda setting: drop('gid', setting))
+    monkeypatch.setattr(keyring.os, "setuid", lambda setting: drop('uid', setting))
+
+    def decrypt(args, *, input, env, **kwargs):
+        assert identity['uid'] == keyring.ROOT_UID
+        assert args[:2] == ['/usr/bin/systemd-creds', 'decrypt'] and args[-2:] == ['-', '-']
+        assert input == ciphertext and value not in str(args).encode() and value not in str(env).encode()
+        decrypts.append(True)
+        return subprocess.CompletedProcess(args, 1 if failure == 'decrypt' else 0, value, b'')
+
+    monkeypatch.setattr(keyring, '_RUN', decrypt)
+
+    def owner():
+        assert identity['uid'] == target_uid and not identity['groups']
+        return 999 if failure == 'owner' else None
+
+    monkeypatch.setattr(keyring, 'bus_owner', owner)
 
     class ExecObserved(BaseException):
         pass
@@ -404,8 +437,8 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
     def execute(path, argv, env):
         assert path == "/usr/bin/gnome-keyring-daemon"
         assert "--foreground" in argv and "--unlock" in argv
-        assert value.decode() not in " ".join(argv)
-        assert value.decode() not in " ".join(env.values())
+        assert drops == ['groups', 'gid', 'uid'] and identity['uid'] == identity['gid'] == target_uid
+        assert value.decode() not in " ".join(argv) and value.decode() not in " ".join(env.values())
         assert "CREDENTIALS_DIRECTORY" not in env
         assert os.read(0, 256) == value
         executed.append(True)
@@ -418,10 +451,23 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
             with pytest.raises((keyring.Refusal, OSError)):
                 keyring.daemon()
             assert not executed
+            if failure not in ('decrypt', 'drop', 'owner'):
+                assert not decrypts
         else:
             with pytest.raises(ExecObserved):
                 keyring.daemon()
-            assert executed == [True]
+            assert executed == [True] and decrypts == [True]
     finally:
         os.dup2(saved, 0)
         os.close(saved)
+
+
+def test_status_and_withdrawal_do_not_require_shared_host_key(host):
+    fake, package = host
+    assert invoke(package, "apply", plan=invoke(package))["native"]["unlocked"]
+    keyring.MACHINE_KEY.unlink()
+    assert invoke(package, 'status')['installation'] == 'owned'
+    stop = invoke(package, operation='disable')
+    assert invoke(package, 'apply', plan=stop)['owned_service_stopped']
+    assert not fake.active and len(fake.encryptions) == 1
+    assert invoke(package, operation='start')['result'] == 'refused'

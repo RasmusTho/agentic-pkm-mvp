@@ -53,7 +53,7 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
     program += f"print(json.dumps(namespace['remote']({request!r}),sort_keys=True))\n"
     try:
         result = _RUN(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
-                       "-o", "ConnectTimeout=10", ALIAS, "sudo -n /usr/bin/python3 -"],
+                       "-o", "ConnectTimeout=10", ALIAS, "sudo -n /usr/bin/python3 -I -"],
                       input=program, capture_output=True, text=True, timeout=90, check=False)
     except subprocess.TimeoutExpired as exc:
         raise InstallerRefusal("remote_outcome_unproven_use_status_before_retry") from exc

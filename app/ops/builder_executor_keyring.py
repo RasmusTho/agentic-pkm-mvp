@@ -1,7 +1,8 @@
 """Fixed BOB-1 native keyring lifecycle; no provider credentials cross this API.
 
-The remote installer runs as root. The two native service entrypoints run as ygg.
-Only explicit, plan-bound apply/disable mutate host state. This is not a BWS binding.
+The installer runs as root; the native bootstrap drops root before GNOME executes.
+Readiness runs as ygg. Only plan-bound apply operations mutate host configuration.
+This is not a BWS binding.
 """
 from __future__ import annotations
 
@@ -179,28 +180,51 @@ def ready() -> dict[str, object]:
 
 
 def daemon() -> None:
-    require(os.geteuid() == UID, "native_user_required")
-    require(bus_owner() is None, "competing_native_owner")
+    # ExecStart=! retains root only for ciphertext decoding inside the unit's
+    # already-applied mount sandbox. PID1 never decrypts this credential.
+    require(os.geteuid() == ROOT_UID, "native_bootstrap_root_required")
+    require(all(os.statvfs(p).f_flag & os.ST_RDONLY for p in (MACHINE_KEY, MACHINE_KEY.parent)),
+            "host_key_mount_must_be_read_only")
     directory = Path(os.environ.get("CREDENTIALS_DIRECTORY", ""))
     require(directory == CREDENTIAL_DIRECTORY_ROOT / UNIT, "credential_directory_mismatch")
     fd = os.open(directory / CREDENTIAL, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         s = os.fstat(fd)
-        require(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and 32 <= s.st_size <= 256,
+        require(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and 1 <= s.st_size <= 16384,
                 "native_credential_custody_or_size")
         credential_permissions(fd, s)
-        os.dup2(fd, 0, inheritable=True)
+        encrypted = os.read(fd, s.st_size + 1)
+        require(len(encrypted) == s.st_size, "native_credential_changed")
+    finally:
+        os.close(fd)
+    master = checked(["/usr/bin/systemd-creds", "decrypt", f"--name={CREDENTIAL}", "-", "-"],
+                     data=encrypted, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C",
+                                          "SYSTEMD_CREDENTIAL_SECRET": str(MACHINE_KEY)})
+    require(re.fullmatch(rb"[A-Za-z0-9_-]{64}", master), "native_master_format")
+    read_fd, write_fd = os.pipe()
+    try:
+        try:
+            require(os.write(write_fd, master) == len(master), "native_master_handoff")
+        finally:
+            os.close(write_fd)
+        os.setgroups([])
+        os.setgid(UID)
+        os.setuid(UID)
+        require(os.getuid() == os.geteuid() == UID and os.getgid() == os.getegid() == UID
+                and not os.getgroups(), "native_privilege_drop_unproven")
+        require(bus_owner() is None, "competing_native_owner")
+        os.dup2(read_fd, 0, inheritable=True)
     except BaseException:
-        os.close(fd)
+        os.close(read_fd)
         raise
-    if fd != 0:
-        os.close(fd)
+    if read_fd != 0:
+        os.close(read_fd)
     os.execve("/usr/bin/gnome-keyring-daemon", ["gnome-keyring-daemon", "--foreground",
               "--components=secrets", "--unlock", f"--control-directory={CONTROL}"], native_environment())
 
 
 def credential_permissions(fd: int, metadata: os.stat_result) -> None:
-    """Accept exactly systemd255's root+read ACL or its read-only UID fallback."""
+    """Validate the ciphertext credential's exact systemd255 ACL/UID custody."""
     try:
         acl = getattr(os, "getxattr")(fd, "system.posix_acl_access")
     except OSError as exc:
@@ -269,7 +293,8 @@ def payload_hash(payload: Mapping[str, str]) -> str:
     return digest(canonical({k: payload[k] for k in ("source_sha", "module", "unit")}))
 
 
-def observe(payload: Mapping[str, str], *, match_source: bool = True) -> dict[str, object]:
+def observe(payload: Mapping[str, str], *, match_source: bool = True,
+            need_host_key: bool = True) -> dict[str, object]:
     require(os.geteuid() == ROOT_UID and sys.platform == "linux" and socket.gethostname() == "builder-system",
             "fixed_target_required")
     account = pwd.getpwnam(USER)
@@ -306,9 +331,13 @@ def observe(payload: Mapping[str, str], *, match_source: bool = True) -> dict[st
             s = directory.lstat()
             require(stat.S_ISDIR(s.st_mode) and s.st_uid == UID
                     and stat.S_IMODE(s.st_mode) == 0o700, "native_directory_custody")
-    key = MACHINE_KEY.lstat()
-    require(stat.S_ISREG(key.st_mode) and key.st_nlink == 1 and key.st_uid == ROOT_UID
-            and stat.S_IMODE(key.st_mode) == 0o400, "machine_key_custody")
+    key_identity = None
+    if need_host_key:
+        protected_parents(MACHINE_KEY)
+        key = MACHINE_KEY.lstat()
+        require(stat.S_ISREG(key.st_mode) and key.st_nlink == 1 and key.st_uid == ROOT_UID
+                and stat.S_IMODE(key.st_mode) == 0o400, "machine_key_custody")
+        key_identity = digest(canonical([key.st_dev, key.st_ino, key.st_mtime_ns, key.st_size]))
     enabled = checked(user_command(["/usr/bin/systemctl", "--user", "list-unit-files", "--state=enabled",
                                     "--no-legend", "--no-pager"]))
     linger = checked(["/usr/bin/loginctl", "show-user", USER, "-p", "Linger", "--value"]).decode().strip()
@@ -317,8 +346,7 @@ def observe(payload: Mapping[str, str], *, match_source: bool = True) -> dict[st
             "installed_source_sha": installation["source_sha"] if installation else None,
             "unit_state": props.get("ActiveState"), "linger": linger,
             "enabled_user_units_sha256": digest(enabled), "payload_sha256": payload_hash(payload),
-            "machine_key_metadata_sha256": digest(canonical([key.st_dev, key.st_ino,
-                                                             key.st_mtime_ns, key.st_size]))}
+            "machine_key_metadata_sha256": key_identity}
 
 
 def planned_effects(action: str, before: Mapping[str, object]) -> dict[str, object]:
@@ -327,6 +355,8 @@ def planned_effects(action: str, before: Mapping[str, object]) -> dict[str, obje
             "enable_user_lingering": action in ("apply", "start") and before["linger"] != "yes",
             "existing_enabled_user_units_may_persist": action in ("apply", "start"),
             "encryption_uses_finite_read_only_host_key_sandbox": action == "apply" and before["installation"] == "absent",
+            "pid1_receives_ciphertext_only": True, "native_bootstrap_drops_root_before_daemon": True,
+            "host_key_read_only_on_every_decrypt": True,
             "packaged_masks_retained": True, "root_can_decrypt": True,
             "same_uid_can_access_unlocked_keyring": True, "offline_image_protection": False,
             "provider_login_performed": False, "existing_services_restarted": False}
@@ -334,7 +364,7 @@ def planned_effects(action: str, before: Mapping[str, object]) -> dict[str, obje
 
 def plan(payload: Mapping[str, str], action: str = "apply") -> dict[str, object]:
     require(action in ("apply", "start", "disable"), "action_refused")
-    before = observe(payload, match_source=action == "apply")
+    before = observe(payload, match_source=action == "apply", need_host_key=action != "disable")
     if action != "apply":
         require(before["installation"] == "owned", "installation_missing")
     result: dict[str, object] = {"action": action, "source_sha": payload["source_sha"],
@@ -385,8 +415,7 @@ def install_bundle(payload: Mapping[str, str], approved: Mapping[str, object]) -
         master = secrets.token_urlsafe(48).encode()
         encrypted = encrypt_master(master)
         require(encrypted and master not in encrypted, "encrypted_master_unproven")
-        verified = checked(["/usr/bin/systemd-creds", "decrypt", f"--name={CREDENTIAL}", "-", "/dev/null"],
-                           data=encrypted)
+        verified = credential_sandbox(["decrypt", f"--name={CREDENTIAL}", "-", "/dev/null"], encrypted)
         require(not verified, "decrypt_output_refused")
         write_new(stage / "master.cred", encrypted, 0o400)
         write_new(stage / "runtime.py", payload["module"].encode(), 0o555)
@@ -405,6 +434,10 @@ def install_bundle(payload: Mapping[str, str], approved: Mapping[str, object]) -
 
 
 def encrypt_master(master: bytes) -> bytes:
+    return credential_sandbox(["encrypt", "--with-key=host", f"--name={CREDENTIAL}", "-", "-"], master)
+
+
+def credential_sandbox(arguments: list[str], value: bytes) -> bytes:
     # systemd-creds may unlink a foreign-machine host key even when it exists.
     # A private, read-only mount namespace makes *both* replacement and generation
     # impossible. No host-key content is opened by this module. --pipe carries the
@@ -414,14 +447,14 @@ def encrypt_master(master: bytes) -> bytes:
                     f"--property=ReadOnlyPaths={MACHINE_KEY.parent} {MACHINE_KEY}",
                     "--property=PrivateTmp=yes", "--property=NoNewPrivileges=yes",
                     "--property=LimitCORE=0", "--property=RuntimeMaxSec=15",
+                    "--property=TimeoutStopSec=3", "--property=KillMode=control-group",
                     "--property=StandardError=null",
                     f"--setenv=SYSTEMD_CREDENTIAL_SECRET={MACHINE_KEY}",
-                    "/usr/bin/systemd-creds", "encrypt", "--with-key=host",
-                    f"--name={CREDENTIAL}", "-", "-"], data=master)
+                    "/usr/bin/systemd-creds", *arguments], data=value)
 
 
 def status(payload: Mapping[str, str]) -> dict[str, object]:
-    observation = observe(payload, match_source=False)
+    observation = observe(payload, match_source=False, need_host_key=False)
     require(observation["installation"] == "owned", "installation_missing")
     result = command(user_command(["/usr/bin/python3", str(BUNDLE / "runtime.py"), "native-status"]))
     native = json.loads(result.stdout) if result.stdout else {"ready": False}
@@ -439,7 +472,8 @@ def apply(payload: Mapping[str, str], approved: Mapping[str, object]) -> dict[st
         raise Refusal("plan_prestate_invalid")
     require(approved.get("effects") == planned_effects(str(approved["action"]), before), "plan_effects_mismatch")
     with installation_lock():
-        current = observe(payload, match_source=approved["action"] == "apply")
+        current = observe(payload, match_source=approved["action"] == "apply",
+                          need_host_key=approved["action"] != "disable")
         installation = owned(payload if approved["action"] == "apply" else None)
         resume = installation is not None and installation.get("plan_sha256") == approved["plan_sha256"]
         before = approved.get("before")
