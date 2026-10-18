@@ -968,11 +968,25 @@ jobs:
         env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
           PYTHONUNBUFFERED: "1"
+          SCOPED_TARGETS_JSON: ${{ steps.select-tests.outputs.pytest_targets_json }}
+          SCOPED_PARTITIONS_JSON: ${{ steps.select-tests.outputs.scoped_partitions_json }}
         run: |
-          set -o pipefail
+          set -euo pipefail
           echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"
           echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"
-          pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20 | tee pytest-not-pg.log
+          if [[ "$SCOPED_PARTITIONS_JSON" == "[]" ]]; then
+            pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20 | tee pytest-not-pg.log
+          else
+            scoped_log_dir="$RUNNER_TEMP/pytest-scoped-shards"
+            python scripts/run_scoped_test_partitions.py \
+              --partitions-json "$SCOPED_PARTITIONS_JSON" \
+              --expected-targets-json "$SCOPED_TARGETS_JSON" \
+              --log-dir "$scoped_log_dir" \
+              --aggregate-log pytest-not-pg.log \
+              --jobs 4 \
+              --serial-last \
+              --shard-timeout-seconds 3300
+          fi
 
       - name: Skip unit tests for docs-only PR
         if: steps.changes.outputs.code != 'true'
@@ -991,6 +1005,13 @@ jobs:
         with:
           name: pytest-not-pg-shards
           path: ${{ runner.temp }}/pytest-not-pg-shards/
+
+      - name: Upload scoped partition logs
+        if: always() && steps.changes.outputs.code == 'true' && steps.select-tests.outputs.scoped_partitions_json != '[]'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-not-pg-scoped-shards
+          path: ${{ runner.temp }}/pytest-scoped-shards/
 
   contract-validation:
     # Activated dead gates (#3892): the non-PR import-boundary check plus

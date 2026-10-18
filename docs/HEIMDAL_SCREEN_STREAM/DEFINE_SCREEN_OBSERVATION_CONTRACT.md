@@ -11,6 +11,15 @@ can_parallelize_with: [Build macOS Observer Client]
 
 # Define Screen Observation Contract
 
+SCREEN-06 retention-source supersession: the `_heimdal/settings.md` source references and
+retention example below record SCREEN-01's original contract. The current source is the accepted
+Settings Spine projection of `<vault>/settings/screen_control.md`, declared by
+`ScreenControlSettings`. Existing legacy policies require an explicit canonical write whose receipt
+retains the old value; invalid replacements retain proven last-valid values and missing valid
+authority fails loudly. See `docs/SETTINGS.md :: Screen control settings` and
+`docs/contracts/HEIMDAL_SCREEN_CLIENT_CONTRACT.md :: Retention posture`. This changes the settings
+source while preserving the raw deletion/receipt contract and SCREEN-01's historical scope.
+
 ## Purpose
 
 The screen modality needs a **host-side contract** before either the derivation stage (SCREEN-02) or

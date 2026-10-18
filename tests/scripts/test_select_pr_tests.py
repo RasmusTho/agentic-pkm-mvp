@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -1834,6 +1835,46 @@ def test_deploy_trigger_keeps_heavy_deploy_suite_on_pr_path(path: str) -> None:
         or (selection.full_suite and "--ignore=tests/deploy" not in selection.pytest_args)
         or selection.unowned_paths == (path,)
     )
+
+
+def test_scoped_deploy_partitions_preserve_selected_targets(tmp_path: Path) -> None:
+    changed = [
+        "app/ops/postgres_deploy_linux.py",
+        "scripts/postmerge_dev_test.py",
+        "tests/deploy/test_postmerge_dev_test.py",
+    ]
+    selection = select_tests(changed)
+    partitions = selector.scoped_deploy_partitions(selection)
+    assert selection.full_suite is False
+    assert selection.deferred_targets == ()
+    assert "tests/deploy" in selection.targets
+    assert "tests/deploy/test_postmerge_dev_test.py" in selection.targets
+    assert 1 <= len(partitions) <= 4
+    flattened = [target for partition in partitions for target in partition]
+    assert sorted(flattened) == sorted(selection.targets)
+    assert len(flattened) == len(set(flattened))
+    assert all(partition for partition in partitions)
+    assert all(target.split("::", 1)[0].startswith("tests/ops") for target in partitions[-1])
+    assert all(
+        not target.split("::", 1)[0].startswith("tests/ops")
+        for partition in partitions[:-1]
+        for target in partition
+    )
+    output = tmp_path / "github-output"
+    result = subprocess.run(
+        [
+            sys.executable, "scripts/select_pr_tests.py",
+            *(arg for path in changed for arg in ("--changed-file", path)),
+            "--github-output", str(output),
+        ],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert json.loads(fields["pytest_targets_json"]) == list(selection.targets)
+    assert json.loads(fields["scoped_partitions_json"]) == [
+        list(partition) for partition in partitions
+    ]
 
 
 def test_changed_heavy_test_file_still_runs_on_pr_path() -> None:

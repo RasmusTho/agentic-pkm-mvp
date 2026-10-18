@@ -775,21 +775,29 @@ def _revoked_grant_refs(rows: List[ConsentGrant]) -> set:
     return {r.revokes_grant_ref for r in rows if r.is_revocation and r.revokes_grant_ref}
 
 
-def list_revoked_grant_refs() -> List[str]:
-    """Return durable revocation work identities in first-observed order."""
+def list_revoked_grant_refs(*, scope: Optional[str] = None) -> List[str]:
+    """Return durable revocation work identities in first-observed order.
+
+    A scoped control retries only its own grants' existing erasure work. The
+    original grant rows own scope; revocation rows deliberately have no scope.
+    """
 
     refs: List[str] = []
     seen: set[str] = set()
-    for row in _backend().all_rows():
+    rows = _backend().all_rows()
+    scoped_refs = {row.grant_ref for row in rows if not row.is_revocation and row.scope == scope}
+    for row in rows:
         grant_ref = row.revokes_grant_ref
         if not row.is_revocation or not grant_ref or grant_ref in seen:
+            continue
+        if scope is not None and grant_ref not in scoped_refs:
             continue
         seen.add(grant_ref)
         refs.append(grant_ref)
     return refs
 
 
-def reconcile_revoked_consent_erasure() -> int:
+def reconcile_revoked_consent_erasure(*, scope: Optional[str] = None) -> int:
     """Replay durable revocation rows through all-copy erasure.
 
     The append-only revocation row is the durable work item. The scheduled
@@ -801,7 +809,7 @@ def reconcile_revoked_consent_erasure() -> int:
     from app.heimdal.retention import enforce_consent_revocation
 
     reconciled = 0
-    for grant_ref in list_revoked_grant_refs():
+    for grant_ref in list_revoked_grant_refs(scope=scope):
         with consent_grant_fence(grant_ref):
             enforce_consent_revocation(grant_ref=grant_ref)
         reconciled += 1

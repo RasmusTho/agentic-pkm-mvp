@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import logging
 import math
+import fcntl
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Mapping, NamedTuple, TypeAlias, cast
+from typing import Any, Iterator, Literal, Mapping, NamedTuple, TypeAlias, cast
 from uuid import uuid4
 
 from app.instance.vault_registry import AppLocalSettingsStore
+from app.settings.models import SCREEN_CONTROL_KEYS, ScreenControlSettings
 from app.receipts.settings_write import (
+    _confirm_file_and_parent_durable,
     SettingsWriteReceipt,
     emit_durable_settings_write_receipt_once,
     emit_settings_write_receipt,
@@ -16,7 +20,10 @@ from app.receipts.settings_write import (
     resolve_settings_receipt_old_value,
 )
 from app.vault.manager import VaultContext, shared_settings_file_seed
-from app.vault.markdown_settings import MarkdownSettingsDocument, MarkdownSettingsError, MarkdownSettingsStore
+from app.vault.markdown_settings import (
+    MarkdownSettingsDocument, MarkdownSettingsError, MarkdownSettingsStore,
+    render_markdown_settings, split_markdown_settings,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -35,6 +42,7 @@ VAULT_SHARED_SETTING_FILES = (
     "design-handoff.md",
     "companion-ui.md",
     "youtube.md",
+    "screen_control.md",
 )
 VAULT_LOCAL_SETTING_FILES = ("local.md",)
 VALID_SOURCE_SCOPES = {"app-local", "vault-shared", "vault-local"}
@@ -47,14 +55,14 @@ VALID_SOURCE_SCOPES = {"app-local", "vault-shared", "vault-local"}
 # See docs/COMPANION_UI_PRODUCT_SPEC.md :: Runtime control actions and
 # companion-ui/docs/UI_RUNTIME_BOUNDARIES.md :: Control-action register.
 RUNTIME_GATING_SETTINGS: frozenset[str] = frozenset(
-    {"enableVaultWatcher", "enableAutoIndexing", "youtubeSync.enabled", "youtubeSync.runnerEnabled"}
+    {"enableVaultWatcher", "enableAutoIndexing", "youtubeSync.enabled", "youtubeSync.runnerEnabled"} | SCREEN_CONTROL_KEYS
 )
 # Issue #3964 is the pre-consumption gate for YSS-06/YSS-10. Existing watcher
 # gates retain their established permissions path; this accepted-state
-# projection is intentionally limited to the two YouTube keys authorized by
-# that Issue rather than silently changing current watcher startup semantics.
+# projection covers the two YouTube keys and SCREEN-06's governed controls;
+# it does not change the existing watcher startup semantics.
 ACCEPTED_RUNTIME_GATING_SETTINGS: frozenset[str] = frozenset(
-    {"youtubeSync.enabled", "youtubeSync.runnerEnabled"}
+    {"youtubeSync.enabled", "youtubeSync.runnerEnabled"} | SCREEN_CONTROL_KEYS
 )
 
 _SETTINGS_WRITE_ACTION = "settings.runtime_gating.write"
@@ -131,7 +139,24 @@ class SettingsRegistry:
         return self._by_key.get(key)
 
 
-SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
+def _screen_control_definitions() -> tuple[SettingDefinition, ...]:
+    defaults = ScreenControlSettings().model_dump()
+    properties = ScreenControlSettings.model_json_schema()["properties"]
+    types: dict[str, SettingType] = {
+        "boolean": "boolean", "integer": "number", "number": "number",
+        "array": "array", "object": "object",
+    }
+    return tuple(
+        SettingDefinition(
+            key, types[properties[key]["type"]], defaults[key],
+            field.description or key, "vault-shared", "commit", True, True, True,
+            "screen_control.md",
+        )
+        for key, field in ScreenControlSettings.model_fields.items()
+    )
+
+
+SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = _screen_control_definitions() + (
     SettingDefinition("settingsFolder", "path", "settings", "Vault settings folder.", "built-in", "commit", False, False, True),
     SettingDefinition(
         "appInstallId",
@@ -428,6 +453,25 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
 )
 
 
+@contextmanager
+def _screen_control_write_lock(context: VaultContext) -> Iterator[None]:
+    if (
+        context.status != "selected" or not context.settings_path
+        or not context.active_vault_id or not context.local_instance_id
+    ):
+        raise SettingsWriteError("screen controls require a selected vault and local-instance identity")
+    # Coordination only, under the existing ignored vault-local runtime root.
+    # Markdown and the Settings Spine receipt remain the durable authorities.
+    lock_path = Path(context.settings_path) / "runtime" / "screen-controls.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 class SettingsService:
     def __init__(
         self,
@@ -542,7 +586,27 @@ class SettingsService:
         surface: str = "api",
         actor: str = "human",
         persist: bool = True,
-    ) -> tuple[EffectiveSetting, SettingsWriteReceipt]:
+    ) -> tuple[EffectiveSetting, SettingsWriteReceipt | None]:
+        if key in SCREEN_CONTROL_KEYS:
+            from app.services.outbox import JsonlOutboxCorruptionError
+
+            try:
+                with _screen_control_write_lock(context):
+                    return self._update_setting(context, key, value, surface=surface, actor=actor, persist=persist)
+            except (OSError, JsonlOutboxCorruptionError) as exc:
+                raise SettingsWriteError("screen control storage unavailable") from exc
+        return self._update_setting(context, key, value, surface=surface, actor=actor, persist=persist)
+
+    def _update_setting(
+        self,
+        context: VaultContext,
+        key: str,
+        value: Any,
+        *,
+        surface: str = "api",
+        actor: str = "human",
+        persist: bool = True,
+    ) -> tuple[EffectiveSetting, SettingsWriteReceipt | None]:
         """Write a single setting and return (effective_setting, receipt).
 
         Runtime-gating settings (the keys in ``RUNTIME_GATING_SETTINGS``)
@@ -560,8 +624,8 @@ class SettingsService:
         removed from frontmatter and the receipt should still be emitted.
 
         ``surface`` names the interaction origin (``'api'``, ``'cli'``,
-        ``'file'``, ``'mcp'``); ``actor`` is the stable actor identity
-        (``'human'`` for all UI/API/CLI/file origins).
+        ``'file'``, ``'mcp'``); ``actor`` is the stable actor identity.
+        Screen HTTP writers derive it from server authentication.
         """
         definition = self.registry.get(key)
         if definition is None:
@@ -583,6 +647,8 @@ class SettingsService:
         valid, message = _validate_value(definition, value)
         if not valid:
             raise SettingsWriteError(message or f"invalid value for {key}")
+        if key in SCREEN_CONTROL_KEYS and not actor.strip():
+            raise SettingsWriteError("settings writes require an actor")
 
         is_runtime_gating = key in RUNTIME_GATING_SETTINGS
 
@@ -601,7 +667,16 @@ class SettingsService:
 
         path = Path(context.settings_path) / definition.file
         document: MarkdownSettingsDocument | None
+        screen_source_text: str | None = None
+        screen_source_version: str | None = None
         try:
+            if key in SCREEN_CONTROL_KEYS:
+                from app.knowledge.write_ops import read_note_text_with_version
+
+                try:
+                    screen_source_text, screen_source_version = read_note_text_with_version(path)
+                except FileNotFoundError:
+                    pass
             document = self.markdown_store.read(path)
         except FileNotFoundError as exc:
             # A watcher-observed owner-file deletion must still emit its
@@ -611,8 +686,21 @@ class SettingsService:
             document = None if not persist else self._scaffold_missing_settings_file(
                 path, definition.file, key=key, cause=exc
             )
-        except (OSError, MarkdownSettingsError) as exc:
+        except (OSError, MarkdownSettingsError, UnicodeDecodeError) as exc:
             raise SettingsWriteError(str(exc)) from exc
+
+        if key in SCREEN_CONTROL_KEYS and document is not None:
+            # Bind the parsed document to bytes captured before the read. A
+            # scaffold has no earlier file, so bind its returned document now.
+            try:
+                if screen_source_text is None:
+                    screen_source_text, screen_source_version = read_note_text_with_version(path)
+                observed_frontmatter, observed_body = split_markdown_settings(screen_source_text, path=path)
+            except (ValueError, OSError) as exc:
+                raise SettingsWriteError("screen control source cannot be validated") from exc
+            if observed_frontmatter != document.frontmatter or observed_body != document.body:
+                raise SettingsWriteError("screen controls changed during source read")
+        expected_screen_bytes = screen_source_text.encode("utf-8") if screen_source_text is not None else None
 
         raw_scope = str(document.frontmatter.get("scope") or definition.scope).strip() if document else definition.scope
         if raw_scope not in VALID_SOURCE_SCOPES:
@@ -623,10 +711,72 @@ class SettingsService:
 
         frontmatter = dict(document.frontmatter) if document else {}
         old_value = resolve_settings_receipt_old_value(frontmatter.get(key))
+        migrating_legacy_screen_retention = False
+        if key in SCREEN_CONTROL_KEYS:
+            # The watcher may observe an API write again, or replay after losing
+            # its cache. Compare with durable acceptance, never watcher memory.
+            accepted = self.resolve_accepted_runtime_gating(context)[key]
+            old_value = accepted.value
+            if key == "screen_frame_retention_minutes" and accepted.source == "accepted-runtime-gating-default":
+                from app.heimdal.screen_control import legacy_screen_retention
+
+                migrating_legacy_screen_retention, legacy_value = legacy_screen_retention(context)
+                if migrating_legacy_screen_retention:
+                    old_value = legacy_value
         frontmatter[key] = value
         if persist:
             assert document is not None
-            self.markdown_store.write_frontmatter(path, frontmatter, body=document.body)
+            if key not in SCREEN_CONTROL_KEYS:
+                self.markdown_store.write_frontmatter(path, frontmatter, body=document.body)
+            elif frontmatter != document.frontmatter:
+                from app.knowledge.errors import KnowledgeError
+                from app.knowledge.write_ops import write_note_from_absolute
+
+                if screen_source_version is None or not context.active_vault_path:
+                    raise SettingsWriteError("screen control replacement requires a source version and vault root")
+                requested_text = render_markdown_settings(frontmatter, document.body)
+                try:
+                    write_note_from_absolute(
+                        path, requested_text, vault_root=context.active_vault_path,
+                        action=_SETTINGS_WRITE_ACTION, expected_version=screen_source_version,
+                        writer_identity=f"settings:{actor}",
+                    )
+                except KnowledgeError as exc:
+                    raise SettingsWriteError("screen controls changed before source replacement") from exc
+                # Receipt acceptance must attest this write's intended bytes,
+                # never a newer edit sampled after the source write completed.
+                expected_screen_bytes = requested_text.encode("utf-8")
+            if key in SCREEN_CONTROL_KEYS:
+                try:
+                    _confirm_file_and_parent_durable(path)
+                except OSError as exc:
+                    raise SettingsWriteError("screen control source is not durable") from exc
+
+        acceptance_precondition = resolve_settings_receipt_acceptance_precondition()
+        if key in SCREEN_CONTROL_KEYS:
+            prior_precondition = acceptance_precondition
+
+            def screen_precondition() -> None:
+                if prior_precondition is not None:
+                    prior_precondition()
+                current_bytes = path.read_bytes() if path.exists() else None
+                if current_bytes != expected_screen_bytes:
+                    raise SettingsWriteError("screen controls changed before durable acceptance")
+
+            acceptance_precondition = screen_precondition
+            if key == "screen_paused" and value is True:
+                from app.heimdal.screen_control import revoke_screen_control_grants
+
+                try:
+                    # Revocation/erasure can outlive the source snapshot.
+                    # Validate on both sides, then recheck at receipt append.
+                    # Failure leaves the desired pause pending or consent off;
+                    # no retry or compensation is allowed to re-grant consent.
+                    screen_precondition()
+                    revoke_screen_control_grants(actor=actor, context=context)
+                    screen_precondition()
+                except Exception as exc:
+                    raise SettingsWriteError("screen pause consent revocation is not complete") from exc
 
         effective = EffectiveSetting(
             key=key,
@@ -635,6 +785,8 @@ class SettingsService:
             source=str(path),
             source_file=str(path),
         )
+        if key in SCREEN_CONTROL_KEYS and old_value == value and not migrating_legacy_screen_retention:
+            return effective, None
 
         # Emit actor-tagged receipt for all governed writes.
         receipt_value = value if persist else None
@@ -664,9 +816,6 @@ class SettingsService:
         # survives process restart (#2787).
         try:
             if is_runtime_gating:
-                acceptance_precondition = (
-                    resolve_settings_receipt_acceptance_precondition()
-                )
                 if acceptance_precondition is None:
                     emit_durable_settings_write_receipt_once(receipt)
                 else:
@@ -784,7 +933,7 @@ class SettingsService:
             document = self.markdown_store.read(path)
         except FileNotFoundError:
             return None
-        except (OSError, MarkdownSettingsError) as exc:
+        except (OSError, MarkdownSettingsError, UnicodeDecodeError) as exc:
             errors.append(SettingsValidationError(message=str(exc), source_file=str(path), scope=fallback_scope))
             return None
 
@@ -902,6 +1051,12 @@ def _value_for_definition(source_values: Mapping[str, Any], definition: SettingD
 
 
 def _validate_value(definition: SettingDefinition, value: Any) -> _ValidationResult:
+    if definition.key in SCREEN_CONTROL_KEYS:
+        try:
+            ScreenControlSettings.model_validate({definition.key: value})
+        except ValueError as exc:
+            return False, str(exc)
+        return True, None
     if value is None:
         if definition.default_value is None:
             return True, None

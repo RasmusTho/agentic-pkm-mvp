@@ -43,6 +43,7 @@ from app.heimdal.settings_notes import (
 )
 from app.ops.heimdal_cold_volume import _ARCHIVE_VOLUME_READY_ISSUER, _issue_archive_volume_ready
 from app.write_guard import WriteGuard
+from tests.helpers.vault_settings import set_test_screen_retention
 
 pytestmark = pytest.mark.not_pg
 
@@ -52,8 +53,9 @@ _READER = "har05-restore-drill"
 
 
 @pytest.fixture(autouse=True)
-def _memory_runtime(monkeypatch: pytest.MonkeyPatch):
+def _memory_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
     monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
     monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", _READER)
     raw_store.reset_memory_raw_store()
@@ -141,6 +143,8 @@ def _write_screen_retention_window(vault_root: Path, *, minutes: int) -> None:
         ),
         write_guard=WriteGuard(lambda: {"state": "healthy"}),
     )
+
+    set_test_screen_retention(vault_root, minutes)
 
 
 @pytest.mark.parametrize("revoked_grant", ["grant-a", "grant-b"])
@@ -384,6 +388,7 @@ def test_screen_retry_finds_cross_reason_pending_receipt_by_modality(
         ),
         write_guard=WriteGuard(lambda: {"state": "healthy"}),
     )
+    set_test_screen_retention(vault_root, 1)
     record = _age_record(
         _insert(
             b"screen cleanup created by hard retention",

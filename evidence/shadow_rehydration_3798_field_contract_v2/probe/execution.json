@@ -1,0 +1,76 @@
+{
+  "schema_name": "epic_rehydration_execution_log",
+  "schema_version": 2,
+  "probe_id": "shadow_rehydration_3798_field_contract",
+  "clock": {
+    "name": "parent clock tool UTC wall-clock observations; one-second resolution",
+    "unit": "seconds",
+    "scope": "parent pre-invocation UTC wall-clock marker through exact original artifact readback; includes orchestration and dispatch; excludes earlier implementation/review and later delivery/CI; not model-active time or human effort"
+  },
+  "started_at": "2026-10-17T21:51:28Z",
+  "ended_at": "2026-10-17T21:53:24Z",
+  "invocation": {
+    "admitted_model": "gpt-6-luna",
+    "admitted_reasoning_effort": "xhigh",
+    "engine_identity": "unknown",
+    "engine_identity_source": "native carrier admission metadata does not expose engine identity",
+    "start_status": "succeeded",
+    "start_observed_at": "2026-10-17T21:51:41Z"
+  },
+  "events": [
+    {
+      "id": "packet-handoff-confirmed-1",
+      "kind": "handoff",
+      "at": "2026-10-17T21:51:41Z",
+      "evidence": "native-capture.json: frozen packet b7ec0ce7fb140bcaddfedde6245d9200ebde44adb6d36bb6b3015e99aab9ebe0 /31502bytes transfer confirmed by parent successful post-spawn observation; not the carrier's exact transfer instant"
+    },
+    {
+      "id": "fresh-agent-admission-observed-1",
+      "kind": "agent_start",
+      "at": "2026-10-17T21:51:41Z",
+      "evidence": "native-capture.json: actual successful fork_none native /root/fresh_shadow_fields_3798 admission at configured gpt-6-luna/xhigh, no rejected admission/fallback; post-spawn observed UTC"
+    },
+    {
+      "id": "original-response-handoff-confirmed-1",
+      "kind": "handoff",
+      "at": "2026-10-17T21:53:24Z",
+      "evidence": "native-capture.json: parent raw original response readback6937bytes SHAa6e1b74af8327a414901bd720e2c4329800d4b6e0370d2154c65e720dbdc41a1 matched fresh observer report; all four originals retained once, no edits"
+    }
+  ],
+  "events_complete": true,
+  "recorder": "parent coordinator /root, recorded by sole implementation owner codex-6174-field-contract",
+  "usage": {
+    "input_tokens": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "tokens",
+      "scope": "parent pre-invocation UTC wall-clock marker through exact original artifact readback; includes orchestration and dispatch; excludes earlier implementation/review and later delivery/CI; not model-active time or human effort",
+      "source": "native carrier authoritative usage/billing receipt unavailable",
+      "reason": "Native carrier exposes admission configuration but no authoritative token usage or monetary cost receipt; no estimate."
+    },
+    "output_tokens": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "tokens",
+      "scope": "parent pre-invocation UTC wall-clock marker through exact original artifact readback; includes orchestration and dispatch; excludes earlier implementation/review and later delivery/CI; not model-active time or human effort",
+      "source": "native carrier authoritative usage/billing receipt unavailable",
+      "reason": "Native carrier exposes admission configuration but no authoritative token usage or monetary cost receipt; no estimate."
+    },
+    "model_cost_usd": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "USD",
+      "scope": "parent pre-invocation UTC wall-clock marker through exact original artifact readback; includes orchestration and dispatch; excludes earlier implementation/review and later delivery/CI; not model-active time or human effort",
+      "source": "native carrier authoritative usage/billing receipt unavailable",
+      "reason": "Native carrier exposes admission configuration but no authoritative token usage or monetary cost receipt; no estimate."
+    },
+    "human_minutes": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "minutes",
+      "scope": "parent pre-invocation UTC wall-clock marker through exact original artifact readback; includes orchestration and dispatch; excludes earlier implementation/review and later delivery/CI; not model-active time or human effort",
+      "source": "human measurement or attestation unavailable",
+      "reason": "No measured or attested human effort; elapsed wall time is not human minutes."
+    }
+  }
+}

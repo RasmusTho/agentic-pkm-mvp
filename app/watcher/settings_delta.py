@@ -65,6 +65,7 @@ SCOPED_SETTINGS_FILENAMES = frozenset(
         "companion-ui.md",
         "local.md",
         "youtube.md",
+        "screen_control.md",
     }
 )
 
@@ -331,15 +332,15 @@ def handle_settings_local_delta(
     """Route watcher-detected runtime-gating file deltas through the governed seam.
 
     The historical function name is retained for callers, but the seam covers
-    both the vault-local runtime controls and the vault-shared YouTube master
-    switch. A blocked edit remains on disk as human-authored input (the
+    the vault-local runtime controls, vault-shared YouTube switches, and
+    SCREEN-06 controls. A blocked edit remains on disk as human-authored input (the
     vault-shared owner file is git-synced across machines, so this seam never
     rewrites it: a denial on one machine must not clobber a value another
     machine legitimately accepted and receipted); the returned ACCEPTED
     values stay at the last guarded state and the denial surfaces via
     ``errors`` with no success receipt. Because ``SettingsService.resolve``
-    re-reads the owner file directly, the future YSS-06/YSS-10 consumers MUST
-    consume the accepted accessor for the two YouTube gates, never raw
+    re-reads the owner file directly, YouTube and screen consumers MUST
+    consume the accepted accessor for their governed controls, never raw
     resolution. Existing watcher/indexing gates keep their established
     permissions path outside #3964. When the vault is not
     selected the delta cannot be routed at all and the result is marked
@@ -446,8 +447,8 @@ def handle_settings_local_delta(
 
     if previous_runtime_values is None:
         # A lost/empty watcher state is not evidence that an on-disk gate was
-        # previously accepted. Rebuild the YSS baseline from receipts bound to
-        # this vault identity/generation; keys outside #3964 retain their
+        # previously accepted. Rebuild the governed baseline from receipts bound to
+        # this vault identity/generation; other keys retain their
         # established registered defaults.
         durable_accepted = service.resolve_accepted_runtime_gating(context)
         accepted_previous_values = {
@@ -557,7 +558,8 @@ def handle_settings_local_delta(
             else:
                 accepted_values.pop(key, None)
             continue
-        receipts.append(receipt)
+        if receipt is not None:
+            receipts.append(receipt)
         if not persist and document is None:
             # The entire registered owner file disappeared. Retain the
             # explicitly accepted default in watcher state so a later

@@ -1282,7 +1282,124 @@ accept/pin that receipt in run-state. A July serialization, fixture, stale sourc
 rotation, worker launch, or later lifecycle action is outside this manual shadow behavior.
 Standalone receipt deserialization reconstructs the retained pack, observation, comparison, and source
 chain and cross-binds their normalized objects and metadata before accepting any receipt. Unmeasured
-token, cost, elapsed-time, and human-minute values remain `unknown`.
+token, cost, elapsed-time, and human-minute values remain `unknown` in the frozen v1 contract.
+
+The explicit v2 surface is selected with `build-pack --schema-version 2`; the default remains v1,
+and the retained first-probe artifacts are unchanged. V2 carries its exact closed JSON response
+schema in `response_contract`. It separates `checkpoint_decision_delta`,
+`checkpoint_gate_invariants`, `checkpoint_recommendations`, and `live_slice_next_action` instead
+of comparing different representations or meanings. Status, open findings, and the complete
+external projection (Issue, PR, head/merge SHA, CI, repository head, and dispatcher mode/DB state)
+are typed facts. Checkpoint facts may cite the packet; live facts must come from independent live
+reads. Missing evidence is the literal `unknown`, not a checkpoint-filled observation. All schema
+keys are mandatory; an unavailable field uses `unknown` rather than omitting its key. Live-field
+provenance must include its required GitHub/repository/dispatcher kinds and bind each reference
+to declared independent `live_reads`. Each declared read is `{kind, evidence}` where evidence is
+the existing exact-byte `{ref, sha256, bytes_length}` binding to a regular local file. The packet
+carries `live_read_contract`: a closed `epic_rehydration_live_read.v2` envelope declaring probe,
+kind, repository/Issue/PR target, UTC observation time, availability, payload and unavailable reason.
+The GitHub payload retains Issue/PR objects and complete-or-incomplete review-thread facts;
+repository payload names the observed `origin` main SHA, and dispatcher payload retains status.
+Unavailable reads retain an explicit unknown payload and reason, not checkpoint-filled values.
+Raw upstream GitHub/dispatcher payload objects retain their upstream fields; the manual envelopes,
+bindings, review-thread projection and repository projection have closed schemas.
+
+One field-aware admission predicate is shared by observations and independent audit facts.
+It classifies references before filesystem use: arbitrary URI/opaque strings and query/fragment
+references are refused for live evidence. Local relative paths resolve from repository CWD;
+final-component symlinks are refused, parent paths are canonicalized, and packet/source/all custody
+files are excluded by both canonical path and device/inode identity. Renamed copies of packet or
+source JSON do not satisfy the live-read envelope. A genuinely independent unchanged reread may
+have identical bytes/hash; content equality alone is not grounds for refusal. This is the declared
+single trusted operator/fresh observer boundary, not authenticated fetch, auditor identity or
+upstream-truth verification. Full v2 observation admission requires the packet context and its
+exact retained-file binding; there is no context-free proof path. V1 admission stays unchanged.
+The response's packet `{ref, sha256, bytes_length}` is also the exact binding required by file-aware
+comparison, telemetry, receipt and audit consumers; a different formatting of equal JSON is not
+the packet observed by that response. Fresh probe reads must be timestamped at/after successful
+agent admission and at/before the response. The agent waits for recorded admission metadata before
+live capture. Separate audit reads instead fall between source checkpoint and independent fact
+observation; they are not asserted to be reads by the probe agent.
+
+Checkpoint fields instead cite the exact field-specific `packet:<probe-id>#<source-pointer>`
+listed in the carried contract. Such pointers are admitted only for `checkpoint_*` semantics,
+never a live fact. Agent missing/fabricated reporting uses `agent:<probe-id>` and holds no live
+evidence authority. The CI dimension carries its
+scope explicitly: all returned PR status-rollup entries, including historical duplicates and
+cancellations. It is not a current required-CI verdict or merge gate; the original rollup stays
+retained. External dimensions retain separate results, including simultaneous drift and unknowns. Live next action
+is `not_comparable` to a checkpoint recommendation. Missing-claim reporting is checked against
+actually unavailable observed fields. Fabrication is never inferred from drift or self-report:
+the optional `compare --fabrication-audit-file` requires a separate auditor's explicit fabrication
+attestation, exact packet/response bindings and separately retained typed fact evidence. The same
+provenance predicate validates those facts; established live values are rederived from their own
+retained payloads, and established checkpoint values must match their exact source projection.
+An unknown observed claim cannot become fabricated merely because an audit has a known fact. Without
+that audit, fabrication stays unknown. Custody validation does not authenticate the auditor or
+prove external source truth.
+At a file-aware audit/comparison/telemetry/receipt join, the audit and joined response must have
+the same exact `{ref, sha256, bytes_length}`, not merely equal parsed JSON. Public comparison
+functions accept `observation_ref` for that file-aware check; standalone receipt replay supplies
+its retained response ref. Logical comparison without a file ref uses the audit's reopened binding
+as authority. Telemetry alone makes no claim about an audit it was not given.
+The v2 receipt CLI unconditionally joins its explicit packet/response/comparison file inputs to
+their retained refs, with or without audit. Use the same serialized ref spelling: equal JSON in
+a separately formatted or differently named file does not establish the exact raw input binding.
+
+Comparison retains the original observed value alongside independent live value/evidence support;
+an incorrect reconstruction or unknown remains measurable. It never replaces missing observed
+fields with independent or checkpoint facts. External refresh compares independent live state to
+the checkpoint, separately from an agent's mistaken summary of that state.
+
+V2 additionally hashes the exact retained Issue/PR, dispatcher and repository JSON custody files.
+The evaluator marker names `dispatcher_status_ref`, `repository_status_ref`, and a
+`probe_external_state` projection; that projection must agree with those retained reads. The
+source is emitted by the existing context-budget evaluator and accepted/pinned through run-state
+before building the packet. V2 consumers reuse the v1 source/identity guards, reject unsupported
+version mixtures, and rederive comparisons from the complete typed chain even during standalone
+receipt consumption. Duplicate JSON keys, extra/missing keys, coercion, non-finite values and
+coherently rehashed semantic corruption fail closed. No result authorizes a lifecycle action.
+V2 source custody requires exact integer Issue/PR identities. Its retained repository capture must
+name `remote: origin` and `ref: refs/heads/main`, using the same repository identity schema as live
+reads; producer diagnostic metadata remains raw-byte bound but cannot substitute a different remote
+or branch. All carried SHA values have their exact hexadecimal length, excluding terminal
+whitespace. This does not reinterpret v1 artifacts.
+
+The manual `telemetry` command derives measurements; callers cannot supply trusted totals:
+
+```bash
+python3 -m app.builderops.epic_rehydration_probe telemetry \
+  --pack-file <frozen-v2-pack.json> --observation-file <original-response.json> \
+  --execution-file <retained-execution-log.json> --output <new-telemetry.json>
+```
+
+The strict `epic_rehydration_execution_log.v2` has `probe_id`, `clock` (`name`, `unit=seconds`,
+`scope`), UTC `started_at`/`ended_at`, `invocation` (the response's exact `agent` object),
+`recorder`, `events_complete=true`, ordered `events`, and `usage`. Each event has a unique `id`,
+`kind`, UTC `at`, and nonempty `evidence` identifying the observed native receipt/action.
+`agent_start` counts successful native admissions (exactly one); `admission_retry` counts attempts
+after rejection and must precede that successful admission. `handoff` counts frozen-packet or
+original-response transfers. `implementation_repair`, `review_repair`, and `ci_repair` count
+code/test corrections after their respective failure within the declared probe scope, not native
+admission retries or historical delivery repairs. Zero counts require the recorder's complete-scope
+attestation. Admission retries must precede success in event order even at equal clock ticks.
+The native admitted model/reasoning is recorded separately from engine introspection.
+
+`usage` has `input_tokens`, `output_tokens`, `model_cost_usd`, and `human_minutes`; each measurement
+has `availability`, `value`, `unit`, `scope`, `source`, and `reason`. Unavailable values are
+`availability=unknown`, `value=unknown`, with the unavailable source/reason named. A known carrier
+value requires a retained `carrier_usage_receipt`, and human effort requires a retained
+`human_attestation`; the exact source bytes, probe identity and value are checked. A strict
+`epic_rehydration_usage_authority.v2` envelope binds `authority`, `metric`, `value`, `unit`, `scope`,
+UTC `observed_at`, and nonempty `source`, with no extra fields; arbitrary dictionaries are not
+accepted as measurement authority. This does not
+add billing integration or independently authenticate an operator-retained receipt. Units are
+tokens/tokens/USD/minutes respectively. The helper derives actual packet/response bytes, UTC
+elapsed seconds, and event counts from retained evidence and cross-binds all measurements again at
+receipt consumption. Bytes are not tokens; wall time includes only the declared interval and is
+neither model effort nor human effort. The new `shadow_rehydration_3798_field_contract.v2` evidence
+namespace records one manual fresh-agent observation; readiness remains limited to another
+explicitly authorized manual experiment, not rotation, compression, dispatch, takeover or adoption.
 
 When a PR is locally validated but GitHub Actions are still pending, coordinators may separate the
 implementation handoff from terminal closure with a CI-monitor handoff record:
