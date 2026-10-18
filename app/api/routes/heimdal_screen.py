@@ -12,8 +12,8 @@ from app.api.compatibility_mutation import (
     seal_vault_mutation,
 )
 from app.api.request_active_context import (
-    refuse_carrier_until_binding_aware,
     route_read_vault_root_or_selection_required,
+    scoped_route_read,
 )
 from app.api.routes.vault_resolution import compatibility_vault_root_or_selection_required
 from app.auth import api_key_header, resolve_auth_subject
@@ -44,11 +44,13 @@ class ScreenControlWrite(BaseModel):
 @router.get(
     "/control",
     response_model=None,
-    dependencies=[Depends(_control_actor), Depends(refuse_carrier_until_binding_aware)],
+    dependencies=[Depends(_control_actor)],
 )
+@scoped_route_read
 def read_screen_control(
     app_id: str | None = None, scopes: list[str] = Query(default=[]),
 ) -> dict[str, Any] | JSONResponse:
+    # A scoped read answers from the request binding's settings (MVR-05B4c6).
     vault_root = route_read_vault_root_or_selection_required()
     if isinstance(vault_root, JSONResponse):
         return vault_root

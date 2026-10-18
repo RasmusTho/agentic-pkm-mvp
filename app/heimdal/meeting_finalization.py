@@ -912,6 +912,20 @@ def latest_receipt(
     return _receipt_dict(receipt) if receipt else None
 
 
+def latest_receipt_for_binding(session_id: str, *, vault_binding_id: str) -> Optional[Dict[str, Any]]:
+    """The latest receipt of one already-proven binding (a scoped read, MVR-05B4c6).
+
+    The caller's request context has bound ``vault_binding_id``; the read never
+    resolves the process selection or scalar binding runtime, and reads only that
+    binding's rows of the binding-scoped receipt table.
+    """
+    binding = (vault_binding_id or "").strip()
+    if not binding:
+        raise MeetingFinalizationError("vault_binding_id must be a non-empty string")
+    receipt = _backend().latest(binding, session_id)
+    return _receipt_dict(receipt) if receipt else None
+
+
 def _receipt_dict(receipt: FinalizationReceipt) -> Dict[str, Any]:
     return {
         "session_id": receipt.session_id,
@@ -926,6 +940,7 @@ def _receipt_dict(receipt: FinalizationReceipt) -> Dict[str, Any]:
 
 
 __all__ = [
+    "latest_receipt_for_binding",
     "FINALIZATION_WRITER",
     "MEETINGS_DIR_DEFAULT",
     "FinalizationReceipt",

@@ -17,7 +17,10 @@ from app.api.request_active_context import (
     scoped_note_path_owned_by_binding,
     scoped_route_read,
 )
-from app.settings.panel_actions import get_panel_actions_diagnostics
+from app.settings.panel_actions import (
+    get_panel_actions_diagnostics,
+    panel_actions_diagnostics_for_read,
+)
 
 router = APIRouter(prefix="/api/debug")
 
@@ -71,11 +74,14 @@ def debug_panel(note_rel: str = Query(..., description="Vault-relative path to n
         "note_rel": note_rel,
         "note_path": str(note_path),
         "parsed_actions": actions,
-        # Panel-actions mapping diagnostics are process-global (one mapping root
-        # for the whole process plus a process-wide last-error slot the probe
-        # rewrites). A scoped read neither reports them as the bound binding's
-        # nor mutates that slot.
-        "panel_diagnostics": get_panel_actions_diagnostics() if scoped is None else None,
+        # The mapping root is process configuration. A scoped read (MVR-05B4c6)
+        # gets its own non-mutating probe: it never rewrites the process-wide
+        # last-error slot, nor reports an error another caller recorded there.
+        "panel_diagnostics": (
+            get_panel_actions_diagnostics()
+            if scoped is None
+            else panel_actions_diagnostics_for_read()
+        ),
     }
 
 
