@@ -4882,6 +4882,74 @@ def test_missing_instance_state_recovery_requires_complete_unchanged_test_ledger
         )
 
 
+def test_missing_instance_state_recovery_preflight_never_recovers_key_rotation(
+    tmp_path,
+) -> None:
+    """The advertised read-only proof refuses pending rotation byte-for-byte."""
+    from app.instance.legacy_owner_recovery import (
+        validate_missing_test_instance_state_recovery_authority,
+    )
+
+    state_mount = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    layout = InstanceStateLayout.for_channel(state_mount, "test")
+    runtime = InstanceRegistryRuntime.for_paths(layout, host_global_root)
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=vault_root, watcher_vault_path=vault_root,
+    )
+    _, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[{
+            "channel_id": "test",
+            "vault_binding_id": registration.vault_binding_id,
+            "root": str(vault_root.resolve()),
+        }],
+    )
+    proof_path = host_global_root / "deployment-quiescence-proof.json"
+    values = {
+        "host_global_root": host_global_root,
+        "authority_binding_id": registration.vault_binding_id,
+        "authority_root": str(vault_root.resolve()),
+        "owner_receipt_path": owner_receipt,
+        "expected_owner_receipt_sha256": hashlib.sha256(
+            owner_receipt.read_bytes()
+        ).hexdigest(),
+        "quiescence_proof_path": proof_path,
+        "expected_quiescence_proof_sha256": hashlib.sha256(
+            proof_path.read_bytes()
+        ).hexdigest(),
+    }
+    validate_missing_test_instance_state_recovery_authority(**values)
+    with pytest.raises(RuntimeError, match="injected crash after key_commit"):
+        runtime.ledger.rotate_key(
+            precondition=lambda _snapshot, _roots: None,
+            crash_after="key_commit",
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+    before = {
+        "key": runtime.ledger.key_path.read_bytes(),
+        "ledger": runtime.ledger.path.read_bytes(),
+        "rotation": runtime.ledger.rotation_path.read_bytes(),
+    }
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="TEST dormant ownership preparation refused",
+    ):
+        validate_missing_test_instance_state_recovery_authority(
+            **values,
+            expected_ledger_sha256=hashlib.sha256(before["ledger"]).hexdigest(),
+        )
+
+    assert runtime.ledger.key_path.read_bytes() == before["key"]
+    assert runtime.ledger.path.read_bytes() == before["ledger"]
+    assert runtime.ledger.rotation_path.read_bytes() == before["rotation"]
+
+
 def test_runtime_preflight_rejects_foreign_channel_host_global_lease_without_mutation(
     tmp_path,
 ) -> None:

@@ -1254,7 +1254,9 @@ successor, allocates a third operation ID for the new candidate, and consumes th
 host-global ownership ledger/key plus proof-bound owner inventory. That inventory must cover the
 exact active TEST lease set. A read-only runtime-UID preflight authenticates the complete ledger and
 records its digest before any receipt, volume, or Compose effect; later boundaries recheck strict
-stopped-writer state and the same digest before writing only dormant, inactive-fenced registry state. The
+stopped-writer state and the same digest before writing only dormant, inactive-fenced registry state.
+A pending ownership-key rotation refuses byte-for-byte at this preflight; it is never recovered or
+deleted by the read-only path. The
 VM's single-slot native request journal authenticates only the current terminal failed successor;
 reconstruction does not require it to retain the original reset binding after rollover. Instead,
 the private completed reset disposition must match the host recovery marker's retained reset

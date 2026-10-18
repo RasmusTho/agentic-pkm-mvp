@@ -298,7 +298,9 @@ reset operation after the failed successor is admitted: that journal authenticat
 terminal successor, while the private completed disposition is matched to the host-retained reset
 request's operation ID, revision, image digest, authority tuple, and bounded runtime surface.
 A read-only runtime-UID preflight authenticates that complete set and its ledger digest before the
-recovery receipt or Compose volume effect. Under deployment-admission -> producer-transition -> ownership-ledger ->
+recovery receipt or Compose volume effect. A pending ownership-key rotation is a byte-preserving
+refusal at this boundary; the preflight never recovers or deletes its rotation journal. Under
+deployment-admission -> producer-transition -> ownership-ledger ->
 registry-store ordering it materializes only the proven TEST registrations through the existing
 snapshot/checksum/legacy-export APIs, leaves the registry dormant at inactive-fenced revision zero
 before its first registration, and records a crash-idempotent result. It cannot mint or rotate

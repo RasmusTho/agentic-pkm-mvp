@@ -182,6 +182,7 @@ def validate_missing_test_instance_state_recovery_authority(
         resolved = ledger.resolve_live_owner_bindings(
             tuple(replace(owner, vault_binding_id="") for owner in owners),
             allow_legacy=True,
+            recover_rotation=False,
         )
         registrations = {
             owner.vault_binding_id: owner.root
@@ -195,10 +196,12 @@ def validate_missing_test_instance_state_recovery_authority(
             raise _test_refusal()
         ledger.require_scalar_rollback_ready(
             channel_id="test", registrations=registrations,
+            recover_rotation=False,
         )
         first = _read_private_bytes(ledger.path)
         ledger.require_scalar_rollback_ready(
             channel_id="test", registrations=registrations,
+            recover_rotation=False,
         )
         second = _read_private_bytes(ledger.path)
         if first != second:
