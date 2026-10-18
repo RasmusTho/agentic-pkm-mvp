@@ -92,6 +92,11 @@ CAPTURE_CHAIN_V1: List[str] = ["ios_voice_memos", "icloud_drive", "folder_watch"
 ADAPTER_ID = "voice_memo_folder_watch"
 ADAPTER_VERSION = "v1"
 
+# The SCREEN-03 macOS observer is a separate host-supported sensor identity.
+# Registration is static allow-list state, not enrollment or consent.
+SCREEN_OBSERVER_ADAPTER_ID = "heimdal_macos_screen_observer"
+SCREEN_OBSERVER_ADAPTER_VERSION = "v1"
+
 # Default consent scope this adapter admits under -- mirrors the standing
 # self_record grant's scope exactly (app.heimdal.consent_ledger.SELF_RECORD_SCOPE).
 DEFAULT_CAPTURE_SCOPE = SELF_RECORD_SCOPE
@@ -183,6 +188,7 @@ class SensorIdentity:
 # modality needs cross-process discoverability.
 _KNOWN_SENSORS: Dict[tuple[str, str], bool] = {
     (ADAPTER_ID, ADAPTER_VERSION): True,
+    (SCREEN_OBSERVER_ADAPTER_ID, SCREEN_OBSERVER_ADAPTER_VERSION): True,
 }
 
 

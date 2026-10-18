@@ -13,6 +13,11 @@ description: "Verify that prod is healthy and functionally correct after a promo
 > assert the running prod ref equals `origin/stable` — that false-FAILs a healthy prod and routes
 > to a rollback against a dormant, diverged ref. Compare against the current promotion ref
 > (`main`) instead; see step 1.
+>
+> **Target flow (ADR-0068, owner-directed 2026-10-18):** delivery becomes `main` → `dev` → `test`
+> (UAT) → `stable` (prod), and this gated-`stable` model is the target again. `stable` advances only
+> from a `test`-passed candidate. Enactment is tracked under #6207; until the prod-promotion slice
+> lands, the status above governs. See [ADR-0068](../../../docs/adr/ADR-0068-continuous-dev-delivery-flow.md).
 
 Use this skill immediately after `execute-promotion` succeeds, and again after `rollback-promotion`. Its sole job is to confirm the running prod channel is healthy and report any failures clearly.
 

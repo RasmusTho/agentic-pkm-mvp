@@ -72,6 +72,60 @@ def test_endpoint_admits_only_via_consent_gate_and_registered_sensor(monkeypatch
     with pytest.raises(RuntimeError): ingest_screen_bundle(bad, key=_KEY)
 
 
+def test_builtin_screen_sensor_is_registered_before_endpoint_admission():
+    """The production host accepts the fixed SCREEN-03 identity without client enrollment."""
+    from app.api.routes.heimdal_screen import capture_screen_bundle
+
+    payload = bundle()
+    payload["sensor"] = {
+        "adapter": "heimdal_macos_screen_observer",
+        "version": "v1",
+        "machine": "mac-1",
+    }
+
+    ack = capture_screen_bundle(payload)
+
+    assert ack["created"] and ack["record_id"]
+    assert all_raw_records()[0].sensor["adapter"] == "heimdal_macos_screen_observer"
+    assert all_raw_records()[0].sensor["version"] == "v1"
+
+
+def test_unknown_screen_sensor_is_refused_before_consent_or_raw_write(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Unknown identities fail at the production endpoint before other admission work."""
+    from app.api.routes.heimdal_screen import capture_screen_bundle
+
+    calls: list[str] = []
+    admit = screen_capture.admit_raw_evidence
+    raw_write = screen_capture.raw_store.insert_raw_record
+
+    def record_consent_admission(*, scope: str):
+        calls.append("consent-admission")
+        return admit(scope=scope)
+
+    def record_raw_write(**kwargs):
+        calls.append("raw-write")
+        return raw_write(**kwargs)
+
+    monkeypatch.setattr(screen_capture, "admit_raw_evidence", record_consent_admission)
+    monkeypatch.setattr(screen_capture.raw_store, "insert_raw_record", record_raw_write)
+
+    payload = bundle()
+    payload["sensor"] = {
+        "adapter": "unknown_screen_observer",
+        "version": "v1",
+        "machine": "mac-1",
+    }
+    with pytest.raises(HTTPException) as excinfo:
+        capture_screen_bundle(payload)
+
+    assert excinfo.value.status_code == 400
+    assert "not registered" in str(excinfo.value.detail)
+    assert calls == []
+    assert all_raw_records() == []
+
+
 def test_frame_bundle_lands_encrypted_idempotent():
     first = ingest_screen_bundle(bundle(), key=_KEY); second = ingest_screen_bundle(bundle(), key=_KEY)
     assert first.created and not second.created and len(all_raw_records()) == 1

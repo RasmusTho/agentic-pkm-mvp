@@ -11,6 +11,11 @@ description: "Execute a reviewed promotion plan: in checkout mode move the stabl
 > **dormant** and is not an ancestor of `origin/main`. Do not run this skill against the current
 > baseline without explicit operator direction — see README §Current direction and §Promotion
 > model before invoking.
+>
+> **Target flow (ADR-0068, owner-directed 2026-10-18):** delivery becomes `main` → `dev` → `test`
+> (UAT) → `stable` (prod), and this gated-`stable` model is the target again. `stable` advances only
+> from a `test`-passed candidate. Enactment is tracked under #6207; until the prod-promotion slice
+> lands, the status above governs. See [ADR-0068](../../../docs/adr/ADR-0068-continuous-dev-delivery-flow.md).
 
 Use this skill only after `prepare-promotion` has produced a complete plan and the operator has reviewed and ticked all acknowledgment checkboxes.
 
