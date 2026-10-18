@@ -40,8 +40,11 @@ def test_publish_uses_fixed_ssh_stdin_and_atomic_receiver(tmp_path, monkeypatch,
     # Run the reviewed receiver body on an isolated real directory. Only host
     # identity/ownership and the Docker transport are substituted; the production
     # decoder and actual atomic file/rename/fsync path execute.
-    base = tmp_path / "receipts"
-    base.mkdir()
+    host_opt = tmp_path / "host-opt"
+    base = host_opt / "builderops" / "receipts"
+    base.mkdir(parents=True)
+    for directory in (host_opt, base.parent, base):
+        directory.chmod(0o755)
     real_lstat = Path.lstat
 
     def metadata(path):
@@ -79,7 +82,9 @@ def test_publish_uses_fixed_ssh_stdin_and_atomic_receiver(tmp_path, monkeypatch,
     monkeypatch.setattr(socket, "gethostname", lambda: "builder-system")
     monkeypatch.setattr(Path, "lstat", metadata)
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(raw)))
-    source = ops.REMOTE.replace("Path('/opt/builderops/receipts')", f"Path({str(base)!r})")
+    source = (ops.REMOTE
+              .replace("Path('/opt/builderops/receipts')", f"Path({str(base)!r})")
+              .replace("Path('/opt')", f"Path({str(host_opt)!r})"))
     exec(compile(source, "private-ckm-receiver", "exec"), {})
     assert (base / FILENAME).read_bytes() == raw
 
