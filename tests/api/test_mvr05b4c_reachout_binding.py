@@ -289,3 +289,19 @@ def test_root_that_is_not_the_live_binding_fails_closed(two_bindings) -> None:
         _tick(Path(second.path), receipts, moments)
     assert not receipts.exists() and not moments.exists()
     assert list(Path(second.path).rglob("moments/*.md")) == []
+
+
+def test_tick_refuses_a_root_that_is_not_the_context_vault(two_bindings) -> None:
+    """#6250 review: B's moments are never materialized into, or stamped as, vault A."""
+
+    _client, first, second, receipts, moments = two_bindings
+    summary = run_relevance_tick(
+        Path(second.path),
+        vault_context=_ctx(Path(first.path)),
+        outbox_path=moments,
+        reachout_outbox_path=receipts,
+        interruptibility="home",
+    )
+    assert summary["skipped"] == "vault-root-context-mismatch"
+    assert not receipts.exists() or receipts.read_text(encoding="utf-8") == ""
+    assert not moments.exists() or moments.read_text(encoding="utf-8") == ""

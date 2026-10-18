@@ -19,6 +19,10 @@ from pathlib import Path
 from typing import Any
 
 from app.instance.compatibility_binding import compatibility_binding_for_root
+from app.instance.filesystem_identity import (
+    resolve_filesystem_root_identity,
+    same_filesystem_root,
+)
 from app.relevance.attention_loop import AttentionLoop
 from app.relevance.evaluator import DeterministicRelevanceEvaluator
 from app.relevance.interruptibility import InterruptibilityThreshold
@@ -71,9 +75,17 @@ def run_relevance_tick(
             "skipped": "vault-local-writes-disabled",
         }
 
+    # The evaluated root must be the vault the write context names: a moment read
+    # from one vault is never materialized into, or stamped as, another.
+    if not same_filesystem_root(
+        resolve_filesystem_root_identity(root),
+        resolve_filesystem_root_identity(context.active_vault_path),
+    ):
+        return {"materialized": 0, "moment_ids": [], "skipped": "vault-root-context-mismatch"}
+
     # Prove the producing binding before the first write (materialization included);
     # an unprovable binding fails the tick closed (the watcher guards the call).
-    producing_binding = compatibility_binding_for_root(Path(context.active_vault_path))
+    producing_binding = compatibility_binding_for_root(root)
 
     moments = DeterministicRelevanceEvaluator(root).evaluate()
     materialized: list[str] = []
