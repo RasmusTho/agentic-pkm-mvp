@@ -832,10 +832,23 @@ class LinuxEffects:
         self.capture_watch_configured: bool | None = None
         self.raw_migration_pending: bool | None = None
 
-    def environment(self, cutover: AuthorityCutover | None = None) -> dict[str, str]:
+    def environment(
+        self, cutover: AuthorityCutover | None = None,
+        candidate: DeployPlan | None = None,
+    ) -> dict[str, str]:
         cfg = self.config
         runtime_env_file = database_input_files(cfg)[1]
         env = dict(os.environ)
+        if candidate is not None:
+            candidate.validate()
+            if (candidate.channel != cfg.channel or not candidate.automatic
+                    or candidate.image_digest is None):
+                raise PostgresDeployError()
+            # Compose image selection is an execution boundary.  The
+            # authenticated candidate overrides both the deploy env-file and
+            # any ambient host selector for this exact invocation.
+            env['APP_IMAGE_TAG'] = candidate.revision
+            env['APP_IMAGE_DIGEST_SUFFIX'] = '@' + candidate.image_digest
         # Native authority is never inherited from the supervisor or shell.
         for key in _CUTOVER_ENV:
             env.pop(key, None)
@@ -895,13 +908,16 @@ class LinuxEffects:
             env['COMPOSE_PROFILES'] = ''
         return env
 
-    def compose(self, *args: str, cutover: AuthorityCutover | None = None) -> str:
+    def compose(
+        self, *args: str, cutover: AuthorityCutover | None = None,
+        candidate: DeployPlan | None = None,
+    ) -> str:
         cfg = self.config
         # Recovery Compose must inherit the authenticated ownership source from
         # the request.  Falling back to the supervisor's ambient/default root
         # could make the container inspect a different host ledger than the
         # one qualified for this failed operation.
-        env = self.environment(cutover)
+        env = self.environment(cutover, candidate)
         overlays = ['-f', str(cfg.root / 'docker-compose.bws.yml')]
         if env['BWS_DATABASE_TARGET'] == 'external':
             overlays += ['-f', str(cfg.root / 'docker-compose.bws-external.yml')]
@@ -1698,6 +1714,45 @@ class LinuxEffects:
         except Exception:
             return False
 
+    def recovery_quiescent(self) -> bool:
+        """Require a stable stopped census for every TEST state writer."""
+        writers = {
+            'api', 'worker', 'watcher', 'heimdal-capture-watch',
+            'instance-state-init', 'migrate',
+        }
+        try:
+            if self._running_one_shots():
+                return False
+            rows = self.compose('ps', '--all', '--format', 'json').strip()
+            records = (
+                [] if not rows else json.loads(rows)
+                if rows.startswith('[') else [json.loads(line) for line in rows.splitlines()]
+            )
+            if not isinstance(records, list):
+                return False
+            snapshots = []
+            for row in records:
+                if (not isinstance(row, dict) or not isinstance(row.get('Service'), str)
+                        or row.get('State') not in {'running', 'exited', 'created'}
+                        or row.get('Health') == 'starting'):
+                    return False
+                snapshots.append((row['Service'], row['State'], row.get('Health')))
+                if row['Service'] in writers and row['State'] == 'running':
+                    return False
+            # Refuse a transition at the effect boundary rather than trusting
+            # one instantaneous Compose response.
+            second = self.compose('ps', '--all', '--format', 'json').strip()
+            second_records = (
+                [] if not second else json.loads(second)
+                if second.startswith('[') else [json.loads(line) for line in second.splitlines()]
+            )
+            return snapshots == [
+                (row.get('Service'), row.get('State'), row.get('Health'))
+                for row in second_records
+            ]
+        except Exception:
+            return False
+
     def recover_source_terminal(self, operation_id: str, plan: DeployPlan) -> None:
         """Observe a retained completed source one-shot, never replay it.
 
@@ -1727,7 +1782,8 @@ class LinuxEffects:
         if (not directory.is_absolute() or directory.is_symlink()
                 or any(parent.is_symlink() for parent in (directory, *directory.parents))):
             raise PostgresDeployError()
-        return directory / ('test-source-recovery-' + request.failed_operation_id + '.json')
+        source_operation_id = request.source_operation_id or request.failed_operation_id
+        return directory / ('test-source-recovery-' + source_operation_id + '.json')
 
     def _read_test_recovery_disposition(self, request: TestRecoveryRequest) -> dict[str, Any] | None:
         path = self._test_recovery_disposition_path(request)
@@ -1735,12 +1791,19 @@ class LinuxEffects:
             raw = _private_json(path)
         except FileNotFoundError:
             return None
+        source_operation_id = request.source_operation_id or request.failed_operation_id
+        source_plan = (
+            request.source_plan
+            if request.source_operation_id is not None else request.plan
+        )
+        if source_plan is None:
+            raise PostgresDeployError()
         expected = {
             'schema': 'test-source-recovery.v1',
             'channel': 'test',
-            'failed_operation_id': request.failed_operation_id,
-            'revision': request.plan.revision,
-            'image_digest': request.plan.image_digest,
+            'failed_operation_id': source_operation_id,
+            'revision': source_plan.revision,
+            'image_digest': source_plan.image_digest,
             'authority_cutover': {
                 'binding_id': request.authority_cutover.binding_id,
                 'root': request.authority_cutover.root,
@@ -1754,6 +1817,8 @@ class LinuxEffects:
         return raw
 
     def _write_test_recovery_disposition(self, request: TestRecoveryRequest, state: str) -> None:
+        if request.source_operation_id is not None:
+            raise PostgresDeployError()
         if state not in {'prepared', 'complete'}:
             raise PostgresDeployError()
         path = self._test_recovery_disposition_path(request)
@@ -1950,9 +2015,47 @@ class LinuxEffects:
             'test-instance-state-recovery-' + request.failed_operation_id + '.json'
         )
 
+    def _validate_test_instance_state_recovery_authority(
+        self, request: TestRecoveryRequest, *, owner_sha: str, proof_sha: str,
+        expected_ledger_sha: str | None = None,
+    ) -> str:
+        """Run the read-only authority preflight before any recovery effect."""
+        root = Path(request.authority_cutover.ownership_root)
+        try:
+            argv = [
+                sys.executable, '-m', 'app.instance.runtime',
+                'deployment-preflight-missing-test-instance-state-recovery',
+                '--host-global-root', str(root),
+                '--authority-binding-id', request.authority_cutover.binding_id,
+                '--authority-root', request.authority_cutover.root,
+                '--owner-receipt-path', str(root / 'legacy-owner-inventory.json'),
+                '--expected-owner-receipt-sha256', owner_sha,
+                '--quiescence-proof-path', str(root / 'deployment-quiescence-proof.json'),
+                '--expected-quiescence-proof-sha256', proof_sha,
+            ]
+            if expected_ledger_sha is not None:
+                argv += ['--expected-ledger-sha256', expected_ledger_sha]
+            environment = {
+                key: os.environ[key]
+                for key in ('HOME', 'USER', 'LOGNAME', 'PATH') if key in os.environ
+            }
+            result = subprocess.run(
+                argv, cwd=self.config.root, env=environment,
+                user=self.config.uid, group=self.config.gid, extra_groups=[],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            output = json.loads(result.stdout)
+            digest = output.get('ledger_sha256') if result.returncode == 0 else None
+            if (not isinstance(digest, str) or len(digest) != 64
+                    or any(char not in '0123456789abcdef' for char in digest)):
+                raise PostgresDeployError()
+            return digest
+        except Exception:
+            raise PostgresDeployError() from None
+
     def _write_test_instance_state_recovery_receipt(
         self, request: TestRecoveryRequest,
-    ) -> tuple[Path, str, str]:
+    ) -> tuple[Path, str, str, str]:
         """Bind the explicit reconstruction to terminal reset evidence.
 
         The receipt is a private recovery checkpoint, not a new authority
@@ -1960,8 +2063,11 @@ class LinuxEffects:
         disposition match the exact failed operation and candidate request.
         """
         request.validate()
+        if request.source_operation_id is None or request.source_plan is None:
+            raise PostgresDeployError()
         journal = self.config.journal.read()
         failed_plan = self.config.journal.bound_plan(request.failed_operation_id)
+        source_plan = request.source_plan
         disposition = self._read_test_recovery_disposition(request)
         if (
             self.config.channel != 'test'
@@ -1969,13 +2075,13 @@ class LinuxEffects:
             or journal.operation_id != request.failed_operation_id
             or journal.terminal_result != 'failed'
             or failed_plan is None
-            or failed_plan.authority_cutover != request.authority_cutover
-            or failed_plan.revision != request.plan.revision
+            or source_plan is None
             or disposition is None
             or disposition.get('state') != 'complete'
         ):
             raise PostgresDeployError()
         request.validate_failed_plan(failed_plan)
+        request.validate_source_plan(source_plan)
         root = Path(request.authority_cutover.ownership_root)
         owner = root / 'legacy-owner-inventory.json'
         proof = root / 'deployment-quiescence-proof.json'
@@ -1986,11 +2092,17 @@ class LinuxEffects:
             raise PostgresDeployError() from None
         owner_sha = hashlib.sha256(owner_bytes).hexdigest()
         proof_sha = hashlib.sha256(proof_bytes).hexdigest()
+        ledger_sha = self._validate_test_instance_state_recovery_authority(
+            request, owner_sha=owner_sha, proof_sha=proof_sha,
+        )
+        if not self.recovery_quiescent():
+            raise PostgresDeployError()
         path = self._test_instance_state_recovery_receipt_path(request)
         payload = {
-            'schema': 'test-instance-state-recovery.v1',
+            'schema': 'test-instance-state-recovery.v2',
             'channel': 'test',
-            'failed_operation_id': request.failed_operation_id,
+            'source_operation_id': request.source_operation_id,
+            'failed_successor_operation_id': request.failed_operation_id,
             'candidate_revision': request.plan.revision,
             'candidate_image_digest': request.plan.image_digest,
             'authority_cutover': {
@@ -2001,6 +2113,7 @@ class LinuxEffects:
             'disposition': 'complete',
             'owner_receipt_sha256': owner_sha,
             'quiescence_proof_sha256': proof_sha,
+            'ledger_sha256': ledger_sha,
         }
         directory = path.parent
         try:
@@ -2038,16 +2151,27 @@ class LinuxEffects:
                     temporary.unlink(missing_ok=True)
         except OSError:
             raise PostgresDeployError() from None
-        return path, owner_sha, proof_sha
+        return path, owner_sha, proof_sha, ledger_sha
 
     def reconstruct_missing_test_instance_state(
         self, request: TestRecoveryRequest,
     ) -> dict[str, object]:
         """Run the explicit TEST-only producer before a fresh normal deploy."""
         request.validate()
-        if self.config.channel != 'test' or not self.local_database():
+        if (request.source_operation_id is None or self.config.channel != 'test'
+                or not self.local_database() or not self.recovery_quiescent()):
             raise PostgresDeployError()
-        receipt_path, owner_sha, proof_sha = self._write_test_instance_state_recovery_receipt(request)
+        # The receipt writer performs the complete read-only owner/ledger
+        # authentication before it creates the first durable checkpoint.
+        receipt_path, owner_sha, proof_sha, ledger_sha = (
+            self._write_test_instance_state_recovery_receipt(request)
+        )
+        if (not self.recovery_quiescent()
+                or self._validate_test_instance_state_recovery_authority(
+                    request, owner_sha=owner_sha, proof_sha=proof_sha,
+                    expected_ledger_sha=ledger_sha,
+                ) != ledger_sha):
+            raise PostgresDeployError()
         # A lost named volume is created by Compose with root ownership. Run
         # the existing permission-only one-shot as root before dropping to the
         # runtime identity for the authenticated producer; it creates no
@@ -2055,12 +2179,17 @@ class LinuxEffects:
         self.compose(
             'run', '--rm', '--no-deps', '-T', 'instance-state-init',
             cutover=request.authority_cutover,
+            candidate=request.plan,
         )
         # The permission-only step must not become a window in which a new
         # writer can start. Re-probe the live Docker census immediately before
         # the state producer, so a deployment that began after reset is denied
         # rather than racing the reconstruction.
-        if not self.quiescent():
+        if (not self.recovery_quiescent()
+                or self._validate_test_instance_state_recovery_authority(
+                    request, owner_sha=owner_sha, proof_sha=proof_sha,
+                    expected_ledger_sha=ledger_sha,
+                ) != ledger_sha):
             raise PostgresDeployError()
         result = self.compose(
             'run', '--rm', '--no-deps', '-T', '--user', str(self.config.uid),
@@ -2081,7 +2210,10 @@ class LinuxEffects:
             '--expected-owner-receipt-sha256', owner_sha,
             '--quiescence-proof-path', '/app/instance-ownership/deployment-quiescence-proof.json',
             '--expected-quiescence-proof-sha256', proof_sha,
+            '--expected-ledger-sha256', ledger_sha,
+            '--source-operation-id', request.source_operation_id,
             cutover=request.authority_cutover,
+            candidate=request.plan,
         )
         try:
             output = json.loads(result)
@@ -2089,13 +2221,185 @@ class LinuxEffects:
             raise PostgresDeployError() from None
         if (
             not isinstance(output, dict)
-            or output.get('schema') != 'test-instance-state-recovery.v1'
+            or output.get('schema') != 'test-instance-state-recovery.v2'
             or output.get('channel') != 'test'
             or output.get('activation') != 'inactive_fenced'
-            or output.get('request', {}).get('failed_operation_id') != request.failed_operation_id
+            or output.get('request', {}).get('failed_successor_operation_id')
+            != request.failed_operation_id
+            or output.get('request', {}).get('source_operation_id')
+            != request.source_operation_id
+            or output.get('ledger_sha256') != ledger_sha
         ):
             raise PostgresDeployError()
         return output
+
+    def release_test_instance_state_recovery_lease(
+        self, request: TestRecoveryRequest,
+    ) -> dict[str, object]:
+        """Release the reconstruction lease after the host checkpoint is durable."""
+        request.validate()
+        if (
+            request.source_operation_id is None
+            or self.config.channel != 'test'
+            or not self.local_database()
+        ):
+            raise PostgresDeployError()
+        root = Path(request.authority_cutover.ownership_root)
+        try:
+            receipt = _private_recovery_json(
+                self._test_instance_state_recovery_receipt_path(request), self.config.uid,
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        expected_request = {
+            'schema': 'test-instance-state-recovery.v2',
+            'channel': 'test',
+            'source_operation_id': request.source_operation_id,
+            'failed_successor_operation_id': request.failed_operation_id,
+            'candidate_revision': request.plan.revision,
+            'candidate_image_digest': request.plan.image_digest,
+            'authority_cutover': {
+                'binding_id': request.authority_cutover.binding_id,
+                'root': request.authority_cutover.root,
+                'ownership_root': request.authority_cutover.ownership_root,
+            },
+            'disposition': 'complete',
+        }
+        if any(receipt.get(key) != value for key, value in expected_request.items()):
+            raise PostgresDeployError()
+        result_path = root / (
+            'test-instance-state-recovery-result-' + request.failed_operation_id + '.json'
+        )
+        try:
+            result = _private_recovery_json(result_path, self.config.uid)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        if (
+            result.get('schema') != 'test-instance-state-recovery.v2'
+            or result.get('channel') != 'test'
+            or result.get('activation') != 'inactive_fenced'
+            or result.get('request') != receipt
+            or result.get('ledger_sha256') != receipt.get('ledger_sha256')
+        ):
+            raise PostgresDeployError()
+        public_lease = root / 'deployment-public/deployment-host-global-lease.json'
+        legacy_lease = root / 'deployment-host-global-lease.json'
+        public_lease_exists = os.path.lexists(public_lease)
+        legacy_lease_exists = os.path.lexists(legacy_lease)
+        if not public_lease_exists and not legacy_lease_exists:
+            return {
+                'channel': 'test', 'released': False,
+                'reason': 'already-released-after-reconstruction',
+            }
+        if (
+            not self.recovery_quiescent()
+            or not legacy_lease_exists
+            or legacy_lease.is_symlink()
+            or not legacy_lease.is_file()
+            or (public_lease_exists and (
+                public_lease.is_symlink() or not public_lease.is_file()
+            ))
+        ):
+            raise PostgresDeployError()
+        try:
+            owner_path = root / 'legacy-owner-inventory.json'
+            owner_bytes = owner_path.read_bytes()
+            owner = _private_recovery_json(owner_path, self.config.uid)
+            root_lease = _private_recovery_json(legacy_lease, self.config.uid)
+            public = (
+                _private_recovery_json(public_lease, self.config.uid)
+                if public_lease_exists else None
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        cleanup_lease = public if public is not None else root_lease
+        cleanup_controller = cleanup_lease.get('controller')
+        original_controller = owner.get('controller')
+        original_nonce = owner.get('deployment_nonce')
+        if (
+            hashlib.sha256(owner_bytes).hexdigest()
+            != receipt.get('owner_receipt_sha256')
+            or not isinstance(original_controller, dict)
+            or not isinstance(original_nonce, str)
+        ):
+            raise PostgresDeployError()
+        cleanup_shape = (
+            cleanup_lease.get('channel_id') == 'test'
+            and cleanup_lease.get('phase') == 'cleanup'
+            and isinstance(cleanup_lease.get('result'), dict)
+            and cleanup_lease['result'].get('channel') == 'test'
+            and isinstance(cleanup_controller, dict)
+        )
+        if cleanup_shape and (
+            cleanup_controller != original_controller
+            or cleanup_lease.get('nonce') != original_nonce
+        ):
+            raise PostgresDeployError()
+        if public is None and (
+            root_lease.get('schema')
+            != 'agentic-pkm.host-deployment-compatibility-block.v1'
+            or not cleanup_shape
+        ):
+            raise PostgresDeployError()
+        if public is not None and cleanup_shape:
+            if (
+                public.get('schema') != 'agentic-pkm.host-deployment-lease.v3'
+                or root_lease.get('schema')
+                != 'agentic-pkm.host-deployment-compatibility-block.v1'
+                or any(
+                    root_lease.get(key) != public.get(key)
+                    for key in ('channel_id', 'nonce', 'phase', 'controller', 'result')
+                )
+            ):
+                raise PostgresDeployError()
+            controller = cleanup_controller
+        elif public is not None:
+            proof_path = root / 'deployment-quiescence-proof.json'
+            try:
+                proof_bytes = proof_path.read_bytes()
+                proof = _private_recovery_json(proof_path, self.config.uid)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                raise PostgresDeployError() from None
+            if (
+                hashlib.sha256(proof_bytes).hexdigest()
+                != receipt.get('quiescence_proof_sha256')
+                or proof.get('channel_id') != 'test'
+            ):
+                raise PostgresDeployError()
+            controller = proof.get('controller')
+        else:
+            controller = cleanup_controller
+        if (
+            not isinstance(controller, dict)
+            or set(controller) != {'pid', 'start_token'}
+            or not isinstance(controller.get('pid'), int)
+            or controller['pid'] <= 0
+            or not isinstance(controller.get('start_token'), str)
+            or re.fullmatch(r'(?:linux|darwin):[0-9a-f]{64}', controller['start_token']) is None
+        ):
+            raise PostgresDeployError()
+        raw = self.compose(
+            'run', '--rm', '--no-deps', '-T', '--user', str(self.config.uid),
+            'instance-state-init', 'python', '-m', 'app.instance.runtime',
+            'deployment-release', '--channel', 'test',
+            '--host-global-root', '/app/instance-ownership',
+            '--controller-pid', str(controller['pid']),
+            '--controller-start-token', controller['start_token'],
+            cutover=request.authority_cutover,
+            candidate=request.plan,
+        )
+        try:
+            released = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        if (
+            not isinstance(released, dict)
+            or released.get('channel') != 'test'
+            or released.get('released') is not True
+            or released.get('reason') not in {'abandoned-deployment', 'already-in-cleanup'}
+        ):
+            raise PostgresDeployError()
+        return released
 
     @contextmanager
     def channel_lock(self, *, journal: DeployJournal | None = None,
@@ -2435,10 +2739,15 @@ class DeploymentSupervisor:
     def _test_recovery_reconstruct_instance_state(self, data: dict[str, Any]) -> dict[str, Any]:
         """Run the explicit TEST-only missing-instance-state producer."""
         self._require_current_config()
-        if set(data) != {'action', 'failed_operation_id', 'plan', 'authority_cutover'}:
+        if set(data) != {
+            'action', 'failed_operation_id', 'source_operation_id',
+            'source_plan', 'plan', 'authority_cutover',
+        }:
             raise PostgresDeployError()
         request = TestRecoveryRequest.from_payload({
             'failed_operation_id': data['failed_operation_id'],
+            'source_operation_id': data['source_operation_id'],
+            'source_plan': data['source_plan'],
             'plan': data['plan'],
             'authority_cutover': data['authority_cutover'],
         })
@@ -2446,11 +2755,75 @@ class DeploymentSupervisor:
             raise PostgresDeployError()
         # Reset and reconstruction are separate RPCs. A fresh deployment may
         # have been admitted in between them; never let reconstruction run
-        # while the supervisor owns an active worker.
-        if self.operation is not None:
-            raise PostgresDeployError()
+        # while the supervisor owns an active or foreign worker. The exact
+        # failed automatic successor may remain as a finished in-memory object
+        # after reconciliation, so retire only that terminal same-ID state.
+        operation = self.operation
+        if operation is not None:
+            if (
+                request.source_plan is None
+                or operation.operation_id != request.failed_operation_id
+                or operation.plan != request.source_plan
+                or operation.bootstrap
+                or not operation.finished.is_set()
+                or operation.thread.is_alive()
+                or not operation.failed
+            ):
+                raise PostgresDeployError()
+            receipt = self.config.journal.read()
+            if (
+                receipt is None
+                or receipt.operation_id != request.failed_operation_id
+                or receipt.terminal_result != 'failed'
+            ):
+                raise PostgresDeployError()
+            self.config.journal.bind_request(
+                operation.operation_id, operation.plan, operation.bootstrap,
+            )
+            receipt.require_profile(operation.plan)
+            self.operation = None
         result = LinuxEffects(self.config).reconstruct_missing_test_instance_state(request)
         return {'result': result, 'recovery': 'test-instance-state-reconstructed'}
+
+    def _test_recovery_release_instance_state(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Release only the lease authenticated by the completed reconstruction."""
+        self._require_current_config()
+        if set(data) != {
+            'action', 'failed_operation_id', 'source_operation_id',
+            'source_plan', 'plan', 'authority_cutover', 'successor_operation_id',
+        }:
+            raise PostgresDeployError()
+        request = TestRecoveryRequest.from_payload({
+            'failed_operation_id': data['failed_operation_id'],
+            'source_operation_id': data['source_operation_id'],
+            'source_plan': data['source_plan'],
+            'plan': data['plan'],
+            'authority_cutover': data['authority_cutover'],
+        })
+        if request.plan.channel != self.config.channel or self.config.channel != 'test':
+            raise PostgresDeployError()
+        successor_operation_id = str(data['successor_operation_id'])
+        try:
+            if (
+                str(UUID(successor_operation_id)) != successor_operation_id
+                or successor_operation_id in {
+                    request.failed_operation_id, request.source_operation_id,
+                }
+            ):
+                raise PostgresDeployError()
+        except (ValueError, TypeError, AttributeError):
+            raise PostgresDeployError() from None
+        operation = self.operation
+        if operation is not None and (
+            operation.operation_id != successor_operation_id
+            or operation.plan != request.plan
+            or operation.bootstrap
+            or not operation.finished.is_set()
+            or operation.thread.is_alive()
+        ):
+            raise PostgresDeployError()
+        result = LinuxEffects(self.config).release_test_instance_state_recovery_lease(request)
+        return {'result': result, 'recovery': 'test-instance-state-released'}
 
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
         if data.get('action') in {'karakeep-acquire', 'karakeep-project'}:
@@ -2473,6 +2846,9 @@ class DeploymentSupervisor:
         if data.get('action') == 'test-recovery-reconstruct-instance-state':
             with self.mutex:
                 return self._test_recovery_reconstruct_instance_state(data)
+        if data.get('action') == 'test-recovery-release-instance-state':
+            with self.mutex:
+                return self._test_recovery_release_instance_state(data)
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
         operation_id = str(data['operation_id'])
@@ -2663,6 +3039,58 @@ class SshDeployRemote:
         ):
             raise PostgresDeployError()
         return response['result']
+
+    def test_recovery_release_instance_state(
+        self, request: TestRecoveryRequest, *, successor_operation_id: str,
+    ) -> dict[str, object]:
+        request.validate()
+        try:
+            if (
+                str(UUID(successor_operation_id)) != successor_operation_id
+                or successor_operation_id in {
+                    request.failed_operation_id, request.source_operation_id,
+                }
+            ):
+                raise PostgresDeployError()
+        except (ValueError, TypeError, AttributeError):
+            raise PostgresDeployError() from None
+        payload = {
+            'action': 'test-recovery-release-instance-state',
+            'successor_operation_id': successor_operation_id,
+            **request.payload(),
+        }
+        result = subprocess.run(
+            [
+                'ssh', '-o', 'BatchMode=yes', '--', self.host,
+                'sudo', '-n', '/usr/local/libexec/yggdrasil-bws-deploy',
+                'rpc', 'test',
+            ],
+            input=json.dumps(payload) + '\n', text=True,
+            capture_output=True, check=False,
+        )
+        if result.returncode:
+            raise PostgresDeployError()
+        try:
+            response = json.loads(result.stdout)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        released = response.get('result') if isinstance(response, dict) else None
+        if (
+            not isinstance(response, dict)
+            or response.get('recovery') != 'test-instance-state-released'
+            or not isinstance(released, dict)
+            or released.get('channel') != 'test'
+            or released.get('reason') not in {
+                'abandoned-deployment', 'already-in-cleanup',
+                'already-released-after-reconstruction',
+            }
+            or (
+                released.get('reason') != 'already-released-after-reconstruction'
+                and released.get('released') is not True
+            )
+        ):
+            raise PostgresDeployError()
+        return released
 
     def prepare(self, operation_id: str, plan: DeployPlan, *, bootstrap: bool) -> bool:
         self.bootstrap = bootstrap

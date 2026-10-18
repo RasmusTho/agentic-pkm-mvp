@@ -139,7 +139,137 @@ def require_test_controller(proof: DeploymentQuiescenceProof, roots: tuple[Path,
         raise _test_refusal() from exc
 
 
-_TEST_INSTANCE_STATE_RECOVERY_SCHEMA = "test-instance-state-recovery.v1"
+_TEST_INSTANCE_STATE_RECOVERY_SCHEMA = "test-instance-state-recovery.v2"
+
+
+def validate_missing_test_instance_state_recovery_authority(
+    *, host_global_root: Path, authority_binding_id: str, authority_root: str,
+    owner_receipt_path: Path, expected_owner_receipt_sha256: str,
+    quiescence_proof_path: Path, expected_quiescence_proof_sha256: str,
+    expected_ledger_sha256: str | None = None,
+    require_materialized_roots: bool = False,
+) -> str:
+    """Authenticate complete TEST owner/ledger evidence without writing state.
+
+    The mounted producer consumes host-captured physical identities and cannot
+    stat native content roots. Only the native host wrapper requests an
+    additional materialized-root comparison.
+    """
+    from app.instance.runtime import (
+        _load_deployment_quiescence_proof,
+        _load_legacy_owner_inventory,
+    )
+
+    host = Path(host_global_root).expanduser().resolve(strict=True)
+    owner_receipt = Path(owner_receipt_path).expanduser().resolve(strict=True)
+    proof_path = Path(quiescence_proof_path).expanduser().resolve(strict=True)
+    if (owner_receipt != host / "legacy-owner-inventory.json"
+            or proof_path != host / "deployment-quiescence-proof.json"):
+        raise _test_refusal()
+    _private_directory(host)
+    owner_bytes = _read_private_bytes(owner_receipt)
+    proof_bytes = _read_private_bytes(proof_path)
+    if (_sha(owner_bytes) != expected_owner_receipt_sha256
+            or _sha(proof_bytes) != expected_quiescence_proof_sha256):
+        raise _test_refusal()
+    proof = _load_deployment_quiescence_proof(proof_path)
+    proof.require_canonical_authority(
+        channel_id="test", host_global_root=host,
+        owner_receipt_path=owner_receipt,
+    )
+    scratch = VaultRegistryStore(host / ".test-recovery-preflight-registry.json")
+    owners = tuple(_load_legacy_owner_inventory(
+        owner_receipt, registry=scratch._empty_snapshot(), channel="test",
+        quiescence_proof=proof, expected_sha256=expected_owner_receipt_sha256,
+        require_receipt_integrity=True,
+    ))
+    try:
+        if type(require_materialized_roots) is not bool:
+            raise _test_refusal()
+        ledger = OwnershipLedger(host)
+        resolved = ledger.resolve_live_owner_bindings(
+            tuple(replace(owner, vault_binding_id="") for owner in owners),
+            allow_legacy=True,
+            recover_rotation=False,
+        )
+        registrations = {
+            owner.vault_binding_id: owner.root
+            for owner in resolved if owner.channel_id == "test"
+        }
+        if (not registrations or len(registrations) != len([
+            owner for owner in resolved if owner.channel_id == "test"
+        ]) or registrations.get(authority_binding_id) is None
+                or str(registrations[authority_binding_id].expanduser().resolve(strict=False))
+                != authority_root):
+            raise _test_refusal()
+        ledger.require_scalar_rollback_ready(
+            channel_id="test",
+            registrations={
+                binding_id: root if require_materialized_roots else None
+                for binding_id, root in registrations.items()
+            },
+            recover_rotation=False,
+        )
+        first = _read_private_bytes(ledger.path)
+        ledger.require_scalar_rollback_ready(
+            channel_id="test",
+            registrations={
+                binding_id: root if require_materialized_roots else None
+                for binding_id, root in registrations.items()
+            },
+            recover_rotation=False,
+        )
+        second = _read_private_bytes(ledger.path)
+        if first != second:
+            raise _test_refusal()
+        digest = _sha(second)
+        if expected_ledger_sha256 is not None and digest != expected_ledger_sha256:
+            raise _test_refusal()
+        return digest
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, LedgerError) as exc:
+        raise _test_refusal() from exc
+
+
+def validate_missing_test_instance_state_recovery_host_authority(
+    *, host_global_root: Path, authority_binding_id: str, authority_root: str,
+    owner_receipt_path: Path, expected_owner_receipt_sha256: str,
+    quiescence_proof_path: Path, expected_quiescence_proof_sha256: str,
+    expected_ledger_sha256: str | None = None,
+) -> str:
+    """Authenticate native controller freshness before shared evidence reads."""
+    from app.instance.runtime import _load_deployment_quiescence_proof
+
+    host = Path(host_global_root).expanduser().resolve(strict=True)
+    owner_receipt = Path(owner_receipt_path).expanduser().resolve(strict=True)
+    proof_path = Path(quiescence_proof_path).expanduser().resolve(strict=True)
+    if (
+        owner_receipt != host / "legacy-owner-inventory.json"
+        or proof_path != host / "deployment-quiescence-proof.json"
+    ):
+        raise _test_refusal()
+    _private_directory(host)
+    if _sha(_read_private_bytes(proof_path)) != expected_quiescence_proof_sha256:
+        raise _test_refusal()
+    proof = _load_deployment_quiescence_proof(proof_path)
+    proof.require_canonical_authority(
+        channel_id="test", host_global_root=host,
+        owner_receipt_path=owner_receipt,
+    )
+    # The host preflight can observe the native controller namespace. The
+    # mounted Compose producer cannot and instead revalidates the same bound
+    # proof, owner evidence, and ledger through the namespace-neutral helper.
+    require_test_controller(proof, ())
+    return validate_missing_test_instance_state_recovery_authority(
+        host_global_root=host,
+        authority_binding_id=authority_binding_id,
+        authority_root=authority_root,
+        owner_receipt_path=owner_receipt,
+        expected_owner_receipt_sha256=expected_owner_receipt_sha256,
+        quiescence_proof_path=proof_path,
+        expected_quiescence_proof_sha256=expected_quiescence_proof_sha256,
+        expected_ledger_sha256=expected_ledger_sha256,
+        require_materialized_roots=True,
+    )
 
 
 def reconstruct_missing_test_instance_state(
@@ -158,6 +288,8 @@ def reconstruct_missing_test_instance_state(
     expected_owner_receipt_sha256: str,
     quiescence_proof_path: Path,
     expected_quiescence_proof_sha256: str,
+    expected_ledger_sha256: str,
+    source_operation_id: str,
     authority_ownership_mount_root: str | None = None,
 ) -> dict[str, object]:
     """Reconstruct only the already-lost TEST instance-state authority.
@@ -172,11 +304,14 @@ def reconstruct_missing_test_instance_state(
 
     try:
         canonical_operation_id = str(UUID(failed_operation_id))
+        canonical_source_operation_id = str(UUID(source_operation_id))
     except (ValueError, TypeError, AttributeError):
         raise _test_refusal() from None
     if (
         channel != "test"
         or canonical_operation_id != failed_operation_id
+        or canonical_source_operation_id != source_operation_id
+        or source_operation_id == failed_operation_id
         or not isinstance(candidate_revision, str)
         or len(candidate_revision) != 40
         or any(char not in "0123456789abcdef" for char in candidate_revision)
@@ -188,7 +323,11 @@ def reconstruct_missing_test_instance_state(
         or str(Path(authority_root).expanduser().resolve(strict=False)) != authority_root
     ):
         raise _test_refusal()
-    for digest in (expected_owner_receipt_sha256, expected_quiescence_proof_sha256):
+    for digest in (
+        expected_owner_receipt_sha256,
+        expected_quiescence_proof_sha256,
+        expected_ledger_sha256,
+    ):
         if (
             not isinstance(digest, str)
             or len(digest) != 64
@@ -233,19 +372,22 @@ def reconstruct_missing_test_instance_state(
         if set(recovery) != {
             "schema",
             "channel",
-            "failed_operation_id",
+            "source_operation_id",
+            "failed_successor_operation_id",
             "candidate_revision",
             "candidate_image_digest",
             "authority_cutover",
             "disposition",
             "owner_receipt_sha256",
             "quiescence_proof_sha256",
+            "ledger_sha256",
         }:
             raise ValueError
         expected_recovery = {
             "schema": _TEST_INSTANCE_STATE_RECOVERY_SCHEMA,
             "channel": "test",
-            "failed_operation_id": failed_operation_id,
+            "source_operation_id": source_operation_id,
+            "failed_successor_operation_id": failed_operation_id,
             "candidate_revision": candidate_revision,
             "candidate_image_digest": candidate_image_digest,
             "authority_cutover": {
@@ -256,6 +398,7 @@ def reconstruct_missing_test_instance_state(
             "disposition": "complete",
             "owner_receipt_sha256": expected_owner_receipt_sha256,
             "quiescence_proof_sha256": expected_quiescence_proof_sha256,
+            "ledger_sha256": expected_ledger_sha256,
         }
         if recovery != expected_recovery:
             raise ValueError
@@ -300,6 +443,16 @@ def reconstruct_missing_test_instance_state(
         proof_object = _load_deployment_quiescence_proof(proof_path)
         proof_object.require_canonical_authority(
             channel_id="test", host_global_root=host, owner_receipt_path=owner_receipt
+        )
+        validate_missing_test_instance_state_recovery_authority(
+            host_global_root=host,
+            authority_binding_id=authority_binding_id,
+            authority_root=authority_root,
+            owner_receipt_path=owner_receipt,
+            expected_owner_receipt_sha256=expected_owner_receipt_sha256,
+            quiescence_proof_path=proof_path,
+            expected_quiescence_proof_sha256=expected_quiescence_proof_sha256,
+            expected_ledger_sha256=expected_ledger_sha256,
         )
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, LedgerError,
             InstanceStatePreflightError) as exc:
@@ -358,7 +511,16 @@ def reconstruct_missing_test_instance_state(
         raise _test_refusal() from exc
     try:
         with _deployment_admission_locked(host), _producer_transition_locked(layout):
-            ledger.require_existing()
+            validate_missing_test_instance_state_recovery_authority(
+                host_global_root=host,
+                authority_binding_id=authority_binding_id,
+                authority_root=authority_root,
+                owner_receipt_path=owner_receipt,
+                expected_owner_receipt_sha256=expected_owner_receipt_sha256,
+                quiescence_proof_path=proof_path,
+                expected_quiescence_proof_sha256=expected_quiescence_proof_sha256,
+                expected_ledger_sha256=expected_ledger_sha256,
+            )
             # The existing runtime materializer uses the canonical store
             # transaction/snapshot/export APIs and validates every owner against
             # the established ledger.  The receipt was parsed above from an
@@ -424,8 +586,19 @@ def reconstruct_missing_test_instance_state(
                     or prior.get("registry_revision") != materialized.revision
                     or prior.get("registry_sha256")
                     != _sha(_read_private_bytes(store.path))
+                    or prior.get("ledger_sha256") != expected_ledger_sha256
                 ):
                     raise _test_refusal()
+                validate_missing_test_instance_state_recovery_authority(
+                    host_global_root=host,
+                    authority_binding_id=authority_binding_id,
+                    authority_root=authority_root,
+                    owner_receipt_path=owner_receipt,
+                    expected_owner_receipt_sha256=expected_owner_receipt_sha256,
+                    quiescence_proof_path=proof_path,
+                    expected_quiescence_proof_sha256=expected_quiescence_proof_sha256,
+                    expected_ledger_sha256=expected_ledger_sha256,
+                )
                 return prior
             # Always route the current generation through the canonical
             # materializer. Besides resuming authenticated partial writes, it
@@ -461,6 +634,7 @@ def reconstruct_missing_test_instance_state(
                 "request": recovery,
                 "registry_revision": materialized.revision,
                 "registry_sha256": _sha(_read_private_bytes(store.path)),
+                "ledger_sha256": expected_ledger_sha256,
                 "activation": "inactive_fenced",
                 "registered_bindings": sorted(materialized.registrations),
             }
