@@ -260,8 +260,6 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "ops/",
         "config/deploy/",
         "app/release_channels/",
-        "tests/release_channels/",
-        "docs/RELEASE_CHANNELS/",
         "tests/helpers/runtime_start_harness.py",
         "tests/runtime/test_start_full_system_version_marker.py",
         ".dockerignore",

@@ -1949,6 +1949,15 @@ def test_scoped_deploy_partitions_preserve_selected_targets(tmp_path: Path) -> N
     ]
 
 
+@pytest.mark.parametrize("path", [
+    "docs/RELEASE_CHANNELS/README.md",
+    "tests/release_channels/test_channel_isolation_preflight.py",
+])
+def test_release_channel_docs_and_tests_do_not_pull_heavy_deploy_suite(path: str) -> None:
+    # Neither is read by tests/deploy; only the release-channel code is.
+    assert "tests/deploy" not in select_tests([path]).targets
+
+
 def test_changed_heavy_test_file_still_runs_on_pr_path() -> None:
     changed = "tests/deploy/test_deploy_channel.py"
     selection = select_tests([changed])
