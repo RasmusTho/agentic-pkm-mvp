@@ -3915,6 +3915,160 @@ def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_p
     assert len(recovered) == 1
 
 
+def test_test_recovery_accepts_exact_failed_cutover_plan_with_automatic_successor(tmp_path):
+    from contextlib import contextmanager
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    successor = DeployPlan(
+        'test', 'f' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'f' * 64, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    failed = replace(successor, automatic=False, ack_forward_only=True, image_digest=None,
+                     authority_cutover=authority)
+    receipt = DeployReceipt(
+        operation_id, 'test', 'deploy', 'failed', 'failed',
+        source_failure='legacy_identity_persistence_refused',
+    )
+
+    class Journal:
+        directory = tmp_path / 'journal'
+        channel = 'test'
+
+        def read(self):
+            return receipt
+
+        def bound_plan(self, selected):
+            assert selected == operation_id
+            return failed
+
+    effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path, journal=Journal()))
+    request = TestRecoveryRequest(operation_id, successor, authority)
+    qualified: list = []
+    observed: list = []
+    effects.local_database = lambda: True
+    effects.qualify_authority_cutover = lambda plan: qualified.append(plan)
+    effects.quiescent = lambda: True
+    effects.recover_source_terminal = lambda operation, plan: observed.append((operation, plan))
+    effects._read_test_recovery_disposition = lambda _request: {'state': 'complete'}
+    effects.retire_reconciled_channel_lock = lambda _handle: None
+    @contextmanager
+    def lock():
+        yield object()
+    effects.failed_reconciliation_lock = lock
+
+    result = effects.reset_test_source_projection(request)
+
+    assert result == receipt
+    assert qualified == []
+    assert observed == []
+    request.validate_failed_plan(failed)
+    with pytest.raises(PostgresDeployError):
+        request.validate_failed_plan(successor)
+
+
+def test_test_recovery_refuses_failed_cutover_plan_drift_without_mutation(tmp_path):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    successor = DeployPlan(
+        'test', 'e' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'e' * 64, True,
+    )
+    failed = replace(successor, automatic=False, authority_cutover=authority)
+    receipt = DeployReceipt(
+        operation_id, 'test', 'deploy', 'failed', 'failed',
+        source_failure='legacy_identity_persistence_refused',
+    )
+
+    class Journal:
+        directory = tmp_path / 'journal'
+        channel = 'test'
+
+        def read(self):
+            return receipt
+
+        def bound_plan(self, selected):
+            assert selected == operation_id
+            return failed
+
+    effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path, journal=Journal()))
+    effects.local_database = lambda: True
+    mutations: list[str] = []
+    effects.qualify_authority_cutover = lambda _plan: mutations.append('authority')
+    effects.quiescent = lambda: mutations.append('quiescent') or True
+    effects.compose = lambda *_args: mutations.append('compose')
+    effects._write_test_recovery_disposition = lambda *_args: mutations.append('disposition')
+    effects._test_recovery_remove_volume = lambda *_args: mutations.append('volume')
+    request = TestRecoveryRequest(operation_id, successor, authority)
+
+    drifts = (
+        replace(successor, revision='d' * 40),
+        replace(successor, image_digest='sha256:' + 'd' * 64),
+        replace(successor, services=('db', 'api')),
+    )
+    for candidate in drifts:
+        with pytest.raises(PostgresDeployError):
+            effects.reset_test_source_projection(replace(request, plan=candidate))
+    with pytest.raises(PostgresDeployError):
+        effects.reset_test_source_projection(replace(request, authority_cutover=replace(
+            authority, binding_id='other-binding')))
+    assert mutations == []
+
+
+def test_recover_test_source_rejects_plan_mismatch_before_host_marker(monkeypatch, tmp_path):
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import AuthorityCutover, PostgresDeployError
+    from uuid import uuid4
+
+    failed_operation_id = str(uuid4())
+    controller = HostSecretController(tmp_path / 'controller')
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def test_recovery_reset(self, _request):
+            raise PostgresDeployError()
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    args = [
+        'test', 'a' * 40, '--automatic', '--image-digest', 'sha256:' + 'a' * 64,
+        '--existing-secrets-only', '--recover-test-source',
+        '--failed-operation-id', failed_operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+
+    assert host.main(args) == 78
+    marker = controller.directory / ('test-source-recovery-' + failed_operation_id + '.json')
+    assert not marker.exists()
+
+
 def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monkeypatch, tmp_path):
     from app.ops import postgres_deploy_host as host
     from app.ops.host_secret_contract import DATABASE_CONSUMERS
@@ -4012,6 +4166,7 @@ def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch
         (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
     )
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    failed_plan = replace(plan, automatic=False, authority_cutover=authority)
     receipt = DeployReceipt(
         operation_id, 'test', 'deploy', 'activating', None,
         source_failure='legacy_identity_persistence_refused',
@@ -4026,7 +4181,7 @@ def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch
 
         def bound_plan(self, selected):
             assert selected == operation_id
-            return plan
+            return failed_plan
 
         def write(self, *_args, **_kwargs):
             raise AssertionError('journal mutation must not occur on boundary drift')
@@ -4079,6 +4234,7 @@ def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch
 
 
 def test_test_recovery_reset_resumes_prepared_disposition_without_requalification(tmp_path):
+    from dataclasses import replace
     from types import SimpleNamespace
     from uuid import uuid4
 
@@ -4096,14 +4252,15 @@ def test_test_recovery_reset_resumes_prepared_disposition_without_requalificatio
     operation_id = str(uuid4())
     plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',), image_digest='sha256:' + '1' * 64,
                       automatic=True)
-    journal.bind_request(operation_id, plan, False, create=True)
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    failed_plan = replace(plan, automatic=False, authority_cutover=authority)
+    journal.bind_request(operation_id, failed_plan, False, create=True)
     for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
         journal.write(operation_id, stage)
     journal.record_source_failure(operation_id, plan.revision, 'legacy_identity_persistence_refused')
     journal.write(operation_id, 'failed')
     config = SimpleNamespace(channel='test', root=root, journal=journal)
     effects = linux.LinuxEffects(config)
-    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
     request = TestRecoveryRequest(operation_id, plan, authority)
     effects.local_database = lambda: True
     disposition_states = ['prepared']
@@ -4133,7 +4290,8 @@ def test_test_recovery_reset_resumes_prepared_disposition_without_requalificatio
     assert disposition_states == ['prepared', 'complete']
 
 
-def test_test_recovery_reset_recreates_external_pgdata_for_initialized_compose_path(tmp_path, monkeypatch):
+def test_test_recovery_recreates_empty_pgdata_before_completion(tmp_path, monkeypatch):
+    from dataclasses import replace
     import json
     from types import SimpleNamespace
     from uuid import uuid4
@@ -4153,7 +4311,9 @@ def test_test_recovery_reset_recreates_external_pgdata_for_initialized_compose_p
     operation_id = str(uuid4())
     plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',), image_digest='sha256:' + '2' * 64,
                       automatic=True)
-    journal.bind_request(operation_id, plan, False, create=True)
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    failed_plan = replace(plan, automatic=False, authority_cutover=authority)
+    journal.bind_request(operation_id, failed_plan, False, create=True)
     for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
         journal.write(operation_id, stage)
     journal.record_source_failure(operation_id, plan.revision, 'legacy_identity_persistence_refused')
@@ -4162,7 +4322,6 @@ def test_test_recovery_reset_recreates_external_pgdata_for_initialized_compose_p
         channel='test', root=root, data_directory=data_directory, journal=journal,
     )
     effects = linux.LinuxEffects(config)
-    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
     request = TestRecoveryRequest(operation_id, plan, authority)
     expected_fields = {'host': 'db', 'port': '5432', 'user': 'app', 'dbname': 'app_test'}
     def local_database():

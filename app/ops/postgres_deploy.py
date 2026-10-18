@@ -159,6 +159,39 @@ class TestRecoveryRequest:
         self.plan.validate()
         self.authority_cutover.validate()
 
+    def validate_failed_plan(self, failed_plan: DeployPlan) -> None:
+        """Authenticate the journal-bound cutover independently of the successor.
+
+        The request carries the fresh automatic candidate.  The failed plan is
+        deliberately reconstructed from the VM's exact operation binding so a
+        caller cannot replace it with a second, caller-supplied plan.  Only the
+        candidate/runtime fields are shared; the failed operation remains a
+        non-automatic authority cutover with the separately authenticated
+        authority tuple.
+        """
+        self.validate()
+        if not isinstance(failed_plan, DeployPlan):
+            raise PostgresDeployError()
+        failed_plan.validate()
+        if (failed_plan.channel != 'test'
+            or failed_plan.automatic
+            or failed_plan.authority_cutover is None
+            or failed_plan.authority_cutover != self.authority_cutover):
+            raise PostgresDeployError()
+        # Forward-only acknowledgement is an authorization attached to the
+        # retained failed cutover. Automatic successors must keep the
+        # request-level acknowledgement disabled, so it is not a successor
+        # compatibility field.
+        for field in ('channel', 'revision', 'services', 'consumers'):
+            if getattr(failed_plan, field) != getattr(self.plan, field):
+                raise PostgresDeployError()
+        # The manual failed cutover producer may not have selected an image
+        # digest.  The automatic successor must always carry its own digest;
+        # when the retained plan has one, bind it to that successor as well.
+        if (failed_plan.image_digest is not None
+            and failed_plan.image_digest != self.plan.image_digest):
+            raise PostgresDeployError()
+
     def payload(self) -> dict[str, Any]:
         self.validate()
         return {
