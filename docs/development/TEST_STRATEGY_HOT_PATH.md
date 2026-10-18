@@ -123,7 +123,8 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   the selector preserves the authenticated target inventory and emits a derived
   `scoped_execution_units_json` plan. The slow deploy directory is expanded to stable test files,
   directory/file overlap is removed, and the runner collects those files once after dependency
-  setup so collected node IDs can be distributed greedily across at most four bounded work units.
+  setup so node counts can weight the distribution of stable file targets across at most four
+  bounded work units.
   The selected-target union remains the authority: the runner rejects empty, missing, duplicate,
   escaped, incomplete, or non-exact collected coverage. Deploy and the remaining selected targets
   run with bounded parallelism; the bounded host-process/writer-census ops modules start only

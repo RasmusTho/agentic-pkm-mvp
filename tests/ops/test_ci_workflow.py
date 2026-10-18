@@ -623,6 +623,45 @@ if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target
         pytest.fail(f"partition descendant {child_pid} survived process-group cleanup")
 
 
+def test_scoped_execution_plan_rejects_partial_option_and_overlapping_coverage() -> None:
+    from scripts.run_scoped_test_partitions import validate_execution_units
+
+    with pytest.raises(ValueError, match="preserve non-deploy targets exactly once"):
+        validate_execution_units(
+            [["tests/scripts"]],
+            ["tests/scripts", "tests/ci"],
+        )
+    with pytest.raises(ValueError, match="must not contain pytest options"):
+        validate_execution_units(
+            [["--ignore=tests/scripts/test_publication.py"]],
+            ["tests/scripts"],
+        )
+    with pytest.raises(ValueError, match="preserve non-deploy targets exactly once"):
+        validate_execution_units(
+            [["tests/scripts", "tests/scripts/test_publication.py"]],
+            ["tests/scripts"],
+        )
+
+
+def test_scoped_execution_plan_requires_complete_current_head_deploy_files() -> None:
+    from scripts.run_scoped_test_partitions import validate_execution_units
+
+    deploy_files = sorted(
+        str(path)
+        for path in (REPO_ROOT / "tests/deploy").rglob("*.py")
+        if path.name.startswith("test_") or path.name.endswith("_test.py")
+    )
+    relative_files = [str(Path(path).relative_to(REPO_ROOT)) for path in deploy_files]
+    assert len(relative_files) > 1
+    with pytest.raises(ValueError, match="current-head files exactly once"):
+        validate_execution_units([relative_files[:-1]], ["tests/deploy"])
+    with pytest.raises(ValueError, match="stable file targets"):
+        validate_execution_units(
+            [["tests/deploy", *relative_files]],
+            ["tests/deploy"],
+        )
+
+
 def test_scoped_runner_balances_parallel_work_and_preserves_serial_quiescence(
     tmp_path: Path,
 ) -> None:
@@ -655,13 +694,17 @@ with state_path.open("a+", encoding="utf-8") as handle:
     fcntl.flock(handle, fcntl.LOCK_EX)
     handle.seek(0)
     raw = handle.read()
-    state = json.loads(raw) if raw else {"active": 0, "max_active": 0, "executed": []}
+    state = json.loads(raw) if raw else {
+        "active": 0, "max_active": 0, "executed": [], "invocations": []
+    }
     state["active"] += 1
     state["max_active"] = max(state["max_active"], state["active"])
+    state["invocations"].append(args)
     for arg in args:
         if arg.startswith("tests/deploy/") and arg.endswith(".py"):
             state["executed"].extend([f"{arg}::test_one", f"{arg}::test_two"])
-    is_serial = any(arg.endswith("test_host.py") for arg in args)
+    serial_targets = json.loads(os.environ["FAKE_SERIAL_TARGETS"])
+    is_serial = all(target in args for target in serial_targets)
     state["active_at_serial"] = state["active"] if is_serial else state.get("active_at_serial")
     handle.seek(0)
     handle.truncate()
@@ -674,7 +717,7 @@ with state_path.open("a+", encoding="utf-8") as handle:
     handle.seek(0)
     state = json.load(handle)
     state["active"] -= 1
-    if any(arg.endswith("test_host.py") for arg in args):
+    if all(target in args for target in json.loads(os.environ["FAKE_SERIAL_TARGETS"])):
         state["serial_started"] = True
     handle.seek(0)
     handle.truncate()
@@ -689,16 +732,28 @@ with state_path.open("a+", encoding="utf-8") as handle:
         "tests/deploy/test_slow.py",
         "tests/deploy/test_other.py",
         "tests/scripts",
-        "tests/ops/test_host.py",
+        "tests/ops",
     ]
     partitions = [[target] for target in expected]
     units = [
         ["tests/deploy/test_slow.py"],
         ["tests/deploy/test_other.py", "tests/scripts"],
-        ["tests/ops/test_host.py"],
+        ["tests/ops"],
+    ]
+    serial_boundary = [
+        "tests/ops/test_dormant_ownership_initialization.py",
+        "tests/ops/test_git_hygiene.py",
+        "tests/ops/test_instance_state_deployment_lease.py",
+        "tests/ops/test_instance_state_volume_contract.py",
+        "tests/ops/test_instance_state_writer_inventory.py",
+        "tests/ops/test_mvr05_mixed_version_fence.py",
+        "tests/ops/test_native_journaling_acceptance.py",
+        "tests/ops/test_start_full_runtime_health.py",
     ]
     state_path = tmp_path / "state.json"
-    state_path.write_text(json.dumps({"active": 0, "max_active": 0, "executed": []}))
+    state_path.write_text(
+        json.dumps({"active": 0, "max_active": 0, "executed": [], "invocations": []})
+    )
     result = subprocess.run(
         [
             sys.executable,
@@ -709,7 +764,7 @@ with state_path.open("a+", encoding="utf-8") as handle:
             "--log-dir", str(tmp_path / "logs"),
             "--aggregate-log", str(tmp_path / "aggregate.log"),
             "--jobs", "4",
-            "--serial-boundary-json", json.dumps(["tests/ops/test_host.py"]),
+            "--serial-boundary-json", json.dumps(serial_boundary),
             "--shard-timeout-seconds", "10",
         ],
         cwd=REPO_ROOT,
@@ -717,6 +772,7 @@ with state_path.open("a+", encoding="utf-8") as handle:
             **os.environ,
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "FAKE_STATE": str(state_path),
+            "FAKE_SERIAL_TARGETS": json.dumps(serial_boundary),
         },
         capture_output=True,
         text=True,
@@ -727,6 +783,24 @@ with state_path.open("a+", encoding="utf-8") as handle:
     assert state["max_active"] <= 4
     assert state["active_at_serial"] == 1
     assert state["serial_started"] is True
+    serial_invocations = [
+        invocation
+        for invocation in state["invocations"]
+        if all(target in invocation for target in serial_boundary)
+    ]
+    assert len(serial_invocations) == 1
+    parallel_invocations = [
+        invocation for invocation in state["invocations"] if invocation not in serial_invocations
+    ]
+    assert all(
+        target not in invocation
+        for invocation in parallel_invocations
+        for target in serial_boundary
+    )
+    ops_invocation = next(
+        invocation for invocation in parallel_invocations if "tests/ops" in invocation
+    )
+    assert all(f"--ignore={target}" in ops_invocation for target in serial_boundary)
     assert sorted(state["executed"]) == sorted([
         "tests/deploy/test_other.py::test_one",
         "tests/deploy/test_other.py::test_two",

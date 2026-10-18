@@ -59,20 +59,27 @@ def _target_file(target: str) -> str:
     return target.split("::", 1)[0]
 
 
-def _target_covers(expected: str, actual: str) -> bool:
-    """Return whether an execution target is inside an authenticated target."""
+def _is_deploy_target(target: str) -> bool:
+    path = _target_file(target)
+    return path == "tests/deploy" or path.startswith("tests/deploy/")
 
-    if actual.startswith("--"):
-        return True
-    expected_file = _target_file(expected)
-    actual_file = _target_file(actual)
-    if expected_file == actual_file:
-        return True
-    return (
-        "::" not in expected
-        and not expected_file.endswith(".py")
-        and actual_file.startswith(f"{expected_file}/")
+
+def _deploy_test_files(path: str) -> tuple[str, ...]:
+    """Expand one authenticated deploy target to stable current-head files."""
+
+    target = Path(_target_file(path))
+    if target.suffix == ".py":
+        return (str(target),)
+    if not target.is_dir():
+        raise ValueError(f"deploy target is not a current-head file or directory: {path}")
+    files = tuple(
+        str(candidate)
+        for candidate in sorted(target.rglob("*.py"))
+        if candidate.name.startswith("test_") or candidate.name.endswith("_test.py")
     )
+    if not files:
+        raise ValueError(f"deploy target has no current-head test files: {path}")
+    return files
 
 
 def validate_execution_units(
@@ -80,10 +87,11 @@ def validate_execution_units(
 ) -> tuple[tuple[str, ...], ...]:
     """Authenticate a derived work-unit plan against selected targets.
 
-    The selected-target inventory remains the authority.  Work units may be
-    concrete files or collected node IDs below a selected directory, but they
-    may never introduce a path outside that inventory or repeat one collected
-    node.
+    The selected-target inventory remains the authority.  Non-deploy targets
+    are preserved exactly.  Deploy directories are the only expandable
+    targets, and their plan must contain the complete current-head file
+    inventory exactly once.  Runner-generated options are never accepted as
+    evidence of target coverage.
     """
 
     expected = _string_list(expected_value, name="expected targets")
@@ -100,16 +108,36 @@ def validate_execution_units(
     actual = tuple(target for unit in units for target in unit)
     if len(set(actual)) != len(actual):
         raise ValueError("execution-unit inventory contains duplicate work")
-    if any(
-        not any(_target_covers(expected_target, target) for expected_target in expected)
-        for target in actual
+    if any(target.startswith("-") for target in actual):
+        raise ValueError("execution-unit inventory must not contain pytest options")
+
+    expected_deploy = tuple(
+        target for target in expected if _is_deploy_target(target)
+    )
+    expected_non_deploy = tuple(target for target in expected if target not in expected_deploy)
+    actual_deploy = tuple(
+        target for target in actual if _is_deploy_target(target)
+    )
+    actual_non_deploy = tuple(target for target in actual if target not in actual_deploy)
+    if Counter(actual_non_deploy) != Counter(expected_non_deploy):
+        raise ValueError(
+            "execution-unit inventory is incomplete or does not preserve "
+            "non-deploy targets exactly once"
+        )
+
+    expected_deploy_files = {
+        file_path
+        for target in expected_deploy
+        for file_path in _deploy_test_files(target)
+    }
+    if any("::" in target or not _target_file(target).endswith(".py") for target in actual_deploy):
+        raise ValueError("deploy execution units must use stable file targets")
+    if Counter(_target_file(target) for target in actual_deploy) != Counter(
+        expected_deploy_files
     ):
-        raise ValueError("execution-unit inventory escapes selected targets")
-    if any(
-        not any(_target_covers(expected_target, target) for target in actual)
-        for expected_target in expected
-    ):
-        raise ValueError("execution-unit inventory is incomplete")
+        raise ValueError(
+            "deploy execution-unit inventory does not match current-head files exactly once"
+        )
     return units
 
 
@@ -210,23 +238,55 @@ def _collect_deploy_nodes(target: str, *, cache: dict[str, tuple[str, ...]]) -> 
     return nodes
 
 
+def _serial_safe_candidates(
+    targets: Sequence[str], serial_boundary: tuple[str, ...]
+) -> tuple[tuple[tuple[str, ...], ...], tuple[str, ...]]:
+    """Remove boundary files and bind every exclusion to its covering root."""
+
+    if len(set(serial_boundary)) != len(serial_boundary):
+        raise ValueError("serial boundary contains duplicates")
+    if any("::" in path or not path.endswith(".py") for path in serial_boundary):
+        raise ValueError("serial boundary entries must be stable test files")
+
+    candidates: list[tuple[str, ...]] = []
+    covered: set[str] = set()
+    for target in targets:
+        path = _target_file(target)
+        if path in serial_boundary:
+            covered.add(path)
+            continue
+        is_directory = "::" not in target and not path.endswith(".py")
+        exclusions = tuple(
+            boundary
+            for boundary in serial_boundary
+            if is_directory and boundary.startswith(f"{path}/")
+        )
+        covered.update(exclusions)
+        candidates.append((target, *(f"--ignore={path}" for path in exclusions)))
+    if covered != set(serial_boundary):
+        missing = sorted(set(serial_boundary) - covered)
+        raise ValueError(
+            "serial boundary is not fully covered by the execution plan: "
+            + ", ".join(missing)
+        )
+    return tuple(candidates), serial_boundary
+
+
 def _expand_and_balance_parallel(
-    partitions: Sequence[Sequence[str]],
+    candidates: Sequence[Sequence[str]],
     *,
     jobs: int,
     expected_targets: Sequence[str] = (),
 ) -> tuple[tuple[str, ...], ...]:
-    """Refine deploy files into nodes, then balance all parallel work units."""
+    """Weight deploy files by collected nodes and balance atomic candidates."""
 
     cache: dict[str, tuple[str, ...]] = {}
     # Collect selected deploy directories before their file-level execution
-    # units.  Pytest node IDs can contain collection-time parameter values, so
-    # collecting a file in one subprocess and its parent directory in another
-    # can produce different IDs for the same test.  The directory collection
-    # is the authenticated inventory; file units are filtered from that cache.
+    # units.  Collection supplies weights only; the stable current-head file
+    # expansion remains the authenticated execution inventory.
     for target in expected_targets:
         path = _target_file(target)
-        if path.startswith("tests/deploy/") or path == "tests/deploy":
+        if _is_deploy_target(target):
             if not path.endswith(".py"):
                 _collect_deploy_nodes(target, cache=cache)
 
@@ -244,41 +304,47 @@ def _expand_and_balance_parallel(
                 )
         return _collect_deploy_nodes(target, cache=cache)
 
-    expanded: list[str] = []
+    expanded: list[tuple[str, ...]] = []
     seen_targets: set[str] = set()
     deploy_node_weight: dict[str, int] = {}
-    for partition in partitions:
-        for target in partition:
-            path = _target_file(target)
-            if path.startswith("tests/deploy/") or path == "tests/deploy":
-                nodes = deploy_nodes_for_target(target)
-                if nodes:
-                    files = sorted({_target_file(node) for node in nodes})
-                    for file_path in files:
-                        deploy_node_weight[file_path] = sum(
-                            _target_file(node) == file_path for node in nodes
-                        )
-                    candidates = tuple(files)
-                else:
-                    candidates = (target,)
-            else:
-                candidates = (target,)
-            for candidate in candidates:
-                if candidate in seen_targets:
-                    continue
-                seen_targets.add(candidate)
-                expanded.append(candidate)
-    expected_deploy_nodes: set[str] = set()
-    for target in expected_targets:
+    for candidate in candidates:
+        positional = tuple(target for target in candidate if not target.startswith("-"))
+        options = tuple(target for target in candidate if target.startswith("-"))
+        if len(positional) != 1:
+            raise ValueError("each execution candidate must contain one positional target")
+        target = positional[0]
         path = _target_file(target)
-        if path == "tests/deploy" or path.startswith("tests/deploy/"):
-            expected_deploy_nodes.update(deploy_nodes_for_target(target))
+        if _is_deploy_target(target):
+            if options:
+                raise ValueError("deploy execution candidates must not contain pytest options")
+            nodes = deploy_nodes_for_target(target)
+            files = _deploy_test_files(target)
+            for file_path in files:
+                deploy_node_weight[file_path] = max(
+                    1,
+                    sum(_target_file(node) == file_path for node in nodes),
+                )
+            refined = tuple((file_path,) for file_path in files)
+        else:
+            refined = (tuple(candidate),)
+        for item in refined:
+            positional_target = next(value for value in item if not value.startswith("-"))
+            if positional_target in seen_targets:
+                raise ValueError("expanded execution plan contains overlapping work")
+            seen_targets.add(positional_target)
+            expanded.append(item)
+    expected_deploy_files = {
+        file_path
+        for target in expected_targets
+        if _is_deploy_target(target)
+        for file_path in _deploy_test_files(target)
+    }
     actual_deploy_files = {
         target
-        for target in expanded
+        for candidate in expanded
+        for target in candidate
         if target.startswith("tests/deploy/") and target.endswith(".py")
     }
-    expected_deploy_files = {_target_file(node) for node in expected_deploy_nodes}
     if expected_deploy_files and actual_deploy_files != expected_deploy_files:
         raise ValueError(
             "expanded deploy file inventory does not match selected coverage exactly once"
@@ -287,40 +353,16 @@ def _expand_and_balance_parallel(
         return ()
     buckets: list[list[str]] = [[] for _ in range(min(jobs, len(expanded)))]
     weights = [0] * len(buckets)
-    for candidate in sorted(expanded, key=lambda item: (-deploy_node_weight.get(item, 1), item)):
+
+    def candidate_weight(candidate: tuple[str, ...]) -> int:
+        positional = next(target for target in candidate if not target.startswith("-"))
+        return deploy_node_weight.get(positional, 1)
+
+    for candidate in sorted(expanded, key=lambda item: (-candidate_weight(item), item)):
         index = min(range(len(buckets)), key=lambda item: (weights[item], item))
-        buckets[index].append(candidate)
-        weights[index] += deploy_node_weight.get(candidate, 1)
+        buckets[index].extend(candidate)
+        weights[index] += candidate_weight(candidate)
     return tuple(tuple(bucket) for bucket in buckets if bucket)
-
-
-def _split_serial_boundary(
-    targets: tuple[str, ...], serial_boundary: tuple[str, ...]
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    roots = tuple(
-        target for target in targets if "::" not in target and not target.endswith(".py")
-    )
-    target_files = {target.split("::", 1)[0] for target in targets}
-    if not serial_boundary or not all(
-        path in target_files or any(path.startswith(f"{root}/") for root in roots)
-        for path in serial_boundary
-    ):
-        raise ValueError(
-            "serial boundary must be contained by a directory target in the last partition"
-        )
-    parallel: list[str] = []
-    for target in targets:
-        if target.split("::", 1)[0] in serial_boundary:
-            continue
-        if any(target.startswith(f"{root}/") for root in roots):
-            continue
-        parallel.append(target)
-    parallel.extend(
-        f"--ignore={path}"
-        for path in serial_boundary
-        if any(path.startswith(f"{root}/") for root in roots)
-    )
-    return tuple(parallel), serial_boundary
 
 
 def run_partitions(
@@ -346,25 +388,26 @@ def run_partitions(
     if serial_boundary:
         if not source_partitions:
             raise ValueError("serial boundary requires an execution partition")
-        parallel_targets, boundary_targets = _split_serial_boundary(
-            source_partitions[-1], serial_boundary
+        candidates, boundary_targets = _serial_safe_candidates(
+            tuple(target for partition in source_partitions for target in partition),
+            serial_boundary,
         )
-        if execution_units:
-            if parallel_targets:
-                parallel_partitions.append(parallel_targets)
-            parallel_partitions = list(
-                _expand_and_balance_parallel(
-                    parallel_partitions,
-                    jobs=min(jobs, MAX_PARTITIONS - 1 if boundary_targets else MAX_PARTITIONS),
-                    expected_targets=expected_targets,
-                )
-            )
-        elif parallel_partitions:
-            parallel_partitions[-1] = parallel_targets
-    elif execution_units:
         parallel_partitions = list(
             _expand_and_balance_parallel(
-                parallel_partitions,
+                candidates,
+                jobs=jobs,
+                expected_targets=expected_targets,
+            )
+        )
+    elif execution_units:
+        candidates = tuple(
+            (target,)
+            for partition in parallel_partitions
+            for target in partition
+        )
+        parallel_partitions = list(
+            _expand_and_balance_parallel(
+                candidates,
                 jobs=jobs,
                 expected_targets=expected_targets,
             )
