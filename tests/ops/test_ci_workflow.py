@@ -489,9 +489,13 @@ def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None
     assert step["env"]["SCOPED_PARTITIONS_JSON"] == (
         "${{ steps.select-tests.outputs.scoped_partitions_json }}"
     )
+    assert step["env"]["SCOPED_EXECUTION_UNITS_JSON"] == (
+        "${{ steps.select-tests.outputs.scoped_execution_units_json }}"
+    )
     assert "scripts/run_scoped_test_partitions.py" in step["run"]
     assert "--jobs 4" in step["run"]
     assert "--serial-boundary-json" in step["run"]
+    assert "--execution-units-json" in step["run"]
     assert "--shard-timeout-seconds 3300" in step["run"]
     assert "set -euo pipefail" in step["run"]
     upload = next(s for s in job["steps"] if s.get("name") == "Upload scoped partition logs")
@@ -617,6 +621,452 @@ if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target
         time.sleep(0.05)
     else:
         pytest.fail(f"partition descendant {child_pid} survived process-group cleanup")
+
+
+def test_scoped_execution_plan_rejects_partial_option_and_overlapping_coverage() -> None:
+    from scripts.run_scoped_test_partitions import validate_execution_units
+
+    with pytest.raises(ValueError, match="preserve non-deploy targets exactly once"):
+        validate_execution_units(
+            [["tests/scripts"]],
+            ["tests/scripts", "tests/ci"],
+        )
+    with pytest.raises(ValueError, match="must not contain pytest options"):
+        validate_execution_units(
+            [["--ignore=tests/scripts/test_publication.py"]],
+            ["tests/scripts"],
+        )
+    with pytest.raises(ValueError, match="preserve non-deploy targets exactly once"):
+        validate_execution_units(
+            [["tests/scripts", "tests/scripts/test_publication.py"]],
+            ["tests/scripts"],
+        )
+
+
+def test_scoped_execution_plan_requires_complete_current_head_deploy_files() -> None:
+    from scripts.run_scoped_test_partitions import validate_execution_units
+
+    deploy_files = sorted(
+        str(path)
+        for path in (REPO_ROOT / "tests/deploy").rglob("*.py")
+        if path.name.startswith("test_") or path.name.endswith("_test.py")
+    )
+    relative_files = [str(Path(path).relative_to(REPO_ROOT)) for path in deploy_files]
+    assert len(relative_files) > 1
+    with pytest.raises(ValueError, match="current-head files exactly once"):
+        validate_execution_units([relative_files[:-1]], ["tests/deploy"])
+    with pytest.raises(ValueError, match="stable file targets"):
+        validate_execution_units(
+            [["tests/deploy", *relative_files]],
+            ["tests/deploy"],
+        )
+
+
+@pytest.mark.parametrize(
+    "nested_target",
+    [
+        "tests/scripts/test_publication.py",
+        "tests/scripts/test_publication.py::test_publish_pr_rejects_missing_governing_issue",
+    ],
+)
+def test_scoped_runner_normalizes_authenticated_directory_overlap_exactly_once(
+    tmp_path: Path,
+    nested_target: str,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+node = "tests/scripts/test_publication.py::test_publish_pr_rejects_missing_governing_issue"
+executions = 0
+if "tests/scripts" in args:
+    executions += 1
+if "tests/scripts/test_publication.py" in args or node in args:
+    executions += 1
+with Path(os.environ["FAKE_EXECUTIONS"]).open("a", encoding="utf-8") as handle:
+    handle.write("covered\n" * executions)
+print(" ".join(args))
+''',
+        encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    expected = ["tests/scripts", nested_target]
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+            "--partitions-json",
+            json.dumps([["tests/scripts"], [nested_target]]),
+            "--expected-targets-json",
+            json.dumps(expected),
+            "--execution-units-json",
+            json.dumps([["tests/scripts"], [nested_target]]),
+            "--log-dir",
+            str(tmp_path / "logs"),
+            "--aggregate-log",
+            str(tmp_path / "aggregate.log"),
+            "--jobs",
+            "4",
+            "--shard-timeout-seconds",
+            "10",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "FAKE_EXECUTIONS": str(tmp_path / "executions"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "executions").read_text().splitlines() == ["covered"]
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert "tests/scripts" in aggregate
+    assert nested_target not in aggregate
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["--serial-boundary-json", "--execution-units-json"],
+)
+@pytest.mark.parametrize("malformed", [{}, None, False, 0, ""])
+def test_scoped_runner_optional_json_shapes_fail_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    option: str,
+    malformed: object,
+) -> None:
+    import scripts.run_scoped_test_partitions as runner
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        runner,
+        "run_partitions",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_scoped_test_partitions.py",
+            "--partitions-json",
+            '[["tests/scripts"]]',
+            "--expected-targets-json",
+            '["tests/scripts"]',
+            "--log-dir",
+            "unused-logs",
+            "--aggregate-log",
+            "unused-aggregate.log",
+            option,
+            json.dumps(malformed),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        runner.main()
+    assert exc_info.value.code == 2
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["--serial-boundary-json", "--execution-units-json"],
+)
+def test_scoped_runner_optional_json_explicit_empty_list_is_valid(
+    monkeypatch: pytest.MonkeyPatch,
+    option: str,
+) -> None:
+    import scripts.run_scoped_test_partitions as runner
+
+    calls: list[object] = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return 17
+
+    monkeypatch.setattr(runner, "run_partitions", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_scoped_test_partitions.py",
+            "--partitions-json",
+            '[["tests/scripts"]]',
+            "--expected-targets-json",
+            '["tests/scripts"]',
+            "--log-dir",
+            "unused-logs",
+            "--aggregate-log",
+            "unused-aggregate.log",
+            option,
+            "[]",
+        ],
+    )
+    assert runner.main() == 17
+    assert len(calls) == 1
+    assert calls[0][1]["serial_boundary"] == ()
+    assert calls[0][1]["execution_units"] == ()
+
+
+def test_scoped_runner_balances_parallel_work_and_preserves_serial_quiescence(
+    tmp_path: Path,
+) -> None:
+    """Collected deploy nodes run once, with the host boundary last."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import fcntl
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+args = sys.argv[1:]
+deploy_files = [arg for arg in args if arg.startswith("tests/deploy/")]
+if "--collect-only" in args:
+    for target in deploy_files:
+        print(f"{target}::test_one")
+        print(f"{target}::test_two")
+    if "tests/deploy" in args:
+        print("tests/deploy/test_slow.py::test_one")
+        print("tests/deploy/test_slow.py::test_two")
+    raise SystemExit(0)
+
+state_path = Path(os.environ["FAKE_STATE"])
+with state_path.open("a+", encoding="utf-8") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    handle.seek(0)
+    raw = handle.read()
+    state = json.loads(raw) if raw else {
+        "active": 0, "max_active": 0, "executed": [], "invocations": []
+    }
+    state["active"] += 1
+    state["max_active"] = max(state["max_active"], state["active"])
+    state["invocations"].append(args)
+    for arg in args:
+        if arg.startswith("tests/deploy/") and arg.endswith(".py"):
+            state["executed"].extend([f"{arg}::test_one", f"{arg}::test_two"])
+    serial_targets = json.loads(os.environ["FAKE_SERIAL_TARGETS"])
+    is_serial = all(target in args for target in serial_targets)
+    state["active_at_serial"] = state["active"] if is_serial else state.get("active_at_serial")
+    handle.seek(0)
+    handle.truncate()
+    json.dump(state, handle)
+    handle.flush()
+    fcntl.flock(handle, fcntl.LOCK_UN)
+time.sleep(0.15)
+with state_path.open("a+", encoding="utf-8") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    handle.seek(0)
+    state = json.load(handle)
+    state["active"] -= 1
+    if all(target in args for target in json.loads(os.environ["FAKE_SERIAL_TARGETS"])):
+        state["serial_started"] = True
+    handle.seek(0)
+    handle.truncate()
+    json.dump(state, handle)
+    handle.flush()
+    fcntl.flock(handle, fcntl.LOCK_UN)
+''',
+        encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    expected = [
+        "tests/deploy/test_slow.py",
+        "tests/deploy/test_other.py",
+        "tests/scripts",
+        "tests/ops",
+    ]
+    partitions = [[target] for target in expected]
+    units = [
+        ["tests/deploy/test_slow.py"],
+        ["tests/deploy/test_other.py", "tests/scripts"],
+        ["tests/ops"],
+    ]
+    serial_boundary = [
+        "tests/ops/test_dormant_ownership_initialization.py",
+        "tests/ops/test_git_hygiene.py",
+        "tests/ops/test_instance_state_deployment_lease.py",
+        "tests/ops/test_instance_state_volume_contract.py",
+        "tests/ops/test_instance_state_writer_inventory.py",
+        "tests/ops/test_mvr05_mixed_version_fence.py",
+        "tests/ops/test_native_journaling_acceptance.py",
+        "tests/ops/test_start_full_runtime_health.py",
+    ]
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps({"active": 0, "max_active": 0, "executed": [], "invocations": []})
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+            "--partitions-json", json.dumps(partitions),
+            "--expected-targets-json", json.dumps(expected),
+            "--execution-units-json", json.dumps(units),
+            "--log-dir", str(tmp_path / "logs"),
+            "--aggregate-log", str(tmp_path / "aggregate.log"),
+            "--jobs", "4",
+            "--serial-boundary-json", json.dumps(serial_boundary),
+            "--shard-timeout-seconds", "10",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "FAKE_STATE": str(state_path),
+            "FAKE_SERIAL_TARGETS": json.dumps(serial_boundary),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads(state_path.read_text())
+    assert state["max_active"] <= 4
+    assert state["active_at_serial"] == 1
+    assert state["serial_started"] is True
+    serial_invocations = [
+        invocation
+        for invocation in state["invocations"]
+        if all(target in invocation for target in serial_boundary)
+    ]
+    assert len(serial_invocations) == 1
+    parallel_invocations = [
+        invocation for invocation in state["invocations"] if invocation not in serial_invocations
+    ]
+    assert all(
+        target not in invocation
+        for invocation in parallel_invocations
+        for target in serial_boundary
+    )
+    ops_invocation = next(
+        invocation for invocation in parallel_invocations if "tests/ops" in invocation
+    )
+    assert all(f"--ignore={target}" in ops_invocation for target in serial_boundary)
+    assert sorted(state["executed"]) == sorted([
+        "tests/deploy/test_other.py::test_one",
+        "tests/deploy/test_other.py::test_two",
+        "tests/deploy/test_slow.py::test_one",
+        "tests/deploy/test_slow.py::test_two",
+    ])
+
+
+def test_scoped_runner_balanced_work_units_remain_bounded_and_fail_loud(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import sys
+import time
+args = sys.argv[1:]
+if "--collect-only" in args:
+    for arg in args:
+        if arg.startswith("tests/deploy/"):
+            print(f"{arg}::test_one")
+    raise SystemExit(0)
+target_text = " ".join(args)
+print("synthetic scoped failure", flush=True)
+if "tests/deploy/test_slow.py" in target_text and "FAIL_SCOPED" in __import__("os").environ:
+    raise SystemExit(7)
+if "TIMEOUT_SCOPED" in __import__("os").environ:
+    time.sleep(5)
+''',
+        encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    expected = ["tests/deploy/test_slow.py", "tests/scripts"]
+    partitions = [[target] for target in expected]
+    units = [["tests/deploy/test_slow.py"], ["tests/scripts"]]
+
+    def run(*, env: dict[str, str] | None = None, timeout: int = 10, units_value=units):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+                "--partitions-json", json.dumps(partitions),
+                "--expected-targets-json", json.dumps(expected),
+                "--execution-units-json", json.dumps(units_value),
+                "--log-dir", str(tmp_path / "logs"),
+                "--aggregate-log", str(tmp_path / "aggregate.log"),
+                "--jobs", "4",
+                "--shard-timeout-seconds", str(timeout),
+            ],
+            cwd=REPO_ROOT,
+            env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", **(env or {})},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    failed = run(env={"FAIL_SCOPED": "1"})
+    assert failed.returncode == 1
+    assert "synthetic scoped failure" in failed.stderr
+    assert "synthetic scoped failure" in (tmp_path / "aggregate.log").read_text()
+    timed_out = run(env={"TIMEOUT_SCOPED": "1"}, timeout=1)
+    assert timed_out.returncode == 1
+    assert "PARTITION TIMED OUT after 1s" in timed_out.stderr
+    duplicate = run(units_value=[["tests/deploy/test_slow.py"], ["tests/deploy/test_slow.py"]])
+    assert duplicate.returncode != 0
+    assert "duplicate work" in duplicate.stderr
+    incomplete = run(units_value=[["tests/deploy/test_slow.py"]])
+    assert incomplete.returncode != 0
+    assert "incomplete" in incomplete.stderr
+
+
+def test_scoped_runner_serial_last_failure_is_aggregated(tmp_path: Path) -> None:
+    """The legacy serial-last path must remain fail-loud and observable."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import sys
+
+args = sys.argv[1:]
+if "tests/ops" in args:
+    print("synthetic serial failure", flush=True)
+    raise SystemExit(7)
+''',
+        encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    expected = ["tests/scripts", "tests/ops"]
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+            "--partitions-json", json.dumps([["tests/scripts"], ["tests/ops"]]),
+            "--expected-targets-json", json.dumps(expected),
+            "--log-dir", str(tmp_path / "logs"),
+            "--aggregate-log", str(tmp_path / "aggregate.log"),
+            "--jobs", "4",
+            "--serial-last",
+            "--shard-timeout-seconds", "10",
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "SERIAL PARTITION FAILED (7): 1" in result.stderr
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert "===== scoped serial partition =====" in aggregate
+    assert "synthetic serial failure" in aggregate
 
 
 @pytest.mark.parametrize("mode", ["shard-failure", "incomplete", "serial-failure"])

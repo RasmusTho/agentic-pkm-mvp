@@ -1899,6 +1899,9 @@ def test_scoped_deploy_partitions_preserve_selected_targets(tmp_path: Path) -> N
     assert json.loads(fields["scoped_partitions_json"]) == [
         list(partition) for partition in partitions
     ]
+    assert json.loads(fields["scoped_execution_units_json"]) == [
+        list(unit) for unit in selector.scoped_deploy_execution_units(selection)
+    ]
     assert json.loads(fields["scoped_serial_boundary_json"]) == list(
         selector.SCOPED_DEPLOY_SERIAL_BOUNDARY
     )
@@ -1956,6 +1959,41 @@ def test_scoped_deploy_partitions_preserve_selected_targets(tmp_path: Path) -> N
 def test_release_channel_docs_and_tests_do_not_pull_heavy_deploy_suite(path: str) -> None:
     # Neither is read by tests/deploy; only the release-channel code is.
     assert "tests/deploy" not in select_tests([path]).targets
+
+
+def test_scoped_deploy_execution_units_balance_slow_directory_without_coverage_drift() -> None:
+    selection = select_tests([
+        "app/ops/postgres_deploy_linux.py",
+        "scripts/postmerge_dev_test.py",
+    ])
+
+    units = selector.scoped_deploy_execution_units(selection)
+    assert selection.full_suite is False
+    assert "tests/deploy" in selection.targets
+    assert 1 <= len(units) <= selector.SCOPED_EXECUTION_MAX_WORK_UNITS
+    assert all(unit for unit in units)
+
+    serial = units[-1]
+    assert all(
+        target.split("::", 1)[0] == "tests/ops"
+        or target.split("::", 1)[0].startswith("tests/ops/")
+        for target in serial
+    )
+    parallel = units[:-1]
+    flattened = [target for unit in parallel for target in unit]
+    deploy_files = set(selector._scoped_deploy_test_files())
+    assert deploy_files <= {
+        target.split("::", 1)[0]
+        for target in flattened
+        if target.split("::", 1)[0].startswith("tests/deploy/")
+    }
+    assert len(flattened) == len(set(flattened))
+    assert "tests/deploy" not in flattened
+    assert all(
+        target.split("::", 1)[0] != "tests/ops"
+        and not target.split("::", 1)[0].startswith("tests/ops/")
+        for target in flattened
+    )
 
 
 def test_changed_heavy_test_file_still_runs_on_pr_path() -> None:

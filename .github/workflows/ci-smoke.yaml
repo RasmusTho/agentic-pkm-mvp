@@ -971,6 +971,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
           SCOPED_TARGETS_JSON: ${{ steps.select-tests.outputs.pytest_targets_json }}
           SCOPED_PARTITIONS_JSON: ${{ steps.select-tests.outputs.scoped_partitions_json }}
+          SCOPED_EXECUTION_UNITS_JSON: ${{ steps.select-tests.outputs.scoped_execution_units_json }}
           SCOPED_SERIAL_BOUNDARY_JSON: ${{ steps.select-tests.outputs.scoped_serial_boundary_json }}
         run: |
           set -euo pipefail
@@ -983,6 +984,7 @@ jobs:
             python scripts/run_scoped_test_partitions.py \
               --partitions-json "$SCOPED_PARTITIONS_JSON" \
               --expected-targets-json "$SCOPED_TARGETS_JSON" \
+              --execution-units-json "$SCOPED_EXECUTION_UNITS_JSON" \
               --log-dir "$scoped_log_dir" \
               --aggregate-log pytest-not-pg.log \
               --jobs 4 \
