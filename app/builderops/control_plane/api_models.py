@@ -216,6 +216,16 @@ class MaintenanceLeaseInput(LeaseInput):
     fencing_token: int = Field(strict=True, ge=1)
 
 
+class LeaseReleaseRequest(BaseModel):
+    """Release only the addressed principal's existing generic lease."""
+
+    model_config = ConfigDict(extra="forbid")
+    envelope: AuthorityEnvelopeInput
+    lease: MaintenanceLeaseInput
+    idempotency_key: str = Field(min_length=1, max_length=512)
+    request: dict[str, Any] = Field(default_factory=dict)
+
+
 class TaskPayloadStatusCorrectionRequest(BaseModel):
     """One same-state correction, never a general task patch."""
 
@@ -403,6 +413,7 @@ __all__ = [
     "IssueDeliveryPreviewRequest",
     "IssueDeliveryStartRequest",
     "LeaseClaimRequest",
+    "LeaseReleaseRequest",
     "LeaseInput",
     "OutboxClaimRequest",
     "OutboxClaimInput",

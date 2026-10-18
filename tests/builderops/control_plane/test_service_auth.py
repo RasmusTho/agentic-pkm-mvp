@@ -824,3 +824,69 @@ def test_scope_metadata_preserves_ascii_grammar_and_size_fence(tmp_path: Path) -
         assert response.status_code == expected
         assert store.last_actor == ("client:macbook" if expected == 200 else None)
         assert "client-token" not in response.text
+
+
+def test_generic_lease_release_is_authenticated_and_fenced(tmp_path: Path) -> None:
+    import copy
+    from app.builderops.control_plane.models import StaleFencingToken
+
+    class ReleaseStore(_Store):
+        def __init__(self):
+            super().__init__()
+            self.releases = []
+
+        def release_lease(self, **kw):
+            self.releases.append(kw)
+            if kw['lease'].fencing_token != 1:
+                raise StaleFencingToken('stale generic lease')
+            return TransactionResult(kw['envelope'].repository, kw['lease'].resource_id,
+                                     'lease.released', 2, '0/2', None)
+
+    store = ReleaseStore()
+    registry = _registry(tmp_path)
+    client = TestClient(create_app(store=store, credentials=registry),
+        headers={'Authorization': 'Bearer client-token', 'X-BuilderOps-Authority-Epoch': '1'})
+    claimed = client.post('/v1/leases/claim', json=_lease_payload())
+    assert claimed.status_code == 200
+    body = {'envelope': _lease_payload()['envelope'], 'lease': claimed.json()['lease'],
+            'idempotency_key': 'release-resource-1', 'request': {}}
+    response = client.post('/v1/leases/release', json=body)
+    assert response.status_code == 200
+    assert response.json()['result']['state'] == 'lease.released'
+    assert response.json()['result']['receipt_sequence'] == 2
+    assert response.json()['result']['recovery_lsn'] == '0/2'
+    call = store.releases[-1]
+    assert call['envelope'].actor == call['lease'].holder == 'client:macbook'
+    assert call['lease'].repository == 'rasmustho/agentic-pkm-mvp'
+    assert call['lease'].lease_kind == 'generic'
+    assert call['idempotency_key'] == body['idempotency_key']
+    cases = [
+        ('holder', 'another-principal', 403),
+        ('repository', 'foreign/repo', 403),
+        ('lease_kind', 'task', 422),
+        ('fencing_token', True, 422),
+    ]
+    for field, value, status in cases:
+        invalid = copy.deepcopy(body)
+        invalid['lease'][field] = value
+        before = len(store.releases)
+        assert client.post('/v1/leases/release', json=invalid).status_code == status
+        assert len(store.releases) == before
+    for headers in ({'Authorization': 'Bearer read-token'},
+                    {'Authorization': 'Bearer invalid-token'},
+                    {'X-BuilderOps-Authority-Epoch': '2'}):
+        before = len(store.releases)
+        assert client.post('/v1/leases/release', json=body, headers=headers).status_code in (401, 403, 409)
+        assert len(store.releases) == before
+    invalid = copy.deepcopy(body)
+    invalid['envelope']['repository'] = 'foreign/repo'
+    before = len(store.releases)
+    assert client.post('/v1/leases/release', json=invalid).status_code == 403
+    secret = copy.deepcopy(body)
+    secret['request'] = {'text': 'client-token'}
+    result = client.post('/v1/leases/release', json=secret)
+    assert result.status_code == 400 and 'client-token' not in result.text
+    assert len(store.releases) == before
+    stale = copy.deepcopy(body)
+    stale['lease']['fencing_token'] = 2
+    assert client.post('/v1/leases/release', json=stale).status_code == 409
