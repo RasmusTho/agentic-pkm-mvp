@@ -5,7 +5,10 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-18 UTC (private CKM source admission / #6194; manual shadow rehydration / #6174 retains its 2026-10-17 review; unrelated status entries were not re-audited)
+Last reviewed: 2026-10-18 UTC (native executor startup / #6245; private CKM source admission / #6194; manual shadow rehydration / #6174 retains its 2026-10-17 review; unrelated status entries were not re-audited)
+Last verified against (native executor startup): Issue #6245, `app/ops/builder_executor_keyring.py`,
+the fixed systemd unit and affected lifecycle/consumer tests; repository and isolated synthetic Linux
+evidence only, without production activation, personal authentication or #6146 qualification.
 Last verified against (private CKM source admission): Issue #6194, `app/builderops/devui_ckm_snapshot.py`, `app/ops/devui_ckm_snapshot.py`, and focused managed source tests; repository evidence only.
 Last reviewed (SCREEN-06 host controls): 2026-10-17
 Last verified against (SCREEN-06 host controls): Issue #3342, `app/heimdal/screen_control.py`,
@@ -171,6 +174,13 @@ Product default or perform a dev/test/prod rollout.
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
+
+2026-10-18 native executor startup support (#6245): the fixed Mac-administered installer prepares
+plan-bound startup/unlock and retained-state withdrawal for BOB-1. The sandboxed bootstrap decodes
+only after read-only mounts apply and permanently drops privileges before GNOME; sanitized Codex
+consumers receive only validated local bus metadata. Production activation, personal login and
+the installed-main qualification under #6146 remain separate gates. The operational procedure stays
+in `docs/deployment/profiles/TARS_PROXMOX.md`; this status entry adds no credential grant.
 
 2026-09-13 DevUI read-model and managed-journey writeback (verified against `docs/DEVUI.md`,
 `docs/plans/DEVUI_IMPLEMENTATION.md`, `app/builderops/devui_overview.py`,
