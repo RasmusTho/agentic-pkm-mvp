@@ -412,14 +412,32 @@ def reconstruct_missing_test_instance_state(
                     raise _test_refusal()
                 with store._locked(recover_transactions=True):
                     materialized = store._read_current_locked(recover=False)
-            if materialized is None:
-                materialized = _materialize_authenticated_channel_registrations(
-                    channel="test",
-                    registry=store,
-                    ledger=ledger,
-                    owners=resolved_owners,
-                    owners_authenticated=True,
-                )
+            # A durable result marker binds the exact already-validated
+            # generation. Validate it before calling the materializer because
+            # that path may resume partial state with registry writes.
+            if marker_result_path.is_file():
+                if materialized is None:
+                    raise _test_refusal()
+                prior = _read_private_json(marker_result_path)
+                if (
+                    prior.get("request") != recovery
+                    or prior.get("registry_revision") != materialized.revision
+                    or prior.get("registry_sha256")
+                    != _sha(_read_private_bytes(store.path))
+                ):
+                    raise _test_refusal()
+                return prior
+            # Always route the current generation through the canonical
+            # materializer. Besides resuming authenticated partial writes, it
+            # validates complete recovery-provenance registrations against the
+            # receipt-derived path/ref before an idempotent result is accepted.
+            materialized = _materialize_authenticated_channel_registrations(
+                channel="test",
+                registry=store,
+                ledger=ledger,
+                owners=resolved_owners,
+                owners_authenticated=True,
+            )
             if (
                 materialized.authority != "dormant"
                 or materialized.revision < 1
@@ -437,16 +455,6 @@ def reconstruct_missing_test_instance_state(
                 )
             ):
                 raise _test_refusal()
-            if marker_result_path.is_file():
-                prior = _read_private_json(marker_result_path)
-                if (
-                    prior.get("request") != recovery
-                    or prior.get("registry_revision") != materialized.revision
-                    or prior.get("registry_sha256")
-                    != _sha(_read_private_bytes(store.path))
-                ):
-                    raise _test_refusal()
-                return prior
             result = {
                 "schema": _TEST_INSTANCE_STATE_RECOVERY_SCHEMA,
                 "channel": "test",

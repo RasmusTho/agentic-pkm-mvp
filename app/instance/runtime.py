@@ -4333,33 +4333,20 @@ def _finish_instance_state_deployment_locked(
     if established is not None and established.legacy_bootstrap_complete:
         recovery_failed = False
         try:
-            # Only pending registrations need the recovery transition here.
-            # Active leases must reach the canonical consistency check below
-            # first; otherwise a corrupted stored identity is misreported as
-            # generic recovery failure instead of the specific consistency
-            # failure that governs this finish path.
-            for registration in registry.registrations.values():
+            # Receipt-proven pending owners need the recovery transition even
+            # when an interrupted materialization has not written their
+            # registration yet. Active and missing leases still reach the
+            # canonical consistency path below so its diagnostics stay stable.
+            for pending_owner in owners:
                 registration_lease = established.leases.get(
-                    registration.vault_binding_id
+                    pending_owner.vault_binding_id
                 )
                 if (
-                    registration_lease is not None
+                    pending_owner.channel_id == channel
+                    and pending_owner.vault_binding_id
+                    and registration_lease is not None
                     and registration_lease.state == "pending"
                 ):
-                    pending_owner = next(
-                        (
-                            owner
-                            for owner in owners
-                            if owner.channel_id == channel
-                            and owner.vault_binding_id
-                            == registration.vault_binding_id
-                        ),
-                        None,
-                    )
-                    if pending_owner is None:
-                        raise LedgerError(
-                            "pending registration has no host-validated owner receipt"
-                        )
                     ledger.recover_or_require_active_from_host_receipt(
                         pending_owner,
                         channel_id=channel,

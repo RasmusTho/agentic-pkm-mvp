@@ -4734,6 +4734,80 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
         expected_quiescence_proof_sha256=request_payload["quiescence_proof_sha256"],
         authority_ownership_mount_root=str(host_global_root.resolve()),
     ) == result
+
+    # Both marker-present and marker-lost retries must revalidate the durable
+    # generation before any write. Matching IDs and provenance cannot make a
+    # foreign path/ref acceptable.
+    result_marker = host_global_root / (
+        "test-instance-state-recovery-result-"
+        + request_payload["failed_operation_id"]
+        + ".json"
+    )
+    foreign_root = tmp_path / "foreign-vault"
+    foreign_root.mkdir()
+    current = recovered_store.load()
+    binding_id = registration.vault_binding_id
+    divergent = replace(
+        current.registrations[binding_id],
+        ref=f"path:{foreign_root}",
+        path=str(foreign_root),
+    )
+    recovered_store.commit_state(
+        registrations=dict(current.registrations) | {binding_id: divergent},
+        expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    def retry_divergent_generation() -> dict[str, object]:
+        return recovery_module.reconstruct_missing_test_instance_state(
+            channel="test",
+            failed_operation_id=request_payload["failed_operation_id"],
+            candidate_revision=candidate_revision,
+            candidate_image_digest=candidate_digest,
+            authority_binding_id=registration.vault_binding_id,
+            authority_root=str(vault_root.resolve()),
+            authority_ownership_root=str(host_ownership_source.resolve()),
+            instance_state_root=state_mount,
+            host_global_root=host_global_root,
+            recovery_receipt_path=recovery_receipt,
+            owner_receipt_path=owner_receipt,
+            expected_owner_receipt_sha256=request_payload["owner_receipt_sha256"],
+            quiescence_proof_path=host_global_root
+            / "deployment-quiescence-proof.json",
+            expected_quiescence_proof_sha256=request_payload[
+                "quiescence_proof_sha256"
+            ],
+            authority_ownership_mount_root=str(host_global_root.resolve()),
+        )
+
+    protected_before = {
+        path: path.read_bytes()
+        for path in (
+            recovered_store.path,
+            recovered_store.snapshot_path,
+            recovered_store.snapshot_checksum_path,
+            recovered_store.rollback_export_path,
+        )
+    }
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="TEST dormant ownership preparation refused",
+    ):
+        retry_divergent_generation()
+    assert {
+        path: path.read_bytes() for path in protected_before
+    } == protected_before
+    assert result_marker.exists()
+
+    result_marker.unlink()
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="TEST dormant ownership preparation refused",
+    ):
+        retry_divergent_generation()
+    assert not result_marker.exists()
+
+
 def test_runtime_preflight_rejects_foreign_channel_host_global_lease_without_mutation(
     tmp_path,
 ) -> None:
@@ -6916,6 +6990,70 @@ def test_deployment_finish_recovers_pending_legacy_owner_lease_before_consistenc
     )
 
     assert result["restart_fence_cleared"] is True
+    assert runtime.ledger.load().leases[registration.vault_binding_id].state == "active"
+
+
+def test_deployment_finish_recovers_pending_owner_before_missing_registration(
+    tmp_path,
+) -> None:
+    """A pending receipt owner reaches consistency with its new registration."""
+
+    host_global_root = tmp_path / "host-global"
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod"),
+        host_global_root,
+    )
+    vault_root = tmp_path / "prod-vault"
+    vault_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=vault_root, watcher_vault_path=vault_root
+    )
+    runtime.ledger.bootstrap_legacy_owners(
+        [],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger_payload = json.loads(runtime.ledger.path.read_text(encoding="utf-8"))
+    ledger_payload["leases"][registration.vault_binding_id]["state"] = "pending"
+    runtime.ledger.path.write_text(json.dumps(ledger_payload), encoding="utf-8")
+    os.chmod(runtime.ledger.path, 0o600)
+    for path in (
+        runtime.layout.registry_path,
+        runtime.registry.snapshot_path,
+        runtime.registry.snapshot_checksum_path,
+        runtime.registry.rollback_export_path,
+    ):
+        path.unlink(missing_ok=True)
+
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=runtime.layout,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {
+                "channel_id": "prod",
+                "vault_binding_id": registration.vault_binding_id,
+                "root": str(vault_root),
+            }
+        ],
+    )
+
+    result = _finish_instance_state_deployment(
+        channel="prod",
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        inventory_path=owner_receipt,
+        backup_root=tmp_path / "backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+
+    assert result["restart_fence_cleared"] is True
+    assert set(runtime.registry.load().registrations) == {
+        registration.vault_binding_id
+    }
     assert runtime.ledger.load().leases[registration.vault_binding_id].state == "active"
 
 
