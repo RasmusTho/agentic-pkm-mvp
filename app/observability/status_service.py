@@ -13,7 +13,7 @@ from app.config.environment import active_environment
 from app.events.types import PROMOTE_INTENT_CREATED, PROMOTE_DONE
 from app.events.types import ORCHESTRATOR_STEP_ERROR, ORCHESTRATOR_STEP_FINISHED
 from app.events.types import PANEL_INTENT_EXECUTED, PANEL_LOG_CREATED
-from app.observability.ingest_meta import get_ingest_status
+from app.observability.ingest_meta import get_ingest_status, get_ingest_status_for_binding
 from app.orchestrator.delivery_sla import (
     DELIVERY_SLA_DELIVERED,
     DELIVERY_SLA_FAILED,
@@ -256,7 +256,13 @@ def _parse_timestamp(value: object) -> datetime | None:
     return None
 
 
-def _count_events(outbox_path: Path) -> EventCounters:
+def _record_binding(record: dict) -> str | None:
+    meta = record.get("meta")
+    stamp = meta.get("vault_binding_id") if isinstance(meta, dict) else None
+    return stamp if isinstance(stamp, str) else None
+
+
+def _count_events(outbox_path: Path, vault_binding_id: str | None = None) -> EventCounters:
     panel_total = panel_recent = promote_total = promote_recent = watcher_total = watcher_recent = 0
     promotion_done_total = promotion_done_recent = 0
     source = str(outbox_path) if outbox_path else None
@@ -276,6 +282,10 @@ def _count_events(outbox_path: Path) -> EventCounters:
             source_path=source,
         )
     for record in records:
+        # Scoped (MVR-05B4c4): count only records stamped with the request binding;
+        # unstamped history is never adopted into a binding.
+        if vault_binding_id is not None and _record_binding(record) != vault_binding_id:
+            continue
         event = record.get("event") or record.get("event_type") or record.get("topic") or ""
         ts = _parse_timestamp(record.get("timestamp") or record.get("created_at"))
         is_recent = ts is not None and ts >= cutoff
@@ -334,7 +344,7 @@ def _outbox_db_source() -> str:
     return os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "outbox"
 
 
-def _count_events_db() -> EventCounters | None:
+def _count_events_db(vault_binding_id: str | None = None) -> EventCounters | None:
     try:
         from app.services import outbox as outbox_service
     except Exception:
@@ -348,10 +358,17 @@ def _count_events_db() -> EventCounters | None:
     cutoff = datetime.now(timezone.utc) - _EVENT_WINDOW
     try:
         cur = conn.cursor()
-        cur.execute(
-            "select topic, count(*) as total, sum(case when created_at >= %s then 1 else 0 end) as recent from outbox group by topic",
-            (cutoff,),
-        )
+        if vault_binding_id is None:
+            cur.execute(
+                "select topic, count(*) as total, sum(case when created_at >= %s then 1 else 0 end) as recent from outbox group by topic",
+                (cutoff,),
+            )
+        else:
+            cur.execute(
+                "select topic, count(*) as total, sum(case when created_at >= %s then 1 else 0 end) as recent "
+                "from outbox where vault_binding_id = %s group by topic",
+                (cutoff, vault_binding_id),
+            )
         rows = cur.fetchall() or []
     except Exception:
         return None
@@ -614,7 +631,7 @@ def _worker_queue_mode() -> str:
     return "none"
 
 
-def _count_outbox_pending_db() -> int | None:
+def _count_outbox_pending_db(vault_binding_id: str | None = None) -> int | None:
     try:
         from app.services import outbox as outbox_service
     except Exception:
@@ -625,7 +642,13 @@ def _count_outbox_pending_db() -> int | None:
         return None
     try:
         cur = conn.cursor()
-        cur.execute("select count(*) from outbox where delivered_at is null")
+        if vault_binding_id is None:
+            cur.execute("select count(*) from outbox where delivered_at is null")
+        else:
+            cur.execute(
+                "select count(*) from outbox where delivered_at is null and vault_binding_id = %s",
+                (vault_binding_id,),
+            )
         row = cur.fetchone()
         return int(outbox_service._row_value(row, 0)) if row else 0
     except Exception:
@@ -660,8 +683,10 @@ def _count_outbox_total_db() -> int | None:
             pass
 
 
-def _get_worker_queue_status() -> WorkerQueueStatus:
+def _get_worker_queue_status(vault_binding_id: str | None = None) -> WorkerQueueStatus:
     mode = _worker_queue_mode()
+    if vault_binding_id is not None:
+        return _binding_worker_queue_status(mode, vault_binding_id)
     heartbeat = _read_worker_heartbeat() or {}
     processed_total = heartbeat.get("processed_total") if isinstance(heartbeat.get("processed_total"), int) else None
     source_path = None
@@ -690,6 +715,24 @@ def _get_worker_queue_status() -> WorkerQueueStatus:
         processed_total=processed_total,
         source_path=source_path,
     )
+
+
+def _binding_worker_queue_status(mode: str, vault_binding_id: str) -> WorkerQueueStatus:
+    """One binding's queue (MVR-05B4c4): the DB outbox carries the binding column.
+
+    The worker heartbeat's ``processed_total`` and the JSONL line count are
+    process-wide with no binding predicate, so a scoped read reports them as
+    unknown rather than another binding's backlog.
+    """
+
+    if mode == "db":
+        return WorkerQueueStatus(
+            mode=mode,
+            pending=_count_outbox_pending_db(vault_binding_id),
+            processed_total=None,
+            source_path=os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "outbox",
+        )
+    return WorkerQueueStatus(mode=mode, pending=None, processed_total=None, source_path=None)
 
 
 def classify_view_freshness(
@@ -1324,19 +1367,30 @@ def get_system_status() -> SystemStatus:
     )
 
 
-def get_orientation_signals() -> OrientationSignals:
-    ingestion = get_ingestion_status()
+def get_orientation_signals(vault_binding_id: str | None = None) -> OrientationSignals:
+    """Orientation runtime signals; one binding's work only when ``vault_binding_id``.
+
+    A carrier-free caller (``None``) keeps the process-wide result. A scoped read
+    (MVR-05B4c4) counts only ingest runs, outbox events and pending queue rows
+    stamped with that binding, and never writes.
+    """
+
+    ingestion = (
+        get_ingestion_status()
+        if vault_binding_id is None
+        else get_ingest_status_for_binding(vault_binding_id)
+    )
     queue_mode = _worker_queue_mode()
     counters: EventCounters | None = None
     if queue_mode == "db":
-        counters = _count_events_db()
+        counters = _count_events_db(vault_binding_id)
     if counters is None:
-        counters = _count_events(_status_outbox_path())
+        counters = _count_events(_status_outbox_path(), vault_binding_id)
     counters = _fill_ingest_run_counts(counters, ingestion)
     return OrientationSignals(
         events=counters,
         ingestion=ingestion,
-        worker_queue=_get_worker_queue_status(),
+        worker_queue=_get_worker_queue_status(vault_binding_id),
     )
 
 

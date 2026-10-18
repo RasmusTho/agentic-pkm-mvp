@@ -657,6 +657,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Orientation is a derived status projection; preserve its
             # unknown-on-corruption proof when its runtime adapter changes.
             "app/orientation/runtime.py",
+            # The leave-point cursor is the derived orientation trace the
+            # status projection reads (MVR-05B4c4); its route proofs are in tests/api.
+            "app/orientation/leave_point_cursor.py",
             "tests/observability/",
             "docs/OBSERVABILITY.md",
         ),

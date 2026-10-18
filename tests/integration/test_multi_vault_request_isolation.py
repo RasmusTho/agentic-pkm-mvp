@@ -377,15 +377,28 @@ def test_scoped_now_orientation_and_browse_stay_inside_the_bound_vault(
     from app.api.routes import companion as companion_routes
     from app.relevance import now_surface
 
+    runtime, first, _second = instance
+
     def forbidden(*_args, **_kwargs):
         raise AssertionError("scoped read consulted a process-global source")
 
     monkeypatch.setattr(now_surface, "query_reachout_receipts", forbidden)
     monkeypatch.setattr(companion_routes, "_orientation_memory_review_queue", forbidden)
     monkeypatch.setattr(companion_routes, "_append_orientation_memory_intent_trace", forbidden)
-    monkeypatch.setattr(companion_routes, "get_orientation_signals", forbidden)
-    monkeypatch.setattr(companion_routes, "_orientation_leave_point", forbidden)
-    runtime, first, _second = instance
+    # MVR-05B4c4: runtime signals and the leave point are read for the request binding only.
+    real_signals = companion_routes.get_orientation_signals
+    real_leave_point = companion_routes._orientation_leave_point
+
+    def binding_signals(vault_binding_id=None):
+        assert vault_binding_id == first.vault_binding_id, "scoped read used process-wide signals"
+        return real_signals(vault_binding_id)
+
+    def binding_leave_point(*args, **kwargs):
+        assert kwargs.get("vault_binding_id") == first.vault_binding_id
+        return real_leave_point(*args, **kwargs)
+
+    monkeypatch.setattr(companion_routes, "get_orientation_signals", binding_signals)
+    monkeypatch.setattr(companion_routes, "_orientation_leave_point", binding_leave_point)
     # A global browse override must not widen a scoped browse beyond its root.
     monkeypatch.setenv("VAULT_BROWSE_ROOT", str(Path(runtime.registry.lookup(first.vault_binding_id).path).parent))
     first_root = runtime.registry.lookup(first.vault_binding_id)
