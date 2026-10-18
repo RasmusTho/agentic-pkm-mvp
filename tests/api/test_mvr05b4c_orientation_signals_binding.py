@@ -239,3 +239,17 @@ def test_scoped_leave_point_cursor_is_binding_keyed_and_read_never_creates(
     assert point_b["artifact_ref"]["artifact_uuid"] == "note-b-uuid"
     # A scoped read never writes the cursor DB.
     assert cursor_db.read_bytes() == before
+
+
+def test_unprovable_ingest_run_keeps_binding_history(two_bindings) -> None:
+    """#6251 review: a run with no provable binding never erases other bindings' history."""
+
+    client, first, second, _outbox, _cursor_db = two_bindings
+    record_ingest_run(
+        "vault", scanned=4, ingested=4, errors=0, vault_binding_id=second.vault_binding_id
+    )
+    record_ingest_run("vault", scanned=1, ingested=1, errors=0, vault_binding_id="")
+    [notable_b] = _signal_view(_orientation(client, _headers(client, second.vault_binding_id)))[
+        "notable"
+    ]
+    assert "ingest_total=4" in notable_b

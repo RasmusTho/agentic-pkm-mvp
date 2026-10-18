@@ -33,10 +33,13 @@ def _write_status(
         "last_error_message": error_message,
         "runs": {plane: _serialize_run(meta) for plane, meta in _last_runs.items()},
     }
+    # Every rewrite keeps the per-binding history, including a run that records no
+    # binding entry of its own (an unprovable producer).
+    bindings = _read_binding_runs(path)
     if binding_entry is not None:
         binding_id, entry = binding_entry
-        bindings = _read_binding_runs(path)
         bindings[binding_id] = entry
+    if bindings:
         payload["bindings"] = bindings
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
