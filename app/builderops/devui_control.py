@@ -179,7 +179,7 @@ def read_system_control(
         _inspect("Signboard recovery", "operational recovery", f"{origin}/signboard" if origin else None,
                  "Opening Signboard triggers a refresh POST and its controls permit writes under its own authority. This is operational recovery."),
         _inspect("CKM Development Overview", "generated diagnostic projection", ckm_url,
-                 "CKM has no built-in HTTP route and its managed reader is unavailable. An explicitly hosted generated view remains unread and non-authoritative."),
+                 "The generated CKM view has no built-in HTTP route. It is separate from the bounded private snapshot in this page's source composition; the outlink remains unread and non-authoritative."),
         _inspect("Legacy BuilderOps records", "diagnostic source", f"{origin}/api/builderops/records" if origin else None,
                  "Legacy Product-hosted records are a distinct source, not the standalone control plane; selected context is unsupported."),
         _inspect("Legacy status", "Product diagnostic", f"{origin}/api/status" if origin else None,

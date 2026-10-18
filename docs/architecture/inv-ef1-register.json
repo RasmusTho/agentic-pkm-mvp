@@ -2669,6 +2669,20 @@
       "issue": "#6174"
     },
     {
+      "artifact": "app/builderops/devui_ckm_snapshot.py",
+      "category": "iii",
+      "why_load_bearing": "The owner-approved #6194 single-operator private CKM transfer binds the existing local query source host to the fixed private DevUI target. This Builder-only policy identity prevents arbitrary source substitution; it contains no address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6194"
+    },
+    {
+      "artifact": "docs/CKM_MEASUREMENT_AND_ACCESS/README.md",
+      "category": "iii",
+      "why_load_bearing": "The owner-approved #6194 single-operator private CKM transfer binds the existing local query source host to the fixed private DevUI target. This Builder-only policy identity prevents arbitrary source substitution; it contains no address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6194"
+    },
+    {
       "artifact": "evidence/shadow_rehydration_3798_live_access.v2.json",
       "category": "ii",
       "why_load_bearing": "The #6195 qualifying receipt preserves the original observer's non-blocking local-interpreter warning as a raw-chain limitation; it is immutable Builder evidence, not a Product binding or credential.",

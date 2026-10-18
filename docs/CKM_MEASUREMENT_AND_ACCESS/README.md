@@ -44,7 +44,30 @@ The capability does **not** provide general bitemporality, arbitrary as-of recon
 8. General valid-time/system-state history is unsupported. Assessment assertion history remains supported; unsupported historical requests fail explicitly. No provenance is fabricated retroactively.
 9. Metrics are descriptive and snapshot-bound. Every definition exposes intended/prohibited uses, Goodhart warnings, and `not_for_gating: true`. V1 may expose aggregate maturity as an explicitly `human_advisory_only` convenience only alongside its vector, citations, freshness, confidence, and composition. It cannot be the sole input to a decision or drive machine ranking, gating, prioritization, agent evaluation, or action. TCD applies to metric depth: add analysis only when its expected decision value exceeds development, review, and maintenance cost.
 10. Comparison refuses any semantics-bearing mismatch, including identity and access-policy versions. Supported longitudinal questions are limited to change in evidence coverage/composition, source freshness, citation/confidence coverage, and candidate/finding composition across retained compatible samples. Arbitrary point-in-time reconstruction is unsupported; cadence and minimum distinct-snapshot thresholds remain evidence-driven rather than fixed in advance.
-11. V1 is a trusted single-operator local environment. Results declare `effective_audience=single_operator_local`, a versioned local access policy, and `redaction_profile=none`; v1 adds no accounts, roles, authentication, multi-user authorization, or field redaction. A multi-user, remote, or externally redistributed surface requires a new policy decision before delivery.
+11. V1 is a trusted single-operator local environment. Results declare `effective_audience=single_operator_local`, a versioned local access policy, and `redaction_profile=none`; v1 adds no accounts, roles, authentication, multi-user authorization, or field redaction. A multi-user, remote, or externally redistributed surface requires a new policy decision before delivery. The bounded private DevUI transfer below is the separately approved exception, not a change to query admission.
+
+### Private DevUI snapshot transfer
+
+The owner decision of 2026-10-18, recorded in #6194, admits
+`ckm-single-operator-private-devui-v1`: the same single operator may transfer one complete bounded
+`list_capabilities` result from the existing admitted local CKM query on Demerzel to private DevUI
+on BOB-1. The browser remains behind the existing direct-loopback and private SSH boundary. This
+admits neither a remote CKM query service nor additional users, public exposure, write authority,
+database relocation/mounts, new credentials, ranking, gating or owner acceptance.
+
+The original query envelope and local policy remain intact. The separate
+`devui_private_ckm_snapshot.v1` transfer binds repository, source/target host, component, actual
+capture time and canonical content digest. The consumer reconstructs and validates the complete
+original typed envelope, stable public read set, schema/policy versions, completeness and digests.
+The fixed capture bound is 500 capabilities / 8 MiB. Missing, malformed, incomplete, tampered,
+foreign, future-dated or older-than-24-hour captures refuse explicitly. Source watermarks and
+provenance are never refreshed by transfer. The visible transfer capture/expiry is distinct from
+the source's own observations; a captured result is not a live remote query.
+
+This is explicit replaceable derived publication, not automatic query retention or a new history
+store. SSH authentication and root-owned file custody supply the private transfer boundary; a
+content hash alone attests neither origin nor acceptance. Deployment and successful live publication
+require their own observed receipts and do not follow from repository support.
 12. Explicitly retained snapshots, observations, watermark runs, and finding evaluations use a 365-day default retention period. Storage count and byte usage are visible. Payloads may expire after 365 days or be pruned earlier only by an explicit operator action; pruning/correction/deletion preserves a non-content marker and makes unavailable-source comparisons refuse rather than fabricate history.
 
 ## Accepted pre-implementation owner decisions

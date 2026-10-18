@@ -1,11 +1,11 @@
 {
-  "payload_sha256": "sha256:368747bd551c1edd0ffb3fb43258d1d0b0866c9d168084f741d16e66d0f53f6c",
+  "payload_sha256": "sha256:af175f5ab82133c16887a3a87d0779bbfcbb33f10f8611da35222c61f51b8db2",
   "provenance_payload": {
     "contract_version": "yggdrasil-constrained-reuse.v1",
     "repository_commit": "d95ef7f9d831f4dba6146e0f173f4242a0496e95",
     "authorship": {
-      "author_identity": "codex:01a138d5-7207-7d70-9db9-2a7f5ae5f3eb",
-      "created_at": "2026-10-14T19:48:58.433945+00:00"
+      "author_identity": "codex:devui-source-repair-20261018",
+      "created_at": "2026-10-18T07:43:52.396142+00:00"
     },
     "authority_claims": {
       "live_design_system_selection": "not_claimed",
@@ -756,11 +756,11 @@
       },
       {
         "target_path": "app/builderops/devui_control.py",
-        "content_sha256": "sha256:40571c387bcdb70ad4fe4ad61376bbe73a018175df00edd5c17cdb7b9a17d170"
+        "content_sha256": "sha256:f1208c924ea839ce52b756b10f839d0cdb41692f90ffd3aab5315b1b95dcb2de"
       },
       {
         "target_path": "app/builderops/devui_runtime.py",
-        "content_sha256": "sha256:8db2a22d8151681191bd679649f353b9b2476431a5c1057b5081defc7572792a"
+        "content_sha256": "sha256:3d54b67a5d18083967e11f4fddb1f6a88bf0c7c55d29e7cea4232445d56a9327"
       }
     ],
     "zero_novel_visual_language": {
@@ -1045,13 +1045,13 @@
     ]
   },
   "independent_review": {
-    "reviewer_identity": "/root/final_reuse_review",
+    "reviewer_identity": "/root/devui_ci_repair_review",
     "independent_from_author": true,
-    "independence_basis": "Separate issue-local helper session and fresh review context from author codex:01a138d5-7207-7d70-9db9-2a7f5ae5f3eb; independently checked source/token/target/evidence hashes, mappings and final pixels.",
-    "reviewed_payload_sha256": "sha256:368747bd551c1edd0ffb3fb43258d1d0b0866c9d168084f741d16e66d0f53f6c",
-    "reviewed_at": "2026-10-14T19:50:52Z",
+    "independence_basis": "Separate read-only agent from the receipt author; independently verified exact payload bindings, unchanged visual envelope, and isolated receiver fixture.",
+    "reviewed_payload_sha256": "sha256:af175f5ab82133c16887a3a87d0779bbfcbb33f10f8611da35222c61f51b8db2",
+    "reviewed_at": "2026-10-18T07:45:59Z",
     "verdict": "pass",
     "findings": []
   },
-  "receipt_sha256": "sha256:65e1f0ecf75a142b9f18e164d3b74664f14b28165362bd92742d4bd5ee312de4"
+  "receipt_sha256": "sha256:e57b52506e570ccd07f4aded02afdfd7298c5cf991dbc06a5d8da0b1ea64ebb0"
 }
