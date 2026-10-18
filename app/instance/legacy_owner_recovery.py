@@ -171,6 +171,9 @@ def validate_missing_test_instance_state_recovery_authority(
         channel_id="test", host_global_root=host,
         owner_receipt_path=owner_receipt,
     )
+    # A structurally valid receipt is not a live stopped window. Re-observe the
+    # native controller identity and namespace before trusting its owner census.
+    require_test_controller(proof, ())
     scratch = VaultRegistryStore(host / ".test-recovery-preflight-registry.json")
     owners = tuple(_load_legacy_owner_inventory(
         owner_receipt, registry=scratch._empty_snapshot(), channel="test",

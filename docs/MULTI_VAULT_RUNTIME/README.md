@@ -299,7 +299,9 @@ terminal successor, while the private completed disposition is matched to the ho
 request's operation ID, revision, image digest, authority tuple, and bounded runtime surface.
 A read-only runtime-UID preflight authenticates that complete set and its ledger digest before the
 recovery receipt or Compose volume effect. A pending ownership-key rotation is a byte-preserving
-refusal at this boundary; the preflight never recovers or deletes its rotation journal. Under
+refusal at this boundary; the preflight never recovers or deletes its rotation journal. The same
+preflight re-observes the native controller PID, start token, and execution namespace, so a proof
+whose controller has exited or changed identity is refused before owner evidence is trusted. Under
 deployment-admission -> producer-transition -> ownership-ledger ->
 registry-store ordering it materializes only the proven TEST registrations through the existing
 snapshot/checksum/legacy-export APIs, leaves the registry dormant at inactive-fenced revision zero

@@ -305,6 +305,7 @@ def _write_empty_quiescence_inventory(*, host_global_root: Path) -> Path:
     lease = json.loads(
         _deployment_lease_path(host_global_root).read_text(encoding="utf-8")
     )
+    controller = lease["controller"]
     domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
     digest = hashlib.sha256(
         json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
@@ -317,7 +318,8 @@ def _write_empty_quiescence_inventory(*, host_global_root: Path) -> Path:
                 "inventory_complete": True,
                 "all_consumers_stopped": True,
                 "probe_count": 2,
-                "controller": lease["controller"],
+                "controller": controller,
+                "controller_namespace_digest": "0" * 64,
                 "domains": domains,
                 "snapshot_digests": [digest, digest],
             }
@@ -4582,9 +4584,26 @@ def test_missing_established_registry_remains_fail_closed_after_recovery_support
         )
 
 
-def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(tmp_path) -> None:
+def _observe_canonical_test_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        writer_inventory, "controller_token", lambda _pid: "linux:" + "0" * 64,
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "controller_namespace_digest",
+        lambda _pid, _roots=(): "0" * 64,
+    )
+
+
+def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(
+    tmp_path, monkeypatch,
+) -> None:
     """The explicit TEST producer reconstructs only an existing dormant binding."""
     import app.instance.legacy_owner_recovery as recovery_module
+
+    _observe_canonical_test_controller(monkeypatch)
 
     state_mount = tmp_path / "instance-state"
     host_global_root = tmp_path / "host-global"
@@ -4819,12 +4838,14 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
 
 
 def test_missing_instance_state_recovery_requires_complete_unchanged_test_ledger(
-    tmp_path,
+    tmp_path, monkeypatch,
 ) -> None:
     """Owner evidence must cover the exact active TEST ledger on every pass."""
     from app.instance.legacy_owner_recovery import (
         validate_missing_test_instance_state_recovery_authority,
     )
+
+    _observe_canonical_test_controller(monkeypatch)
 
     state_mount = tmp_path / "instance-state"
     host_global_root = tmp_path / "host-global"
@@ -4883,12 +4904,14 @@ def test_missing_instance_state_recovery_requires_complete_unchanged_test_ledger
 
 
 def test_missing_instance_state_recovery_preflight_never_recovers_key_rotation(
-    tmp_path,
+    tmp_path, monkeypatch,
 ) -> None:
     """The advertised read-only proof refuses pending rotation byte-for-byte."""
     from app.instance.legacy_owner_recovery import (
         validate_missing_test_instance_state_recovery_authority,
     )
+
+    _observe_canonical_test_controller(monkeypatch)
 
     state_mount = tmp_path / "instance-state"
     host_global_root = tmp_path / "host-global"
@@ -4948,6 +4971,66 @@ def test_missing_instance_state_recovery_preflight_never_recovers_key_rotation(
     assert runtime.ledger.key_path.read_bytes() == before["key"]
     assert runtime.ledger.path.read_bytes() == before["ledger"]
     assert runtime.ledger.rotation_path.read_bytes() == before["rotation"]
+
+
+def test_missing_instance_state_recovery_rejects_stale_controller_proof(
+    tmp_path, monkeypatch,
+) -> None:
+    """A stale native controller identity cannot authorize reconstruction."""
+    from app.instance.legacy_owner_recovery import (
+        validate_missing_test_instance_state_recovery_authority,
+    )
+
+    host_global_root = tmp_path / "host-global"
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
+    runtime = InstanceRegistryRuntime.for_paths(layout, host_global_root)
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=vault_root, watcher_vault_path=vault_root,
+    )
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[{
+            "channel_id": "test",
+            "vault_binding_id": registration.vault_binding_id,
+            "root": str(vault_root.resolve()),
+        }],
+    )
+    proof_path = host_global_root / "deployment-quiescence-proof.json"
+    before = {
+        path.relative_to(host_global_root): path.read_bytes()
+        for path in host_global_root.rglob("*") if path.is_file()
+    }
+    monkeypatch.setattr(
+        writer_inventory,
+        "controller_token",
+        lambda _pid: "darwin:" + "f" * 64,
+    )
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="TEST dormant ownership preparation refused",
+    ):
+        validate_missing_test_instance_state_recovery_authority(
+            host_global_root=host_global_root,
+            authority_binding_id=registration.vault_binding_id,
+            authority_root=str(vault_root.resolve()),
+            owner_receipt_path=owner_receipt,
+            expected_owner_receipt_sha256=hashlib.sha256(
+                owner_receipt.read_bytes()
+            ).hexdigest(),
+            quiescence_proof_path=proof_path,
+            expected_quiescence_proof_sha256=hashlib.sha256(
+                proof_path.read_bytes()
+            ).hexdigest(),
+        )
+    after = {
+        path.relative_to(host_global_root): path.read_bytes()
+        for path in host_global_root.rglob("*") if path.is_file()
+    }
+    assert after == before
 
 
 def test_runtime_preflight_rejects_foreign_channel_host_global_lease_without_mutation(

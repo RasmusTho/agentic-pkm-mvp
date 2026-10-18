@@ -427,7 +427,9 @@ owner-inventory receipt and two-pass stopped-writer proof, the exact selected TE
 the existing host-global key/ledger, and the new candidate revision/image digest. The owner
 inventory must cover the complete active TEST lease set exactly. A read-only native preflight
 authenticates that set and its ledger digest before the recovery receipt or named-volume permission
-step; the mounted runtime producer revalidates the same digest before any instance-state write,
+step. It also re-observes the proof's native controller PID, start token, and execution namespace;
+an exited, reused, or otherwise changed controller refuses without mutation. The mounted runtime
+producer revalidates the same digest before any instance-state write,
 then uses the canonical deployment-admission -> producer-transition ->
 ownership-ledger -> registry-store order and the existing registry snapshot, checksum, and
 legacy-export writers to materialize only receipt/ledger-proven dormant registrations. The result
@@ -1255,6 +1257,8 @@ host-global ownership ledger/key plus proof-bound owner inventory. That inventor
 exact active TEST lease set. A read-only runtime-UID preflight authenticates the complete ledger and
 records its digest before any receipt, volume, or Compose effect; later boundaries recheck strict
 stopped-writer state and the same digest before writing only dormant, inactive-fenced registry state.
+A controller proof is live authority only while its native PID, start token, and execution namespace
+still match; the preflight re-observes all three and refuses stale controller evidence without mutation.
 A pending ownership-key rotation refuses byte-for-byte at this preflight; it is never recovered or
 deleted by the read-only path. The
 VM's single-slot native request journal authenticates only the current terminal failed successor;
