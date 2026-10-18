@@ -402,7 +402,8 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
     credential = directory / keyring.CREDENTIAL
     value, ciphertext = b"s" * 64, b"synthetic-encrypted-master"
     credential.write_bytes(b"" if failure == "empty" else ciphertext)
-    credential.chmod(0o644 if failure == "public" else 0o400)
+    no_acl_cases = {"uid-no-acl", "root-no-acl"}
+    credential.chmod(0o644 if failure == "public" else 0o400 if failure in no_acl_cases else 0o440)
     if failure in ("symlink", "hardlink"):
         original = directory / "original"
         credential.rename(original)
@@ -416,20 +417,16 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
     target_uid = os.geteuid() + 100
     monkeypatch.setattr(keyring, "UID", target_uid)
     monkeypatch.setattr(keyring.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_dir=str(tmp_path / 'home')))
-    acl_cases = {"acl", "foreign-acl", "group-acl", "write-acl", "malformed-acl", "root-no-acl"}
-    if failure in acl_cases:
-        credential.chmod(0o400 if failure == "root-no-acl" else 0o440)
-
     def credential_metadata(fd):
         result = list(fstat(fd))
-        result[4] = keyring.ROOT_UID if failure in acl_cases else target_uid
+        result[4] = target_uid if failure == "uid-no-acl" else keyring.ROOT_UID
         return os.stat_result(result)
 
     monkeypatch.setattr(keyring.os, "fstat", credential_metadata)
 
     def credential_acl(fd, name):
         assert name == "system.posix_acl_access" and fstat(fd).st_size >= 0
-        if failure not in acl_cases or failure == "root-no-acl":
+        if failure in no_acl_cases:
             raise OSError(errno.ENODATA, "synthetic no ACL")
         undefined = 0xffffffff
         entries = [(1, 4, undefined), (2, 6 if failure == "write-acl" else 4,
@@ -444,7 +441,7 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
         f_flag=0 if path == (keyring.MACHINE_KEY if failure == "writable-key" else
                              keyring.MACHINE_KEY.parent if failure == "writable-parent" else None)
         else os.ST_RDONLY))
-    drops, decrypts, executed = [], [], []
+    drops, decrypts, executed, owner_calls = [], [], [], []
     identity = {"uid": keyring.ROOT_UID, "gid": keyring.ROOT_UID, "groups": [keyring.ROOT_UID]}
     monkeypatch.setattr(keyring.os, "getuid", lambda: identity['uid'])
     monkeypatch.setattr(keyring.os, "geteuid", lambda: identity['uid'])
@@ -471,6 +468,7 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
     monkeypatch.setattr(keyring, '_RUN', decrypt)
 
     def owner():
+        owner_calls.append(True)
         assert identity['uid'] == target_uid and not identity['groups']
         return 999 if failure == 'owner' else None
 
@@ -498,6 +496,10 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
             assert not executed
             if failure not in ('decrypt', 'drop', 'owner'):
                 assert not decrypts
+            else:
+                assert decrypts == [True]
+                assert drops == ([] if failure == 'decrypt' else ['groups', 'gid', 'uid'])
+                assert owner_calls == ([True] if failure == 'owner' else [])
         else:
             with pytest.raises(ExecObserved):
                 keyring.daemon()
