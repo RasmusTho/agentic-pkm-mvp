@@ -1875,6 +1875,9 @@ def test_scoped_deploy_partitions_preserve_selected_targets(tmp_path: Path) -> N
     assert json.loads(fields["scoped_partitions_json"]) == [
         list(partition) for partition in partitions
     ]
+    assert json.loads(fields["scoped_serial_boundary_json"]) == list(
+        selector.SCOPED_DEPLOY_SERIAL_BOUNDARY
+    )
 
 
 def test_changed_heavy_test_file_still_runs_on_pr_path() -> None:

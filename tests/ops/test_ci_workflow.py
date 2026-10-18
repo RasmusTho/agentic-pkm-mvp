@@ -491,7 +491,7 @@ def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None
     )
     assert "scripts/run_scoped_test_partitions.py" in step["run"]
     assert "--jobs 4" in step["run"]
-    assert "--serial-last" in step["run"]
+    assert "--serial-boundary-json" in step["run"]
     assert "--shard-timeout-seconds 3300" in step["run"]
     assert "set -euo pipefail" in step["run"]
     upload = next(s for s in job["steps"] if s.get("name") == "Upload scoped partition logs")
@@ -517,7 +517,8 @@ if active_dir_value := os.environ.get("FAKE_ACTIVE_DIR"):
     token.touch()
     if "tests/deploy" in target_text:
         time.sleep(0.3)
-    if "tests/ops" in target_text and len(list(active_dir.iterdir())) != 1:
+    if any(arg.endswith("test_instance_state_writer_inventory.py") and not arg.startswith("--ignore=")
+           for arg in sys.argv[1:]) and len(list(active_dir.iterdir())) != 1:
         print("host-sensitive ops partition overlapped another process", file=sys.stderr)
         raise SystemExit(9)
     token.unlink()
@@ -542,7 +543,9 @@ if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target
                 "--expected-targets-json", json.dumps(expected_targets),
                 "--log-dir", str(tmp_path / "logs"),
                 "--aggregate-log", str(tmp_path / "aggregate.log"),
-                "--jobs", "4", "--serial-last", "--shard-timeout-seconds", str(timeout),
+                "--jobs", "4", "--serial-boundary-json",
+                json.dumps(["tests/ops/test_instance_state_writer_inventory.py"]),
+                "--shard-timeout-seconds", str(timeout),
             ],
             cwd=REPO_ROOT, capture_output=True, text=True,
             env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",

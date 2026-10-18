@@ -1511,6 +1511,18 @@ def scoped_deploy_partitions(selection: Selection) -> tuple[tuple[str, ...], ...
     return tuple(partitions)
 
 
+SCOPED_DEPLOY_SERIAL_BOUNDARY = (
+    "tests/ops/test_dormant_ownership_initialization.py",
+    "tests/ops/test_git_hygiene.py",
+    "tests/ops/test_instance_state_deployment_lease.py",
+    "tests/ops/test_instance_state_volume_contract.py",
+    "tests/ops/test_instance_state_writer_inventory.py",
+    "tests/ops/test_mvr05_mixed_version_fence.py",
+    "tests/ops/test_native_journaling_acceptance.py",
+    "tests/ops/test_start_full_runtime_health.py",
+)
+
+
 def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     runtime_prefixes = ("app/", "companion-ui/")
     owned_prefixes = tuple(prefix for _, prefixes, _ in SUBSYSTEMS for prefix in prefixes)
@@ -1657,6 +1669,10 @@ def _write_github_output(path: str, selection: Selection, *, runtime_checks: boo
         handle.write(f"runtime_checks={'true' if runtime_checks else 'false'}\n")
         handle.write(f"pytest_targets_json={json.dumps(selection.targets, separators=(',', ':'))}\n")
         handle.write(f"scoped_partitions_json={json.dumps(partitions, separators=(',', ':'))}\n")
+        handle.write(
+            "scoped_serial_boundary_json="
+            f"{json.dumps(SCOPED_DEPLOY_SERIAL_BOUNDARY if partitions else (), separators=(',', ':'))}\n"
+        )
 
 
 def main() -> int:
