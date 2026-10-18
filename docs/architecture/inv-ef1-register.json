@@ -2667,6 +2667,83 @@
       "why_load_bearing": "The fresh #6174 observer's immutable live-read envelope retains the public Bifrost repository identity from dispatcher output; this exact original evidence is neither Product data nor an operator vault binding.",
       "disposition": "stay",
       "issue": "#6174"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access.v2.json",
+      "category": "ii",
+      "why_load_bearing": "The #6195 qualifying receipt preserves the original observer's non-blocking local-interpreter warning as a raw-chain limitation; it is immutable Builder evidence, not a Product binding or credential.",
+      "disposition": "stay",
+      "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access_v2/accepted/live-dispatcher-status.json",
+      "category": "iv",
+      "why_load_bearing": "The accepted #6195 checkpoint binds exact dispatcher output including the public Bifrost constituent repository; this is Builder operational evidence, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access_v2/accepted/source-capture.json",
+      "category": "ii",
+      "why_load_bearing": "The #6195 create-only source capture retains the actual supported local-interpreter argv used for successful reads and run-state acceptance; removing it would discard invocation provenance, not improve Product portability.",
+      "disposition": "stay",
+      "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access_v2/probe/agent-response.original.json",
+      "category": "ii",
+      "why_load_bearing": "The first #6195 observer response remains unmodified despite semantic refusal and retains its actual local-command/warning evidence; scrubbing the local path would invalidate the measured original.",
+      "disposition": "stay",
+      "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access_v2/probe/context-pack.json",
+      "category": "ii",
+      "why_load_bearing": "The frozen first #6195 packet retains the actual supported interpreter instruction as failed-attempt custody; it is not an executable Product default and cannot be rewritten without destroying evidence identity.",
+      "disposition": "stay",
+      "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access_v2/probe/live-read-dispatcher.json",
+      "category": "iv",
+      "why_load_bearing": "The first #6195 observer's exact dispatcher envelope records the configured public Bifrost constituent repository; the failed response does not authorize changing this original payload.",
+      "disposition": "stay",
+      "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access_v2/probe-retry1/agent-response.original.json",
+      "category": "ii",
+      "why_load_bearing": "The qualifying #6195 observer's immutable original response retains the real local-interpreter warning and invocation provenance; these are Builder evidence, not Product environment configuration.",
+      "disposition": "stay",
+      "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access_v2/probe-retry1/comparison.json",
+      "category": "ii",
+      "why_load_bearing": "The #6195 production comparison embeds the exact frozen packet and original observation, including supported-interpreter instructions and warning; its complete retained-chain semantics must replay unchanged.",
+      "disposition": "stay",
+      "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access_v2/probe-retry1/context-pack.json",
+      "category": "ii",
+      "why_load_bearing": "The corrected frozen #6195 packet names the actual supported local interpreter in its sanctioned read-only argv; exact byte custody is load-bearing and introduces no Product binding or credential.",
+      "disposition": "stay",
+      "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access_v2/probe-retry1/live-read-dispatcher.json",
+      "category": "iv",
+      "why_load_bearing": "The qualifying fresh #6195 dispatcher envelope retains the public Bifrost constituent repository from actual status output; it is immutable Builder evidence, not an operator vault binding.",
+      "disposition": "stay",
+      "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_live_access_v2/probe-retry1/native-capture.json",
+      "category": "ii",
+      "why_load_bearing": "The #6195 recorder retains exact successful manual-consumer command argv using the supported local interpreter, together with measured raw bindings; it records this capture rather than defining a Product default.",
+      "disposition": "stay",
+      "issue": "#6195"
     }
   ]
 }

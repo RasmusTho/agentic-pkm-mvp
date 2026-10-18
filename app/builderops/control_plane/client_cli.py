@@ -55,6 +55,7 @@ _MUTATING_COMMANDS = frozenset(
         "task-complete",
         "task-correct-payload-status",
         "lease-claim",
+        "lease-release",
         "attempt",
         "promotion",
     }
@@ -195,6 +196,11 @@ def build_parser() -> argparse.ArgumentParser:
     task_complete.add_argument("--lease", required=True, help="JSON lease object from claim.")
     task_complete.add_argument("--idempotency-key", required=True)
 
+    lease_release = sub.add_parser("lease-release", help="Release an exact generic fenced lease.")
+    _add_envelope_arguments(lease_release)
+    lease_release.add_argument("--lease", required=True, help="Full JSON generic lease from claim.")
+    lease_release.add_argument("--idempotency-key", required=True)
+
     lease_claim = sub.add_parser("lease-claim", help="Claim a generic fenced lease.")
     _add_envelope_arguments(lease_claim)
     lease_claim.add_argument("--resource-id", required=True)
@@ -292,6 +298,11 @@ def _dispatch(
         return client.complete_task(
             envelope=_envelope(args),
             lease=_json_payload(args.lease),
+            idempotency_key=args.idempotency_key,
+        )
+    if command == "lease-release":
+        return client.release_lease(
+            envelope=_envelope(args), lease=_json_payload(args.lease),
             idempotency_key=args.idempotency_key,
         )
     if command == "lease-claim":

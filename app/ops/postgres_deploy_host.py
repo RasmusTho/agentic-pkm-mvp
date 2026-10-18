@@ -369,9 +369,6 @@ def main(argv: list[str] | None = None) -> int:
                 ) as (operation, resumed):
                     if not resumed:
                         raise PostgresDeployError()
-                    _write_test_recovery_marker(
-                        controller, recovery_request, 'resetting', fresh_operation_id,
-                    )
                     receipt = remote.test_recovery_reset(recovery_request)
                     if receipt.terminal_result != 'failed':
                         raise PostgresDeployError()
@@ -379,6 +376,10 @@ def main(argv: list[str] | None = None) -> int:
                         operation.finish(receipt.evidence())
                     elif operation.completed_result != 'failed':
                         raise PostgresDeployError()
+                    # The VM validates the retained failed plan against the
+                    # automatic successor before any reset mutation.  Persist
+                    # the host checkpoint only after that call succeeds so a
+                    # static mismatch cannot leave a misleading local marker.
                     _write_test_recovery_marker(
                         controller, recovery_request, 'ready', fresh_operation_id,
                     )

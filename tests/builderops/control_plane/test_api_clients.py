@@ -422,3 +422,28 @@ def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_p
         return client
     assert main(command, client_factory=stale_factory) == 3
     assert store._seq == before
+
+
+def test_generic_lease_release_uses_api(tmp_path: Path) -> None:
+    from tests.builderops.control_plane.test_service_auth import _registry as lease_registry, _Store
+
+    class ReleaseStore(_Store):
+        def release_lease(self, **kw):
+            self.kw = kw
+            return TransactionResult(kw['envelope'].repository, kw['lease'].resource_id,
+                                     'lease.released', 3, '0/3', None)
+
+    store = ReleaseStore()
+    transport = TestClient(create_app(store=store, credentials=lease_registry(tmp_path)))
+    client = BuilderOpsControlPlaneClient(ClientConfig(base_url='http://builderops', token='client-token'),
+                                        http_client=transport, max_retries=0)
+    claimed = client.claim_lease(envelope=_envelope(), resource_id='maintenance-fixture',
+                                idempotency_key='claim-fixture', ttl_seconds=60)
+    result = client.release_lease(envelope=_envelope(), lease=claimed['lease'],
+                                  idempotency_key='release-fixture')
+    assert result['result']['state'] == 'lease.released'
+    assert result['result']['recovery_lsn'] == '0/3'
+    assert store.kw['lease'].resource_id == claimed['lease']['resource_id']
+    assert store.kw['envelope'].actor == 'client:macbook'
+    assert store.kw['request'] == {}
+    assert store.kw['idempotency_key'] == 'release-fixture'

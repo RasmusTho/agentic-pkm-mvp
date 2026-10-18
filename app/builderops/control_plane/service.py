@@ -25,6 +25,7 @@ from app.builderops.control_plane.api_models import (
     IssueDeliveryStartRequest,
     IssueDeliveryOperationRecordRequest,
     LeaseClaimRequest,
+    LeaseReleaseRequest,
     LeaseInput,
     OutboxClaimRequest,
     OutboxEffectEligibilityRequest,
@@ -1843,6 +1844,29 @@ def create_app(
                 "lease_kind": lease.lease_kind,
             },
         }
+
+    @application.post("/v1/leases/release")
+    async def release_generic_lease(
+        request: LeaseReleaseRequest,
+        credential: Credential = Depends(lease_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            envelope = _envelope(request.envelope, credential)
+            if canonical_repository(request.lease.repository) != envelope.repository:
+                raise HTTPException(status_code=403, detail="lease repository differs from envelope")
+            result = await run_in_threadpool(
+                store.release_lease,
+                envelope=envelope,
+                lease=_lease_from_input(envelope.repository, request.lease, credential),
+                idempotency_key=request.idempotency_key,
+                request=request.request,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {"result": _transition_response(result)}
 
     @application.post("/v1/records")
     async def commit_record(

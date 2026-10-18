@@ -1,0 +1,19 @@
+{
+  "schema_name": "epic_rehydration_live_read",
+  "schema_version": 2,
+  "probe_id": "shadow_rehydration_3798_live_access",
+  "kind": "repository",
+  "target": {
+    "repository": "RasmusTho/agentic-pkm-mvp",
+    "issue_number": 3798,
+    "pr_number": 3803
+  },
+  "observed_at": "2026-10-18T06:46:33Z",
+  "availability": "observed",
+  "payload": {
+    "head_sha": "cc3cdb562a0039e5bce209f3979de4642e484d87",
+    "remote": "origin",
+    "ref": "refs/heads/main"
+  },
+  "unavailable_reason": ""
+}

@@ -1,0 +1,168 @@
+{
+  "schema_name": "epic_rehydrated_observation",
+  "schema_version": 2,
+  "probe_id": "shadow_rehydration_3798_live_access",
+  "observed_at": "2026-10-18T06:47:16Z",
+  "target": {
+    "repository": "RasmusTho/agentic-pkm-mvp",
+    "issue_number": 3798,
+    "pr_number": 3803,
+    "verified_pr_head_sha": "7df955c4c4d0cdefef5556fdad6b9a66c45d3c8c",
+    "merge_sha": "ed52d564a30f6ac6a02d585f488de0f1f9b7eacd"
+  },
+  "agent": {
+    "admitted_model": "gpt-6-luna",
+    "admitted_reasoning_effort": "xhigh",
+    "engine_identity": "unknown",
+    "engine_identity_source": "not independently introspected; admission details supplied by recorder",
+    "start_status": "succeeded",
+    "start_observed_at": "2026-10-18T06:45:35Z"
+  },
+  "context_pack": {
+    "ref": "evidence/shadow_rehydration_3798_live_access_v2/probe/context-pack.json",
+    "sha256": "91a8c448e1b0cab1a6b332b1fbd4cd3c9b800cdc0aec7b8a41325e28989636ec",
+    "bytes_length": 29141
+  },
+  "fields": {
+    "slice_status": {
+      "value": "closed_merged",
+      "provenance": [
+        {"kind": "github", "ref": "evidence/shadow_rehydration_3798_live_access_v2/probe/live-read-github.json"}
+      ],
+      "notes": [
+        "Actor /root/fresh_shadow_live_access_3798; command gh issue view 3798 --repo RasmusTho/agentic-pkm-mvp --json number,url,state; exit 0, observed Issue state CLOSED; target Issue 3798; UTC capture interval 2026-10-18T06:45:47Z–2026-10-18T06:46:11Z; sandbox_permissions=require_escalated.",
+        "Actor /root/fresh_shadow_live_access_3798; command gh pr view 3803 --repo RasmusTho/agentic-pkm-mvp --json number,url,state,headRefOid,mergeCommit,statusCheckRollup; exit 0, observed PR state MERGED; target PR 3803; UTC capture interval 2026-10-18T06:45:47Z–2026-10-18T06:46:11Z; sandbox_permissions=require_escalated."
+      ]
+    },
+    "checkpoint_decision_delta": {
+      "value": [
+        "new actual checkpoint from current live #3798/#3803/review-thread, origin/main and dispatcher reads",
+        "manual live-access repeat only; retain checkpoint/live separation and empty authority effects"
+      ],
+      "provenance": [
+        {"kind": "checkpoint", "ref": "packet:shadow_rehydration_3798_live_access#/source/receipt/checkpoint/decision_log_delta"}
+      ],
+      "notes": []
+    },
+    "checkpoint_gate_invariants": {
+      "value": {
+        "ci": "unchanged_required",
+        "independent_review": "unchanged_required",
+        "merge": "unchanged_required",
+        "closure": "unchanged_required"
+      },
+      "provenance": [
+        {"kind": "checkpoint", "ref": "packet:shadow_rehydration_3798_live_access#/source/receipt/gate_invariants"}
+      ],
+      "notes": []
+    },
+    "open_review_findings": {
+      "value": [],
+      "provenance": [
+        {"kind": "github", "ref": "evidence/shadow_rehydration_3798_live_access_v2/probe/live-read-github.json"}
+      ],
+      "notes": [
+        "Actor /root/fresh_shadow_live_access_3798; read-only gh api graphql reviewThreads(first:100), selecting isResolved and comments(first:1){nodes{url}}; exit 0, one page, hasNextPage=false, six thread nodes; target PR 3803; UTC capture interval 2026-10-18T06:45:47Z–2026-10-18T06:46:11Z; sandbox_permissions=require_escalated. All six returned threads were resolved."
+      ]
+    },
+    "external_state": {
+      "value": {
+        "issue": "3798:closed",
+        "pr": "3803:merged",
+        "pr_head_sha": "7df955c4c4d0cdefef5556fdad6b9a66c45d3c8c",
+        "merge_sha": "ed52d564a30f6ac6a02d585f488de0f1f9b7eacd",
+        "repository_head": "cc3cdb562a0039e5bce209f3979de4642e484d87",
+        "ci": {
+          "status": "red",
+          "scope": "all_returned_pr_rollup_entries_including_historical_duplicates_not_a_current_required_ci_verdict"
+        },
+        "dispatcher": {
+          "coordination_mode": "dispatcher-backed",
+          "db_exists": true
+        }
+      },
+      "provenance": [
+        {"kind": "github", "ref": "evidence/shadow_rehydration_3798_live_access_v2/probe/live-read-github.json"},
+        {"kind": "repository", "ref": "evidence/shadow_rehydration_3798_live_access_v2/probe/live-read-repository.json"},
+        {"kind": "dispatcher", "ref": "evidence/shadow_rehydration_3798_live_access_v2/probe/live-read-dispatcher.json"}
+      ],
+      "notes": [
+        "Actor /root/fresh_shadow_live_access_3798; command git ls-remote --exit-code origin refs/heads/main; exit 0, directly observed refs/heads/main SHA cc3cdb562a0039e5bce209f3979de4642e484d87; target origin/refs/heads/main; UTC capture interval 2026-10-18T06:45:47Z–2026-10-18T06:46:11Z; sandbox_permissions=require_escalated. No local ref substituted.",
+        "The observed PR statusCheckRollup contains CANCELLED entries; classified red under the packet's all-returned-entries scope, not asserted as a current required-CI verdict.",
+        "Actor /root/fresh_shadow_live_access_3798; packet command /Users/rasmus/.pyenv/versions/3.12.7/bin/python3 -m app.dispatcher status --json . exited 2 (unrecognized extra argument '.'); corrected local read-only invocation without trailing '.' exited 0 and returned status JSON; target existing dispatcher status; UTC capture interval 2026-10-18T06:45:47Z–2026-10-18T06:46:11Z; default sandbox permission mode, not escalated. The shell emitted a non-blocking pyenv rehash warning."
+      ]
+    },
+    "checkpoint_recommendations": {
+      "value": {
+        "recommendations": {
+          "coordinator_lifecycle": "keep",
+          "slice_execution": "thin_worker",
+          "model_tier": "terra"
+        },
+        "reasons": [
+          "context_measurement_unknown",
+          "isolated_thin_worker_candidate",
+          "model_tier_terra"
+        ]
+      },
+      "provenance": [
+        {"kind": "checkpoint", "ref": "packet:shadow_rehydration_3798_live_access#/source/receipt/recommendations"}
+      ],
+      "notes": []
+    },
+    "live_slice_next_action": {
+      "value": {
+        "action": "No further Issue or PR lifecycle action; retain the observed state.",
+        "reason": "The live Issue is CLOSED, the live PR is MERGED, and a complete review-thread read found six resolved threads."
+      },
+      "provenance": [
+        {"kind": "github", "ref": "evidence/shadow_rehydration_3798_live_access_v2/probe/live-read-github.json"}
+      ],
+      "notes": []
+    },
+    "missing_claims": {
+      "value": [],
+      "provenance": [
+        {"kind": "agent", "ref": "observer:shadow_rehydration_3798_live_access"}
+      ],
+      "notes": ["All contract-listed comparable fields had known checkpoint or live observations."]
+    },
+    "fabricated_claims": {
+      "value": "unknown",
+      "provenance": [
+        {"kind": "agent", "ref": "observer:shadow_rehydration_3798_live_access"}
+      ],
+      "notes": ["No independent auditor evidence was provided; fabrication status is not inferred from self-report or checkpoint/live mismatch."]
+    }
+  },
+  "live_reads": [
+    {
+      "kind": "github",
+      "evidence": {
+        "ref": "evidence/shadow_rehydration_3798_live_access_v2/probe/live-read-github.json",
+        "sha256": "800d6d12f61c55407badd223865fa5496dbcbe82ca51d66f07d263c3e541842c",
+        "bytes_length": 10953
+      }
+    },
+    {
+      "kind": "repository",
+      "evidence": {
+        "ref": "evidence/shadow_rehydration_3798_live_access_v2/probe/live-read-repository.json",
+        "sha256": "24369f537d5c4dd8df17a298f94b033c8b5bf87b54b7623fa79f602ba596e609",
+        "bytes_length": 496
+      }
+    },
+    {
+      "kind": "dispatcher",
+      "evidence": {
+        "ref": "evidence/shadow_rehydration_3798_live_access_v2/probe/live-read-dispatcher.json",
+        "sha256": "e0dc47a4b3a5bc437ef43fe89b88ba54f29884e0a9275c6ef1f1fdc331cb16b0",
+        "bytes_length": 3273
+      }
+    }
+  ],
+  "limitations": [
+    "The packet-specified dispatcher invocation with trailing '.' returned exit 2 because the CLI rejected that extra argument; the corrected local read-only invocation without '.' returned exit 0 and supplied the actual status JSON.",
+    "The shell printed 'pyenv: cannot rehash: /Users/rasmus/.pyenv/shims isn't writable'; this warning did not prevent the successful dispatcher read."
+  ]
+}

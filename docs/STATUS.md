@@ -216,6 +216,8 @@ deployment, host, or owner-acceptance claims.
   in the existing BuilderOps API/client/CLI. It aligns only a completed GitHub task's redundant
   ready status, retaining historical source data and ordinary lifecycle guards. The
   [terminal correction contract](BUILDEROPS_CONTROL_PLANE/README.md#terminal-task-payload-status-correction)
+  now also exposes exact generic maintenance cleanup through the authenticated API/client/CLI
+  (#6198), preserving task-ownership isolation and existing store fencing/idempotency. It
   separates this implementation from control-plane installation, task5495 data application,
   owner acceptance and complete system/source qualification under #5181.
 - FCP-04 (#4697) implements the exact nonvisual Start/Hold preview and authenticated bounded
