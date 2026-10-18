@@ -1171,6 +1171,35 @@ native operation guard and proves absence or stoppage of the exact API one-shot,
 name, project, service, one-off flag, operation ID and target SHA before termination. Unknown
 ownership or quiescence retains the target pin and pending operation. Same-ID reconciliation
 also checks daemon-owned one-offs omitted by `compose ps`; it never replays activation.
+When a source-projection refusal reaches startup compensation, restoring the previous pin is
+not sufficient by itself: the rollback gate must observe the API, worker, and watcher as a
+complete running service set before treating the runtime as restored. An API/UI-only recreate,
+an exited worker, or an unavailable service census leaves the operation pending; it cannot be
+reported as a healthy rollback or as candidate acceptance. The explicit, host/controller-owned
+TEST recovery path is:
+
+```text
+python3 -m app.ops.postgres_deploy_host test <candidate-revision> \
+  --automatic --image-digest sha256:<published-image-index> --existing-secrets-only \
+  --recover-test-source --failed-operation-id <failed-operation-uuid> \
+  --authority-cutover-binding <qualified-binding-id> \
+  --authority-cutover-root <qualified-existing-source-root> \
+  --authority-cutover-ownership-root <qualified-existing-ownership-root>
+```
+
+It accepts only the authenticated pending TEST deployment operation, the exact candidate
+revision/digest, and the qualified authority tuple. The VM-side reset refuses PROD/DEV,
+candidate/operation/authority/ownership/journal/lock drift, and concurrent or non-quiescent
+writers; after the journal is terminalized as failed, it removes only the derived TEST volumes.
+Embedding identity/model preflight refusals that occur before writer drain are not reset-eligible;
+they remain ordinary admission failures.
+The external `pkm-test_pgdata` volume is recreated as an empty, exact managed volume and
+qualified against the configured data directory before the reset is marked complete; the
+instance-state and runtime-tmp volumes are removed for normal Compose recreation. The same
+command then runs the normal candidate deployment gates. It never resets the source vault, identity,
+ownership authority, or production state, and local reset scripts, direct host repair, source
+healing, and direct SQL remain invalid substitutes. This repository support and its deterministic
+tests do not establish live TEST recovery; parent-owned live qualification remains separate.
 Existing migration markers, forward-only target retention and rollback floors still apply.
 This is repository support and deterministic proof; live DEV/TEST/PROD corpus qualification
 and functional acceptance remain separate operator work.

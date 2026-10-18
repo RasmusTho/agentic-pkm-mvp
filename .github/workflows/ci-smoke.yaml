@@ -970,6 +970,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
           SCOPED_TARGETS_JSON: ${{ steps.select-tests.outputs.pytest_targets_json }}
           SCOPED_PARTITIONS_JSON: ${{ steps.select-tests.outputs.scoped_partitions_json }}
+          SCOPED_SERIAL_BOUNDARY_JSON: ${{ steps.select-tests.outputs.scoped_serial_boundary_json }}
         run: |
           set -euo pipefail
           echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"
@@ -984,7 +985,7 @@ jobs:
               --log-dir "$scoped_log_dir" \
               --aggregate-log pytest-not-pg.log \
               --jobs 4 \
-              --serial-last \
+              --serial-boundary-json "$SCOPED_SERIAL_BOUNDARY_JSON" \
               --shard-timeout-seconds 3300
           fi
 

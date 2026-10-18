@@ -102,6 +102,35 @@ def _run_partition(
             return index, 124, log_path, True
 
 
+def _split_serial_boundary(
+    targets: tuple[str, ...], serial_boundary: tuple[str, ...]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    roots = tuple(
+        target for target in targets if "::" not in target and not target.endswith(".py")
+    )
+    target_files = {target.split("::", 1)[0] for target in targets}
+    if not serial_boundary or not all(
+        path in target_files or any(path.startswith(f"{root}/") for root in roots)
+        for path in serial_boundary
+    ):
+        raise ValueError(
+            "serial boundary must be contained by a directory target in the last partition"
+        )
+    parallel: list[str] = []
+    for target in targets:
+        if target.split("::", 1)[0] in serial_boundary:
+            continue
+        if any(target.startswith(f"{root}/") for root in roots):
+            continue
+        parallel.append(target)
+    parallel.extend(
+        f"--ignore={path}"
+        for path in serial_boundary
+        if any(path.startswith(f"{root}/") for root in roots)
+    )
+    return tuple(parallel), serial_boundary
+
+
 def run_partitions(
     partitions: tuple[tuple[str, ...], ...],
     *,
@@ -110,12 +139,33 @@ def run_partitions(
     jobs: int,
     timeout_seconds: int,
     serial_last: bool,
+    serial_boundary: tuple[str, ...],
 ) -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     results: dict[int, tuple[int, Path, bool]] = {}
+    if serial_last and serial_boundary:
+        raise ValueError("--serial-last and --serial-boundary-json are mutually exclusive")
     parallel_count = len(partitions) - 1 if serial_last else len(partitions)
-    if parallel_count:
-        with ThreadPoolExecutor(max_workers=min(jobs, parallel_count)) as executor:
+    parallel_partitions = list(partitions[:parallel_count])
+    boundary_targets: tuple[str, ...] = ()
+    if serial_boundary:
+        parallel_targets, boundary_targets = _split_serial_boundary(
+            partitions[-1], serial_boundary
+        )
+        parallel_partitions[-1] = parallel_targets
+    runnable_partitions: list[tuple[int, tuple[str, ...]]] = []
+    for index, targets in enumerate(parallel_partitions):
+        if targets:
+            runnable_partitions.append((index, targets))
+            continue
+        log_path = log_dir / f"partition-{index}.log"
+        log_path.write_text(
+            "Partition coverage moved entirely to the serial boundary.\n",
+            encoding="utf-8",
+        )
+        results[index] = (0, log_path, False)
+    if runnable_partitions:
+        with ThreadPoolExecutor(max_workers=min(jobs, len(runnable_partitions))) as executor:
             futures = {
                 executor.submit(
                     _run_partition,
@@ -124,7 +174,7 @@ def run_partitions(
                     log_dir=log_dir,
                     timeout_seconds=timeout_seconds,
                 ): index
-                for index, targets in enumerate(partitions[:parallel_count])
+                for index, targets in runnable_partitions
             }
             for future in as_completed(futures):
                 index, returncode, log_path, timed_out = future.result()
@@ -148,9 +198,25 @@ def run_partitions(
             f"targets={len(partitions[index])}",
             flush=True,
         )
-    if len(results) != len(partitions):
+    boundary_index: int | None = None
+    if boundary_targets:
+        boundary_index = len(partitions)
+        result_index, returncode, log_path, timed_out = _run_partition(
+            boundary_index,
+            boundary_targets,
+            log_dir=log_dir,
+            timeout_seconds=timeout_seconds,
+        )
+        results[result_index] = (returncode, log_path, timed_out)
         print(
-            f"Partition runner incomplete: expected={len(partitions)} actual={len(results)}",
+            f"SERIAL BOUNDARY FINISHED ({returncode}): "
+            f"targets={len(boundary_targets)}",
+            flush=True,
+        )
+    expected_results = len(partitions) + (1 if boundary_index is not None else 0)
+    if len(results) != expected_results:
+        print(
+            f"Partition runner incomplete: expected={expected_results} actual={len(results)}",
             file=sys.stderr,
         )
         return 1
@@ -165,6 +231,16 @@ def run_partitions(
             if returncode != 0 or timed_out:
                 failed = True
                 print(f"PARTITION FAILED ({returncode}): {index}", file=sys.stderr)
+                print(log, file=sys.stderr, end="" if log.endswith("\n") else "\n")
+        if boundary_index is not None:
+            returncode, log_path, timed_out = results[boundary_index]
+            log = log_path.read_text(encoding="utf-8")
+            aggregate.write(f"===== scoped serial boundary =====\n{log}")
+            if log and not log.endswith("\n"):
+                aggregate.write("\n")
+            if returncode != 0 or timed_out:
+                failed = True
+                print(f"SERIAL BOUNDARY FAILED ({returncode})", file=sys.stderr)
                 print(log, file=sys.stderr, end="" if log.endswith("\n") else "\n")
     return 1 if failed else 0
 
@@ -181,6 +257,11 @@ def main() -> int:
         action="store_true",
         help="Run the final host-sensitive partition after every parallel process exits.",
     )
+    parser.add_argument(
+        "--serial-boundary-json",
+        default="[]",
+        help="Run these host-sensitive paths alone after safe partition coverage exits.",
+    )
     parser.add_argument("--shard-timeout-seconds", type=int, default=MAX_SHARD_TIMEOUT_SECONDS)
     args = parser.parse_args()
     if not 1 <= args.jobs <= MAX_PARTITIONS:
@@ -191,6 +272,12 @@ def main() -> int:
         partitions = validate_inventory(
             json.loads(args.partitions_json), json.loads(args.expected_targets_json)
         )
+        serial_boundary_value = json.loads(args.serial_boundary_json)
+        serial_boundary = (
+            _string_list(serial_boundary_value, name="serial boundary")
+            if serial_boundary_value
+            else ()
+        )
     except (json.JSONDecodeError, ValueError) as exc:
         parser.error(str(exc))
     return run_partitions(
@@ -200,6 +287,7 @@ def main() -> int:
         jobs=args.jobs,
         timeout_seconds=args.shard_timeout_seconds,
         serial_last=args.serial_last,
+        serial_boundary=serial_boundary,
     )
 
 

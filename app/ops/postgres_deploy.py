@@ -134,6 +134,55 @@ class DeployPlan:
 
 
 @dataclass(frozen=True)
+class TestRecoveryRequest:
+    """Authenticated TEST-only reset request for one failed candidate operation."""
+
+    failed_operation_id: str
+    plan: DeployPlan
+    authority_cutover: AuthorityCutover
+
+    def validate(self) -> None:
+        if (not isinstance(self.failed_operation_id, str)
+            or not isinstance(self.plan, DeployPlan)
+            or not isinstance(self.authority_cutover, AuthorityCutover)):
+            raise PostgresDeployError()
+        try:
+            canonical_operation_id = str(UUID(self.failed_operation_id))
+        except (ValueError, TypeError, AttributeError):
+            raise PostgresDeployError() from None
+        if (canonical_operation_id != self.failed_operation_id
+            or self.plan.channel != 'test'
+            or not self.plan.automatic
+            or self.plan.authority_cutover is not None
+            or self.plan.image_digest is None):
+            raise PostgresDeployError()
+        self.plan.validate()
+        self.authority_cutover.validate()
+
+    def payload(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            'failed_operation_id': self.failed_operation_id,
+            'plan': self.plan.payload(),
+            'authority_cutover': asdict(self.authority_cutover),
+        }
+
+    @classmethod
+    def from_payload(cls, raw: Any) -> TestRecoveryRequest:
+        if (not isinstance(raw, dict)
+            or set(raw) != {'failed_operation_id', 'plan', 'authority_cutover'}
+            or not isinstance(raw['authority_cutover'], dict)
+            or set(raw['authority_cutover']) != {'binding_id', 'root', 'ownership_root'}):
+            raise PostgresDeployError()
+        request = cls(
+            raw['failed_operation_id'], DeployPlan.from_payload(raw['plan']),
+            AuthorityCutover(**raw['authority_cutover']),
+        )
+        request.validate()
+        return request
+
+
+@dataclass(frozen=True)
 class DeployReceipt:
     operation_id: str
     channel: str
