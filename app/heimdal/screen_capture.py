@@ -57,10 +57,13 @@ def ingest_screen_bundle(bundle: Mapping[str, Any], *, key: bytes | None = None)
     sensor_data = bundle.get("sensor")
     if not isinstance(sensor_data, Mapping):
         raise ValueError("screen bundle requires sensor {adapter, version, machine}")
+    machine = sensor_data.get("machine")
+    if not isinstance(machine, str) or not machine.strip():
+        raise ValueError("screen bundle requires a non-empty sensor.machine identity")
     sensor = SensorIdentity(
         adapter=str(sensor_data.get("adapter", "")),
         version=str(sensor_data.get("version", "")),
-        device=str(sensor_data.get("machine", "")),
+        device=machine,
     )
     _assert_sensor_registered(sensor)
     # The admitting scope is always the screen lane's own scope, never a

@@ -126,6 +126,42 @@ def test_unknown_screen_sensor_is_refused_before_consent_or_raw_write(
     assert all_raw_records() == []
 
 
+def test_missing_or_empty_machine_is_refused_before_consent_or_raw_write(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Machine provenance must be present before the endpoint admits any evidence."""
+    from app.api.routes.heimdal_screen import capture_screen_bundle
+
+    calls: list[str] = []
+
+    def record_consent_admission(*, scope: str):
+        calls.append("consent-admission")
+        raise AssertionError("invalid machine identity must fail before consent admission")
+
+    def record_raw_write(**kwargs):
+        calls.append("raw-write")
+        raise AssertionError("invalid machine identity must fail before raw storage")
+
+    monkeypatch.setattr(screen_capture, "admit_raw_evidence", record_consent_admission)
+    monkeypatch.setattr(screen_capture.raw_store, "insert_raw_record", record_raw_write)
+
+    malformed_sensors = [
+        {"adapter": "screen-test", "version": "v1"},
+        {"adapter": "screen-test", "version": "v1", "machine": ""},
+        {"adapter": "screen-test", "version": "v1", "machine": " \t "},
+    ]
+    for sensor in malformed_sensors:
+        payload = bundle()
+        payload["sensor"] = sensor
+        with pytest.raises(HTTPException) as excinfo:
+            capture_screen_bundle(payload)
+        assert excinfo.value.status_code == 400
+        assert "sensor.machine" in str(excinfo.value.detail)
+
+    assert calls == []
+    assert all_raw_records() == []
+
+
 def test_frame_bundle_lands_encrypted_idempotent():
     first = ingest_screen_bundle(bundle(), key=_KEY); second = ingest_screen_bundle(bundle(), key=_KEY)
     assert first.created and not second.created and len(all_raw_records()) == 1
