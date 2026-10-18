@@ -386,7 +386,10 @@ def test_every_panel_receipt_emitter_stamps_the_compatibility_binding(tmp_path: 
 
     curation_outbox = tmp_path / "curation.jsonl"
     proposal_writer._emit_proposal_receipt(
-        _Finding(), note_path=tmp_path / SHARED_NOTE_PATH, outbox_path=curation_outbox
+        _Finding(),
+        note_path=tmp_path / SHARED_NOTE_PATH,
+        outbox_path=curation_outbox,
+        producing_binding=COMPATIBILITY_BINDING_ID,
     )
     curated = json.loads(curation_outbox.read_text(encoding="utf-8").splitlines()[0])
     assert curated["payload"][PRODUCING_BINDING_FIELD] == COMPATIBILITY_BINDING_ID
@@ -712,3 +715,47 @@ def test_old_format_idempotency_row_is_not_replayed_after_rebind(
     with pytest.raises(confirm_module.UnknownProposalError):
         service.confirm(request)
     assert cache.get("reused-key", binding="binding-B") is None
+
+
+def test_curation_pass_resolves_binding_before_touching_any_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6243 review: an unprovable binding stops the pass before any vault write."""
+
+    from app.curation.findings import CurationFinding, FindingClass
+    from app.curation.proposal_writer import write_curation_proposals
+    from app.instance.compatibility_binding import CompatibilityBindingUnavailableError
+    from app.write_guard import WriteGuard
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    note = vault_root / "note.md"
+    note.write_text(
+        "---\nuuid: uuid-note-1\nkind: note\n---\n\n# Note\n\n"
+        "%% AI:Start %%\n## AI-instruktion\n\n%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    before = note.read_text(encoding="utf-8")
+    finding = CurationFinding.create(
+        note_uuid="path:note.md",
+        finding_class=next(iter(FindingClass)),
+        span="L5:body",
+        observed="teh",
+        proposed="the",
+        evidence=("note.md",),
+    )
+    registry = tmp_path / "registry.json"
+    registry.write_text("{ not json", encoding="utf-8")
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(registry))
+    outbox = tmp_path / "outbox.jsonl"
+
+    with pytest.raises(CompatibilityBindingUnavailableError):
+        write_curation_proposals(
+            [finding],
+            vault_root=vault_root,
+            write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy", "reason": None}),
+            outbox_path=outbox,
+        )
+
+    assert note.read_text(encoding="utf-8") == before
+    assert not outbox.exists()
