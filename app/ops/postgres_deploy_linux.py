@@ -2735,7 +2735,7 @@ class DeploymentSupervisor:
         self._require_current_config()
         if set(data) != {
             'action', 'failed_operation_id', 'source_operation_id',
-            'source_plan', 'plan', 'authority_cutover',
+            'source_plan', 'plan', 'authority_cutover', 'successor_operation_id',
         }:
             raise PostgresDeployError()
         request = TestRecoveryRequest.from_payload({
@@ -2747,7 +2747,25 @@ class DeploymentSupervisor:
         })
         if request.plan.channel != self.config.channel or self.config.channel != 'test':
             raise PostgresDeployError()
-        if self.operation is not None:
+        successor_operation_id = str(data['successor_operation_id'])
+        try:
+            if (
+                str(UUID(successor_operation_id)) != successor_operation_id
+                or successor_operation_id in {
+                    request.failed_operation_id, request.source_operation_id,
+                }
+            ):
+                raise PostgresDeployError()
+        except (ValueError, TypeError, AttributeError):
+            raise PostgresDeployError() from None
+        operation = self.operation
+        if operation is not None and (
+            operation.operation_id != successor_operation_id
+            or operation.plan != request.plan
+            or operation.bootstrap
+            or not operation.finished.is_set()
+            or operation.thread.is_alive()
+        ):
             raise PostgresDeployError()
         result = LinuxEffects(self.config).release_test_instance_state_recovery_lease(request)
         return {'result': result, 'recovery': 'test-instance-state-released'}
@@ -2968,10 +2986,24 @@ class SshDeployRemote:
         return response['result']
 
     def test_recovery_release_instance_state(
-        self, request: TestRecoveryRequest,
+        self, request: TestRecoveryRequest, *, successor_operation_id: str,
     ) -> dict[str, object]:
         request.validate()
-        payload = {'action': 'test-recovery-release-instance-state', **request.payload()}
+        try:
+            if (
+                str(UUID(successor_operation_id)) != successor_operation_id
+                or successor_operation_id in {
+                    request.failed_operation_id, request.source_operation_id,
+                }
+            ):
+                raise PostgresDeployError()
+        except (ValueError, TypeError, AttributeError):
+            raise PostgresDeployError() from None
+        payload = {
+            'action': 'test-recovery-release-instance-state',
+            'successor_operation_id': successor_operation_id,
+            **request.payload(),
+        }
         result = subprocess.run(
             [
                 'ssh', '-o', 'BatchMode=yes', '--', self.host,

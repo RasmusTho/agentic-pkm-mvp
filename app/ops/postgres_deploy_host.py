@@ -531,7 +531,9 @@ def main(argv: list[str] | None = None) -> int:
                 # until this host checkpoint is durable. The explicit,
                 # idempotent handoff then clears only that authenticated lease
                 # before the fresh normal deployment tries to claim it.
-                remote.test_recovery_release_instance_state(lineage_request)
+                remote.test_recovery_release_instance_state(
+                    lineage_request, successor_operation_id=next_operation_id,
+                )
                 admin = SecretAdmin(_configured_host_admin(), controller=controller)
                 receipt = deploy_from_host(
                     admin, remote, plan,

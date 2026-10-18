@@ -3951,6 +3951,7 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
     controller.deploy_operation = deploy_operation
     calls: list[TestRecoveryRequest] = []
     releases: list[TestRecoveryRequest] = []
+    release_successors: list[str] = []
     events: list[str] = []
     deployed: list[tuple[DeployPlan, str]] = []
 
@@ -3977,8 +3978,9 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
                 'registered_bindings': ['test-binding'],
             }
 
-        def test_recovery_release_instance_state(self, request):
+        def test_recovery_release_instance_state(self, request, *, successor_operation_id):
             releases.append(request)
+            release_successors.append(successor_operation_id)
             events.append('release')
             return {'channel': 'test', 'released': True, 'reason': 'abandoned-deployment'}
 
@@ -4028,6 +4030,7 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
     )
     assert calls == [expected_lineage]
     assert releases == [expected_lineage]
+    assert release_successors == [deployed[0][1]]
     assert events == ['reconstruct', 'release', 'deploy']
     assert len(deployed) == 1
     assert deployed[0][0] == plan
@@ -4144,6 +4147,7 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
     controller.deploy_operation = deploy_operation
     reconstruct_calls: list[object] = []
     release_calls: list[object] = []
+    release_successors: list[str] = []
     deploy_calls: list[str] = []
 
     class Remote:
@@ -4163,8 +4167,9 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
                 'request': {'failed_operation_id': operation_id},
             }
 
-        def test_recovery_release_instance_state(self, request):
+        def test_recovery_release_instance_state(self, request, *, successor_operation_id):
             release_calls.append(request)
+            release_successors.append(successor_operation_id)
             return {
                 'channel': 'test', 'released': False,
                 'reason': 'already-released-after-reconstruction',
@@ -4210,6 +4215,7 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
     assert reconstruct_calls == ['reconstruct']
     assert len(release_calls) == 2
     assert release_calls[0] == release_calls[1]
+    assert release_successors == deploy_calls
     assert len(deploy_calls) == 2
     assert deploy_calls[0] == deploy_calls[1]
     capsys.readouterr()
@@ -5981,6 +5987,45 @@ def test_linux_reconstruction_uses_retained_reset_request_after_journal_rollover
     assert payload['source_operation_id'] == source_operation_id
     assert payload['failed_successor_operation_id'] == failed_successor_operation_id
     assert payload['candidate_revision'] == fresh_candidate.revision
+
+    # A normal same-plan successor remains as a terminal in-memory object.
+    # The identical recovery retry must still reach the evidence-bound,
+    # idempotent release instead of failing at the supervisor shell.
+    successor_operation_id = str(uuid4())
+    terminal = linux.SupervisedOperation(
+        linux.LinuxEffects(config), successor_operation_id, fresh_candidate, False,
+    )
+    terminal.finished.set()
+    supervisor.operation = terminal
+    release_calls = []
+
+    def release(_self, selected):
+        release_calls.append(selected)
+        return {
+            'channel': 'test', 'released': False,
+            'reason': 'already-released-after-reconstruction',
+        }
+
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'release_test_instance_state_recovery_lease', release,
+    )
+    with pytest.raises(PostgresDeployError):
+        linux.SshDeployRemote('ygg-test').test_recovery_release_instance_state(
+            request, successor_operation_id=str(uuid4()),
+        )
+    terminal.finished.clear()
+    with pytest.raises(PostgresDeployError):
+        linux.SshDeployRemote('ygg-test').test_recovery_release_instance_state(
+            request, successor_operation_id=successor_operation_id,
+        )
+    terminal.finished.set()
+    assert release_calls == []
+    released = linux.SshDeployRemote('ygg-test').test_recovery_release_instance_state(
+        request, successor_operation_id=successor_operation_id,
+    )
+    assert released['reason'] == 'already-released-after-reconstruction'
+    assert release_calls == [request]
+    assert supervisor.operation is terminal
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
