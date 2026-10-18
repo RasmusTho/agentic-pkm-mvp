@@ -259,6 +259,7 @@ exec {sys.executable!s} "$@"
             "PATH": f"{fake_bin}:{env.get('PATH', '')}",
             "HOME": str(Path.home()),
             "XDG_DATA_HOME": str(tmp_path / "xdg"),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(tmp_path / "ownership"),
             # #4519 — this env inherits pytest's markers, so the launcher's
             # runtime env write must be tmp_path-scoped or the exporter's
             # repo-file guard refuses the run (and before that guard existed,
