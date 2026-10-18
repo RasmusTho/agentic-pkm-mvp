@@ -245,42 +245,52 @@ def _expand_and_balance_parallel(
         return _collect_deploy_nodes(target, cache=cache)
 
     expanded: list[str] = []
-    seen_nodes: set[str] = set()
+    seen_targets: set[str] = set()
+    deploy_node_weight: dict[str, int] = {}
     for partition in partitions:
         for target in partition:
             path = _target_file(target)
             if path.startswith("tests/deploy/") or path == "tests/deploy":
                 nodes = deploy_nodes_for_target(target)
-                candidates = nodes or (target,)
+                if nodes:
+                    files = sorted({_target_file(node) for node in nodes})
+                    for file_path in files:
+                        deploy_node_weight[file_path] = sum(
+                            _target_file(node) == file_path for node in nodes
+                        )
+                    candidates = tuple(files)
+                else:
+                    candidates = (target,)
             else:
                 candidates = (target,)
             for candidate in candidates:
-                if candidate in seen_nodes:
+                if candidate in seen_targets:
                     continue
-                seen_nodes.add(candidate)
+                seen_targets.add(candidate)
                 expanded.append(candidate)
     expected_deploy_nodes: set[str] = set()
     for target in expected_targets:
         path = _target_file(target)
         if path == "tests/deploy" or path.startswith("tests/deploy/"):
             expected_deploy_nodes.update(deploy_nodes_for_target(target))
-    actual_deploy_nodes = {
+    actual_deploy_files = {
         target
         for target in expanded
-        if _target_file(target).startswith("tests/deploy/") and "::" in target
+        if target.startswith("tests/deploy/") and target.endswith(".py")
     }
-    if expected_deploy_nodes and actual_deploy_nodes != expected_deploy_nodes:
+    expected_deploy_files = {_target_file(node) for node in expected_deploy_nodes}
+    if expected_deploy_files and actual_deploy_files != expected_deploy_files:
         raise ValueError(
-            "expanded deploy node inventory does not match selected coverage exactly once"
+            "expanded deploy file inventory does not match selected coverage exactly once"
         )
     if not expanded:
         return ()
     buckets: list[list[str]] = [[] for _ in range(min(jobs, len(expanded)))]
     weights = [0] * len(buckets)
-    for candidate in sorted(expanded):
+    for candidate in sorted(expanded, key=lambda item: (-deploy_node_weight.get(item, 1), item)):
         index = min(range(len(buckets)), key=lambda item: (weights[item], item))
         buckets[index].append(candidate)
-        weights[index] += 1
+        weights[index] += deploy_node_weight.get(candidate, 1)
     return tuple(tuple(bucket) for bucket in buckets if bucket)
 
 

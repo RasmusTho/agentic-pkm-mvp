@@ -658,7 +658,9 @@ with state_path.open("a+", encoding="utf-8") as handle:
     state = json.loads(raw) if raw else {"active": 0, "max_active": 0, "executed": []}
     state["active"] += 1
     state["max_active"] = max(state["max_active"], state["active"])
-    state["executed"].extend(arg for arg in args if "::" in arg)
+    for arg in args:
+        if arg.startswith("tests/deploy/") and arg.endswith(".py"):
+            state["executed"].extend([f"{arg}::test_one", f"{arg}::test_two"])
     is_serial = any(arg.endswith("test_host.py") for arg in args)
     state["active_at_serial"] = state["active"] if is_serial else state.get("active_at_serial")
     handle.seek(0)
