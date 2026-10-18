@@ -5,7 +5,8 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-17 UTC (manual shadow rehydration / #6174; BWS / #5667 and DevUI / #6105 retain their 2026-10-15 review; unrelated status entries were not re-audited)
+Last reviewed: 2026-10-18 UTC (private CKM source admission / #6194; manual shadow rehydration / #6174 retains its 2026-10-17 review; unrelated status entries were not re-audited)
+Last verified against (private CKM source admission): Issue #6194, `app/builderops/devui_ckm_snapshot.py`, `app/ops/devui_ckm_snapshot.py`, and focused managed source tests; repository evidence only.
 Last reviewed (SCREEN-06 host controls): 2026-10-17
 Last verified against (SCREEN-06 host controls): Issue #3342, `app/heimdal/screen_control.py`,
 `app/heimdal/retention.py`, `app/api/routes/heimdal_screen.py`,
@@ -205,7 +206,12 @@ deployment, host, or owner-acceptance claims.
   preflight (#5522), without Product or Companion gateway startup. Its typed qualification/deploy/health producers validate supplied
   component evidence and distinguish preparation from observed health. The managed GET now reads
   the admitted BuilderOps API, bounded gh REST and immutable candidate documents alongside the
-  independent VM102 receipts (#5520); CKM remains unavailable. Source configuration, partial
+  independent VM102 receipts (#5520). #6194 adds the separately owner-approved private CKM
+  snapshot from the existing local read-only query through fixed SSH publication and the existing
+  receipt mount. The complete capture retains original identity/watermarks and expires after
+  24 hours; missing or invalid captures remain refused while independent sources stay available.
+  This is repository support; live installation/publication and browser proof remain separate
+  under #5181. Source configuration, partial
   task projection, quota refusal and candidate provenance are defined at
   [Managed read journey admission](BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission).
   The separate local browser proof and constrained-reuse envelope establish repository behavior;
