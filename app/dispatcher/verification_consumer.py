@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -152,13 +153,56 @@ _COORDINATOR_OPTIONAL_ENVIRONMENT = (
     "TMPDIR",
 )
 
+_LINUX_USER_RUNTIME_BASE = Path("/run/user")
+_LINUX_RUNTIME_ROOT_UID = 0
+
+
+def _linux_keyring_environment(base: Mapping[str, str]) -> dict[str, str]:
+    """Bind only the current uid's private, canonical local user bus on Linux.
+
+    The environment is metadata, not authentication. Never forward arbitrary
+    D-Bus addresses or another user's runtime directory into a privileged review.
+    An absent backend retains the existing keyring-only auth refusal downstream.
+    """
+    if sys.platform != "linux":
+        return {}
+    uid = os.geteuid()
+    runtime = _LINUX_USER_RUNTIME_BASE / str(uid)
+    selected = {"XDG_RUNTIME_DIR": str(runtime),
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus"}
+    error = "verification coordinator native keyring environment unavailable"
+    if any(base.get(key) and base[key] != value for key, value in selected.items()):
+        raise RuntimeError(error)
+    try:
+        directory = runtime.lstat()
+        endpoint = (runtime / "bus").lstat()
+    except FileNotFoundError as exc:
+        if any(base.get(key) for key in selected):
+            raise RuntimeError(error) from exc
+        return {}
+    except OSError as exc:
+        raise RuntimeError(error) from exc
+    try:
+        parents = [_LINUX_USER_RUNTIME_BASE.lstat(), _LINUX_USER_RUNTIME_BASE.parent.lstat()]
+    except OSError as exc:
+        raise RuntimeError(error) from exc
+    if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != uid
+            or stat.S_IMODE(directory.st_mode) != 0o700
+            or not stat.S_ISSOCK(endpoint.st_mode) or endpoint.st_uid != uid
+            or endpoint.st_nlink != 1
+            or any(not stat.S_ISDIR(parent.st_mode)
+                   or parent.st_uid != _LINUX_RUNTIME_ROOT_UID
+                   or stat.S_IMODE(parent.st_mode) & 0o022 for parent in parents)):
+        raise RuntimeError(error)
+    return selected
+
 
 def _coordinator_environment(base: Mapping[str, str]) -> dict[str, str]:
     """Return the non-secret runtime environment allowed into Codex children."""
 
     if any(not base.get(key) for key in _COORDINATOR_REQUIRED_ENVIRONMENT):
         raise RuntimeError("verification coordinator required environment unavailable")
-    return {
+    result = {
         key: base[key]
         for key in (
             *_COORDINATOR_REQUIRED_ENVIRONMENT,
@@ -166,6 +210,8 @@ def _coordinator_environment(base: Mapping[str, str]) -> dict[str, str]:
         )
         if base.get(key)
     }
+    result.update(_linux_keyring_environment(base))
+    return result
 
 CANONICAL_RECEIPT_SCHEMA_PATH = (
     Path(__file__).resolve().parent

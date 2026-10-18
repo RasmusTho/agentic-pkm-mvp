@@ -96,6 +96,77 @@ This profile supplies setup-specific qualification evidence and refuses missing 
 identity, ingress, health, or rollback evidence; it does not redefine the receipt chain or record
 live residency, deployment, health, or owner acceptance.
 
+### BOB-1 native executor keyring administration
+
+Repository support under #6245 provides `scripts/install_builder_executor_keyring.py` for the fixed
+VM102 guest `builder-system`, existing `ygg` UID/GID1000, administered from the Mac Mini through
+`bob-1-builder-system` and noninteractive sudo. This does not install an executor identity, update
+the VM source checkout, activate the service or establish #6146 qualification.
+
+From a clean committed checkout matching freshly read `origin/main`, prepare the value-free plan
+and retain its `plan_sha256`. Every action, including plan/status, authenticates that source before
+privileged SSH execution:
+
+```bash
+python3 scripts/install_builder_executor_keyring.py plan
+```
+
+After concrete operator approval, apply the exact saved plan:
+
+```bash
+python3 scripts/install_builder_executor_keyring.py apply \
+  --plan-file <reviewed-plan.json> --expected-plan-sha256 <plan_sha256>
+python3 scripts/install_builder_executor_keyring.py status
+```
+
+The plan binds target/user, installed-source identity, payload, existing user-unit inventory,
+user-manager lifetime and machine-key metadata without opening the machine key. Apply requires the
+existing private systemd host key; it creates only this consumer's encrypted master and immutable
+root-owned runtime bundle. Native encrypted state is isolated in the service's private state
+directory. Existing foreign/default keyrings, unowned units and incompatible partial state are
+refused. A retry reconciles the same published installation and retains its original master.
+Encryption runs in a finite transient systemd service with the host-key file and its parent
+read-only: `systemd-creds` cannot generate or replace shared host custody, including when an
+existing key belongs to another machine. Validation uses the same sandbox. `LoadCredential` copies
+ciphertext only; PID1 never decrypts it. The fixed `ExecStart=!` bootstrap retains only the capabilities
+needed to drop user/group identity, checks that the host-key file and parent are read-only, decrypts
+through descriptors, clears supplementary groups, permanently drops to `ygg`, and execs GNOME with
+an anonymous stdin pipe. Readiness runs as `ygg`. This ordering also protects automatic restart/boot.
+Ciphertext custody accepts only systemd's exact root-owned read ACL for `ygg`; additional grants
+and the UID-owned `0400` fallback are refused. That fallback is unreadable by the capability-bounded
+root bootstrap. The supported BOB-1 ACL path is exercised by the isolated native fixture.
+
+The concrete activation step enables `ygg` lingering and
+`yggdrasil-builder-executor-keyring.service`, retaining the user bus across SSH logout. Existing
+enabled user sockets/timers may therefore remain available when no SSH session is open; their
+inventory is bound before apply. The pre-existing administrative masks for
+`gnome-keyring-daemon.service`, `gnome-keyring-daemon.socket`, `gcr-ssh-agent.service` and
+`gcr-ssh-agent.socket` stay in place. No API, worker, database or unrelated service is restarted.
+
+Prepare withdrawal as a separate reviewed plan, then apply that operation explicitly:
+
+```bash
+python3 scripts/install_builder_executor_keyring.py plan --operation disable
+python3 scripts/install_builder_executor_keyring.py apply --operation disable \
+  --plan-file <reviewed-disable-plan.json> --expected-plan-sha256 <plan_sha256>
+```
+
+Status and withdrawal remain available after unrelated `main` advancement; neither upgrades the
+installed bundle. A plan/apply pair with `--operation start` re-enables the validated retained bundle
+without replacing its source or master. The service retries failures at most three times per minute;
+manual stop/disable suppresses those retries. Disable stops only the owned service, proves its cgroup is empty/reclaimed, and
+retains encrypted state and lingering. It does not revoke ChatGPT/GitHub sessions or stop other user
+services. Any later removal of retained credentials or lingering needs its own explicit scope.
+Owned status/disable remain available when the shared host key is missing or unusable.
+
+The master never becomes a plaintext password file or an argument/environment value. Root can
+decrypt host-key-protected credentials, and same-UID processes can read an unlocked user-bus
+keyring. This is not TPM/full-image confidentiality or process isolation. The Mac's existing browser
+login is not copied to the VM. Personal device-auth follows successful native readiness and forced
+ChatGPT/keyring policy; no repeated GitHub browser login is required for routine execution. Provider
+expiry/revocation can still require personal reauthentication. Service restart, SSH reconnect and
+reboot claims require their own actual observations; repository tests alone do not establish them.
+
 ## Disk and WAL headroom policy
 
 No current VM disk capacity, used-space value, or free-space value is asserted here. Before a TARS
