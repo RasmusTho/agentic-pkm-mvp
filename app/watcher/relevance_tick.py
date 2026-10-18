@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from app.instance.compatibility_binding import compatibility_binding_for_root
 from app.relevance.attention_loop import AttentionLoop
 from app.relevance.evaluator import DeterministicRelevanceEvaluator
 from app.relevance.interruptibility import InterruptibilityThreshold
@@ -70,6 +71,10 @@ def run_relevance_tick(
             "skipped": "vault-local-writes-disabled",
         }
 
+    # Prove the producing binding before the first write (materialization included);
+    # an unprovable binding fails the tick closed (the watcher guards the call).
+    producing_binding = compatibility_binding_for_root(Path(context.active_vault_path))
+
     moments = DeterministicRelevanceEvaluator(root).evaluate()
     materialized: list[str] = []
     materialized_moments: list[Moment] = []
@@ -91,6 +96,7 @@ def run_relevance_tick(
         context,
         outbox_path=reachout_outbox_path,
         moment_outbox_path=outbox_path,
+        producing_binding_id=producing_binding,
     ).tick(
         moments=materialized_moments,
         interruptibility=current_interruptibility,

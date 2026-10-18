@@ -20,9 +20,14 @@ from pathlib import Path
 from typing import Any, Literal, Sequence
 from uuid import uuid4
 
+from app.instance.compatibility_binding import (
+    compatibility_binding_for_root,
+    legacy_view_bindings,
+)
 from app.relevance.interruptibility import InterruptibilityThreshold, coerce_threshold
 from app.relevance.materialization import materialize_moment
 from app.relevance.patterns import DeclaredPattern, apply_patterns
+from app.receipts.artifact_receipts import PRODUCING_BINDING_FIELD
 from app.relevance.schema import Moment, UrgencyBand, urgency_rank
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
@@ -92,12 +97,16 @@ class AttentionLoop:
         write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
         outbox_path: Path | None = None,
         moment_outbox_path: Path | None = None,
+        producing_binding_id: str | None = None,
     ) -> None:
         self.vault_context = vault_context
         self.write_guard = write_guard
         self.outbox_path = outbox_path
         # Where the deferred-lifecycle re-materialization receipt is recorded.
         self.moment_outbox_path = moment_outbox_path
+        # MVR-05B4c3: a producer that already knows its binding stamps THAT; otherwise
+        # the binding is proven from the vault root at tick start (see ``tick``).
+        self.producing_binding_id = producing_binding_id
 
     def tick(
         self,
@@ -109,6 +118,9 @@ class AttentionLoop:
         """Run one context tick: gate each moment, emit receipts, return decisions."""
 
         threshold = coerce_threshold(interruptibility)
+        # Resolve and prove the producing binding before any write (deferred-lifecycle
+        # re-materialization included); an unprovable binding fails the tick closed.
+        binding = self._resolve_producing_binding()
         # Governed by construction: if durable writes are blocked, the loop reaches
         # out to no one and records the deliberate suppression for accountability.
         try:
@@ -118,7 +130,9 @@ class AttentionLoop:
             writes_blocked = True
 
         pattern_tuple = tuple(patterns)
-        latest_by_moment = _latest_reachout_by_moment(outbox_path=self.outbox_path)
+        latest_by_moment = _latest_reachout_by_moment(
+            outbox_path=self.outbox_path, bindings=reachout_dedup_view(binding)
+        )
         decisions: list[ReachOutDecision] = []
         for moment in moments:
             effect = apply_patterns(moment, pattern_tuple, threshold.state)
@@ -160,6 +174,7 @@ class AttentionLoop:
                 effective_band=effect.effective_band,
                 applied=effect.applied,
                 reason=reason,
+                binding=binding,
             )
             latest_by_moment[moment.uuid] = {
                 "outcome": outcome,
@@ -184,6 +199,14 @@ class AttentionLoop:
             )
         return decisions
 
+    def _resolve_producing_binding(self) -> str:
+        if self.producing_binding_id:
+            return self.producing_binding_id
+        root = self.vault_context.active_vault_path
+        if not root:
+            return compatibility_binding_for_root(Path(""))
+        return compatibility_binding_for_root(Path(root))
+
     def _emit_reachout_receipt(
         self,
         *,
@@ -194,6 +217,7 @@ class AttentionLoop:
         effective_band: UrgencyBand,
         applied: tuple[str, ...],
         reason: str,
+        binding: str,
     ) -> str:
         receipt_id = uuid4().hex
         trace_id = uuid4().hex
@@ -215,6 +239,7 @@ class AttentionLoop:
             "trace_id": trace_id,
             "vault_id": self.vault_context.active_vault_id,
             "moment_uuid": moment.uuid,
+            PRODUCING_BINDING_FIELD: binding,
             "governance_tier": "act",
             "external_side_effect": False,
             "reachout": {
@@ -267,16 +292,41 @@ class AttentionLoop:
             return
 
 
+def reachout_dedup_view(binding: str) -> tuple[str | None, ...]:
+    """Stamps a producer's reach-out dedup addresses (MVR-05B4c3).
+
+    The live compatibility producer spans its own binding, the legacy sentinel and
+    unstamped history (one vault's single-binding journey); any other producer
+    addresses exactly its own binding, so another vault's receipt for the same
+    moment UUID never suppresses its emission.
+    """
+
+    legacy = legacy_view_bindings()
+    return legacy if binding in legacy else (binding,)
+
+
+def _stamp_of(payload: dict[str, Any]) -> str | None:
+    value = payload.get(PRODUCING_BINDING_FIELD)
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def query_reachout_receipts(
     *,
     outbox_path: Path | None = None,
     moment_uuid: str | None = None,
+    bindings: Sequence[str | None] | None = None,
 ) -> list[dict]:
-    """Read back the reach-out / suppression receipts (accountability projection)."""
+    """Read back the reach-out / suppression receipts (accountability projection).
+
+    ``bindings`` selects the producing-binding view: receipts whose stamp is in the
+    sequence (``None`` = unstamped legacy receipts). Omitted, the accountability
+    projection is unfiltered; every consumer that answers for one vault passes a view.
+    """
 
     path = outbox_path or DEFAULT_REACHOUT_RECEIPTS_PATH
     if not path.exists():
         return []
+    view = None if bindings is None else tuple(bindings)
     rows: list[dict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -288,15 +338,20 @@ def query_reachout_receipts(
             continue
         if record.get("event") != REACHOUT_EVENT:
             continue
-        if moment_uuid is not None and (record.get("payload") or {}).get("moment_uuid") != moment_uuid:
+        payload = record.get("payload") or {}
+        if moment_uuid is not None and payload.get("moment_uuid") != moment_uuid:
+            continue
+        if view is not None and _stamp_of(payload) not in view:
             continue
         rows.append(record)
     return rows
 
 
-def _latest_reachout_by_moment(*, outbox_path: Path | None) -> dict[str, dict[str, Any]]:
+def _latest_reachout_by_moment(
+    *, outbox_path: Path | None, bindings: Sequence[str | None] | None = None
+) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
-    for record in query_reachout_receipts(outbox_path=outbox_path):
+    for record in query_reachout_receipts(outbox_path=outbox_path, bindings=bindings):
         payload = record.get("payload") or {}
         reachout = payload.get("reachout") or {}
         moment_uuid = payload.get("moment_uuid")
@@ -336,6 +391,7 @@ __all__ = [
     "ReachOutDecision",
     "decide_reachout",
     "query_reachout_receipts",
+    "reachout_dedup_view",
     "REACHOUT_EVENT",
     "REACHOUT_ACTION",
 ]
