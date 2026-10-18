@@ -3657,9 +3657,9 @@ def _materialize_authenticated_channel_registrations(
                 )
     for owner in channel_owners:
         registration = expected_registrations[owner.vault_binding_id]
-        existing = snapshot.registrations.get(owner.vault_binding_id)
-        if existing is not None:
-            if existing != registration:
+        existing_registration = snapshot.registrations.get(owner.vault_binding_id)
+        if existing_registration is not None:
+            if existing_registration != registration:
                 raise InstanceStatePreflightError(
                     "authenticated owner registry entry does not match its binding"
                 )
