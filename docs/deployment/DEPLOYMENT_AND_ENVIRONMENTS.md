@@ -1128,9 +1128,13 @@ python3 -m app.ops.postgres_deploy_host test <candidate-revision> \
 It accepts only the authenticated pending TEST deployment operation, the exact candidate
 revision/digest, and the qualified authority tuple. The VM-side reset refuses PROD/DEV,
 candidate/operation/authority/ownership/journal/lock drift, and concurrent or non-quiescent
-writers; after the journal is terminalized as failed, it removes only the derived TEST volumes
-`pkm-test_pgdata`, `pkm-test_instance-state`, and `pkm-test_runtime-tmp`, then the same command
-runs the normal candidate deployment gates. It never resets the source vault, identity,
+writers; after the journal is terminalized as failed, it removes only the derived TEST volumes.
+Embedding identity/model preflight refusals that occur before writer drain are not reset-eligible;
+they remain ordinary admission failures.
+The external `pkm-test_pgdata` volume is recreated as an empty, exact managed volume and
+qualified against the configured data directory before the reset is marked complete; the
+instance-state and runtime-tmp volumes are removed for normal Compose recreation. The same
+command then runs the normal candidate deployment gates. It never resets the source vault, identity,
 ownership authority, or production state, and local reset scripts, direct host repair, source
 healing, and direct SQL remain invalid substitutes. This repository support and its deterministic
 tests do not establish live TEST recovery; parent-owned live qualification remains separate.

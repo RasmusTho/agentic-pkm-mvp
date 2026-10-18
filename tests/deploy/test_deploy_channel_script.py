@@ -4061,6 +4061,15 @@ def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch
         )))
     assert mutations == []
 
+    # Embedding identity/model preflight runs before writer drain and is not
+    # evidence that a source projection was ever attempted.
+    monkeypatch.setattr(effects.config.journal, 'read', lambda: replace(
+        receipt, source_failure='embedding_identity_unavailable'
+    ))
+    with pytest.raises(PostgresDeployError):
+        effects.reset_test_source_projection(request)
+    assert mutations == []
+
     # A non-TEST supervisor cannot route the canonical reset action at all.
     non_test = SimpleNamespace(channel='dev', journal=Journal())
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: non_test)
@@ -4109,15 +4118,108 @@ def test_test_recovery_reset_resumes_prepared_disposition_without_requalificatio
     effects.quiescent = lambda: True
     composed: list[tuple[str, ...]] = []
     effects.compose = lambda *args: composed.append(args) or ''
+    effects.initialized = lambda: False
     removed: list[str] = []
     effects._test_recovery_remove_volume = lambda name: removed.append(name)
+    recreated: list[str] = []
+    effects._test_recovery_recreate_empty_pgdata = lambda: recreated.append('pkm-test_pgdata')
 
     receipt = effects.reset_test_source_projection(request)
 
     assert receipt.terminal_result == 'failed'
     assert removed == ['pkm-test_pgdata', 'pkm-test_instance-state', 'pkm-test_runtime-tmp']
+    assert recreated == ['pkm-test_pgdata']
     assert len(composed) == 2
     assert disposition_states == ['prepared', 'complete']
+
+
+def test_test_recovery_reset_recreates_external_pgdata_for_initialized_compose_path(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployJournal, DeployPlan, TestRecoveryRequest,
+    )
+
+    root = tmp_path / 'checkout'
+    lock_dir = root / 'config/deploy/test.env.lock'
+    lock_dir.mkdir(parents=True, mode=0o700)
+    (lock_dir / 'bws-owner').touch(mode=0o600)
+    data_directory = tmp_path / 'pgdata'
+    data_directory.mkdir()
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',), image_digest='sha256:' + '2' * 64,
+                      automatic=True)
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    journal.record_source_failure(operation_id, plan.revision, 'legacy_identity_persistence_refused')
+    journal.write(operation_id, 'failed')
+    config = SimpleNamespace(
+        channel='test', root=root, data_directory=data_directory, journal=journal,
+    )
+    effects = linux.LinuxEffects(config)
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    request = TestRecoveryRequest(operation_id, plan, authority)
+    expected_fields = {'host': 'db', 'port': '5432', 'user': 'app', 'dbname': 'app_test'}
+    def local_database():
+        effects.database_fields = expected_fields
+        return True
+    effects.local_database = local_database
+    disposition_states = ['prepared']
+    effects._read_test_recovery_disposition = lambda _request: {'state': disposition_states[-1]}
+    effects._write_test_recovery_disposition = lambda _request, state: disposition_states.append(state)
+    effects.quiescent = lambda: True
+    effects.compose = lambda *_args: ''
+    volume_rows = {
+        name: [{
+            'Name': name,
+            'Driver': 'local',
+            'Mountpoint': str(data_directory) if name == 'pkm-test_pgdata' else str(tmp_path / name),
+            'Labels': {
+                'com.docker.compose.project': 'pkm-test',
+                'com.docker.compose.volume': 'pgdata',
+            },
+        }]
+        for name in ('pkm-test_pgdata', 'pkm-test_instance-state', 'pkm-test_runtime-tmp')
+    }
+    commands: list[list[str]] = []
+
+    def command(argv, **_kwargs):
+        commands.append(argv)
+        if argv[1:3] == ['volume', 'ls']:
+            name = argv[-1].removeprefix('name=^').removesuffix('$')
+            return name
+        if argv[1:3] == ['volume', 'inspect']:
+            if '--format' in argv:
+                return str(data_directory)
+            return json.dumps(volume_rows[argv[-1]])
+        if argv[1:3] == ['volume', 'rm']:
+            return argv[-1]
+        if argv[1:3] == ['volume', 'create']:
+            return argv[-1]
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(linux, '_command', command)
+    receipt = effects.reset_test_source_projection(request)
+
+    assert receipt.terminal_result == 'failed'
+    assert any(
+        argv[:4] == ['docker', 'volume', 'create', '--driver'] and argv[-1] == 'pkm-test_pgdata'
+        for argv in commands
+    )
+    assert effects.database_fields == expected_fields
+
+    # The recreated external volume is now a valid empty local target: the
+    # normal production initializer may bootstrap it and Compose can inspect
+    # the external volume before starting db.
+    effects.local_database = lambda: True
+    effects.database_fields = {'host': 'db', 'port': '5432', 'user': 'app', 'dbname': 'app_test'}
+    effects.compose = lambda *args: '' if args == ('ps', '--all', '-q', 'db') else pytest.fail(args)
+    assert effects.initialized() is False
 
 
 def test_test_recovery_reset_refuses_external_database_before_mutation(tmp_path):

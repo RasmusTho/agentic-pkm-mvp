@@ -72,6 +72,18 @@ _SOURCE_PROJECTION_FAILURE_REASONS = frozenset({
     'embedding_probe_cleanup_failed',
     'source_worker_timeout', 'source_worker_terminated', 'source_worker_oom',
 })
+# The embedding identity/model gate runs before the native source gate drains
+# application writers.  Those refusals prove only that the candidate is not
+# admitted; they never authorize destructive TEST projection reset.  The
+# post-drain projection failures remain eligible for the exact recovery path.
+_TEST_RECOVERY_SOURCE_FAILURE_REASONS = _SOURCE_PROJECTION_FAILURE_REASONS - frozenset({
+    'embedding_context_invalid', 'embedding_identity_unavailable', 'embedding_guard_refused',
+    'embedding_identity_invalid', 'embedding_service_unavailable', 'embedding_service_not_ready',
+    'embedding_model_unavailable', 'embedding_model_not_ready', 'embedding_probe_failed',
+    'embedding_probe_client_failed', 'embedding_probe_identity_mismatch',
+    'embedding_probe_generation_failed', 'embedding_probe_vector_invalid',
+    'embedding_probe_cleanup_failed',
+})
 _GUARD_FAILURE_CHECKPOINTS = frozenset({
     'config_runtime_file_binding', 'inherited_owner_fd_inode_flock',
     'active_journal_operation', 'selector_shape_capture_raw_migration',
@@ -1787,6 +1799,33 @@ class LinuxEffects:
         if removed != [name]:
             raise PostgresDeployError()
 
+    def _test_recovery_recreate_empty_pgdata(self) -> None:
+        """Recreate the external TEST database volume before recovery completes."""
+        name = 'pkm-test_pgdata'
+        created = _command([
+            'docker', 'volume', 'create',
+            '--driver', 'local',
+            '--label', 'com.docker.compose.project=pkm-test',
+            '--label', 'com.docker.compose.volume=pgdata',
+            name,
+        ]).strip()
+        if created != name:
+            raise PostgresDeployError()
+        rows = json.loads(_command(['docker', 'volume', 'inspect', name]))
+        if (not isinstance(rows, list) or len(rows) != 1 or rows[0].get('Name') != name
+            or rows[0].get('Driver') != 'local'):
+            raise PostgresDeployError()
+        labels = rows[0].get('Labels') or {}
+        if (not isinstance(labels, dict)
+            or labels.get('com.docker.compose.project') != 'pkm-test'
+            or labels.get('com.docker.compose.volume') != 'pgdata'):
+            raise PostgresDeployError()
+        mountpoint = rows[0].get('Mountpoint')
+        data_directory = self.config.data_directory
+        if (not isinstance(mountpoint, str) or Path(mountpoint) != data_directory
+            or not data_directory.is_dir() or any(data_directory.iterdir())):
+            raise PostgresDeployError()
+
     def reset_test_source_projection(self, request: TestRecoveryRequest) -> DeployReceipt:
         """Reset only derived TEST volumes after an exact failed source projection."""
         request.validate()
@@ -1801,7 +1840,7 @@ class LinuxEffects:
         receipt = self.config.journal.read()
         if (receipt is None or receipt.operation_id != request.failed_operation_id
             or receipt.stage not in {'activating', 'failed'}
-            or receipt.source_failure not in _SOURCE_PROJECTION_FAILURE_REASONS
+            or receipt.source_failure not in _TEST_RECOVERY_SOURCE_FAILURE_REASONS
             or self.config.journal.bound_plan(request.failed_operation_id) != request.plan):
             raise PostgresDeployError()
         disposition = self._read_test_recovery_disposition(request)
@@ -1853,7 +1892,19 @@ class LinuxEffects:
             )
             if not self.quiescent():
                 raise PostgresDeployError()
-            for volume in ('pkm-test_pgdata', 'pkm-test_instance-state', 'pkm-test_runtime-tmp'):
+            # Compose declares pgdata as an external volume, so removing it
+            # without recreating the exact empty managed volume would make the
+            # fresh candidate fail in initialized() before PostgreSQL starts.
+            self._test_recovery_remove_volume('pkm-test_pgdata')
+            self._test_recovery_recreate_empty_pgdata()
+            # Run the same read-only initializer used by the normal candidate
+            # path while the exact empty external volume and Compose topology
+            # are present.  A true result means the target is not the default
+            # bootstrap shape; leave the authenticated recovery checkpoint
+            # pending rather than marking a non-bootstrapable reset complete.
+            if self.initialized():
+                raise PostgresDeployError()
+            for volume in ('pkm-test_instance-state', 'pkm-test_runtime-tmp'):
                 self._test_recovery_remove_volume(volume)
             self._write_test_recovery_disposition(request, 'complete')
             final = self.config.journal.read()
