@@ -457,6 +457,20 @@ def _private_json(path: Path) -> dict[str, Any]:
         return result
 
 
+def _private_recovery_json(path: Path, runtime_uid: int) -> dict[str, Any]:
+    """Read a recovery checkpoint across the root-to-runtime ownership handoff."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'r') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid not in {0, runtime_uid}
+            or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1 or info.st_size > 65536):
+            raise PostgresDeployError()
+        result = json.load(stream)
+        if not isinstance(result, dict):
+            raise PostgresDeployError()
+        return result
+
+
 def _root_directory(path: Path) -> None:
     if not path.is_absolute():
         raise PostgresDeployError()
@@ -1991,10 +2005,10 @@ class LinuxEffects:
         directory = path.parent
         try:
             info = directory.stat()
-            if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            if info.st_uid != self.config.uid or stat.S_IMODE(info.st_mode) != 0o700:
                 raise PostgresDeployError()
             if path.exists():
-                if _private_json(path) != payload:
+                if _private_recovery_json(path, self.config.uid) != payload:
                     raise PostgresDeployError()
             else:
                 descriptor, temporary_name = tempfile.mkstemp(
@@ -2042,6 +2056,12 @@ class LinuxEffects:
             'run', '--rm', '--no-deps', '-T', 'instance-state-init',
             cutover=request.authority_cutover,
         )
+        # The permission-only step must not become a window in which a new
+        # writer can start. Re-probe the live Docker census immediately before
+        # the state producer, so a deployment that began after reset is denied
+        # rather than racing the reconstruction.
+        if not self.quiescent():
+            raise PostgresDeployError()
         result = self.compose(
             'run', '--rm', '--no-deps', '-T', '--user', str(self.config.uid),
             'instance-state-init', 'python', '-m', 'app.instance.runtime',
@@ -2423,6 +2443,11 @@ class DeploymentSupervisor:
             'authority_cutover': data['authority_cutover'],
         })
         if request.plan.channel != self.config.channel or self.config.channel != 'test':
+            raise PostgresDeployError()
+        # Reset and reconstruction are separate RPCs. A fresh deployment may
+        # have been admitted in between them; never let reconstruction run
+        # while the supervisor owns an active worker.
+        if self.operation is not None:
             raise PostgresDeployError()
         result = LinuxEffects(self.config).reconstruct_missing_test_instance_state(request)
         return {'result': result, 'recovery': 'test-instance-state-reconstructed'}

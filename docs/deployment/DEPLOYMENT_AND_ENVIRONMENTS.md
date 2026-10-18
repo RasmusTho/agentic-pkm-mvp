@@ -1256,7 +1256,9 @@ read/repair because the VM disposition and failed operation are idempotent; a re
 transaction journal uses the canonical store recovery path before validating the byte-identical
 result. On a genuinely new named volume, the producer first runs the existing root-owned
 permission-only one-shot (which creates no registry or authority) before dropping to the configured
-runtime UID. The same command then
+runtime UID. The supervisor validates the authenticated ownership directory against that runtime UID
+and accepts only the root-to-runtime private recovery-receipt handoff, keeping a retry readable after
+permission preparation without broadening the checkpoint's authority. The same command then
 runs the normal candidate deployment gates. It never resets the source vault, identity,
 ownership authority, or production state, and local reset scripts, direct host repair, source
 healing, and direct SQL remain invalid substitutes. This repository support and its deterministic
