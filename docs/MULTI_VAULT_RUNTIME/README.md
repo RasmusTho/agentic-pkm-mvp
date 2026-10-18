@@ -396,11 +396,17 @@ hub. This allocation does not change #3854's exhausted repair ledger or claim pr
 | 05B1 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6136](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6136) | inventory-derived context-boundary gate with a shrinking compatibility-adapter allowlist | 05B0 | Sol/high |
 | 05B2 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6137](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6137) | companion read routes onto the per-request ActiveContextSet | 05B1 | Sol/high |
 | 05B3 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6138) | remaining API route modules and the pre-05C mutation seal | 05B2 | Sol/xhigh |
-| 05B4 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6139](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6139) | **sub-hub** for 05B4a–05B4c; closed after 05B4c merges | 05B3 | — |
+| 05B4 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6139](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6139) | **sub-hub** for 05B4a–05B4c; closed after the 05B4c sub-sub-hub closes | 05B3 | — |
 | 05B4a | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6160](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6160) | agent, MCP, and CLI carrier propagation, retrieval provenance, and settings conflict | 05B3 | Sol/high |
 | 05B4b | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6161](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6161) | binding-aware companion read projections | 05B4a | Sol/high |
-| 05B4c | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6162](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6162) | binding-aware process-global read surfaces refused by 05B3 | 05B4b | Sol/high |
-| 05B5 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6140](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6140) | Companion client activation, stale-selection recovery, and client-boundary writeback | 05B4c | Sol/high |
+| 05B4c | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6162](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6162) | **sub-sub-hub** for 05B4c1–05B4c6; closed after 05B4c6 merges | 05B4b | — |
+| 05B4c1 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6211](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6211) | review queue binding stamp, agent-memory posture, and orientation memory summary | 05B4b | Sol/high |
+| 05B4c2 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6212](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6212) | panel proposal/idempotency state, panel receipts, and orientation governance summary | 05B4c1 | Sol/high |
+| 05B4c3 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6213](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6213) | reach-out receipts, per-binding dedup, and `/now` nudges | 05B4c2 | Sol/high |
+| 05B4c4 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6214](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6214) | orientation runtime signals and the leave-point cursor keyed per binding | 05B4c3 | Sol/high |
+| 05B4c5 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6215](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6215) | emitted-bundle registry and the orientation, context-bundle and resurfacing reads | 05B4c4 | Sol/high |
+| 05B4c6 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6216](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6216) | Heimdal reads, debug-panel diagnostics, and removal of the 05B3 carrier refusal | 05B4c5 | Sol/high |
+| 05B5 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6140](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6140) | Companion client activation, stale-selection recovery, and client-boundary writeback | 05B4c6, #6162 | Sol/high |
 | 05C | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3861](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3861) | governed write target/token/receipt migration | 05B | Sol/xhigh |
 | 05D | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3862](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3862) | outbox producers, interim worker delivery, aggregate proof, owner docs | 05C | Sol/high; Terra/high mechanical consumers |
 | 06A | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | [#3863](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3863) | durable intent, service role, admin, and runtime floor | 05D, #3163 | Sol/xhigh |
@@ -419,10 +425,11 @@ producer set — so 05A2 through 05A8 run in listed order, each `agent:blocked` 
 until that predecessor is merged and reconciled on `origin/main`. Every merge posts a child receipt
 to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup. 05A itself is a stage
 hub: it posts the MVR-05A stage receipt once every 05A child has merged, and it is never picked up
-directly. The mergeable 05B children 05B0–05B3, 05B4a–05B4c and 05B5 run serially on the same
-terms. 05B4 (#6139) is a sub-hub with no deliverable of its own: it is reconciled and closed once
-05B4c has merged, never merged itself. 05B (#3860) is the stage hub; unlike 05A it is also the stage
-closer, picked up only after every mergeable 05B child has merged and the #6139 sub-hub is closed.
+directly. The mergeable 05B children 05B0–05B3, 05B4a, 05B4b, 05B4c1–05B4c6 and 05B5 run serially on the same
+terms. 05B4 (#6139) and 05B4c (#6162) are sub-hubs with no deliverable of their own, never merged
+themselves: #6162 is reconciled and closed once 05B4c6 has merged, and #6139 once #6162 is closed.
+05B (#3860) is the stage hub; unlike 05A it is also the stage closer, picked up only after every
+mergeable 05B child has merged and the #6139 and #6162 sub-hubs are closed.
 
 ## Cross-Task Invariants / Interaction Safety
 

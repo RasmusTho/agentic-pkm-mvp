@@ -445,8 +445,10 @@ proof exposes is repaired before more consumers depend on it), then the ratcheti
 children split by carrier family, then client activation once every server surface the client
 calls accepts the carrier. The compatibility-adapter allowlist that MVR-05B1 introduces is the
 shared artifact: the children that migrate allowlisted resolvers (05B2, 05B3 and 05B4a) each
-remove the entries they migrate; 05B4b and 05B4c restore binding-aware projections and stores that
-have no allowlist entries, and prove progress through their own acceptance criteria instead. The hub
+remove the entries they migrate; 05B4b and the 05B4c children restore binding-aware projections and
+stores that have no allowlist entries, and prove progress through their own acceptance criteria instead.
+05B4c6 additionally deletes `refuse_carrier_until_binding_aware`, the guard every earlier 05B4c child
+stops depending on. The hub
 records the final retained adapters with their retiring owner.
 
 Order is serial, on the same terms as 05A and `README.md :: Implementation tasks`: each child is
@@ -461,11 +463,17 @@ never drop or weaken, a criterion.
 | MVR-05B1 | [#6136](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6136) | inventory-derived production-entrypoint context-boundary gate with a named, shrinking compatibility-adapter allowlist | 05B0 | Sol/high |
 | MVR-05B2 | [#6137](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6137) | `companion.py` read routes onto the per-request ActiveContextSet, with nested, provisional, channel-lease, and effect-window enforcement per route | 05B1 | Sol/high |
 | MVR-05B3 | [#6138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6138) | remaining API route modules (`capture`, `artifacts`, `canvas`, `provisional_memory`, `eval_drafts`, `debug`) and the pre-05C `capability_not_ready` mutation seal across every vault-bound write route | 05B2 | Sol/xhigh |
-| MVR-05B4 | [#6139](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6139) | sub-hub for 05B4a–05B4c (see *05B4 split* below); no deliverable of its own, reconciled closed after 05B4c merges | 05B3 | — |
+| MVR-05B4 | [#6139](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6139) | sub-hub for 05B4a–05B4c (see *05B4 split* below); no deliverable of its own, reconciled closed after the 05B4c sub-sub-hub (#6162) is closed | 05B3 | — |
 | MVR-05B4a | [#6160](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6160) | agent, MCP, and CLI carrier propagation, production retrieval/cache provenance, request-wide settings conflict (including the `VAULT_SYSTEM_DIR_REL`/`VAULT_LAYOUT_NOTE_REL` classification), and the context-boundary gate hardening the carrier allowlist removal depends on | 05B3 | Sol/high |
 | MVR-05B4b | [#6161](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6161) | the one companion read projection that 05B2 omits whose source already identifies its vault: workspace watcher status (the watcher heartbeat compared with the request binding's root) | 05B4a | Sol/high |
-| MVR-05B4c | [#6162](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6162) | binding-stamped process-global stores behind the read surfaces 05B3 refuses for carriers (orientation frame, emitted-bundle registry, Heimdal capture/meeting), vault-browser artifact receipts (emitted without a vault identity), `/now` nudges (reach-out decisions deduplicated globally by moment UUID before emission), the memory review queue and agent-memory posture (one process-global queue keyed only by candidate id), workspace panel proposal/idempotency state (keyed only by artifact id), orientation summaries and runtime signals (process-global counters), the leave-point cursor (keyed by display name), and the scoped debug-panel diagnostics — every source that needs a binding stamp before any scoped read | 05B4b | Sol/high |
-| MVR-05B5 | [#6140](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6140) | Companion client activation, stale-selection recovery, client first-vault bootstrap, and the `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md` writeback | 05B4c | Sol/high |
+| MVR-05B4c | [#6162](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6162) | **sub-sub-hub** for 05B4c1–05B4c6 (see *05B4c split* below); no deliverable of its own, reconciled closed after 05B4c6 merges | 05B4b | — |
+| MVR-05B4c1 | [#6211](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6211) | memory review queue: the producing binding stamped on every enqueued candidate, then GET `/memory/review-queue`, `/vault-browser` agent-memory posture and the `/orientation` memory summary answered from the request binding's candidates only | 05B4b | Sol/high |
+| MVR-05B4c2 | [#6212](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6212) | panel confirmation state: the proposal/idempotency stores (keyed only by artifact id) keyed per binding and `panel.action.logged` receipts stamped at emission, then `/workspace` panel state, `/vault-browser` receipts and the `/orientation` memory and governance summaries restored | 05B4c1 | Sol/high |
+| MVR-05B4c3 | [#6213](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6213) | reach-out receipts stamped per binding and deduplicated per binding (today globally by moment UUID), then `/now` in-app nudges restored | 05B4c2 | Sol/high |
+| MVR-05B4c4 | [#6214](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6214) | orientation runtime signals (ingestion, status outbox, worker queue) scoped per binding and the leave-point cursor (keyed by display name) keyed per binding, never created by a scoped read | 05B4c3 | Sol/high |
+| MVR-05B4c5 | [#6215](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6215) | emitted-bundle registry stamped with the emitting binding, then `/api/orientation` (the frame is built from the 05B4c4 signals), `/api/orientation/bundle/{bundle_id}`, `/api/context-bundles/{bundle_id}` and `/api/resurfacing/bundle/{bundle_id}` answered per binding | 05B4c4 | Sol/high |
+| MVR-05B4c6 | [#6216](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6216) | Heimdal reads classified (capture receipts and meeting session/segment/projection are `explicitly-global` and served unchanged; only the binding-scoped finalization receipt is filtered), the screen-control read, scoped debug-panel diagnostics, and deletion of `refuse_carrier_until_binding_aware` — the last 05B4c child | 05B4c5 | Sol/high |
+| MVR-05B5 | [#6140](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6140) | Companion client activation, stale-selection recovery, client first-vault bootstrap, and the `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md` writeback | 05B4c6 merged and #6162 reconciled closed | Sol/high |
 | 05B hub | [#3860](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3860) | stage closer: full acceptance matrix on one exact head, `docs/ARCHITECTURE.md` and `docs/SETTINGS.md` writebacks, final allowlist truth, stage receipt to #2143 | 05B0–05B5 | Sol/high |
 
 **05B4 split.** MVR-05B4 (#6139) was filed for the agent, MCP, and CLI carriers. While 05B2 and
@@ -482,9 +490,33 @@ propagates the context through the non-HTTP carriers and owns the original MVR-0
 05B4b adds a binding predicate to companion projections whose sources already record per-vault
 identity;
 05B4c stamps a binding where an id-keyed process-global entry is created, then filters scoped
-reads on it. 05B4a also takes the gate hardening that the Known Defects KD-55D38D90BD05,
+reads on it, and is itself split below. 05B4a also takes the gate hardening that the Known Defects KD-55D38D90BD05,
 KD-88B6B1EC0D9A, and KD-6BC9153BD3A2 tie to the first carrier allowlist removal. Each child adds
 strict criteria of its own; none drops or weakens an MVR-05B criterion.
+
+**05B4c split.** MVR-05B4c (#6162) absorbed the stores that 05B4b found to hold no per-vault
+identity (the #6162 maintenance comments of 2026-10-17) and reached 15 acceptance criteria over eight
+store families. Assessment on `origin/main` `b746d0392` found at least ten distinct stores or producers
+(the review queue, the panel proposal/idempotency stores, `panel.action.logged` emission, the
+attention-loop reach-out dedup, `get_orientation_signals`, the leave-point cursor database, the
+emitted-bundle registry, Heimdal, and the panel-actions diagnostics), five route modules plus
+`companion.py`, and a sixth router (`heimdal_screen.py`) that depends on the same refusal without a
+criterion. It is therefore a sub-sub-hub, split like 05B4 by store family and mechanism into six serial
+children, each one reviewable PR: 05B4c1 the review queue family, 05B4c2 the panel confirmation
+family, 05B4c3 reach-out receipts, 05B4c4 the derived orientation stores, 05B4c5 the emitted-bundle
+registry and the reads it backs, and 05B4c6 Heimdal, the debug-panel diagnostics and the refusal
+removal. The order is the data-flow order: the `/orientation` memory + governance summary criterion
+needs the review queue stamp (05B4c1) before the panel state (05B4c2) completes it, and the
+`/api/orientation` frame is built from the runtime signals that 05B4c4 scopes, so it lands in 05B4c5.
+Each of the 15 criteria has exactly one owner at unchanged strength; the two Heimdal criteria are
+reshaped to follow `tests/architecture/durable_table_classification.json`, which classifies
+`heimdal_media_receipt` and the meeting session, segment and projection tables as `explicitly-global`
+and only `heimdal_meeting_finalization_receipt` as binding-scoped, so 05B4c6 serves the global
+sources unchanged and scopes only the finalization material rather than stamping a global table. Each
+child adds strict criteria of its own where the split exposes a gap (the orientation memory summary in
+05B4c1; the Heimdal classification and the screen-control read in 05B4c6); none drops or weakens one.
+Closure is by reconciliation: 05B4c6 is the last mergeable child, and once it has merged #6162 is
+reconciled closed without a PR of its own, which in turn lets #6139 close and 05B5 start.
 
 **Acceptance-target ledger.** Every one of the 32 `Verify:` targets of the MVR-05B criteria in
 `Acceptance Criteria` below has exactly one owner. That section is authoritative; it carries the
