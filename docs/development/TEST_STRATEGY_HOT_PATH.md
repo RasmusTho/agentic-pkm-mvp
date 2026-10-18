@@ -5,7 +5,7 @@ Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
-Last reviewed: 2026-10-14 (scoped unit execution margin)
+Last reviewed: 2026-10-18 (source-triggered deploy partitions)
 Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/import-linter.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py`, `tests/governance/test_governed_vault_profile_contract.py`, `tests/governance/test_governed_vault_profile_proposals.py`, `tests/agents/test_reviewer.py`, `tests/agents/test_reviewer_single_note.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`, `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`, Issue #5820 / PR #5838 candidate selector coverage and `tests/scripts/test_select_pr_tests.py::test_product_embedding_adapters_select_their_regression_coverage`
 
 # Test Strategy for the Hot Path
@@ -86,7 +86,8 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   seed copies and require failure for missing/malformed metric input, failed gates and missing
   thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
   unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
-- Both full and scoped non-PG unit steps have finite 60-minute outer ceilings. The scoped step's
+- The full and scoped non-PG unit steps retain finite outer ceilings: 75 minutes for the full lane
+  and 60 minutes for the scoped lane. The scoped step's
   former 35-minute ceiling cut off #6091 / PR #6092 at 91% without a reported assertion failure
   ([job 116083429844](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38631158811/job/116083429844));
   its six selected subsystem groups run serially. Additional outer margin does not prove completion
@@ -96,8 +97,12 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   and [#6075 job 115693481077](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38515571086/job/115693481077).
   All parallel shards passed; the serial boundary was still running when cancelled. Their
   parallel phases alone took approximately 30m56s and 29m50s, leaving only about four to five
-  minutes for serial coverage at the old ceiling. The 60-minute bound leaves approximately
-  29 minutes after the slowest observed parallel phase, without changing four-process concurrency
+  minutes for serial coverage at the old ceiling. Current-head #6187 run 39100438771 later proved
+  that repository growth can extend the full lane's parallel phase to 51m35s (including a 45m51s
+  deploy shard), after which the host-sensitive serial boundary was cancelled at the 60-minute
+  ceiling despite every parallel shard passing. The full lane's 75-minute bound restores finite
+  serial-phase margin; the scoped source-triggered lane remains bounded at 60 minutes. Neither
+  change alters four-process concurrency
   or starting host-sensitive tests until all parallel processes exit. This is execution margin,
   not a speedup or a completed-run duration measurement. The `required-unit-phase-margin.v1`
   receipt (`pytest-not-pg-shards/phase-margin.json`) records exact checkout SHA, budget, watchdog,
@@ -114,6 +119,17 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   speedup. `tests/ops/test_ci_workflow.py::test_scoped_unit_budget_preserves_selected_command_and_failure`
   executes that YAML command against finite success/failure producers to verify selected arguments,
   watchdog, visible diagnostics, retained log and failure exit propagation.
+- When `tests/deploy` is retained pre-merge because a changed source triggers its heavy coverage,
+  the scoped lane uses four deterministic process partitions: deploy, scripts, the remaining
+  selected targets, and ops. Deploy, scripts, the remainder, and non-census ops coverage run with
+  bounded parallelism; the bounded host-process/writer-census ops modules start only after all
+  parallel processes exit. The selector emits the expected target inventory, partitions, and
+  serial boundary; the runner refuses an empty, missing,
+  duplicate, or non-exact union, caps concurrency at four and each partition at 55 minutes, and
+  aggregates per-partition logs. Every pytest process
+  retains the PR marker expression and 120-second per-test thread watchdog. Any failed, timed-out,
+  or absent partition fails the single required `Unit tests (not pg)` verdict. Other scoped
+  selections retain the existing single pytest invocation.
 - The shared native PostgreSQL acceptance profile retains the former `pr-index-pg-contracts`
   surface (#5587), including FCA-06 second-consumer conformance (#5405) and dormant host-candidate
   admission/history/live-refusal and managed-source proofs (#5593). Each test retains the
@@ -135,7 +151,7 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 - Governance PR contract checks live in `.github/workflows/issue-pr-governance.yml`.
 - The import-boundary contract runs once on the PR path in `.github/workflows/import-linter.yaml`; CI Smoke retains the same blocking command for non-PR pushes/tags and owns the remaining contract-validation checks.
 - The hot-path and direct-repair invariants are covered by `tests/architecture/test_pr_hot_path_governance.py`, selected through the Unit tests (not pg) lane for governance changes rather than run as a second CI Smoke step.
-- PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Shared CI/test configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; the `Unit tests (not pg)` job runs each collectible top-level test directory (or root-level test module) as a serial process with bounded parallelism, then runs host/process-global and exact-FD-count compatibility tests after those processes exit. This keeps the shared runtime bounded without asking xdist workers to share process-global or host-wide assumptions. E2E coverage is deferred to post-merge and nightly validation. This document is `scripts/select_pr_tests.py`'s `docs/development/` contract for the `scripts/docs_guard_logic.py :: GOVERNANCE_TEMPORAL_ENFORCEMENT` temporal-owner-doc exemption, and the check enforces that pairing specifically: update this doc, not `docs/STATUS.md`/`docs/ROADMAP.md`/etc., when the selection script's behavior changes.
+- PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Changes to `.github/workflows/ci-smoke.yaml` select the governance workflow and selector contract tests instead of recursively requiring the whole product suite merely to validate the test runner itself. Co-changed deploy-source paths still select the complete bounded `ops_deploy` partitions. Other shared test/runtime configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; the `Unit tests (not pg)` job runs each collectible top-level test directory (or root-level test module) as a serial process with bounded parallelism, then runs host/process-global and exact-FD-count compatibility tests after those processes exit. This keeps the shared runtime bounded without asking xdist workers to share process-global or host-wide assumptions. E2E coverage is deferred to post-merge and nightly validation. This document is `scripts/select_pr_tests.py`'s `docs/development/` contract for the `scripts/docs_guard_logic.py :: GOVERNANCE_TEMPORAL_ENFORCEMENT` temporal-owner-doc exemption, and the check enforces that pairing specifically: update this doc, not `docs/STATUS.md`/`docs/ROADMAP.md`/etc., when the selection script's behavior changes.
 - Shared-suite shard discovery collapses nested directories into their top-level owner because
   pytest already recurses. Eligible test files therefore run once across parallel shards and the
   serial host-sensitive boundary. Each shard prints its completion status and elapsed seconds;
@@ -346,7 +362,7 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 - Docs-only PRs should not run full runtime smoke by default.
 - Governance/skill PRs should run cheap skill coherence and workflow invariant tests before any broader smoke.
 - Runtime PRs should run focused tests first and add smoke only when the runtime surface is actually touched.
-- Subsystem-scoped CI must be conservative: workflow/test configuration, dependency files, migrations, and shared fixtures choose the broad deterministic suite. Unmapped runtime paths fail selection until an owner is declared; they must never silently borrow the whole repository's suite.
+- Subsystem-scoped CI must be conservative: dependency files, migrations, shared fixtures, and shared runtime/test configuration choose the broad deterministic suite. CI workflow-only changes run their owned workflow and selector contract tests; any co-changed runtime source still adds its subsystem coverage. Unmapped runtime paths fail selection until an owner is declared; they must never silently borrow the whole repository's suite.
 - E2E coverage is reserved for post-merge, nightly, or explicit manual verification.
 - Heavy test targets in `HEAVY_PR_DEFERRED_TARGETS` run on the PR path only when the PR changes a source they exercise; otherwise they run in `post-merge-heavy-tests.yml` (see `:: Post-merge heavy tests`).
 - When a governing contract names an exact-ref browser proof, dispatch the dedicated workflow only

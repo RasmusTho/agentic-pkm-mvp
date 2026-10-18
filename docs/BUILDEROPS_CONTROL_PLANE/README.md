@@ -946,8 +946,11 @@ lease has since expired/released, without a second correction. A different reque
 refuses. A caller must not manufacture a new key after an unknown result. The source owner retains
 the authenticated exchange, then independently reads task/status and production DevUI source and
 browser results. Existing task GET does not expose correction transaction evidence. Release the
-exact generic maintenance lease through its existing owner after verified completion; failed or
-unknown cleanup is reconciled through that same lease identity. Do not roll the task back to ready
+exact generic maintenance lease through `POST /v1/leases/release`,
+`BuilderOpsControlPlaneClient.release_lease` or API-only `lease-release` after verified completion; failed or
+unknown cleanup is reconciled through that same lease identity and idempotency key. The cleanup
+route requires existing `leases:write`, current epoch, matching repository/holder and generic kind;
+it delegates fencing and durable replay to the existing store and cannot release task ownership. Do not roll the task back to ready
 or rewind a version to compensate for an observation failure.
 
 Repository implementation and tests do not install this support or apply the task5495 correction

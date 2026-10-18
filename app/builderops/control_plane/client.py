@@ -613,6 +613,21 @@ class BuilderOpsControlPlaneClient:
             },
         )
 
+    def release_lease(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        lease: Mapping[str, Any],
+        idempotency_key: str,
+        request: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Release the exact generic lease; never terminate task ownership."""
+        return self._request(
+            "POST", f"/{API_VERSION}/leases/release",
+            json_body={"envelope": dict(envelope), "lease": dict(lease),
+                       "idempotency_key": idempotency_key, "request": dict(request or {})},
+        )
+
     def commit_attempt(
         self,
         *,
