@@ -653,6 +653,17 @@ mismatched evidence cannot start a fresh operation or advance the candidate. Fai
 SHA/digest/run/channel/result JSON in the private controller log. A newer candidate can supersede
 an older one before deployment begins; a started chain completes with its original identity.
 
+After a candidate's `test` deployment commits, the controller runs the fixed post-merge heavy-test
+profile once: `qualify-heavy test <operation-id>` through the same `yggdrasil-bws-deploy` launcher
+(#6158). It reads only the committed receipt and its PG proof, takes no channel lock and touches no
+channel resource; an operation-owned network-none container from the admitted image runs the
+selector's heavy targets against a scratch depth-1 checkout of the exact candidate SHA, with the host Docker
+CLI mounted read-only and no socket. The result never gates channel advancement. The controller then
+dispatches `.github/workflows/post-merge-heavy-tests.yml` once with the bounded verdict, using a
+GitHub client limited to Actions write for that dispatch. A failed dispatch does not stall later
+candidates; the workflow's missing-verdict watchdog makes it visible. The VM tooling must be at a
+revision that contains `qualify-heavy`; see `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`.
+
 Install from a clean retained tooling checkout contained in reviewed `main` of
 `RasmusTho/agentic-pkm-mvp`, with its own working Python environment and the existing `gh` read
 client. Before importing checkout code, the installer requires one credential-free canonical
