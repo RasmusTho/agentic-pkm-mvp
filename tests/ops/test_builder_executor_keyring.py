@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import ast
+import errno
 import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 from types import SimpleNamespace
 
 import pytest
@@ -28,8 +30,8 @@ class Host:
     def run(self, args, *, input=None, **kwargs):
         self.calls.append((args, input))
         code, output = 0, b""
-        if args[0].endswith("systemd-creds"):
-            if args[1] == "encrypt":
+        if "/usr/bin/systemd-creds" in args:
+            if "encrypt" in args:
                 self.encryptions.append(input)
                 output = b"encrypted-synthetic:" + keyring.digest(input).encode()
             elif self.fail_decrypt:
@@ -82,7 +84,7 @@ def host(tmp_path, monkeypatch):
     for name in keyring.MASKS:
         (keyring.MASK_DIRECTORY / name).symlink_to("/dev/null")
     keyring.MACHINE_KEY.write_bytes(b"synthetic pre-existing OS host key; never opened by observe")
-    keyring.MACHINE_KEY.chmod(0o600)
+    keyring.MACHINE_KEY.chmod(0o400)
     monkeypatch.setattr(keyring.sys, "platform", "linux")
     monkeypatch.setattr(keyring.socket, "gethostname", lambda: "builder-system")
     monkeypatch.setattr(keyring.pwd, "getpwnam", lambda name: SimpleNamespace(
@@ -175,7 +177,10 @@ def test_apply_uses_encrypted_stdin_handoff_and_rejects_bad_custody(host):
     for args, data in fake.calls:
         assert master.decode() not in " ".join(args)
         if data == master:
-            assert args[0:2] == ["/usr/bin/systemd-creds", "encrypt"]
+            assert args[0] == "/usr/bin/systemd-run" and "encrypt" in args
+            assert "--property=ProtectSystem=strict" in args
+            assert f"--property=ReadOnlyPaths={keyring.MACHINE_KEY.parent} {keyring.MACHINE_KEY}" in args
+            assert "--property=RuntimeMaxSec=15" in args
     for path in keyring.BUNDLE.iterdir():
         assert master not in path.read_bytes()
     assert (keyring.BUNDLE / "master.cred").stat().st_mode & 0o777 == 0o400
@@ -340,7 +345,8 @@ def test_remaining_owned_cgroup_blocks_withdrawal_success_and_reactivation(host)
     assert invoke(package, "apply", plan=stop)["owned_cgroup_empty_or_reclaimed"]
 
 
-@pytest.mark.parametrize("failure", [None, "empty", "public", "symlink", "hardlink"])
+@pytest.mark.parametrize("failure", [None, "empty", "public", "symlink", "hardlink", "acl", "foreign-acl",
+                                         "group-acl", "write-acl", "malformed-acl", "root-no-acl"])
 def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, monkeypatch, failure):
     _, _package = host
     root = tmp_path / "credentials"
@@ -360,6 +366,36 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
     monkeypatch.setattr(keyring, "CREDENTIAL_DIRECTORY_ROOT", root)
     monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(directory))
     monkeypatch.setattr(keyring, "bus_owner", lambda: None)
+    fstat = os.fstat
+    acl_cases = {"acl", "foreign-acl", "group-acl", "write-acl", "malformed-acl", "root-no-acl"}
+    # Metadata/ACL substitute models the systemd producer; the file descriptor and
+    # stdin/exec path remain real. The native Linux fixture exercises actual ACLs.
+    root_uid = os.geteuid() + 100
+    monkeypatch.setattr(keyring, "ROOT_UID", root_uid)
+    if failure in acl_cases:
+        credential.chmod(0o440)
+
+        def root_metadata(fd):
+            result = fstat(fd)
+            values = list(result)
+            values[4] = root_uid
+            return os.stat_result(values)
+
+        monkeypatch.setattr(keyring.os, "fstat", root_metadata)
+
+    def credential_acl(fd, name):
+        assert name == "system.posix_acl_access" and fstat(fd).st_size >= 0
+        if failure not in acl_cases or failure == "root-no-acl":
+            raise OSError(errno.ENODATA, "synthetic no ACL")
+        undefined = 0xffffffff
+        entries = [(1, 4, undefined), (2, 6 if failure == "write-acl" else 4,
+                                      keyring.UID + 1 if failure == "foreign-acl" else keyring.UID),
+                   (4, 4 if failure == "group-acl" else 0, undefined),
+                   (16, 4, undefined), (32, 0, undefined)]
+        return (b"bad" if failure == "malformed-acl" else struct.pack("<I", 2)) + b"".join(
+            struct.pack("<HHI", *entry) for entry in entries)
+
+    monkeypatch.setattr(keyring.os, "getxattr", credential_acl, raising=False)
     executed = []
 
     class ExecObserved(BaseException):
@@ -378,7 +414,7 @@ def test_daemon_hands_protected_credential_to_native_stdin_only(host, tmp_path, 
     monkeypatch.setattr(keyring.os, "execve", execute)
     saved = os.dup(0)
     try:
-        if failure:
+        if failure and failure != "acl":
             with pytest.raises((keyring.Refusal, OSError)):
                 keyring.daemon()
             assert not executed

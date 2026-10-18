@@ -124,6 +124,10 @@ existing private systemd host key; it creates only this consumer's encrypted mas
 root-owned runtime bundle. Native encrypted state is isolated in the service's private state
 directory. Existing foreign/default keyrings, unowned units and incompatible partial state are
 refused. A retry reconciles the same published installation and retains its original master.
+Encryption runs in a finite transient systemd service with the host-key file and its parent
+read-only: `systemd-creds` cannot generate or replace shared host custody, including when an
+existing key belongs to another machine. The decrypted credential accepts systemd's exact root-owned
+read ACL for `ygg`, or its UID-owned `0400` fallback; additional ACL grants are refused.
 
 The concrete activation step enables `ygg` lingering and
 `yggdrasil-builder-executor-keyring.service`, retaining the user bus across SSH logout. Existing

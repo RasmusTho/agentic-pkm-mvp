@@ -148,6 +148,9 @@ native-keyring master on the VM. The master is delivered by `LoadCredentialEncry
 the foreground GNOME secrets daemon as the existing `ygg` user. No master value crosses SSH, enters
 argv/environment/Git, or becomes a BWS reader/DevUI identity. Missing or wrong-custody host keys,
 foreign state, a competing native owner, source/plan drift and unknown startup outcomes fail closed.
+Encryption uses a finite transient service with read-only host-key file/parent mounts, preventing
+the tool's implicit generation or replacement of shared OS custody. Decrypted input admits only
+systemd's root-owned ACL granting `ygg` read access, or its UID-owned `0400` fallback.
 An existing encrypted keyring never causes automatic master regeneration. The actual auth-preflight
 and model-child environment admit only the current UID's validated private local bus/runtime pair;
 ambient provider/GitHub credentials and `CODEX_HOME` remain excluded.

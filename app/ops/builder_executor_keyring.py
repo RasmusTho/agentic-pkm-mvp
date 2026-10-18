@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import errno
 import fcntl
 import hashlib
 import json
@@ -18,6 +19,7 @@ import secrets
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -184,9 +186,9 @@ def daemon() -> None:
     fd = os.open(directory / CREDENTIAL, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         s = os.fstat(fd)
-        require(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_uid == UID
-                and not stat.S_IMODE(s.st_mode) & 0o077 and 32 <= s.st_size <= 256,
+        require(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and 32 <= s.st_size <= 256,
                 "native_credential_custody_or_size")
+        credential_permissions(fd, s)
         os.dup2(fd, 0, inheritable=True)
     except BaseException:
         os.close(fd)
@@ -195,6 +197,27 @@ def daemon() -> None:
         os.close(fd)
     os.execve("/usr/bin/gnome-keyring-daemon", ["gnome-keyring-daemon", "--foreground",
               "--components=secrets", "--unlock", f"--control-directory={CONTROL}"], native_environment())
+
+
+def credential_permissions(fd: int, metadata: os.stat_result) -> None:
+    """Accept exactly systemd255's root+read ACL or its read-only UID fallback."""
+    try:
+        acl = getattr(os, "getxattr")(fd, "system.posix_acl_access")
+    except OSError as exc:
+        require(exc.errno in (errno.ENODATA, errno.ENOTSUP), "credential_acl_unavailable")
+        require(metadata.st_uid == UID and stat.S_IMODE(metadata.st_mode) == 0o400,
+                "credential_owner_or_mode")
+        return
+    require(metadata.st_uid == ROOT_UID and stat.S_IMODE(metadata.st_mode) == 0o440,
+            "credential_acl_owner_or_mode")
+    # Linux POSIX ACL xattr v2: tag, permissions, qualifier. Reject any extra grant,
+    # including ineffective named entries, rather than trusting mode's ACL mask.
+    undefined = 0xffffffff
+    expected = ((1, 4, undefined), (2, 4, UID), (4, 0, undefined),
+                (16, 4, undefined), (32, 0, undefined))
+    require(len(acl) == 44 and acl[:4] == struct.pack("<I", 2)
+            and tuple(struct.iter_unpack("<HHI", acl[4:])) == expected,
+            "credential_acl_grants")
 
 
 def user_command(args: list[str]) -> list[str]:
@@ -251,7 +274,7 @@ def observe(payload: Mapping[str, str], *, match_source: bool = True) -> dict[st
             "fixed_target_required")
     account = pwd.getpwnam(USER)
     require(account.pw_uid == UID and account.pw_gid == UID, "fixed_user_required")
-    for name in ("gnome-keyring-daemon", "secret-tool", "busctl", "systemd-creds"):
+    for name in ("gnome-keyring-daemon", "secret-tool", "busctl", "systemd-creds", "systemd-run"):
         require(shutil.which(name, path="/usr/bin:/bin"), "native_tool_missing")
     protected_parents(BUNDLE)
     protected_parents(UNIT_PATH)
@@ -285,7 +308,7 @@ def observe(payload: Mapping[str, str], *, match_source: bool = True) -> dict[st
                     and stat.S_IMODE(s.st_mode) == 0o700, "native_directory_custody")
     key = MACHINE_KEY.lstat()
     require(stat.S_ISREG(key.st_mode) and key.st_nlink == 1 and key.st_uid == ROOT_UID
-            and not stat.S_IMODE(key.st_mode) & 0o077, "machine_key_custody")
+            and stat.S_IMODE(key.st_mode) == 0o400, "machine_key_custody")
     enabled = checked(user_command(["/usr/bin/systemctl", "--user", "list-unit-files", "--state=enabled",
                                     "--no-legend", "--no-pager"]))
     linger = checked(["/usr/bin/loginctl", "show-user", USER, "-p", "Linger", "--value"]).decode().strip()
@@ -303,6 +326,7 @@ def planned_effects(action: str, before: Mapping[str, object]) -> dict[str, obje
             "ensure_native_started": action in ("apply", "start"), "stop_owned_native_service": action == "disable",
             "enable_user_lingering": action in ("apply", "start") and before["linger"] != "yes",
             "existing_enabled_user_units_may_persist": action in ("apply", "start"),
+            "encryption_uses_finite_read_only_host_key_sandbox": action == "apply" and before["installation"] == "absent",
             "packaged_masks_retained": True, "root_can_decrypt": True,
             "same_uid_can_access_unlocked_keyring": True, "offline_image_protection": False,
             "provider_login_performed": False, "existing_services_restarted": False}
@@ -359,8 +383,7 @@ def install_bundle(payload: Mapping[str, str], approved: Mapping[str, object]) -
     with tempfile.TemporaryDirectory(prefix=".executor-keyring-", dir=BUNDLE.parent) as temp:
         stage = Path(temp)
         master = secrets.token_urlsafe(48).encode()
-        encrypted = checked(["/usr/bin/systemd-creds", "encrypt", "--with-key=host",
-                             f"--name={CREDENTIAL}", "-", "-"], data=master)
+        encrypted = encrypt_master(master)
         require(encrypted and master not in encrypted, "encrypted_master_unproven")
         verified = checked(["/usr/bin/systemd-creds", "decrypt", f"--name={CREDENTIAL}", "-", "/dev/null"],
                            data=encrypted)
@@ -379,6 +402,22 @@ def install_bundle(payload: Mapping[str, str], approved: Mapping[str, object]) -
         sync_directory(BUNDLE.parent)
         # TemporaryDirectory must not try to remove the now-published bundle.
         stage.mkdir(mode=0o700)
+
+
+def encrypt_master(master: bytes) -> bytes:
+    # systemd-creds may unlink a foreign-machine host key even when it exists.
+    # A private, read-only mount namespace makes *both* replacement and generation
+    # impossible. No host-key content is opened by this module. --pipe carries the
+    # master through descriptors; native stdout is captured ciphertext, never journal.
+    return checked(["/usr/bin/systemd-run", "--quiet", "--wait", "--pipe", "--collect",
+                    "--service-type=exec", "--property=ProtectSystem=strict",
+                    f"--property=ReadOnlyPaths={MACHINE_KEY.parent} {MACHINE_KEY}",
+                    "--property=PrivateTmp=yes", "--property=NoNewPrivileges=yes",
+                    "--property=LimitCORE=0", "--property=RuntimeMaxSec=15",
+                    "--property=StandardError=null",
+                    f"--setenv=SYSTEMD_CREDENTIAL_SECRET={MACHINE_KEY}",
+                    "/usr/bin/systemd-creds", "encrypt", "--with-key=host",
+                    f"--name={CREDENTIAL}", "-", "-"], data=master)
 
 
 def status(payload: Mapping[str, str]) -> dict[str, object]:
