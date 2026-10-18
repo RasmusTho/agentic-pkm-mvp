@@ -881,9 +881,13 @@ class LinuxEffects:
             env['COMPOSE_PROFILES'] = ''
         return env
 
-    def compose(self, *args: str) -> str:
+    def compose(self, *args: str, cutover: AuthorityCutover | None = None) -> str:
         cfg = self.config
-        env = self.environment()
+        # Recovery Compose must inherit the authenticated ownership source from
+        # the request.  Falling back to the supervisor's ambient/default root
+        # could make the container inspect a different host ledger than the
+        # one qualified for this failed operation.
+        env = self.environment(cutover)
         overlays = ['-f', str(cfg.root / 'docker-compose.bws.yml')]
         if env['BWS_DATABASE_TARGET'] == 'external':
             overlays += ['-f', str(cfg.root / 'docker-compose.bws-external.yml')]
@@ -2043,6 +2047,7 @@ class LinuxEffects:
             '--expected-owner-receipt-sha256', owner_sha,
             '--quiescence-proof-path', '/app/instance-ownership/deployment-quiescence-proof.json',
             '--expected-quiescence-proof-sha256', proof_sha,
+            cutover=request.authority_cutover,
         )
         try:
             output = json.loads(result)

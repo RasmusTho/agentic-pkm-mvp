@@ -4407,6 +4407,36 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
     )
     recovery_receipt.chmod(0o600)
 
+    # Simulate a crash before the registry's main file was published: the
+    # canonical transaction journal contains a valid prepared empty generation
+    # but no registry artifacts are visible yet.  Recovery must roll this back
+    # first, then continue the authenticated dormant materialization.
+    import app.instance.vault_registry as vault_registry_module
+
+    layout.root.mkdir(mode=0o700)
+    recovered_store = VaultRegistryStore(layout.registry_path)
+    empty_snapshot = recovered_store._empty_snapshot()
+    empty_payload = vault_registry_module._render_markdown_settings(
+        recovered_store._frontmatter_from_snapshot(empty_snapshot),
+        "# Instance Vault Registry\nMechanical instance-local state; registration does not grant vault authority.\n",
+    ).encode("utf-8")
+    empty_generation = {
+        recovered_store.path: empty_payload,
+        recovered_store.snapshot_path: empty_payload,
+        recovered_store.snapshot_checksum_path: (
+            hashlib.sha256(empty_payload).hexdigest() + "\n"
+        ).encode("ascii"),
+        recovered_store.rollback_export_path: recovered_store._rollback_export_payload(
+            empty_snapshot
+        ),
+        recovered_store.scalar_rollback_session_path: None,
+    }
+    empty_previous = {path: None for path in empty_generation}
+    vault_registry_module._atomic_private_write(
+        recovered_store.transaction_path,
+        recovered_store._transaction_manifest("prepared", empty_previous, empty_generation),
+    )
+
     result = recovery_module.reconstruct_missing_test_instance_state(
         channel="test",
         failed_operation_id=request_payload["failed_operation_id"],
@@ -4443,8 +4473,6 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
     # the recovery result marker was observed.  The retry must use the store's
     # canonical journal recovery path instead of read_existing(), which is
     # intentionally fail-closed for this crash window.
-    import app.instance.vault_registry as vault_registry_module
-
     recovered_store = VaultRegistryStore(layout.registry_path)
     generation = {
         path: path.read_bytes() if path.exists() else None

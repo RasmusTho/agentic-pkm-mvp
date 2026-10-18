@@ -5391,6 +5391,30 @@ def test_linux_effects_authenticates_effective_compose_connection(tmp_path, monk
     assert len(compose_environments) == 1
 
 
+def test_linux_recovery_compose_binds_authenticated_cutover_ownership_root(tmp_path, monkeypatch):
+    """The recovery one-shot cannot inherit an ambient host-global root."""
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import AuthorityCutover
+
+    cfg = linux.LinuxConfig('test', tmp_path, tmp_path / 'data', 1000, 1000, '', '')
+    (tmp_path / 'config/deploy').mkdir(parents=True)
+    (tmp_path / 'config/deploy/test.env').write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    monkeypatch.delenv('INSTANCE_OWNERSHIP_HOST_STATE_DIR', raising=False)
+    environments = []
+
+    def command(_argv, **kwargs):
+        environments.append(kwargs['env'])
+        return ''
+
+    monkeypatch.setattr(linux, '_command', command)
+    cutover = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
+    )
+    linux.LinuxEffects(cfg).compose('run', 'instance-state-init', cutover=cutover)
+
+    assert environments[0]['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] == cutover.ownership_root
+
+
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
 @pytest.mark.parametrize('reject_recheck', [False, True])
 def test_bws_full_deploy_raw_migration_uses_supervised_preflight(tmp_path, channel, reject_recheck):

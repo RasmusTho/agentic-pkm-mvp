@@ -359,18 +359,6 @@ def reconstruct_missing_test_instance_state(
     try:
         with _deployment_admission_locked(host), _producer_transition_locked(layout):
             ledger.require_existing()
-            # Existing artifacts are accepted only as the exact idempotent
-            # result of this request.  A foreign or partial generation refuses.
-            artifacts = (
-                layout.registry_path,
-                store.snapshot_path,
-                store.snapshot_checksum_path,
-                store.rollback_export_path,
-            )
-            has_artifacts = any(os.path.lexists(path) for path in artifacts)
-            if marker_result_path.exists() and not has_artifacts:
-                raise _test_refusal()
-
             # The existing runtime materializer uses the canonical store
             # transaction/snapshot/export APIs and validates every owner against
             # the established ledger.  The receipt was parsed above from an
@@ -395,17 +383,36 @@ def reconstruct_missing_test_instance_state(
             ]
             if len(selected_resolved) != 1:
                 raise _test_refusal()
-            if has_artifacts:
-                # A crash may have committed the registry's atomic transaction
-                # immediately before the result marker.  Let the canonical
-                # store recovery path finish or roll back its journal before
-                # validating the exact expected dormant snapshot; read_existing
-                # intentionally refuses this crash window.
+
+            # Recover an early transaction journal before inspecting the main
+            # registry.  A crash can leave only the journal (or a partial
+            # generation) while the main file is absent; the canonical store
+            # recovery path must roll that back to an authenticated empty
+            # materialization point instead of treating it as foreign state.
+            materialized = None
+            if os.path.lexists(store.transaction_path):
+                with store._locked(recover_transactions=True):
+                    if store.path.is_file():
+                        materialized = store._read_current_locked(recover=False)
+
+            # Existing artifacts are accepted only as the exact idempotent
+            # result of this request.  A foreign or partial generation refuses
+            # after any canonical journal recovery has completed.
+            artifacts = (
+                layout.registry_path,
+                store.snapshot_path,
+                store.snapshot_checksum_path,
+                store.rollback_export_path,
+            )
+            has_artifacts = any(os.path.lexists(path) for path in artifacts)
+            if marker_result_path.exists() and not has_artifacts and materialized is None:
+                raise _test_refusal()
+            if materialized is None and has_artifacts:
                 if not store.path.is_file():
                     raise _test_refusal()
                 with store._locked(recover_transactions=True):
                     materialized = store._read_current_locked(recover=False)
-            else:
+            if materialized is None:
                 materialized = _materialize_authenticated_channel_registrations(
                     channel="test",
                     registry=store,
