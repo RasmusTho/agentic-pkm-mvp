@@ -30,6 +30,7 @@ CANDIDATE_IDS = tuple('native-web-' + name for name in ('promote', 'reject', 'de
 def bootstrap_fixture(vault_root: Path, generation: str, *, review_queue: MemoryCandidateReviewQueue) -> dict[str, Any]:
     from app.agent_memory.candidate import MemoryCandidate, MemoryType
     from app.agent_memory.companion_aware import SynthesisCompanion, discover_candidates_from_companions
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
     from app.domain.commitments import CommitmentRecord
     from app.episodes.notes import render_episode_note
     from app.knowledge.write_ops import write_note_relative
@@ -95,7 +96,7 @@ def bootstrap_fixture(vault_root: Path, generation: str, *, review_queue: Memory
     discovered = discover_candidates_from_companions([SynthesisCompanion(
         companion_for=REVIEW_NOTE_UUID, target_path=REVIEW_NOTE_PATH, candidates=candidates,
         generated_by='synthetic.native-web',
-    )], queue)
+    )], queue, binding=COMPATIBILITY_BINDING_ID)
     if discovered is not queue or {entry.candidate_id for entry in queue.pending()} != set(CANDIDATE_IDS):
         raise NativeWebRefusal('api_process_memory_queue_unavailable')
     return {
