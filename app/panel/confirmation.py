@@ -7,6 +7,7 @@ typed response contract.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -28,6 +29,7 @@ from app.agents.panel.writeback import (
 )
 from app.events.panel import PanelIntentEvent
 from app.events.schema import make_outbox_event
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.instance.compatibility_binding import legacy_view_bindings, live_compatibility_binding_id
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.receipts.artifact_receipts import stamp_producing_binding
@@ -61,6 +63,30 @@ _DEFAULT_BINDING: Any = object()
 
 def _resolve_stamp(binding: Any) -> str | None:
     return live_compatibility_binding_id() if binding is _DEFAULT_BINDING else binding
+
+
+_ENVELOPE_KEY = "__panel_binding_envelope__"
+
+
+def _wrap_durable(binding: str | None, payload_json: str) -> str:
+    """Persist the producing binding inside the existing JSON column (no migration)."""
+
+    return json.dumps({_ENVELOPE_KEY: 1, "binding_id": binding, "payload": payload_json})
+
+
+def _unwrap_durable(raw: str) -> tuple[str | None, str]:
+    """(binding, payload JSON). A row written before stamps existed has binding ``None``."""
+
+    try:
+        decoded = json.loads(raw)
+    except ValueError:
+        return None, raw
+    if isinstance(decoded, dict) and decoded.get(_ENVELOPE_KEY) == 1:
+        binding = decoded.get("binding_id")
+        return (binding if isinstance(binding, str) and binding else None), str(
+            decoded.get("payload", "")
+        )
+    return None, raw
 
 
 def _is_legacy_binding(binding: str | None) -> bool:
@@ -143,6 +169,16 @@ class SameTurnExecutionError(RuntimeError):
 
 class UnknownProposalError(LookupError):
     pass
+
+
+class RestageRequiredError(UnknownProposalError):
+    """A durable proposal whose producing binding is unproven must be staged again.
+
+    Raised when a registry-bound compatibility write finds a proposal that is not
+    stamped with the live compatibility binding (an unstamped legacy row, or the
+    pre-registry sentinel): it cannot be proven to belong to the vault the confirm
+    would write to, so it is refused rather than executed.
+    """
 
 
 class PanelReceiptPersistenceError(RuntimeError):
@@ -346,14 +382,14 @@ class ProposalStore:
                 conn.commit()
             self._proposals = {}
             for row in rows:
-                self._proposals[(None, str(row["proposal_id"]))] = StagedProposal(
+                stamp, event_json = _unwrap_durable(str(row["intent_event_json"]))
+                self._proposals[(stamp, str(row["proposal_id"]))] = StagedProposal(
                     artifact_id=str(row["artifact_id"]),
-                    intent_event=PanelIntentEvent.model_validate_json(
-                        str(row["intent_event_json"])
-                    ),
+                    intent_event=PanelIntentEvent.model_validate_json(event_json),
                     proposed_at=float(row["proposed_at"]),
                     trace_id=str(row["trace_id"] or ""),
                     proposal_origin=row["proposal_origin"],
+                    binding_id=stamp,
                 )
             self._degraded_reason = None
         except Exception as exc:
@@ -409,7 +445,7 @@ class ProposalStore:
                     (
                         proposal_id,
                         proposal.artifact_id,
-                        proposal.intent_event.model_dump_json(),
+                        _wrap_durable(binding, proposal.intent_event.model_dump_json()),
                         float(proposal.proposed_at),
                         proposal.trace_id,
                         proposal.proposal_origin,
@@ -452,8 +488,7 @@ class ProposalStore:
             if key is None:
                 return
             self._proposals.pop(key, None)
-            removed_binding = key[0]
-        if self._db_path is None or self.degraded or not _is_legacy_binding(removed_binding):
+        if self._db_path is None or self.degraded:
             return
         try:
             with self._connect() as conn:
@@ -554,12 +589,13 @@ class ConfirmIdempotencyStore:
                     "SELECT key, response_json FROM panel_confirm_idempotency ORDER BY created_at ASC"
                 ).fetchall()
                 conn.commit()
-            self._cache = {
-                (None, str(row["key"])): ConfirmResponse.model_validate_json(
-                    str(row["response_json"])
+            cache: dict[tuple[str | None, str], ConfirmResponse] = {}
+            for row in rows:
+                stamp, response_json = _unwrap_durable(str(row["response_json"]))
+                cache[(stamp, str(row["key"]))] = ConfirmResponse.model_validate_json(
+                    response_json
                 )
-                for row in rows
-            }
+            self._cache = cache
             self._degraded_reason = None
         except Exception as exc:
             self._degraded_reason = f"{type(exc).__name__}: {exc}"
@@ -617,7 +653,7 @@ class ConfirmIdempotencyStore:
                     """,
                     (
                         key,
-                        response.model_dump_json(),
+                        _wrap_durable(binding, response.model_dump_json()),
                         now,
                         now_iso,
                     ),
@@ -890,6 +926,10 @@ class PanelConfirmationService:
         if proposal is None:
             raise UnknownProposalError(request.proposal_id)
 
+        live = live_compatibility_binding_id()
+        if live != COMPATIBILITY_BINDING_ID and proposal.binding_id != live:
+            raise RestageRequiredError(request.proposal_id)
+
         if proposal.artifact_id != request.artifact_id:
             raise ValueError("proposal does not belong to artifact_id")
 
@@ -913,7 +953,7 @@ class PanelConfirmationService:
                     idempotency_key=request.idempotency_key,
                     events_emitted=[],
                 )
-                self._idempotency.set(request.idempotency_key, resp)
+                self._idempotency.set(request.idempotency_key, resp, binding=live)
                 self._proposals.remove(request.proposal_id)
                 return resp
             _write_blocked_projection(
@@ -941,7 +981,7 @@ class PanelConfirmationService:
                 idempotency_key=request.idempotency_key,
                 events_emitted=["panel.action.blocked"],
             )
-            self._idempotency.set(request.idempotency_key, resp)
+            self._idempotency.set(request.idempotency_key, resp, binding=live)
             # A WriteGuard block is transient (health/maintenance lock), not a
             # terminal decision: keep the proposal staged (in-memory + DB) so a
             # post-reopen retry resolves the proposal instead of failing as
@@ -958,7 +998,7 @@ class PanelConfirmationService:
                 idempotency_key=request.idempotency_key,
                 events_emitted=[],
             )
-            self._idempotency.set(request.idempotency_key, resp)
+            self._idempotency.set(request.idempotency_key, resp, binding=live)
             self._proposals.remove(request.proposal_id)
             return resp
 
@@ -1068,7 +1108,7 @@ class PanelConfirmationService:
                 events_emitted=events,
             )
 
-        self._idempotency.set(request.idempotency_key, resp)
+        self._idempotency.set(request.idempotency_key, resp, binding=live)
         self._proposals.remove(request.proposal_id)
         return resp
 
@@ -1087,6 +1127,7 @@ __all__ = [
     "panel_staging_store_posture",
     "ProposalStore",
     "Receipt",
+    "RestageRequiredError",
     "SameTurnExecutionError",
     "StagedProposal",
     "UnknownProposalError",

@@ -25,6 +25,7 @@ from app.panel.confirmation import (
     ConfirmResponse,
     PanelReceiptPersistenceError,
     SameTurnExecutionError,
+    RestageRequiredError,
     UnknownProposalError,
 )
 from app.api.compatibility_mutation import (
@@ -64,6 +65,11 @@ async def panel_confirm(
         raise capability_not_ready()
     try:
         return confirm_module._service.confirm(request)
+    except RestageRequiredError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "restage_required", "proposal_id": str(exc)},
+        )
     except UnknownProposalError as exc:
         raise HTTPException(
             status_code=404,

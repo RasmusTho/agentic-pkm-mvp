@@ -11,6 +11,7 @@ scoped read. The confirm path stays a carrier-free compatibility write.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -344,10 +345,10 @@ def test_durable_store_keeps_scoped_state_process_local(tmp_path: Path) -> None:
 
     reloaded = ProposalStore(db)
     reloaded_cache = ConfirmIdempotencyStore(db)
-    # Reloaded rows carry no stamp: legacy view only, never adopted into a binding.
+    # Reloaded rows keep their producing stamp; scoped (non-legacy) state is not persisted.
     assert [pid for pid, _ in reloaded.items_for()] == ["legacy-prop"]
     assert reloaded.items_for("binding-1") == []
-    assert reloaded.items_for(COMPATIBILITY_BINDING_ID) == []
+    assert [pid for pid, _ in reloaded.items_for(COMPATIBILITY_BINDING_ID)] == ["legacy-prop"]
     assert reloaded_cache.get("legacy-key") is not None
     assert reloaded_cache.get("scoped-key") is None
 
@@ -448,3 +449,127 @@ def test_production_paths_stamp_the_live_compatibility_binding(two_bindings) -> 
     # Carrier-free view still sees the compatibility-stamped state.
     legacy = companion_routes._panel_state(artifact_id)
     assert legacy.receipt_count == 1 and len(legacy.proposals) == 1
+
+
+def _set_live_binding(monkeypatch: pytest.MonkeyPatch, holder: dict) -> None:
+    import app.instance.compatibility_binding as binding_module
+
+    def live() -> str:
+        return holder["live"]
+
+    monkeypatch.setattr(binding_module, "live_compatibility_binding_id", live)
+    monkeypatch.setattr(confirm_module, "live_compatibility_binding_id", live)
+
+
+def test_durable_rows_reload_under_their_producing_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review repair: stage under A, rebind to B, restart: A's rows stay A's."""
+
+    import sqlite3
+
+    holder = {"live": "binding-A"}
+    _set_live_binding(monkeypatch, holder)
+    db = tmp_path / "panel.sqlite3"
+    store = ProposalStore(db)
+    cache = ConfirmIdempotencyStore(db)
+    _stage(store, "prop-a", "art", binding=confirm_module._DEFAULT_BINDING)  # production default
+    cache.set("key-a", _response("art", "key-a"))
+
+    # Rebind A -> B and restart.
+    holder["live"] = "binding-B"
+    reloaded = ProposalStore(db)
+    reloaded_cache = ConfirmIdempotencyStore(db)
+    assert reloaded.get("prop-a") is None and reloaded.items_for() == []
+    assert reloaded.get("prop-a", binding="binding-B") is None
+    assert reloaded_cache.get("key-a") is None and reloaded_cache.responses_for() == []
+    # B's carrier-free confirm cannot execute A's proposal.
+    service = confirm_module.PanelConfirmationService(reloaded, reloaded_cache, same_turn_ttl=0)
+    request = confirm_module.ConfirmRequest(
+        proposal_id="prop-a", artifact_id="art", action="reject", idempotency_key="k-b"
+    )
+    with pytest.raises(confirm_module.UnknownProposalError):
+        service.confirm(request)
+
+    # A's state reloads under A.
+    assert reloaded.get("prop-a", binding="binding-A").binding_id == "binding-A"
+    assert reloaded_cache.get("key-a", binding="binding-A") is not None
+    holder["live"] = "binding-A"
+    again = ProposalStore(db)
+    assert again.get("prop-a").binding_id == "binding-A"
+
+    # A row with no stamp (written before stamps existed) joins the legacy view but is
+    # refused for execution while a registry binding is live.
+    holder["live"] = "binding-B"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO panel_staged_proposals (proposal_id, artifact_id, intent_event_json, "
+            "proposed_at, trace_id, proposal_origin, created_at, updated_at) "
+            "VALUES ('prop-old', 'art', ?, ?, '', NULL, 'x', 'x')",
+            (_intent().model_dump_json(), time.time()),
+        )
+    legacy = ProposalStore(db)
+    assert legacy.get("prop-old").binding_id is None
+    old_service = confirm_module.PanelConfirmationService(
+        legacy, ConfirmIdempotencyStore(), same_turn_ttl=0
+    )
+    with pytest.raises(confirm_module.RestageRequiredError):
+        old_service.confirm(
+            confirm_module.ConfirmRequest(
+                proposal_id="prop-old", artifact_id="art", action="reject", idempotency_key="k-old"
+            )
+        )
+    assert legacy.get("prop-old") is not None  # refused, not consumed
+
+
+def test_unprovable_compatibility_binding_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.instance.compatibility_binding import (
+        CompatibilityBindingUnavailableError,
+        legacy_view_bindings,
+        live_compatibility_binding_id,
+    )
+    from app.receipts.artifact_receipts import stamp_producing_binding
+
+    # No registry configured: the explicit sentinel journey.
+    monkeypatch.delenv("INSTANCE_VAULT_REGISTRY_PATH", raising=False)
+    assert live_compatibility_binding_id() == COMPATIBILITY_BINDING_ID
+
+    # A configured but corrupt registry is not silently attributed to the sentinel.
+    registry = tmp_path / "registry.json"
+    registry.write_text("{ not json", encoding="utf-8")
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(registry))
+    with pytest.raises(CompatibilityBindingUnavailableError):
+        live_compatibility_binding_id()
+    with pytest.raises(CompatibilityBindingUnavailableError):
+        stamp_producing_binding({"note_path": "n.md"})
+    with pytest.raises(CompatibilityBindingUnavailableError):
+        ProposalStore().stage("p", StagedProposal(artifact_id="a", intent_event=_intent()))
+    with pytest.raises(CompatibilityBindingUnavailableError):
+        ConfirmIdempotencyStore().set("k", _response("a", "k"))
+    with pytest.raises(CompatibilityBindingUnavailableError):
+        confirm_module._emit_projection_event(
+            "panel.action.logged", {"note_path": "n.md"}, trace_id="t", outbox_path=tmp_path / "o.jsonl"
+        )
+    assert not (tmp_path / "o.jsonl").exists()
+    # Reads never stamp: they degrade to the sentinel and unstamped entries only.
+    assert legacy_view_bindings() == (COMPATIBILITY_BINDING_ID, None)
+
+
+def test_unresolved_rebind_record_fails_closed(two_bindings, monkeypatch) -> None:
+    from app.instance.compatibility_binding import (
+        CompatibilityBindingUnavailableError,
+        live_compatibility_binding_id,
+    )
+    from app.instance.settings_rebind import SettingsRebindStore
+    from app.instance.vault_registry import RegistryError
+
+    def unresolved(self):
+        raise RegistryError("compatibility handoff is awaiting commit")
+
+    monkeypatch.setattr(SettingsRebindStore, "compatibility_binding_id", unresolved)
+    with pytest.raises(CompatibilityBindingUnavailableError):
+        live_compatibility_binding_id()
+    with pytest.raises(CompatibilityBindingUnavailableError):
+        ProposalStore().stage("p", StagedProposal(artifact_id="a", intent_event=_intent()))
