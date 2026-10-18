@@ -559,6 +559,41 @@ if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target
     assert all(target in aggregate for target in expected)
     boundary = run(env={"FAKE_ACTIVE_DIR": str(tmp_path / "active")})
     assert boundary.returncode == 0, boundary.stdout + boundary.stderr
+    exact_boundary = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+            "--partitions-json",
+            json.dumps(
+                [["tests/deploy"], ["tests/ops/test_instance_state_writer_inventory.py"]]
+            ),
+            "--expected-targets-json",
+            json.dumps(
+                ["tests/deploy", "tests/ops/test_instance_state_writer_inventory.py"]
+            ),
+            "--log-dir",
+            str(tmp_path / "exact-logs"),
+            "--aggregate-log",
+            str(tmp_path / "exact-aggregate.log"),
+            "--jobs",
+            "4",
+            "--serial-boundary-json",
+            json.dumps(["tests/ops/test_instance_state_writer_inventory.py"]),
+            "--shard-timeout-seconds",
+            "10",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "PYTEST_ADDOPTS": "--timeout=120 --timeout-method=thread",
+            "FAKE_ACTIVE_DIR": str(tmp_path / "exact-active"),
+        },
+        check=False,
+    )
+    assert exact_boundary.returncode == 0, exact_boundary.stdout + exact_boundary.stderr
     failure = run(env={"FAKE_FAIL_TARGET": "tests/ops"})
     assert failure.returncode == 1
     assert "PARTITION FAILED (7)" in failure.stderr

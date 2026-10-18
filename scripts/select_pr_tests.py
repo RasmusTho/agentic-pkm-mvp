@@ -1660,13 +1660,11 @@ def requires_runtime_checks(changed_files: list[str]) -> bool:
 def _write_github_output(path: str, selection: Selection, *, runtime_checks: bool = True) -> None:
     output = Path(path)
     partitions = scoped_deploy_partitions(selection)
+    target_files = {target.split("::", 1)[0] for target in selection.targets}
     serial_boundary = (
         SCOPED_DEPLOY_SERIAL_BOUNDARY
-        if any(
-            target.split("::", 1)[0] == SCOPED_DEPLOY_SERIAL_ROOT
-            for target in selection.targets
-        )
-        else ()
+        if SCOPED_DEPLOY_SERIAL_ROOT in target_files
+        else tuple(path for path in SCOPED_DEPLOY_SERIAL_BOUNDARY if path in target_files)
     )
     with output.open("a", encoding="utf-8") as handle:
         handle.write(f"full_suite={'true' if selection.full_suite else 'false'}\n")

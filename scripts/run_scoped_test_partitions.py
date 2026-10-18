@@ -108,20 +108,26 @@ def _split_serial_boundary(
     roots = tuple(
         target for target in targets if "::" not in target and not target.endswith(".py")
     )
+    target_files = {target.split("::", 1)[0] for target in targets}
     if not serial_boundary or not all(
-        any(path.startswith(f"{root}/") for root in roots) for path in serial_boundary
+        path in target_files or any(path.startswith(f"{root}/") for root in roots)
+        for path in serial_boundary
     ):
         raise ValueError(
             "serial boundary must be contained by a directory target in the last partition"
         )
     parallel: list[str] = []
     for target in targets:
-        if target in serial_boundary:
+        if target.split("::", 1)[0] in serial_boundary:
             continue
         if any(target.startswith(f"{root}/") for root in roots):
             continue
         parallel.append(target)
-    parallel.extend(f"--ignore={path}" for path in serial_boundary)
+    parallel.extend(
+        f"--ignore={path}"
+        for path in serial_boundary
+        if any(path.startswith(f"{root}/") for root in roots)
+    )
     return tuple(parallel), serial_boundary
 
 
@@ -147,8 +153,19 @@ def run_partitions(
             partitions[-1], serial_boundary
         )
         parallel_partitions[-1] = parallel_targets
-    if parallel_count:
-        with ThreadPoolExecutor(max_workers=min(jobs, parallel_count)) as executor:
+    runnable_partitions: list[tuple[int, tuple[str, ...]]] = []
+    for index, targets in enumerate(parallel_partitions):
+        if targets:
+            runnable_partitions.append((index, targets))
+            continue
+        log_path = log_dir / f"partition-{index}.log"
+        log_path.write_text(
+            "Partition coverage moved entirely to the serial boundary.\n",
+            encoding="utf-8",
+        )
+        results[index] = (0, log_path, False)
+    if runnable_partitions:
+        with ThreadPoolExecutor(max_workers=min(jobs, len(runnable_partitions))) as executor:
             futures = {
                 executor.submit(
                     _run_partition,
@@ -157,7 +174,7 @@ def run_partitions(
                     log_dir=log_dir,
                     timeout_seconds=timeout_seconds,
                 ): index
-                for index, targets in enumerate(parallel_partitions)
+                for index, targets in runnable_partitions
             }
             for future in as_completed(futures):
                 index, returncode, log_path, timed_out = future.result()
