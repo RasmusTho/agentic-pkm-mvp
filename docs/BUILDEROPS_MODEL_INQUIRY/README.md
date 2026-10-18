@@ -338,15 +338,17 @@ Partial failure examples:
 ## Relationship To GitHub Issues
 
 Parent feature Issue: [#3288](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3288). It is the
-validation hub for this capability. Child issues are #3289 (BMI-01), #3290 (BMI-02), #3291
-(BMI-03), #3292 (BMI-04), and #3293 (BMI-05). All five child issues are delivered and closed; the
-parent remains open for the end-to-end validation described below.
+delivered validation hub for this capability, closed on 2026-09-02. Child issues are #3289
+(BMI-01), #3290 (BMI-02), #3291 (BMI-03), #3292 (BMI-04), and #3293 (BMI-05); all five are
+delivered and closed. Its fixture-backed acceptance does not establish current host-session readiness.
 
 ## Validation / Acceptance Path
 
-After BMI-05, run the deterministic dry-run and the repo-verifiable contract checks. Under the
-ADR-0064 owner-cost ruling, parent acceptance does not request a metered provider-API inquiry,
-provision API keys, or retire the sanctioned subscription bridge. Ordinary host-local inquiries
-continue through the sanctioned subscription-backed session; that operational path is Model
-Inquiry-only and never a CKM credential source or fallback. Promote BuilderOps owner-doc claims only
-after the remaining parent validation is satisfied.
+Parent #3288 accepted the deterministic, fixture-backed inquiry/trace/readiness/promotion contract
+and closed on 2026-09-02. Live provider acceptance, host subscription setup and credential
+provisioning were explicitly outside that parent scope. Under the ADR-0064 owner-cost ruling,
+repeat validation uses the deterministic dry-run and repo-verifiable checks; it does not request a
+metered provider-API inquiry, provision API keys, or retire the sanctioned subscription bridge.
+Ordinary host-local inquiries continue through the sanctioned subscription-backed session; that operational path is Model
+Inquiry-only and never a CKM credential source or fallback. Any new host or credential-readiness
+claim requires current evidence under its own owner procedure; the closed parent is historical contract-acceptance evidence, not an outstanding activation gate.
