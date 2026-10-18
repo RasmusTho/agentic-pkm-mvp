@@ -1793,7 +1793,7 @@ class LinuxEffects:
             return None
         source_operation_id = request.source_operation_id or request.failed_operation_id
         source_plan = (
-            self.config.journal.bound_plan(source_operation_id)
+            request.source_plan
             if request.source_operation_id is not None else request.plan
         )
         if source_plan is None:
@@ -2063,11 +2063,11 @@ class LinuxEffects:
         disposition match the exact failed operation and candidate request.
         """
         request.validate()
-        if request.source_operation_id is None:
+        if request.source_operation_id is None or request.source_plan is None:
             raise PostgresDeployError()
         journal = self.config.journal.read()
         failed_plan = self.config.journal.bound_plan(request.failed_operation_id)
-        source_plan = self.config.journal.bound_plan(request.source_operation_id)
+        source_plan = request.source_plan
         disposition = self._read_test_recovery_disposition(request)
         if (
             self.config.channel != 'test'

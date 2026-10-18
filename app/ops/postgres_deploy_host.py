@@ -264,6 +264,7 @@ def _write_test_recovery_repair_marker(
         failed_successor_operation_id, candidate_plan,
         source_request.authority_cutover,
         source_operation_id=source_request.failed_operation_id,
+        source_plan=source_request.plan,
     )
     probe.validate()
     prior = _read_test_recovery_marker(controller, probe)
@@ -490,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
                     failed_successor_operation_id, plan,
                     recovery_request.authority_cutover,
                     source_operation_id=recovery_request.failed_operation_id,
+                    source_plan=source_request.plan,
                 )
                 lineage_request.validate()
                 # The original reset checkpoint is insufficient: the exact

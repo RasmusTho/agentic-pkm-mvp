@@ -4014,6 +4014,7 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
     assert calls == [TestRecoveryRequest(
         failed_successor_operation_id, plan, authority,
         source_operation_id=failed_operation_id,
+        source_plan=source_request.plan,
     )]
     assert len(deployed) == 1
     assert deployed[0][0] == plan
@@ -5471,6 +5472,7 @@ def test_linux_recovery_prepares_new_volume_before_runtime_uid(monkeypatch, tmp_
     )
     request = TestRecoveryRequest(
         operation_id, plan, cutover, source_operation_id=source_operation_id,
+        source_plan=plan,
     )
     config = SimpleNamespace(channel='test', root=tmp_path, uid=1000, journal=object())
     effects = linux.LinuxEffects(config)
@@ -5548,6 +5550,7 @@ def test_linux_recovery_refuses_before_first_effect_when_writers_are_live(tmp_pa
     )
     request = TestRecoveryRequest(
         str(uuid4()), plan, authority, source_operation_id=str(uuid4()),
+        source_plan=plan,
     )
     effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path))
     effects.local_database = lambda: True
@@ -5595,6 +5598,7 @@ def test_linux_recovery_rejects_active_supervised_operation(monkeypatch, tmp_pat
         **{
             'failed_operation_id': str(uuid4()),
             'source_operation_id': str(uuid4()),
+            'source_plan': plan.payload(),
             'plan': plan.payload(),
             'authority_cutover': {
                 'binding_id': authority.binding_id,
@@ -5610,6 +5614,7 @@ def test_linux_recovery_rejects_active_supervised_operation(monkeypatch, tmp_pat
 def test_linux_recovery_accepts_runtime_owned_receipt_under_root_supervisor(monkeypatch, tmp_path):
     """A retry accepts the runtime-owned checkpoint after permission preparation."""
     import hashlib
+    from dataclasses import replace
     from types import SimpleNamespace
     from uuid import uuid4
 
@@ -5637,10 +5642,7 @@ def test_linux_recovery_accepts_runtime_owned_receipt_under_root_supervisor(monk
     )
     request = TestRecoveryRequest(
         operation_id, plan, authority, source_operation_id=source_operation_id,
-    )
-    source_plan = DeployPlan(
-        'test', plan.revision, plan.services, plan.consumers, True,
-        None, False, authority,
+        source_plan=replace(plan, revision='c' * 40, image_digest='sha256:' + 'd' * 64),
     )
 
     class Journal:
@@ -5648,10 +5650,8 @@ def test_linux_recovery_accepts_runtime_owned_receipt_under_root_supervisor(monk
             return DeployReceipt(operation_id, 'test', 'deploy', 'failed', 'failed')
 
         def bound_plan(self, selected):
-            if selected == operation_id:
-                return plan
-            assert selected == source_operation_id
-            return source_plan
+            assert selected == operation_id
+            return plan
 
     config = SimpleNamespace(
         channel='test', uid=os.geteuid(), gid=os.getegid(), journal=Journal(), root=tmp_path,
@@ -5693,6 +5693,83 @@ def test_linux_recovery_accepts_runtime_owned_receipt_under_root_supervisor(monk
         'f' * 64,
     )
     assert receipt_path.stat().st_uid == config.uid
+
+
+def test_linux_reconstruction_uses_retained_reset_request_after_journal_rollover(
+    monkeypatch, tmp_path,
+):
+    """The single-slot journal authenticates the failed successor, not history."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployJournal, DeployPlan, PostgresDeployError,
+        TestRecoveryRequest,
+    )
+
+    source_operation_id = str(uuid4())
+    failed_successor_operation_id = str(uuid4())
+    authority = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'ownership'),
+    )
+    source_request_plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'a' * 64, True,
+    )
+    source_cutover_plan = replace(
+        source_request_plan, automatic=False, image_digest=None,
+        ack_forward_only=True, authority_cutover=authority,
+    )
+    fresh_candidate = replace(
+        source_request_plan, revision='b' * 40,
+        image_digest='sha256:' + 'b' * 64,
+    )
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+
+    def fail_operation(operation_id, plan):
+        journal.bind_request(operation_id, plan, False, create=True)
+        for stage in ('prepared', 'preflighted', 'materialized', 'activating', 'failed'):
+            journal.write(operation_id, stage)
+
+    fail_operation(source_operation_id, source_cutover_plan)
+    effects = linux.LinuxEffects(SimpleNamespace(
+        channel='test', root=tmp_path, uid=os.geteuid(), gid=os.getegid(), journal=journal,
+    ))
+    source_request = TestRecoveryRequest(
+        source_operation_id, source_request_plan, authority,
+    )
+    effects._write_test_recovery_disposition(source_request, 'complete')
+    fail_operation(failed_successor_operation_id, source_request_plan)
+
+    with pytest.raises(PostgresDeployError):
+        journal.bound_plan(source_operation_id)
+    request = TestRecoveryRequest(
+        failed_successor_operation_id, fresh_candidate, authority,
+        source_operation_id=source_operation_id,
+        source_plan=source_request_plan,
+    )
+    ownership_root = Path(authority.ownership_root)
+    ownership_root.mkdir(mode=0o700)
+    (ownership_root / 'legacy-owner-inventory.json').write_text('{}\n')
+    (ownership_root / 'deployment-quiescence-proof.json').write_text('{}\n')
+    effects._validate_test_instance_state_recovery_authority = (
+        lambda *_args, **_kwargs: 'c' * 64
+    )
+    effects.recovery_quiescent = lambda: True
+    monkeypatch.setattr(
+        linux, '_private_json', lambda path: json.loads(path.read_text()),
+    )
+
+    receipt_path, *_ = effects._write_test_instance_state_recovery_receipt(request)
+
+    payload = json.loads(receipt_path.read_text())
+    assert payload['source_operation_id'] == source_operation_id
+    assert payload['failed_successor_operation_id'] == failed_successor_operation_id
+    assert payload['candidate_revision'] == fresh_candidate.revision
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])

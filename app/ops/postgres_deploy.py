@@ -148,6 +148,7 @@ class TestRecoveryRequest:
     plan: DeployPlan
     authority_cutover: AuthorityCutover
     source_operation_id: str | None = None
+    source_plan: DeployPlan | None = None
 
     def validate(self) -> None:
         if (not isinstance(self.failed_operation_id, str)
@@ -168,10 +169,13 @@ class TestRecoveryRequest:
             or self.plan.channel != 'test'
             or not self.plan.automatic
             or self.plan.authority_cutover is not None
-            or self.plan.image_digest is None):
+            or self.plan.image_digest is None
+            or (self.source_operation_id is None) != (self.source_plan is None)):
             raise PostgresDeployError()
         self.plan.validate()
         self.authority_cutover.validate()
+        if self.source_plan is not None:
+            self.validate_source_plan(self.source_plan)
 
     def validate_failed_plan(self, failed_plan: DeployPlan) -> None:
         """Authenticate the journal-bound cutover independently of the successor.
@@ -214,14 +218,14 @@ class TestRecoveryRequest:
                 raise PostgresDeployError()
 
     def validate_source_plan(self, source_plan: DeployPlan) -> None:
-        """Authenticate the completed original reset lineage."""
-        self.validate()
+        """Validate the host-retained request for the completed reset."""
         if self.source_operation_id is None or not isinstance(source_plan, DeployPlan):
             raise PostgresDeployError()
         source_plan.validate()
         if (source_plan.channel != 'test'
-            or source_plan.automatic
-            or source_plan.authority_cutover != self.authority_cutover):
+            or not source_plan.automatic
+            or source_plan.authority_cutover is not None
+            or source_plan.image_digest is None):
             raise PostgresDeployError()
         for field in ('channel', 'services', 'consumers'):
             if getattr(source_plan, field) != getattr(self.plan, field):
@@ -235,7 +239,10 @@ class TestRecoveryRequest:
             'authority_cutover': asdict(self.authority_cutover),
         }
         if self.source_operation_id is not None:
+            if self.source_plan is None:
+                raise PostgresDeployError()
             payload['source_operation_id'] = self.source_operation_id
+            payload['source_plan'] = self.source_plan.payload()
         return payload
 
     @classmethod
@@ -243,7 +250,10 @@ class TestRecoveryRequest:
         if (not isinstance(raw, dict)
             or set(raw) not in (
                 {'failed_operation_id', 'plan', 'authority_cutover'},
-                {'failed_operation_id', 'source_operation_id', 'plan', 'authority_cutover'},
+                {
+                    'failed_operation_id', 'source_operation_id', 'source_plan',
+                    'plan', 'authority_cutover',
+                },
             )
             or not isinstance(raw['authority_cutover'], dict)
             or set(raw['authority_cutover']) != {'binding_id', 'root', 'ownership_root'}):
@@ -251,6 +261,7 @@ class TestRecoveryRequest:
         request = cls(
             raw['failed_operation_id'], DeployPlan.from_payload(raw['plan']),
             AuthorityCutover(**raw['authority_cutover']), raw.get('source_operation_id'),
+            DeployPlan.from_payload(raw['source_plan']) if 'source_plan' in raw else None,
         )
         request.validate()
         return request

@@ -1255,6 +1255,11 @@ host-global ownership ledger/key plus proof-bound owner inventory. That inventor
 exact active TEST lease set. A read-only runtime-UID preflight authenticates the complete ledger and
 records its digest before any receipt, volume, or Compose effect; later boundaries recheck strict
 stopped-writer state and the same digest before writing only dormant, inactive-fenced registry state. The
+VM's single-slot native request journal authenticates only the current terminal failed successor;
+reconstruction does not require it to retain the original reset binding after rollover. Instead,
+the private completed reset disposition must match the host recovery marker's retained reset
+request by source operation ID, revision, image digest, authority tuple, and runtime surface before
+the successor-bound journal can authorize the new candidate.
 container receives the host ownership directory through the fixed `/app/instance-ownership` bind
 mount; the host ownership path remains part of the authenticated authority tuple and is never
 replaced by path inference. The host recovery marker carries separate reset and reconstruction

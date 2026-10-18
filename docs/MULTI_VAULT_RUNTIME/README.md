@@ -293,7 +293,11 @@ one already-observed TEST total-loss shape has a separate explicit producer,
 terminal failed successor and the distinct completed original recovery disposition, a fresh
 two-pass owner inventory and stopped-writer proof, the existing host-global ownership key/ledger,
 and the exact candidate revision and image digest. The receipt must cover every active TEST lease;
-a read-only runtime-UID preflight authenticates that complete set and its ledger digest before the
+a reconstruction does not assume that the VM's single-slot request journal retains the original
+reset operation after the failed successor is admitted: that journal authenticates the current
+terminal successor, while the private completed disposition is matched to the host-retained reset
+request's operation ID, revision, image digest, authority tuple, and bounded runtime surface.
+A read-only runtime-UID preflight authenticates that complete set and its ledger digest before the
 recovery receipt or Compose volume effect. Under deployment-admission -> producer-transition -> ownership-ledger ->
 registry-store ordering it materializes only the proven TEST registrations through the existing
 snapshot/checksum/legacy-export APIs, leaves the registry dormant at inactive-fenced revision zero
