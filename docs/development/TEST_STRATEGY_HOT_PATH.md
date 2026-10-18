@@ -86,7 +86,8 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   seed copies and require failure for missing/malformed metric input, failed gates and missing
   thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
   unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
-- Both full and scoped non-PG unit steps have finite 60-minute outer ceilings. The scoped step's
+- The full and scoped non-PG unit steps retain finite outer ceilings: 75 minutes for the full lane
+  and 60 minutes for the scoped lane. The scoped step's
   former 35-minute ceiling cut off #6091 / PR #6092 at 91% without a reported assertion failure
   ([job 116083429844](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38631158811/job/116083429844));
   its six selected subsystem groups run serially. Additional outer margin does not prove completion
@@ -96,8 +97,12 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   and [#6075 job 115693481077](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38515571086/job/115693481077).
   All parallel shards passed; the serial boundary was still running when cancelled. Their
   parallel phases alone took approximately 30m56s and 29m50s, leaving only about four to five
-  minutes for serial coverage at the old ceiling. The 60-minute bound leaves approximately
-  29 minutes after the slowest observed parallel phase, without changing four-process concurrency
+  minutes for serial coverage at the old ceiling. Current-head #6187 run 39100438771 later proved
+  that repository growth can extend the full lane's parallel phase to 51m35s (including a 45m51s
+  deploy shard), after which the host-sensitive serial boundary was cancelled at the 60-minute
+  ceiling despite every parallel shard passing. The full lane's 75-minute bound restores finite
+  serial-phase margin; the scoped source-triggered lane remains bounded at 60 minutes. Neither
+  change alters four-process concurrency
   or starting host-sensitive tests until all parallel processes exit. This is execution margin,
   not a speedup or a completed-run duration measurement. The `required-unit-phase-margin.v1`
   receipt (`pytest-not-pg-shards/phase-margin.json`) records exact checkout SHA, budget, watchdog,
