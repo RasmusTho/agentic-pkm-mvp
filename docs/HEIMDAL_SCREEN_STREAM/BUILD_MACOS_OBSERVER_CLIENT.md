@@ -40,27 +40,38 @@ issue #3340.
    restart, see Restart posture). The client renders the actual capture-loop state at a glance; it
    shows `observing` only while capture is active and shows paused or degraded when capture is stopped
    or its governed state is unavailable. SCREEN-06 supplies the governed setting but does not claim the
-   external client's actual capture state.
+   external client's actual capture state. If a governed-control read is missing, invalid, ambiguous, or
+   unavailable, fail paused: stop new sampling and shipping, preserve queued bundles unchanged, and do
+   not use cached settings as authority after the failed read. Resume only after a fresh valid control
+   response matches the same vault/instance binding and current exclusions have been reapplied.
 4. **Per-app exclusion list (INV-SCREEN-D).** Before sampling, check the frontmost app (and its scope,
    SCREEN-06) against the exclusion list. **An excluded app's pixels are never captured** — not
    sampled, not buffered, not shipped. Exclusion is enforced **at capture**, upstream of everything;
    there is no path by which an excluded app's frame reaches the host to be redacted there.
-5. **Durable offline buffer + backfill (INV-SCREEN-F).** When the host is unreachable, buffer raw
-   bundles in a **bounded, durable** local queue (`screen_client_buffer_max`); on reconnect, backfill
-   in order. Each bundle carries its `content_identity`, so a re-shipped bundle after a lost ack dedups
-   host-side (no duplicate observation). When the buffer is full while offline, the **oldest** bundles
-   age out (bounded loss, locally counted/legible — never unbounded growth that fills the disk).
+5. **Durable offline buffer + backfill (INV-SCREEN-F).** If the capture endpoint is unreachable while
+   valid governed controls remain available, retain captured raw bundles in a **bounded, durable** local
+   queue (`screen_client_buffer_max`). A failed or invalid control read instead pauses new sampling and
+   shipping while preserving the existing queue; it does not authorize more offline capture. Resume
+   ordered backfill only after a fresh valid control response matches the same vault/instance binding
+   and current exclusions have been reapplied. Each bundle carries its `content_identity`, so a
+   re-shipped bundle after a lost ack dedups host-side (no duplicate observation). When the buffer is
+   full, the **oldest** bundles age out (bounded loss, locally counted/legible — never unbounded growth
+   that fills the disk).
 6. **Ship per SCREEN-01.** POST `raw_capture_bundle`s to the host capture endpoint over the
-   loopback (co-located) or Tailscale-local (cross-machine) transport; register as a sensor on first
-   run; release a buffered bundle only on a durable host ack.
+   loopback (co-located) or Tailscale-local (cross-machine) transport. Send the fixed adapter identity
+   `heimdal_macos_screen_observer` / `v1`; the host pre-registers it in its built-in allow-list. This
+   identity check does not replace the host's independent `screen_always_on` consent admission. Release
+   a buffered bundle only on a durable host ack.
 
 ## Concretely
 
 ```
 # observer status (menu-bar or CLI surface)
 observing: on   machine: rasmus-macbook   cadence: 45s   buffered: 0   excluded apps: 3   scope: work
-# host unreachable -> buffering, still bounded
-observing: on   host: unreachable   buffered: 128/500 (oldest aging out)   backfill: pending
+# capture endpoint unreachable while fresh governed controls remain available
+observing: on   capture endpoint: unreachable   controls: valid   buffered: 128/500 (oldest aging out)   backfill: pending
+# governed-control read unavailable -> pause sampling/shipping and preserve the queue
+observing: PAUSED   controls: unavailable   buffered: 128/500 (queue preserved)
 # paused -> total stop
 observing: PAUSED   machine: rasmus-macbook   buffered: 0   (no capture, no buffering, no shipping)
 ```
@@ -80,16 +91,21 @@ day of observations.
 - [ ] AC2 (enforcement): an excluded app being frontmost means **no capture** — asserted at the capture
       entrypoint, before any buffer write or network call. Verify: `tests/heimdal/test_screen_exclusion.py::test_excluded_app_never_captured` (asserts the exclusion check gates the capture call site, not a host-side filter)
 - [ ] AC3 (enforcement): the status indicator is derived from actual capture-loop state and never
-      reports `observing` while paused, idle/locked, or when governed settings are missing or invalid;
-      pause stops sampling, buffering, and shipping, and valid resume restores capture. Verify:
+      reports `observing` while paused, idle/locked, or when governed settings are missing or invalid.
+      An unavailable, invalid, or ambiguous control read fails paused: stop new sampling/shipping,
+      preserve queued bundles, and resume only after a fresh valid control response for the same
+      vault/instance binding and current exclusions are reapplied. Pause stops sampling, buffering,
+      and shipping, and valid resume restores capture. Verify:
       `tests/heimdal/test_screen_pause.py::test_visible_status_matches_capture_loop` (asserts visible status
       agrees with the capture loop, the loop no-ops while paused, and the buffer does not grow)
 - [ ] AC4: the offline buffer is bounded and durable; a full buffer ages out oldest bundles with a
       local count, never grows unbounded. Verify: `tests/heimdal/test_screen_client_buffer.py::test_buffer_bounded_and_durable`
 - [ ] AC5: backfill after reconnect does not duplicate observations (re-shipped bundle dedups on
       `content_identity` host-side). Verify: `tests/heimdal/test_screen_client_buffer.py::test_backfill_idempotent_no_duplicates`
-- [ ] AC6: the client ships conforming `raw_capture_bundle`s and registers as a sensor before its first
-      admit. Verify: `tests/heimdal/test_screen_client_capture.py::test_ships_conforming_bundle_and_registers_sensor`
+- [ ] AC6: the client ships conforming `raw_capture_bundle`s using the fixed host-supported sensor
+      identity `heimdal_macos_screen_observer` / `v1`; the host allow-list check does not replace
+      `screen_always_on` consent admission. Verify:
+      `tests/heimdal/test_screen_client_capture.py::test_ships_conforming_bundle_and_registers_sensor`
 
 ## How to Verify (Pre-Merge)
 
@@ -114,10 +130,12 @@ still frames + app metadata only.
 Two durability-sensitive surfaces this task owns:
 
 - **Offline buffer.** Durable across client restart (bounded on-disk queue, not in-memory): bundles
-  captured while offline survive a client crash/restart and backfill when the host returns. Bounded by
-  `screen_client_buffer_max`; on overflow the **oldest** bundles are dropped with a local count (loss
-  is legible, disk is protected). The user experience on restart: buffered-but-unsent bundles resume
-  backfilling; nothing silently vanishes without the count reflecting it.
+  captured while the capture endpoint is unreachable and fresh governed controls remain available
+  survive a client crash/restart. Bounded by `screen_client_buffer_max`; on overflow the **oldest**
+  bundles are dropped with a local count (loss is legible, disk is protected). On restart, the client
+  begins paused and resumes ordered backfill only after a fresh valid control response matches the
+  same vault/instance binding and current exclusions have been reapplied. If controls are unavailable,
+  invalid, or ambiguous, the existing queue is preserved and no new sampling or shipping starts.
 - **Pause state.** Durable across client restart. A client paused when it crashed comes back **PAUSED**,
   never observing. The trust consequence of getting this wrong is severe: a pause that resets to
   "observing" on restart means the owner is captured without realizing — so the default on ambiguous

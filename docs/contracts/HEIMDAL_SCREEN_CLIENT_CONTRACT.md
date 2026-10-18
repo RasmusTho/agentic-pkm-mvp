@@ -25,6 +25,13 @@ lands it in `heimdal_raw_record`, idempotently by `content_identity`, then
 returns an acknowledgement containing the durable record identity. A client
 may remove its offline-buffer entry only after that acknowledgement.
 
+The SCREEN-03 macOS observer uses the fixed host-supported identity
+`heimdal_macos_screen_observer` / `v1`. The host registers this identity in its
+built-in sensor allow-list during normal startup; clients cannot enroll or
+register an identity through this endpoint. Registration confirms only that
+the adapter is supported. The independent `screen_always_on` consent gate
+still applies before raw evidence is admitted.
+
 `raw_capture_bundle` is the default and stops at the host derivation seam.
 `derived_observation` is the contract-held future on-device path; its supplied
 observation is validated/published through the existing Heimdal publish path.
