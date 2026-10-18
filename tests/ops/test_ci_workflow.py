@@ -662,6 +662,158 @@ def test_scoped_execution_plan_requires_complete_current_head_deploy_files() -> 
         )
 
 
+@pytest.mark.parametrize(
+    "nested_target",
+    [
+        "tests/scripts/test_publication.py",
+        "tests/scripts/test_publication.py::test_publish_pr_rejects_missing_governing_issue",
+    ],
+)
+def test_scoped_runner_normalizes_authenticated_directory_overlap_exactly_once(
+    tmp_path: Path,
+    nested_target: str,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+node = "tests/scripts/test_publication.py::test_publish_pr_rejects_missing_governing_issue"
+executions = 0
+if "tests/scripts" in args:
+    executions += 1
+if "tests/scripts/test_publication.py" in args or node in args:
+    executions += 1
+with Path(os.environ["FAKE_EXECUTIONS"]).open("a", encoding="utf-8") as handle:
+    handle.write("covered\n" * executions)
+print(" ".join(args))
+''',
+        encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    expected = ["tests/scripts", nested_target]
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+            "--partitions-json",
+            json.dumps([["tests/scripts"], [nested_target]]),
+            "--expected-targets-json",
+            json.dumps(expected),
+            "--execution-units-json",
+            json.dumps([["tests/scripts"], [nested_target]]),
+            "--log-dir",
+            str(tmp_path / "logs"),
+            "--aggregate-log",
+            str(tmp_path / "aggregate.log"),
+            "--jobs",
+            "4",
+            "--shard-timeout-seconds",
+            "10",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "FAKE_EXECUTIONS": str(tmp_path / "executions"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "executions").read_text().splitlines() == ["covered"]
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert "tests/scripts" in aggregate
+    assert nested_target not in aggregate
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["--serial-boundary-json", "--execution-units-json"],
+)
+@pytest.mark.parametrize("malformed", [{}, None, False, 0, ""])
+def test_scoped_runner_optional_json_shapes_fail_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    option: str,
+    malformed: object,
+) -> None:
+    import scripts.run_scoped_test_partitions as runner
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        runner,
+        "run_partitions",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_scoped_test_partitions.py",
+            "--partitions-json",
+            '[["tests/scripts"]]',
+            "--expected-targets-json",
+            '["tests/scripts"]',
+            "--log-dir",
+            "unused-logs",
+            "--aggregate-log",
+            "unused-aggregate.log",
+            option,
+            json.dumps(malformed),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        runner.main()
+    assert exc_info.value.code == 2
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["--serial-boundary-json", "--execution-units-json"],
+)
+def test_scoped_runner_optional_json_explicit_empty_list_is_valid(
+    monkeypatch: pytest.MonkeyPatch,
+    option: str,
+) -> None:
+    import scripts.run_scoped_test_partitions as runner
+
+    calls: list[object] = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return 17
+
+    monkeypatch.setattr(runner, "run_partitions", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_scoped_test_partitions.py",
+            "--partitions-json",
+            '[["tests/scripts"]]',
+            "--expected-targets-json",
+            '["tests/scripts"]',
+            "--log-dir",
+            "unused-logs",
+            "--aggregate-log",
+            "unused-aggregate.log",
+            option,
+            "[]",
+        ],
+    )
+    assert runner.main() == 17
+    assert len(calls) == 1
+    assert calls[0][1]["serial_boundary"] == ()
+    assert calls[0][1]["execution_units"] == ()
+
+
 def test_scoped_runner_balances_parallel_work_and_preserves_serial_quiescence(
     tmp_path: Path,
 ) -> None:

@@ -35,6 +35,12 @@ def _string_list(value: object, *, name: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _optional_string_list(value: object, *, name: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a JSON list")
+    return _string_list(value, name=name) if value else ()
+
+
 def validate_inventory(
     partitions_value: object, expected_value: object
 ) -> tuple[tuple[str, ...], ...]:
@@ -62,6 +68,32 @@ def _target_file(target: str) -> str:
 def _is_deploy_target(target: str) -> bool:
     path = _target_file(target)
     return path == "tests/deploy" or path.startswith("tests/deploy/")
+
+
+def _strictly_covers(ancestor: str, descendant: str) -> bool:
+    """Return whether one positional pytest target makes another redundant."""
+
+    if ancestor == descendant or ancestor.startswith("-") or descendant.startswith("-"):
+        return False
+    ancestor_file = _target_file(ancestor)
+    descendant_file = _target_file(descendant)
+    if "::" not in ancestor and ancestor_file.endswith(".py"):
+        return ancestor_file == descendant_file and "::" in descendant
+    return (
+        "::" not in ancestor
+        and not ancestor_file.endswith(".py")
+        and descendant_file.startswith(f"{ancestor_file}/")
+    )
+
+
+def _effective_targets(targets: Sequence[str]) -> tuple[str, ...]:
+    """Normalize authenticated ancestor/descendant overlap to one execution."""
+
+    return tuple(
+        target
+        for target in targets
+        if not any(_strictly_covers(other, target) for other in targets)
+    )
 
 
 def _deploy_test_files(path: str) -> tuple[str, ...]:
@@ -124,6 +156,10 @@ def validate_execution_units(
             "execution-unit inventory is incomplete or does not preserve "
             "non-deploy targets exactly once"
         )
+    if Counter(_effective_targets(actual_non_deploy)) != Counter(
+        _effective_targets(expected_non_deploy)
+    ):
+        raise ValueError("execution-unit effective coverage escapes selected targets")
 
     expected_deploy_files = {
         file_path
@@ -303,6 +339,20 @@ def _expand_and_balance_parallel(
                     or _target_file(node).startswith(f"{path}/")
                 )
         return _collect_deploy_nodes(target, cache=cache)
+
+    positional_targets = tuple(
+        target
+        for candidate in candidates
+        for target in candidate
+        if not target.startswith("-")
+    )
+    effective_targets = set(_effective_targets(positional_targets))
+    candidates = tuple(
+        candidate
+        for candidate in candidates
+        if next(target for target in candidate if not target.startswith("-"))
+        in effective_targets
+    )
 
     expanded: list[tuple[str, ...]] = []
     seen_targets: set[str] = set()
@@ -549,21 +599,20 @@ def main() -> int:
     if not 1 <= args.shard_timeout_seconds <= MAX_SHARD_TIMEOUT_SECONDS:
         parser.error(f"--shard-timeout-seconds must be between 1 and {MAX_SHARD_TIMEOUT_SECONDS}")
     try:
+        expected_targets_value = json.loads(args.expected_targets_json)
         partitions = validate_inventory(
-            json.loads(args.partitions_json), json.loads(args.expected_targets_json)
+            json.loads(args.partitions_json), expected_targets_value
         )
-        serial_boundary_value = json.loads(args.serial_boundary_json)
-        serial_boundary = (
-            _string_list(serial_boundary_value, name="serial boundary")
-            if serial_boundary_value
-            else ()
+        serial_boundary = _optional_string_list(
+            json.loads(args.serial_boundary_json),
+            name="serial boundary",
         )
         execution_units_value = json.loads(args.execution_units_json)
-        execution_units = (
-            validate_execution_units(execution_units_value, json.loads(args.expected_targets_json))
-            if execution_units_value
-            else ()
-        )
+        if not isinstance(execution_units_value, list):
+            raise ValueError("execution-unit inventory must be a JSON list")
+        execution_units = validate_execution_units(
+            execution_units_value, expected_targets_value
+        ) if execution_units_value else ()
     except (json.JSONDecodeError, ValueError) as exc:
         parser.error(str(exc))
     try:
