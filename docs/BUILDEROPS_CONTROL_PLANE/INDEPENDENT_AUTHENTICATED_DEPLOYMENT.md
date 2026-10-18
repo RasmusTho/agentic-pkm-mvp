@@ -140,7 +140,9 @@ configuration leaves the affected source unavailable; contradictory repository, 
 selector or baked-document identity refuses startup. Work reads use the existing authenticated
 BuilderOps client with source-owned repository and `receipts:read` / `status:read` permission checks
 and an explicitly pinned `DEVUI_BUILDEROPS_AUTHORITY_EPOCH`. The source token file is reread each
-request, and service revocation or epoch movement withdraws work. CKM stays unavailable.
+request, and service revocation or epoch movement withdraws work. CKM is available through the
+separately approved [private snapshot publication contract](README.md#private-ckm-publication-and-refresh);
+missing, stale or invalid captures retain an independent refusal.
 
 [`docker-compose.devui-sources.yml`](../../docker-compose.devui-sources.yml) is an optional managed
 source-configuration overlay, owned by the Builder runtime/release owner; Platform and Operations
