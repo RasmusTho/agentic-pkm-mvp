@@ -6052,6 +6052,8 @@ def test_coordinator_launch_uses_explicit_runtime_environment(tmp_path, monkeypa
     # This case models a host without a native backend. Keep the runner's real
     # Linux user bus out; dedicated socket fixtures cover valid/invalid buses.
     monkeypatch.setattr(verification_consumer, "_LINUX_USER_RUNTIME_BASE", tmp_path / "no-user-runtime")
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     runtime_environment = {
         "HOME": "/non-secret/home",
         "LANG": "sv_SE.UTF-8",

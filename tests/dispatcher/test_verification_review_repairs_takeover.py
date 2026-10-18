@@ -62,6 +62,8 @@ def test_coordinator_subprocess_receives_only_minimal_non_secret_environment(
     # Native bus inclusion has separate real-socket coverage; this is the
     # no-backend minimal environment and must not discover the CI runner's bus.
     monkeypatch.setattr(verification_consumer, "_LINUX_USER_RUNTIME_BASE", tmp_path / "no-user-runtime")
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     captured: list[dict[str, object]] = []
 
     class Result:
