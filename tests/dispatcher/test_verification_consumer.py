@@ -6049,6 +6049,9 @@ def test_host_fenced_coordinator_has_no_ambient_github_write_path(
 
 def test_coordinator_launch_uses_explicit_runtime_environment(tmp_path, monkeypatch) -> None:
     calls: list[dict[str, object]] = []
+    # This case models a host without a native backend. Keep the runner's real
+    # Linux user bus out; dedicated socket fixtures cover valid/invalid buses.
+    monkeypatch.setattr(verification_consumer, "_LINUX_USER_RUNTIME_BASE", tmp_path / "no-user-runtime")
     runtime_environment = {
         "HOME": "/non-secret/home",
         "LANG": "sv_SE.UTF-8",

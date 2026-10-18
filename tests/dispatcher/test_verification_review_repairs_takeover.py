@@ -11,6 +11,7 @@ from typing import Callable
 
 import pytest
 
+from app.dispatcher import verification_consumer
 from app.dispatcher.verification_consumer import (
     CodexExecLauncher,
     GhCliVerificationSource,
@@ -58,6 +59,9 @@ def _receipt() -> dict[str, object]:
 def test_coordinator_subprocess_receives_only_minimal_non_secret_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Native bus inclusion has separate real-socket coverage; this is the
+    # no-backend minimal environment and must not discover the CI runner's bus.
+    monkeypatch.setattr(verification_consumer, "_LINUX_USER_RUNTIME_BASE", tmp_path / "no-user-runtime")
     captured: list[dict[str, object]] = []
 
     class Result:
