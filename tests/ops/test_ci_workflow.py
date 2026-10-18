@@ -798,6 +798,49 @@ if "TIMEOUT_SCOPED" in __import__("os").environ:
     assert "incomplete" in incomplete.stderr
 
 
+def test_scoped_runner_serial_last_failure_is_aggregated(tmp_path: Path) -> None:
+    """The legacy serial-last path must remain fail-loud and observable."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import sys
+
+args = sys.argv[1:]
+if "tests/ops" in args:
+    print("synthetic serial failure", flush=True)
+    raise SystemExit(7)
+''',
+        encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    expected = ["tests/scripts", "tests/ops"]
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+            "--partitions-json", json.dumps([["tests/scripts"], ["tests/ops"]]),
+            "--expected-targets-json", json.dumps(expected),
+            "--log-dir", str(tmp_path / "logs"),
+            "--aggregate-log", str(tmp_path / "aggregate.log"),
+            "--jobs", "4",
+            "--serial-last",
+            "--shard-timeout-seconds", "10",
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "SERIAL PARTITION FAILED (7): 1" in result.stderr
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert "===== scoped serial partition =====" in aggregate
+    assert "synthetic serial failure" in aggregate
+
+
 @pytest.mark.parametrize("mode", ["shard-failure", "incomplete", "serial-failure"])
 def test_full_suite_shards_retain_failure_logs(tmp_path: Path, mode: str) -> None:
     failing_shard = "tests/ops" if mode == "serial-failure" else "tests/alpha"

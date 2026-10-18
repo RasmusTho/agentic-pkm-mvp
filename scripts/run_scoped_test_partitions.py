@@ -219,13 +219,38 @@ def _expand_and_balance_parallel(
     """Refine deploy files into nodes, then balance all parallel work units."""
 
     cache: dict[str, tuple[str, ...]] = {}
+    # Collect selected deploy directories before their file-level execution
+    # units.  Pytest node IDs can contain collection-time parameter values, so
+    # collecting a file in one subprocess and its parent directory in another
+    # can produce different IDs for the same test.  The directory collection
+    # is the authenticated inventory; file units are filtered from that cache.
+    for target in expected_targets:
+        path = _target_file(target)
+        if path.startswith("tests/deploy/") or path == "tests/deploy":
+            if not path.endswith(".py"):
+                _collect_deploy_nodes(target, cache=cache)
+
+    def deploy_nodes_for_target(target: str) -> tuple[str, ...]:
+        path = _target_file(target)
+        if path in cache:
+            return cache[path]
+        for root, nodes in cache.items():
+            if root == "tests/deploy" or path.startswith(f"{root}/"):
+                return tuple(
+                    node
+                    for node in nodes
+                    if _target_file(node) == path
+                    or _target_file(node).startswith(f"{path}/")
+                )
+        return _collect_deploy_nodes(target, cache=cache)
+
     expanded: list[str] = []
     seen_nodes: set[str] = set()
     for partition in partitions:
         for target in partition:
             path = _target_file(target)
             if path.startswith("tests/deploy/") or path == "tests/deploy":
-                nodes = _collect_deploy_nodes(target, cache=cache)
+                nodes = deploy_nodes_for_target(target)
                 candidates = nodes or (target,)
             else:
                 candidates = (target,)
@@ -238,7 +263,7 @@ def _expand_and_balance_parallel(
     for target in expected_targets:
         path = _target_file(target)
         if path == "tests/deploy" or path.startswith("tests/deploy/"):
-            expected_deploy_nodes.update(_collect_deploy_nodes(target, cache=cache))
+            expected_deploy_nodes.update(deploy_nodes_for_target(target))
     actual_deploy_nodes = {
         target
         for target in expanded
@@ -365,17 +390,18 @@ def run_partitions(
                     f"targets={len(parallel_partitions[index])}",
                     flush=True,
                 )
+    serial_last_index: int | None = None
     if serial_last:
-        index = len(parallel_partitions)
+        serial_last_index = len(parallel_partitions)
         result_index, returncode, log_path, timed_out = _run_partition(
-            index,
+            serial_last_index,
             source_partitions[-1],
             log_dir=log_dir,
             timeout_seconds=timeout_seconds,
         )
         results[result_index] = (returncode, log_path, timed_out)
         print(
-            f"PARTITION FINISHED ({returncode}): {index} "
+            f"SERIAL PARTITION FINISHED ({returncode}): {serial_last_index} "
             f"targets={len(source_partitions[-1])}",
             flush=True,
         )
@@ -414,6 +440,19 @@ def run_partitions(
             if returncode != 0 or timed_out:
                 failed = True
                 print(f"PARTITION FAILED ({returncode}): {index}", file=sys.stderr)
+                print(log, file=sys.stderr, end="" if log.endswith("\n") else "\n")
+        if serial_last_index is not None:
+            returncode, log_path, timed_out = results[serial_last_index]
+            log = log_path.read_text(encoding="utf-8")
+            aggregate.write(f"===== scoped serial partition =====\n{log}")
+            if log and not log.endswith("\n"):
+                aggregate.write("\n")
+            if returncode != 0 or timed_out:
+                failed = True
+                print(
+                    f"SERIAL PARTITION FAILED ({returncode}): {serial_last_index}",
+                    file=sys.stderr,
+                )
                 print(log, file=sys.stderr, end="" if log.endswith("\n") else "\n")
         if boundary_index is not None:
             returncode, log_path, timed_out = results[boundary_index]
