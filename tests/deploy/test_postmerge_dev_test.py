@@ -870,3 +870,20 @@ def test_heavy_verdict_dispatch_payload_is_bounded(monkeypatch):
         returncode=0, stdout=json.dumps({'profile_version': 'postmerge-heavy.v1', 'result': 'passed',
                                          'source_sha': 'c' * 40}), stderr=''))
     assert driver.native_heavy(candidate)['result'] == 'refused'
+
+
+def test_legacy_test_stage_heavy_checkpoint_is_inert(tmp_path):
+    # A #6171-era checkpoint recorded the heavy verdict at passed/test. It must
+    # neither stall the controller nor rerun anything; the next build proceeds.
+    tmp_path.chmod(0o700)
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    options = {'build': lambda: 123, 'load': lambda _run: candidate,
+               'deploy': lambda ch, c: _native_receipt(ch, c), 'current_main': lambda: SHA}
+    assert driver.poll(tmp_path, **options) == 0
+    assert driver.poll(tmp_path, **options) == 0
+    checkpoint = tmp_path / 'postmerge-dev-test.json'
+    stored = json.loads(checkpoint.read_text())
+    assert (stored['phase'], stored['channel']) == ('passed', 'test')
+    stored['heavy'] = dict(HEAVY_PASSED, dispatch='sent')
+    driver._atomic_checkpoint(checkpoint, stored)
+    assert driver.poll(tmp_path, **options, heavy=lambda _c: pytest.fail('legacy rerun')) == 0

@@ -312,7 +312,9 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
         if 'heavy' in checkpoint:
             _validate_heavy(checkpoint['heavy'])
         if (set(checkpoint) - {'heavy'} != {'candidate', 'phase', 'channel', 'outcome'}
-            or ('heavy' in checkpoint and (checkpoint['phase'], checkpoint['channel']) != ('passed', 'dev'))
+            # passed/test is the #6171 shape; it is inert and replaced by the next candidate.
+            or ('heavy' in checkpoint and (checkpoint['phase'], checkpoint['channel']) not in {
+                ('passed', 'dev'), ('passed', 'test')})
             or re.fullmatch(r'[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
             or any(type(value) is not int or value < 1
                    for value in (candidate.run_id, candidate.run_attempt, candidate.artifact_id))
