@@ -489,9 +489,13 @@ def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None
     assert step["env"]["SCOPED_PARTITIONS_JSON"] == (
         "${{ steps.select-tests.outputs.scoped_partitions_json }}"
     )
+    assert step["env"]["SCOPED_EXECUTION_UNITS_JSON"] == (
+        "${{ steps.select-tests.outputs.scoped_execution_units_json }}"
+    )
     assert "scripts/run_scoped_test_partitions.py" in step["run"]
     assert "--jobs 4" in step["run"]
     assert "--serial-boundary-json" in step["run"]
+    assert "--execution-units-json" in step["run"]
     assert "--shard-timeout-seconds 3300" in step["run"]
     assert "set -euo pipefail" in step["run"]
     upload = next(s for s in job["steps"] if s.get("name") == "Upload scoped partition logs")
@@ -617,6 +621,181 @@ if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target
         time.sleep(0.05)
     else:
         pytest.fail(f"partition descendant {child_pid} survived process-group cleanup")
+
+
+def test_scoped_runner_balances_parallel_work_and_preserves_serial_quiescence(
+    tmp_path: Path,
+) -> None:
+    """Collected deploy nodes run once, with the host boundary last."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import fcntl
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+args = sys.argv[1:]
+deploy_files = [arg for arg in args if arg.startswith("tests/deploy/")]
+if "--collect-only" in args:
+    for target in deploy_files:
+        print(f"{target}::test_one")
+        print(f"{target}::test_two")
+    if "tests/deploy" in args:
+        print("tests/deploy/test_slow.py::test_one")
+        print("tests/deploy/test_slow.py::test_two")
+    raise SystemExit(0)
+
+state_path = Path(os.environ["FAKE_STATE"])
+with state_path.open("a+", encoding="utf-8") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    handle.seek(0)
+    raw = handle.read()
+    state = json.loads(raw) if raw else {"active": 0, "max_active": 0, "executed": []}
+    state["active"] += 1
+    state["max_active"] = max(state["max_active"], state["active"])
+    state["executed"].extend(arg for arg in args if "::" in arg)
+    is_serial = any(arg.endswith("test_host.py") for arg in args)
+    state["active_at_serial"] = state["active"] if is_serial else state.get("active_at_serial")
+    handle.seek(0)
+    handle.truncate()
+    json.dump(state, handle)
+    handle.flush()
+    fcntl.flock(handle, fcntl.LOCK_UN)
+time.sleep(0.15)
+with state_path.open("a+", encoding="utf-8") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    handle.seek(0)
+    state = json.load(handle)
+    state["active"] -= 1
+    if any(arg.endswith("test_host.py") for arg in args):
+        state["serial_started"] = True
+    handle.seek(0)
+    handle.truncate()
+    json.dump(state, handle)
+    handle.flush()
+    fcntl.flock(handle, fcntl.LOCK_UN)
+''',
+        encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    expected = [
+        "tests/deploy/test_slow.py",
+        "tests/deploy/test_other.py",
+        "tests/scripts",
+        "tests/ops/test_host.py",
+    ]
+    partitions = [[target] for target in expected]
+    units = [
+        ["tests/deploy/test_slow.py"],
+        ["tests/deploy/test_other.py", "tests/scripts"],
+        ["tests/ops/test_host.py"],
+    ]
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"active": 0, "max_active": 0, "executed": []}))
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+            "--partitions-json", json.dumps(partitions),
+            "--expected-targets-json", json.dumps(expected),
+            "--execution-units-json", json.dumps(units),
+            "--log-dir", str(tmp_path / "logs"),
+            "--aggregate-log", str(tmp_path / "aggregate.log"),
+            "--jobs", "4",
+            "--serial-boundary-json", json.dumps(["tests/ops/test_host.py"]),
+            "--shard-timeout-seconds", "10",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "FAKE_STATE": str(state_path),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads(state_path.read_text())
+    assert state["max_active"] <= 4
+    assert state["active_at_serial"] == 1
+    assert state["serial_started"] is True
+    assert sorted(state["executed"]) == sorted([
+        "tests/deploy/test_other.py::test_one",
+        "tests/deploy/test_other.py::test_two",
+        "tests/deploy/test_slow.py::test_one",
+        "tests/deploy/test_slow.py::test_two",
+    ])
+
+
+def test_scoped_runner_balanced_work_units_remain_bounded_and_fail_loud(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import sys
+import time
+args = sys.argv[1:]
+if "--collect-only" in args:
+    for arg in args:
+        if arg.startswith("tests/deploy/"):
+            print(f"{arg}::test_one")
+    raise SystemExit(0)
+target_text = " ".join(args)
+print("synthetic scoped failure", flush=True)
+if "tests/deploy/test_slow.py" in target_text and "FAIL_SCOPED" in __import__("os").environ:
+    raise SystemExit(7)
+if "TIMEOUT_SCOPED" in __import__("os").environ:
+    time.sleep(5)
+''',
+        encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    expected = ["tests/deploy/test_slow.py", "tests/scripts"]
+    partitions = [[target] for target in expected]
+    units = [["tests/deploy/test_slow.py"], ["tests/scripts"]]
+
+    def run(*, env: dict[str, str] | None = None, timeout: int = 10, units_value=units):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+                "--partitions-json", json.dumps(partitions),
+                "--expected-targets-json", json.dumps(expected),
+                "--execution-units-json", json.dumps(units_value),
+                "--log-dir", str(tmp_path / "logs"),
+                "--aggregate-log", str(tmp_path / "aggregate.log"),
+                "--jobs", "4",
+                "--shard-timeout-seconds", str(timeout),
+            ],
+            cwd=REPO_ROOT,
+            env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", **(env or {})},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    failed = run(env={"FAIL_SCOPED": "1"})
+    assert failed.returncode == 1
+    assert "synthetic scoped failure" in failed.stderr
+    assert "synthetic scoped failure" in (tmp_path / "aggregate.log").read_text()
+    timed_out = run(env={"TIMEOUT_SCOPED": "1"}, timeout=1)
+    assert timed_out.returncode == 1
+    assert "PARTITION TIMED OUT after 1s" in timed_out.stderr
+    duplicate = run(units_value=[["tests/deploy/test_slow.py"], ["tests/deploy/test_slow.py"]])
+    assert duplicate.returncode != 0
+    assert "duplicate work" in duplicate.stderr
+    incomplete = run(units_value=[["tests/deploy/test_slow.py"]])
+    assert incomplete.returncode != 0
+    assert "incomplete" in incomplete.stderr
 
 
 @pytest.mark.parametrize("mode", ["shard-failure", "incomplete", "serial-failure"])

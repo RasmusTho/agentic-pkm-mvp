@@ -24,6 +24,7 @@ from scripts.select_pr_tests import PR_MARKER_EXPRESSION
 MAX_PARTITIONS = 4
 MAX_SHARD_TIMEOUT_SECONDS = 3300
 PROCESS_GROUP_GRACE_SECONDS = 1.0
+COLLECTION_TIMEOUT_SECONDS = 300
 
 
 def _string_list(value: object, *, name: str) -> tuple[str, ...]:
@@ -52,6 +53,64 @@ def validate_inventory(
     if Counter(actual) != Counter(expected):
         raise ValueError("partition union does not match expected targets exactly once")
     return partitions
+
+
+def _target_file(target: str) -> str:
+    return target.split("::", 1)[0]
+
+
+def _target_covers(expected: str, actual: str) -> bool:
+    """Return whether an execution target is inside an authenticated target."""
+
+    if actual.startswith("--"):
+        return True
+    expected_file = _target_file(expected)
+    actual_file = _target_file(actual)
+    if expected_file == actual_file:
+        return True
+    return (
+        "::" not in expected
+        and not expected_file.endswith(".py")
+        and actual_file.startswith(f"{expected_file}/")
+    )
+
+
+def validate_execution_units(
+    units_value: object, expected_value: object
+) -> tuple[tuple[str, ...], ...]:
+    """Authenticate a derived work-unit plan against selected targets.
+
+    The selected-target inventory remains the authority.  Work units may be
+    concrete files or collected node IDs below a selected directory, but they
+    may never introduce a path outside that inventory or repeat one collected
+    node.
+    """
+
+    expected = _string_list(expected_value, name="expected targets")
+    if len(set(expected)) != len(expected):
+        raise ValueError("expected targets contain duplicates")
+    if not isinstance(units_value, list) or not units_value:
+        raise ValueError("execution-unit inventory must be a non-empty JSON list")
+    if len(units_value) > MAX_PARTITIONS:
+        raise ValueError(f"execution-unit inventory exceeds {MAX_PARTITIONS} shards")
+    units = tuple(
+        _string_list(unit, name=f"execution unit {index}")
+        for index, unit in enumerate(units_value)
+    )
+    actual = tuple(target for unit in units for target in unit)
+    if len(set(actual)) != len(actual):
+        raise ValueError("execution-unit inventory contains duplicate work")
+    if any(
+        not any(_target_covers(expected_target, target) for expected_target in expected)
+        for target in actual
+    ):
+        raise ValueError("execution-unit inventory escapes selected targets")
+    if any(
+        not any(_target_covers(expected_target, target) for target in actual)
+        for expected_target in expected
+    ):
+        raise ValueError("execution-unit inventory is incomplete")
+    return units
 
 
 def _terminate_process_group(process_group: int) -> None:
@@ -102,6 +161,104 @@ def _run_partition(
             return index, 124, log_path, True
 
 
+def _collect_deploy_nodes(target: str, *, cache: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """Collect deploy nodes once so a slow file can be split across workers."""
+
+    path = _target_file(target)
+    if path in cache:
+        return cache[path]
+    command = [
+        "pytest",
+        "--collect-only",
+        "-q",
+        "-m",
+        PR_MARKER_EXPRESSION,
+        target,
+    ]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=os.environ.copy(),
+        start_new_session=True,
+    )
+    try:
+        output, _ = process.communicate(timeout=COLLECTION_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_group(process.pid)
+        process.wait()
+        raise RuntimeError(
+            f"deploy work-unit collection timed out after {COLLECTION_TIMEOUT_SECONDS}s: {target}"
+        ) from exc
+    finally:
+        _terminate_process_group(process.pid)
+    if process.returncode not in (0, 5):
+        raise RuntimeError(
+            f"deploy work-unit collection failed ({process.returncode}): {target}\n{output}"
+        )
+    nodes = tuple(
+        sorted(
+            {
+                line.strip()
+                for line in output.splitlines()
+                if line.strip().startswith(path) and "::" in line.strip()
+            }
+        )
+    )
+    cache[path] = nodes
+    return nodes
+
+
+def _expand_and_balance_parallel(
+    partitions: Sequence[Sequence[str]],
+    *,
+    jobs: int,
+    expected_targets: Sequence[str] = (),
+) -> tuple[tuple[str, ...], ...]:
+    """Refine deploy files into nodes, then balance all parallel work units."""
+
+    cache: dict[str, tuple[str, ...]] = {}
+    expanded: list[str] = []
+    seen_nodes: set[str] = set()
+    for partition in partitions:
+        for target in partition:
+            path = _target_file(target)
+            if path.startswith("tests/deploy/") or path == "tests/deploy":
+                nodes = _collect_deploy_nodes(target, cache=cache)
+                candidates = nodes or (target,)
+            else:
+                candidates = (target,)
+            for candidate in candidates:
+                if candidate in seen_nodes:
+                    continue
+                seen_nodes.add(candidate)
+                expanded.append(candidate)
+    expected_deploy_nodes: set[str] = set()
+    for target in expected_targets:
+        path = _target_file(target)
+        if path == "tests/deploy" or path.startswith("tests/deploy/"):
+            expected_deploy_nodes.update(_collect_deploy_nodes(target, cache=cache))
+    actual_deploy_nodes = {
+        target
+        for target in expanded
+        if _target_file(target).startswith("tests/deploy/") and "::" in target
+    }
+    if expected_deploy_nodes and actual_deploy_nodes != expected_deploy_nodes:
+        raise ValueError(
+            "expanded deploy node inventory does not match selected coverage exactly once"
+        )
+    if not expanded:
+        return ()
+    buckets: list[list[str]] = [[] for _ in range(min(jobs, len(expanded)))]
+    weights = [0] * len(buckets)
+    for candidate in sorted(expanded):
+        index = min(range(len(buckets)), key=lambda item: (weights[item], item))
+        buckets[index].append(candidate)
+        weights[index] += 1
+    return tuple(tuple(bucket) for bucket in buckets if bucket)
+
+
 def _split_serial_boundary(
     targets: tuple[str, ...], serial_boundary: tuple[str, ...]
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -140,19 +297,43 @@ def run_partitions(
     timeout_seconds: int,
     serial_last: bool,
     serial_boundary: tuple[str, ...],
+    execution_units: tuple[tuple[str, ...], ...] = (),
+    expected_targets: tuple[str, ...] = (),
 ) -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     results: dict[int, tuple[int, Path, bool]] = {}
     if serial_last and serial_boundary:
         raise ValueError("--serial-last and --serial-boundary-json are mutually exclusive")
-    parallel_count = len(partitions) - 1 if serial_last else len(partitions)
-    parallel_partitions = list(partitions[:parallel_count])
+    source_partitions = execution_units or partitions
+    parallel_count = len(source_partitions) - 1 if serial_last else len(source_partitions)
+    parallel_partitions = list(source_partitions[:parallel_count])
     boundary_targets: tuple[str, ...] = ()
     if serial_boundary:
+        if not source_partitions:
+            raise ValueError("serial boundary requires an execution partition")
         parallel_targets, boundary_targets = _split_serial_boundary(
-            partitions[-1], serial_boundary
+            source_partitions[-1], serial_boundary
         )
-        parallel_partitions[-1] = parallel_targets
+        if execution_units:
+            if parallel_targets:
+                parallel_partitions.append(parallel_targets)
+            parallel_partitions = list(
+                _expand_and_balance_parallel(
+                    parallel_partitions,
+                    jobs=min(jobs, MAX_PARTITIONS - 1 if boundary_targets else MAX_PARTITIONS),
+                    expected_targets=expected_targets,
+                )
+            )
+        elif parallel_partitions:
+            parallel_partitions[-1] = parallel_targets
+    elif execution_units:
+        parallel_partitions = list(
+            _expand_and_balance_parallel(
+                parallel_partitions,
+                jobs=jobs,
+                expected_targets=expected_targets,
+            )
+        )
     runnable_partitions: list[tuple[int, tuple[str, ...]]] = []
     for index, targets in enumerate(parallel_partitions):
         if targets:
@@ -181,26 +362,26 @@ def run_partitions(
                 results[index] = (returncode, log_path, timed_out)
                 print(
                     f"PARTITION FINISHED ({returncode}): {index} "
-                    f"targets={len(partitions[index])}",
+                    f"targets={len(parallel_partitions[index])}",
                     flush=True,
                 )
     if serial_last:
-        index = len(partitions) - 1
+        index = len(parallel_partitions)
         result_index, returncode, log_path, timed_out = _run_partition(
             index,
-            partitions[index],
+            source_partitions[-1],
             log_dir=log_dir,
             timeout_seconds=timeout_seconds,
         )
         results[result_index] = (returncode, log_path, timed_out)
         print(
             f"PARTITION FINISHED ({returncode}): {index} "
-            f"targets={len(partitions[index])}",
+            f"targets={len(source_partitions[-1])}",
             flush=True,
         )
     boundary_index: int | None = None
     if boundary_targets:
-        boundary_index = len(partitions)
+        boundary_index = len(parallel_partitions)
         result_index, returncode, log_path, timed_out = _run_partition(
             boundary_index,
             boundary_targets,
@@ -213,7 +394,9 @@ def run_partitions(
             f"targets={len(boundary_targets)}",
             flush=True,
         )
-    expected_results = len(partitions) + (1 if boundary_index is not None else 0)
+    expected_results = len(parallel_partitions) + int(serial_last) + int(
+        boundary_index is not None
+    )
     if len(results) != expected_results:
         print(
             f"Partition runner incomplete: expected={expected_results} actual={len(results)}",
@@ -222,7 +405,7 @@ def run_partitions(
         return 1
     failed = False
     with aggregate_log.open("w", encoding="utf-8") as aggregate:
-        for index in range(len(partitions)):
+        for index in range(len(parallel_partitions)):
             returncode, log_path, timed_out = results[index]
             log = log_path.read_text(encoding="utf-8")
             aggregate.write(f"===== scoped partition {index} =====\n{log}")
@@ -262,6 +445,11 @@ def main() -> int:
         default="[]",
         help="Run these host-sensitive paths alone after safe partition coverage exits.",
     )
+    parser.add_argument(
+        "--execution-units-json",
+        default="[]",
+        help="Derived balanced work units authenticated against the selected targets.",
+    )
     parser.add_argument("--shard-timeout-seconds", type=int, default=MAX_SHARD_TIMEOUT_SECONDS)
     args = parser.parse_args()
     if not 1 <= args.jobs <= MAX_PARTITIONS:
@@ -278,17 +466,29 @@ def main() -> int:
             if serial_boundary_value
             else ()
         )
+        execution_units_value = json.loads(args.execution_units_json)
+        execution_units = (
+            validate_execution_units(execution_units_value, json.loads(args.expected_targets_json))
+            if execution_units_value
+            else ()
+        )
     except (json.JSONDecodeError, ValueError) as exc:
         parser.error(str(exc))
-    return run_partitions(
-        partitions,
-        log_dir=Path(args.log_dir),
-        aggregate_log=Path(args.aggregate_log),
-        jobs=args.jobs,
-        timeout_seconds=args.shard_timeout_seconds,
-        serial_last=args.serial_last,
-        serial_boundary=serial_boundary,
-    )
+    try:
+        return run_partitions(
+            partitions,
+            log_dir=Path(args.log_dir),
+            aggregate_log=Path(args.aggregate_log),
+            jobs=args.jobs,
+            timeout_seconds=args.shard_timeout_seconds,
+            serial_last=args.serial_last,
+            serial_boundary=serial_boundary,
+            execution_units=execution_units,
+            expected_targets=tuple(json.loads(args.expected_targets_json)),
+        )
+    except (RuntimeError, ValueError) as exc:
+        print(f"Execution-unit planning failed: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

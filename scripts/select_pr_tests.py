@@ -331,6 +331,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
 
 SCOPED_DEPLOY_PARALLEL_ROOTS = ("tests/deploy", "tests/scripts")
 SCOPED_DEPLOY_SERIAL_ROOT = "tests/ops"
+SCOPED_EXECUTION_MAX_WORK_UNITS = 4
 
 SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
@@ -1508,6 +1509,105 @@ def scoped_deploy_partitions(selection: Selection) -> tuple[tuple[str, ...], ...
     return tuple(partitions)
 
 
+def _scoped_deploy_test_files() -> tuple[str, ...]:
+    """Return the deploy test inventory in stable order.
+
+    The selector runs before the pytest environment is installed, so this
+    inventory is deliberately filesystem-only.  The runner performs the
+    later collection step that can split a very large file into node-level
+    work units.  Keeping this first expansion deterministic gives the
+    workflow a reviewable, authenticated plan without making selection depend
+    on an interpreter/plugin installation.
+    """
+
+    root = Path("tests/deploy")
+    if not root.is_dir():
+        return ()
+    return tuple(
+        str(path)
+        for path in sorted(root.rglob("*.py"))
+        if path.name.startswith("test_") or path.name.endswith("_test.py")
+    )
+
+
+def _target_weight(target: str) -> int:
+    """Use a stable, cheap proxy for balancing selector work units."""
+
+    path = Path(target.split("::", 1)[0])
+    try:
+        if path.is_file():
+            return max(1, len(path.read_text(encoding="utf-8").splitlines()))
+    except (OSError, UnicodeError):
+        pass
+    return 1
+
+
+def _balanced_work_units(
+    targets: list[str], *, max_units: int = SCOPED_EXECUTION_MAX_WORK_UNITS
+) -> tuple[tuple[str, ...], ...]:
+    """Greedily balance stable target units without changing their identity."""
+
+    if not targets:
+        return ()
+    buckets: list[list[str]] = [[] for _ in range(min(max_units, len(targets)))]
+    weights = [0] * len(buckets)
+    # Largest-first with the lexical target tie-break makes the plan stable and
+    # prevents one large source file from being appended to an already-heavy
+    # bucket.  The runner may refine deploy files into collected node IDs.
+    ordered = sorted(set(targets), key=lambda target: (-_target_weight(target), target))
+    for target in ordered:
+        index = min(range(len(buckets)), key=lambda candidate: (weights[candidate], candidate))
+        buckets[index].append(target)
+        weights[index] += _target_weight(target)
+    return tuple(tuple(bucket) for bucket in buckets if bucket)
+
+
+def scoped_deploy_execution_units(selection: Selection) -> tuple[tuple[str, ...], ...]:
+    """Build deterministic bounded work units for source-triggered deploy tests.
+
+    ``scoped_deploy_partitions`` remains the authenticated selected-target
+    inventory.  This derived plan expands ``tests/deploy`` into its concrete
+    files, removes directory/file overlap, and balances the files into at
+    most four units.  The runtime runner can refine those file units further
+    into collected node IDs after dependencies are installed; no selected
+    target is dropped or silently deferred.
+    """
+
+    partitions = scoped_deploy_partitions(selection)
+    if not partitions:
+        return ()
+
+    serial = partitions[-1] if any(
+        target.split("::", 1)[0] == SCOPED_DEPLOY_SERIAL_ROOT
+        or target.split("::", 1)[0].startswith(f"{SCOPED_DEPLOY_SERIAL_ROOT}/")
+        for target in partitions[-1]
+    ) else ()
+    parallel = partitions[:-1] if serial else partitions
+
+    expanded: list[str] = []
+    deploy_directory_selected = any(
+        target.split("::", 1)[0] == "tests/deploy" for partition in parallel for target in partition
+    )
+    deploy_files = _scoped_deploy_test_files() if deploy_directory_selected else ()
+    for partition in parallel:
+        for target in partition:
+            path = target.split("::", 1)[0]
+            if path == "tests/deploy":
+                expanded.extend(deploy_files)
+            elif deploy_directory_selected and path.startswith("tests/deploy/"):
+                # The directory's file expansion already authenticates this
+                # explicit changed-file target.  Keeping it again would run
+                # the same collected tests twice (the #6193 failure shape).
+                if path not in deploy_files:
+                    expanded.append(target)
+            else:
+                expanded.append(target)
+
+    parallel_limit = SCOPED_EXECUTION_MAX_WORK_UNITS - (1 if serial else 0)
+    balanced = _balanced_work_units(expanded, max_units=max(1, parallel_limit))
+    return (*balanced, serial) if serial else balanced
+
+
 SCOPED_DEPLOY_SERIAL_BOUNDARY = (
     "tests/ops/test_dormant_ownership_initialization.py",
     "tests/ops/test_git_hygiene.py",
@@ -1657,6 +1757,7 @@ def requires_runtime_checks(changed_files: list[str]) -> bool:
 def _write_github_output(path: str, selection: Selection, *, runtime_checks: bool = True) -> None:
     output = Path(path)
     partitions = scoped_deploy_partitions(selection)
+    execution_units = scoped_deploy_execution_units(selection)
     target_files = {target.split("::", 1)[0] for target in selection.targets}
     serial_boundary = (
         SCOPED_DEPLOY_SERIAL_BOUNDARY
@@ -1672,6 +1773,10 @@ def _write_github_output(path: str, selection: Selection, *, runtime_checks: boo
         handle.write(f"runtime_checks={'true' if runtime_checks else 'false'}\n")
         handle.write(f"pytest_targets_json={json.dumps(selection.targets, separators=(',', ':'))}\n")
         handle.write(f"scoped_partitions_json={json.dumps(partitions, separators=(',', ':'))}\n")
+        handle.write(
+            "scoped_execution_units_json="
+            f"{json.dumps(execution_units, separators=(',', ':'))}\n"
+        )
         handle.write(
             "scoped_serial_boundary_json="
             f"{json.dumps(serial_boundary, separators=(',', ':'))}\n"
