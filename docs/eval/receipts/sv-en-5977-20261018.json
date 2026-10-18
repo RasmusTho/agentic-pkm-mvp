@@ -1,0 +1,170 @@
+{
+  "schema": "sv_en_live_reproduction_public.v1",
+  "issue": 5977,
+  "finished_at_utc": "2026-10-18T10:11:30.511780+00:00",
+  "status": "QUALIFIED_SYNTHETIC_REPRODUCTION",
+  "actual_runtime_receipt": {
+    "schema": "sv_en_live_reproduction.v1",
+    "sha256": "a9ad1b461ef1e9ef4c6a7d83768501d6a2cff0129f35052136df308d14bda54c"
+  },
+  "candidate": {
+    "product_source_sha": "f5c02633bfac6248b9ed7fa2b5a16040b32a7a67",
+    "product_image_digest": "sha256:5e9eb51a1116c0acbedc17bd017838ca48bbe571d0673d559db8eead4ab1f1f1",
+    "executor_source_sha": "8efb7e50251d6dc14eca1af9e17af21d55a9f904",
+    "consumer_identity_sha256": "84e3001c94c0b4a6efbb4abdb348fa57dfa0ea8bca78b08441a495fe97c47ba4",
+    "consumer_qualified_at_execution": true,
+    "runtime_app_python_files": 1065,
+    "eval_payload_sha256": "2d4523271c963161b68ae0a1e8b2be40fc0c2450a863d54ef6d69162581f3910",
+    "runtime_app_manifest_sha256": "d7a3d7d076e6f10986e0051a9b2f26027c519037554bd6f680219748670679b0"
+  },
+  "selected_and_executed_nodes": [
+    "tests/evals/test_sv_en_retrieval_eval.py::test_live_run_reproduces_the_cross_lingual_finding",
+    "tests/evals/test_sv_en_retrieval_eval.py::test_live_corpus_embeds_at_the_declared_dimensions"
+  ],
+  "tests_passed": 2,
+  "tests_skipped": 0,
+  "all_original_assertions_preserved": true,
+  "pytest_terminal_code": 0,
+  "parent_and_transport_terminal_codes": [
+    0,
+    0
+  ],
+  "embedding_identities": [
+    {
+      "provider": "ollama",
+      "model": "nomic-embed-text:latest",
+      "declared_and_actual_dimensions": 768,
+      "normalized": true,
+      "observations": 48,
+      "all_finite": true,
+      "maximum_unit_norm_error": 1.1102230246251565e-16
+    },
+    {
+      "provider": "ollama",
+      "model": "bge-m3:latest",
+      "declared_and_actual_dimensions": 1024,
+      "normalized": true,
+      "observations": 48,
+      "all_finite": true,
+      "maximum_unit_norm_error": 1.1102230246251565e-16
+    }
+  ],
+  "synthetic_fixture_hashes": {
+    "tests/evals/fixtures/sv_en_retrieval/README.md": "a2ced096d878c95814dc5c8f15d65ec83a1bb9cfb0ca19f64dd8fa17c846dfd4",
+    "tests/evals/fixtures/sv_en_retrieval/connect_pairs.json": "a405bf645d339aa9a4b2514b1962bb1abb0f19503f47d97e9ae9278843378c99",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/avdrag-frilans-sv.md": "c528512cc7d9a276a8d435ee775b71706872b2a8ba7ea4555e0773371f3f34ef",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/bevakare-mottryck-sv.md": "d64565661ec47806d13f5a8067e2d77c29c2a2f59a93568c0702eef522635df2",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/bicycle-maintenance-en.md": "d278748ead91e6850a09787327efc2726504e2c6c22c4616e1afb26fe6428e2e",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/board-game-design-en.md": "812d9e6d31aa39008461d74f49f4c568bbd05e6cb5085f62f35651b64749fcf2",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/coffee-roasting-en.md": "ede4c2cbf5acfdc44ff7dd0166b5fb97f27a46d803f6af75c6c14c9e313b75e6",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/cykelservice-sv.md": "ef0af904435bddfec1e5d2d844bb68a38d7060a86779466e6255403ccc3bdea4",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/freelance-expenses-en.md": "a7586e0b2731c76b832521abe49708373f82ee8c7379aa150f3378270497ffe5",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/grafteori-sv.md": "18ca4560c633516a3ee9bd5196ff1fd8047225d5f0b73a825e65bafbd9acb332",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/index-rebuild-en.md": "e1dabf7419ae93b3b017f032a1bb500663c5f9e5e66e45f61d09b325d2ff39a3",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/lankvanor-sv.md": "30c0e6dfba0b2a9f7f47967ac3011ac4813fa18e9e8abd6f4b72a365a96d3a86",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/note-linking-en.md": "c8cc558c52ffd7ce122d9e173d5e20e0dbbcfaa5968bfdb71afe5805adf109ff",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/olbryggning-jast-sv.md": "f1936f38a29477773c8ac4f723a0a8b7ae820022de741ee70c31992b22eca342",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/omindexering-sv.md": "600f6e00145510033584701ca3bb3fb51bb69142b12060278d980a11425ac14f",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/post-office-queue-en.md": "81d9951358a8b81b7d5c443f914021da7cfe29a3b059a9d8d4c3b7d52d43e0fc",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/sleep-focus-en.md": "3966a4ff9d98ccdfe12d0616f0425449cb6f75baf9d43c0f7974e467c3895ee1",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/somn-och-fokus-sv.md": "b1140e202301b84caf357852b2fd2faff3dcb5e103b640586a5737579c48a2ca",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/sourdough-en.md": "b5a44d8638e2d001cedc395390df54c9a9d270db98e1159cc0d43ea8786fe9ba",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/spelbalans-sv.md": "2d03083fca53b295b6ab4488fe89c533ad3124a3964336c01834e9af5c7117f0",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/surdeg-sv.md": "d385a0bd326d0804a592c84c96b5d44f8c1da0e8ff186a5153eba812c3f62763",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/watcher-backpressure-en.md": "0d58e6f6a3ebc09993c27bd2f6f52c65aaac044f877f356afa476607a1149206",
+    "tests/evals/fixtures/sv_en_retrieval/queries.json": "f15132c0504c6f905ad7f7aacd10c300bf35b809daa037ecaacd8977cd84d7bf",
+    "tests/evals/fixtures/sv_en_retrieval/scorecard.json": "673259cff4687377ec19fa925bc3318ece65823330d8cf3db7a8d43ceffdd2b6"
+  },
+  "corpus_hashes": {
+    "tests/evals/fixtures/sv_en_retrieval/corpus/avdrag-frilans-sv.md": "c528512cc7d9a276a8d435ee775b71706872b2a8ba7ea4555e0773371f3f34ef",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/bevakare-mottryck-sv.md": "d64565661ec47806d13f5a8067e2d77c29c2a2f59a93568c0702eef522635df2",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/bicycle-maintenance-en.md": "d278748ead91e6850a09787327efc2726504e2c6c22c4616e1afb26fe6428e2e",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/board-game-design-en.md": "812d9e6d31aa39008461d74f49f4c568bbd05e6cb5085f62f35651b64749fcf2",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/coffee-roasting-en.md": "ede4c2cbf5acfdc44ff7dd0166b5fb97f27a46d803f6af75c6c14c9e313b75e6",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/cykelservice-sv.md": "ef0af904435bddfec1e5d2d844bb68a38d7060a86779466e6255403ccc3bdea4",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/freelance-expenses-en.md": "a7586e0b2731c76b832521abe49708373f82ee8c7379aa150f3378270497ffe5",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/grafteori-sv.md": "18ca4560c633516a3ee9bd5196ff1fd8047225d5f0b73a825e65bafbd9acb332",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/index-rebuild-en.md": "e1dabf7419ae93b3b017f032a1bb500663c5f9e5e66e45f61d09b325d2ff39a3",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/lankvanor-sv.md": "30c0e6dfba0b2a9f7f47967ac3011ac4813fa18e9e8abd6f4b72a365a96d3a86",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/note-linking-en.md": "c8cc558c52ffd7ce122d9e173d5e20e0dbbcfaa5968bfdb71afe5805adf109ff",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/olbryggning-jast-sv.md": "f1936f38a29477773c8ac4f723a0a8b7ae820022de741ee70c31992b22eca342",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/omindexering-sv.md": "600f6e00145510033584701ca3bb3fb51bb69142b12060278d980a11425ac14f",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/post-office-queue-en.md": "81d9951358a8b81b7d5c443f914021da7cfe29a3b059a9d8d4c3b7d52d43e0fc",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/sleep-focus-en.md": "3966a4ff9d98ccdfe12d0616f0425449cb6f75baf9d43c0f7974e467c3895ee1",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/somn-och-fokus-sv.md": "b1140e202301b84caf357852b2fd2faff3dcb5e103b640586a5737579c48a2ca",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/sourdough-en.md": "b5a44d8638e2d001cedc395390df54c9a9d270db98e1159cc0d43ea8786fe9ba",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/spelbalans-sv.md": "2d03083fca53b295b6ab4488fe89c533ad3124a3964336c01834e9af5c7117f0",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/surdeg-sv.md": "d385a0bd326d0804a592c84c96b5d44f8c1da0e8ff186a5153eba812c3f62763",
+    "tests/evals/fixtures/sv_en_retrieval/corpus/watcher-backpressure-en.md": "0d58e6f6a3ebc09993c27bd2f6f52c65aaac044f877f356afa476607a1149206"
+  },
+  "synthetic_input_hashes": {
+    "corpus": [
+      "fef776cf7f0ca5a2c314b9689db98d3a471e4e2bd7436df9ef9a4a34be383c72",
+      "2fbfdc9d988b440119e38c9c6c7de3cd5602dc9a348df7d041ed78d1eb37b98c",
+      "5a69597cc8e4d059778b731d0bb35db22f32f45e676da6b289e484c4d91a9f5b",
+      "a5eae6454e4f422c893f012b0762d07d49b061f463457d802b9c6dbf653a5a59",
+      "b62223595e6018a385c44b471b889c17f4da622fb9ba0a2f97e3ec2e490d6aab",
+      "90a182442bf0f5a6b8304fb3078b689965276f692f68fcc56fdfa9410d7dcac1",
+      "739e061feba36a73c3207e66e5211feedc215500a6d934c444540730a44103b1",
+      "0662c39eadb4ecb9290f8c937d54c5b2988e01837c519621ae940cf71f1ccc2f",
+      "6b7328b33de6f610a29d1464870f7107ee5b0cb6900f4055981d51f533468b3c",
+      "5fd3f81d3d8d5002256832971884499875ef1748f2534c17be17cb1eece2c764",
+      "26ed7ebbbd3a8f64ba691025f0890699fc30b7bf4f833f2176ebd112f73a693a",
+      "75be0f7994621bb73261df91a05e084f0deb7dec80c0dd7bbecbc3b8d1fa2369",
+      "661f00e86a2280d9f385d65bb61714de7ebba61ae904329ae494a77005b6570d",
+      "bc4d32b4e5051c93aa328aefccd0ce7e6ae163a59bc5c85c501ce94f57f4cdbc",
+      "1aa697833b8a7efbb0e8dae2f9e9b88bf047be2fa8301c396f9daf3ef4531de2",
+      "cb34ac13a1c554d1bdff7341e164364c4fdbea4a580d26109b3761aac2bfe1be",
+      "6da6d81a8be58017355f27ad963cf1183c6d38d76427074befb0a0f809fd19a0",
+      "7e03667d03351e8b443e50d3e1a9dcaa1464e6e12ab2989fb5a8f34b5ecd84bb",
+      "9a574f16d6d7c60bdef790b721c64250fe73feba060856a9a3a274f50f310b10",
+      "d0f99cf0bd9fa9792dce18efbc1abf3d8eb41fdf3532b2eaa7f195f92a128ecd"
+    ],
+    "query": [
+      "533a8330b2d9cca76c2da6103cc1e38dcf9cefa5d947d1258f1f62b97459808a",
+      "2eb16129f6bb98ba832cec45be8ec1d293c76007c49b35a0c27eaa2abd87a9dc",
+      "65ff582d7eac6f62dea269bac38fb0f69cfbb4bdf4a0e4421bb50b175dea728e",
+      "d7adf7663603d55064a166f3b4727133d28f443dc3720956ec50a883630ef7c5",
+      "79bc0c177cf06a5d89d9504ce8f90bc910ce03f6a9a7e938b606998dd6dde781",
+      "b9d7d9ea64d9ef4a5b8858427d4debcd6ed1d061df299a2bdab841f4d3977c23",
+      "c097231ceb265433ed10adace0eec37f3fb641eedbfa6f301fee8f42d125e2d1",
+      "68d42725a38946329589cecd34976551388b75c6908bcba2605657d8b8596b8b"
+    ]
+  },
+  "observed_cross_lingual_hits": {
+    "nomic": 0,
+    "bge_m3": 7
+  },
+  "query_count": 8,
+  "real_Product_path": {
+    "provider": "ollama",
+    "execution_host": "profile.codex_remote_host",
+    "fallback_phase": "none",
+    "raw_embedding_responses": 176,
+    "parent_admissions": 176,
+    "current_catalog_readiness_basis": "ordinary_Product_embed_internal_fresh_catalog",
+    "standalone_catalog_calls": 0,
+    "provider_wire_request_count": "UNKNOWN"
+  },
+  "effects": {
+    "original_test_batches": 1,
+    "automatic_retries": 0,
+    "store_backend": "memory",
+    "test_Product_store_writes": false,
+    "test_vault_writes": false,
+    "test_index_writes": false,
+    "new_shared_model_service_operations": 0,
+    "model_window_revoked": true,
+    "model_reservation_seconds": 325.57811880111694,
+    "cumulative_reserved_seconds": 435.097307001117,
+    "approved_cumulative_cap_seconds": 899.5191882
+  },
+  "actual_evidence_sha256": {
+    "receipt.json": "a9ad1b461ef1e9ef4c6a7d83768501d6a2cff0129f35052136df308d14bda54c",
+    "trace.json": "2be30beb16c5447aa0bf55889eccf38edc2fc8773f7c6e671a184f20c3f6c005",
+    "junit.xml": "e941a85fdd33741f3e5be9e5ad67b2e298c47d57cf6ae233c575d4323f0d3ca9",
+    "scorecard.json": "4045ca924257ce1ba52cc64e33fd3404f496113b3aa5551f5fc7b58a89e8e701",
+    "control-progress.jsonl": "8711ad00900e5083aa04ab1be462df8685076d63a85419eb93c3205df776d2be"
+  },
+  "scope": "Qualification applies to this retained synthetic corpus, original test pair, Product consumer and executor candidate. Historical failed-run inner causes remain unknown."
+}

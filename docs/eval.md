@@ -91,16 +91,19 @@ Product router/client and admission boundary. The context restores the caller's 
 other environment values, memory documents and tuning on completion or failed entry.
 
 The existing DEV/TEST Model Access qualification owned by Issue #5963 supplies the admitted
-consumer prerequisite. Its capture/browser receipt is not automatically the SV/EN quality receipt.
-Until a matching dual-identity run exists, this additional live reproduction remains **unqualified**.
-Retain a separate execution receipt bound to the exact candidate SHA and qualified channel/consumer,
-both selected and executed test node IDs, synthetic fixture identity, actual Nomic 768 and BGE-M3
-1024 embedding identities, and terminal results. Include JUnit or scorecard artifact hashes. A
-missing-path failure is negative admission evidence; the post-merge PostgreSQL acceptance receipt
-under #5675 is also separate and cannot substitute for the two-model quality result. Issue #5973
-owns this classification correction; the downstream execution obligation remains explicit after
-its code delivery and requires the existing qualification prerequisite rather than new credentials,
-deployment or reset authority.
+consumer prerequisite. Issue #5977 completed a qualified synthetic reproduction on 2026-10-18:
+**both original live tests passed**, with no skips. Nomic returned normalized 768-dimensional
+embeddings and BGE-M3 returned normalized 1024-dimensional embeddings. The original SV/EN finding
+was reproduced: Nomic found 0 of 8 cross-lingual matches and BGE-M3 found 7 of 8.
+
+The [redacted execution receipt](eval/receipts/sv-en-5977-20261018.json) binds the exact Product
+and executor candidates, consumer identity digest, unchanged test nodes, synthetic fixture hashes,
+real Product response provenance, and original JUnit, scorecard and trace hashes. One memory-only
+batch ran; its model reservation was verified revoked. Qualification applies to the recorded
+candidates and synthetic inputs. Retain the same evidence for subsequent candidates and runs.
+
+Issue #5973 owns the deterministic/live lane classification; #5977 records the completed dual-model
+execution. The capture/browser qualification and PostgreSQL acceptance receipt under #5675 retain their own scope.
 
 ## RAG eval (Ragas, seed suite)
 - Seed RAG cases live in `docs/eval/rag_cases.yaml`.
