@@ -780,3 +780,22 @@ def test_same_idempotency_key_in_two_bindings_survives_restart(
     b = reloaded.get("shared-key", binding="binding-B")
     assert a is not None and a.artifact_id == "art-a"
     assert b is not None and b.artifact_id == "art-b"
+
+
+def test_legacy_idempotency_key_with_separator_is_preserved(tmp_path: Path) -> None:
+    """#6243 review: a bare legacy key containing the separator reloads unchanged."""
+
+    import sqlite3
+
+    db = tmp_path / "panel.sqlite3"
+    ConfirmIdempotencyStore(db)  # create schema
+    odd = "client\x1fkey"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO panel_confirm_idempotency (key, response_json, created_at, updated_at)"
+            " VALUES (?, ?, strftime('%s','now'), '')",
+            (odd, _response("art", odd).model_dump_json()),
+        )
+        conn.commit()
+
+    assert ConfirmIdempotencyStore(db).get(odd) is not None

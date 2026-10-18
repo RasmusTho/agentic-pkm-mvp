@@ -537,9 +537,17 @@ def _durable_key(binding: str | None, key: str) -> str:
     return f"{binding}{_DURABLE_KEY_SEPARATOR}{key}"
 
 
-def _split_durable_key(durable: str) -> tuple[str | None, str]:
-    binding, sep, key = durable.partition(_DURABLE_KEY_SEPARATOR)
-    return (binding, key) if sep else (None, durable)
+def _split_durable_key(durable: str, stamp: str | None) -> str:
+    """The idempotency key of a durable row whose envelope records ``stamp``.
+
+    Only strip a prefix that is exactly this row's own binding, so a legacy bare
+    key that happens to contain the separator is preserved unchanged.
+    """
+
+    prefix = f"{stamp}{_DURABLE_KEY_SEPARATOR}" if stamp else None
+    if prefix and stamp != COMPATIBILITY_BINDING_ID and durable.startswith(prefix):
+        return durable[len(prefix):]
+    return durable
 
 
 class ConfirmIdempotencyStore:
@@ -614,7 +622,7 @@ class ConfirmIdempotencyStore:
             cache: dict[tuple[str | None, str], ConfirmResponse] = {}
             for row in rows:
                 stamp, response_json = _unwrap_durable(str(row["response_json"]))
-                cache[(stamp, _split_durable_key(str(row["key"]))[1])] = (
+                cache[(stamp, _split_durable_key(str(row["key"]), stamp))] = (
                     ConfirmResponse.model_validate_json(response_json)
                 )
             self._cache = cache
