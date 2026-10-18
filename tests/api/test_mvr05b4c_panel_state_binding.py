@@ -799,3 +799,50 @@ def test_legacy_idempotency_key_with_separator_is_preserved(tmp_path: Path) -> N
         conn.commit()
 
     assert ConfirmIdempotencyStore(db).get(odd) is not None
+
+
+def test_curation_pass_refuses_a_root_that_is_not_the_compatibility_vault(
+    two_bindings, tmp_path: Path
+) -> None:
+    """#6243 review: a handed vault root must be the live compatibility binding's root."""
+
+    from app.curation.findings import CurationFinding, FindingClass
+    from app.curation.proposal_writer import write_curation_proposals
+    from app.instance.compatibility_binding import CompatibilityBindingUnavailableError
+    from app.write_guard import WriteGuard
+
+    _client, first, second, _proposals, _idempotency, _outbox = two_bindings
+    other_root = Path(second.path)
+    note = other_root / "curate.md"
+    note.write_text(
+        "---\nuuid: uuid-curate\nkind: note\n---\n\n# Note\n\n%% AI:Start %%\n## AI-instruktion\n\n%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    before = note.read_text(encoding="utf-8")
+    finding = CurationFinding.create(
+        note_uuid="path:curate.md",
+        finding_class=next(iter(FindingClass)),
+        span="L5:body",
+        observed="teh",
+        proposed="the",
+        evidence=("curate.md",),
+    )
+    outbox = tmp_path / "curation-outbox.jsonl"
+    guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy", "reason": None})
+
+    with pytest.raises(CompatibilityBindingUnavailableError):
+        write_curation_proposals([finding], vault_root=other_root, write_guard=guard, outbox_path=outbox)
+
+    assert note.read_text(encoding="utf-8") == before
+    assert not outbox.exists()
+
+    # The compatibility vault itself is accepted and stamped with its real id.
+    own = Path(first.path) / "curate.md"
+    own.write_text(before, encoding="utf-8")
+    write_curation_proposals([finding], vault_root=Path(first.path), write_guard=guard, outbox_path=outbox)
+    import json as _json
+
+    stamped = [_json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines()]
+    assert stamped and all(
+        item["payload"][PRODUCING_BINDING_FIELD] == first.vault_binding_id for item in stamped
+    )

@@ -15,6 +15,10 @@ from pathlib import Path
 
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.instance.settings_rebind import SettingsRebindStore
+from app.instance.filesystem_identity import (
+    resolve_filesystem_root_identity,
+    same_filesystem_root,
+)
 from app.instance.vault_registry import VaultRegistryStore
 
 
@@ -50,6 +54,39 @@ def live_compatibility_binding_id() -> str:
         raise CompatibilityBindingUnavailableError(
             "compatibility binding is not provable"
         ) from exc
+
+
+def compatibility_binding_for_root(root: Path) -> str:
+    """The live compatibility binding, proven to be the vault at ``root``.
+
+    For producers that write a vault root they were handed (rather than the
+    sealed selection): once a registry binding is live, ``root`` must be that
+    binding's registered root, or the producer fails closed before any write
+    instead of stamping another vault's binding. The no-registry journeys return
+    the legacy sentinel unchanged.
+    """
+
+    live = live_compatibility_binding_id()
+    if live == COMPATIBILITY_BINDING_ID:
+        return live
+    raw_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+    try:
+        registry = VaultRegistryStore(Path(raw_path).expanduser().resolve(strict=False))
+        registration = registry.load().registrations.get(live)
+        if registration is None:
+            raise CompatibilityBindingUnavailableError("compatibility binding is not registered")
+        if same_filesystem_root(
+            resolve_filesystem_root_identity(Path(root)),
+            resolve_filesystem_root_identity(Path(registration.path)),
+        ):
+            return live
+    except CompatibilityBindingUnavailableError:
+        raise
+    except Exception as exc:
+        raise CompatibilityBindingUnavailableError("compatibility binding is not provable") from exc
+    raise CompatibilityBindingUnavailableError(
+        "vault root is not the live compatibility binding's registered root"
+    )
 
 
 def legacy_view_bindings() -> tuple[str | None, ...]:

@@ -42,7 +42,7 @@ from pathlib import Path
 from app.agents.panel_agent.runtime import _write_proposals_to_panel
 from app.curation.findings import CurationFinding
 from app.events.panel import NoteRef, PanelActionLoggedEvent, PanelEventSource
-from app.instance.compatibility_binding import live_compatibility_binding_id
+from app.instance.compatibility_binding import compatibility_binding_for_root
 from app.receipts.artifact_receipts import stamp_producing_binding
 from app.services.outbox import append_jsonl_outbox_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
@@ -139,9 +139,11 @@ def write_curation_proposals(
     # MVR-05B4c2: prove the producing binding once, before any note is touched,
     # so an unresolved binding authority stops the pass instead of leaving a
     # vault mutation without its accountability receipt.
-    producing_binding = live_compatibility_binding_id()
-
     vault_root = Path(vault_root).expanduser().resolve()
+    # The pass writes the root it was handed: prove that root IS the live
+    # compatibility binding (or stop) rather than stamping another vault's id.
+    producing_binding = compatibility_binding_for_root(vault_root)
+
     unresolved: list[CurationFinding] = []
 
     by_note: dict[Path, list[CurationFinding]] = {}
