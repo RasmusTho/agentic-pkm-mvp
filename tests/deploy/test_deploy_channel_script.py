@@ -5400,9 +5400,10 @@ def test_linux_recovery_compose_binds_authenticated_cutover_ownership_root(tmp_p
     (tmp_path / 'config/deploy').mkdir(parents=True)
     (tmp_path / 'config/deploy/test.env').write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
     monkeypatch.delenv('INSTANCE_OWNERSHIP_HOST_STATE_DIR', raising=False)
-    environments = []
+    commands, environments = [], []
 
-    def command(_argv, **kwargs):
+    def command(argv, **kwargs):
+        commands.append(argv)
         environments.append(kwargs['env'])
         return ''
 
@@ -5412,7 +5413,56 @@ def test_linux_recovery_compose_binds_authenticated_cutover_ownership_root(tmp_p
     )
     linux.LinuxEffects(cfg).compose('run', 'instance-state-init', cutover=cutover)
 
+    assert len(commands) == 1
     assert environments[0]['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] == cutover.ownership_root
+
+
+def test_linux_recovery_prepares_new_volume_before_runtime_uid(monkeypatch, tmp_path):
+    """A fresh named volume is permission-prepared before reconstruction."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
+
+    operation_id = str(uuid4())
+    digest = 'sha256:' + 'a' * 64
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    cutover = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
+    )
+    request = TestRecoveryRequest(operation_id, plan, cutover)
+    config = SimpleNamespace(channel='test', root=tmp_path, uid=1000, journal=object())
+    effects = linux.LinuxEffects(config)
+    effects.local_database = lambda: True
+    effects._write_test_instance_state_recovery_receipt = lambda _request: (
+        tmp_path / 'receipt.json', 'a' * 64, 'b' * 64,
+    )
+    calls = []
+
+    def compose(*args, **kwargs):
+        calls.append((args, kwargs))
+        if '--user' in args:
+            return json.dumps({
+                'schema': 'test-instance-state-recovery.v1',
+                'channel': 'test',
+                'activation': 'inactive_fenced',
+                'request': {'failed_operation_id': operation_id},
+            })
+        return ''
+
+    effects.compose = compose
+    assert effects.reconstruct_missing_test_instance_state(request)['activation'] == 'inactive_fenced'
+
+    assert calls[0][0] == ('run', '--rm', '--no-deps', '-T', 'instance-state-init')
+    assert '--user' not in calls[0][0]
+    assert '--user' in calls[1][0]
+    assert calls[0][1]['cutover'] == cutover
+    assert calls[1][1]['cutover'] == cutover
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])

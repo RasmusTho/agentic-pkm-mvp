@@ -2028,6 +2028,14 @@ class LinuxEffects:
         if self.config.channel != 'test' or not self.local_database():
             raise PostgresDeployError()
         receipt_path, owner_sha, proof_sha = self._write_test_instance_state_recovery_receipt(request)
+        # A lost named volume is created by Compose with root ownership. Run
+        # the existing permission-only one-shot as root before dropping to the
+        # runtime identity for the authenticated producer; it creates no
+        # registry, ledger, binding, or other authority.
+        self.compose(
+            'run', '--rm', '--no-deps', '-T', 'instance-state-init',
+            cutover=request.authority_cutover,
+        )
         result = self.compose(
             'run', '--rm', '--no-deps', '-T', '--user', str(self.config.uid),
             'instance-state-init', 'python', '-m', 'app.instance.runtime',

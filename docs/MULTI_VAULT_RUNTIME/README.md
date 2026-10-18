@@ -302,7 +302,9 @@ run as an ordinary startup side effect; divergent retries remain refused. In the
 host-side ownership path remains in the exact authority tuple and is never inferred from the mount
 path. A retry that finds the registry transaction journal uses the registry store's canonical
 recovery path before accepting the byte-identical dormant generation, and a source-reset-only host
-checkpoint never counts as reconstruction evidence.
+checkpoint never counts as reconstruction evidence. The producer first runs the existing root-owned
+permission-only one-shot for a genuinely new named volume; that step creates no registry or
+authority before the runtime-UID reconstruction command runs.
 
 The existing private backup manifest binds the absent-pair before-image and one authenticated
 prepared epoch. Reservation evidence in the existing TEST deployment safety records fences retries

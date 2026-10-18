@@ -1254,7 +1254,9 @@ its recovery marker only after the VM has accepted and completed the exact reset
 failed-plan/successor mismatch leaves no misleading local marker. A retry may repeat the remote
 read/repair because the VM disposition and failed operation are idempotent; a retry with a registry
 transaction journal uses the canonical store recovery path before validating the byte-identical
-result. The same command then
+result. On a genuinely new named volume, the producer first runs the existing root-owned
+permission-only one-shot (which creates no registry or authority) before dropping to the configured
+runtime UID. The same command then
 runs the normal candidate deployment gates. It never resets the source vault, identity,
 ownership authority, or production state, and local reset scripts, direct host repair, source
 healing, and direct SQL remain invalid substitutes. This repository support and its deterministic
