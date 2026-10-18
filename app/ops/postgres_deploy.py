@@ -135,11 +135,19 @@ class DeployPlan:
 
 @dataclass(frozen=True)
 class TestRecoveryRequest:
-    """Authenticated TEST-only reset request for one failed candidate operation."""
+    """Authenticated TEST-only reset or reconstruction request.
+
+    A reset request names the original failed authority-cutover operation.
+    Reconstruction additionally names that operation in ``source_operation_id``
+    and uses ``failed_operation_id`` for the terminal failed automatic
+    successor.  Keeping both identities prevents a fresh candidate from being
+    confused with either historical operation.
+    """
 
     failed_operation_id: str
     plan: DeployPlan
     authority_cutover: AuthorityCutover
+    source_operation_id: str | None = None
 
     def validate(self) -> None:
         if (not isinstance(self.failed_operation_id, str)
@@ -148,9 +156,15 @@ class TestRecoveryRequest:
             raise PostgresDeployError()
         try:
             canonical_operation_id = str(UUID(self.failed_operation_id))
+            canonical_source_operation_id = (
+                str(UUID(self.source_operation_id))
+                if self.source_operation_id is not None else None
+            )
         except (ValueError, TypeError, AttributeError):
             raise PostgresDeployError() from None
         if (canonical_operation_id != self.failed_operation_id
+            or canonical_source_operation_id != self.source_operation_id
+            or self.source_operation_id == self.failed_operation_id
             or self.plan.channel != 'test'
             or not self.plan.automatic
             or self.plan.authority_cutover is not None
@@ -173,43 +187,70 @@ class TestRecoveryRequest:
         if not isinstance(failed_plan, DeployPlan):
             raise PostgresDeployError()
         failed_plan.validate()
+        if self.source_operation_id is None:
+            if (failed_plan.channel != 'test'
+                or failed_plan.automatic
+                or failed_plan.authority_cutover is None
+                or failed_plan.authority_cutover != self.authority_cutover):
+                raise PostgresDeployError()
+            # The first automatic successor is bound to the retained cutover.
+            for field in ('channel', 'revision', 'services', 'consumers'):
+                if getattr(failed_plan, field) != getattr(self.plan, field):
+                    raise PostgresDeployError()
+            if (failed_plan.image_digest is not None
+                and failed_plan.image_digest != self.plan.image_digest):
+                raise PostgresDeployError()
+            return
+        # Reconstruction is authorized by a distinct terminal automatic
+        # successor.  Its candidate bytes may differ from the new plan, while
+        # its runtime surface must remain the same bounded TEST profile.
         if (failed_plan.channel != 'test'
-            or failed_plan.automatic
-            or failed_plan.authority_cutover is None
-            or failed_plan.authority_cutover != self.authority_cutover):
+            or not failed_plan.automatic
+            or failed_plan.authority_cutover is not None
+            or failed_plan.image_digest is None):
             raise PostgresDeployError()
-        # Forward-only acknowledgement is an authorization attached to the
-        # retained failed cutover. Automatic successors must keep the
-        # request-level acknowledgement disabled, so it is not a successor
-        # compatibility field.
-        for field in ('channel', 'revision', 'services', 'consumers'):
+        for field in ('channel', 'services', 'consumers'):
             if getattr(failed_plan, field) != getattr(self.plan, field):
                 raise PostgresDeployError()
-        # The manual failed cutover producer may not have selected an image
-        # digest.  The automatic successor must always carry its own digest;
-        # when the retained plan has one, bind it to that successor as well.
-        if (failed_plan.image_digest is not None
-            and failed_plan.image_digest != self.plan.image_digest):
+
+    def validate_source_plan(self, source_plan: DeployPlan) -> None:
+        """Authenticate the completed original reset lineage."""
+        self.validate()
+        if self.source_operation_id is None or not isinstance(source_plan, DeployPlan):
             raise PostgresDeployError()
+        source_plan.validate()
+        if (source_plan.channel != 'test'
+            or source_plan.automatic
+            or source_plan.authority_cutover != self.authority_cutover):
+            raise PostgresDeployError()
+        for field in ('channel', 'services', 'consumers'):
+            if getattr(source_plan, field) != getattr(self.plan, field):
+                raise PostgresDeployError()
 
     def payload(self) -> dict[str, Any]:
         self.validate()
-        return {
+        payload = {
             'failed_operation_id': self.failed_operation_id,
             'plan': self.plan.payload(),
             'authority_cutover': asdict(self.authority_cutover),
         }
+        if self.source_operation_id is not None:
+            payload['source_operation_id'] = self.source_operation_id
+        return payload
 
     @classmethod
     def from_payload(cls, raw: Any) -> TestRecoveryRequest:
         if (not isinstance(raw, dict)
-            or set(raw) != {'failed_operation_id', 'plan', 'authority_cutover'}
+            or set(raw) not in (
+                {'failed_operation_id', 'plan', 'authority_cutover'},
+                {'failed_operation_id', 'source_operation_id', 'plan', 'authority_cutover'},
+            )
             or not isinstance(raw['authority_cutover'], dict)
             or set(raw['authority_cutover']) != {'binding_id', 'root', 'ownership_root'}):
             raise PostgresDeployError()
         request = cls(
             raw['failed_operation_id'], DeployPlan.from_payload(raw['plan']),
-            AuthorityCutover(**raw['authority_cutover']),
+            AuthorityCutover(**raw['authority_cutover']), raw.get('source_operation_id'),
         )
         request.validate()
         return request

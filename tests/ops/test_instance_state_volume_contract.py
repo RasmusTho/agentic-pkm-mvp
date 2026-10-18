@@ -4619,10 +4619,13 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
     )
     candidate_revision = "a" * 40
     candidate_digest = "sha256:" + "a" * 64
+    source_operation_id = "22222222-2222-4222-8222-222222222222"
+    ledger_sha256 = hashlib.sha256(runtime.ledger.path.read_bytes()).hexdigest()
     request_payload = {
-        "schema": "test-instance-state-recovery.v1",
+        "schema": "test-instance-state-recovery.v2",
         "channel": "test",
-        "failed_operation_id": "11111111-1111-4111-8111-111111111111",
+        "source_operation_id": source_operation_id,
+        "failed_successor_operation_id": "11111111-1111-4111-8111-111111111111",
         "candidate_revision": candidate_revision,
         "candidate_image_digest": candidate_digest,
         "authority_cutover": {
@@ -4635,6 +4638,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
         "quiescence_proof_sha256": hashlib.sha256(
             (host_global_root / "deployment-quiescence-proof.json").read_bytes()
         ).hexdigest(),
+        "ledger_sha256": ledger_sha256,
     }
     recovery_receipt.write_text(
         json.dumps(request_payload, sort_keys=True, separators=(",", ":")) + "\n",
@@ -4674,7 +4678,8 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
 
     result = recovery_module.reconstruct_missing_test_instance_state(
         channel="test",
-        failed_operation_id=request_payload["failed_operation_id"],
+        failed_operation_id=request_payload["failed_successor_operation_id"],
+        source_operation_id=request_payload["source_operation_id"],
         candidate_revision=candidate_revision,
         candidate_image_digest=candidate_digest,
         authority_binding_id=registration.vault_binding_id,
@@ -4687,6 +4692,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
         expected_owner_receipt_sha256=request_payload["owner_receipt_sha256"],
         quiescence_proof_path=host_global_root / "deployment-quiescence-proof.json",
         expected_quiescence_proof_sha256=request_payload["quiescence_proof_sha256"],
+        expected_ledger_sha256=request_payload["ledger_sha256"],
         authority_ownership_mount_root=str(host_global_root.resolve()),
     )
 
@@ -4719,7 +4725,8 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
     )
     assert recovery_module.reconstruct_missing_test_instance_state(
         channel="test",
-        failed_operation_id=request_payload["failed_operation_id"],
+        failed_operation_id=request_payload["failed_successor_operation_id"],
+        source_operation_id=request_payload["source_operation_id"],
         candidate_revision=candidate_revision,
         candidate_image_digest=candidate_digest,
         authority_binding_id=registration.vault_binding_id,
@@ -4732,6 +4739,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
         expected_owner_receipt_sha256=request_payload["owner_receipt_sha256"],
         quiescence_proof_path=host_global_root / "deployment-quiescence-proof.json",
         expected_quiescence_proof_sha256=request_payload["quiescence_proof_sha256"],
+        expected_ledger_sha256=request_payload["ledger_sha256"],
         authority_ownership_mount_root=str(host_global_root.resolve()),
     ) == result
 
@@ -4740,7 +4748,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
     # foreign path/ref acceptable.
     result_marker = host_global_root / (
         "test-instance-state-recovery-result-"
-        + request_payload["failed_operation_id"]
+        + request_payload["failed_successor_operation_id"]
         + ".json"
     )
     foreign_root = tmp_path / "foreign-vault"
@@ -4761,7 +4769,8 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
     def retry_divergent_generation() -> dict[str, object]:
         return recovery_module.reconstruct_missing_test_instance_state(
             channel="test",
-            failed_operation_id=request_payload["failed_operation_id"],
+            failed_operation_id=request_payload["failed_successor_operation_id"],
+            source_operation_id=request_payload["source_operation_id"],
             candidate_revision=candidate_revision,
             candidate_image_digest=candidate_digest,
             authority_binding_id=registration.vault_binding_id,
@@ -4777,6 +4786,7 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
             expected_quiescence_proof_sha256=request_payload[
                 "quiescence_proof_sha256"
             ],
+            expected_ledger_sha256=request_payload["ledger_sha256"],
             authority_ownership_mount_root=str(host_global_root.resolve()),
         )
 
@@ -4806,6 +4816,70 @@ def test_missing_instance_state_recovery_rebuilds_dormant_registry_from_ledger(t
     ):
         retry_divergent_generation()
     assert not result_marker.exists()
+
+
+def test_missing_instance_state_recovery_requires_complete_unchanged_test_ledger(
+    tmp_path,
+) -> None:
+    """Owner evidence must cover the exact active TEST ledger on every pass."""
+    from app.instance.legacy_owner_recovery import (
+        validate_missing_test_instance_state_recovery_authority,
+    )
+
+    state_mount = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    layout = InstanceStateLayout.for_channel(state_mount, "test")
+    runtime = InstanceRegistryRuntime.for_paths(layout, host_global_root)
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=vault_root, watcher_vault_path=vault_root,
+    )
+    _, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[{
+            "channel_id": "test",
+            "vault_binding_id": registration.vault_binding_id,
+            "root": str(vault_root.resolve()),
+        }],
+    )
+    proof_path = host_global_root / "deployment-quiescence-proof.json"
+    values = {
+        "host_global_root": host_global_root,
+        "authority_binding_id": registration.vault_binding_id,
+        "authority_root": str(vault_root.resolve()),
+        "owner_receipt_path": owner_receipt,
+        "expected_owner_receipt_sha256": hashlib.sha256(
+            owner_receipt.read_bytes()
+        ).hexdigest(),
+        "quiescence_proof_path": proof_path,
+        "expected_quiescence_proof_sha256": hashlib.sha256(
+            proof_path.read_bytes()
+        ).hexdigest(),
+    }
+    ledger_sha256 = validate_missing_test_instance_state_recovery_authority(
+        **values
+    )
+
+    extra_root = tmp_path / "unrepresented-vault"
+    extra_root.mkdir()
+    runtime.ledger.reserve(
+        channel_id="test", vault_binding_id="unrepresented-binding",
+        root=extra_root, _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    runtime.ledger.activate(
+        "unrepresented-binding", _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="TEST dormant ownership preparation refused",
+    ):
+        validate_missing_test_instance_state_recovery_authority(
+            **values, expected_ledger_sha256=ledger_sha256,
+        )
 
 
 def test_runtime_preflight_rejects_foreign_channel_host_global_lease_without_mutation(

@@ -5445,6 +5445,19 @@ def _main(argv: list[str] | None = None) -> int:
     reconstruct.add_argument("--expected-owner-receipt-sha256", required=True)
     reconstruct.add_argument("--quiescence-proof-path", type=Path, required=True)
     reconstruct.add_argument("--expected-quiescence-proof-sha256", required=True)
+    reconstruct.add_argument("--expected-ledger-sha256", required=True)
+    reconstruct.add_argument("--source-operation-id", required=True)
+    recovery_preflight = subparsers.add_parser(
+        "deployment-preflight-missing-test-instance-state-recovery"
+    )
+    recovery_preflight.add_argument("--host-global-root", type=Path, required=True)
+    recovery_preflight.add_argument("--authority-binding-id", required=True)
+    recovery_preflight.add_argument("--authority-root", required=True)
+    recovery_preflight.add_argument("--owner-receipt-path", type=Path, required=True)
+    recovery_preflight.add_argument("--expected-owner-receipt-sha256", required=True)
+    recovery_preflight.add_argument("--quiescence-proof-path", type=Path, required=True)
+    recovery_preflight.add_argument("--expected-quiescence-proof-sha256", required=True)
+    recovery_preflight.add_argument("--expected-ledger-sha256")
     read = subparsers.add_parser("read-revision")
     read.add_argument("--registry-path", type=Path, required=True)
     read.add_argument("--consumer", required=True)
@@ -5634,6 +5647,28 @@ def _main(argv: list[str] | None = None) -> int:
             command.add_argument("--kind", choices=("human", "agent"), required=True)
             command.add_argument("--label", required=True)
     args = parser.parse_args(argv)
+    if args.command == "deployment-preflight-missing-test-instance-state-recovery":
+        from app.instance.legacy_owner_recovery import (
+            validate_missing_test_instance_state_recovery_authority,
+        )
+
+        values = vars(args).copy()
+        values.pop("command")
+        try:
+            ledger_sha256 = validate_missing_test_instance_state_recovery_authority(
+                **values
+            )
+        except (
+            InstanceStatePreflightError, RegistryError, LedgerError, OSError,
+            RuntimeError, ValueError, KeyError, TypeError,
+        ):
+            print(json.dumps({"channel": "test", "outcome": "refused"}))
+            return 1
+        print(json.dumps({
+            "channel": "test", "outcome": "authenticated",
+            "ledger_sha256": ledger_sha256,
+        }, sort_keys=True))
+        return 0
     if args.command == "deployment-reconstruct-missing-test-instance-state":
         from app.instance.legacy_owner_recovery import reconstruct_missing_test_instance_state
 
