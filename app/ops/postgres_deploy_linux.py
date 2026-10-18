@@ -1840,9 +1840,10 @@ class LinuxEffects:
         receipt = self.config.journal.read()
         if (receipt is None or receipt.operation_id != request.failed_operation_id
             or receipt.stage not in {'activating', 'failed'}
-            or receipt.source_failure not in _TEST_RECOVERY_SOURCE_FAILURE_REASONS
-            or self.config.journal.bound_plan(request.failed_operation_id) != request.plan):
+            or receipt.source_failure not in _TEST_RECOVERY_SOURCE_FAILURE_REASONS):
             raise PostgresDeployError()
+        failed_plan = self.config.journal.bound_plan(request.failed_operation_id)
+        request.validate_failed_plan(failed_plan)
         disposition = self._read_test_recovery_disposition(request)
         lock_path = self.config.root / 'config/deploy' / 'test.env.lock'
         if disposition is not None and disposition.get('state') == 'complete':
@@ -1856,18 +1857,14 @@ class LinuxEffects:
             return final
         prepared = disposition is not None and disposition.get('state') == 'prepared'
         if not prepared:
-            authority_plan = DeployPlan(
-                'test', request.plan.revision, request.plan.services, request.plan.consumers,
-                request.plan.ack_forward_only, request.plan.image_digest, False,
-                request.authority_cutover,
-            )
-            authority_plan.validate()
-            self.qualify_authority_cutover(authority_plan)
+            self.qualify_authority_cutover(failed_plan)
         with self.failed_reconciliation_lock() as handle:
             current = self.config.journal.read()
+            current_failed_plan = self.config.journal.bound_plan(request.failed_operation_id)
+            request.validate_failed_plan(current_failed_plan)
             if (current is None or current.operation_id != request.failed_operation_id
                 or current.stage not in {'activating', 'failed'}
-                or self.config.journal.bound_plan(request.failed_operation_id) != request.plan):
+                or current_failed_plan != failed_plan):
                 raise PostgresDeployError()
             if not self.quiescent():
                 raise PostgresDeployError()
@@ -1877,7 +1874,7 @@ class LinuxEffects:
             # cleanup from that checkpoint instead of re-qualifying absent
             # containers or replaying the source observation.
             if not prepared:
-                self.recover_source_terminal(request.failed_operation_id, request.plan)
+                self.recover_source_terminal(request.failed_operation_id, failed_plan)
                 self._write_test_recovery_disposition(request, 'prepared')
             if current.stage != 'failed':
                 self.config.journal.write(request.failed_operation_id, 'failed')
