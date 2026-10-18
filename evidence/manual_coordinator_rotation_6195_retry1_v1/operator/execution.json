@@ -1,0 +1,153 @@
+{
+  "schema_name": "manual_rotation_execution_log",
+  "schema_version": 2,
+  "experiment_id": "manual_coordinator_rotation_6195_retry1",
+  "recorder": "/root",
+  "started_at": "2026-10-18T12:04:34Z",
+  "ended_at": "2026-10-18T12:20:12Z",
+  "clock_name": "root recorder actual UTC clock observations",
+  "clock_scope": "Qualifying retry1 native request through root original continuation readback (2026-10-18T12:04:34Z–12:20:12Z), orchestration-inclusive; includes operator metadata artifact, parser code and derived evidence-reference repairs; excludes invalid first candidate, writer/reviewer starts and whole delivery.",
+  "events_complete": true,
+  "events": [
+    {
+      "kind": "agent_start",
+      "actor": "/root/manual_rotation_successor_6236_retry1",
+      "at": "2026-10-18T12:04:48Z",
+      "evidence": {
+        "bytes_length": 1138,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/operator/admission.corrected.original.json",
+        "sha256": "1f7efddc9e5a80d9344fc596c4f7e867d40089c790358d51555fd5edbe2b148c"
+      }
+    },
+    {
+      "kind": "packet_handoff",
+      "actor": "/root/manual_rotation_successor_6236_retry1",
+      "at": "2026-10-18T12:04:48Z",
+      "evidence": {
+        "bytes_length": 55875,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/context-pack.json",
+        "sha256": "c67a830a1d1111750368849e269177e0c6f59d474bb83f2b4c5dbaf0ac1d2e34"
+      }
+    },
+    {
+      "kind": "implementation_repair",
+      "actor": "/root",
+      "at": "2026-10-18T12:06:45Z",
+      "evidence": {
+        "bytes_length": 851,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/operator/admission-metadata-correction.original.json",
+        "sha256": "dc7ab3adf5c1e513a8b4a8926bfaf67bf808764efb49d22bcd75b2f8470ac4fb"
+      }
+    },
+    {
+      "kind": "admission_metadata_handoff",
+      "actor": "/root/manual_rotation_successor_6236_retry1",
+      "at": "2026-10-18T12:06:45Z",
+      "evidence": {
+        "bytes_length": 1138,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/operator/admission.corrected.original.json",
+        "sha256": "1f7efddc9e5a80d9344fc596c4f7e867d40089c790358d51555fd5edbe2b148c"
+      }
+    },
+    {
+      "kind": "response_handoff",
+      "actor": "/root/manual_rotation_successor_6236_retry1",
+      "at": "2026-10-18T12:08:42Z",
+      "evidence": {
+        "bytes_length": 6630,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/initial/agent-response.original.json",
+        "sha256": "16c963e10e136b63f0d21d4ec27ad2b4c6e99387e73644dd482214a8b174fa43"
+      }
+    },
+    {
+      "kind": "implementation_repair",
+      "actor": "/root/implement_manual_rotation_6236",
+      "at": "2026-10-18T12:14:22Z",
+      "evidence": {
+        "bytes_length": 968,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/writer/review-query-code-correction.original.json",
+        "sha256": "52466a870fac8cbe4a442d9230bb3221e1ff5dc1e1aa70e3713fd9fe3e001052"
+      }
+    },
+    {
+      "kind": "implementation_repair",
+      "actor": "/root/implement_manual_rotation_6236",
+      "at": "2026-10-18T12:15:14Z",
+      "evidence": {
+        "bytes_length": 1012,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/writer/evidence-ref-artifact-correction.original.json",
+        "sha256": "4406996b50ffcb3528cfaf25c20fb54dc16f0fbff8b4d9a80d28f3a41ec9dba7"
+      }
+    },
+    {
+      "kind": "acknowledgment_request_handoff",
+      "actor": "/root/manual_rotation_successor_6236_retry1",
+      "at": "2026-10-18T12:16:21Z",
+      "evidence": {
+        "bytes_length": 541,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/operator/quiescence.original.json",
+        "sha256": "a56bc3284942cee704b7e4fdf4a03f68225c8f1b97966da73cfa0669d878fee7"
+      }
+    },
+    {
+      "kind": "acknowledgment_response_handoff",
+      "actor": "/root/manual_rotation_successor_6236_retry1",
+      "at": "2026-10-18T12:16:53Z",
+      "evidence": {
+        "bytes_length": 944,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/acknowledgment.original.json",
+        "sha256": "c4d3279aec60022bb13d5529e6b6ad03f15301f7dffb7e920c150aea9d9e8dc6"
+      }
+    },
+    {
+      "kind": "activation_handoff",
+      "actor": "/root/manual_rotation_successor_6236_retry1",
+      "at": "2026-10-18T12:17:17Z",
+      "evidence": {
+        "bytes_length": 711,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/operator/activation.original.json",
+        "sha256": "b6a3a6ad11a79640090490c06184e8241fa249b11a6b3419da16d3912aee493f"
+      }
+    },
+    {
+      "kind": "continuation_handoff",
+      "actor": "/root/manual_rotation_successor_6236_retry1",
+      "at": "2026-10-18T12:20:12Z",
+      "evidence": {
+        "bytes_length": 3320,
+        "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/continuation/continuation.original.json",
+        "sha256": "2de1a689c8f3970ddfe71024296da61a45876ab4cb9aea8c1765afdf5b795d5c"
+      }
+    }
+  ],
+  "unavailable_measurements": {
+    "input_tokens": {
+      "value": "unknown",
+      "reason": "No authoritative carrier, engine, human-effort or whole-delivery measurement was supplied for this declared interval. Actual admitted capability is recorded separately; root actual model/reasoning is unknown."
+    },
+    "output_tokens": {
+      "value": "unknown",
+      "reason": "No authoritative carrier, engine, human-effort or whole-delivery measurement was supplied for this declared interval. Actual admitted capability is recorded separately; root actual model/reasoning is unknown."
+    },
+    "model_cost_usd": {
+      "value": "unknown",
+      "reason": "No authoritative carrier, engine, human-effort or whole-delivery measurement was supplied for this declared interval. Actual admitted capability is recorded separately; root actual model/reasoning is unknown."
+    },
+    "human_minutes": {
+      "value": "unknown",
+      "reason": "No authoritative carrier, engine, human-effort or whole-delivery measurement was supplied for this declared interval. Actual admitted capability is recorded separately; root actual model/reasoning is unknown."
+    },
+    "engine_identity": {
+      "value": "unknown",
+      "reason": "No authoritative carrier, engine, human-effort or whole-delivery measurement was supplied for this declared interval. Actual admitted capability is recorded separately; root actual model/reasoning is unknown."
+    },
+    "model_active_seconds": {
+      "value": "unknown",
+      "reason": "No authoritative carrier, engine, human-effort or whole-delivery measurement was supplied for this declared interval. Actual admitted capability is recorded separately; root actual model/reasoning is unknown."
+    },
+    "whole_delivery_totals": {
+      "value": "unknown",
+      "reason": "No authoritative carrier, engine, human-effort or whole-delivery measurement was supplied for this declared interval. Actual admitted capability is recorded separately; root actual model/reasoning is unknown."
+    }
+  }
+}

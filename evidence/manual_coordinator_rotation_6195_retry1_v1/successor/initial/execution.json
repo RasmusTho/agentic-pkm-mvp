@@ -1,0 +1,76 @@
+{
+  "schema_name": "epic_rehydration_execution_log",
+  "schema_version": 2,
+  "probe_id": "manual_coordinator_rotation_6195_retry1",
+  "clock": {
+    "name": "root recorder UTC wall clock",
+    "unit": "seconds",
+    "scope": "retry1 initial native request through original five-file root readback; shipped v2 code/test counters only; operator metadata-artifact repair is separately retained"
+  },
+  "started_at": "2026-10-18T12:04:34Z",
+  "ended_at": "2026-10-18T12:08:42Z",
+  "invocation": {
+    "admitted_model": "gpt-6-luna",
+    "admitted_reasoning_effort": "xhigh",
+    "engine_identity": "unknown",
+    "engine_identity_source": "native carrier exposes no independent engine identity",
+    "start_observed_at": "2026-10-18T12:04:48Z",
+    "start_status": "succeeded"
+  },
+  "events_complete": true,
+  "recorder": "/root",
+  "events": [
+    {
+      "id": "retry1-native-start",
+      "kind": "agent_start",
+      "at": "2026-10-18T12:04:48Z",
+      "evidence": "Parent native spawn accepted /root/manual_rotation_successor_6236_retry1 gpt-6-luna/xhigh fork:none, observed at 12:04:48Z; independent engine identity unavailable."
+    },
+    {
+      "id": "retry1-context-packet-handoff",
+      "kind": "handoff",
+      "at": "2026-10-18T12:04:48Z",
+      "evidence": "Native packet-only initial handoff of evidence/manual_coordinator_rotation_6195_retry1_v1/context-pack.json; successful admission confirmation is the recorder tick, not a precise transport timestamp."
+    },
+    {
+      "id": "retry1-original-response-handoff",
+      "kind": "handoff",
+      "at": "2026-10-18T12:08:42Z",
+      "evidence": "Root independently read back and hash/length checked all five originals; response 16c963e10e136b63f0d21d4ec27ad2b4c6e99387e73644dd482214a8b174fa43/6630; fidelity 6208b394c13c8ae9792accb5e8d139289f90a44e577888e02c948147091d981d/13064."
+    }
+  ],
+  "usage": {
+    "input_tokens": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "tokens",
+      "scope": "retry1 initial native request through original five-file root readback; shipped v2 code/test counters only; operator metadata-artifact repair is separately retained",
+      "source": "Native carrier and recorder expose no authoritative metric receipt for this scope.",
+      "reason": "No measured token/cost or human-effort authority was supplied; elapsed wall time is orchestration-inclusive and not model-active or human time."
+    },
+    "output_tokens": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "tokens",
+      "scope": "retry1 initial native request through original five-file root readback; shipped v2 code/test counters only; operator metadata-artifact repair is separately retained",
+      "source": "Native carrier and recorder expose no authoritative metric receipt for this scope.",
+      "reason": "No measured token/cost or human-effort authority was supplied; elapsed wall time is orchestration-inclusive and not model-active or human time."
+    },
+    "model_cost_usd": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "USD",
+      "scope": "retry1 initial native request through original five-file root readback; shipped v2 code/test counters only; operator metadata-artifact repair is separately retained",
+      "source": "Native carrier and recorder expose no authoritative metric receipt for this scope.",
+      "reason": "No measured token/cost or human-effort authority was supplied; elapsed wall time is orchestration-inclusive and not model-active or human time."
+    },
+    "human_minutes": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "minutes",
+      "scope": "retry1 initial native request through original five-file root readback; shipped v2 code/test counters only; operator metadata-artifact repair is separately retained",
+      "source": "Native carrier and recorder expose no authoritative metric receipt for this scope.",
+      "reason": "No measured token/cost or human-effort authority was supplied; elapsed wall time is orchestration-inclusive and not model-active or human time."
+    }
+  }
+}

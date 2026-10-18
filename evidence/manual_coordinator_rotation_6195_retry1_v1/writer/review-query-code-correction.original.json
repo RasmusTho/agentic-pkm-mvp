@@ -1,0 +1,9 @@
+{
+  "schema_name": "manual_rotation_correction",
+  "schema_version": 2,
+  "experiment_id": "manual_coordinator_rotation_6195_retry1",
+  "kind": "implementation_repair",
+  "actor": "/root/implement_manual_rotation_6236",
+  "at": "2026-10-18T12:14:22Z",
+  "reason": "Post-initial implementation code/test repair: the verifier had required the example GraphQL query's byte spelling, although the frozen packet permits the equivalent anonymous read-only selection. Corrected only a finite token equality boundary to allow optional anonymous query and ASCII whitespace; mutation, alias, extra selection, foreign repository/PR, cursor and named operation remain refused. All 34 focused tests, Ruff and module mypy passed before the actual clock.curr_time observation at 12:14:22Z; this is a repair-completion observation, not an exact edit-start timestamp. No frozen contract or original response was changed. Outside the completed 12:04:34–12:08:42Z initial v2 scope."
+}
