@@ -2905,6 +2905,97 @@
       "why_load_bearing": "The review names the governed public Bifrost constituent repository and its local-device consumer source to bound cross-repository coverage; these are repository/consumer references, not personal vault data.",
       "disposition": "stay",
       "issue": "ADR-0050; PR #6242"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/accepted/live-dispatcher-status.json",
+      "category": "iv",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact dispatcher output naming the public Bifrost constituent repository. These immutable raw evidence bytes are not personal vault data, Product configuration or an authorization to access another repository.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/accepted/source-capture.original.json",
+      "category": "ii",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact supported local-interpreter argv or frozen carried instructions. These immutable evidence bytes are load-bearing provenance, not a Product default, launcher, credential or new policy.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/accepted/source-capture.original.json",
+      "category": "iv",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact dispatcher output naming the public Bifrost constituent repository. These immutable raw evidence bytes are not personal vault data, Product configuration or an authorization to access another repository.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/capture-contract.json",
+      "category": "ii",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact supported local-interpreter argv or frozen carried instructions. These immutable evidence bytes are load-bearing provenance, not a Product default, launcher, credential or new policy.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/context-pack.json",
+      "category": "ii",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact supported local-interpreter argv or frozen carried instructions. These immutable evidence bytes are load-bearing provenance, not a Product default, launcher, credential or new policy.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/continuation/capture-fidelity.original.json",
+      "category": "ii",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact supported local-interpreter argv or frozen carried instructions. These immutable evidence bytes are load-bearing provenance, not a Product default, launcher, credential or new policy.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/continuation/capture-fidelity.original.json",
+      "category": "iv",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact dispatcher output naming the public Bifrost constituent repository. These immutable raw evidence bytes are not personal vault data, Product configuration or an authorization to access another repository.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/continuation/continuation.original.json",
+      "category": "ii",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact supported local-interpreter argv or frozen carried instructions. These immutable evidence bytes are load-bearing provenance, not a Product default, launcher, credential or new policy.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/continuation/live-read-dispatcher.json",
+      "category": "iv",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact dispatcher output naming the public Bifrost constituent repository. These immutable raw evidence bytes are not personal vault data, Product configuration or an authorization to access another repository.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/initial/capture-fidelity.original.json",
+      "category": "ii",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact supported local-interpreter argv or frozen carried instructions. These immutable evidence bytes are load-bearing provenance, not a Product default, launcher, credential or new policy.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/initial/capture-fidelity.original.json",
+      "category": "iv",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact dispatcher output naming the public Bifrost constituent repository. These immutable raw evidence bytes are not personal vault data, Product configuration or an authorization to access another repository.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/initial/live-read-dispatcher.json",
+      "category": "iv",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact dispatcher output naming the public Bifrost constituent repository. These immutable raw evidence bytes are not personal vault data, Product configuration or an authorization to access another repository.",
+      "disposition": "stay",
+      "issue": "#6244"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_conformant_v1/writer/initial-comparison.json",
+      "category": "ii",
+      "why_load_bearing": "The #6244 actual conformant manual experiment retains exact supported local-interpreter argv or frozen carried instructions. These immutable evidence bytes are load-bearing provenance, not a Product default, launcher, credential or new policy.",
+      "disposition": "stay",
+      "issue": "#6244"
     }
   ]
 }

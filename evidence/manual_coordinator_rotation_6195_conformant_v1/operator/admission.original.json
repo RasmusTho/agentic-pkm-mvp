@@ -1,0 +1,23 @@
+{
+  "schema_name": "manual_rotation_native_admission",
+  "schema_version": 2,
+  "experiment_id": "manual_coordinator_rotation_6195_conformant",
+  "actor": "/root/manual_rotation_successor_6244",
+  "at": "2026-10-18T16:45:18Z",
+  "fork_turns": "none",
+  "initial_context": {
+    "context_pack": {
+      "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/context-pack.json",
+      "sha256": "307f366b8eb960338d19b66bfb6c7342208e6d22a617e2dc3d579a1c78df5122",
+      "bytes_length": 58717
+    }
+  },
+  "requested_model": "gpt-6-luna",
+  "requested_reasoning_effort": "xhigh",
+  "admitted_model": "gpt-6-luna",
+  "admitted_reasoning_effort": "xhigh",
+  "engine_identity": "unknown",
+  "engine_identity_source": "unknown(native carrier exposes no independent engine identity)",
+  "status": "succeeded",
+  "native_receipt": "Native collaboration.spawn_agent accepted /root/manual_rotation_successor_6244 with requested gpt-6-luna/xhigh/fork:none; root observed successful native return at actual clock 2026-10-18T16:45:18Z. Accepted invocation configuration is not independent engine introspection."
+}
