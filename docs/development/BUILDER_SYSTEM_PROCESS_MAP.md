@@ -1027,6 +1027,19 @@ three in-interval repairs, extra invalid metadata transfer and later reporting r
 adoption, worker start, writer takeover, dispatch change, process fence or Product-memory claim
 follows from this observed experiment.
 
+Issue #6244 subsequently delivered exact admission-metadata transport on the existing manual
+seam: the finite `manual_coordinator_rotation metadata` producer copies the retained admitted v2
+invocation object, and its optional original-response preflight preserves strict equality rather
+than repairing explanation text. The new `manual_coordinator_rotation_6195_conformant.v1` actual
+experiment passed unchanged v2 consumers and separate-process strict build/verify. A distinct
+operator decision/quiescence/acknowledgment/activation chain led the same packet-only successor to
+fresh live terminal reconciliation and a no-change recommendation, with no Project proposals
+executed. Its 685-second recorder interval and exact byte/event/unknown scopes are retained in
+`evidence/manual_coordinator_rotation_6195_conformant_v1/README.md`; the earlier NONCONFORMING
+originals and refusal remain intact. This is evidence for one manual read-only role boundary, not
+active-epic or whole-session replacement, writer/lease takeover, runtime fencing, changed dispatch,
+worker starts, automatic rotation/compression/adoption or Product-memory authority.
+
 ### Run-state authority
 
 Persisted and dry-run epic run-state is evidence only. It cannot authorize parent closure, GitHub

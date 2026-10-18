@@ -1,0 +1,123 @@
+{
+  "schema_name": "manual_rotation_execution_log",
+  "schema_version": 2,
+  "experiment_id": "manual_coordinator_rotation_6195_conformant",
+  "recorder": "/root",
+  "started_at": "2026-10-18T16:45:04Z",
+  "ended_at": "2026-10-18T16:56:29Z",
+  "clock_name": "root recorder actual UTC clock observations",
+  "clock_scope": "One actual conformant manual read-only role experiment: native request through independently verified continuation-original readback, including admission/metadata and seven mandatory bundle transfers. Packet-transfer tick is observed native acceptance, not a precise transport timestamp. Counts cover this experiment domain, not unrelated whole-delivery diagnostics, writer/reviewer starts, human effort or model-active time.",
+  "events_complete": true,
+  "events": [
+    {
+      "kind": "agent_start",
+      "actor": "/root/manual_rotation_successor_6244",
+      "at": "2026-10-18T16:45:18Z",
+      "evidence": {
+        "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/operator/admission.original.json",
+        "sha256": "034727af2402351eb7d6895457909a9250252b24009218dc86b3a2841a3d31a2",
+        "bytes_length": 1108
+      }
+    },
+    {
+      "kind": "packet_handoff",
+      "actor": "/root/manual_rotation_successor_6244",
+      "at": "2026-10-18T16:45:18Z",
+      "evidence": {
+        "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/context-pack.json",
+        "sha256": "307f366b8eb960338d19b66bfb6c7342208e6d22a617e2dc3d579a1c78df5122",
+        "bytes_length": 58717
+      }
+    },
+    {
+      "kind": "admission_metadata_handoff",
+      "actor": "/root/manual_rotation_successor_6244",
+      "at": "2026-10-18T16:46:25Z",
+      "evidence": {
+        "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/operator/admission.original.json",
+        "sha256": "034727af2402351eb7d6895457909a9250252b24009218dc86b3a2841a3d31a2",
+        "bytes_length": 1108
+      }
+    },
+    {
+      "kind": "response_handoff",
+      "actor": "/root/manual_rotation_successor_6244",
+      "at": "2026-10-18T16:49:40Z",
+      "evidence": {
+        "bytes_length": 7049,
+        "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/initial/agent-response.original.json",
+        "sha256": "e23bb4ad273ec96524e1e0e4938c4a6048650e67ec18141b3053321c82aea195"
+      }
+    },
+    {
+      "kind": "acknowledgment_request_handoff",
+      "actor": "/root/manual_rotation_successor_6244",
+      "at": "2026-10-18T16:52:12Z",
+      "evidence": {
+        "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/operator/quiescence.original.json",
+        "sha256": "ee64dc976b57e9ea18108f98db6e4674507d51f15f4028dce2cd116eaf259dd3",
+        "bytes_length": 607
+      }
+    },
+    {
+      "kind": "acknowledgment_response_handoff",
+      "actor": "/root/manual_rotation_successor_6244",
+      "at": "2026-10-18T16:52:49Z",
+      "evidence": {
+        "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/acknowledgment.original.json",
+        "sha256": "29c1205a025986f47dec6bb45db9805776146c48470c945e77888b3bfb737612",
+        "bytes_length": 953
+      }
+    },
+    {
+      "kind": "activation_handoff",
+      "actor": "/root/manual_rotation_successor_6244",
+      "at": "2026-10-18T16:53:11Z",
+      "evidence": {
+        "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/operator/activation.original.json",
+        "sha256": "e43c5a53c785a74abd4eb28e3406d156d24649632e3df664fd52199c433ea479",
+        "bytes_length": 802
+      }
+    },
+    {
+      "kind": "continuation_handoff",
+      "actor": "/root/manual_rotation_successor_6244",
+      "at": "2026-10-18T16:56:29Z",
+      "evidence": {
+        "bytes_length": 3611,
+        "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/continuation/continuation.original.json",
+        "sha256": "197e1973aa6c42cfb8e9a783025e8bdd0beb910ffc546674d52c1f6d94787e06"
+      }
+    }
+  ],
+  "unavailable_measurements": {
+    "input_tokens": {
+      "value": "unknown",
+      "reason": "No authoritative carrier/engine usage receipt, human attestation or model-active measurement was supplied. Actual accepted native configuration is retained separately; root actual model/reasoning remains unknown."
+    },
+    "output_tokens": {
+      "value": "unknown",
+      "reason": "No authoritative carrier/engine usage receipt, human attestation or model-active measurement was supplied. Actual accepted native configuration is retained separately; root actual model/reasoning remains unknown."
+    },
+    "model_cost_usd": {
+      "value": "unknown",
+      "reason": "No authoritative carrier/engine usage receipt, human attestation or model-active measurement was supplied. Actual accepted native configuration is retained separately; root actual model/reasoning remains unknown."
+    },
+    "human_minutes": {
+      "value": "unknown",
+      "reason": "No authoritative carrier/engine usage receipt, human attestation or model-active measurement was supplied. Actual accepted native configuration is retained separately; root actual model/reasoning remains unknown."
+    },
+    "engine_identity": {
+      "value": "unknown",
+      "reason": "No authoritative carrier/engine usage receipt, human attestation or model-active measurement was supplied. Actual accepted native configuration is retained separately; root actual model/reasoning remains unknown."
+    },
+    "model_active_seconds": {
+      "value": "unknown",
+      "reason": "No authoritative carrier/engine usage receipt, human attestation or model-active measurement was supplied. Actual accepted native configuration is retained separately; root actual model/reasoning remains unknown."
+    },
+    "whole_delivery_totals": {
+      "value": "unknown",
+      "reason": "No complete whole-delivery duration/event/effort measurement exists. Writer and later reviewer starts, pre-interval preparation/claim corrections and unrelated validation/publication diagnostics are outside this experiment count scope. One unrelated read-only publication-prep rg diagnostic failed shell-glob expansion without retry; this is not an all-delivery zero-tool-failure claim or a successor live-read/producer/planner correction."
+    }
+  }
+}

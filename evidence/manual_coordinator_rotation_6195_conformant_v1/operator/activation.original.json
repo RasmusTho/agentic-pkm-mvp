@@ -1,0 +1,19 @@
+{
+  "schema_name": "manual_rotation_operator_activation",
+  "schema_version": 2,
+  "experiment_id": "manual_coordinator_rotation_6195_conformant",
+  "actor": "/root",
+  "at": "2026-10-18T16:52:59Z",
+  "acknowledgment": {
+    "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/successor/acknowledgment.original.json",
+    "sha256": "29c1205a025986f47dec6bb45db9805776146c48470c945e77888b3bfb737612",
+    "bytes_length": 953
+  },
+  "manual_decision": {
+    "ref": "evidence/manual_coordinator_rotation_6195_conformant_v1/operator/manual-decision.original.json",
+    "sha256": "270c30bd0cbee05c22995f78cb951d19f38c2298c4c946ece1cbd4f2a2c584d9",
+    "bytes_length": 1514
+  },
+  "role_scope": "read_only_terminal_reconciliation_no_writer_or_lifecycle_transfer",
+  "action": "manual_activate"
+}

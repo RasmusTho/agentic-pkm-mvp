@@ -196,6 +196,55 @@ def _after(before: str, after: str, name: str, *, strict: bool = False) -> None:
         raise Error(f"{name} violates phase chronology")
 
 
+def response_invocation_metadata(
+    admission: Mapping[str, Any], *, expected_capture_contract: Mapping[str, Any],
+    observation: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Copy the retained actual admission, never reconstruct or normalize its prose.
+
+    This pre-read producer and optional pre-activation concordance check hold no
+    admission, activation or agent-launch authority. The independent capture pin
+    is supplied by the caller, not derived from the admission being checked.
+    """
+    contract = _read(dict(expected_capture_contract))
+    v2._validate(contract, CONTRACT, "capture contract")
+    _same(_read(contract["ingestion_contract"]), ingestion_contract(), "pre-capture ingestion contract")
+    experiment, actors = contract["experiment_id"], contract["actors"]
+    if actors["successor"] in {actors["operator"], actors["incumbent"], actors["writer"]}:
+        raise Error("history-free successor must be a distinct actor")
+    pack = probe.normalize_context_pack(_read(contract["context_pack"]))
+    if pack["schema_version"] != 2:
+        raise Error("manual rotation requires the unchanged explicit-v2 chain")
+    _same(pack["probe_id"], experiment, "packet experiment")
+    _same({key: pack["target"][key] for key in v2.TARGET["properties"]}, contract["target"], "packet target")
+    _same(contract["source_checkpoint"], {
+        "ref": pack["source"]["source_ref"], "sha256": pack["source"]["bytes_sha256"],
+        "bytes_length": pack["source"]["bytes_length"],
+    }, "accepted source binding")
+    source = _read(contract["source_checkpoint"])
+    _same(source, pack["source"]["receipt"], "accepted evaluator source")
+    accepted = normalize_epic_run_state(_read(contract["accepted_run_state"]))
+    _same(accepted["context_budget_receipts"], [source], "accepted run-state checkpoint")
+    _same(accepted["independent_issue_numbers"], [contract["target"]["issue_number"]], "accepted run-state target")
+    _after(pack["source"]["observed_at"], contract["created_at"], "source before frozen packet")
+    value = _phase(deepcopy(dict(admission)), ADMISSION, experiment, actors["successor"])
+    _same(value["initial_context"]["context_pack"], contract["context_pack"], "history-free input")
+    _same(value["requested_model"], value["admitted_model"], "finite run no-fallback model admission")
+    _same(value["requested_reasoning_effort"], value["admitted_reasoning_effort"], "finite run no-fallback reasoning admission")
+    _after(contract["created_at"], value["at"], "frozen packet before admission")
+    result = {key: value[key] for key in (
+        "admitted_model", "admitted_reasoning_effort", "engine_identity", "engine_identity_source",
+    )}
+    result.update(start_status=value["status"], start_observed_at=value["at"])
+    v2._validate(result, v2.AGENT, "admission-derived response metadata")
+    if observation is not None:
+        admitted = probe.normalize_rehydrated_observation(
+            observation, context_pack=pack, context_pack_ref=contract["context_pack"]["ref"],
+        )
+        _same(admitted["agent"], result, "pre-activation admission metadata")
+    return result
+
+
 def _clock(value: dict[str, Any]) -> str:
     text = value["result"]["current_time"]
     if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC", text) is None:
@@ -631,16 +680,30 @@ def normalize_receipt(value: Mapping[str, Any], *, expected_capture_contract: Ma
 
 def cli_main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("build", "verify", "build-result", "verify-result"))
+    parser.add_argument("mode", choices=("metadata", "build", "verify", "build-result", "verify-result"))
     parser.add_argument("--input-file", required=True, type=Path)
     parser.add_argument("--capture-contract-file", required=True, type=Path)
     parser.add_argument("--expected-capture-sha256", required=True)
+    parser.add_argument("--observation-file", type=Path, help="Metadata-only pre-activation concordance check.")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
         anchor = binding(str(args.capture_contract_file))
         _same(anchor["sha256"], args.expected_capture_sha256, "caller capture digest")
         value = probe.parse_strict_json(args.input_file.read_bytes())
+        if args.mode == "metadata":
+            observation = None if args.observation_file is None else probe.parse_strict_json(args.observation_file.read_bytes())
+            result = response_invocation_metadata(value, expected_capture_contract=anchor, observation=observation)
+            if args.output is not None:
+                inputs = [args.input_file, args.capture_contract_file]
+                if args.observation_file is not None:
+                    inputs.append(args.observation_file)
+                probe._reject_output_alias(args.output, *inputs)
+                probe._write_json_file(args.output, result)
+            print(probe.canonical_json(result))
+            return 0
+        if args.observation_file is not None:
+            raise Error("observation-file is only supported by the metadata preflight")
         consumer = {"build": build_receipt, "verify": normalize_receipt,
                     "build-result": build_nonconforming_result, "verify-result": normalize_nonconforming_result}[args.mode]
         result = consumer(value, expected_capture_contract=anchor)

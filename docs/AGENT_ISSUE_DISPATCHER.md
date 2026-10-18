@@ -1448,6 +1448,28 @@ proves only the observed manual read-only role boundary and continuation, with i
 nonconformance; it does not establish whole-session replacement, active-epic scheduling, writer
 takeover, process fencing, automatic rotation/compression/dispatch or Product-memory authority.
 
+Issue #6244 adds the finite `manual_coordinator_rotation metadata` producer on this same seam.
+It validates the independently pinned capture contract, accepted source and actual retained
+admission, then copies the existing six-field v2 invocation object exactly. The optional
+`--observation-file` preflight checks the original response against that object before an operator
+decision. Neither command activates a role, infers an engine identity or normalizes explanation
+strings; the existing strict build/verify and v2 consumers remain unchanged.
+
+The new `manual_coordinator_rotation_6195_conformant.v1` experiment is strictly conforming. Its
+packet-only successor copied actual admitted metadata through this producer before its own reads;
+the distinct `/root` operator decision, incumbent-role quiescence, same-actor acknowledgment and
+manual activation preceded a fresh no-effect terminal plan. Separate-process strict build/verify
+accepted the complete original chain. Seven initial field results matched; fabrication stayed
+unknown, live next action stayed not comparable, and no refresh was required. The successor
+recommended leaving external state unchanged; four optional Project proposals were not executed.
+The 58,717-byte packet, 7,049-byte initial response and 3,611-byte continuation bind a 685-second
+recorder interval; the initial interval was 276 seconds and continuation start-to-completion was
+101 seconds. These are bytes and scoped wall time, not tokens or effort. Actual clocks, native
+outputs, separate event scopes and unknown metrics are retained in
+`evidence/manual_coordinator_rotation_6195_conformant_v1/README.md`. The old NONCONFORMING evidence
+and strict refusal remain immutable. This proves one manually operated read-only terminal role,
+not whole-session/active-epic replacement, writer/lease transfer, runtime fencing or automatic adoption.
+
 When a PR is locally validated but GitHub Actions are still pending, coordinators may separate the
 implementation handoff from terminal closure with a CI-monitor handoff record:
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import subprocess
 import sys
@@ -20,6 +21,8 @@ from tests.builderops.test_epic_rehydration_probe_v2 import chain  # noqa: F401
 ROOT = Path("evidence/manual_coordinator_rotation_6195_retry1_v1")
 FAILED_ROOT = Path("evidence/manual_coordinator_rotation_6195_v1")
 CAPTURE_SHA256 = "36a2bda8af7a092d7b660fb203dd620790d57c1865bec01d8f5efa97d252f022"
+CONFORMANT_ROOT = Path("evidence/manual_coordinator_rotation_6195_conformant_v1")
+CONFORMANT_CAPTURE_SHA256 = "d945db4695e2534a2b4511ea14f63fce3bbe840e3bc0e7028983cc14e93f9deb"
 
 
 def _read(path):
@@ -463,7 +466,7 @@ def _result_cli(case, mode="build-result", value=None, output=None):
     return subprocess.run(args, capture_output=True, text=True, check=False)
 
 
-def _coherent_capture_case(tmp_path, phase, *, mutate=lambda value: None, pages=None, conforming=False):
+def _coherent_capture_case(tmp_path, phase, *, mutate=lambda value: None, pages=None, conforming=False, agent_metadata=None):
     """Private synthetic clones of retained bytes; never edit operator originals.
 
     Keep the external capture pin. Rebind the entire downstream DAG, including v2
@@ -511,6 +514,10 @@ def _coherent_capture_case(tmp_path, phase, *, mutate=lambda value: None, pages=
         value = rewrite(value)
         if ref == str(ROOT / "operator/admission.corrected.original.json") and conforming:
             value["engine_identity_source"] = "native carrier exposes no independent engine identity"
+        if agent_metadata is not None and ref == str(ROOT / "successor/initial/agent-response.original.json"):
+            value["agent"] = deepcopy(agent_metadata)
+        if agent_metadata is not None and ref == str(ROOT / "successor/initial/execution.json"):
+            value["invocation"] = deepcopy(agent_metadata)
         if ref == str(ROOT / "successor/initial/agent-response.original.json") and phase == "initial" and core_present:
             live = {item["kind"]: _read(item["evidence"]["ref"]) for item in value["live_reads"]}
             for name, fact in v2._live_facts(live).items():
@@ -843,3 +850,185 @@ def test_nonconforming_actual_cli_strict_serialization_and_create_only(rotation_
     assert existing.read_bytes() == b"preserve existing"
     assert all(Path(ref).read_bytes() == raw for ref, raw in before.items())
     assert _result_cli(case, output=output).returncode == 0
+
+
+def _metadata_cli(tmp_path, *, admission=None, capture=None, output=None, observation=None, digest=None):
+    """Exercise the serialized producer; historical inputs are read-only test authority."""
+    source = tmp_path / "serialized-admission.json"
+    if admission is None:
+        admission = _read(ROOT / "operator/admission.corrected.original.json")
+    source.write_bytes(admission if type(admission) is bytes else probe.canonical_json_bytes(admission) + b"\n")
+    capture = ROOT / "capture-contract.json" if capture is None else capture
+    pin = rotation.binding(str(capture))["sha256"] if digest is None else digest
+    argv = [sys.executable, "-m", "app.builderops.manual_coordinator_rotation", "metadata", "--input-file", str(source),
+            "--capture-contract-file", str(capture), "--expected-capture-sha256", pin]
+    if observation is not None:
+        argv += ["--observation-file", str(observation)]
+    if output is not None:
+        argv += ["--output", str(output)]
+    return subprocess.run(argv, capture_output=True, text=True, check=False)
+
+
+def test_rotation_metadata_producer_preserves_exact_admission(tmp_path):
+    admission = _read(ROOT / "operator/admission.corrected.original.json")
+    output = tmp_path / "exact-admitted-agent.json"
+    produced = _metadata_cli(tmp_path, output=output)
+    assert produced.returncode == 0, produced.stdout + produced.stderr
+    agent = _read(output)
+    assert json.loads(produced.stdout) == agent
+    assert agent == {**{key: admission[key] for key in (
+        "admitted_model", "admitted_reasoning_effort", "engine_identity", "engine_identity_source",
+    )}, "start_status": admission["status"], "start_observed_at": admission["at"]}
+    assert agent["engine_identity_source"] == "unknown(native carrier exposes no independent engine identity)"
+    former_response = ROOT / "successor/initial/agent-response.original.json"
+    former = _metadata_cli(tmp_path, observation=former_response)
+    assert former.returncode == 2 and "pre-activation admission metadata" in former.stdout
+
+    # Private synthetic clone only: original admission is the producer authority,
+    # not a rewritten admission made equal to the former response after capture.
+    case = _coherent_capture_case(tmp_path, "initial", agent_metadata=agent)
+    inputs = _read(case["report"]["rotation_input"]["ref"])
+    exact_response = _read(inputs["probe_receipt"]["ref"])["observation"]["ref"]
+    preflight = _metadata_cli(tmp_path, observation=exact_response)
+    assert preflight.returncode == 0 and json.loads(preflight.stdout) == agent
+    receipt_path = tmp_path / "strict-produced-receipt.json"
+    built = _result_cli(case, mode="build", value=inputs, output=receipt_path)
+    assert built.returncode == 0, built.stdout + built.stderr
+    verified = _result_cli(case, mode="verify", value=_read(receipt_path))
+    assert verified.returncode == 0, verified.stdout + verified.stderr
+    assert json.loads(verified.stdout)["frozen_protocol_conformance"] == "CONFORMING"
+
+
+def test_rotation_metadata_serialized_ingestion_is_strict(tmp_path):
+    admission = _read(ROOT / "operator/admission.corrected.original.json")
+    good = probe.canonical_json_bytes(admission)
+    invalid = [b"{", good[:-1], b'{"x":1,"x":2}', b'{"x":NaN}', b'{"x":Infinity}', b"[]", b"\xff"]
+    mutations = [
+        lambda item: item.pop("engine_identity_source"),
+        lambda item: item.update(extra="not admitted"),
+        lambda item: item.update(schema_version=True),
+        lambda item: item.update(schema_version=2.0),
+        lambda item: item.update(engine_identity_source=1),
+        lambda item: item.update(engine_identity="inferred-engine"),
+        lambda item: item.update(schema_name="manual_rotation_operator_activation"),
+        lambda item: item.update(experiment_id="foreign-experiment"),
+        lambda item: item.update(actor="foreign-successor"),
+        lambda item: item.update(fork_turns="all"),
+        lambda item: item.update(status="requested"),
+        lambda item: item.update(requested_model="not-the-admitted-model"),
+        lambda item: item.update(requested_reasoning_effort="not-the-admitted-effort"),
+        lambda item: item.update(at="2026-01-01T00:00:00Z"),
+        lambda item: item["initial_context"]["context_pack"].update(sha256="0" * 64),
+    ]
+    for mutate in mutations:
+        changed = deepcopy(admission)
+        mutate(changed)
+        invalid.append(probe.canonical_json_bytes(changed))
+    output = tmp_path / "must-not-exist.json"
+    originals = {str(path): path.read_bytes() for path in ROOT.rglob("*") if path.is_file()}
+    for raw in invalid:
+        result = _metadata_cli(tmp_path, admission=raw, output=output)
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert not output.exists()
+    assert _metadata_cli(tmp_path, digest="0" * 64, output=output).returncode == 2
+    for key, changed in (("target", {"issue_number": 9999}), ("source_checkpoint", {"sha256": "0" * 64})):
+        capture = _read(ROOT / "capture-contract.json")
+        capture[key].update(changed)
+        capture_path = tmp_path / f"foreign-{key}.json"
+        _retain(capture_path, capture)
+        assert _metadata_cli(tmp_path, capture=capture_path, output=output).returncode == 2
+        assert not output.exists()
+    existing = tmp_path / "partial-output.json"
+    existing.write_bytes(b'{"partial":')
+    hardlink, symlink = tmp_path / "metadata-hardlink.json", tmp_path / "metadata-symlink.json"
+    hardlink.hardlink_to(tmp_path / "serialized-admission.json")
+    symlink.symlink_to((ROOT / "context-pack.json").resolve())
+    for target in (existing, hardlink, symlink, tmp_path / "serialized-admission.json", ROOT / "capture-contract.json",
+                   ROOT / "operator/admission.corrected.original.json", ROOT / "accepted/source-checkpoint.json"):
+        assert _metadata_cli(tmp_path, output=target).returncode == 2
+    assert existing.read_bytes() == b'{"partial":'
+    assert all(Path(ref).read_bytes() == raw for ref, raw in originals.items())
+    assert _metadata_cli(tmp_path, output=output).returncode == 0
+    assert _metadata_cli(tmp_path, output=output).returncode == 2
+
+
+def test_rotation_metadata_producer_has_no_authority_effects(monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("metadata producer launched a process"))
+    monkeypatch.setattr(probe, "_write_json_file", lambda *args, **kwargs: pytest.fail("pure producer wrote an artifact"))
+    result = rotation.response_invocation_metadata(
+        _read(ROOT / "operator/admission.corrected.original.json"),
+        expected_capture_contract=rotation.binding(str(ROOT / "capture-contract.json")),
+    )
+    assert set(result) == set(v2.AGENT["properties"])
+    tree = ast.parse(Path(rotation.__file__).read_text())
+    imports = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    imports.update(alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names)
+    forbidden = {"subprocess", "socket", "requests", "httpx", "app.dispatcher", "app.verified_merge"}
+    assert not any(name and any(name == item or name.startswith(item + ".") for item in forbidden) for name in imports)
+
+
+def test_historical_nonconforming_rotation_remains_immutable():
+    digest = hashlib.sha256()
+    for root in (FAILED_ROOT, ROOT):
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                digest.update(str(path).encode() + b"\0" + path.read_bytes() + b"\0")
+    assert digest.hexdigest() == "fbd488ce080fdd5c407f455aa504a184057149a5ed08cbb9f417d446be911d4e"
+    test_retained_manual_rotation_replays_actual_chain()
+
+
+def test_retained_conformant_rotation_replays_actual_chain(tmp_path):
+    """Actual new native chain, not the private synthetic producer regression."""
+    root = CONFORMANT_ROOT
+    capture, receipt_path = root / "capture-contract.json", root / "writer/receipt.v1.json"
+    anchor = rotation.binding(str(capture))
+    assert anchor["sha256"] == CONFORMANT_CAPTURE_SHA256
+    receipt = _read(receipt_path)
+    assert receipt["experiment_id"] + ".v1" == "manual_coordinator_rotation_6195_conformant.v1"
+    assert rotation.normalize_receipt(receipt, expected_capture_contract=anchor) == receipt
+    assert receipt["actors"] == {
+        "operator": "/root", "incumbent": "/root", "successor": "/root/manual_rotation_successor_6244",
+        "writer": "/root/implement_metadata_conformance_6244",
+    }
+    response = _read(root / "successor/initial/agent-response.original.json")
+    metadata = _read(root / "successor/initial/admitted-agent-metadata.original.json")
+    admission = _read(root / "operator/admission.original.json")
+    assert response["agent"] == metadata == rotation.response_invocation_metadata(
+        admission, expected_capture_contract=anchor, observation=response,
+    )
+    assert metadata["engine_identity_source"] == admission["engine_identity_source"]
+    assert receipt["effects"] == {key: [] for key in rotation.EFFECTS}
+    assert receipt["continuation_live_facts"]["slice_status"] == "closed_merged"
+    assert receipt["continuation_live_facts"]["open_review_findings"] == []
+    assert receipt["continuation_live_facts"]["external_state"]["repository_head"] == "6aa98b572a6dd497a3d035f0860bed40d613a306"
+    for mode, source in (("build", root / "writer/rotation-input.json"), ("verify", receipt_path)):
+        replay = subprocess.run([
+            sys.executable, "-m", "app.builderops.manual_coordinator_rotation", mode,
+            "--input-file", str(source), "--capture-contract-file", str(capture),
+            "--expected-capture-sha256", CONFORMANT_CAPTURE_SHA256,
+            "--output", str(tmp_path / f"conformant-{mode}.json"),
+        ], capture_output=True, text=True, check=False)
+        assert replay.returncode == 0, replay.stdout + replay.stderr
+        assert json.loads(replay.stdout)["frozen_protocol_conformance"] == "CONFORMING"
+        assert _read(tmp_path / f"conformant-{mode}.json") == receipt
+
+
+def test_conformant_rotation_measurements_are_provenance_bound():
+    receipt = _read(CONFORMANT_ROOT / "writer/receipt.v1.json")
+    anchor = rotation.binding(str(CONFORMANT_ROOT / "capture-contract.json"))
+    assert anchor["sha256"] == CONFORMANT_CAPTURE_SHA256
+    measurements = rotation.normalize_receipt(receipt, expected_capture_contract=anchor)["measurements"]
+    assert (measurements["started_at"], measurements["ended_at"], measurements["elapsed_wall_seconds"]) == (
+        "2026-10-18T16:45:04Z", "2026-10-18T16:56:29Z", 685.0,
+    )
+    assert (measurements["packet_bytes"], measurements["initial_response_bytes"], measurements["continuation_response_bytes"]) == (58717, 7049, 3611)
+    assert (measurements["successful_native_starts"], measurements["native_followup_handoffs"], measurements["artifact_handoffs"]) == (1, 2, 7)
+    assert measurements["corrections"] == {key: 0 for key in rotation.CORRECTIONS}
+    assert all(value["value"] == "unknown" for value in measurements["unavailable"].values())
+    initial = _read(CONFORMANT_ROOT / "writer/initial-telemetry.json")
+    assert initial["measurements"]["elapsed_wall_time"]["value"] == 276.0
+    assert initial["evidence"]["execution"]["ref"] != receipt["inputs"]["execution"]["ref"]
+    changed = deepcopy(receipt)
+    changed["measurements"]["packet_bytes"] += 1
+    with pytest.raises(rotation.Error):
+        rotation.normalize_receipt(changed, expected_capture_contract=anchor)
