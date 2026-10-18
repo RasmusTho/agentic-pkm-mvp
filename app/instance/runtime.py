@@ -75,6 +75,7 @@ from app.instance.vault_registry import (
     RegistrySnapshot,
     REGISTRY_AUTHORITY_ACTIVE,
     RemovalTombstone,
+    TransferLineage,
     VaultRegistration,
     VaultRegistryStore,
 )
@@ -3525,10 +3526,30 @@ def _materialize_authenticated_channel_registrations(
     # follows the canonical ownership-ledger -> registry-store order even when
     # retired TEST bindings need dormant tombstones materialized.
     tombstone_paths: dict[str, str] = {}
+    transfer_lineage: tuple[TransferLineage, ...] = ()
     with ledger._locked(allow_legacy_rotation=True):
         key = ledger._load_or_create_key_locked(allow_create=False)
         current = ledger._load_or_create_ledger_locked(
             key, allow_create=False, allow_legacy=True
+        )
+        transfer_lineage = tuple(
+            TransferLineage(
+                source_binding_id=item.source_binding_id,
+                destination_binding_id=item.destination_binding_id,
+                local_instance_id=None,
+                vault_id=None,
+                source_channel_id=item.source_channel_id,
+                destination_channel_id=item.destination_channel_id,
+                # The host ledger authenticates the transfer identity and root
+                # lineage, but does not retain either registry's revision. A
+                # reconstructed registry records the bounded recovery epoch
+                # rather than inventing source-registry metadata.
+                source_registry_revision=0,
+                destination_registry_revision=0,
+                ownership_transfer_id=item.transfer_id,
+            )
+            for item in current.transfer_lineage
+            if item.destination_channel_id == channel
         )
         for binding_id, lease in current.tombstones.items():
             if lease.channel_id != channel:
@@ -3586,7 +3607,11 @@ def _materialize_authenticated_channel_registrations(
             expected_revision=snapshot.revision,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
-    if tombstone_paths:
+    if tombstone_paths or transfer_lineage:
+        transfer_lineage = tuple(
+            replace(item, destination_registry_revision=snapshot.revision + 1)
+            for item in transfer_lineage
+        )
         tombstones = {
             binding_id: RemovalTombstone(
                 vault_binding_id=binding_id,
@@ -3600,7 +3625,8 @@ def _materialize_authenticated_channel_registrations(
         }
         snapshot = registry.commit_state(
             registrations=dict(snapshot.registrations),
-            removal_tombstones=tombstones,
+            removal_tombstones=tombstones if tombstone_paths else None,
+            transfer_lineage=transfer_lineage,
             expected_revision=snapshot.revision,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
