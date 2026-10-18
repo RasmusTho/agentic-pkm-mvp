@@ -42,6 +42,8 @@ from pathlib import Path
 from app.agents.panel_agent.runtime import _write_proposals_to_panel
 from app.curation.findings import CurationFinding
 from app.events.panel import NoteRef, PanelActionLoggedEvent, PanelEventSource
+from app.instance.compatibility_binding import compatibility_binding_for_root
+from app.receipts.artifact_receipts import stamp_producing_binding
 from app.services.outbox import append_jsonl_outbox_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -134,8 +136,14 @@ def write_curation_proposals(
     slice that would ever add one.
     """
     write_guard.assert_writes_allowed(CURATION_PROPOSE_WRITE_ACTION)
-
+    # MVR-05B4c2: prove the producing binding once, before any note is touched,
+    # so an unresolved binding authority stops the pass instead of leaving a
+    # vault mutation without its accountability receipt.
     vault_root = Path(vault_root).expanduser().resolve()
+    # The pass writes the root it was handed: prove that root IS the live
+    # compatibility binding (or stop) rather than stamping another vault's id.
+    producing_binding = compatibility_binding_for_root(vault_root)
+
     unresolved: list[CurationFinding] = []
 
     by_note: dict[Path, list[CurationFinding]] = {}
@@ -147,7 +155,9 @@ def write_curation_proposals(
         by_note.setdefault(note_path, []).append(finding)
 
     for note_path, note_findings in by_note.items():
-        _materialize_for_note(note_path, note_findings, outbox_path=outbox_path)
+        _materialize_for_note(
+            note_path, note_findings, outbox_path=outbox_path, producing_binding=producing_binding
+        )
 
     return unresolved
 
@@ -157,6 +167,7 @@ def _materialize_for_note(
     findings: list[CurationFinding],
     *,
     outbox_path: Path,
+    producing_binding: str,
 ) -> None:
     try:
         original_text = note_path.read_text(encoding="utf-8")
@@ -180,7 +191,12 @@ def _materialize_for_note(
     for finding in findings:
         label = _proposal_label(finding)
         if label not in original_text:
-            _emit_proposal_receipt(finding, note_path=note_path, outbox_path=outbox_path)
+            _emit_proposal_receipt(
+                finding,
+                note_path=note_path,
+                outbox_path=outbox_path,
+                producing_binding=producing_binding,
+            )
 
 
 def _emit_proposal_receipt(
@@ -188,16 +204,22 @@ def _emit_proposal_receipt(
     *,
     note_path: Path,
     outbox_path: Path,
+    producing_binding: str,
 ) -> None:
     event = PanelActionLoggedEvent(
         source=PanelEventSource(component="curation.proposal_writer", trigger="curation_pass"),
-        payload={
-            "note": NoteRef(uuid=finding.note_uuid, path=str(note_path)).model_dump(mode="json"),
-            "finding_id": finding.finding_id,
-            "finding_class": finding.finding_class.value,
-            "track": finding.track.value,
-            "reason": "curation_finding_proposed",
-        },
+        # MVR-05B4c2: the curation pass is a carrier-free producer; stamp the sealed
+        # compatibility binding so scoped reads can attribute (and exclude) the receipt.
+        payload=stamp_producing_binding(
+            {
+                "note": NoteRef(uuid=finding.note_uuid, path=str(note_path)).model_dump(mode="json"),
+                "finding_id": finding.finding_id,
+                "finding_class": finding.finding_class.value,
+                "track": finding.track.value,
+                "reason": "curation_finding_proposed",
+            },
+            producing_binding,
+        ),
     )
     append_jsonl_outbox_event(Path(outbox_path), event, default_source="curation.proposal_writer")
 

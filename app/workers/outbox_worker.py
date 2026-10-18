@@ -1669,6 +1669,13 @@ def handle_panel_scan_requested(
         vault_root=resolved_root,
         vault_uuid=note_uuid,
         persist_created_to_db=_use_db_outbox(),
+        # The sentinel is the carrier-free/legacy row attribution: those runs stamp
+        # the live compatibility binding. Any other binding is the producing vault.
+        producing_binding_id=(
+            source_vault_binding_id
+            if source_vault_binding_id != COMPATIBILITY_BINDING_ID
+            else None
+        ),
     )
     emitted = execution.emitted_count
 
