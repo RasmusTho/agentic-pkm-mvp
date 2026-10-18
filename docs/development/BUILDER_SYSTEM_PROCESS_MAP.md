@@ -933,6 +933,7 @@ Mechanism classification:
 | human exception removed from normal queue | deterministic in labels | `agent:needs-human` normally Backlog and not ready | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27] |
 | epic context-budget observation | deterministic + advisory | At slice boundaries, a versioned run-state receipt records explicit context measurement or `unknown`, checkpoint/digest data, cost inputs, and independent lifecycle/execution/model-tier recommendations. It performs no dispatch, spawn, acceptance, CI, review, merge, or closure mutation. | [`app/builderops/epic_run_context_budget.py`], [`tests/builderops/test_epic_run_context_budget.py`], [docs/AGENT_ISSUE_DISPATCHER.md :: Epic-runner context-budget observation] |
 | manual shadow rehydration probe | deterministic + manual + advisory | One fresh agent receives a strictly raw-byte/source-object-bound packet and explicit live-read instructions, then returns one provenance-bearing observation. Every consumer, including standalone receipt deserialization, reconstructs and cross-binds the retained source/pack/observation/comparison chain; every CLI output is create-only and rejects existing, aliased, direct, or transitive evidence targets. A pure comparison records match/mismatch/unknown and external refresh evidence; sparse live external fields never inherit checkpoint values. No score, threshold, launch, dispatch, lease, CI, review, acceptance, merge, or closure effect is available. | [`app/builderops/epic_rehydration_probe.py`], [`tests/builderops/test_epic_rehydration_probe.py`], [docs/AGENT_ISSUE_DISPATCHER.md :: Manual shadow rehydration probe] |
+| manual read-only coordinator-role experiment | manual + pure evidence replay | An explicit operator decision/quiescence/acknowledgment/activation precedes same-successor live terminal continuation. The pure verifier cannot perform those actions. The observed #6236 result is NONCONFORMING for narrative metadata copying; an explicit result preserves that violation and strict refusal, never qualifying the frozen producer protocol or transferring writer/lifecycle authority. | [`app/builderops/manual_coordinator_rotation.py`], [`tests/builderops/test_manual_coordinator_rotation.py`], [docs/AGENT_ISSUE_DISPATCHER.md :: Manual shadow rehydration probe] |
 
 The context-budget evaluator is measurement infrastructure, not a routing authority. Its
 `checkpoint_rotate` and `thin_worker` values are recommendations on separate axes: delegating a
@@ -1008,6 +1009,23 @@ next action remained not comparable. Historical CI-rollup classification is not 
 gate. Exact byte, wall-clock, event and limitation evidence remains in the manual owner passage
 and retained artifacts, with failed-attempt, between-attempt and delivery counts kept separate.
 This empirical qualification adds no rotation, dispatch, takeover, launch or Product-memory authority.
+
+The later #6236 manual role experiment actually exercised one distinct operator decision,
+incumbent experimental-role quiescence, acknowledgment, activation and same-successor post-activation
+live terminal plan for closed #6195 / merged #6200. The operator was `/root`; the outer delivery
+writer, lease and worktree remained unchanged. Fresh repository drift outranked the checkpoint and
+the successor recommended no external change. This is an observed read-only role boundary, not
+runtime-enforced exclusion or whole-session/active-epic replacement.
+
+Its result is explicitly NONCONFORMING because admission/response engine-source explanation text
+differs. Both original strings and the unknown engine value remain unchanged; the frozen strict
+path still refuses. The opt-in result consumer retains that refusal and historical verifier bytes
+while enforcing all hard identity, custody, phase, live-fidelity and no-effect predicates. It is
+not an automatic fallback or a successful frozen capture. Exact byte/time/event scopes and the
+three in-interval repairs, extra invalid metadata transfer and later reporting repair remain in
+`evidence/manual_coordinator_rotation_6195_retry1_v1/README.md`. No universal score, automatic
+adoption, worker start, writer takeover, dispatch change, process fence or Product-memory claim
+follows from this observed experiment.
 
 ### Run-state authority
 

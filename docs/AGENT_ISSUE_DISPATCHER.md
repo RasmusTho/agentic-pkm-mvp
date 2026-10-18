@@ -1420,6 +1420,34 @@ not a current delivery merge verdict. Exact originals, separate scoped counters,
 limitations are retained in `evidence/shadow_rehydration_3798_live_access_v2/README.md`; none of this
 authorizes automatic rotation or globally authenticates upstream truth.
 
+Issue #6236 subsequently exercised one operator-mediated replacement of a bounded read-only
+terminal-reconciliation role for closed #6195 / merged #6200. The actual operator/incumbent was
+`/root`, not an asserted human click. After inspecting the unchanged v2 comparison and raw-output/
+actual-clock joins, it separately recorded decision, incumbent-role quiescence, same-successor
+acknowledgment and manual activation. That same history-free successor then refreshed all live
+domains and ran the existing no-effect terminal planner. It retained newly observed repository
+drift and recommended leaving external state unchanged; none of four optional Project proposals
+was executed. Writer/lifecycle authority and the existing lease/worktree owner never transferred.
+
+The observed experiment is explicitly **NONCONFORMING**, not a successful frozen-protocol capture:
+the original admission and response contain different `engine_identity_source` explanation text.
+Engine identity remains unknown; the exact strings are not canonicalized. The frozen protocol-2
+strict `build`/`verify` path still refuses the mismatch. The separate, opt-in `build-result` /
+`verify-result` surface in `app/builderops/manual_coordinator_rotation.py` reports actual chain
+facts and that nonconformance, binding the actual refusal and byte-identical historical verifier
+source. It still refuses hard identity, custody, target, chronology, payload/clock, effect and
+serialized-input corruption. It is never an automatic fallback, role activator or approval gate.
+
+The actual observed recorder interval was 938 seconds, including three separately retained
+metadata/parser/evidence-reference repairs; later reporting maintenance is outside it. Packet,
+initial response and continuation were 55,875 / 6,630 / 3,320 bytes. Exact originals, the invalid
+unactivated first candidate, the extra invalid metadata transfer, scoped counters and replay
+commands are retained in `evidence/manual_coordinator_rotation_6195_retry1_v1/README.md`. Tokens,
+cost, engine/model-active data, human effort and complete delivery totals remain unknown. This
+proves only the observed manual read-only role boundary and continuation, with its producer
+nonconformance; it does not establish whole-session replacement, active-epic scheduling, writer
+takeover, process fencing, automatic rotation/compression/dispatch or Product-memory authority.
+
 When a PR is locally validated but GitHub Actions are still pending, coordinators may separate the
 implementation handoff from terminal closure with a CI-monitor handoff record:
 

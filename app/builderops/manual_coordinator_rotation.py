@@ -1,0 +1,611 @@
+"""Pure, manually supplied evidence verification for one read-only role rotation.
+
+This finite ingestion surface cannot activate the role it records. Its trust boundary
+is the explicitly pinned capture contract and the retained native/actor attestations,
+not authenticated upstream truth, process fencing, or a new delivery authority.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from copy import deepcopy
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+from app.builderops import epic_rehydration_probe as probe
+from app.builderops import epic_rehydration_probe_v2 as v2
+from app.builderops.epic_lifecycle_plan import build_lifecycle_transition_plan
+from app.builderops.epic_run_state import normalize_epic_run_state
+
+Error = probe.EpicRehydrationProbeError
+PROTOCOL_VERSION = 2
+SCOPE = "read_only_terminal_reconciliation_no_writer_or_lifecycle_transfer"
+EFFECTS = (*probe._EFFECT_CATEGORIES, "rotation", "termination", "compression", "product_memory")
+UNKNOWN_METRICS = (
+    "input_tokens", "output_tokens", "model_cost_usd", "human_minutes",
+    "engine_identity", "model_active_seconds", "whole_delivery_totals",
+)
+CORRECTIONS = ("admission_retry", "implementation_repair", "review_repair", "ci_repair", "read_command_correction")
+obj = v2.obj
+STRING = v2.STRING
+BINDING = v2.BINDING
+
+
+def envelope(name: str, fields: dict[str, Any]) -> dict[str, Any]:
+    return obj({"schema_name": {"const": name}, "schema_version": {"type": "integer", "const": PROTOCOL_VERSION}, **fields})
+
+
+CONTRACT = envelope("manual_rotation_capture_contract", {
+    "experiment_id": STRING, "created_at": STRING, "target": v2.TARGET,
+    "role_scope": {"const": SCOPE},
+    "actors": obj({key: STRING for key in ("operator", "incumbent", "successor", "writer")}),
+    "context_pack": BINDING, "source_checkpoint": BINDING, "accepted_run_state": BINDING, "ingestion_contract": BINDING,
+    "planner_interpreter": STRING,
+})
+ADMISSION = envelope("manual_rotation_native_admission", {
+    "experiment_id": STRING, "actor": STRING, "at": STRING,
+    "fork_turns": {"const": "none"}, "initial_context": obj({"context_pack": BINDING}),
+    "requested_model": STRING, "requested_reasoning_effort": STRING,
+    "admitted_model": STRING, "admitted_reasoning_effort": STRING,
+    "engine_identity": {"const": "unknown"}, "engine_identity_source": STRING,
+    "status": {"const": "succeeded"}, "native_receipt": STRING,
+})
+DECISION = envelope("manual_rotation_operator_decision", {
+    "experiment_id": STRING, "actor": STRING, "at": STRING, "probe_receipt": BINDING,
+    "initial_fidelity": BINDING,
+    "decision": {"const": "activate_read_only_successor"}, "rationale": STRING,
+    "decision_source": {"const": "explicit_operator_action_not_comparison_rule"},
+})
+QUIESCENCE = envelope("manual_rotation_incumbent_quiescence", {
+    "experiment_id": STRING, "actor": STRING, "at": STRING, "manual_decision": BINDING,
+    "role_scope": {"const": SCOPE}, "experimental_role_quiescent": {"const": True},
+    "writer_authority_unchanged": {"const": True},
+})
+ACKNOWLEDGMENT = envelope("manual_rotation_successor_acknowledgment", {
+    "experiment_id": STRING, "actor": STRING, "at": STRING,
+    "manual_decision": BINDING, "quiescence": BINDING, "context_pack": BINDING,
+    "role_scope": {"const": SCOPE}, "writer_authority_unchanged": {"const": True},
+})
+ACTIVATION = envelope("manual_rotation_operator_activation", {
+    "experiment_id": STRING, "actor": STRING, "at": STRING,
+    "acknowledgment": BINDING, "manual_decision": BINDING,
+    "role_scope": {"const": SCOPE}, "action": {"const": "manual_activate"},
+})
+EMPTY_EFFECTS = obj({key: {"type": "array", "maxItems": 0} for key in EFFECTS})
+CONTINUATION = envelope("manual_rotation_successor_continuation", {
+    "experiment_id": STRING, "actor": STRING, "started_at": STRING, "completed_at": STRING,
+    "activation": BINDING, "live_reads": v2.LIVE_READS,
+    "planner": obj({"argv": {"type": "array", "items": STRING}, "issue_input": BINDING,
+                    "pr_input": BINDING, "output": BINDING}),
+    "observation": obj({**{key: v2.FIELD_SHAPES[key] for key in ("slice_status", "open_review_findings", "external_state")},
+                        "next_action": obj({"action": STRING, "reason": STRING}),
+                        "recommendation_only": {"const": True}}),
+    "effects": EMPTY_EFFECTS,
+})
+FIDELITY = envelope("manual_rotation_capture_fidelity", {
+    "experiment_id": STRING, "actor": STRING, "phase": {"enum": ["initial", "continuation"]},
+    "response": BINDING, "live_reads": v2.LIVE_READS,
+    "commands": {"type": "array", "items": obj({
+        "kind": {"enum": ["issue", "pr", "review_threads", "repository", "dispatcher", "planner"]},
+        "argv": {"type": "array", "items": STRING}, "exit_code": {"type": "integer", "const": 0},
+        "permission_mode": {"enum": ["use_default", "require_escalated"]}, "raw_output": STRING,
+        "output_token_budget": {"type": "integer", "minimum": 1},
+        "original_token_count": {"type": "integer", "minimum": 0},
+    })},
+    "clock_reads": {"type": "array", "items": obj({
+        "purpose": {"enum": ["github", "repository", "dispatcher", "response", "continuation_start"]},
+        "tool": {"const": "clock.curr_time"}, "result": obj({"current_time": STRING}),
+    })},
+})
+EVENT = obj({"kind": {"enum": ["agent_start", "packet_handoff", "admission_metadata_handoff", "response_handoff", "acknowledgment_request_handoff", "acknowledgment_response_handoff", "activation_handoff", "continuation_handoff", *CORRECTIONS]},
+             "actor": STRING, "at": STRING, "evidence": BINDING})
+EXECUTION = envelope("manual_rotation_execution_log", {
+    "experiment_id": STRING, "recorder": STRING, "started_at": STRING, "ended_at": STRING,
+    "clock_name": STRING, "clock_scope": STRING, "events_complete": {"const": True},
+    "events": {"type": "array", "items": EVENT},
+    "unavailable_measurements": obj({key: obj({"value": {"const": "unknown"}, "reason": STRING}) for key in UNKNOWN_METRICS}),
+})
+CORRECTION = envelope("manual_rotation_correction", {
+    "experiment_id": STRING, "kind": {"enum": list(CORRECTIONS)}, "actor": STRING, "at": STRING, "reason": STRING,
+})
+PHASES = {
+    "admission": ADMISSION, "initial_fidelity": FIDELITY, "manual_decision": DECISION, "quiescence": QUIESCENCE,
+    "acknowledgment": ACKNOWLEDGMENT, "activation": ACTIVATION,
+    "continuation": CONTINUATION, "continuation_fidelity": FIDELITY, "execution": EXECUTION,
+}
+INPUT = envelope("manual_coordinator_rotation_input", {
+    "experiment_id": STRING, "capture_contract": BINDING, "probe_receipt": BINDING,
+    **{key: BINDING for key in PHASES},
+})
+
+# Post-capture reporting inputs are distinct from the immutable producer protocol.
+# They cannot turn a protocol-2 violation into a conforming capture.
+RESULT_INPUT = obj({
+    "schema_name": {"const": "manual_rotation_nonconforming_result_input"},
+    "schema_version": {"type": "integer", "const": 1},
+    **{key: BINDING for key in ("rotation_input", "strict_refusal", "historical_source", "source_custody")},
+})
+CAPTURE_CLOCK = obj({"tool": {"const": "clock.curr_time"}, "result": obj({"current_time": STRING})})
+SOURCE_CUSTODY = obj({
+    "purpose": STRING, "captured_module": BINDING, "preserved_source": BINDING,
+    "strict_refusal_ref": STRING, "verification": STRING, "observed_clock": CAPTURE_CLOCK,
+    "historical_replay_note": STRING,
+})
+STRICT_REFUSAL = obj({
+    "purpose": STRING, "actor": STRING, "argv": {"type": "array", "items": STRING},
+    "result": obj({"chunk_id": STRING, "wall_time_seconds": {"type": "number", "minimum": 0},
+                   "exit_code": {"type": "integer", "const": 2}, "original_token_count": {"type": "integer", "minimum": 0},
+                   "output": STRING}),
+    "retention_clock": obj({**CAPTURE_CLOCK["properties"], "scope": STRING}),
+    "module": BINDING, "input": BINDING, "output_created": {"const": False},
+    "qualifying_interval_repair_count_unchanged": {"type": "integer", "minimum": 0},
+})
+SOURCE_MISMATCH_REFUSAL = "manual rotation refused: native admission engine_identity_source is not bound to its retained authority\n"
+
+
+def ingestion_contract() -> dict[str, Any]:
+    """Closed producer schemas, retained before the first native capture."""
+    return {"schema_name": "manual_rotation_ingestion_contract", "schema_version": PROTOCOL_VERSION,
+            "schemas": {"capture_contract": CONTRACT, "input": INPUT, **PHASES, "correction": CORRECTION},
+            "phase_order": ["frozen_packet", "admission", "initial_live_response", "comparison_inspection", "manual_decision",
+                            "quiescence", "acknowledgment_request", "acknowledgment", "activation", "actual_live_continuation"],
+            "capture_integrity": "Exact raw native exec-result output objects and actual clock.curr_time results are retained; payloads and timestamps are rederived, not manually transcribed or estimated.",
+            "trust_boundary": "caller-pinned exact bytes plus trusted native/actor/recorder attestations; no upstream authentication or runtime fencing"}
+
+
+def binding(ref: str) -> dict[str, Any]:
+    """Bind one strict local JSON original, refusing URI syntax and final symlinks."""
+    v2._local_evidence_path(ref)
+    return v2._bound_ref(ref)
+
+
+def historical_source_binding(ref: str) -> dict[str, Any]:
+    """Bind raw archived verifier bytes, not a JSON phase or current module."""
+    path = v2._local_evidence_path(ref)
+    if not path.is_file():
+        raise Error("historical verifier source must be a retained regular file")
+    raw = path.read_bytes()
+    return {"ref": ref, "sha256": probe.sha256_bytes(raw), "bytes_length": len(raw)}
+
+
+def _read(record: Any) -> dict[str, Any]:
+    v2._validate(record, BINDING, "retained binding")
+    if binding(record["ref"]) != record:
+        raise Error("retained exact-byte binding mismatch")
+    return probe.parse_strict_json(Path(record["ref"]).read_bytes())
+
+
+def _same(left: Any, right: Any, name: str) -> None:
+    if not probe._json_exact_equal(left, right):
+        raise Error(f"{name} is not bound to its retained authority")
+
+
+def _phase(value: dict[str, Any], schema: dict[str, Any], experiment: str, actor: str) -> dict[str, Any]:
+    v2._validate(value, schema, "rotation phase")
+    _same(value["experiment_id"], experiment, "phase experiment")
+    if "actor" in value:
+        _same(value["actor"], actor, "phase actor")
+    return value
+
+
+def _after(before: str, after: str, name: str, *, strict: bool = False) -> None:
+    earlier, later = v2._timestamp(before), v2._timestamp(after)
+    if later < earlier or (strict and later == earlier):
+        raise Error(f"{name} violates phase chronology")
+
+
+def _clock(value: dict[str, Any]) -> str:
+    text = value["result"]["current_time"]
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC", text) is None:
+        raise Error("capture clock must retain the actual clock.curr_time result shape")
+    result = text[:-4].replace(" ", "T") + "Z"
+    v2._timestamp(result)
+    return result
+
+
+def review_query(repository: str, pr_number: int, cursor: str | None = None) -> str:
+    owner, name = repository.split("/")
+    after = "null" if cursor is None else json.dumps(cursor)
+    return ('{repository(owner:' + json.dumps(owner) + ',name:' + json.dumps(name) + '){pullRequest(number:' + str(pr_number)
+            + '){reviewThreads(first:100,after:' + after + '){nodes{isResolved comments(first:1){nodes{url}}} pageInfo{hasNextPage endCursor}}}}}')
+
+
+def _review_query_tokens(value: str) -> list[str]:
+    """Finite equality for the carried anonymous read, not a general GraphQL parser."""
+    tokens = []
+    token = re.compile(r'"(?:[^"\\\r\n]|\\.)*"|[A-Za-z_][A-Za-z_0-9]*|[0-9]+|[{}():,]')
+    position = 0
+    while position < len(value):
+        if value[position] in " \t\r\n":
+            position += 1
+            continue
+        matched = token.match(value, position)
+        if matched is None:
+            raise Error("review query contains unsupported syntax")
+        tokens.append(matched.group())
+        position = matched.end()
+    if tokens[:1] == ["query"]:
+        tokens.pop(0)
+    return tokens
+
+
+def _review_argv(actual: list[str], expected: list[str]) -> None:
+    if len(actual) != 5 or actual[:4] != expected[:4] or not actual[4].startswith("query="):
+        raise Error("actual review-page arguments do not select the carried read-only source")
+    _same(_review_query_tokens(actual[4][6:]), _review_query_tokens(expected[4][6:]), "bounded read-only review selection")
+
+
+def _capture_fidelity(value: dict[str, Any], *, phase: str, response_binding: dict[str, Any],
+                      response: dict[str, Any], contract: dict[str, Any]) -> None:
+    """Join data-preserving native result/clock originals to the actual v2 envelopes."""
+    _same(value["phase"], phase, "capture phase")
+    _same(value["response"], response_binding, "capture original response")
+    _same(value["live_reads"], response["live_reads"], "capture exact live reads")
+    expected_purposes = {"github", "repository", "dispatcher", "response"}
+    if phase == "continuation":
+        expected_purposes.add("continuation_start")
+    clocks = {item["purpose"]: _clock(item) for item in value["clock_reads"]}
+    if len(clocks) != len(value["clock_reads"]) or set(clocks) != expected_purposes:
+        raise Error("capture requires exactly its actual per-read and response clock results")
+    response_time = response["observed_at"] if phase == "initial" else response["completed_at"]
+    _same(v2._timestamp(clocks["response"]), v2._timestamp(response_time), "actual response clock")
+    if phase == "continuation":
+        _same(v2._timestamp(clocks["continuation_start"]), v2._timestamp(response["started_at"]), "actual continuation start clock")
+    reads = {item["kind"]: _read(item["evidence"]) for item in response["live_reads"]}
+    for kind, read in reads.items():
+        if read["availability"] != "observed":
+            raise Error("qualifying capture requires observed original upstream reads")
+        _same(v2._timestamp(clocks[kind]), v2._timestamp(read["observed_at"]), "actual live-read clock")
+        _after(clocks[kind], clocks["response"], "read before original response clock")
+    commands = value["commands"]
+    for item in commands:
+        if item["original_token_count"] > item["output_token_budget"]:
+            raise Error("truncated native command output cannot establish source fidelity")
+    singles = {kind: [item for item in commands if item["kind"] == kind] for kind in ("issue", "pr", "repository", "dispatcher")}
+    if any(len(items) != 1 for items in singles.values()):
+        raise Error("one actual upstream command result per non-paginated source is required")
+    target = contract["target"]
+    repository, issue, pr = target["repository"], target["issue_number"], target["pr_number"]
+    argvs = {
+        "issue": ["gh", "issue", "view", str(issue), "--repo", repository, "--json", "number,url,state,labels,closedAt"],
+        "pr": ["gh", "pr", "view", str(pr), "--repo", repository, "--json", "number,url,state,mergedAt,isDraft,headRefOid,mergeCommit,statusCheckRollup"],
+        "repository": ["git", "ls-remote", "--exit-code", "origin", "refs/heads/main"],
+        "dispatcher": [contract["planner_interpreter"], "-m", "app.dispatcher", "status", "--json"],
+    }
+    for kind, records in singles.items():
+        _same(records[0]["argv"], argvs[kind], "actual upstream argument vector")
+    for kind in ("issue", "pr"):
+        _same(probe.parse_strict_json(singles[kind][0]["raw_output"]), reads["github"]["payload"][kind], "complete original GitHub payload")
+    _same(probe.parse_strict_json(singles["dispatcher"][0]["raw_output"]), reads["dispatcher"]["payload"], "complete original dispatcher payload")
+    lines = singles["repository"][0]["raw_output"].splitlines()
+    if len(lines) != 1 or len(lines[0].split("\t")) != 2:
+        raise Error("direct remote output must contain exactly one SHA/ref row")
+    head, ref = lines[0].split("\t")
+    _same({"head_sha": head, "remote": "origin", "ref": ref}, reads["repository"]["payload"], "complete original remote read")
+    pages = [item for item in commands if item["kind"] == "review_threads"]
+    cursor, nodes = None, []
+    planner_commands = [item for item in commands if item["kind"] == "planner"]
+    if phase == "continuation":
+        if len(planner_commands) != 1:
+            raise Error("one actual post-activation planner command result is required")
+        _same(planner_commands[0]["argv"], response["planner"]["argv"], "original terminal-planner argv")
+        _same(probe.parse_strict_json(planner_commands[0]["raw_output"]), _read(response["planner"]["output"]), "original terminal-planner output")
+    elif planner_commands:
+        raise Error("an initial/pre-activation planner is not continuation evidence")
+    if not pages or len(commands) != 4 + len(pages) + len(planner_commands):
+        raise Error("complete raw review-thread pagination is required")
+    for index, item in enumerate(pages):
+        _review_argv(item["argv"], ["gh", "api", "graphql", "-f", "query=" + review_query(repository, pr, cursor)])
+        try:
+            page = probe.parse_strict_json(item["raw_output"])["data"]["repository"]["pullRequest"]["reviewThreads"]
+            for node in page["nodes"]:
+                nodes.append({"isResolved": node["isResolved"], "url": node["comments"]["nodes"][0]["url"]})
+            info = page["pageInfo"]
+            if type(info["hasNextPage"]) is not bool or info["hasNextPage"] != (index < len(pages) - 1):
+                raise Error("raw review pagination is incomplete or contains trailing pages")
+            cursor = info["endCursor"]
+        except (KeyError, TypeError, IndexError) as exc:
+            raise Error("malformed raw review-thread page") from exc
+    _same({"repository": repository, "pr_number": pr, "nodes": nodes, "complete": True}, reads["github"]["payload"]["review_threads"], "complete original review threads")
+
+
+def _continuation(value: dict[str, Any], contract: dict[str, Any], pack: dict[str, Any],
+                  inputs: dict[str, Any], phases: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
+    _same(value["activation"], inputs["activation"], "continuation activation")
+    _after(phases["activation"]["at"], value["started_at"], "post-activation continuation", strict=True)
+    _after(value["started_at"], value["completed_at"], "continuation completion")
+    declared = value["live_reads"]
+    if len(declared) != 3 or {item["kind"] for item in declared} != {"github", "repository", "dispatcher"}:
+        raise Error("continuation requires exactly three independently refreshed live reads")
+    reads = {}
+    old_paths = [v2._local_evidence_path(item["evidence"]["ref"]) for item in observation["live_reads"]]
+    for item in declared:
+        path = v2._local_evidence_path(item["evidence"]["ref"])
+        if any(path == old or path.samefile(old) for old in old_paths):
+            raise Error("initial shadow read cannot substitute for continuation refresh")
+        reads[item["kind"]] = v2._independent_read(
+            item["evidence"], kind=item["kind"], pack=pack, packet_binding=contract["context_pack"],
+            observed_at=value["completed_at"], earliest_at=value["started_at"],
+        )
+        if reads[item["kind"]]["availability"] != "observed":
+            raise Error("actual terminal continuation requires observed live access")
+    if not reads["github"]["payload"]["review_threads"]["complete"]:
+        raise Error("actual continuation requires complete review-thread capture")
+    facts = v2._live_facts(reads)
+    for key, fact in facts.items():
+        _same(value["observation"][key], fact, f"continuation {key}")
+    if facts["slice_status"] != "closed_merged":
+        raise Error("experiment target is not terminal closed/merged truth")
+    planner = value["planner"]
+    issue, pr, plan = (_read(planner[key]) for key in ("issue_input", "pr_input", "output"))
+    _same(issue, reads["github"]["payload"]["issue"], "planner Issue input")
+    _same(pr, reads["github"]["payload"]["pr"], "planner PR input")
+    argv = [contract["planner_interpreter"], "-m", "app.builderops", "builderops", "epic-run-state", "lifecycle-plan",
+            "--transition", "terminal", "--issue-file", planner["issue_input"]["ref"],
+            "--pr-file", planner["pr_input"]["ref"], "--repo", contract["target"]["repository"], "--json"]
+    _same(planner["argv"], argv, "actual planner argument vector")
+    expected = build_lifecycle_transition_plan(transition="terminal", issue=issue, pull_request=pr, repo=contract["target"]["repository"])
+    _same(plan, expected, "actual no-effect terminal plan")
+    return facts
+
+
+def _derive_chain(value: Mapping[str, Any], *, expected_capture_contract: Mapping[str, Any],
+                  report_source_explanation_mismatch: bool = False) -> dict[str, Any]:
+    """Derive hard chain facts; only explicit reporting may retain a prose mismatch."""
+    inputs = deepcopy(dict(value))
+    v2._validate(inputs, INPUT, "rotation input")
+    # This separate caller pin prevents a self-contained coherent rebind of the packet/actors.
+    _same(inputs["capture_contract"], dict(expected_capture_contract), "caller-pinned capture contract")
+    contract = _read(inputs["capture_contract"])
+    v2._validate(contract, CONTRACT, "capture contract")
+    _same(_read(contract["ingestion_contract"]), ingestion_contract(), "pre-capture ingestion contract")
+    experiment, actors = contract["experiment_id"], contract["actors"]
+    _same(inputs["experiment_id"], experiment, "input experiment")
+    if actors["successor"] in {actors["operator"], actors["incumbent"], actors["writer"]}:
+        raise Error("history-free successor must be a distinct actor")
+    pack = probe.normalize_context_pack(_read(contract["context_pack"]))
+    if pack["schema_version"] != 2:
+        raise Error("manual rotation requires the unchanged explicit-v2 chain")
+    _same(pack["probe_id"], experiment, "packet experiment")
+    _same({key: pack["target"][key] for key in v2.TARGET["properties"]}, contract["target"], "packet target")
+    source = _read(contract["source_checkpoint"])
+    _same(contract["source_checkpoint"], {"ref": pack["source"]["source_ref"], "sha256": pack["source"]["bytes_sha256"], "bytes_length": pack["source"]["bytes_length"]}, "accepted source binding")
+    _same(source, pack["source"]["receipt"], "accepted evaluator source")
+    accepted = normalize_epic_run_state(_read(contract["accepted_run_state"]))
+    _same(accepted["context_budget_receipts"], [source], "accepted run-state checkpoint")
+    _same(accepted["independent_issue_numbers"], [contract["target"]["issue_number"]], "accepted run-state target")
+    _after(pack["source"]["observed_at"], contract["created_at"], "source before frozen packet")
+    initial = probe.normalize_probe_receipt(_read(inputs["probe_receipt"]))
+    _same(initial["context_pack"], contract["context_pack"], "probe exact frozen packet")
+    _same({key: initial["target"][key] for key in v2.TARGET["properties"]}, contract["target"], "probe target")
+    observation = _read(initial["observation"])
+    phases = {key: _phase(_read(inputs[key]), schema, experiment,
+                         actors["successor"] if key in {"admission", "initial_fidelity", "acknowledgment", "continuation", "continuation_fidelity"} else
+                         actors["incumbent"] if key == "quiescence" else actors["operator"])
+              for key, schema in PHASES.items()}
+    admission = phases["admission"]
+    _same(admission["requested_model"], admission["admitted_model"], "finite run no-fallback model admission")
+    _same(admission["requested_reasoning_effort"], admission["admitted_reasoning_effort"], "finite run no-fallback reasoning admission")
+    _same(admission["initial_context"]["context_pack"], contract["context_pack"], "history-free input")
+    _after(contract["created_at"], admission["at"], "frozen packet before admission")
+    for key in ("admitted_model", "admitted_reasoning_effort", "engine_identity"):
+        _same(observation["agent"][key], admission[key], f"native admission {key}")
+    if not report_source_explanation_mismatch:
+        _same(observation["agent"]["engine_identity_source"], admission["engine_identity_source"], "native admission engine_identity_source")
+    _same(observation["agent"]["start_observed_at"], admission["at"], "native admission time")
+    _capture_fidelity(phases["initial_fidelity"], phase="initial", response_binding=initial["observation"], response=observation, contract=contract)
+    decision, quiescence, acknowledgment, activation = (phases[key] for key in ("manual_decision", "quiescence", "acknowledgment", "activation"))
+    _same(decision["probe_receipt"], inputs["probe_receipt"], "operator inspection")
+    _same(decision["initial_fidelity"], inputs["initial_fidelity"], "operator source-fidelity inspection")
+    _after(observation["observed_at"], decision["at"], "inspection before decision", strict=True)
+    _same(quiescence["manual_decision"], inputs["manual_decision"], "quiescence decision")
+    _same(acknowledgment["manual_decision"], inputs["manual_decision"], "acknowledged decision")
+    _same(acknowledgment["quiescence"], inputs["quiescence"], "acknowledged quiescence")
+    _same(acknowledgment["context_pack"], contract["context_pack"], "acknowledged packet")
+    _same(activation["manual_decision"], inputs["manual_decision"], "activation decision")
+    _same(activation["acknowledgment"], inputs["acknowledgment"], "activation acknowledgment")
+    for before, after in ((decision, quiescence), (quiescence, acknowledgment), (acknowledgment, activation)):
+        _after(before["at"], after["at"], "manual role boundary", strict=True)
+    facts = _continuation(phases["continuation"], contract, pack, inputs, phases, observation)
+    _capture_fidelity(phases["continuation_fidelity"], phase="continuation", response_binding=inputs["continuation"], response=phases["continuation"], contract=contract)
+    measurements = _measurements(inputs, contract, initial, phases)
+    return {"schema_name": "manual_coordinator_rotation_6195", "schema_version": 1,
+            "experiment_id": experiment, "inputs": inputs, "actors": actors, "role_scope": SCOPE,
+            "target": contract["target"], "initial_field_results": _read(initial["comparison"])["field_results"],
+            "continuation_live_facts": facts, "next_action": phases["continuation"]["observation"]["next_action"],
+            "measurements": measurements, "effects": {key: [] for key in EFFECTS},
+            "limitations": ["Trusted native/actor/recorder attestations; not authenticated upstream truth or process fencing.",
+                            "One manually activated read-only terminal-reconciliation role, not whole-session or active-epic replacement.",
+                            "No writer/lifecycle authority transfer, automatic adoption, quality score or threshold."]}
+
+
+def build_receipt(value: Mapping[str, Any], *, expected_capture_contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Strict frozen-protocol replay: a narrative mismatch still refuses."""
+    return _derive_chain(value, expected_capture_contract=expected_capture_contract)
+
+
+def build_nonconforming_result(value: Mapping[str, Any], *, expected_capture_contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Explicit factual result, never fallback or frozen-protocol qualification.
+
+    Only engine-source explanation concordance is reportable. Every hard chain
+    predicate is still enforced before any result, and the captured strict refusal
+    and its historical verifier bytes remain independently retained.
+    """
+    report_inputs = deepcopy(dict(value))
+    v2._validate(report_inputs, RESULT_INPUT, "explicit nonconforming result input")
+    inputs = _read(report_inputs["rotation_input"])
+    result = _derive_chain(inputs, expected_capture_contract=expected_capture_contract,
+                           report_source_explanation_mismatch=True)
+    contract = _read(inputs["capture_contract"])
+    admission = _read(inputs["admission"])
+    initial = _read(inputs["probe_receipt"])
+    observation = _read(initial["observation"])
+    expected, observed = admission["engine_identity_source"], observation["agent"]["engine_identity_source"]
+    if probe._json_exact_equal(expected, observed):
+        raise Error("explicit NONCONFORMING mode requires an actual source-explanation mismatch")
+
+    refusal, custody = (_read(report_inputs[key]) for key in ("strict_refusal", "source_custody"))
+    v2._validate(refusal, STRICT_REFUSAL, "retained actual strict refusal")
+    v2._validate(custody, SOURCE_CUSTODY, "historical verifier custody")
+    _same(refusal["actor"], contract["actors"]["writer"], "strict refusal recorder")
+    _same(refusal["input"], report_inputs["rotation_input"], "strict refusal exact input graph")
+    _same(refusal["result"]["output"], SOURCE_MISMATCH_REFUSAL, "actual frozen strict refusal output")
+    argv = [contract["planner_interpreter"], "-m", "app.builderops.manual_coordinator_rotation", "build",
+            "--input-file", report_inputs["rotation_input"]["ref"],
+            "--capture-contract-file", inputs["capture_contract"]["ref"],
+            "--expected-capture-sha256", inputs["capture_contract"]["sha256"], "--output"]
+    if len(refusal["argv"]) != len(argv) + 1 or refusal["argv"][:-1] != argv:
+        raise Error("captured strict refusal does not retain the actual strict argument vector")
+    _same(custody["strict_refusal_ref"], report_inputs["strict_refusal"]["ref"], "historical refusal custody")
+    _same(custody["captured_module"], refusal["module"], "historical captured module")
+    _same(custody["preserved_source"], report_inputs["historical_source"], "preserved historical source")
+    preserved = historical_source_binding(report_inputs["historical_source"]["ref"])
+    _same(preserved, report_inputs["historical_source"], "historical source bytes")
+    _same({key: preserved[key] for key in ("sha256", "bytes_length")},
+          {key: refusal["module"][key] for key in ("sha256", "bytes_length")}, "captured and preserved verifier bytes")
+    # The captured module ref is a historical location, not a current-path hash assertion.
+    _same(refusal["module"]["ref"], "app/builderops/manual_coordinator_rotation.py", "captured verifier entrypoint")
+    _after(result["measurements"]["ended_at"], _clock(refusal["retention_clock"]), "post-interval refusal retention")
+    _after(_clock(refusal["retention_clock"]), _clock(custody["observed_clock"]), "historical source preservation")
+    _same(refusal["qualifying_interval_repair_count_unchanged"], result["measurements"]["corrections"]["implementation_repair"],
+          "archival interval repair count")
+
+    result["inputs"] = report_inputs
+    result["purpose"] = "explicit_observed_nonconforming_experiment_result_not_protocol_qualification"
+    result["frozen_protocol_conformance"] = "NONCONFORMING"
+    result["frozen_protocol_version"] = PROTOCOL_VERSION
+    result["metadata_concordance"] = {"field": "engine_identity_source", "status": "mismatch",
+                                      "expected": expected, "observed": observed,
+                                      "admission": inputs["admission"], "response": initial["observation"]}
+    result["strict_refusal"] = report_inputs["strict_refusal"]
+    result["historical_verifier"] = report_inputs["historical_source"]
+    result["measurements"]["execution_scope_source"] = inputs["execution"]
+    result["measurements"]["scope"] = "Actual observed nonconforming experiment interval; not model-active or human effort."
+    result["measurements"]["handoff_count_scope"] = "Seven mandatory protocol/bundle transfers, plus separately retained invalid or correction-related transports; this count does not claim capture conformance."
+    result["limitations"].extend([
+        "Frozen protocol 2 producer metadata conformance failed and its strict path still refuses; this result is not a conforming capture or full-success claim.",
+        "The exact narrative strings are retained as a mismatch, not canonicalized or used to infer engine identity.",
+        "The retained execution's historical scope label is provenance only, not a conformance verdict; later reporting repairs are outside that interval.",
+    ])
+    return result
+
+
+def normalize_nonconforming_result(value: Mapping[str, Any], *, expected_capture_contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Recompute every explicit result field; the strict receipt consumer is separate."""
+    if type(value) is not dict or type(value.get("inputs")) is not dict:
+        raise Error("nonconforming result must retain its closed reporting inputs")
+    expected = build_nonconforming_result(value["inputs"], expected_capture_contract=expected_capture_contract)
+    _same(value, expected, "complete explicit nonconforming result")
+    return expected
+
+
+def _measurements(inputs: dict[str, Any], contract: dict[str, Any], initial: dict[str, Any], phases: dict[str, Any]) -> dict[str, Any]:
+    log, admission, continuation = (phases[key] for key in ("execution", "admission", "continuation"))
+    _same(log["recorder"], contract["actors"]["operator"], "execution recorder")
+    _after(log["started_at"], admission["at"], "recorded native admission interval")
+    _after(continuation["completed_at"], log["ended_at"], "recorded continuation interval")
+    required = {"agent_start": (inputs["admission"], admission["at"]),
+                "packet_handoff": (contract["context_pack"], admission["at"]),
+                "admission_metadata_handoff": (inputs["admission"], None),
+                "response_handoff": (initial["observation"], None),
+                "acknowledgment_request_handoff": (inputs["quiescence"], None),
+                "acknowledgment_response_handoff": (inputs["acknowledgment"], None),
+                "activation_handoff": (inputs["activation"], None),
+                "continuation_handoff": (inputs["continuation"], log["ended_at"])}
+    previous = log["started_at"]
+    correction_refs = set()
+    correction_details = []
+    for event in log["events"]:
+        _after(previous, event["at"], "native event ordering")
+        _after(event["at"], log["ended_at"], "native event interval")
+        previous = event["at"]
+        retained = _read(event["evidence"])
+        if event["kind"] in required:
+            evidence, at = required[event["kind"]]
+            _same(event["evidence"], evidence, "native event evidence")
+            _same(event["actor"], contract["actors"]["successor"], "native event successor")
+            if at is not None:
+                _same(event["at"], at, "native event time")
+        else:
+            _phase(retained, CORRECTION, contract["experiment_id"], event["actor"])
+            for key in ("kind", "at", "actor"):
+                _same(retained[key], event[key], "retained correction event")
+            identity = (event["evidence"]["ref"], event["evidence"]["sha256"])
+            if identity in correction_refs:
+                raise Error("one retained correction cannot be counted twice")
+            correction_refs.add(identity)
+            correction_details.append({"kind": retained["kind"], "actor": retained["actor"], "at": retained["at"],
+                                       "reason": retained["reason"], "evidence": event["evidence"]})
+            if event["kind"] == "admission_retry":
+                _after(event["at"], admission["at"], "retry before native success", strict=True)
+    for kind in required:
+        if sum(event["kind"] == kind for event in log["events"]) != 1:
+            raise Error("each actual native start/handoff must be recorded exactly once")
+    by_kind = {event["kind"]: event for event in log["events"] if event["kind"] in required}
+    _after(admission["at"], by_kind["admission_metadata_handoff"]["at"], "successful admission metadata transfer")
+    first_read_at = min(v2._timestamp(_read(item["evidence"])["observed_at"]) for item in _read(initial["observation"])["live_reads"])
+    if v2._timestamp(by_kind["admission_metadata_handoff"]["at"]) > first_read_at:
+        raise Error("live reads preceded recorded admission metadata")
+    _after(_read(initial["observation"])["observed_at"], by_kind["response_handoff"]["at"], "original response transfer")
+    _after(by_kind["response_handoff"]["at"], phases["manual_decision"]["at"], "operator actual response inspection")
+    _after(phases["quiescence"]["at"], by_kind["acknowledgment_request_handoff"]["at"], "quiescence before acknowledgment request")
+    _after(by_kind["acknowledgment_request_handoff"]["at"], phases["acknowledgment"]["at"], "request before successor acknowledgment")
+    _after(phases["acknowledgment"]["at"], by_kind["acknowledgment_response_handoff"]["at"], "original acknowledgment transfer")
+    _after(by_kind["acknowledgment_response_handoff"]["at"], phases["activation"]["at"], "acknowledgment before manual activation")
+    _after(phases["activation"]["at"], by_kind["activation_handoff"]["at"], "activation follow-up transfer")
+    _after(by_kind["activation_handoff"]["at"], continuation["started_at"], "follow-up before continuation")
+    return {"scope": log["clock_scope"], "clock_name": log["clock_name"],
+            "started_at": log["started_at"], "ended_at": log["ended_at"],
+            "elapsed_wall_seconds": (v2._timestamp(log["ended_at"]) - v2._timestamp(log["started_at"])).total_seconds(),
+            "successful_native_starts": 1, "native_followup_handoffs": 2, "artifact_handoffs": 7,
+            "handoff_count_scope": "Seven mandatory qualified protocol/bundle transfers; additional invalid or correction-related transports are separately retained in correction evidence, not silently included or asserted absent.",
+            "corrections": {key: sum(event["kind"] == key for event in log["events"]) for key in CORRECTIONS},
+            "correction_events": correction_details,
+            "packet_bytes": contract["context_pack"]["bytes_length"],
+            "initial_response_bytes": initial["observation"]["bytes_length"],
+            "continuation_response_bytes": inputs["continuation"]["bytes_length"],
+            "unavailable": log["unavailable_measurements"],
+            "scope_exclusions": ["writer, invalid first candidate and later independent reviewer starts", "whole delivery duration/repairs", "model-active and human effort"]}
+
+
+def normalize_receipt(value: Mapping[str, Any], *, expected_capture_contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Accept only the fully rederived strict receipt, with the separate caller pin."""
+    if type(value) is not dict or type(value.get("inputs")) is not dict:
+        raise Error("rotation receipt must retain its strict original inputs")
+    expected = build_receipt(value["inputs"], expected_capture_contract=expected_capture_contract)
+    _same(value, expected, "complete rotation receipt")
+    return expected
+
+
+def cli_main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", choices=("build", "verify", "build-result", "verify-result"))
+    parser.add_argument("--input-file", required=True, type=Path)
+    parser.add_argument("--capture-contract-file", required=True, type=Path)
+    parser.add_argument("--expected-capture-sha256", required=True)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args(argv)
+    try:
+        anchor = binding(str(args.capture_contract_file))
+        _same(anchor["sha256"], args.expected_capture_sha256, "caller capture digest")
+        value = probe.parse_strict_json(args.input_file.read_bytes())
+        consumer = {"build": build_receipt, "verify": normalize_receipt,
+                    "build-result": build_nonconforming_result, "verify-result": normalize_nonconforming_result}[args.mode]
+        result = consumer(value, expected_capture_contract=anchor)
+        if args.output is not None:
+            # Every existing file/alias refuses before writing, including transitive evidence.
+            probe._reject_output_alias(args.output, args.input_file, args.capture_contract_file)
+            probe._write_json_file(args.output, result)
+        print(probe.canonical_json({"accepted": True, "schema_name": result["schema_name"],
+                                    "frozen_protocol_conformance": result.get("frozen_protocol_conformance", "CONFORMING"),
+                                    "effects": result["effects"]}))
+        return 0
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        print(f"manual rotation refused: {exc}")
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli_main())

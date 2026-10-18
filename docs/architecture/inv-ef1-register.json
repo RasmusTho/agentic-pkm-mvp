@@ -2758,6 +2758,139 @@
       "why_load_bearing": "The #6195 recorder retains exact successful manual-consumer command argv using the supported local interpreter, together with measured raw bindings; it records this capture rather than defining a Product default.",
       "disposition": "stay",
       "issue": "#6195"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/accepted/live-dispatcher-status.json",
+      "category": "iv",
+      "why_load_bearing": "The #6236 manual read-only experiment retains exact dispatcher output naming the public Bifrost constituent repository. This is immutable Builder evidence, including refused attempts, not personal vault data or Product configuration.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/accepted/source-capture.json",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/capture-contract.json",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/context-pack.json",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/continuation/capture-fidelity.original.json",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/continuation/capture-fidelity.original.json",
+      "category": "iv",
+      "why_load_bearing": "The #6236 manual read-only experiment retains exact dispatcher output naming the public Bifrost constituent repository. This is immutable Builder evidence, including refused attempts, not personal vault data or Product configuration.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/continuation/continuation.original.json",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/continuation/live-read-dispatcher.json",
+      "category": "iv",
+      "why_load_bearing": "The #6236 manual read-only experiment retains exact dispatcher output naming the public Bifrost constituent repository. This is immutable Builder evidence, including refused attempts, not personal vault data or Product configuration.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/initial/capture-fidelity.original.json",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/initial/capture-fidelity.original.json",
+      "category": "iv",
+      "why_load_bearing": "The #6236 manual read-only experiment retains exact dispatcher output naming the public Bifrost constituent repository. This is immutable Builder evidence, including refused attempts, not personal vault data or Product configuration.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/initial/comparison.json",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/initial/live-read-dispatcher.json",
+      "category": "iv",
+      "why_load_bearing": "The #6236 manual read-only experiment retains exact dispatcher output naming the public Bifrost constituent repository. This is immutable Builder evidence, including refused attempts, not personal vault data or Product configuration.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_v1/CAPTURE_CONTRACT.md",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_v1/accepted/live-dispatcher-status.json",
+      "category": "iv",
+      "why_load_bearing": "The #6236 manual read-only experiment retains exact dispatcher output naming the public Bifrost constituent repository. This is immutable Builder evidence, including refused attempts, not personal vault data or Product configuration.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_v1/accepted/source-capture.json",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_v1/capture-contract.json",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_v1/context-pack.json",
+      "category": "ii",
+      "why_load_bearing": "The #6236 manual read-only experiment retains the actual supported local-interpreter argv or frozen capture instructions. Exact bytes are load-bearing provenance, including refused attempts, not a Product default, launcher or credential.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_v1/successor/initial/live-read-dispatcher.json",
+      "category": "iv",
+      "why_load_bearing": "The #6236 manual read-only experiment retains exact dispatcher output naming the public Bifrost constituent repository. This is immutable Builder evidence, including refused attempts, not personal vault data or Product configuration.",
+      "disposition": "stay",
+      "issue": "#6236"
+    },
+    {
+      "artifact": "evidence/manual_coordinator_rotation_6195_retry1_v1/writer/frozen-v2-refusal.original.json",
+      "category": "ii",
+      "why_load_bearing": "The actual #6236 strict-refusal subprocess receipt retains its supported local-interpreter argv and exact captured source/input bindings. Those immutable historical bytes distinguish refusal from the later explicit nonconforming report; they are not Product configuration or credentials.",
+      "disposition": "stay",
+      "issue": "#6236"
     }
   ]
 }
