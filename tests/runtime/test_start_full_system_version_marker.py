@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -44,6 +45,40 @@ def test_start_full_system_exports_vcs_ref_for_compose_build(tmp_path: Path) -> 
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+    compose_fence_config = json.dumps(
+        {
+            "services": {
+                "api": {
+                    "depends_on": ["db"],
+                    "labels": {"com.agentic-pkm.mvr05.db-role": "client"},
+                },
+                "db": {
+                    "labels": {"com.agentic-pkm.mvr05.db-role": "server"}
+                },
+                "migrate": {
+                    "command": ["/app/scripts/run_migrations.sh"],
+                    "depends_on": ["db"],
+                    "labels": {
+                        "com.agentic-pkm.mvr05.db-role": "migration-runner"
+                    },
+                },
+            }
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    compose_fence_plan = json.dumps(
+        {
+            "schema": "agentic-pkm.mvr05-cutover-fence.v1",
+            "db_clients": ["api", "migrate"],
+            "migration_runner": "migrate",
+            "stopped_services": ["api"],
+            "source_sha256": "0" * 64,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
     capture_file = tmp_path / "compose-up.env"
     progress_file = tmp_path / "startup-progress.log"
@@ -129,6 +164,9 @@ set -eu
 case "${{1:-}}" in
   */scripts/instance_state_writer_inventory.py)
     command="${{2:-}}"
+    if [ -n "${{STARTUP_HARNESS_PROGRESS_PATH:-}}" ]; then
+      printf 'inventory %s\n' "$*" >>"$STARTUP_HARNESS_PROGRESS_PATH"
+    fi
     if [ "$command" = controller-token ]; then
       printf 'darwin:%064d\n' 0
       exit 0
@@ -144,10 +182,33 @@ case "${{1:-}}" in
         done
         exit 2
         ;;
+      redact-compose-fence-config)
+        while [ "$#" -gt 0 ]; do
+          if [ "$1" = --output ]; then
+            printf '%s\n' {compose_fence_config!r} >"$2"
+            exit 0
+          fi
+          shift
+        done
+        exit 2
+        ;;
+      compose-fence-plan)
+        while [ "$#" -gt 0 ]; do
+          if [ "$1" = --receipt-output ]; then
+            printf '%s\n' {compose_fence_plan!r} >"$2"
+            printf 'api\n'
+            exit 0
+          fi
+          shift
+        done
+        exit 2
+        ;;
     esac
+    echo "unexpected instance-state inventory invocation: $*" >&2
+    exit 96
     ;;
 esac
-exec {sys.executable!s} "$@"
+exec "${{STARTUP_ARCHIVE_GATE_PYTHON:?}}" "$@"
 """,
         encoding="utf-8",
     )
@@ -213,6 +274,8 @@ exec {sys.executable!s} "$@"
         }
     )
     archive_marker = configure_ready_archive_gate(env, tmp_path)
+    env["STARTUP_ARCHIVE_GATE_PYTHON"] = env["PYTHON"]
+    env["PYTHON"] = str(fake_python)
 
     proc = run_runtime_start(
         ["bash", "scripts/start_full_system.sh"],
@@ -231,6 +294,16 @@ exec {sys.executable!s} "$@"
     assert captured["VCS_REF"] == expected_sha
     assert captured["BUILT_AT"] != "unknown"
     assert TIMESTAMP_RE.fullmatch(captured["BUILT_AT"])
+    progress = progress_file.read_text(encoding="utf-8")
+    for command in (
+        "produce-legacy-owners",
+        "controller-token",
+        "redact-compose-fence-config",
+        "compose-fence-plan",
+        "prove-quiescent",
+        "validate-legacy-owners",
+    ):
+        assert f" {command} " in progress
     assert_archive_gate_preceded_host_mutation(archive_marker, progress_file)
 
 
