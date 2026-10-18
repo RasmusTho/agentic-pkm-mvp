@@ -5591,11 +5591,19 @@ def test_linux_recovery_releases_authenticated_lease_after_durable_result(tmp_pa
     )
     proof = {
         'channel_id': 'test',
+        'nonce': 'n' * 32,
         'controller': {'pid': 4242, 'start_token': 'linux:' + 'c' * 64},
     }
     proof_path = ownership_root / 'deployment-quiescence-proof.json'
     proof_path.write_text(json.dumps(proof, sort_keys=True) + '\n', encoding='utf-8')
     proof_path.chmod(0o600)
+    owner = {
+        'deployment_nonce': proof['nonce'],
+        'controller': proof['controller'],
+    }
+    owner_path = ownership_root / 'legacy-owner-inventory.json'
+    owner_path.write_text(json.dumps(owner, sort_keys=True) + '\n', encoding='utf-8')
+    owner_path.chmod(0o600)
     receipt = {
         'schema': 'test-instance-state-recovery.v2',
         'channel': 'test',
@@ -5609,7 +5617,7 @@ def test_linux_recovery_releases_authenticated_lease_after_durable_result(tmp_pa
             'ownership_root': authority.ownership_root,
         },
         'disposition': 'complete',
-        'owner_receipt_sha256': 'd' * 64,
+        'owner_receipt_sha256': hashlib.sha256(owner_path.read_bytes()).hexdigest(),
         'quiescence_proof_sha256': hashlib.sha256(proof_path.read_bytes()).hexdigest(),
         'ledger_sha256': 'e' * 64,
     }
@@ -5697,6 +5705,34 @@ def test_linux_recovery_releases_authenticated_lease_after_durable_result(tmp_pa
         'already-in-cleanup'
     )
 
+    foreign_cleanup = {
+        **public_cleanup,
+        'nonce': 'x' * 32,
+        'controller': {'pid': 4343, 'start_token': 'linux:' + 'f' * 64},
+    }
+    foreign_root_cleanup = {
+        **foreign_cleanup,
+        'schema': 'agentic-pkm.host-deployment-compatibility-block.v1',
+        'compatibility_v3_nonce': 'x' * 32,
+    }
+    (ownership_root / 'deployment-host-global-lease.json').write_text(
+        json.dumps(foreign_root_cleanup) + '\n', encoding='utf-8',
+    )
+    (ownership_root / 'deployment-host-global-lease.json').chmod(0o600)
+    effects.compose = lambda *_args, **_kwargs: pytest.fail(
+        'foreign root-only cleanup reached Compose'
+    )
+    with pytest.raises(linux.PostgresDeployError):
+        effects.release_test_instance_state_recovery_lease(request)
+
+    (public_root / 'deployment-host-global-lease.json').write_text(
+        json.dumps(foreign_cleanup) + '\n', encoding='utf-8',
+    )
+    (public_root / 'deployment-host-global-lease.json').chmod(0o600)
+    with pytest.raises(linux.PostgresDeployError):
+        effects.release_test_instance_state_recovery_lease(request)
+
+    (public_root / 'deployment-host-global-lease.json').unlink()
     (ownership_root / 'deployment-host-global-lease.json').unlink()
     effects.recovery_quiescent = lambda: False
     effects.compose = lambda *_args, **_kwargs: pytest.fail('idempotent release called Compose')

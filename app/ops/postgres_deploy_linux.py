@@ -2302,6 +2302,9 @@ class LinuxEffects:
         ):
             raise PostgresDeployError()
         try:
+            owner_path = root / 'legacy-owner-inventory.json'
+            owner_bytes = owner_path.read_bytes()
+            owner = _private_recovery_json(owner_path, self.config.uid)
             root_lease = _private_recovery_json(legacy_lease, self.config.uid)
             public = (
                 _private_recovery_json(public_lease, self.config.uid)
@@ -2311,6 +2314,15 @@ class LinuxEffects:
             raise PostgresDeployError() from None
         cleanup_lease = public if public is not None else root_lease
         cleanup_controller = cleanup_lease.get('controller')
+        original_controller = owner.get('controller')
+        original_nonce = owner.get('deployment_nonce')
+        if (
+            hashlib.sha256(owner_bytes).hexdigest()
+            != receipt.get('owner_receipt_sha256')
+            or not isinstance(original_controller, dict)
+            or not isinstance(original_nonce, str)
+        ):
+            raise PostgresDeployError()
         cleanup_shape = (
             cleanup_lease.get('channel_id') == 'test'
             and cleanup_lease.get('phase') == 'cleanup'
@@ -2318,6 +2330,11 @@ class LinuxEffects:
             and cleanup_lease['result'].get('channel') == 'test'
             and isinstance(cleanup_controller, dict)
         )
+        if cleanup_shape and (
+            cleanup_controller != original_controller
+            or cleanup_lease.get('nonce') != original_nonce
+        ):
+            raise PostgresDeployError()
         if public is None and (
             root_lease.get('schema')
             != 'agentic-pkm.host-deployment-compatibility-block.v1'
