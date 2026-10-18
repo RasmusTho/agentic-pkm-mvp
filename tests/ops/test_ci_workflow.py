@@ -393,12 +393,16 @@ def test_scoped_unit_budget_preserves_selected_coverage() -> None:
     )
     assert step["shell"] == "bash"
     assert "continue-on-error" not in step
-    assert step["run"] == (
-        "set -o pipefail\n"
+    assert step["run"].startswith(
+        "set -euo pipefail\n"
         'echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"\n'
         'echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"\n'
-        "pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20 | tee pytest-not-pg.log\n"
     )
+    assert 'if [[ "$SCOPED_PARTITIONS_JSON" == "[]" ]]; then' in step["run"]
+    assert (
+        "pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short "
+        "--durations=20 | tee pytest-not-pg.log"
+    ) in step["run"]
 
 
 
@@ -443,7 +447,8 @@ sys.exit(int(os.environ["FIXTURE_PYTEST_EXIT"]))
         ["bash", "-c", script], cwd=tmp_path, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True,
         env={**os.environ, **step["env"], "PATH": f"{bin_dir}:{os.environ['PATH']}",
-             "FIXTURE_PYTEST_EXIT": str(pytest_exit)},
+             "FIXTURE_PYTEST_EXIT": str(pytest_exit),
+             "SCOPED_PARTITIONS_JSON": "[]", "SCOPED_TARGETS_JSON": "[]"},
     )
     log_path = tmp_path / "pytest-not-pg.log"
     expected_node = "tests/fixture.py::test_scoped_result " + ("FAILED" if pytest_exit else "PASSED")
@@ -471,6 +476,77 @@ sys.exit(int(os.environ["FIXTURE_PYTEST_EXIT"]))
     if pytest_exit:
         assert "AssertionError: scoped diagnostic" in log
     assert log in stdout
+
+
+def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None:
+    job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
+    step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
+    assert step["timeout-minutes"] == 60
+    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert step["env"]["SCOPED_TARGETS_JSON"] == (
+        "${{ steps.select-tests.outputs.pytest_targets_json }}"
+    )
+    assert step["env"]["SCOPED_PARTITIONS_JSON"] == (
+        "${{ steps.select-tests.outputs.scoped_partitions_json }}"
+    )
+    assert "scripts/run_scoped_test_partitions.py" in step["run"]
+    assert "--jobs 4" in step["run"]
+    assert "--shard-timeout-seconds 3300" in step["run"]
+    assert "set -euo pipefail" in step["run"]
+    upload = next(s for s in job["steps"] if s.get("name") == "Upload scoped partition logs")
+    assert upload["if"].startswith("always()")
+    assert upload["with"]["path"] == "${{ runner.temp }}/pytest-scoped-shards/"
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import os
+import sys
+import time
+target_text = " ".join(sys.argv[1:])
+print(target_text, flush=True)
+if (timeout_target := os.environ.get("FAKE_TIMEOUT_TARGET")) and timeout_target in target_text:
+    time.sleep(5)
+if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target_text:
+    print("synthetic scoped failure", file=sys.stderr, flush=True)
+    raise SystemExit(7)
+''', encoding="utf-8")
+    fake_pytest.chmod(0o755)
+    expected = ["tests/deploy", "tests/ops", "tests/scripts", "tests/ci"]
+    partitions = [["tests/deploy"], ["tests/ops"], ["tests/scripts"], ["tests/ci"]]
+
+    def run(*, expected_targets=expected, env: dict[str, str] | None = None, timeout: int = 10):
+        return subprocess.run(
+            [
+                sys.executable, str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+                "--partitions-json", json.dumps(partitions),
+                "--expected-targets-json", json.dumps(expected_targets),
+                "--log-dir", str(tmp_path / "logs"),
+                "--aggregate-log", str(tmp_path / "aggregate.log"),
+                "--jobs", "4", "--shard-timeout-seconds", str(timeout),
+            ],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+            env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                 "PYTEST_ADDOPTS": "--timeout=120 --timeout-method=thread", **(env or {})},
+            check=False,
+        )
+
+    success = run()
+    assert success.returncode == 0, success.stdout + success.stderr
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert all(target in aggregate for target in expected)
+    failure = run(env={"FAKE_FAIL_TARGET": "tests/ops"})
+    assert failure.returncode == 1
+    assert "PARTITION FAILED (7)" in failure.stderr
+    assert "synthetic scoped failure" in failure.stderr
+    absent = run(expected_targets=[*expected, "tests/missing"])
+    assert absent.returncode != 0
+    assert "does not match expected targets exactly once" in absent.stderr
+    timed_out = run(env={"FAKE_TIMEOUT_TARGET": "tests/deploy"}, timeout=1)
+    assert timed_out.returncode == 1
+    assert "PARTITION TIMED OUT after 1s" in timed_out.stderr
 
 
 @pytest.mark.parametrize("mode", ["shard-failure", "incomplete", "serial-failure"])

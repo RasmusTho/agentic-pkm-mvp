@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -330,6 +331,8 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "scripts/start_full_system.sh",
     ),
 }
+
+SCOPED_DEPLOY_PARTITION_ROOTS = ("tests/deploy", "tests/ops", "tests/scripts")
 
 SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
@@ -1479,6 +1482,26 @@ def _defer_heavy(selection: Selection, paths: tuple[str, ...]) -> Selection:
     )
 
 
+def scoped_deploy_partitions(selection: Selection) -> tuple[tuple[str, ...], ...]:
+    """Partition source-triggered deploy coverage without changing its targets."""
+    if selection.full_suite or "tests/deploy" not in selection.targets:
+        return ()
+    buckets: list[list[str]] = [[] for _ in SCOPED_DEPLOY_PARTITION_ROOTS]
+    remainder: list[str] = []
+    for target in selection.targets:
+        target_file = target.split("::", 1)[0]
+        for index, root in enumerate(SCOPED_DEPLOY_PARTITION_ROOTS):
+            if target_file == root or target_file.startswith(f"{root}/"):
+                buckets[index].append(target)
+                break
+        else:
+            remainder.append(target)
+    partitions = [tuple(bucket) for bucket in buckets if bucket]
+    if remainder:
+        partitions.append(tuple(remainder))
+    return tuple(partitions)
+
+
 def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     runtime_prefixes = ("app/", "companion-ui/")
     owned_prefixes = tuple(prefix for _, prefixes, _ in SUBSYSTEMS for prefix in prefixes)
@@ -1615,6 +1638,7 @@ def requires_runtime_checks(changed_files: list[str]) -> bool:
 
 def _write_github_output(path: str, selection: Selection, *, runtime_checks: bool = True) -> None:
     output = Path(path)
+    partitions = scoped_deploy_partitions(selection)
     with output.open("a", encoding="utf-8") as handle:
         handle.write(f"full_suite={'true' if selection.full_suite else 'false'}\n")
         handle.write(f"subsystems={','.join(selection.subsystems) or 'all'}\n")
@@ -1622,6 +1646,8 @@ def _write_github_output(path: str, selection: Selection, *, runtime_checks: boo
         handle.write(f"reason={selection.reason}\n")
         handle.write(f"deferred_targets={' '.join(selection.deferred_targets)}\n")
         handle.write(f"runtime_checks={'true' if runtime_checks else 'false'}\n")
+        handle.write(f"pytest_targets_json={json.dumps(selection.targets, separators=(',', ':'))}\n")
+        handle.write(f"scoped_partitions_json={json.dumps(partitions, separators=(',', ':'))}\n")
 
 
 def main() -> int:
