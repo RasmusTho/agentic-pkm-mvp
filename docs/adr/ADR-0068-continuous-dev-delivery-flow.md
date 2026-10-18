@@ -50,13 +50,12 @@ can complete them.
 
 A red `dev` or `test` candidate opens or updates one rolling bug Issue per channel. The bug names the
 candidate SHA, the commit range since the channel's last good candidate, the failing gate, and the run
-or receipt. The next candidate then proceeds as normal. The default recovery is **roll-forward**: the
-fix merges to `main` and reaches `dev` as a later candidate. The controller may redeploy the last good
-image automatically only when the database revision is unchanged by the failed candidate, or when
-prior-image compatibility with the migrated schema is explicitly proven. A reversible migration marker
-alone is not enough. This matches `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md :: Concretely`.
-Otherwise the controller keeps the retained target image. The existing rule that automation never
-rolls back a database stays.
+or receipt. The next candidate then proceeds as normal. `dev` and `test` never roll back. Recovery there is
+**roll-forward**: the fix merges to `main` and reaches `dev` as a later candidate. A `dev` or `test`
+channel whose state is broken is **rebuilt from scratch** instead, because its databases are
+rebuildable projections (`docs/REBUILDABLE_SYSTEM_CONTINUITY/README.md :: RSC-01 continuity classification`). The
+rebuild capability is owned by that specification (epic #5258). Production keeps its rollback
+contract (`docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).
 
 ### D4 — Git refs record channel state
 
@@ -103,7 +102,7 @@ so a bad candidate cannot crash the deployer (for example the 2026-10 controller
 ## Consequences
 
 - Development never waits on dev, test, or a deploy investigation. The cost is that a red candidate
-  can sit on `dev` until a fix merges. D3's last-good redeploy narrows that window only where it is safe.
+  can sit on `dev` until a fix merges, or until the channel is rebuilt.
 - With batching, one bug can cover several merged PRs. The commit range in the bug is the first
   triage tool; automatic bisection is a later option.
 - Every agent works under D1 and D3. Agents do not pause the controller to protect their own work;
@@ -113,8 +112,7 @@ so a bad candidate cannot crash the deployer (for example the 2026-10 controller
 
 Tracked by the parent Issue linked from `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md :: Continuous dev delivery target (ADR-0068)`.
 The slices are: the liveness check (D6), automatic channel bug filing (D3), the `dev`/`test` refs and
-their advancement (D4), the kill switch replacing unload-as-pause (D5), pinned controller tooling (D7),
-the fail-closed last-good redeploy (D3), heavy tests on `dev` (D4), and prod promotion from `test` to
+their advancement (D4), the kill switch replacing unload-as-pause (D5), pinned controller tooling (D7), heavy tests on `dev` (D4), and prod promotion from `test` to
 `stable` (D4, superseding ADR-0040 §1–§2).
 
 ## References

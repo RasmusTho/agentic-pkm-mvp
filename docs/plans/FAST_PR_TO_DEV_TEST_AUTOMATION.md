@@ -71,7 +71,7 @@ No automated database rollback is part of this plan. A failed health check must 
 
 - **Merge on risk.** No post-merge stage gates or reverts a merge. Problems found after merge become bug Issues.
 - **Latest wins.** `dev` gets the newest admitted `main` build, and intermediate commits are batched.
-- **A failure files a bug, never a pause.** A red candidate opens or updates one rolling bug Issue per channel, with the SHA, the commit range since the last good candidate, the failing gate and the receipt. The next candidate proceeds. Recovery is roll-forward. A last-good redeploy is allowed only when the database revision is unchanged, or prior-image compatibility is explicitly proven.
+- **A failure files a bug, never a pause.** A red candidate opens or updates one rolling bug Issue per channel, with the SHA, the commit range since the last good candidate, the failing gate and the receipt. The next candidate proceeds. `dev` and `test` never roll back. Recovery is roll-forward, or rebuilding a broken channel from scratch, because its databases are rebuildable projections (Rebuildable System Continuity, #5258). Prod keeps its rollback contract.
 - **Refs record channel state.** `dev` is the last green dev verdict, and differs from `main` only by a documented technical hold. `test` is the last candidate promoted for UAT after a green dev verdict. `stable` is prod, advanced only from a `test`-passed candidate through human-approved promotion (superseding ADR-0040 once enacted).
 - **Pause only the machinery.** A kill switch needs a linked Issue and an expiry. Unloading the controller is not a pause mechanism.
 - **Liveness is loud.** A GitHub check turns red when no dev verdict follows a newer admitted build within the grace period.
@@ -86,7 +86,6 @@ Enactment slices (children of #6207):
 | `dev` and `test` refs advanced on green verdicts | D4 |
 | Kill switch with Issue and expiry, replacing unload-as-pause | D5 |
 | Pinned controller tooling | D7 |
-| Fail-closed last-good redeploy (unchanged DB revision or proven compatibility) | D3 |
 | Heavy tests on `dev` as part of the dev verdict (prerequisite #6205; host activation #6170) | D4 |
 | Prod promotion from `test` to `stable` | D4 |
 
