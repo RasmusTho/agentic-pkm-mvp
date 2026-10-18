@@ -87,7 +87,7 @@ Enactment slices (children of #6207):
 | Kill switch with Issue and expiry, replacing unload-as-pause | D5 |
 | Pinned controller tooling | D7 |
 | Safe last-good redeploy without forward-only migration | D3 |
-| Heavy tests on `dev` as part of the dev verdict (#6205) | D4 |
+| Heavy tests on `dev` as part of the dev verdict (prerequisite #6205; host activation #6170) | D4 |
 | Prod promotion from `test` to `stable` | D4 |
 
 ## Preconditions and delivery sequence
