@@ -320,6 +320,12 @@ a later ADR restores gated `stable`.
 
 ### Target: gated `stable` promotion (deferred hardening)
 
+[ADR-0068](../adr/ADR-0068-continuous-dev-delivery-flow.md) (owner-directed 2026-10-18, parent #6207) sets
+the target chain as `main` → `dev` → `test` → `stable`. `dev` and `test` are refs the post-merge controller
+advances on green verdicts. `test` is the UAT stage. `stable` advances only from a `test`-passed candidate
+through the human-approved promotion below. Once enacted, this supersedes ADR-0040 §1–§2; until then the
+current `main`-tracking baseline above governs.
+
 The four-phase gated model in [Promotion contract](#promotion-contract) — prepare → execute → verify → rollback, advancing a protected `stable` ref — is the **target**, deferred to promotion hardening (see [Future promotion hardening](#future-promotion-hardening)). Restoring `stable` as a gated promotion ref, and switching prod from `main`-tracking to `stable`-tracking, is future work that descends from Issue #2527; until then the current baseline above governs.
 
 ## Promotion contract

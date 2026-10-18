@@ -182,6 +182,12 @@ PG PR coverage transfers to the shared isolated native profile only after actual
 execution is verified under #5675. Non-PG PR and bounded nightly checks remain; production promotion
 is separately governed.
 
+Target flow: [ADR-0068](../adr/ADR-0068-continuous-dev-delivery-flow.md) (owner-directed 2026-10-18,
+parent #6207) keeps this controller running through deploy problems. A red candidate files a rolling
+channel bug Issue and the next candidate proceeds. A hold pins the `dev` ref or engages a kill switch
+with an Issue and an expiry. Unloading the LaunchAgent is not a pause mechanism, and an absent
+controller is an alert. Until those slices land, the mechanics above are current.
+
 RCA on 2026-06-29 (BuilderOps LearningSignal `lrn_20260629093241_59713bc1`) found that the system had **no deployment source-of-truth**. The observed reality:
 
 - All three docker API stacks bind-mount a single shared host checkout (`./:/app`) — there is **no code isolation between channels**; every channel runs whatever is checked out in that one tree.

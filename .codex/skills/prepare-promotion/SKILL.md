@@ -16,6 +16,11 @@ description: "Produce a promotion plan that diffs main against stable, enumerate
 > `main`-tracking path: migrations against the `app` DB under compose project `pkm-prod` must be
 > classified before they run. The current baseline applies that policy manually; this skill's
 > marker enforcement and durable plan acknowledgements remain deferred hardening.
+>
+> **Target flow (ADR-0068, owner-directed 2026-10-18):** delivery becomes `main` → `dev` → `test`
+> (UAT) → `stable` (prod), and this gated-`stable` model is the target again. `stable` advances only
+> from a `test`-passed candidate. Enactment is tracked under #6207; until the prod-promotion slice
+> lands, the status above governs. See [ADR-0068](../../../docs/adr/ADR-0068-continuous-dev-delivery-flow.md).
 
 Use this skill before any `execute-promotion` run. Its sole job is to produce a reviewable promotion plan. It does not move any ref, apply any migration, or restart any process.
 

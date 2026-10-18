@@ -56,7 +56,7 @@ Apply `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` before publicati
   artifact evidence; do not create duplicate records merely to satisfy closeout. Protected executor
   and in-flight receipts, current-head CI, exact review, merge, and closure gates remain mandatory.
 - If acceptance requires a post-merge producer, keep its parent or explicit acceptance Issue open;
-  do not pretend a pre-merge test proves the later outcome.
+  do not pretend a pre-merge test proves the later outcome. Merge on risk (ADR-0068): a later `dev`/`test` failure is a channel bug Issue, never a reason to delay or revert this merge.
 - Own technical acceptance under `docs/TESTING.md :: Automated Technical Acceptance`: qualified
   automatic TEST by default, short DEV smoke/warranted scenarios, actual same-candidate SHA/digest and
   isolated synthetic actor/source proof. Prove every scoped AC before parent closure. Use concrete
