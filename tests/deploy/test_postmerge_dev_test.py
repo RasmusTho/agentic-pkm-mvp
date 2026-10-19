@@ -978,6 +978,11 @@ class _ChannelGithub:
         self.runs = []
         self.candidates = []
         self.deliveries = []
+        self.reads = []
+        self.refusals = []
+        self.latest_runs = {}
+        self.attempts = {}
+        self.attempt_jobs = {}
 
     def add(self, candidate):
         self.candidates.append(candidate)
@@ -987,6 +992,8 @@ class _ChannelGithub:
         prefix = f'repos/{driver.REPOSITORY}'
         if method != 'GET':
             self.effects.append((method, path, data))
+        else:
+            self.reads.append(path)
         if path.startswith(prefix + '/compare/'):
             base, head = path.split('/compare/')[1].split('...')
             shas = [c.sha for c in self.candidates]
@@ -995,10 +1002,21 @@ class _ChannelGithub:
         if path.startswith(prefix + '/actions/workflows/'):
             return {'workflow_runs': self.runs}
         if path.startswith(prefix + '/actions/runs/'):
-            candidate = next(c for c in self.candidates if c.run_id == int(path.rsplit('/', 1)[1]))
+            parts = path.split('/actions/runs/')[1].split('/')
+            candidate = next(c for c in self.candidates if c.run_id == int(parts[0]))
             run, _ = _build()
-            return {**run, 'id': candidate.run_id, 'run_attempt': candidate.run_attempt, 'head_sha': candidate.sha,
-                    'created_at': '2026-10-19T00:00:00Z'}
+            run = {**run, 'id': candidate.run_id, 'run_attempt': candidate.run_attempt, 'head_sha': candidate.sha,
+                   'created_at': '2026-10-19T00:00:00Z'}
+            if len(parts) == 1:
+                return {**run, **self.latest_runs.get(candidate.run_id, {})}
+            assert parts[1] == 'attempts'
+            key = (candidate.run_id, int(parts[2]))
+            if len(parts) == 3:
+                return {**run, **self.attempts.get(key, {})}
+            assert parts[3] == 'jobs?per_page=100'
+            job = {'name': driver.BUILD_JOB, 'run_id': candidate.run_id, 'run_attempt': candidate.run_attempt,
+                   'head_sha': candidate.sha, 'status': 'completed', 'conclusion': 'success'}
+            return self.attempt_jobs.get(key, {'total_count': 1, 'jobs': [job]})
         if path.startswith(prefix + '/issues?'):
             return self.issues
         if path == prefix + '/issues' and method == 'POST':
@@ -1033,12 +1051,17 @@ class _ChannelGithub:
         evidence = json.loads(fields['evidence'])
         assert fields['channel'] == evidence['channel']
         self.deliveries.append(evidence)
-        self.reconcile(evidence)
+        try:
+            self.reconcile(evidence)
+        except channel_bug.AlertRefused as error:
+            self.refusals.append(str(error))
+            raise
         candidate = evidence['candidate']
         self.runs.append({'id': 1000 + len(self.runs), 'conclusion': 'success', 'head_branch': 'main',
                           'event': 'workflow_dispatch', 'path': '.github/workflows/postmerge-channel-bug.yml',
                           'display_title': f"channel-bug/{evidence['channel']}/{evidence['verdict']}/"
-                                           f"{candidate['sha']}/{candidate['run_id']}/{candidate['run_attempt']}"})
+                                           f"{candidate['sha']}/{candidate['run_id']}/{candidate['run_attempt']}/"
+                                           f"{evidence['receipt_fingerprint']}"})
         return SimpleNamespace(returncode=0)
 
 
@@ -1132,8 +1155,10 @@ def _channel_evidence(candidate, channel='dev', verdict='failed', last_good=None
                'operation_id': candidate.operation_id(channel)}
     if verdict == 'passed':
         receipt['pg_acceptance'] = _native_receipt(channel, candidate)['pg_acceptance']
-    return {'candidate': asdict(candidate), 'channel': channel, 'verdict': verdict,
-            'gate': 'native_deploy', 'last_good_sha': last_good, 'receipt': receipt}
+    evidence = {'candidate': asdict(candidate), 'channel': channel, 'verdict': verdict,
+                'gate': 'native_deploy', 'last_good_sha': last_good, 'receipt': receipt}
+    evidence['receipt_fingerprint'] = driver.channel_verdict_fingerprint(evidence)
+    return evidence
 
 
 @pytest.mark.parametrize('late_verdict,new_verdict', [('passed', 'failed'), ('failed', 'passed')])
@@ -1156,7 +1181,8 @@ def test_delayed_first_red_after_green_without_bug_is_ignored():
     new = github.add(driver.Candidate('c' * 40, DIGEST, 124, 1, 457))
     github.runs = [{'id': 901, 'conclusion': 'success', 'head_branch': 'main',
                     'event': 'workflow_dispatch', 'path': '.github/workflows/postmerge-channel-bug.yml',
-                    'display_title': f'channel-bug/dev/passed/{new.sha}/124/1'}]
+                    'display_title': f'channel-bug/dev/passed/{new.sha}/124/1/'
+                                     + _channel_evidence(new, verdict='passed')['receipt_fingerprint']}]
     assert github.reconcile(_channel_evidence(old)) == 'stale'
     assert not github.effects
 
@@ -1217,6 +1243,7 @@ def test_channel_bug_workflow_keeps_writes_on_trusted_main():
     assert set(workflow.get('on', workflow.get(True))) == {'workflow_dispatch'}
     assert workflow['concurrency'] == {'group': 'postmerge-channel-bug-${{ inputs.channel }}',
                                         'cancel-in-progress': False, 'queue': 'max'}
+    assert workflow['run-name'].endswith('/${{ fromJSON(inputs.evidence).receipt_fingerprint }}')
     job = workflow['jobs']['reconcile']
     assert "github.ref == 'refs/heads/main'" in job['if']
     assert "github.repository == 'RasmusTho/agentic-pkm-mvp'" in job['if']
@@ -1319,3 +1346,105 @@ def test_channel_bug_script_entrypoint_is_dependency_free(tmp_path):
                             cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert '--evidence' in result.stdout
+
+
+@pytest.mark.parametrize('conflict', ['verdict', 'digest', 'artifact', 'receipt'])
+def test_channel_bug_initial_green_refuses_conflicting_terminal_replay(tmp_path, channel_github, conflict):
+    # R1-F1: persist a real first-green workflow receipt with no rolling Issue.
+    github = channel_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    assert _poll_channel(tmp_path, candidate) == 0
+    assert not github.issues
+    changed = (replace(candidate, digest='sha256:' + 'c' * 64) if conflict == 'digest' else
+               replace(candidate, artifact_id=789) if conflict == 'artifact' else candidate)
+    evidence = _channel_evidence(changed, channel='test', verdict='failed' if conflict == 'verdict' else 'passed')
+    if conflict == 'receipt':
+        evidence['receipt']['pg_acceptance']['report_hash'] = '9' * 64
+    driver._atomic_checkpoint(tmp_path / 'postmerge-dev-test.json', {
+        'candidate': asdict(changed), 'channel': 'test', 'phase': evidence['verdict'], 'outcome': evidence['receipt'],
+    })
+    assert driver.poll(tmp_path, build=lambda: 123, load=lambda _: changed,
+                       deploy=lambda *_: pytest.fail('terminal deployment replay')) == 0
+    stored = json.loads((tmp_path / 'postmerge-dev-test.json').read_text())
+    assert stored['channel_bug']['dispatch'] == 'failed'
+    assert github.refusals[-1] == 'conflicting_terminal_verdict'
+    assert not github.effects and not github.issues
+
+
+def test_channel_bug_initial_green_identical_replay_has_no_issue_effect(tmp_path, channel_github):
+    github = channel_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    assert _poll_channel(tmp_path, candidate) == 0
+    evidence = _channel_evidence(candidate, channel='test', verdict='passed')
+    driver._atomic_checkpoint(tmp_path / 'postmerge-dev-test.json', {
+        'candidate': asdict(candidate), 'channel': 'test', 'phase': 'passed', 'outcome': evidence['receipt'],
+    })
+    assert driver.poll(tmp_path, deploy=lambda *_: pytest.fail('terminal deployment replay')) == 0
+    assert json.loads((tmp_path / 'postmerge-dev-test.json').read_text())['channel_bug']['dispatch'] == 'sent'
+    assert not github.effects
+
+
+@pytest.mark.parametrize('verdict', ['failed', 'passed'])
+@pytest.mark.parametrize('latest', [('in_progress', None), ('completed', 'failure')])
+def test_channel_bug_exact_build_attempt_survives_later_rerun(tmp_path, channel_github, verdict, latest):
+    # R1-F2: the producer already admitted successful image attempt 1.
+    github = channel_github
+    if verdict == 'passed':
+        previous = github.add(driver.Candidate('1' * 40, DIGEST, 122, 1, 455))
+        assert _poll_channel(tmp_path, previous, red='dev') == 78
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    github.latest_runs[123] = {'run_attempt': 2, 'status': latest[0], 'conclusion': latest[1]}
+    assert _poll_channel(tmp_path, candidate, red='dev' if verdict == 'failed' else None) == (78 if verdict == 'failed' else 0)
+    assert github.issues[0]['state'] == ('open' if verdict == 'failed' else 'closed')
+    prefix = f'repos/{driver.REPOSITORY}/actions/runs/123'
+    assert prefix + '/attempts/1' in github.reads
+    assert prefix + '/attempts/1/jobs?per_page=100' in github.reads
+    assert prefix not in github.reads
+
+
+def test_channel_bug_reused_image_job_from_earlier_failed_attempt(tmp_path, channel_github):
+    # load_candidate supports rerunning unrelated failed jobs without rebuilding
+    # the already-passed image job. Its older exact image-job attempt remains valid.
+    github = channel_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    github.attempts[(123, 1)] = {'conclusion': 'failure'}
+    github.latest_runs[123] = {'run_attempt': 2}
+    assert _poll_channel(tmp_path, candidate, red='dev') == 78
+    assert github.issues[0]['state'] == 'open'
+
+
+@pytest.mark.parametrize('fault', ['wrong_attempt', 'failed_image', 'incomplete_jobs'])
+def test_channel_bug_refuses_unproved_exact_image_attempt(tmp_path, channel_github, fault):
+    github = channel_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    if fault == 'wrong_attempt':
+        github.attempts[(123, 1)] = {'run_attempt': 2}
+    else:
+        job = {'name': driver.BUILD_JOB, 'run_id': 123, 'run_attempt': 1, 'head_sha': SHA,
+               'status': 'completed', 'conclusion': 'failure' if fault == 'failed_image' else 'success'}
+        github.attempt_jobs[(123, 1)] = {'total_count': 101 if fault == 'incomplete_jobs' else 1, 'jobs': [job]}
+    assert _poll_channel(tmp_path, candidate, red='dev') == 78
+    assert not github.effects
+    assert json.loads((tmp_path / 'postmerge-dev-test.json').read_text())['channel_bug']['dispatch'] == 'failed'
+
+
+@pytest.mark.parametrize('field', ['diagnostic', 'reason', 'failure_reference', 'operation_id'])
+def test_channel_bug_private_retained_fields_never_cross_dispatch(tmp_path, channel_github, capsys, field):
+    # R1-F3: use the real controller outbound function, not a validating callback.
+    github = channel_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    tmp_path.chmod(0o700)
+    outcome = _channel_evidence(candidate)['receipt']
+    outcome[field] = 'review-private-canary-only'
+    driver._atomic_checkpoint(tmp_path / 'postmerge-dev-test.json', {
+        'candidate': asdict(candidate), 'channel': 'dev', 'phase': 'failed', 'outcome': outcome,
+    })
+    assert driver.poll(tmp_path, build=lambda: 123, load=lambda _: candidate,
+                       deploy=lambda *_: pytest.fail('terminal deployment replay')) == 0
+    assert not github.deliveries and not github.effects
+    assert 'review-private-canary-only' not in capsys.readouterr().out
+    assert json.loads((tmp_path / 'postmerge-dev-test.json').read_text())['channel_bug']['dispatch'] == 'failed'
+    later = github.add(replace(candidate, sha='c' * 40, run_id=124))
+    assert _poll_channel(tmp_path, later) == 0
+    assert github.deliveries
+    assert 'review-private-canary-only' not in json.dumps(github.deliveries)

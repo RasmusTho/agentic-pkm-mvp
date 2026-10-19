@@ -1,5 +1,5 @@
 name: Post-merge channel bug
-run-name: channel-bug/${{ inputs.channel }}/${{ fromJSON(inputs.evidence).verdict }}/${{ fromJSON(inputs.evidence).candidate.sha }}/${{ fromJSON(inputs.evidence).candidate.run_id }}/${{ fromJSON(inputs.evidence).candidate.run_attempt }}
+run-name: channel-bug/${{ inputs.channel }}/${{ fromJSON(inputs.evidence).verdict }}/${{ fromJSON(inputs.evidence).candidate.sha }}/${{ fromJSON(inputs.evidence).candidate.run_id }}/${{ fromJSON(inputs.evidence).candidate.run_attempt }}/${{ fromJSON(inputs.evidence).receipt_fingerprint }}
 on:
   workflow_dispatch:
     inputs:

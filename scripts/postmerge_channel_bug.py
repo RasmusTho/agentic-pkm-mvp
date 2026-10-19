@@ -19,8 +19,9 @@ from urllib.parse import quote
 if __package__ in {None, ''}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.postmerge_dev_test import Candidate, REPOSITORY, _digest, _source_failure, validate_source_run
-from app.ops.pg_acceptance import require_pass
+from scripts.postmerge_dev_test import (
+    BUILD_JOB, BUILD_WORKFLOW, Candidate, REPOSITORY, validate_channel_evidence,
+)
 
 WORKFLOW = 'postmerge-channel-bug.yml'
 BOT = 'github-actions[bot]'
@@ -48,47 +49,7 @@ def _api(method: str, path: str, data: dict[str, Any] | None = None) -> Any:
 
 def validate_evidence(evidence: Any, channel: str) -> Candidate:
     try:
-        if (not isinstance(evidence, dict)
-            or set(evidence) != {'candidate', 'channel', 'verdict', 'gate', 'last_good_sha', 'receipt'}
-            or channel not in {'dev', 'test'} or evidence['channel'] != channel
-            or evidence['verdict'] not in {'passed', 'failed'}):
-            raise ValueError()
-        candidate = Candidate(**evidence['candidate'])
-        if (re.fullmatch('[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
-            or any(type(value) is not int or value < 1
-                   for value in (candidate.run_id, candidate.run_attempt, candidate.artifact_id))):
-            raise ValueError()
-        previous = evidence['last_good_sha']
-        if previous is not None and (not isinstance(previous, str) or re.fullmatch('[0-9a-f]{40}', previous) is None):
-            raise ValueError()
-        receipt = evidence['receipt']
-        if set(receipt) - {'source_sha', 'image_digest', 'source_run_id', 'source_run_attempt', 'artifact_id',
-                           'channel', 'result', 'operation_id', 'pg_acceptance', 'source_failure',
-                           'failure_reference', 'reason'}:
-            raise ValueError()
-        if any(receipt.get(key) != value for key, value in {
-            'source_sha': candidate.sha, 'image_digest': candidate.digest, 'source_run_id': candidate.run_id,
-            'source_run_attempt': candidate.run_attempt, 'artifact_id': candidate.artifact_id,
-            'channel': channel, 'result': evidence['verdict'], 'operation_id': candidate.operation_id(channel),
-        }.items()):
-            raise ValueError()
-        if 'failure_reference' in receipt and receipt['failure_reference'] != (
-            f'https://github.com/{REPOSITORY}/actions/runs/{candidate.run_id}'
-        ):
-            raise ValueError()
-        _source_failure(receipt)
-        reason = receipt.get('reason')
-        if reason is not None and (reason != 'pg_profile_missing_or_mismatched' or evidence['verdict'] != 'failed'):
-            raise ValueError()
-        gate = 'source_projection' if 'source_failure' in receipt else 'pg_acceptance' if reason else 'native_deploy'
-        if evidence['gate'] != gate:
-            raise ValueError()
-        if evidence['verdict'] == 'passed':
-            require_pass(receipt.get('pg_acceptance'), candidate.sha, candidate.digest,
-                         channel, candidate.operation_id(channel))
-        elif 'pg_acceptance' in receipt:
-            raise ValueError()
-        return candidate
+        return validate_channel_evidence(evidence, channel)
     except Exception:
         raise AlertRefused('channel_evidence_refused') from None
 
@@ -133,13 +94,14 @@ def _newer(api: Callable[..., Any], left: Candidate, right: Candidate) -> bool:
 
 
 def _newer_completed_verdict(api: Callable[..., Any], candidate: Candidate, channel: str, run_id: int,
-                             created_at: str) -> bool:
+                             created_at: str, receipt_fingerprint: str) -> bool:
     # A green verdict with no open bug still has a durable workflow receipt.
     # Consult it so an older delayed red cannot open an already-recovered bug.
     if re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z', created_at) is None:
         raise AlertRefused('source_run_time_refused')
     created = quote('>=' + created_at, safe='')
-    pattern = re.compile(r'channel-bug/(dev|test)/(passed|failed)/([0-9a-f]{40})/([1-9][0-9]*)/([1-9][0-9]*)')
+    pattern = re.compile(r'channel-bug/(dev|test)/(passed|failed)/([0-9a-f]{40})/'
+                         r'([1-9][0-9]*)/([1-9][0-9]*)/([0-9a-f]{64})')
     for page in range(1, MAX_PAGES + 1):
         result = api('GET', f'repos/{REPOSITORY}/actions/workflows/{WORKFLOW}/runs'
                            f'?branch=main&event=workflow_dispatch&status=success&created={created}&per_page=100&page={page}')
@@ -153,6 +115,10 @@ def _newer_completed_verdict(api: Callable[..., Any], candidate: Candidate, chan
                 or row.get('path') != f'.github/workflows/{WORKFLOW}' or not match or match[1] != channel):
                 continue
             other = Candidate(match[3], candidate.digest, int(match[4]), int(match[5]), candidate.artifact_id)
+            if (other.sha, other.run_id, other.run_attempt) == (candidate.sha, candidate.run_id, candidate.run_attempt):
+                if match[6] != receipt_fingerprint:
+                    raise AlertRefused('conflicting_terminal_verdict')
+                continue
             if _newer(api, other, candidate):
                 return True
         if len(rows) < 100:
@@ -222,9 +188,30 @@ def reconcile(evidence: dict[str, Any], *, channel: str, event: str, ref: str, r
     if event != 'workflow_dispatch' or ref != 'refs/heads/main' or repository != REPOSITORY or run_id < 1:
         raise AlertRefused('workflow_authority_refused')
     candidate = validate_evidence(evidence, channel)
-    run = api('GET', f'repos/{REPOSITORY}/actions/runs/{candidate.run_id}')
-    if (validate_source_run(run, candidate.run_id) != candidate.sha
-        or run['run_attempt'] < candidate.run_attempt):
+    # Source run metadata changes on rerun. Authenticate the recorded image
+    # job's exact attempt; unrelated failed jobs may have been rerun later.
+    attempt_path = f'repos/{REPOSITORY}/actions/runs/{candidate.run_id}/attempts/{candidate.run_attempt}'
+    run = api('GET', attempt_path)
+    if (not isinstance(run, dict) or type(run.get('id')) is not int or run['id'] != candidate.run_id
+        or type(run.get('run_attempt')) is not int or run['run_attempt'] != candidate.run_attempt
+        or run.get('event') != 'push' or run.get('status') != 'completed'
+        or run.get('head_branch') != 'main' or run.get('path') != BUILD_WORKFLOW
+        or run.get('repository', {}).get('full_name') != REPOSITORY
+        or run.get('head_repository', {}).get('full_name') != REPOSITORY
+        or run.get('head_sha') != candidate.sha):
+        raise AlertRefused('candidate_build_refused')
+    jobs = api('GET', attempt_path + '/jobs?per_page=100')
+    if (not isinstance(jobs, dict) or not isinstance(jobs.get('jobs'), list)
+        or type(jobs.get('total_count')) is not int or not 0 <= jobs['total_count'] <= 100
+        or jobs['total_count'] != len(jobs['jobs']) or any(not isinstance(job, dict) for job in jobs['jobs'])):
+        raise AlertRefused('candidate_build_refused')
+    image_jobs = [job for job in jobs['jobs'] if job.get('name') == BUILD_JOB]
+    if (len(image_jobs) != 1
+        or any(type(image_jobs[0].get(key)) is not int for key in ('run_id', 'run_attempt'))
+        or any(image_jobs[0].get(key) != value for key, value in {
+        'run_id': candidate.run_id, 'run_attempt': candidate.run_attempt, 'head_sha': candidate.sha,
+        'status': 'completed', 'conclusion': 'success',
+    }.items())):
         raise AlertRefused('candidate_build_refused')
     for base, head in ((candidate.sha, 'main'), (evidence['last_good_sha'], candidate.sha)):
         if base is not None:
@@ -233,7 +220,8 @@ def reconcile(evidence: dict[str, Any], *, channel: str, event: str, ref: str, r
                 raise AlertRefused('candidate_ancestry_refused')
     # A later main-push build cannot predate this build's original creation.
     # Filter by that immutable time so normal polling does not scan all history.
-    if _newer_completed_verdict(api, candidate, channel, run_id, run.get('created_at', '')):
+    if _newer_completed_verdict(api, candidate, channel, run_id, run.get('created_at', ''),
+                                 evidence['receipt_fingerprint']):
         return 'stale'
     marker = f'<!-- postmerge-channel-bug:v1:{channel} -->'
     issues = _pages(api, f'repos/{REPOSITORY}/issues?state=all&creator=github-actions%5Bbot%5D&labels=type%3Abug')

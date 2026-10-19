@@ -262,6 +262,7 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
             evidence = {'candidate': asdict(candidate), 'channel': channel,
                         'verdict': checkpoint['phase'], 'gate': gate,
                         'last_good_sha': report['last_good_sha'], 'receipt': outcome}
+            evidence['receipt_fingerprint'] = channel_verdict_fingerprint(evidence)
             try:
                 (alert or dispatch_channel_verdict)(evidence)
                 report['dispatch'] = 'sent'
@@ -357,9 +358,66 @@ def _save_outcome(path: Path, candidate: Candidate, outcome: dict[str, Any], *,
     return checkpoint
 
 
+def channel_verdict_fingerprint(evidence: dict[str, Any]) -> str:
+    # Bind terminal identity in the existing successful workflow receipt even
+    # when a first green had no Issue. Last-green history is not terminal identity.
+    terminal = {key: evidence[key] for key in ('candidate', 'channel', 'verdict', 'gate', 'receipt')}
+    return hashlib.sha256(json.dumps(terminal, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def validate_channel_evidence(evidence: Any, channel: str) -> Candidate:
+    try:
+        if (not isinstance(evidence, dict)
+            or set(evidence) != {'candidate', 'channel', 'verdict', 'gate', 'last_good_sha', 'receipt', 'receipt_fingerprint'}
+            or channel not in {'dev', 'test'} or evidence['channel'] != channel
+            or evidence['verdict'] not in {'passed', 'failed'}):
+            raise ValueError()
+        candidate = Candidate(**evidence['candidate'])
+        if (re.fullmatch('[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
+            or any(type(value) is not int or value < 1
+                   for value in (candidate.run_id, candidate.run_attempt, candidate.artifact_id))):
+            raise ValueError()
+        previous = evidence['last_good_sha']
+        if previous is not None and (not isinstance(previous, str) or re.fullmatch('[0-9a-f]{40}', previous) is None):
+            raise ValueError()
+        receipt = evidence['receipt']
+        if set(receipt) - {'source_sha', 'image_digest', 'source_run_id', 'source_run_attempt', 'artifact_id',
+                           'channel', 'result', 'operation_id', 'pg_acceptance', 'source_failure',
+                           'failure_reference', 'reason'}:
+            raise ValueError()
+        if any(receipt.get(key) != value for key, value in {
+            'source_sha': candidate.sha, 'image_digest': candidate.digest, 'source_run_id': candidate.run_id,
+            'source_run_attempt': candidate.run_attempt, 'artifact_id': candidate.artifact_id,
+            'channel': channel, 'result': evidence['verdict'], 'operation_id': candidate.operation_id(channel),
+        }.items()):
+            raise ValueError()
+        if 'failure_reference' in receipt and receipt['failure_reference'] != (
+            f'https://github.com/{REPOSITORY}/actions/runs/{candidate.run_id}'
+        ):
+            raise ValueError()
+        _source_failure(receipt)
+        reason = receipt.get('reason')
+        if reason is not None and (reason != 'pg_profile_missing_or_mismatched' or evidence['verdict'] != 'failed'):
+            raise ValueError()
+        gate = 'source_projection' if 'source_failure' in receipt else 'pg_acceptance' if reason else 'native_deploy'
+        if (evidence['gate'] != gate
+            or evidence['receipt_fingerprint'] != channel_verdict_fingerprint(evidence)):
+            raise ValueError()
+        if evidence['verdict'] == 'passed':
+            require_pass(receipt.get('pg_acceptance'), candidate.sha, candidate.digest,
+                         channel, candidate.operation_id(channel))
+        elif 'pg_acceptance' in receipt:
+            raise ValueError()
+        return candidate
+    except Exception:
+        raise CandidateRefused('channel_evidence_refused') from None
+
+
 def dispatch_channel_verdict(evidence: dict[str, Any]) -> None:
     # Existing controller Actions-write permission only. Issue writes belong
     # to reviewed main workflow code and its short-lived GITHUB_TOKEN.
+    # Validate before any private retained field can cross the host boundary.
+    validate_channel_evidence(evidence, evidence.get('channel', ''))
     result = subprocess.run([
         'gh', 'workflow', 'run', 'postmerge-channel-bug.yml', '--repo', REPOSITORY, '--ref', 'main',
         '-f', 'channel=' + evidence['channel'], '-f', 'evidence=' + json.dumps(evidence, sort_keys=True),

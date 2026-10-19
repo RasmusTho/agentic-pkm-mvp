@@ -706,13 +706,15 @@ last-green SHAs and records dispatch intent before calling Actions. An unknown o
 is reported as such and is not replayed after restart; later candidates still proceed. A retained
 checkpoint with no prior green records an explicit unknown baseline instead of inventing a range.
 The controller's approved client still needs only Actions read/write, Contents read and Metadata
-read. The main-only workflow uses its own short-lived `GITHUB_TOKEN` for Issue writes; it never
-receives deployment credentials or runs candidate code.
+read. Its outbound boundary validates the closed public receipt before dispatch; unrecognized
+retained fields fail reporting without transmission. The main-only workflow uses its own short-lived
+`GITHUB_TOKEN` for Issue writes; it never receives deployment credentials or runs candidate code.
 
-The workflow validates main ancestry and exact receipt identity, serializes each channel, and
-opens or comments on one bot-owned, channel-marked rolling bug. Later green evidence comments and
-closes that Issue; a later failure reopens the same Issue. Candidate ordering and successful
-workflow receipts reject delayed red/green events, including a green verdict before any bug exists.
+The workflow validates main ancestry, the exact successful image-job attempt and receipt identity,
+serializes each channel, and opens or comments on one bot-owned, channel-marked rolling bug. Later
+green evidence comments and closes that Issue; a later failure reopens the same Issue. Candidate ordering and successful
+workflow receipts reject delayed red/green events. A terminal-evidence fingerprint in workflow
+metadata also rejects conflicting replays after a first green before any bug exists.
 Human-authored or other-channel Issues are not mutation targets. Generated bugs are failure intake;
 readiness requires a bounded repair contract. Actions failures remain visible in their workflow run
 and never gate main merges or replay deployment. This is repository support; live activation and
