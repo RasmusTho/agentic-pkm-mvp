@@ -3925,6 +3925,8 @@ def test_source_identity_persistence_accepts_optional_docker_unsets():
         "PGPASSWORD",
         "OPTIONAL_PROVIDER",
         "EXPLICIT_EMPTY=",
+        "VCS_REF",
+        "BUILT_AT",
     ])
     assert normalized == {
         "PKM_ENVIRONMENT": "dev",
@@ -3948,6 +3950,10 @@ def test_source_identity_unsets_preserve_closed_helper_environment(monkeypatch):
     assert "OPTIONAL_PROVIDER" not in child
     assert child["EXPLICIT_EMPTY"] == ""
     assert child["PKM_ENVIRONMENT"] == "dev"
+    with pytest.raises(linux.PostgresDeployError):
+        linux._closed_source_helper_environment(
+            installed, {**installed, "OPTIONAL_PROVIDER": "env-file-value"},
+        )
     snapshot = linux.SourceIdentityRuntimeSnapshot(
         "c" * 64, "d" * 64, ("api", "watcher", "worker"),
         ("api", "watcher", "worker"), "/srv/vault-alpha",
@@ -3968,6 +3974,22 @@ def test_source_identity_unsets_preserve_closed_helper_environment(monkeypatch):
     effects.compose("run", "-e", "OPTIONAL_PROVIDER", "api", source_snapshot=snapshot)
     assert "OPTIONAL_PROVIDER" not in captured["env"]
     assert captured["argv"][-3:] == ["-e", "OPTIONAL_PROVIDER", "api"]
+    legacy_payload = linux._source_identity_execution_payload(
+        files=[("runtime.env", "e" * 64)],
+        child_environment=(("PKM_ENVIRONMENT", "dev"),),
+        resolved_environment={"PKM_ENVIRONMENT": "dev"},
+        container_root="/srv/vault-alpha",
+        vault_overlay="docker-compose.full-host-vault.yml",
+        unset_environment=(),
+    )
+    assert legacy_payload == {
+        "files": [("runtime.env", "e" * 64)],
+        "child_environment": [("PKM_ENVIRONMENT", "dev")],
+        "resolved_service_environment": [("PKM_ENVIRONMENT", "dev")],
+        "container_root": "/srv/vault-alpha",
+        "vault_overlay": "docker-compose.full-host-vault.yml",
+    }
+    assert "unset_environment" not in legacy_payload
 
 
 @pytest.mark.parametrize("entries", [

@@ -632,9 +632,30 @@ def _installed_container_environment(
         seen.add(key)
         if separator:
             parsed[key] = value
-        else:
+        elif key not in _SOURCE_HELPER_IMAGE_OWNED_ENV:
             unset.add(key)
     return parsed, tuple(sorted(unset))
+
+
+def _source_identity_execution_payload(
+    *, files: list[tuple[str, str]],
+    child_environment: tuple[tuple[str, str], ...],
+    resolved_environment: dict[str, str],
+    container_root: str,
+    vault_overlay: str,
+    unset_environment: tuple[str, ...],
+) -> dict[str, Any]:
+    """Keep the pre-unset fingerprint shape for previously admitted requests."""
+    payload: dict[str, Any] = {
+        'files': files,
+        'child_environment': list(child_environment),
+        'resolved_service_environment': sorted(resolved_environment.items()),
+        'container_root': container_root,
+        'vault_overlay': vault_overlay,
+    }
+    if unset_environment:
+        payload['unset_environment'] = list(unset_environment)
+    return payload
 
 
 def _closed_source_helper_environment(
@@ -1786,14 +1807,14 @@ class LinuxEffects:
         child_environment = _closed_source_helper_environment(
             api_environment, resolved_environment,
         )
-        execution_payload = {
-            'files': [(str(path), stable_hash(path)) for path in input_paths],
-            'child_environment': list(child_environment),
-            'unset_environment': list(api_unset_environment),
-            'resolved_service_environment': sorted(resolved_environment.items()),
-            'container_root': container_root,
-            'vault_overlay': vault_overlay,
-        }
+        execution_payload = _source_identity_execution_payload(
+            files=[(str(path), stable_hash(path)) for path in input_paths],
+            child_environment=child_environment,
+            resolved_environment=resolved_environment,
+            container_root=container_root,
+            vault_overlay=vault_overlay,
+            unset_environment=api_unset_environment,
+        )
         return SourceIdentityRuntimeSnapshot(
             installed_fingerprint=hashlib.sha256(json.dumps(
                 installed_payload, sort_keys=True, separators=(',', ':'),

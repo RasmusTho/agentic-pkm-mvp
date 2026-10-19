@@ -899,6 +899,7 @@ def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
     assert before.running_writers == before.existing_writers
     assert "VCS_REF" not in dict(before.child_environment)
     assert "BUILT_AT" not in dict(before.child_environment)
+    assert before.unset_environment == ()
     (tmp_path / "tmp/runtime.env").write_text(
         "LLM_PROVIDER=ollama\n"
         "DATABASE_URL=postgresql+psycopg://app@db:5432/app_dev\n"
@@ -1254,6 +1255,7 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
                 "Env": [
                     *[f"{key}={value}" for key, value in installed.items()],
                     "POSTGRES_PASSWORD", "PGPASSWORD", "OPTIONAL_PROVIDER",
+                    "VCS_REF", "BUILT_AT",
                 ],
                 "User": f"{os.getuid()}:{os.getgid()}",
                 "Labels": {
