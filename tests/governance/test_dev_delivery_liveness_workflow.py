@@ -1068,6 +1068,12 @@ def test_pause_dispatch_failure_keeps_durable_observation_for_retry_and_restart(
     {'sequence': 1, 'observed_at': NOW.isoformat(), 'extra': 'unknown'},
 ])
 def test_pause_malformed_observation_refuses_producer_and_trusted_writer(monkeypatch, tmp_path, observation):
+    # Reach metadata validation independently of the machine's calendar date.
+    class WriterClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+    monkeypatch.setattr(liveness, 'datetime', WriterClock)
     transport = _pause_transport(monkeypatch, tmp_path)
     controller._atomic_checkpoint(tmp_path / 'postmerge-dev-test.json', {'observation': observation})
     assert controller.main(['--latest', '--state-directory', str(tmp_path)]) == 78
