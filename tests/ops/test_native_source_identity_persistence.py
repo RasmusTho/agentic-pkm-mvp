@@ -889,7 +889,8 @@ def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
             "State": {"Status": "running"},
             "Mounts": ([{
                 "Type": "bind", "Source": "/srv/vault-alpha",
-                "Destination": "/srv/vault-alpha", "RW": True,
+                "Destination": "/srv/vault-alpha", "Mode": "",
+                "RW": True, "Propagation": "rprivate",
             }] if service in {"api", "worker", "watcher"} else []),
         })
     (tmp_path / "config/deploy").mkdir(parents=True)
@@ -1040,7 +1041,7 @@ def test_locked_admission_refuses_child_or_writer_drift_before_effects(
     assert mutations == []
 
 
-def test_configured_capture_producer_receipt_resumes_real_snapshot_cleanup_only(
+def test_retained_failed_cleanup_accepts_proven_legacy_mount_order_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from contextlib import contextmanager
@@ -1071,10 +1072,19 @@ def test_configured_capture_producer_receipt_resumes_real_snapshot_cleanup_only(
                 },
             },
             "State": {"Status": "exited"},
-            "Mounts": ([{
-                "Type": "bind", "Source": selected.root,
-                "Destination": selected.root, "RW": True,
-            }] if service != "heimdal-capture-watch" else []),
+            "Mounts": ([
+                {
+                    "Type": "bind", "Source": selected.root,
+                    "Destination": selected.root, "Mode": "",
+                    "RW": True, "Propagation": "rprivate",
+                },
+                {
+                    "Type": "volume", "Name": "pkm-dev_instance-state",
+                    "Driver": "local", "Mode": "z",
+                    "Source": "/var/lib/docker/volumes/state", "Destination": "/app/instance-state",
+                    "RW": True, "Propagation": "",
+                },
+            ] if service != "heimdal-capture-watch" else []),
         })
     (tmp_path / "config/deploy").mkdir(parents=True)
     (tmp_path / "tmp").mkdir()
@@ -1120,6 +1130,30 @@ def test_configured_capture_producer_receipt_resumes_real_snapshot_cleanup_only(
     snapshot = effects.source_identity_runtime_snapshot(
         selected, require_running_capture=False,
     )
+    for row in rows:
+        if len(row["Mounts"]) > 1:
+            row["Mounts"] = row["Mounts"][1:] + row["Mounts"][:1]
+    permuted_snapshot = effects.source_identity_runtime_snapshot(
+        selected, require_running_capture=False,
+    )
+    assert permuted_snapshot.installed_fingerprint == snapshot.installed_fingerprint
+    assert permuted_snapshot.observed_installed_fingerprint != (
+        snapshot.observed_installed_fingerprint
+    )
+    assert permuted_snapshot.legacy_installed_fingerprints == frozenset()
+    for row in rows:
+        if len(row["Mounts"]) > 1:
+            row["Mounts"] = row["Mounts"][1:] + row["Mounts"][:1]
+    legacy_snapshot = effects.source_identity_runtime_snapshot(
+        selected, require_running_capture=False, allow_legacy_mount_order=True,
+    )
+    legacy_fingerprint = next(
+        value for value in legacy_snapshot.legacy_installed_fingerprints
+        if value not in {
+            legacy_snapshot.installed_fingerprint,
+            legacy_snapshot.observed_installed_fingerprint,
+        }
+    )
     operation_id = str(uuid4())
     owner = {"kind": "source-identity-persistence", "channel": "dev", "operation_id": operation_id}
     request = {
@@ -1130,20 +1164,28 @@ def test_configured_capture_producer_receipt_resumes_real_snapshot_cleanup_only(
             "binding_id": selected.binding_id, "root": selected.root,
             "ownership_root": selected.ownership_root,
         },
-        "installed_fingerprint": snapshot.installed_fingerprint,
+        "installed_fingerprint": legacy_fingerprint,
         "execution_fingerprint": snapshot.execution_fingerprint,
         "writers": list(services), "container_root": snapshot.container_root,
         "vault_overlay": snapshot.vault_overlay,
     }
     retained = {
         "contract": "native-source-identity-persistence.v1", "operation_id": operation_id,
-        "channel": "dev", "revision": REVISION, "terminal_state": "committed",
-        "eligible": True, "reason": None, "selected_count": 1, "persisted_count": 1,
+        "channel": "dev", "revision": REVISION, "terminal_state": "failed",
+        "eligible": False, "reason": "source_operation_conflict",
+        "selected_count": 0, "persisted_count": 0,
         "missing_count": 0, "invalid_count": 0, "ambiguous_count": 0,
-        "producer_error_count": 0,
+        "producer_error_count": 1,
     }
-    (journal_dir / f"dev-source-identity-{operation_id}.request.json").write_text(json.dumps(request))
-    (journal_dir / f"dev-source-identity-{operation_id}.producer.json").write_text(json.dumps(retained))
+    request_path = journal_dir / f"dev-source-identity-{operation_id}.request.json"
+    terminal_path = journal_dir / f"dev-source-identity-{operation_id}.json"
+    request_path.write_text(json.dumps(request))
+    terminal_path.write_text(json.dumps(retained))
+    request_before = request_path.read_bytes()
+    terminal_before = terminal_path.read_bytes()
+    for row in rows:
+        if len(row["Mounts"]) > 1:
+            row["Mounts"] = row["Mounts"][1:] + row["Mounts"][:1]
 
     fresh = linux.LinuxEffects(config)
     events: list[str] = []
@@ -1182,6 +1224,327 @@ def test_configured_capture_producer_receipt_resumes_real_snapshot_cleanup_only(
 
     assert fresh.persist_source_identity(operation_id, REVISION, DIGEST, selected) == retained
     assert events == ["qualify", "lock", "qualify", "start", "retire"]
+    assert request_path.read_bytes() == request_before
+    assert terminal_path.read_bytes() == terminal_before
+    assert not (journal_dir / f"dev-source-identity-{operation_id}.producer.json").exists()
+
+    producer_operation_id = str(uuid4())
+    producer_owner = {
+        "kind": "source-identity-persistence", "channel": "dev",
+        "operation_id": producer_operation_id,
+    }
+    producer_request = {
+        **request,
+        "operation_id": producer_operation_id,
+        "installed_fingerprint": legacy_fingerprint,
+    }
+    producer_receipt = {
+        **retained,
+        "operation_id": producer_operation_id,
+        "terminal_state": "committed",
+        "eligible": True,
+        "reason": None,
+        "selected_count": 1,
+        "persisted_count": 1,
+        "producer_error_count": 0,
+    }
+    producer_request_path = (
+        journal_dir / f"dev-source-identity-{producer_operation_id}.request.json"
+    )
+    producer_path = (
+        journal_dir / f"dev-source-identity-{producer_operation_id}.producer.json"
+    )
+    producer_request_path.write_text(json.dumps(producer_request))
+    producer_path.write_text(json.dumps(producer_receipt))
+    fresh.channel_lock_owner = lambda: (  # type: ignore[method-assign]
+        json.dumps(producer_owner, sort_keys=True) + "\n"
+    ).encode()
+    events.clear()
+    with pytest.raises(linux.PostgresDeployError):
+        fresh.persist_source_identity(
+            producer_operation_id, REVISION, DIGEST, selected,
+        )
+    assert events == ["qualify"]
+
+    current_snapshot = effects.source_identity_runtime_snapshot(
+        selected, require_running_capture=False,
+    )
+    producer_request["installed_fingerprint"] = (
+        current_snapshot.observed_installed_fingerprint
+    )
+    producer_request_path.write_text(json.dumps(producer_request))
+    events.clear()
+    assert fresh.persist_source_identity(
+        producer_operation_id, REVISION, DIGEST, selected,
+    ) == producer_receipt
+    assert events == ["qualify", "lock", "qualify", "start", "retire"]
+
+    dangling_operation_id = str(uuid4())
+    dangling_owner = {
+        "kind": "source-identity-persistence", "channel": "dev",
+        "operation_id": dangling_operation_id,
+    }
+    dangling_request = {
+        **request,
+        "operation_id": dangling_operation_id,
+        "installed_fingerprint": legacy_fingerprint,
+    }
+    dangling_receipt = {**retained, "operation_id": dangling_operation_id}
+    (journal_dir / f"dev-source-identity-{dangling_operation_id}.request.json").write_text(
+        json.dumps(dangling_request)
+    )
+    (journal_dir / f"dev-source-identity-{dangling_operation_id}.json").write_text(
+        json.dumps(dangling_receipt)
+    )
+    dangling_producer = (
+        journal_dir / f"dev-source-identity-{dangling_operation_id}.producer.json"
+    )
+    dangling_producer.symlink_to(journal_dir / "missing-producer-receipt")
+    fresh.channel_lock_owner = lambda: (  # type: ignore[method-assign]
+        json.dumps(dangling_owner, sort_keys=True) + "\n"
+    ).encode()
+    events.clear()
+    with pytest.raises(linux.PostgresDeployError):
+        fresh.persist_source_identity(
+            dangling_operation_id, REVISION, DIGEST, selected,
+        )
+    assert events == ["qualify"]
+
+
+def _installed_test_snapshots():
+    def mount(name: str) -> dict[str, object]:
+        return {
+            "Type": "bind", "Source": f"/source/{name}",
+            "Destination": f"/target/{name}", "Mode": "",
+            "RW": True, "Propagation": "rprivate",
+        }
+
+    base = {
+        "image_id": "sha256:" + "1" * 64,
+        "image_ref": "example/installed",
+        "environment": ["PKM_ENVIRONMENT=dev", "LLM_PROVIDER=ollama"],
+        "user": "501:20",
+    }
+    return {
+        "api": {**base, "id": "a" * 64, "mounts": [mount("a"), mount("b"), mount("c")]},
+        "worker": {**base, "id": "b" * 64, "mounts": [mount("d"), mount("e")]},
+        "watcher": {**base, "id": "c" * 64, "mounts": [mount("f"), mount("g")]},
+    }
+
+
+def _installed_test_fingerprint(snapshots) -> str:
+    from app.ops import postgres_deploy_linux as linux
+
+    return linux._installed_payload_fingerprint({
+        "containers": snapshots,
+        "container_root": "/srv/vault-alpha",
+        "vault_overlay": "docker-compose.full-host-vault.yml",
+    })
+
+
+def _canonical_installed_test_fingerprint(snapshots) -> str:
+    from app.ops import postgres_deploy_linux as linux
+
+    return _installed_test_fingerprint({
+        service: {
+            **snapshot,
+            "mounts": linux._canonical_mount_records(snapshot["mounts"]),
+        }
+        for service, snapshot in snapshots.items()
+    })
+
+
+def test_installed_fingerprint_is_invariant_to_mount_order() -> None:
+    first = _installed_test_snapshots()
+    second = {
+        service: {**snapshot, "mounts": list(reversed(snapshot["mounts"]))}
+        for service, snapshot in first.items()
+    }
+
+    assert _canonical_installed_test_fingerprint(
+        first
+    ) == _canonical_installed_test_fingerprint(second)
+
+
+def test_installed_fingerprint_refuses_nonmount_and_full_mount_field_mutations() -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    baseline = _installed_test_snapshots()
+    baseline_canonical = _canonical_installed_test_fingerprint(baseline)
+    baseline_observed = _installed_test_fingerprint(baseline)
+    mutations = []
+
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["id"] = "d" * 64
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["image_id"] = "sha256:" + "2" * 64
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["image_ref"] = "example/changed"
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["environment"][0] = "PKM_ENVIRONMENT=test"
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["environment"].reverse()
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["user"] = "502:20"
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["mounts"][0]["Mode"] = "ro"
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["mounts"][0]["DriverData"] = {"opaque": "changed"}
+    mutations.append(changed)
+
+    for mutated in mutations:
+        assert _canonical_installed_test_fingerprint(mutated) != baseline_canonical
+        assert baseline_observed not in linux._legacy_mount_order_fingerprints(
+            mutated,
+            container_root="/srv/vault-alpha",
+            vault_overlay="docker-compose.full-host-vault.yml",
+        )
+
+
+def test_legacy_installed_fingerprint_requires_bounded_exact_mount_permutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    snapshots = _installed_test_snapshots()
+    rotated = {
+        service: {**snapshot, "mounts": snapshot["mounts"][1:] + snapshot["mounts"][:1]}
+        for service, snapshot in snapshots.items()
+    }
+    retained = _installed_test_fingerprint(rotated)
+    candidates = linux._legacy_mount_order_fingerprints(
+        snapshots,
+        container_root="/srv/vault-alpha",
+        vault_overlay="docker-compose.full-host-vault.yml",
+    )
+    assert len(candidates) == 12
+    assert retained in candidates
+    monkeypatch.setattr(linux, "_MAX_LEGACY_MOUNT_ORDER_CANDIDATES", 11)
+    assert linux._legacy_mount_order_fingerprints(
+        snapshots,
+        container_root="/srv/vault-alpha",
+        vault_overlay="docker-compose.full-host-vault.yml",
+    ) == frozenset()
+    duplicate = _installed_test_snapshots()
+    duplicate["api"]["mounts"].append(dict(duplicate["api"]["mounts"][0]))
+    with pytest.raises(linux.PostgresDeployError):
+        linux._legacy_mount_order_fingerprints(
+            duplicate,
+            container_root="/srv/vault-alpha",
+            vault_overlay="docker-compose.full-host-vault.yml",
+        )
+    invalid_records = (
+        {},
+        {
+            "Type": "bind", "Source": "/source/incomplete",
+            "Destination": "/target/incomplete", "RW": True,
+        },
+        {
+            "Type": "opaque", "Source": "/source/opaque",
+            "Destination": "/target/opaque", "Mode": "", "RW": True,
+            "Propagation": "rprivate",
+        },
+        {
+            "Type": "volume", "Source": "/var/lib/docker/volumes/incomplete",
+            "Destination": "/target/incomplete", "Mode": "", "RW": True,
+            "Propagation": "",
+        },
+    )
+    for invalid in invalid_records:
+        with pytest.raises(linux.PostgresDeployError):
+            linux._canonical_mount_records([invalid])
+
+
+def test_legacy_mount_compatibility_refuses_true_runtime_mutation() -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    snapshots = _installed_test_snapshots()
+    retained = next(iter(linux._legacy_mount_order_fingerprints(
+        snapshots,
+        container_root="/srv/vault-alpha",
+        vault_overlay="docker-compose.full-host-vault.yml",
+    )))
+    changed = {
+        service: {**snapshot, "mounts": [dict(item) for item in snapshot["mounts"]]}
+        for service, snapshot in snapshots.items()
+    }
+    changed["worker"]["mounts"][0]["RW"] = False
+    assert retained not in linux._legacy_mount_order_fingerprints(
+        changed,
+        container_root="/srv/vault-alpha",
+        vault_overlay="docker-compose.full-host-vault.yml",
+    )
+    noncyclic = {
+        service: {**snapshot, "mounts": list(snapshot["mounts"])}
+        for service, snapshot in snapshots.items()
+    }
+    noncyclic["api"]["mounts"] = [
+        snapshots["api"]["mounts"][0],
+        snapshots["api"]["mounts"][2],
+        snapshots["api"]["mounts"][1],
+    ]
+    assert _installed_test_fingerprint(noncyclic) not in linux._legacy_mount_order_fingerprints(
+        snapshots,
+        container_root="/srv/vault-alpha",
+        vault_overlay="docker-compose.full-host-vault.yml",
+    )
+
+
+def test_legacy_mount_compatibility_cannot_cross_absence_or_producer_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    operation_id = str(uuid4())
+    journal = SimpleNamespace(
+        directory=tmp_path,
+        read=lambda: SimpleNamespace(
+            operation_id=str(uuid4()), terminal_result="failed",
+        ),
+    )
+    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal))
+    (tmp_path / f"dev-source-identity-{operation_id}.request.json").write_text("{}")
+    effects.channel_lock_owner = lambda: None  # type: ignore[method-assign]
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        linux,
+        "_command",
+        lambda argv, **_kwargs: commands.append(argv) or "",
+    )
+
+    with pytest.raises(linux.PostgresDeployError):
+        effects.prove_source_identity_absence(operation_id)
+    assert commands == []
+
+
+def test_legacy_mount_compatibility_is_fenced_to_owned_failed_cleanup() -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    failed = {"terminal_state": "failed", "eligible": False}
+    assert linux._legacy_mount_cleanup_allowed(
+        failed, producer_exists=False, owns_lock=True,
+    )
+    assert not linux._legacy_mount_cleanup_allowed(
+        None, producer_exists=False, owns_lock=True,
+    )
+    assert not linux._legacy_mount_cleanup_allowed(
+        failed, producer_exists=True, owns_lock=True,
+    )
+    assert not linux._legacy_mount_cleanup_allowed(
+        failed, producer_exists=False, owns_lock=False,
+    )
+    assert not linux._legacy_mount_cleanup_allowed(
+        {"terminal_state": "committed", "eligible": True},
+        producer_exists=False,
+        owns_lock=True,
+    )
 
 
 @pytest.mark.parametrize("channel", ["dev", "test"])
@@ -1330,11 +1693,14 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
             },
             "State": {"Status": "running"},
             "Mounts": [
-                {"Type": "bind", "Source": str(root), "Destination": container_root, "RW": True},
+                {"Type": "bind", "Source": str(root), "Destination": container_root,
+                 "Mode": "", "RW": True, "Propagation": "rprivate"},
                 {"Type": "bind", "Source": str(ownership_root),
-                 "Destination": "/app/instance-ownership", "RW": True},
+                 "Destination": "/app/instance-ownership", "Mode": "", "RW": True,
+                 "Propagation": "rprivate"},
                 {"Type": "volume", "Source": str(state_root),
-                 "Destination": "/app/instance-state", "Name": f"pkm-{channel}_instance-state"},
+                 "Destination": "/app/instance-state", "Name": f"pkm-{channel}_instance-state",
+                 "Driver": "local", "Mode": "z", "RW": True, "Propagation": ""},
             ],
         })
     candidate_checks: list[str] = []

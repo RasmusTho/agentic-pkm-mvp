@@ -1264,6 +1264,22 @@ are checked before writers stop or the producer starts. The Compose query covers
 project-env grammar without a parallel dotenv parser and its values are never retained or emitted.
 Assigned-only snapshots and retained cleanup do not acquire this unset-specific lookup dependency.
 
+The installed-writer fingerprint treats Docker's `Mounts` collection as an unordered set of
+complete supported bind/volume records. Partial records and unsupported mount types refuse. Future
+requests sort the full serialized records before hashing; no mount field
+is dropped or normalized, and environment ordering plus every non-mount container field remains
+exact. An earlier order-sensitive request may still use the original exact guard when its digest
+equals the current raw Docker order; this preserves ordinary terminal producer cleanup without
+weakening any field. If that exact raw guard does not match, a retained request may enter only the
+existing failed/ineligible same-operation cleanup path when its exact digest is found in a pre-bounded cross-product
+of cyclic rotations of the current complete mount lists. Duplicate records, a rotation-product over
+the finite cap, a non-cyclic legacy order, no exact digest match, or any changed mount/non-mount
+field refuses. This compatibility proof never rewrites the request or terminal receipt, reruns the
+producer, establishes eligibility, or crosses the never-admitted absence boundary. Post-merge host
+convergence must bind the installed Linux helper and every imported support module to the exact
+reviewed source hashes before that proof is used; installing one helper file is not dependency
+convergence. Repository tests and CI are not live cleanup or DEV/TEST acceptance evidence.
+
 If the host has durably marked a source-persistence operation `sent` but the selected native
 channel refuses before creating any request, producer receipt, terminal receipt, owned one-shot,
 or channel owner fence, the same ID may be retired only through
