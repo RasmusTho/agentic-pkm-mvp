@@ -10,11 +10,18 @@ or deployment credentials.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import os
+from pathlib import Path
+import re
 import subprocess
+import sys
 from typing import Any, Callable
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 REPOSITORY = "RasmusTho/agentic-pkm-mvp"
 BUILD_WORKFLOW = ".github/workflows/app-image-build.yml"
@@ -57,7 +64,12 @@ def _timestamp(value: Any) -> datetime:
 
 
 def _status_timestamp(status: dict[str, Any]) -> datetime:
-    return _timestamp(status.get("updated_at") or status.get("created_at"))
+    # Use the producer observation, never the time a delayed/replayed Actions
+    # request finally writes the status. This protocol is new in #6222.
+    description = status.get("description", "")
+    if not isinstance(description, str) or not description.startswith("observed_at="):
+        raise LivenessRefused("signal_observation_missing")
+    return _timestamp(description.split(";", 1)[0].removeprefix("observed_at="))
 
 
 def _validate_sha(value: Any) -> str:
@@ -160,7 +172,7 @@ def evaluate(
     if heartbeat is None or heartbeat.get("state") != "success":
         return LivenessResult(False, "heartbeat_missing", "post-merge dev controller heartbeat is missing")
     heartbeat_age = current - _status_timestamp(heartbeat)
-    if heartbeat_age > HEARTBEAT_GRACE:
+    if heartbeat_age < timedelta(0) or heartbeat_age > HEARTBEAT_GRACE:
         hours = int(HEARTBEAT_GRACE.total_seconds() // 3600)
         return LivenessResult(False, "heartbeat_stale", f"controller heartbeat is older than {hours} h")
 
@@ -211,47 +223,100 @@ def check(repo: str, github_sha: str, *, api: Callable[[str], Any] = _github,
     build = builds[0] if builds else None
     heartbeat = _status_history(repo, github_sha, HEARTBEAT_CONTEXT, api=api)
     latest_verdict: list[Any] = []
-    terminal_times: list[datetime] = []
+    outstanding: list[AdmittedBuild] = []
     for candidate in builds:
         verdict = _status_history(repo, candidate.sha, VERDICT_CONTEXT, api=api)
         if candidate is build:
             latest_verdict = verdict
         recorded = _latest_status(verdict, VERDICT_CONTEXT)
-        if (recorded is not None and recorded.get("state") in {"success", "failure"}):
+        if recorded is not None and recorded.get("state") in {"success", "failure"}:
             recorded_at = _status_timestamp(recorded)
             if candidate.completed_at <= recorded_at <= current:
-                terminal_times.append(recorded_at)
+                # Creation-ordered build identity is the progress watermark.
+                # A late verdict for an older build cannot retire newer work;
+                # a newer terminal build does retire skipped earlier history.
+                break
+        outstanding.append(candidate)
 
-    if build is not None:
-        # D2 is latest-wins: a terminal verdict for the newest admitted build
-        # supersedes older builds that never received their own verdict. When
-        # the newest build is still outstanding, anchor grace at the oldest
-        # build after the latest terminal progress so continuous traffic cannot
-        # keep resetting the timer.
-        last_progress = max(terminal_times, default=None)
-        outstanding = [
-            candidate for candidate in builds
-            if last_progress is None or candidate.completed_at > last_progress
-        ]
-        if outstanding:
-            oldest_outstanding = min(outstanding, key=lambda candidate: candidate.completed_at)
-            if current - oldest_outstanding.completed_at > GRACE:
-                return evaluate(
-                    oldest_outstanding,
-                    heartbeat_statuses=heartbeat,
-                    verdict_statuses=[],
-                    now=current,
-                )
+    if outstanding:
+        oldest_outstanding = min(outstanding, key=lambda candidate: candidate.completed_at)
+        if current - oldest_outstanding.completed_at > GRACE:
+            return evaluate(oldest_outstanding, heartbeat_statuses=heartbeat,
+                            verdict_statuses=[], now=current)
 
     return evaluate(build, heartbeat_statuses=heartbeat, verdict_statuses=latest_verdict, now=current)
+
+
+def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
+                  actor: str, triggering_actor: str, run_url: str,
+                  api: Callable[[str], Any] = _github,
+                  now: datetime | None = None) -> None:
+    """The only liveness writer: narrow owner-originated, main-bound evidence.
+
+    The controller's owner-provisioned Actions-write client is trusted to report
+    DEV terminality; it cannot select a status context or borrow heavy-test
+    authority. Actions independently re-admits the public build proof.
+    """
+    from scripts.postmerge_dev_test import LIVENESS_PROTOCOL, load_candidate
+
+    owner = REPOSITORY.split("/", 1)[0]
+    if (repo != REPOSITORY or event != "workflow_dispatch" or ref != "refs/heads/main"
+            or actor != owner or triggering_actor != owner
+            or kind not in {"heartbeat", "verdict"}
+            or re.fullmatch(rf"https://github.com/{re.escape(repo)}/actions/runs/[1-9][0-9]*", run_url) is None
+            or len(payload) > 2048):
+        raise LivenessRefused("signal_producer_refused")
+    signal = json.loads(payload)
+    fields = {"protocol", "sha", "observed_at"}
+    if kind == "verdict":
+        fields |= {"candidate", "result", "operation_id"}
+    if not isinstance(signal, dict) or set(signal) != fields or signal["protocol"] != LIVENESS_PROTOCOL:
+        raise LivenessRefused("signal_protocol_refused")
+    sha = _validate_sha(signal["sha"])
+    observed = _timestamp(signal["observed_at"])
+    current = now or datetime.now(timezone.utc)
+    if not timedelta(0) <= current - observed <= HEARTBEAT_GRACE:
+        raise LivenessRefused("signal_observation_stale_or_future")
+    compare = api(f"repos/{repo}/compare/{sha}...main")
+    if not isinstance(compare, dict) or compare.get("status") not in {"identical", "ahead"}:
+        raise LivenessRefused("signal_sha_not_on_main")
+    description = "observed_at=" + observed.isoformat()
+    state = "success"
+    if kind == "heartbeat":
+        context = f"{HEARTBEAT_CONTEXT}/{observed:%Y%m%d%H}"
+    else:
+        evidence = signal["candidate"]
+        if (not isinstance(evidence, dict) or type(evidence.get("run_id")) is not int
+                or evidence["run_id"] < 1 or signal["result"] not in {"passed", "failed"}):
+            raise LivenessRefused("signal_candidate_refused")
+        candidate = load_candidate(evidence["run_id"])
+        if (asdict(candidate) != evidence or candidate.sha != sha
+                or signal["operation_id"] != candidate.operation_id("dev")):
+            raise LivenessRefused("signal_candidate_refused")
+        context = VERDICT_CONTEXT
+        state = "success" if signal["result"] == "passed" else "failure"
+        description += f";run={candidate.run_id};attempt={candidate.run_attempt}"
+    subprocess.run(["gh", "api", f"repos/{repo}/statuses/{sha}", "-f", f"state={state}",
+                    "-f", f"context={context}", "-f", f"description={description}",
+                    "-f", f"target_url={run_url}"], capture_output=True, text=True, check=True, timeout=60)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=REPOSITORY)
     parser.add_argument("--github-sha", required=True)
+    parser.add_argument("--record-signal", action="store_true")
+    parser.add_argument("--kind", default="")
+    parser.add_argument("--payload", default="{}")
     args = parser.parse_args(argv)
     try:
+        if args.record_signal:
+            record_signal(args.kind, args.payload, repo=args.repo,
+                          event=os.environ.get("GITHUB_EVENT_NAME", ""),
+                          ref=os.environ.get("GITHUB_REF", ""), actor=os.environ.get("GITHUB_ACTOR", ""),
+                          triggering_actor=os.environ.get("GITHUB_TRIGGERING_ACTOR", ""),
+                          run_url=os.environ.get("RUN_URL", ""))
+            return 0
         result = check(args.repo, _validate_sha(args.github_sha))
     except Exception as error:
         result = LivenessResult(False, "evidence_refused", str(error))

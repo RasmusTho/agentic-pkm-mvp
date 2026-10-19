@@ -4,18 +4,57 @@ on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
+    inputs:
+      kind:
+        description: "Controller signal: heartbeat or verdict; empty checks liveness"
+        required: false
+        default: ""
+      payload:
+        description: "Versioned controller liveness evidence (no credentials)"
+        required: false
+        default: "{}"
 
 permissions:
   contents: read
   actions: read
   statuses: read
 
+# Heartbeats may replace pending heartbeats. Every terminal signal has its own
+# run identity; no heartbeat or heavy-test run can displace a pending verdict.
 concurrency:
-  group: post-merge-dev-delivery-liveness
+  group: post-merge-dev-liveness-${{ github.event.inputs.kind == 'heartbeat' && 'heartbeat' || github.run_id }}
   cancel-in-progress: false
 
 jobs:
+  record-signal:
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.event.inputs.kind != '' &&
+      github.ref == 'refs/heads/main' && github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Admit and record the controller signal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNAL_KIND: ${{ github.event.inputs.kind }}
+          SIGNAL_PAYLOAD: ${{ github.event.inputs.payload }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/dev_delivery_liveness.py --repo "$GITHUB_REPOSITORY" --github-sha "$GITHUB_SHA" \
+            --record-signal --kind "$SIGNAL_KIND" --payload "$SIGNAL_PAYLOAD"
+
   liveness:
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.kind == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

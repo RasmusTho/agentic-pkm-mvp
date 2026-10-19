@@ -351,20 +351,16 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
 
 HEAVY_WORKFLOW = 'post-merge-heavy-tests.yml'
 HEAVY_COUNTS = ('selected', 'passed', 'failed', 'skipped', 'docker_skipped')
-DEV_HEARTBEAT_CONTEXT = 'post-merge-dev-test/heartbeat'
-DEV_VERDICT_CONTEXT = 'post-merge-dev-test/verdict'
+LIVENESS_WORKFLOW = 'dev-delivery-liveness.yml'
+LIVENESS_PROTOCOL = 'dev-delivery-liveness.v1'
 
 
-def _dispatch_liveness_signal(sha: str, context: str, state: str, description: str) -> None:
-    """Ask the approved Actions-write boundary to record a commit status."""
-    if (re.fullmatch(r'[0-9a-f]{40}', sha) is None
-            or not context or len(context) > 140
-            or state not in {'failure', 'success'}):
+def _dispatch_liveness_signal(kind: str, payload: dict[str, Any]) -> None:
+    """Use the approved Actions-write client; Actions owns status admission."""
+    if kind not in {'heartbeat', 'verdict'}:
         raise CandidateRefused('liveness_signal_refused')
-    command = ['gh', 'workflow', 'run', HEAVY_WORKFLOW, '--repo', REPOSITORY, '--ref', 'main',
-               '-f', 'liveness_signal=status', '-f', f'liveness_sha={sha}',
-               '-f', f'liveness_context={context}', '-f', f'liveness_state={state}',
-               '-f', f'liveness_description={description[:140]}']
+    command = ['gh', 'workflow', 'run', LIVENESS_WORKFLOW, '--repo', REPOSITORY, '--ref', 'main',
+               '-f', f'kind={kind}', '-f', 'payload=' + json.dumps(payload, sort_keys=True)]
     environment = {key: value for key, value in os.environ.items() if key not in {'SSH_AUTH_SOCK'}}
     for attempt in range(3):
         result = subprocess.run(command, env=environment, capture_output=True, text=True,
@@ -376,26 +372,27 @@ def _dispatch_liveness_signal(sha: str, context: str, state: str, description: s
     raise CandidateRefused('liveness_signal_failed')
 
 
-def _heartbeat_context(now: datetime | None = None) -> str:
-    """Rotate heartbeat contexts hourly so an idle SHA cannot exhaust one context."""
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    return f'{DEV_HEARTBEAT_CONTEXT}/{current:%Y%m%d%H}'
-
-
 def publish_heartbeat(sha: str) -> None:
-    """Publish the controller heartbeat without exposing deployment state."""
-    _dispatch_liveness_signal(sha, _heartbeat_context(), 'success',
-                               'post-merge dev controller heartbeat')
+    """Publish a timestamped heartbeat; queued/replayed signals cannot renew it."""
+    if re.fullmatch(r'[0-9a-f]{40}', sha) is None:
+        raise CandidateRefused('liveness_signal_refused')
+    _dispatch_liveness_signal('heartbeat', {
+        'protocol': LIVENESS_PROTOCOL, 'sha': sha,
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+    })
 
 
 def publish_dev_verdict(candidate: Candidate, outcome: dict[str, Any]) -> None:
-    """Publish a terminal dev verdict; the result never gates main merges."""
-    result = outcome.get('result')
-    if result not in {'passed', 'failed'}:
+    """Publish only a terminal DEV outcome bound to its admitted native operation."""
+    if (outcome.get('result') not in {'passed', 'failed'} or outcome.get('channel') != 'dev'
+            or outcome.get('operation_id') != candidate.operation_id('dev')):
         raise CandidateRefused('liveness_verdict_refused')
-    state = 'success' if result == 'passed' else 'failure'
-    _dispatch_liveness_signal(candidate.sha, DEV_VERDICT_CONTEXT,
-                               state, f'dev verdict {result} for {candidate.sha[:12]}')
+    _dispatch_liveness_signal('verdict', {
+        'protocol': LIVENESS_PROTOCOL, 'sha': candidate.sha,
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+        'candidate': asdict(candidate), 'result': outcome['result'],
+        'operation_id': outcome['operation_id'],
+    })
 
 
 def _validate_heavy(heavy: Any) -> dict[str, Any]:

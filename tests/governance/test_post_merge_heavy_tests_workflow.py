@@ -112,9 +112,7 @@ def test_workflow_records_status_and_keeps_rolling_alert() -> None:
     triggers = workflow[True]  # PyYAML parses the bare `on:` key as boolean True.
     assert "push" not in triggers, "the per-push GitHub-hosted run is retired"
     assert triggers["schedule"] and set(triggers["workflow_dispatch"]["inputs"]) == {
-        "sha", "verdict", "operation_id", "counts", "reason", "failures",
-        "liveness_signal", "liveness_sha", "liveness_context", "liveness_state",
-        "liveness_description"}
+        "sha", "verdict", "operation_id", "counts", "reason", "failures"}
     assert workflow["concurrency"]["cancel-in-progress"] is False
     assert "github.event.inputs.sha" in workflow["concurrency"]["group"]
     assert workflow["permissions"] == {"contents": "read"}
@@ -138,8 +136,7 @@ def test_workflow_records_status_and_keeps_rolling_alert() -> None:
 
     alert = jobs["alert"]
     assert alert["needs"] == ["resolve", "record-verdict", "heavy-tests"]
-    assert ("always()" in alert["if"] and "cancelled" in alert["if"]
-            and "'noop'" in alert["if"] and "liveness_signal != 'status'" in alert["if"])
+    assert "always()" in alert["if"] and "cancelled" in alert["if"] and "'noop'" in alert["if"]
     assert alert["permissions"]["issues"] == "write"
     script = alert["steps"][-1]["run"]
     assert "gh issue create" in script and "scripts/post_merge_heavy_tests_alert.py" in script
