@@ -166,6 +166,7 @@ class _GitHubTransport:
                          "digest": "sha256:" + hashlib.sha256(self.archive).hexdigest(),
                          "size_in_bytes": len(self.archive)}
         self.dispatches = []
+        self.heavy_calls = []
         self.writes = []
         self.denied_writes = []
         self.reads = []
@@ -183,6 +184,15 @@ class _GitHubTransport:
         return [command for command in self.dispatches if command[3] == "postmerge-channel-bug.yml"]
 
     def __call__(self, argv, **kwargs):
+        if argv[0] == "/usr/bin/ssh":
+            assert "ygg-dev" in argv
+            assert argv[-3:] == ["qualify-heavy", "dev", self.candidate.operation_id("dev")]
+            self.heavy_calls.append(argv)
+            from app.ops.heavy_acceptance import identity
+            receipt = {**identity(self.candidate.sha, self.candidate.digest, "dev", self.candidate.operation_id("dev")),
+                       "result": "passed", "targets": ["tests/deploy"], "report_hash": "0" * 64,
+                       "selected": 1, "passed": 1, "failed": 0, "skipped": 0, "docker_skipped": 0, "failures": []}
+            return SimpleNamespace(returncode=0, stdout=json.dumps(receipt), stderr="")
         if argv[:3] == ["gh", "workflow", "run"]:
             self.dispatches.append(argv)
             return SimpleNamespace(returncode=int(self.fail_dispatch or argv[3] in self.failed_workflows),
@@ -249,11 +259,14 @@ def test_controller_latest_entrypoint_publishes_heartbeat_and_wires_dev_verdict(
     tmp_path.chmod(0o700)
     # No production main/poll/deliver/admission/publisher helper is replaced.
     assert controller.main(["--latest", "--state-directory", str(tmp_path)]) == 0
-    assert channels == ["dev", "test"]
+    assert channels == ["dev"] and not transport.heavy_calls
+    assert len(transport.liveness_dispatches) == 1 and not transport.channel_dispatches
+    assert controller.main(["--latest", "--state-directory", str(tmp_path)]) == 0
+    assert channels == ["dev", "test"] and len(transport.heavy_calls) == 1
     assert not transport.denied_writes and not transport.writes
     checkpoint = json.loads((tmp_path / "postmerge-dev-test.json").read_text())
     assert (checkpoint["phase"], checkpoint["channel"]) == ("passed", "test")
-    assert len(transport.liveness_dispatches) == 2
+    assert len(transport.liveness_dispatches) == 3
     assert len(transport.channel_dispatches) == 2
     assert checkpoint["last_green"] == {"dev": SHA, "test": SHA}
     assert checkpoint["channel_bug"]["dispatch"] == "sent"
@@ -270,7 +283,8 @@ def test_controller_latest_entrypoint_publishes_heartbeat_and_wires_dev_verdict(
         assert _writer_main(fields["kind"], json.loads(fields["payload"])) == 0
     contexts = [next(arg for arg in call if arg.startswith("context=")) for call in transport.writes]
     assert contexts[0].startswith("context=" + liveness.HEARTBEAT_CONTEXT + "/")
-    assert contexts[1] == "context=" + liveness.VERDICT_CONTEXT
+    assert all(value.startswith("context=" + liveness.HEARTBEAT_CONTEXT + "/") for value in contexts[:-1])
+    assert contexts[-1] == "context=" + liveness.VERDICT_CONTEXT
     assert any("/artifacts/456/zip" in path for path in transport.reads)
 
 
@@ -329,7 +343,8 @@ def test_controller_signal_transport_failure_keeps_native_progress(monkeypatch, 
     monkeypatch.setattr(controller, "native_deploy", _native_receipt)
     tmp_path.chmod(0o700)
     assert controller.main(["--latest", "--state-directory", str(tmp_path)]) == 0
-    expected_signals = 6 if "dev-delivery-liveness.yml" in failed_workflows else 2
+    assert controller.main(["--latest", "--state-directory", str(tmp_path)]) == 0
+    expected_signals = 9 if "dev-delivery-liveness.yml" in failed_workflows else 3
     assert len(transport.liveness_dispatches) == expected_signals
     assert len(transport.channel_dispatches) == 2
     assert not transport.denied_writes and not transport.writes
@@ -957,7 +972,8 @@ def test_pause_equal_time_replay_replacement_expiry_and_restart_order(monkeypatc
     assert result.reason == 'paused' and expiry.isoformat() in result.description
     monkeypatch.setattr(controller, '_utc_now', lambda: expiry)
     assert controller.main(options) == 0
-    resumed = _record_heartbeat(transport, transport.liveness_dispatches[-1], expiry)
+    resumed_command = next(command for command in reversed(transport.liveness_dispatches) if 'kind=heartbeat' in command)
+    resumed = _record_heartbeat(transport, resumed_command, expiry)
     assert _check_pause_history([paused, normal, replacement, resumed], expiry).ok
     path = tmp_path / 'postmerge-dev-test.json'
     before = path.read_bytes()

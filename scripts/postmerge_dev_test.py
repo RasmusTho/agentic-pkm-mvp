@@ -276,7 +276,6 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
             nonlocal checkpoint
             checkpoint = _save_outcome(path, candidate, outcome, last_green=last_green,
                                        pause=pause, observation=observation)
-            _signal_dev_verdict(candidate, outcome, signal)
             report_terminal()
 
         def report_terminal() -> None:
@@ -284,9 +283,16 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                 return
             channel = checkpoint['channel']
             candidate = Candidate(**checkpoint['candidate'])
+            outcome = dict(checkpoint['outcome'])
+            if channel == 'dev' and checkpoint['phase'] == 'passed':
+                # A native DEV pass is provisional until the exact heavy run.
+                if 'heavy' not in checkpoint:
+                    return
+                outcome['heavy_acceptance'] = _heavy_summary(checkpoint['heavy'])
+                outcome['result'] = 'passed' if checkpoint['heavy']['result'] == 'passed' else 'failed'
             if 'channel_bug' not in checkpoint:
                 checkpoint['channel_bug'] = {'last_good_sha': last_green.get(channel), 'dispatch': None}
-                if checkpoint['phase'] == 'passed':
+                if outcome['result'] == 'passed':
                     last_green[channel] = candidate.sha
                 checkpoint['last_green'] = dict(last_green)
             report = checkpoint['channel_bug']
@@ -296,12 +302,13 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
             # is not retried after restart and never replays a native operation.
             report['dispatch'] = 'started'
             _atomic_checkpoint(path, checkpoint)
-            outcome = checkpoint['outcome']
-            gate = ('source_projection' if 'source_failure' in outcome else
+            _signal_dev_verdict(candidate, outcome, signal)
+            gate = ('heavy_acceptance' if 'heavy_acceptance' in outcome else
+                    'source_projection' if 'source_failure' in outcome else
                     'pg_acceptance' if outcome.get('reason') == 'pg_profile_missing_or_mismatched' else
                     'native_deploy')
             evidence = {'candidate': asdict(candidate), 'channel': channel,
-                        'verdict': checkpoint['phase'], 'gate': gate,
+                        'verdict': outcome['result'], 'gate': gate,
                         'last_good_sha': report['last_good_sha'], 'receipt': outcome}
             evidence['receipt_fingerprint'] = channel_verdict_fingerprint(evidence)
             try:
@@ -352,6 +359,8 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                 save(candidate, outcome)
                 checkpoint.update(phase=result, outcome=outcome)
                 if result != 'passed':
+                    if checkpoint['channel'] == 'dev':
+                        _report_dev_failure(path, checkpoint, dispatch or dispatch_verdict)
                     return 78
         if checkpoint and checkpoint['phase'] == 'passed':
             candidate = Candidate(**checkpoint['candidate'])
@@ -369,23 +378,34 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                            'result': 'failed', 'reason': 'pg_profile_missing_or_mismatched'}
                 save(candidate, outcome)
                 checkpoint.update(phase='failed', outcome=outcome)
-        report_terminal()
         if checkpoint and checkpoint['phase'] == 'passed' and checkpoint['channel'] == 'dev':
             candidate = Candidate(**checkpoint['candidate'])
-            return deliver(candidate, deploy=deploy or native_deploy, current_main=lambda: candidate.sha,
-                           emit=lambda outcome: save(candidate, outcome), channels=('test',))
-        if checkpoint and checkpoint['phase'] == 'passed' and checkpoint['channel'] == 'test' and (
-            checkpoint.get('heavy', {}).get('dispatch') is None
-        ):
-            return heavy_verdict(path, checkpoint, run=heavy or native_heavy, send=dispatch or dispatch_verdict)
+            if checkpoint.get('heavy', {}).get('dispatch') is None:
+                heavy_verdict(path, checkpoint, run=heavy or native_heavy, send=dispatch or dispatch_verdict)
+            report_terminal()
+            if checkpoint['heavy']['result'] == 'passed':
+                return deliver(candidate, deploy=deploy or native_deploy, current_main=lambda: candidate.sha,
+                               emit=lambda outcome: save(candidate, outcome), channels=('test',))
+            if checkpoint['heavy'].get('held') is not True:
+                checkpoint['heavy']['held'] = True
+                _atomic_checkpoint(path, checkpoint)
+                return 78
+        elif checkpoint and checkpoint['phase'] == 'failed' and checkpoint['channel'] == 'dev':
+            _report_dev_failure(path, checkpoint, dispatch or dispatch_verdict)
+        report_terminal()
+        # A legacy passed/TEST heavy receipt is already terminal. Do not run it
+        # again or treat it as permission to replay this candidate on DEV.
         run_id = build()
         candidate = load(run_id)
         if checkpoint and (checkpoint['candidate']['run_id'], checkpoint['candidate']['run_attempt']) == (
             candidate.run_id, candidate.run_attempt
         ):
             return 0
-        return deliver(candidate, deploy=deploy or native_deploy, current_main=current_main,
-                       emit=lambda outcome: save(candidate, outcome))
+        status = deliver(candidate, deploy=deploy or native_deploy, current_main=current_main,
+                         emit=lambda outcome: save(candidate, outcome), channels=('dev',))
+        if checkpoint and checkpoint['phase'] == 'failed' and checkpoint['channel'] == 'dev':
+            _report_dev_failure(path, checkpoint, dispatch or dispatch_verdict)
+        return status
 
 
 def _save_outcome(path: Path, candidate: Candidate, outcome: dict[str, Any], *,
@@ -430,7 +450,7 @@ def validate_channel_evidence(evidence: Any, channel: str) -> Candidate:
         receipt = evidence['receipt']
         if set(receipt) - {'source_sha', 'image_digest', 'source_run_id', 'source_run_attempt', 'artifact_id',
                            'channel', 'result', 'operation_id', 'pg_acceptance', 'source_failure',
-                           'failure_reference', 'reason'}:
+                           'failure_reference', 'reason', 'heavy_acceptance'}:
             raise ValueError()
         if any(receipt.get(key) != value for key, value in {
             'source_sha': candidate.sha, 'image_digest': candidate.digest, 'source_run_id': candidate.run_id,
@@ -446,11 +466,18 @@ def validate_channel_evidence(evidence: Any, channel: str) -> Candidate:
         reason = receipt.get('reason')
         if reason is not None and (reason != 'pg_profile_missing_or_mismatched' or evidence['verdict'] != 'failed'):
             raise ValueError()
-        gate = 'source_projection' if 'source_failure' in receipt else 'pg_acceptance' if reason else 'native_deploy'
+        heavy = receipt.get('heavy_acceptance')
+        if heavy is not None:
+            if (channel != 'dev' or set(heavy) - {'result', 'reason', 'failures', *HEAVY_COUNTS}
+                or _heavy_summary(heavy) != heavy or reason is not None or 'source_failure' in receipt
+                or (heavy['result'] == 'passed') != (evidence['verdict'] == 'passed')):
+                raise ValueError()
+        gate = ('heavy_acceptance' if heavy is not None else
+                'source_projection' if 'source_failure' in receipt else 'pg_acceptance' if reason else 'native_deploy')
         if (evidence['gate'] != gate
             or evidence['receipt_fingerprint'] != channel_verdict_fingerprint(evidence)):
             raise ValueError()
-        if evidence['verdict'] == 'passed':
+        if evidence['verdict'] == 'passed' or heavy is not None:
             require_pass(receipt.get('pg_acceptance'), candidate.sha, candidate.digest,
                          channel, candidate.operation_id(channel))
         elif 'pg_acceptance' in receipt:
@@ -517,7 +544,9 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
                     or re.fullmatch(r'[0-9a-f]{40}', report['last_good_sha']) is None))):
                 raise ValueError()
         if (set(checkpoint) - {'heavy', 'last_green', 'channel_bug', 'pause', 'observation'} != {'candidate', 'phase', 'channel', 'outcome'}
-            or ('heavy' in checkpoint and (checkpoint['phase'], checkpoint['channel']) != ('passed', 'test'))
+            or ('heavy' in checkpoint and (checkpoint['phase'], checkpoint['channel']) not in {
+                ('passed', 'dev'), ('passed', 'test'), ('failed', 'dev')})
+            or ('heavy' in checkpoint and checkpoint['phase'] == 'failed' and checkpoint['heavy'].get('reason') != 'dev_deploy_failed')
             or re.fullmatch(r'[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
             or any(type(value) is not int or value < 1
                    for value in (candidate.run_id, candidate.run_attempt, candidate.artifact_id))
@@ -588,12 +617,16 @@ def publish_dev_verdict(candidate: Candidate, outcome: dict[str, Any]) -> None:
 def _validate_heavy(heavy: Any) -> dict[str, Any]:
     from app.ops.heavy_acceptance import MAX_FAILURES, MAX_NODEID, VERDICTS
     if (not isinstance(heavy, dict) or heavy.get('result') not in VERDICTS
-        or heavy.get('dispatch') not in {None, 'sent', 'failed'}
-        or set(heavy) - {'result', 'reason', 'failures', 'dispatch', *HEAVY_COUNTS}
+        or heavy.get('dispatch') not in {None, 'started', 'sent', 'failed'}
+        or ('held' in heavy and (heavy['held'] is not True or heavy['result'] == 'passed'))
+        or set(heavy) - {'result', 'reason', 'failures', 'dispatch', 'held', *HEAVY_COUNTS}
         or ('reason' in heavy and (heavy['result'] != 'refused'
                                    or re.fullmatch(r'[a-z0-9_]{1,64}', str(heavy['reason'])) is None))
         or any(key in heavy and (type(heavy[key]) is not int or heavy[key] < 0) for key in HEAVY_COUNTS)
         or (heavy['result'] != 'refused' and any(key not in heavy for key in HEAVY_COUNTS))
+        or (heavy['result'] == 'passed' and (heavy.get('selected', 0) == 0 or heavy.get('passed', 0) == 0
+                                             or heavy.get('failed') != 0 or heavy.get('docker_skipped') != 0
+                                             or heavy.get('failures', [])))
         or not isinstance(heavy.get('failures', []), list) or len(heavy.get('failures', [])) > MAX_FAILURES
         or any(not isinstance(item, str) or not item or len(item) > MAX_NODEID
                or re.search(r'[\x00-\x1f]', item) for item in heavy.get('failures', []))):
@@ -601,8 +634,22 @@ def _validate_heavy(heavy: Any) -> dict[str, Any]:
     return heavy
 
 
+def _heavy_summary(heavy: dict[str, Any]) -> dict[str, Any]:
+    validated = _validate_heavy(heavy)
+    return {key: value for key, value in validated.items() if key not in {'dispatch', 'held'}}
+
+
+def _report_dev_failure(path: Path, checkpoint: dict[str, Any],
+                        send: Callable[[Candidate, dict[str, Any]], None]) -> None:
+    if 'heavy' not in checkpoint:
+        checkpoint['heavy'] = {'result': 'refused', 'reason': 'dev_deploy_failed'}
+        _atomic_checkpoint(path, checkpoint)
+    if checkpoint['heavy'].get('dispatch') is None:
+        heavy_verdict(path, checkpoint, run=lambda _: checkpoint['heavy'], send=send)
+
+
 def native_heavy(candidate: Candidate) -> dict[str, Any]:
-    """Run the fixed `qualify-heavy` profile for the committed TEST operation.
+    """Run the fixed `qualify-heavy` profile for the committed DEV operation.
 
     The same launcher alias as the native deployment RPC; only the operation ID
     crosses. A transport or evidence failure is a `refused` verdict, never green.
@@ -610,8 +657,8 @@ def native_heavy(candidate: Candidate) -> dict[str, Any]:
     environment = {key: os.environ[key] for key in ('HOME', 'USER', 'LOGNAME', 'PATH', 'SSH_AUTH_SOCK')
                    if key in os.environ}
     command = ['/usr/bin/ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
-               '-o', 'ServerAliveInterval=60', '--', 'ygg-test', 'sudo', '-n',
-               '/usr/local/libexec/yggdrasil-bws-deploy', 'qualify-heavy', 'test', candidate.operation_id('test')]
+               '-o', 'ServerAliveInterval=60', '--', 'ygg-dev', 'sudo', '-n',
+               '/usr/local/libexec/yggdrasil-bws-deploy', 'qualify-heavy', 'dev', candidate.operation_id('dev')]
     try:
         result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False,
                                 timeout=2 * 3600)
@@ -625,7 +672,7 @@ def native_heavy(candidate: Candidate) -> dict[str, Any]:
         if receipt.get('result') == 'refused':
             return _validate_heavy({'result': 'refused', 'reason': str(receipt.get('reason', ''))})
         if (receipt.get('source_sha') != candidate.sha or receipt.get('image_digest') != candidate.digest
-            or receipt.get('channel') != 'test' or receipt.get('operation_id') != candidate.operation_id('test')
+            or receipt.get('channel') != 'dev' or receipt.get('operation_id') != candidate.operation_id('dev')
             or (receipt.get('result') == 'passed') != (result.returncode == 0)):
             raise ValueError()
         return _validate_heavy({key: receipt[key] for key in ('result', 'failures', *HEAVY_COUNTS)})
@@ -639,7 +686,7 @@ def dispatch_verdict(candidate: Candidate, heavy: dict[str, Any]) -> None:
     # Node IDs may hold any character; mask what the workflow's bounded input
     # grammar refuses so a red verdict keeps its failing tests, never a ping.
     failures = re.sub(r'[^A-Za-z0-9_./:\[\]+=, -]', '?', ','.join(heavy.get('failures', [])))[:1000]
-    fields = {'sha': candidate.sha, 'verdict': heavy['result'], 'operation_id': candidate.operation_id('test'),
+    fields = {'sha': candidate.sha, 'verdict': heavy['result'], 'operation_id': candidate.operation_id('dev'),
               'counts': counts, 'reason': heavy.get('reason', ''), 'failures': failures}
     command = ['gh', 'workflow', 'run', HEAVY_WORKFLOW, '--repo', REPOSITORY, '--ref', 'main']
     for key, value in fields.items():
@@ -655,22 +702,30 @@ def dispatch_verdict(candidate: Candidate, heavy: dict[str, Any]) -> None:
 def heavy_verdict(path: Path, checkpoint: dict[str, Any], *,
                   run: Callable[[Candidate], dict[str, Any]],
                   send: Callable[[Candidate, dict[str, Any]], None]) -> int:
-    # The heavy profile never gates channel advancement. One run and at most
-    # one dispatch per committed TEST candidate; a lost dispatch is surfaced by
-    # the workflow's missing-verdict watchdog, never retried into a stall.
+    # Fence both uncertain windows before effects. A crash during the run is
+    # conservatively refused on restart, and an uncertain dispatch is not sent
+    # again. Neither case can replay a native deployment or stall later builds.
     candidate = Candidate(**checkpoint['candidate'])
     heavy = checkpoint.get('heavy')
     if heavy is None:
-        heavy = _validate_heavy(run(candidate))
+        checkpoint['heavy'] = {'result': 'refused', 'reason': 'heavy_run_interrupted'}
+        _atomic_checkpoint(path, checkpoint)
+        try:
+            heavy = _heavy_summary(run(candidate))
+        except Exception:
+            heavy = {'result': 'refused', 'reason': 'native_heavy_evidence_refused'}
         checkpoint['heavy'] = heavy
         _atomic_checkpoint(path, checkpoint)
-    try:
-        send(candidate, heavy)
-        heavy['dispatch'] = 'sent'
-    except Exception:
-        heavy['dispatch'] = 'failed'
-    _atomic_checkpoint(path, checkpoint)
-    print(json.dumps({'source_sha': candidate.sha, 'channel': 'test', 'heavy': heavy}, sort_keys=True))
+    if heavy.get('dispatch') is None:
+        heavy['dispatch'] = 'started'
+        _atomic_checkpoint(path, checkpoint)
+        try:
+            send(candidate, heavy)
+            heavy['dispatch'] = 'sent'
+        except Exception:
+            heavy['dispatch'] = 'failed'
+        _atomic_checkpoint(path, checkpoint)
+    print(json.dumps({'source_sha': candidate.sha, 'channel': 'dev', 'heavy': heavy}, sort_keys=True))
     return 0 if heavy['dispatch'] == 'sent' else 78
 
 
@@ -775,8 +830,8 @@ def _require_terminal_profile(receipt: dict[str, Any], channel: str, candidate: 
 def deliver(candidate: Candidate, *, deploy: Callable[[str, Candidate], dict[str, Any]] = native_deploy,
             current_main: Callable[[], str] = _current_main,
             emit: Callable[[dict[str, Any]], None] = lambda result: print(json.dumps(result, sort_keys=True)),
-            channels: tuple[str, ...] = ('dev', 'test')) -> int:
-    if channels not in {('dev', 'test'), ('test',)}:
+            channels: tuple[str, ...] = ('dev',)) -> int:
+    if channels not in {('dev', 'test'), ('dev',), ('test',)}:
         raise CandidateRefused('invalid_stage_sequence')
     identity = {'source_sha': candidate.sha, 'image_digest': candidate.digest,
                 'source_run_id': candidate.run_id, 'source_run_attempt': candidate.run_attempt,

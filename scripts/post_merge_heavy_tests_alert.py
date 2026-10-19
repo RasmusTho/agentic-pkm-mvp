@@ -1,7 +1,7 @@
-"""Render the rolling alert Issue for a red post-merge heavy-tests run (#6154, #6158).
+"""Render the rolling alert Issue for a red dev verification run (#6154, #6158).
 
 The heavy test targets that `scripts/select_pr_tests.py` defers from the PR
-path run on the ygg `test` VM; `.github/workflows/post-merge-heavy-tests.yml`
+path run on the ygg `dev` VM; `.github/workflows/post-merge-heavy-tests.yml`
 records the host's verdict, or runs a GitHub-hosted fallback when no verdict
 arrives. When a run is red on `main`, the workflow opens one rolling
 `type:bug` + `prio:high` Issue with this body (or comments on the open one),
@@ -14,7 +14,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-ALERT_TITLE = "bug: post-merge heavy tests are red on main"
+ALERT_TITLE = "bug: dev verification is red on main"
+LEGACY_ALERT_TITLE = "bug: post-merge heavy tests are red on main"
 ALERT_LABELS = ("type:bug", "prio:high", "agent:ready")
 ALERT_MARKER = "<!-- post-merge-heavy-tests-alert:v1 -->"
 
@@ -24,15 +25,15 @@ def render_alert_body(*, sha: str, run_url: str, targets: str, reason: str = "")
     return f"""{ALERT_MARKER}
 ## Context
 
-The post-merge heavy-tests workflow is red on `main` at `{sha}`: {run_url}
+Dev verification is red on `main` at `{sha}`: {run_url}
 {reason_line}
-These heavy targets are deferred from the required PR check `Unit tests (not pg)` unless a PR changes a source they exercise (owner decision 2026-10-16, #6154). They run on the ygg `test` VM after the candidate's native test deployment (#6158), and the workflow records that verdict as the `post-merge-heavy-tests/ygg` commit status. A red result means a regression may already be on `main`; a missing or refused verdict means the VM path itself is broken. Later red runs comment on this Issue. The next green verdict closes it.
+These heavy targets are deferred from the required PR check `Unit tests (not pg)` unless a PR changes a source they exercise (owner decision 2026-10-16, #6154). They run on the ygg `dev` VM after the candidate's native dev deployment, before test promotion (#6227), and the workflow records that verdict as the `post-merge-heavy-tests/ygg` commit status. A red verdict holds this candidate from test promotion while later builds continue. A terminal dev deployment failure is a refused verdict (`dev_deploy_failed`). A red result means a regression may already be on `main`; a missing or refused verdict means the VM path itself is broken. Later red runs comment on this Issue. The next green verdict closes it.
 
 Heavy targets: `{targets}`
 
 ## Scope
 
-Find the failing tests (named in the reason above, or in the GitHub-hosted fallback log), identify the merged change that broke them, and repair the code or the test on `main`. For a missing or refused verdict, restore the host controller or VM path instead.
+Find the failing tests (named in the reason above, or in the GitHub-hosted fallback log), identify the merged change that broke them, and repair the code or the test on `main`. For `dev_deploy_failed`, repair the failing native dev gate. For another missing or refused verdict, restore the host controller or VM path instead.
 
 ## Source Anchors
 
@@ -52,7 +53,7 @@ Depends on the failing suite. Classify it from the failing tests' owning subsyst
 
 ## Acceptance Criteria
 
-- [ ] AC1: The post-merge heavy-tests verdict is green on `main` at a commit containing the repair. Verify: `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`
+- [ ] AC1: The dev verification verdict is green on `main` at a commit containing the repair. Verify: `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`
 
 ## Out of Scope
 
