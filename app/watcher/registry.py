@@ -684,8 +684,31 @@ class RegistryConfig:
             logger.info("watcher registry idling: WATCHER_ENABLE=1 but no vault bound")
             enable = False
         vault_path = Path(vault_raw or ".").expanduser()
-        if enable and not _validate_registry_vault(vault_path, read_only=read_only):
-            enable = False
+        watcher_settings = load_watcher_settings(vault_path)
+        state_dir = Path(os.getenv("WATCHER_STATE_DIR") or watcher_settings.paths.watcher_state.parent).expanduser()
+        if enable:
+            registry_value = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+            reconciler = (
+                DormantSettingsRebindReconciler(
+                    registry_path=Path(registry_value).expanduser(),
+                    state_dir=state_dir,
+                )
+                if registry_value
+                else None
+            )
+            # Configuration admission precedes the scan boundary. Fence its
+            # identity-healing choice against foreground commits as well.
+            with _compatibility_watcher_window(reconciler):
+                observation_only = (
+                    reconciler is not None
+                    and reconciler.requires_observation_only_validation()
+                )
+                if not _validate_registry_vault(
+                    vault_path,
+                    read_only=read_only,
+                    heal_identity=not observation_only,
+                ):
+                    enable = False
         scope_glob, scope_source, inbox_source = _resolve_scope_glob(vault_path)
         logger.info(
             "watcher scope resolved vault_path=%s scope_glob=%s provenance=%s inbox_source=%s",
@@ -706,10 +729,8 @@ class RegistryConfig:
             parser=_parse_int_factory(fallback=30),
             logger=logger,
         )
-        watcher_settings = load_watcher_settings(vault_path)
         outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH") or watcher_settings.paths.index_outbox)
         watcher_run_log = Path(os.getenv("WATCHER_RUN_LOG_PATH") or watcher_settings.paths.watcher_run_log)
-        state_dir = Path(os.getenv("WATCHER_STATE_DIR") or watcher_settings.paths.watcher_state.parent).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)
         stop_file = Path(os.getenv("WATCHER_STOP_FILE") or watcher_settings.paths.watcher_stop_file).expanduser()
@@ -1035,7 +1056,12 @@ def _auto_exec_enabled(vault_root: Path) -> bool:
 _IDLE_VAULT_STATUSES = {"none", "uninitialized"}
 
 
-def _validate_registry_vault(vault_path: Path, *, read_only: bool = False) -> bool:
+def _validate_registry_vault(
+    vault_path: Path,
+    *,
+    read_only: bool = False,
+    heal_identity: bool = True,
+) -> bool:
     """Return True when the registry should run; False when it should idle.
 
     Raises only for a *loud* misconfiguration (set-but-missing or invalid vault
@@ -1055,7 +1081,9 @@ def _validate_registry_vault(vault_path: Path, *, read_only: bool = False) -> bo
                 raise ValueError("watcher registry requires persisted vault identities")
     else:
         manager = VaultManager()
-    context = manager.validate_vault(vault_path)
+    context = manager.validate_vault(
+        vault_path, heal_identity=heal_identity and not read_only
+    )
     if context.status in _IDLE_VAULT_STATUSES:
         logger.info(
             "watcher registry idling: no usable vault bound (status=%s path=%s)",
@@ -2748,7 +2776,10 @@ def _run_registry_cycle(
                 if rebind_cycle.record.candidate_binding_id is None:
                     cfg.enable = False
                 else:
-                    cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
+                    cfg.vault_path = reconciler.candidate_vault_path(
+                        rebind_cycle.record,
+                        heal_identity=not recovery_mode,
+                    )
         return summaries
 
 

@@ -532,6 +532,9 @@ mergeable 05B child has merged and the #6139 and #6162 sub-hubs are closed.
   wait for the ordinary stable cycle without consuming delivery eligibility or cadence. Existing
   missing-source observations also survive recovery finalization and restart, so the next normal
   scan can deliver governed removals/resets before pruning their observations.
+  Configuration admission and candidate revalidation are also write-free during recovery:
+  selected roots are classified without identity healing. Ordinary-mode guarded healing and
+  the separate producer inventory's persisted-identity preflight remain unchanged.
 - Zero, one, and many bindings are all valid. One configured vault behaves as before; no-vault
   behavior remains truthful and idle.
 - The durable registry/default/dimension store is instance-local mechanical state; content and

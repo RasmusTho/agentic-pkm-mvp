@@ -403,6 +403,21 @@ class DormantSettingsRebindReconciler:
 
         return self._store.read()
 
+    def requires_observation_only_validation(self) -> bool:
+        """Choose a write-free admission ceiling, not recovery authority.
+
+        Root, reload, policy and scan checks still belong to begin/finish-cycle.
+        Even a refused first-adoption candidate must not be healed while the
+        configuration loader determines whether recovery is admissible.
+        """
+
+        record = self.current_record()
+        return (
+            record.phase == "committed"
+            and record.prior_binding_id is None
+            and self._load_matching_receipt(record) is None
+        )
+
     @classmethod
     def from_config(
         cls,
@@ -481,7 +496,7 @@ class DormantSettingsRebindReconciler:
                 # This is a committed first adoption whose transactional receipt
                 # was lost.  It has no old-root acknowledgement to reconstruct:
                 # one fresh configured-root scan is the only admissible evidence.
-                self.candidate_vault_path(record)
+                self.candidate_vault_path(record, heal_identity=False)
                 return RebindCycle(record=record, mode="recovery", receipt=None)
         if record.prior_binding_id is None and not self._is_first_adoption_of_configured_root(
             snapshot, record, cfg
@@ -534,7 +549,7 @@ class DormantSettingsRebindReconciler:
         if cycle.mode not in {"prepared", "committed"}:
             if cycle.mode == "recovery":
                 self._assert_scan_success(summaries)
-                self.candidate_vault_path(cycle.record)
+                self.candidate_vault_path(cycle.record, heal_identity=False)
                 self._assert_authority_unchanged(cycle)
                 recovery = SettingsRebindWatcherReceipt(
                     desired_revision=cycle.record.desired_revision,
@@ -644,7 +659,12 @@ class DormantSettingsRebindReconciler:
         # authorize adoption of the candidate binding.
         return drained
 
-    def candidate_vault_path(self, record: SettingsRebindRecord) -> Path:
+    def candidate_vault_path(
+        self,
+        record: SettingsRebindRecord,
+        *,
+        heal_identity: bool = True,
+    ) -> Path:
         """Resolve the committed candidate for the next watcher tick."""
 
         candidate = self._required_binding(record.candidate_binding_id, name="candidate")
@@ -653,7 +673,9 @@ class DormantSettingsRebindReconciler:
             raise RegistryError("settings rebind candidate watcher binding is missing")
         # Registration proves identity, not watcher permission. Revalidate the
         # candidate at the adoption seam immediately before changing roots.
-        return validate_settings_rebind_candidate_root(Path(registration.path))
+        return validate_settings_rebind_candidate_root(
+            Path(registration.path), heal_identity=heal_identity
+        )
 
     def _receipt_path(self, record: SettingsRebindRecord) -> Path:
         return settings_rebind_watcher_receipt_path(

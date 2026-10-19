@@ -431,13 +431,17 @@ def require_compatibility_binding_ready(
         raise RegistryError("compatibility handoff is awaiting settings reload")
 
 
-def validate_settings_rebind_candidate_root(candidate_root: Path) -> Path:
+def validate_settings_rebind_candidate_root(
+    candidate_root: Path,
+    *,
+    heal_identity: bool = True,
+) -> Path:
     """Validate the candidate vault before any watcher adoption receipt."""
 
     from app.vault.manager import VaultManager
 
     manager = VaultManager()
-    context = manager.validate_vault(candidate_root)
+    context = manager.validate_vault(candidate_root, heal_identity=heal_identity)
     if context.status != "selected":
         raise SettingsRebindCandidatePolicyError(
             "settings rebind candidate watcher root is not a selected vault"

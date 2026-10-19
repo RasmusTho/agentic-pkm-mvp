@@ -1485,6 +1485,65 @@ def test_first_adoption_recovery_once_and_forever_defer_source_effects(
 
 
 @pytest.mark.parametrize("entrypoint", ["once", "forever"])
+def test_first_adoption_recovery_preserves_settings_identity_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+) -> None:
+    """A selected root needing ordinary identity healing stays untouched in recovery."""
+    from app.vault.manager import VaultManager
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "healthy"})
+    source = vault_a / "settings/local.md"
+    settings_store = MarkdownSettingsStore()
+    document = settings_store.read(source)
+    frontmatter = dict(document.frontmatter)
+    frontmatter.pop("localInstanceId")
+    settings_store.write_frontmatter(source, frontmatter, body=document.body)
+    assert VaultManager().validate_vault(vault_a, heal_identity=False).status == "selected"
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    source_tree = _vault_file_bytes(vault_a)
+    registry_bytes = runtime.registry.path.read_bytes()
+    # The separate producer inventory's strict persisted-ID preflight is not
+    # relaxed by recovery's nonmutating classification of this selected root.
+    with pytest.raises(ValueError, match="requires persisted vault identities"):
+        registry.load_registry_config(config_path, read_only=True)
+    assert _vault_file_bytes(vault_a) == source_tree
+
+    if entrypoint == "once":
+        registry.run_registry_once(config_path)
+    else:
+        registry.run_registry_forever(config_path, max_ticks=1)
+
+    assert _vault_file_bytes(vault_a) == source_tree
+    assert runtime.registry.path.read_bytes() == registry_bytes
+    receipt = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
+    assert receipt.stage == "completed"
+    assert receipt.evidence_kind == "first_adoption_recovery"
+    # Recovery changes no machine-role or producer-policy rule: ordinary
+    # startup still performs its established, guarded identity-heal transition.
+    registry.run_registry_once(config_path)
+    assert settings_store.read(source).frontmatter.get("localInstanceId")
+
+
+@pytest.mark.parametrize("entrypoint", ["once", "forever"])
 def test_first_adoption_recovery_preserves_pending_removals_until_ordinary_scan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
