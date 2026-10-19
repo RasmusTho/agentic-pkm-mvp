@@ -75,7 +75,12 @@ No automated database rollback is part of this plan. A failed health check must 
 - **Refs record channel state.** `dev` is the last green dev verdict, and differs from `main` only by a documented technical hold. `test` is the last candidate promoted for UAT after a green dev verdict. `stable` is prod, advanced only from a `test`-passed candidate through human-approved promotion (superseding ADR-0040 once enacted).
 - **Pause only the machinery.** The supported controller pause requires a linked Issue and an expiry, reports red `paused (#N, until T)` through liveness, and automatically lifts at expiry. Unloading the controller is not a pause mechanism. The [deployment owner](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture) owns the command and live-change authority.
 - **Liveness is loud.** A GitHub check turns red when no dev verdict follows a newer admitted build within the grace period.
-- **Pinned controller tooling,** separate from candidate code.
+- **Pinned controller tooling,** separate from candidate code. Repository support in #6225 checks
+  the real pin before polling and reports failed startup through liveness using a read-only
+  checkpoint frontier. Later actual activity can recover; a fresh verdict alone cannot hide the
+  failure. The [deployment owner](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture)
+  owns the asynchronous reporting/refusal limits and installation. Live activation and release
+  acceptance remain separate under #6170/#3347.
 
 Enactment slices (children of #6207):
 

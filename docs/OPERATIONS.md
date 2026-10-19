@@ -577,9 +577,11 @@ Companion docs:
   isolated Python startup and a fixed pin; neither its imports nor the native host child imports use
   a candidate checkout or ambient Python configuration. Startup checks the runtime identity and real
   controller/native imports and unauthenticated SDK construction before polling. The SDK closure
-  reuses the existing BWS manifest pins and is copied and hashed inside the installation. A failed check exits 78 and reports a failed heartbeat
-  through the existing Actions-write liveness signal; unavailable signal transport remains visible
-  through the scheduled missing/stale-heartbeat check. Select a fresh reviewed tooling SHA to
+  reuses the existing BWS manifest pins and is copied and hashed inside the installation. A failed
+  check exits 78 and snapshots existing checkpoint order without changing it before dispatching a
+  failed heartbeat. A fresh DEV verdict cannot mask that failure; later actual controller activity
+  supersedes it, with active-pause and expiry behavior preserved. Invalid checkpoint state, clock admission
+  refusal or unavailable transport uses the bounded log and scheduled missing/stale-heartbeat path. Select a fresh reviewed tooling SHA to
   upgrade or recover a broken pin; candidate deployment never refreshes it. Follow the linked deployment
   posture for installation. Repository support does not activate the host (#6170) or accept a
   release (#3347).

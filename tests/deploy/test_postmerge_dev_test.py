@@ -1752,15 +1752,15 @@ def test_controller_self_check_fails_loud(installed_controller_pin, monkeypatch,
                'description': 'observed_at=' + (now - timedelta(minutes=2)).isoformat()}
     produced = []
     monkeypatch.setattr(driver, '_dispatch_liveness_signal', lambda kind, received: produced.append(received))
-    observation = {'sequence': 7, 'observed_at': (now - timedelta(minutes=1)).isoformat()}
+    observation = {'sequence': payload['after_sequence'], 'observed_at': (now - timedelta(minutes=1)).isoformat()}
     driver.publish_heartbeat(SHA, None, observation)
     prior = admit(produced[-1])
     pause = {'issue': 6224, 'engaged_at': (now - timedelta(minutes=1)).isoformat(),
              'expires_at': (now + timedelta(minutes=5)).isoformat()}
-    driver.publish_heartbeat(SHA, pause, {**observation, 'sequence': 8})
+    driver.publish_heartbeat(SHA, pause, observation)
     paused = admit(produced[-1])
     recovery_at = now + timedelta(minutes=6)
-    driver.publish_heartbeat(SHA, None, {'sequence': 9, 'observed_at': recovery_at.isoformat()})
+    driver.publish_heartbeat(SHA, None, {'sequence': observation['sequence'] + 1, 'observed_at': recovery_at.isoformat()})
     recovered = admit(produced[-1], at=recovery_at)
     newer_main = 'b' * 40
     def check_history(history, at=now):
@@ -1839,7 +1839,7 @@ def test_installer_partial_pin_does_not_replace_active_launch_or_checkpoint(inst
 def test_startup_signal_refuses_non_failure_values(monkeypatch, value):
     from scripts import dev_delivery_liveness as liveness
     payload = {'protocol': driver.LIVENESS_PROTOCOL, 'sha': SHA,
-               'observed_at': datetime.now(timezone.utc).isoformat(), 'startup': value}
+               'observed_at': datetime.now(timezone.utc).isoformat(), 'startup': value, 'after_sequence': 0}
     monkeypatch.setattr(liveness.subprocess, 'run', lambda *_a, **_k: pytest.fail('refused signal wrote a status'))
     with pytest.raises(liveness.LivenessRefused, match='signal_startup_refused'):
         liveness.record_signal('heartbeat', json.dumps(payload), repo=driver.REPOSITORY,
@@ -2107,20 +2107,20 @@ def test_pinned_tooling_update_preserves_authoritative_pending_state(installed_c
 def test_startup_diagnostic_cannot_borrow_activity_order(monkeypatch, activity):
     from scripts import dev_delivery_liveness as liveness
     payload = {'protocol': driver.LIVENESS_PROTOCOL, 'sha': SHA,
-               'observed_at': datetime.now(timezone.utc).isoformat(), 'startup': 'failed', **activity}
+               'observed_at': datetime.now(timezone.utc).isoformat(), 'startup': 'failed', 'after_sequence': 0, **activity}
     with pytest.raises(liveness.LivenessRefused, match='signal_startup_refused'):
         liveness.record_signal('heartbeat', json.dumps(payload), repo=driver.REPOSITORY,
                                event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
                                triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999')
 
 
-@pytest.mark.parametrize('diagnostic_lags_pause', [False, True])
+@pytest.mark.parametrize('checkpoint_clock_ahead', [False, True])
 def test_startup_diagnostic_discovers_ancestor_pause_before_fresh_verdict(
-    installed_controller_pin, monkeypatch, diagnostic_lags_pause,
+    installed_controller_pin, monkeypatch, checkpoint_clock_ahead,
 ):
     from scripts import dev_delivery_liveness as liveness
     pin = installed_controller_pin
-    pause_at = datetime.now(timezone.utc)
+    pause_at = datetime.now(timezone.utc) + timedelta(seconds=30 if checkpoint_clock_ahead else 0)
     until = pause_at + timedelta(minutes=10)
     monkeypatch.setattr(driver, '_utc_now', lambda: pause_at)
     produced = []
@@ -2142,12 +2142,9 @@ def test_startup_diagnostic_discovers_ancestor_pause_before_fresh_verdict(
     startup_payload = json.loads(pin.signals.read_text())
     assert startup_payload['sha'] == newer_main
     startup_at = datetime.fromisoformat(startup_payload['observed_at'])
-    # The independent stdlib diagnostic has no checkpoint clock floor. Model a
-    # permitted host-clock rewind; the main-only writer still admits this age.
-    if diagnostic_lags_pause:
-        startup_at = pause_at - timedelta(seconds=2)
-        startup_payload['observed_at'] = startup_at.isoformat()
-    verdict_at = pause_at - timedelta(seconds=1) if diagnostic_lags_pause else startup_at + timedelta(seconds=1)
+    assert startup_payload['after_sequence'] == pause_payload['sequence']
+    assert startup_at >= pause_at
+    verdict_at = startup_at + timedelta(seconds=1)
     now = max(pause_at, startup_at) + timedelta(seconds=2)
     writes = []
     run = subprocess.run
@@ -2198,7 +2195,7 @@ def test_startup_diagnostic_discovers_ancestor_pause_before_fresh_verdict(
         pytest.fail('unexpected liveness read: ' + endpoint)
     checked = liveness.check(driver.REPOSITORY, newest_main, api=api, now=now)
     assert not checked.ok
-    assert checked.reason == ('paused' if diagnostic_lags_pause else 'startup_self_check_failed')
+    assert checked.reason == 'startup_self_check_failed'
     assert any(endpoint.endswith('/git/commits/' + newer_main) for endpoint in reads)
     assert any(f'/commits/{newer_main}/statuses?per_page=100&page=2' in endpoint for endpoint in reads)
     # Repair the actual pin, then let the real poller allocate a later normal
@@ -2207,6 +2204,14 @@ def test_startup_diagnostic_discovers_ancestor_pause_before_fresh_verdict(
     healthy = run([*pin.config['ProgramArguments'], '--self-check'], cwd=pin.source,
                   capture_output=True, text=True, check=False)
     assert healthy.returncode == 0, healthy.stdout + healthy.stderr
+    monkeypatch.setattr(driver, '_utc_now', lambda: now)
+    assert driver.poll(pin.state, build=unexpected, current_main=lambda: newest_main,
+                       heartbeat=driver.publish_heartbeat) == 0
+    later_pause = admit(*produced[-1], now)
+    statuses[newest_main] = [later_pause]
+    assert liveness.check(driver.REPOSITORY, newest_main, api=api, now=now).reason == 'paused'
+    # Preserve the existing pause-expiry semantics without requiring a new tick.
+    assert liveness.check(driver.REPOSITORY, newest_main, api=api, now=until).ok
     monkeypatch.setattr(driver, '_utc_now', lambda: until)
     def no_build():
         raise driver.CandidateRefused('latest_build_not_ready')
@@ -2228,7 +2233,7 @@ def test_diagnostic_only_ancestry_preserves_exact_fail_closed_bound(pause_positi
     now = datetime(2026, 10, 19, 18, tzinfo=timezone.utc)
     commits = [f'{number + 1:040x}' for number in range(102)]
     startup = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'failure',
-               'description': f'observed_at={(now - timedelta(minutes=1)).isoformat()};startup=self_check_failed'}
+               'description': f'observed_at={(now - timedelta(minutes=1)).isoformat()};after_sequence=9;startup=self_check_failed'}
     paused = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'failure',
               'description': f'observed_at={(now - timedelta(minutes=2)).isoformat()};seq=9;paused_issue=6224;until={(now + timedelta(hours=1)).isoformat()}'}
     visited = []
@@ -2255,10 +2260,10 @@ def test_diagnostic_only_ancestry_preserves_exact_fail_closed_bound(pause_positi
 def test_diagnostic_only_history_refuses_malformed_signal_before_ancestry(fault):
     from scripts import dev_delivery_liveness as liveness
     now = datetime(2026, 10, 19, 18, tzinfo=timezone.utc)
-    description = f'observed_at={now.isoformat()};startup=self_check_failed'
+    description = f'observed_at={now.isoformat()};after_sequence=0;startup=self_check_failed'
     status = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'failure', 'description': description}
     if fault == 'timestamp':
-        status['description'] = 'observed_at=invalid;startup=self_check_failed'
+        status['description'] = 'observed_at=invalid;after_sequence=0;startup=self_check_failed'
     elif fault == 'state':
         status['state'] = 'success'
     else:
@@ -2271,3 +2276,495 @@ def test_diagnostic_only_history_refuses_malformed_signal_before_ancestry(fault)
         pytest.fail('malformed diagnostic reached ancestry lookup')
     with pytest.raises(liveness.LivenessRefused):
         liveness.check(driver.REPOSITORY, SHA, api=api, now=now)
+
+
+@pytest.mark.parametrize('separate_commits', [False, True])
+def test_startup_frontier_survives_clock_lag_and_fresh_verdicts(
+    installed_controller_pin, monkeypatch, separate_commits,
+):
+    from scripts import dev_delivery_liveness as liveness
+    pin = installed_controller_pin
+    # Real poll allocation can precede a clock correction and a future-refused
+    # signal. Startup must snapshot both persisted fields without changing them.
+    floor = datetime.now(timezone.utc) + timedelta(minutes=4)
+    monkeypatch.setattr(driver, '_utc_now', lambda: floor)
+    produced = []
+    monkeypatch.setattr(driver, '_dispatch_liveness_signal', lambda kind, payload: produced.append((kind, payload)))
+    def no_build():
+        raise driver.CandidateRefused('latest_build_not_ready')
+    with pytest.raises(driver.CandidateRefused, match='latest_build_not_ready'):
+        driver.poll(pin.state, build=no_build, current_main=lambda: SHA, heartbeat=driver.publish_heartbeat)
+    normal_payload = produced[-1][1]
+    path = pin.state / 'postmerge-dev-test.json'
+    before, inode = path.read_bytes(), path.stat().st_ino
+    lock_inode = (pin.state / 'postmerge-dev-test.lock').stat().st_ino
+    failed_sha, current_sha = ('b' * 40, 'c' * 40) if separate_commits else (SHA, SHA)
+    pin.gh.write_text(pin.gh.read_text().replace(SHA, failed_sha))
+    controller_file = pin.source / 'scripts/postmerge_dev_test.py'
+    original = controller_file.read_bytes()
+    controller_file.write_text("raise ModuleNotFoundError('private fixture input')\n")
+    run = subprocess.run
+    result = run(pin.config['ProgramArguments'], cwd=pin.source, capture_output=True, text=True)
+    assert result.returncode == 78 and json.loads(result.stdout)['liveness_signal'] == 'sent'
+    failure_payload = json.loads(pin.signals.read_text())
+    assert path.read_bytes() == before and path.stat().st_ino == inode
+    assert (pin.state / 'postmerge-dev-test.lock').stat().st_ino == lock_inode
+    writes = []
+    monkeypatch.setattr(liveness.subprocess, 'run', lambda command, **_: writes.append(command))
+    def admit(kind, payload, at):
+        writes.clear()
+        liveness.record_signal(kind, json.dumps(payload), repo=driver.REPOSITORY,
+                               event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
+                               triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999',
+                               api=lambda _: {'status': 'identical'}, now=at)
+        fields = dict(item.split('=', 1) for item in writes[0] if '=' in item)
+        return {**{key: fields[key] for key in ('state', 'context', 'description')}, 'created_at': at.isoformat()}
+    with pytest.raises(liveness.LivenessRefused, match='signal_observation_stale_or_future'):
+        admit('heartbeat', normal_payload, floor - timedelta(minutes=4))
+    assert writes == []
+    startup = admit('heartbeat', failure_payload, floor + timedelta(seconds=1))
+    normal = admit('heartbeat', normal_payload, floor + timedelta(seconds=3))
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    monkeypatch.setattr(driver, 'load_candidate', lambda _: candidate)
+    build = {**_build()[0], 'created_at': (floor - timedelta(hours=2)).isoformat(),
+             'completed_at': (floor - timedelta(hours=1)).isoformat()}
+    verdicts = []
+    reads = []
+    recovery_status = None
+    def api(endpoint):
+        reads.append(endpoint)
+        if '/actions/workflows/' in endpoint:
+            return {'workflow_runs': [build]}
+        if '/statuses?' in endpoint:
+            sha = endpoint.split('/commits/', 1)[1].split('/', 1)[0]
+            if sha == current_sha and recovery_status is not None:
+                return [recovery_status, *([] if separate_commits else [startup]), *verdicts]
+            if sha == SHA:
+                return [normal, *(verdicts or []), *([] if separate_commits else [startup])]
+            return [startup] if sha == failed_sha else []
+        if '/git/commits/' in endpoint:
+            sha = endpoint.rsplit('/', 1)[1]
+            return {'sha': sha, 'parents': [{'sha': failed_sha if sha == current_sha else SHA}]}
+        pytest.fail('unexpected liveness read: ' + endpoint)
+    now = floor + timedelta(seconds=4)
+    for verdict_at in (None, floor, floor + timedelta(seconds=3)):
+        if verdict_at is not None:
+            class VerdictClock(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return verdict_at
+            monkeypatch.setattr(driver, 'datetime', VerdictClock)
+            driver.publish_dev_verdict(candidate, {'result': 'passed', 'channel': 'dev',
+                                                  'operation_id': candidate.operation_id('dev')})
+            verdicts[:] = [admit(*produced[-1], now)]
+        checked = liveness.check(driver.REPOSITORY, current_sha, api=api, now=now)
+        assert not checked.ok and checked.reason == 'startup_self_check_failed'
+    assert failure_payload['after_sequence'] == normal_payload['sequence']
+    assert datetime.fromisoformat(failure_payload['observed_at']) >= floor
+    # The floor is never lowered merely to pass the existing writer window.
+    with pytest.raises(liveness.LivenessRefused, match='signal_observation_stale_or_future'):
+        admit('heartbeat', failure_payload, floor - timedelta(seconds=1))
+    assert writes == []
+    if separate_commits:
+        assert any(endpoint.endswith('/git/commits/' + failed_sha) for endpoint in reads)
+    # Repair, allocate a genuine later observation at the same source time,
+    # then retain/replay the older failure after recovery on current main.
+    controller_file.write_bytes(original)
+    healthy = run([*pin.config['ProgramArguments'], '--self-check'], cwd=pin.source,
+                  capture_output=True, text=True)
+    assert healthy.returncode == 0, healthy.stdout + healthy.stderr
+    with pytest.raises(driver.CandidateRefused, match='latest_build_not_ready'):
+        driver.poll(pin.state, build=no_build, current_main=lambda: current_sha, heartbeat=driver.publish_heartbeat)
+    recovered_payload = produced[-1][1]
+    recovered = admit('heartbeat', recovered_payload, now)
+    assert recovered_payload['sha'] == current_sha
+    assert recovered_payload['sequence'] > failure_payload['after_sequence']
+    assert recovered_payload['observed_at'] == failure_payload['observed_at']
+    recovery_status = recovered
+    assert liveness.check(driver.REPOSITORY, current_sha, api=api, now=now).ok
+
+
+def _record_frontier_heartbeat(monkeypatch, payload, at):
+    from scripts import dev_delivery_liveness as liveness
+    writes = []
+    with monkeypatch.context() as isolated:
+        isolated.setattr(liveness.subprocess, 'run', lambda command, **_: writes.append(command))
+        liveness.record_signal('heartbeat', json.dumps(payload), repo=driver.REPOSITORY,
+                               event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
+                               triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999',
+                               api=lambda _: {'status': 'identical'}, now=at)
+    fields = dict(item.split('=', 1) for item in writes[0] if '=' in item)
+    return {**{key: fields[key] for key in ('state', 'context', 'description')}, 'created_at': at.isoformat()}
+
+
+@pytest.mark.parametrize('frontier', [None, -1, True, 1.5, '1', 10**18])
+def test_startup_frontier_wire_refuses_before_external_read(monkeypatch, frontier):
+    from scripts import dev_delivery_liveness as liveness
+    now = datetime.now(timezone.utc)
+    payload = {'protocol': driver.LIVENESS_PROTOCOL, 'sha': SHA,
+               'observed_at': now.isoformat(), 'startup': 'failed'}
+    if frontier is not None:
+        payload['after_sequence'] = frontier
+    unexpected = lambda *_a, **_k: pytest.fail('invalid frontier reached GitHub')
+    monkeypatch.setattr(liveness.subprocess, 'run', unexpected)
+    with pytest.raises(liveness.LivenessRefused, match='signal_startup_refused'):
+        liveness.record_signal('heartbeat', json.dumps(payload), repo=driver.REPOSITORY,
+                               event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
+                               triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999',
+                               api=unexpected, now=now)
+    payload.pop('startup')
+    payload['after_sequence'] = 0
+    with pytest.raises(liveness.LivenessRefused, match='signal_protocol_refused'):
+        liveness.record_signal('heartbeat', json.dumps(payload), repo=driver.REPOSITORY,
+                               event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
+                               triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999',
+                               api=unexpected, now=now)
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_startup_snapshot_preserves_pending_state_and_causal_recovery(tmp_path, monkeypatch, legacy):
+    from scripts import dev_delivery_liveness as liveness
+    from scripts import postmerge_controller as bootstrap
+    assert driver.CandidateRefused is bootstrap.CandidateRefused
+    now = datetime.now(timezone.utc)
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    with driver.checkpoint_lock(tmp_path):
+        pass
+    path = tmp_path / 'postmerge-dev-test.json'
+    outcome = {'source_sha': SHA, 'image_digest': DIGEST, 'source_run_id': 123,
+               'source_run_attempt': 1, 'artifact_id': 456, 'result': 'pending',
+               'channel': 'dev', 'operation_id': candidate.operation_id('dev')}
+    driver._save_outcome(path, candidate, outcome, last_green={'dev': 'd' * 40},
+                         observation=None if legacy else {'sequence': 7, 'observed_at': now.isoformat()})
+    before, inode = path.read_bytes(), path.stat().st_ino
+    lock = tmp_path / 'postmerge-dev-test.lock'
+    lock_inode = lock.stat().st_ino
+    captured = []
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now + timedelta(minutes=1)
+    monkeypatch.setattr(bootstrap, 'datetime', Clock)
+    def transport(command, **_):
+        if command[1] == 'api':
+            return SimpleNamespace(stdout=json.dumps({'object': {'sha': SHA}}))
+        captured.append(json.loads(next(arg[8:] for arg in command if arg.startswith('payload='))))
+        return SimpleNamespace()
+    monkeypatch.setattr(bootstrap.subprocess, 'run', transport)
+    bootstrap.report_startup_failure(tmp_path)
+    failure = captured[-1]
+    assert failure['after_sequence'] == (0 if legacy else 7)
+    assert path.read_bytes() == before and path.stat().st_ino == inode and lock.stat().st_ino == lock_inode
+    at = now + timedelta(minutes=2)
+    failed = _record_frontier_heartbeat(monkeypatch, failure, at)
+    legacy_normal = _record_frontier_heartbeat(monkeypatch, {
+        'protocol': driver.LIVENESS_PROTOCOL, 'sha': SHA, 'observed_at': at.isoformat()}, at)
+    def check(history):
+        return liveness.check(driver.REPOSITORY, SHA, api=lambda endpoint: (
+            {'workflow_runs': []} if '/actions/workflows/' in endpoint else history), now=at)
+    assert check([legacy_normal, failed]).reason == 'startup_self_check_failed'
+    # A real poll adopts legacy state and reuses the native operation identity.
+    # It emits a later heartbeat before the unchanged pending native result.
+    emitted = []
+    monkeypatch.setattr(driver, '_utc_now', lambda: now)
+    monkeypatch.setattr(driver, '_dispatch_liveness_signal', lambda kind, payload: emitted.append(payload))
+    with pytest.raises(driver.CandidateRefused, match='native_terminal_evidence_refused'):
+        driver.poll(tmp_path, resume=lambda channel, item: {'terminal_result': 'unknown'},
+                    current_main=lambda: SHA, heartbeat=driver.publish_heartbeat)
+    recovered = _record_frontier_heartbeat(monkeypatch, emitted[-1], at)
+    assert emitted[-1]['sequence'] > failure['after_sequence']
+    assert datetime.fromisoformat(emitted[-1]['observed_at']) < datetime.fromisoformat(failure['observed_at'])
+    assert check([failed, recovered, failed]).ok
+    retained = json.loads(path.read_text())
+    assert retained['candidate'] == asdict(candidate) and retained['last_green'] == {'dev': 'd' * 40}
+    assert retained['outcome']['operation_id'] == outcome['operation_id']
+    bootstrap.report_startup_failure(tmp_path)
+    next_failed = _record_frontier_heartbeat(monkeypatch, captured[-1], at)
+    assert captured[-1]['after_sequence'] == emitted[-1]['sequence']
+    assert check([failed, recovered, next_failed]).reason == 'startup_self_check_failed'
+
+
+@pytest.mark.parametrize('fault', ['ref_failure', 'dispatch_failure', 'lost_reply', 'writer_after_snapshot'])
+def test_startup_snapshot_crash_and_lock_linearization(tmp_path, monkeypatch, fault):
+    from scripts import dev_delivery_liveness as liveness
+    from scripts import postmerge_controller as bootstrap
+    now = datetime.now(timezone.utc)
+    with driver.checkpoint_lock(tmp_path):
+        pass
+    path = tmp_path / 'postmerge-dev-test.json'
+    driver._atomic_checkpoint(path, {'observation': {'sequence': 4, 'observed_at': now.isoformat()}})
+    before, inode = path.read_bytes(), path.stat().st_ino
+    lock_inode = (tmp_path / 'postmerge-dev-test.lock').stat().st_ino
+    emitted, captured = [], []
+    current_main = 'b' * 40
+    monkeypatch.setattr(driver, '_utc_now', lambda: now)
+    monkeypatch.setattr(driver, '_dispatch_liveness_signal', lambda kind, payload: emitted.append(payload))
+    def no_build():
+        raise driver.CandidateRefused('latest_build_not_ready')
+    def transport(command, **_):
+        if command[1] == 'api':
+            if fault == 'ref_failure':
+                raise subprocess.TimeoutExpired(command, 60)
+            if fault == 'writer_after_snapshot':
+                # Deterministic writer-after-snapshot interleaving. The real
+                # lock must have been released before the first transport call.
+                with pytest.raises(driver.CandidateRefused, match='latest_build_not_ready'):
+                    driver.poll(tmp_path, build=no_build, current_main=lambda: current_main, heartbeat=driver.publish_heartbeat)
+            return SimpleNamespace(stdout=json.dumps({'object': {'sha': current_main}}))
+        captured.append(json.loads(next(arg[8:] for arg in command if arg.startswith('payload='))))
+        if fault in {'dispatch_failure', 'lost_reply'}:
+            raise subprocess.TimeoutExpired(command, 60)
+        return SimpleNamespace()
+    monkeypatch.setattr(bootstrap.subprocess, 'run', transport)
+    if fault == 'writer_after_snapshot':
+        bootstrap.report_startup_failure(tmp_path)
+        assert captured[-1]['after_sequence'] == 4 and emitted[-1]['sequence'] == 5
+        assert captured[-1]['sha'] == emitted[-1]['sha'] == current_main
+        at = datetime.now(timezone.utc) + timedelta(seconds=1)
+        failed = _record_frontier_heartbeat(monkeypatch, captured[-1], at)
+        recovered = _record_frontier_heartbeat(monkeypatch, emitted[-1], at)
+        checked = liveness.check(driver.REPOSITORY, current_main, api=lambda endpoint: (
+            {'workflow_runs': []} if '/actions/workflows/' in endpoint else [failed, recovered, failed]), now=at)
+        assert checked.ok
+    else:
+        with pytest.raises(subprocess.TimeoutExpired):
+            bootstrap.report_startup_failure(tmp_path)
+        assert path.read_bytes() == before and path.stat().st_ino == inode
+    assert (tmp_path / 'postmerge-dev-test.lock').stat().st_ino == lock_inode
+
+
+def test_installed_startup_refuses_bad_state_without_creating_authority(installed_controller_pin):
+    pin = installed_controller_pin
+    path, lock = pin.state / 'postmerge-dev-test.json', pin.state / 'postmerge-dev-test.lock'
+    checkpoint, checkpoint_inode = path.read_bytes(), path.stat().st_ino
+    lock_inode = lock.stat().st_ino
+    # Pure checks run while the parent installer lock is held, even with no
+    # checkpoint. They must neither snapshot state nor dispatch a report.
+    saved = pin.state / 'checkpoint-saved'
+    with driver.checkpoint_lock(pin.state):
+        path.rename(saved)
+        checked = subprocess.run([*pin.config['ProgramArguments'], '--self-check'],
+                                 capture_output=True, text=True)
+        saved.rename(path)
+    assert checked.returncode == 0 and not pin.signals.exists()
+    controller = pin.source / 'scripts/postmerge_dev_test.py'
+    controller.write_text("raise ModuleNotFoundError('private state must not leak')\n")
+    calls = pin.state / 'gh-calls'
+    pin.gh.write_text(pin.gh.read_text().replace('#!/bin/sh\n', '#!/bin/sh\nprintf call >> "' + str(calls) + '"\n'))
+    for fault in ('missing_directory', 'missing_lock', 'missing_checkpoint', 'directory_mode', 'lock_mode', 'checkpoint_mode',
+                  'checkpoint_symlink', 'checkpoint_hardlink', 'checkpoint_type', 'json', 'object',
+                  'size', 'null_observation', 'bool_sequence', 'overflow_sequence', 'invalid_time', 'busy'):
+        extra = pin.state / 'extra-link'
+        saved_lock = pin.state / 'lock-saved'
+        if fault == 'missing_lock':
+            lock.rename(saved_lock)
+        elif fault in {'missing_checkpoint', 'checkpoint_symlink', 'checkpoint_type'}:
+            path.rename(saved)
+            if fault == 'checkpoint_symlink':
+                path.symlink_to(saved)
+            elif fault == 'checkpoint_type':
+                path.mkdir()
+        elif fault == 'checkpoint_hardlink':
+            os.link(path, extra)
+        elif fault == 'directory_mode':
+            pin.state.chmod(0o755)
+        elif fault == 'lock_mode':
+            lock.chmod(0o644)
+        elif fault == 'checkpoint_mode':
+            path.chmod(0o644)
+        elif fault in {'json', 'object', 'size'}:
+            path.write_text({'json': '{private', 'object': '[]', 'size': ' ' * 65537}[fault])
+        elif fault in {'null_observation', 'bool_sequence', 'overflow_sequence', 'invalid_time'}:
+            data = json.loads(checkpoint)
+            data['observation'] = None if fault == 'null_observation' else {
+                'sequence': True if fault == 'bool_sequence' else 10**18 if fault == 'overflow_sequence' else 1,
+                'observed_at': 'private invalid time' if fault == 'invalid_time' else data['observation']['observed_at']}
+            path.write_text(json.dumps(data))
+        if fault == 'busy':
+            with driver.checkpoint_lock(pin.state):
+                failed = subprocess.run(pin.config['ProgramArguments'], capture_output=True, text=True)
+        else:
+            command = pin.config['ProgramArguments']
+            if fault == 'missing_directory':
+                command = [*command, '--state-directory', str(pin.state / 'absent-state')]
+            failed = subprocess.run(command, capture_output=True, text=True)
+        assert failed.returncode == 78 and json.loads(failed.stdout)['liveness_signal'] == 'failed', fault
+        assert not calls.exists() and not pin.signals.exists(), fault
+        assert 'private' not in failed.stdout + failed.stderr, fault
+        if fault == 'missing_lock':
+            assert not lock.exists()
+            saved_lock.rename(lock)
+        elif fault in {'missing_checkpoint', 'checkpoint_symlink', 'checkpoint_type'}:
+            if path.is_symlink():
+                path.unlink()
+            elif path.is_dir():
+                path.rmdir()
+            assert not path.exists()
+            saved.rename(path)
+        else:
+            extra.unlink(missing_ok=True)
+            pin.state.chmod(0o700)
+            lock.chmod(0o600)
+            path.chmod(0o600)
+            path.write_bytes(checkpoint)
+        assert path.read_bytes() == checkpoint and path.stat().st_ino == checkpoint_inode, fault
+        assert lock.stat().st_ino == lock_inode, fault
+
+
+def test_startup_timestamp_floor_preserves_queued_failure_pagination(tmp_path, monkeypatch):
+    from scripts import dev_delivery_liveness as liveness
+    from scripts import postmerge_controller as bootstrap
+    floor = datetime(2026, 10, 19, 17, 58, tzinfo=timezone.utc)
+    emitted = []
+    monkeypatch.setattr(driver, '_utc_now', lambda: floor)
+    monkeypatch.setattr(driver, '_dispatch_liveness_signal', lambda kind, payload: emitted.append(payload))
+    def no_build():
+        raise driver.CandidateRefused('latest_build_not_ready')
+    with pytest.raises(driver.CandidateRefused, match='latest_build_not_ready'):
+        driver.poll(tmp_path, build=no_build, current_main=lambda: SHA, heartbeat=driver.publish_heartbeat)
+    normal_payload = emitted[-1]
+    # A host-ahead normal signal initially refuses. Its unchanged owner rerun
+    # can be admitted later, so its source time alone is not an arrival clock.
+    with pytest.raises(liveness.LivenessRefused, match='signal_observation_stale_or_future'):
+        _record_frontier_heartbeat(monkeypatch, normal_payload, floor - timedelta(minutes=4))
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return floor - timedelta(minutes=3)
+    monkeypatch.setattr(bootstrap, 'datetime', Clock)
+    captured = []
+    def transport(command, **_):
+        if command[1] == 'api':
+            return SimpleNamespace(stdout=json.dumps({'object': {'sha': SHA}}))
+        captured.append(json.loads(next(arg[8:] for arg in command if arg.startswith('payload='))))
+        return SimpleNamespace()
+    monkeypatch.setattr(bootstrap.subprocess, 'run', transport)
+    bootstrap.report_startup_failure(tmp_path)
+    failure_payload = captured[-1]
+    assert failure_payload['observed_at'] == floor.isoformat()
+    with pytest.raises(liveness.LivenessRefused, match='signal_observation_stale_or_future'):
+        _record_frontier_heartbeat(monkeypatch, failure_payload, floor - timedelta(minutes=2))
+    normal = _record_frontier_heartbeat(monkeypatch, normal_payload, floor + timedelta(minutes=3))
+    failed = _record_frontier_heartbeat(monkeypatch, failure_payload, floor + timedelta(minutes=1))
+    pages = {1: [normal] + [{'context': 'unrelated', 'created_at': (floor + timedelta(minutes=2)).isoformat()}] * 99,
+             2: [failed]}
+    reads = []
+    def api(endpoint):
+        if '/actions/workflows/' in endpoint:
+            return {'workflow_runs': []}
+        page = int(endpoint.rsplit('page=', 1)[1])
+        reads.append(page)
+        return pages[page]
+    checked = liveness.check(driver.REPOSITORY, SHA, api=api, now=floor + timedelta(minutes=4))
+    assert not checked.ok and checked.reason == 'startup_self_check_failed'
+    assert reads == [1, 2]
+
+
+@pytest.mark.parametrize('include_activity', [False, True])
+@pytest.mark.parametrize('later_pause', [False, True])
+def test_startup_diagnostic_is_not_a_pagination_clock_witness(tmp_path, monkeypatch, include_activity, later_pause):
+    from scripts import dev_delivery_liveness as liveness
+    from scripts import postmerge_controller as bootstrap
+    floor = datetime(2026, 10, 19, 18, tzinfo=timezone.utc)
+    emitted, captured = [], []
+    monkeypatch.setattr(driver, '_utc_now', lambda: floor)
+    monkeypatch.setattr(driver, '_dispatch_liveness_signal', lambda kind, payload: emitted.append(payload))
+    def no_build():
+        raise driver.CandidateRefused('latest_build_not_ready')
+    with pytest.raises(driver.CandidateRefused, match='latest_build_not_ready'):
+        driver.poll(tmp_path, build=no_build, current_main=lambda: SHA, heartbeat=driver.publish_heartbeat)
+    older = _record_frontier_heartbeat(monkeypatch, emitted[-1], floor + timedelta(minutes=2))
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return floor + timedelta(minutes=30)
+    monkeypatch.setattr(bootstrap, 'datetime', Clock)
+    def transport(command, **_):
+        if command[1] == 'api':
+            return SimpleNamespace(stdout=json.dumps({'object': {'sha': SHA}}))
+        captured.append(json.loads(next(arg[8:] for arg in command if arg.startswith('payload='))))
+        return SimpleNamespace()
+    monkeypatch.setattr(bootstrap.subprocess, 'run', transport)
+    bootstrap.report_startup_failure(tmp_path)
+    failed = _record_frontier_heartbeat(monkeypatch, captured[-1], floor + timedelta(minutes=31))
+    if later_pause:
+        driver.engage_pause(tmp_path, 6224, (floor + timedelta(hours=1)).isoformat())
+        assert driver.poll(tmp_path, build=no_build, current_main=lambda: SHA, heartbeat=driver.publish_heartbeat) == 0
+    else:
+        with pytest.raises(driver.CandidateRefused, match='latest_build_not_ready'):
+            driver.poll(tmp_path, build=no_build, current_main=lambda: SHA, heartbeat=driver.publish_heartbeat)
+    later = _record_frontier_heartbeat(monkeypatch, emitted[-1], floor + timedelta(minutes=1))
+    noise = {'context': 'unrelated', 'created_at': (floor + timedelta(minutes=2)).isoformat()}
+    pages = {1: [failed] + [noise] * (98 if include_activity else 99) + ([older] if include_activity else []),
+             2: [later]}
+    reads = []
+    def api(endpoint):
+        if '/actions/workflows/' in endpoint:
+            return {'workflow_runs': []}
+        page = int(endpoint.rsplit('page=', 1)[1])
+        reads.append(page)
+        return pages[page]
+    checked = liveness.check(driver.REPOSITORY, SHA, api=api, now=floor + timedelta(minutes=40))
+    assert checked.reason == ('paused' if later_pause else 'no_admitted_build')
+    assert checked.ok is not later_pause and reads == [1, 2]
+
+
+@pytest.mark.parametrize('last_page_size', [99, 100])
+def test_startup_only_status_history_preserves_exact_page_bound(monkeypatch, last_page_size):
+    from scripts import dev_delivery_liveness as liveness
+    now = datetime.now(timezone.utc)
+    failed = _record_frontier_heartbeat(monkeypatch, {
+        'protocol': driver.LIVENESS_PROTOCOL, 'sha': SHA, 'observed_at': now.isoformat(),
+        'startup': 'failed', 'after_sequence': 7}, now)
+    pages = []
+    def api(endpoint):
+        if '/actions/workflows/' in endpoint:
+            return {'workflow_runs': []}
+        if '/git/commits/' in endpoint:
+            return {'sha': SHA, 'parents': []}
+        page = int(endpoint.rsplit('page=', 1)[1])
+        pages.append(page)
+        return [failed] * (last_page_size if page == 20 else 100)
+    if last_page_size == 100:
+        with pytest.raises(liveness.LivenessRefused, match='statuses_incomplete'):
+            liveness.check(driver.REPOSITORY, SHA, api=api, now=now)
+    else:
+        checked = liveness.check(driver.REPOSITORY, SHA, api=api, now=now)
+        assert not checked.ok and checked.reason == 'startup_self_check_failed'
+    assert pages == list(range(1, 21))
+
+
+@pytest.mark.parametrize('marker', ['-1', '01', 'true', '1000000000000000000', ''])
+def test_startup_description_refuses_malformed_frontier_before_ancestry(monkeypatch, marker):
+    from scripts import dev_delivery_liveness as liveness
+    now = datetime.now(timezone.utc)
+    status = _record_frontier_heartbeat(monkeypatch, {
+        'protocol': driver.LIVENESS_PROTOCOL, 'sha': SHA, 'observed_at': now.isoformat(),
+        'startup': 'failed', 'after_sequence': 0}, now)
+    status['description'] = status['description'].replace('after_sequence=0', 'after_sequence=' + marker)
+    def api(endpoint):
+        if '/actions/workflows/' in endpoint:
+            return {'workflow_runs': []}
+        if '/statuses?' in endpoint:
+            return [status]
+        pytest.fail('malformed frontier reached ancestry')
+    with pytest.raises(liveness.LivenessRefused, match='heartbeat_observation_refused'):
+        liveness.check(driver.REPOSITORY, SHA, api=api, now=now)
+
+
+def test_healthy_installed_bootstrap_forwards_authoritative_state(installed_controller_pin):
+    pin = installed_controller_pin
+    path = pin.state / 'postmerge-dev-test.json'
+    before = json.loads(path.read_text())
+    # Actual gh transport returns no successful candidate; actual poll still
+    # persists and publishes its next normal observation, with no native work.
+    pin.gh.write_text(pin.gh.read_text().replace('if [ "$1" = api ]; then\n',
+        'if [ "$1" = api ]; then\ncase "$2" in *actions/workflows*) printf \'%s\\n\' \'{"workflow_runs":[]}\'; exit 0;; '
+        '*commits/main*) printf \'%s\\n\' \'{"sha":"' + SHA + '"}\'; exit 0;; esac\n'))
+    result = subprocess.run(pin.config['ProgramArguments'], cwd=pin.source,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    after = json.loads(path.read_text())
+    payload = json.loads(pin.signals.read_text())
+    assert payload['sequence'] == after['observation']['sequence'] == before['observation']['sequence'] + 1
+    assert 'after_sequence' not in payload and 'startup' not in payload

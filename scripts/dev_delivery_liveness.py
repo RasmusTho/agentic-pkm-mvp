@@ -153,8 +153,8 @@ def _latest_status(statuses: Any, context: str, *, allow_rotated_context: bool =
         return max(matching, key=_status_timestamp)
     observations: dict[int, tuple[datetime, str, str]] = {}
     for status in matching:
-        sequence, observed = _heartbeat_order(status)
-        if sequence:
+        sequence, diagnostic, observed = _heartbeat_order(status)
+        if sequence and not diagnostic:
             evidence = (observed, status['state'], status['description'])
             if sequence in observations and observations[sequence] != evidence:
                 raise LivenessRefused("heartbeat_sequence_conflict")
@@ -162,32 +162,23 @@ def _latest_status(statuses: Any, context: str, *, allow_rotated_context: bool =
     ordered_times = [observations[sequence][0] for sequence in sorted(observations)]
     if ordered_times != sorted(ordered_times):
         raise LivenessRefused("heartbeat_clock_order_refused")
-    # Startup diagnostics cannot import or mutate the checkpoint producer.
-    # Preserve the sequenced activity order, then let a newer failed-startup
-    # observation override it. A later genuine activity observation recovers;
-    # a queued/replayed older diagnostic cannot override current activity.
-    startup = [status for status in matching if _startup_failure(status)]
-    activity = [status for status in matching if not _startup_failure(status)]
-    latest = max(activity, key=_heartbeat_order) if activity else None
-    failed = max(startup, key=_status_timestamp) if startup else None
-    if failed is not None and (latest is None or _status_timestamp(failed) >= _status_timestamp(latest)):
-        return failed
-    return latest
+    # A read-only frontier f is after activity f and before actual activity
+    # f+1. Independent host clocks and queued writes never establish recovery.
+    return max(matching, key=_heartbeat_order)
 
 
-def _heartbeat_order(status: dict[str, Any]) -> tuple[int, datetime]:
+def _heartbeat_order(status: dict[str, Any]) -> tuple[int, int, datetime]:
     description = status.get("description", "")
     match = re.fullmatch(
-        r"observed_at=([^;]+)(?:;seq=([1-9][0-9]{0,17}))?(?:;paused_issue=([1-9][0-9]{0,9});until=([^;]+)|;startup=(self_check_failed))?",
+        r"observed_at=([^;]+)(?:;seq=([1-9][0-9]{0,17})(?:;paused_issue=([1-9][0-9]{0,9});until=([^;]+))?|;after_sequence=(0|[1-9][0-9]{0,17});startup=(self_check_failed))?",
         description if isinstance(description, str) else "",
     )
     if (match is None or status.get("state") not in {"success", "failure"}
-            or (status['state'] == 'failure') != bool(match[3] or match[5])
-            or (match[3] and not match[2]) or (match[5] and match[2])):
+            or (status['state'] == 'failure') != bool(match[3] or match[6])):
         raise LivenessRefused("heartbeat_observation_refused")
     # Shipped legacy heartbeats are normal only. Sequenced producer continuity
     # outranks those observations even when its adoption followed a clock reset.
-    return int(match[2] or 0), _timestamp(match[1])
+    return int(match[2] or match[5] or 0), int(bool(match[6])), _timestamp(match[1])
 
 
 def _heartbeat_pause(status: dict[str, Any] | None) -> tuple[int, datetime] | None:
@@ -222,9 +213,9 @@ def evaluate(
     pause = _heartbeat_pause(activity)
     if heartbeat is not None and _status_timestamp(heartbeat) > current:
         return LivenessResult(False, "heartbeat_future", "controller heartbeat observation is in the future")
+    if _startup_failure(heartbeat):
+        return LivenessResult(False, 'startup_self_check_failed', 'controller pinned tooling startup self-check failed')
     if pause is not None and activity is not None and _status_timestamp(activity) <= current < pause[1]:
-        if _startup_failure(heartbeat):
-            return LivenessResult(False, 'startup_self_check_failed', 'controller pinned tooling startup self-check failed')
         return LivenessResult(False, "paused", f"paused (#{pause[0]}, until {pause[1].isoformat()})")
     verdict = _latest_status(verdict_statuses, VERDICT_CONTEXT)
     verdict_at = _status_timestamp(verdict) if verdict is not None else None
@@ -232,11 +223,6 @@ def evaluate(
                         and verdict.get("state") in {"success", "failure"}
                         and verdict_at is not None and verdict_at >= build.completed_at
                         and verdict_at <= current)
-    if (heartbeat is not None and heartbeat.get('state') == 'failure'
-            and heartbeat.get('description', '').endswith(';startup=self_check_failed')
-            and _status_timestamp(heartbeat) <= current
-            and (not terminal_verdict or _status_timestamp(heartbeat) > verdict_at)):
-        return LivenessResult(False, 'startup_self_check_failed', 'controller pinned tooling startup self-check failed')
     if (terminal_verdict
             and current - verdict_at <= HEARTBEAT_GRACE):
         # A fresh terminal verdict is itself proof that the controller was
@@ -302,7 +288,12 @@ def _status_history(repo: str, sha: str, context: str, *, api: Callable[[str], A
                     or (previous_created is not None and created[0] > previous_created)):
                 raise LivenessRefused("statuses_creation_order_refused")
             previous_created = created[-1]
-            latest = _latest_status(collected, context, allow_rotated_context=True)
+            # A diagnostic's frontier/time cannot prove page completeness.
+            # Its producer floors time at the snapshotted observation; only an
+            # actual activity supplies the monotone clock used by this cutoff.
+            activity = [status for status in collected if not _startup_failure(status)]
+            _latest_status(collected, context, allow_rotated_context=True)
+            latest = _latest_status(activity, context, allow_rotated_context=True)
             if (latest is not None and _heartbeat_order(latest)[0] > 0
                     and created[-1] < _status_timestamp(latest).replace(microsecond=0)):
                 return collected
@@ -407,8 +398,10 @@ def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
     elif isinstance(signal, dict):
         fields |= set(signal) & {"pause", "sequence"}
     if kind == 'heartbeat' and isinstance(signal, dict) and 'startup' in signal:
-        fields |= {'startup'}
-        if signal['startup'] != 'failed' or set(signal) & {'pause', 'sequence'}:
+        fields |= {'startup', 'after_sequence'}
+        if (signal['startup'] != 'failed' or set(signal) & {'pause', 'sequence'}
+                or type(signal.get('after_sequence')) is not int
+                or not 0 <= signal['after_sequence'] < 10**18):
             raise LivenessRefused('signal_startup_refused')
     if not isinstance(signal, dict) or set(signal) != fields or signal["protocol"] != LIVENESS_PROTOCOL:
         raise LivenessRefused("signal_protocol_refused")
@@ -437,7 +430,7 @@ def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
             description += f";paused_issue={pause['issue']};until={pause['expires_at']}"
         if signal.get('startup') == 'failed':
             state = 'failure'
-            description += ';startup=self_check_failed'
+            description += f";after_sequence={signal['after_sequence']};startup=self_check_failed"
     else:
         evidence = signal["candidate"]
         if (not isinstance(evidence, dict) or type(evidence.get("run_id")) is not int
