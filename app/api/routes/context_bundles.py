@@ -9,14 +9,20 @@ authority flags surfaced verbatim, ``may_write`` never upgraded here.
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.request_active_context import current_scoped_route_read, scoped_route_read
 from app.context_bundles.construction import build_inspectable_bundle
 from app.context_bundles.runtime_registry import get_emitted_bundle, register_emitted_bundle
 from app.context_bundles.schema import AuthorityFlags, ContextBundle
+from app.instance.context_settings import IncompatibleBindingSettingsError, resolve_context_settings
+from app.instance.vault_registry import VaultRegistryStore
 from app.retrieval.capability import RetrievalRequest
 from app.retrieval.production_bundle import retrieve_and_emit_bundle
+from app.vault.active_context_v1 import ActiveContextSetV1
 
 router = APIRouter()
 
@@ -48,6 +54,34 @@ def _bundle_not_found(bundle_id: str) -> HTTPException:
     )
 
 
+def _retrieval_request(
+    query: str, bundle_id: str, context: ActiveContextSetV1 | None
+) -> RetrievalRequest:
+    """The retrieval request; a scoped one ranks with its bindings' own settings.
+
+    Like ``/search/scoped``, the context's retrieval tuning and settings digest
+    are resolved under the read lease the scoped route already holds, so the
+    bundle is never ranked with another vault's configuration.
+    """
+    if context is None:
+        return RetrievalRequest(query=query, trace_id=bundle_id)
+    registry = VaultRegistryStore(
+        Path(os.environ["INSTANCE_VAULT_REGISTRY_PATH"]).expanduser().resolve(strict=False)
+    )
+    try:
+        settings = resolve_context_settings(context, registry_store=registry)
+    except IncompatibleBindingSettingsError as exc:
+        raise HTTPException(status_code=409, detail="incompatible_binding_settings") from exc
+    return RetrievalRequest(
+        query=query,
+        trace_id=bundle_id,
+        scope=context.scope,
+        active_context=context,
+        settings_bundle_digest=settings.cache_bundle_digest,
+        retrieval_tuning=settings.retrieval_tuning,
+    )
+
+
 @router.get("/context-bundles/{bundle_id}", response_model=ContextBundle)
 @scoped_route_read
 def get_context_bundle(
@@ -72,11 +106,7 @@ def get_context_bundle(
         raise _bundle_not_found(bundle_id)
     if query:
         result, _receipt = retrieve_and_emit_bundle(
-            RetrievalRequest(
-                query=query,
-                trace_id=bundle_id,
-                active_context=scoped.context if scoped is not None else None,
-            ),
+            _retrieval_request(query, bundle_id, scoped.context if scoped is not None else None),
             bundle_id=bundle_id,
         )
         bundle = _scope_emitted_bundle(result.bundle, intended_use)

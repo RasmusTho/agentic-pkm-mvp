@@ -63,13 +63,14 @@ def get_emitted_bundle(
     carrier-free read sees the legacy view: the live compatibility binding, the
     no-registry sentinel and unstamped entries.
     """
-    bindings = (vault_binding_id,) if vault_binding_id is not None else _legacy_view()
-    for binding in bindings:
-        key = (binding, bundle_id)
-        bundle = _EMITTED_BUNDLES.get(key)
-        if bundle is not None:
+    visible = {vault_binding_id} if vault_binding_id is not None else set(_legacy_view())
+    # Newest visible registration wins, preserving the registry's last-write
+    # behavior across the legacy view's bindings.
+    for key in reversed(_EMITTED_BUNDLES):
+        binding, entry_id = key
+        if entry_id == bundle_id and binding in visible:
             _EMITTED_BUNDLES.move_to_end(key)
-            return bundle.model_copy(deep=True)
+            return _EMITTED_BUNDLES[key].model_copy(deep=True)
     return None
 
 

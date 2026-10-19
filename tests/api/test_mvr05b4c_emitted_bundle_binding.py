@@ -27,6 +27,8 @@ from tests.helpers.vault_settings import initialize_test_vault
 pytestmark = pytest.mark.not_pg
 
 BUNDLE_ID = "cb-shared-id"
+# The ``tuning`` each stubbed backend search received, newest last.
+_TUNINGS: list[object] = []
 
 
 class _EmptyStore:
@@ -61,9 +63,11 @@ def two_bindings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Retrieval backend: one matching note per vault, returned WITHOUT honoring the
     # allowed bindings, so only the production post-filter keeps a scoped read honest.
     searched: list[set[str] | None] = []
+    _TUNINGS.clear()
 
     def search(query, **kwargs):
         searched.append(kwargs.get("allowed_binding_ids"))
+        _TUNINGS.append(kwargs.get("tuning"))
         return ScopedRetrieval(
             results=[
                 _hit("note-a", first.vault_binding_id, "vault-a/plan.md", 0.9),
@@ -227,3 +231,46 @@ def test_carrier_free_emission_is_never_visible_to_the_live_binding(two_bindings
         assert client.get(path, headers=headers_a).status_code == 404
     # The carrier-free legacy view still sees its own emission.
     assert client.get(f"/api/resurfacing/bundle/{BUNDLE_ID}").status_code == 200
+
+
+def test_scoped_query_ranks_with_the_request_bindings_settings(
+    two_bindings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6253 review: the bundle is ranked with its own binding's retrieval settings."""
+
+    import app.api.routes.context_bundles as bundle_routes
+    from app.instance.context_settings import resolve_context_settings as real_resolve
+
+    client, first, _second, _searched = two_bindings
+    resolved: list[object] = []
+
+    def spy(context, **kwargs):
+        settings = real_resolve(context, **kwargs)
+        resolved.append(settings)
+        return settings
+
+    monkeypatch.setattr(bundle_routes, "resolve_context_settings", spy)
+    bundle = _emit(client, _headers(client, first.vault_binding_id))
+    [settings] = resolved
+    assert _TUNINGS[-1] is settings.retrieval_tuning
+    assert bundle["id"] == BUNDLE_ID
+
+
+def test_legacy_view_returns_the_newest_visible_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#6253 review: last write wins across the legacy view's bindings."""
+
+    from app.context_bundles import runtime_registry
+    from app.context_bundles.construction import build_inspectable_bundle
+
+    clear_emitted_bundles()
+    monkeypatch.setattr(runtime_registry, "_legacy_view", lambda: ("live-binding", None))
+    older = build_inspectable_bundle("cb-x").model_copy(update={"intended_use": ["orient"]})
+    newer = build_inspectable_bundle("cb-x").model_copy(update={"intended_use": ["resurface"]})
+    runtime_registry.register_emitted_bundle(older, vault_binding_id="live-binding")
+    runtime_registry.register_emitted_bundle(newer)
+    assert runtime_registry.get_emitted_bundle("cb-x").intended_use == ["resurface"]
+    runtime_registry.register_emitted_bundle(older, vault_binding_id="live-binding")
+    assert runtime_registry.get_emitted_bundle("cb-x").intended_use == ["orient"]
+    clear_emitted_bundles()
