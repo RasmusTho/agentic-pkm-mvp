@@ -1183,6 +1183,16 @@ reason. A committed receipt does not prove legacy-row convergence or authorize r
 mapping and atomic legacy reconciliation remain separate mandatory gates, and the no-progress
 classifier must be reapplied before a fresh current-main candidate is admitted.
 
+If the host has durably marked a source-persistence operation `sent` but the selected native
+channel refuses before creating any request, producer receipt, terminal receipt, owned one-shot,
+or channel owner fence, the same ID may be retired only through
+`--prove-source-persistence-never-admitted`. The existing-secrets-only DEV/TEST command obtains a
+fixed-field proof from that exact channel and records `failed/native-absence-proof` under the host lock;
+any partial, terminal, locked, owned-container, malformed, foreign, or ambiguous native state
+refuses. This recovery never runs the producer, retargets the operation, deploys a candidate, or
+continues automatically. A corrected channel requires a fresh operation UUID and all ordinary
+source-persistence admission checks.
+
 Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
 History dependencies, candidate/staging or untrusted material, changed sources,
 redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again

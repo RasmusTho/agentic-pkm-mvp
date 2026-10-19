@@ -1373,6 +1373,49 @@ class LinuxEffects:
             raise PostgresDeployError()
         return validate_receipt(payload)
 
+    def prove_source_identity_absence(self, operation_id: str) -> dict[str, Any]:
+        """Prove one source-persistence ID never crossed native admission."""
+        try:
+            if (
+                self.config.channel not in {"dev", "test"}
+                or str(UUID(operation_id)) != operation_id
+            ):
+                raise PostgresDeployError()
+        except (ValueError, TypeError, AttributeError):
+            raise PostgresDeployError() from None
+        current = self.config.journal.read()
+        if (
+            current is None
+            or current.operation_id == operation_id
+            or current.terminal_result not in {"committed", "aborted", "failed"}
+        ):
+            raise PostgresDeployError()
+        directory = self.config.journal.directory
+        paths = (
+            directory / f"{self.config.channel}-source-identity-{operation_id}.request.json",
+            directory / f"{self.config.channel}-source-identity-{operation_id}.producer.json",
+            directory / f"{self.config.channel}-source-identity-{operation_id}.json",
+        )
+        if any(os.path.lexists(path) for path in paths) or self.channel_lock_owner() is not None:
+            raise PostgresDeployError()
+        ids = _command([
+            "docker", "ps", "--all", "--no-trunc",
+            "--filter", f"label=yggdrasil.native.operation={operation_id}",
+            "--format", "{{.ID}}",
+        ]).splitlines()
+        if ids:
+            raise PostgresDeployError()
+        return {
+            "contract": "native-source-identity-absence.v1",
+            "operation_id": operation_id,
+            "channel": self.config.channel,
+            "native_request_absent": True,
+            "native_producer_receipt_absent": True,
+            "native_terminal_receipt_absent": True,
+            "native_worker_absent": True,
+            "native_lock_absent": True,
+        }
+
     def reconcile_source_identity_cleanup(
         self,
         operation_id: str,
@@ -3707,6 +3750,21 @@ class DeploymentSupervisor:
                     operation_id, revision, image_digest, selected,
                 )
                 return {'source_identity_persistence': receipt}
+        if data.get('action') == 'source-identity-prove-absence':
+            if set(data) != {'action', 'operation_id'}:
+                raise PostgresDeployError()
+            try:
+                operation_id = str(data['operation_id'])
+                if str(UUID(operation_id)) != operation_id:
+                    raise PostgresDeployError()
+            except (ValueError, TypeError, AttributeError):
+                raise PostgresDeployError() from None
+            with self.mutex:
+                self._require_current_config()
+                if self.operation is not None and not self.operation.finished.is_set():
+                    raise PostgresDeployError()
+                proof = LinuxEffects(self.config).prove_source_identity_absence(operation_id)
+                return {'source_identity_absence': proof}
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
         operation_id = str(data['operation_id'])
@@ -3895,6 +3953,52 @@ class SshDeployRemote:
             ):
                 raise PostgresDeployError()
             return receipt
+        except Exception:
+            raise PostgresDeployError() from None
+
+    def prove_source_identity_absence(self, operation_id: str) -> dict[str, Any]:
+        """Read one fixed proof that a source operation never reached native admission."""
+        try:
+            if str(UUID(operation_id)) != operation_id:
+                raise PostgresDeployError()
+        except (ValueError, TypeError, AttributeError):
+            raise PostgresDeployError() from None
+        channel = self.host.removeprefix('ygg-')
+        if channel not in {'dev', 'test'}:
+            raise PostgresDeployError()
+        payload = {'action': 'source-identity-prove-absence', 'operation_id': operation_id}
+        result = subprocess.run(
+            ['ssh', '-o', 'BatchMode=yes', '--', self.host, 'sudo', '-n',
+             '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', channel],
+            input=json.dumps(payload) + '\n', text=True, capture_output=True, check=False,
+        )
+        if result.returncode:
+            raise PostgresDeployError()
+        expected = {
+            'contract': 'native-source-identity-absence.v1',
+            'operation_id': operation_id,
+            'channel': channel,
+            'native_request_absent': True,
+            'native_producer_receipt_absent': True,
+            'native_terminal_receipt_absent': True,
+            'native_worker_absent': True,
+            'native_lock_absent': True,
+        }
+        try:
+            response = json.loads(result.stdout)
+            if not isinstance(response, dict) or set(response) != {'source_identity_absence'}:
+                raise PostgresDeployError()
+            proof = response['source_identity_absence']
+            if (
+                not isinstance(proof, dict)
+                or set(proof) != set(expected)
+                or any(
+                    type(proof[key]) is not type(value) or proof[key] != value
+                    for key, value in expected.items()
+                )
+            ):
+                raise PostgresDeployError()
+            return expected
         except Exception:
             raise PostgresDeployError() from None
 

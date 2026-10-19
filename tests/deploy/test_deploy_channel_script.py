@@ -3859,6 +3859,7 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
             operation = SimpleNamespace(
                 operation_id=operation_id,
                 completed_result=None,
+                completed_source=None,
                 prepare_mutation=lambda: calls.append(("host-sent", channel, operation_id)),
                 finish=lambda evidence: calls.append(("host-finish", evidence)),
             )
@@ -3912,6 +3913,407 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
     assert host.main(["prod", *args[1:]]) == 78
     malformed = ["bad" if value == operation_id else value for value in args]
     assert host.main(malformed) == 78
+
+
+def test_source_identity_absence_proof_retires_only_exact_pending_host_operation(
+    monkeypatch, tmp_path,
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+
+    operation_id = str(uuid4())
+    calls = []
+
+    class Controller:
+        directory = tmp_path
+
+        @contextmanager
+        def source_persistence_operation(self, channel, *, operation_id):
+            calls.append(("host-admit", channel, operation_id))
+            operation = SimpleNamespace(
+                operation_id=operation_id,
+                completed_result=None,
+                mutation_started=True,
+                finish=lambda evidence: calls.append(("host-finish", evidence)),
+            )
+            yield operation, True
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def prove_source_identity_absence(self, requested_id):
+            calls.append(("prove", requested_id))
+            return {
+                "contract": "native-source-identity-absence.v1",
+                "operation_id": requested_id,
+                "channel": "test",
+                "native_request_absent": True,
+                "native_producer_receipt_absent": True,
+                "native_terminal_receipt_absent": True,
+                "native_worker_absent": True,
+                "native_lock_absent": True,
+            }
+
+    monkeypatch.setattr(host, "HostSecretController", Controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    monkeypatch.setattr(
+        host, "deploy_from_host",
+        lambda *_args, **_kwargs: pytest.fail("absence proof must not deploy"),
+    )
+    args = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--prove-source-persistence-never-admitted", "--operation-id", operation_id,
+    ]
+    assert host.main(args) == 0
+    assert calls[:2] == [("host-admit", "test", operation_id), ("prove", operation_id)]
+    evidence = calls[-1][1]
+    assert (evidence.operation_id, evidence.kind, evidence.target, evidence.result) == (
+        operation_id, "source-persistence", "test", "failed",
+    )
+    assert host.main([*args, "--persist-source-identity"]) == 78
+
+
+def test_source_identity_retired_host_operation_never_replays_producer(
+    monkeypatch, tmp_path,
+):
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = str(uuid4())
+    with controller.source_persistence_operation(
+        "test", operation_id=operation_id,
+    ) as (operation, resumed):
+        assert resumed is False
+        operation.prepare_mutation()
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def prove_source_identity_absence(self, requested_id):
+            assert requested_id == operation_id
+            return {
+                "contract": "native-source-identity-absence.v1",
+                "operation_id": requested_id,
+                "channel": "test",
+                "native_request_absent": True,
+                "native_producer_receipt_absent": True,
+                "native_terminal_receipt_absent": True,
+                "native_worker_absent": True,
+                "native_lock_absent": True,
+            }
+
+        def persist_source_identity(self, *_args, **_kwargs):
+            pytest.fail("a retired host operation must never replay the producer")
+
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    base = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--operation-id", operation_id,
+    ]
+    assert host.main([*base, "--prove-source-persistence-never-admitted"]) == 0
+    assert host.main([*base, "--prove-source-persistence-never-admitted"]) == 0
+    persist = [
+        *base, "--persist-source-identity",
+        "--image-digest", "sha256:" + "1" * 64,
+        "--authority-cutover-binding", "vault-alpha",
+        "--authority-cutover-root", "/srv/vault-alpha",
+        "--authority-cutover-ownership-root", "/srv/instance-ownership",
+    ]
+    assert host.main(persist) == 78
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["prepared", "sent", "failed"]
+    assert records[-1]["source"] == "native-absence-proof"
+
+
+def test_source_identity_admitted_failed_operation_can_finish_retained_cleanup(
+    monkeypatch, tmp_path,
+):
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = str(uuid4())
+    lifecycle = {
+        "request": False,
+        "receipt": False,
+        "fence": False,
+        "producer_calls": 0,
+        "cleanup_calls": 0,
+    }
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def persist_source_identity(self, requested_id, revision, _digest, _selected):
+            assert requested_id == operation_id
+            if not lifecycle["receipt"]:
+                lifecycle.update({
+                    "request": True,
+                    "receipt": True,
+                    "fence": True,
+                    "producer_calls": lifecycle["producer_calls"] + 1,
+                })
+            else:
+                assert lifecycle["request"] and lifecycle["fence"]
+                lifecycle["cleanup_calls"] += 1
+                lifecycle["fence"] = False
+            return {
+                "contract": "native-source-identity-persistence.v1",
+                "operation_id": requested_id,
+                "channel": "test",
+                "revision": revision,
+                "terminal_state": "failed",
+                "eligible": False,
+                "reason": "source_operation_conflict",
+                "selected_count": 1,
+                "persisted_count": 0,
+                "missing_count": 0,
+                "invalid_count": 0,
+                "ambiguous_count": 0,
+                "producer_error_count": 1,
+            }
+
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    args = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--persist-source-identity", "--operation-id", operation_id,
+        "--image-digest", "sha256:" + "1" * 64,
+        "--authority-cutover-binding", "vault-alpha",
+        "--authority-cutover-root", "/srv/vault-alpha",
+        "--authority-cutover-ownership-root", "/srv/instance-ownership",
+    ]
+    assert host.main(args) == 78
+    assert lifecycle == {
+        "request": True,
+        "receipt": True,
+        "fence": True,
+        "producer_calls": 1,
+        "cleanup_calls": 0,
+    }
+    assert host.main(args) == 78
+    assert lifecycle == {
+        "request": True,
+        "receipt": True,
+        "fence": False,
+        "producer_calls": 1,
+        "cleanup_calls": 1,
+    }
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["prepared", "sent", "failed"]
+    assert records[-1]["source"] == "remote-terminal"
+
+
+def test_source_identity_absence_proof_holds_host_lock_across_remote_read(
+    monkeypatch, tmp_path,
+):
+    import threading
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = str(uuid4())
+    with controller.source_persistence_operation(
+        "test", operation_id=operation_id,
+    ) as (operation, _resumed):
+        operation.prepare_mutation()
+
+    proof_called = threading.Event()
+    native_request_present = threading.Event()
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def prove_source_identity_absence(self, requested_id):
+            assert requested_id == operation_id
+            proof_called.set()
+            if native_request_present.is_set():
+                raise PostgresDeployError()
+            pytest.fail("proof ran before the competing host lock was released")
+
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    args = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--prove-source-persistence-never-admitted", "--operation-id", operation_id,
+    ]
+    result = []
+    with controller.source_persistence_operation(
+        "test", operation_id=operation_id,
+    ):
+        thread = threading.Thread(target=lambda: result.append(host.main(args)))
+        thread.start()
+        assert proof_called.wait(0.2) is False
+        native_request_present.set()
+    thread.join(timeout=2)
+    assert thread.is_alive() is False
+    assert result == [78]
+    assert proof_called.is_set()
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["prepared", "sent"]
+
+
+def test_source_identity_absence_proof_refuses_partial_ambiguous_or_mismatched_state(
+    monkeypatch, tmp_path,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    operation_id = str(uuid4())
+    directory = tmp_path / "journal"
+    directory.mkdir()
+    terminal = SimpleNamespace(operation_id=str(uuid4()), terminal_result="failed")
+    config = SimpleNamespace(
+        channel="dev", journal=SimpleNamespace(directory=directory, read=lambda: terminal),
+    )
+    effects = object.__new__(linux.LinuxEffects)
+    effects.config = config
+    monkeypatch.setattr(effects, "channel_lock_owner", lambda: None)
+    monkeypatch.setattr(linux, "_command", lambda _args, **_kwargs: "")
+    proof = effects.prove_source_identity_absence(operation_id)
+    assert proof["native_request_absent"] is True
+
+    class RoutedEffects:
+        def __init__(self, selected):
+            assert selected is config
+
+        def prove_source_identity_absence(self, requested_id):
+            assert requested_id == operation_id
+            return proof
+
+    monkeypatch.setattr(linux, "LinuxEffects", RoutedEffects)
+    supervisor = linux.DeploymentSupervisor(config)
+    monkeypatch.setattr(supervisor, "_require_current_config", lambda: None)
+    assert supervisor.request({
+        "action": "source-identity-prove-absence", "operation_id": operation_id,
+    }) == {"source_identity_absence": proof}
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({
+            "action": "source-identity-prove-absence",
+            "operation_id": operation_id,
+            "unexpected": True,
+        })
+
+    request = directory / f"dev-source-identity-{operation_id}.request.json"
+    request.write_text("{}")
+    with pytest.raises(PostgresDeployError):
+        effects.prove_source_identity_absence(operation_id)
+    request.unlink()
+    monkeypatch.setattr(effects, "channel_lock_owner", lambda: b"foreign")
+    with pytest.raises(PostgresDeployError):
+        effects.prove_source_identity_absence(operation_id)
+    monkeypatch.setattr(effects, "channel_lock_owner", lambda: None)
+    monkeypatch.setattr(linux, "_command", lambda _args, **_kwargs: "a" * 64)
+    with pytest.raises(PostgresDeployError):
+        effects.prove_source_identity_absence(operation_id)
+
+
+def test_source_identity_absence_reconciliation_is_content_free_and_never_replays(
+    monkeypatch,
+):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    operation_id = str(uuid4())
+    expected = {
+        "contract": "native-source-identity-absence.v1",
+        "operation_id": operation_id,
+        "channel": "dev",
+        "native_request_absent": True,
+        "native_producer_receipt_absent": True,
+        "native_terminal_receipt_absent": True,
+        "native_worker_absent": True,
+        "native_lock_absent": True,
+    }
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, json.loads(kwargs["input"])))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"source_identity_absence": expected}),
+        )
+
+    monkeypatch.setattr(linux.subprocess, "run", run)
+    remote = linux.SshDeployRemote("ygg-dev")
+    assert remote.prove_source_identity_absence(operation_id) == expected
+    assert calls == [(
+        ["ssh", "-o", "BatchMode=yes", "--", "ygg-dev", "sudo", "-n",
+         "/usr/local/libexec/yggdrasil-bws-deploy", "rpc", "dev"],
+        {"action": "source-identity-prove-absence", "operation_id": operation_id},
+    )]
+    assert set(expected) == {
+        "contract", "operation_id", "channel", "native_request_absent",
+        "native_producer_receipt_absent", "native_terminal_receipt_absent",
+        "native_worker_absent", "native_lock_absent",
+    }
+    with pytest.raises(PostgresDeployError):
+        remote.prove_source_identity_absence("bad")
+    monkeypatch.setattr(
+        linux.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "source_identity_absence": {**expected, "private_path": "/forbidden"},
+            }),
+        ),
+    )
+    with pytest.raises(PostgresDeployError):
+        remote.prove_source_identity_absence(operation_id)
+
+    malformed_proofs = []
+    for numeric in (1, 1.0):
+        malformed_proofs.append({**expected, "native_request_absent": numeric})
+    missing = dict(expected)
+    missing.pop("native_lock_absent")
+    malformed_proofs.append(missing)
+    malformed_proofs.append({**expected, "extra": True})
+    malformed_proofs.append({
+        **expected,
+        "native_request_absent": 1,
+        "native_lock_absent": False,
+    })
+    for malformed_proof in malformed_proofs:
+        monkeypatch.setattr(
+            linux.subprocess,
+            "run",
+            lambda *_args, proof=malformed_proof, **_kwargs: SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"source_identity_absence": proof}),
+            ),
+        )
+        with pytest.raises(PostgresDeployError):
+            remote.prove_source_identity_absence(operation_id)
 
 
 def test_native_deploy_reports_source_projection_identity_refusal() -> None:

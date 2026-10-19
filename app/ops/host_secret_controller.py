@@ -40,6 +40,7 @@ _TERMINAL_SOURCES = {
 _TOKEN_PUSH_LOCAL_ABORT_SOURCE = "host-preflight"
 _DEPLOY_ABSENCE_SOURCE = "postmerge-controller"
 _DEPLOY_ABSENCE_STAGE = "retired-before-admission"
+_SOURCE_PERSISTENCE_ABSENCE_SOURCE = "native-absence-proof"
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class HostSecretOperation:
         prepared: bool = False,
         mutation_started: bool = False,
         completed_result: str | None = None,
+        completed_source: str | None = None,
     ) -> None:
         self._journal_fd = journal_fd
         self.operation_id = operation_id
@@ -77,6 +79,7 @@ class HostSecretOperation:
         self._prepared = prepared
         self._mutation_started = mutation_started
         self._completed_result = completed_result
+        self._completed_source = completed_source
 
     def _record(self, stage: str, source: str | None = None) -> None:
         if not self._active or self._finished or self._completed_result is not None:
@@ -113,6 +116,10 @@ class HostSecretOperation:
     def completed_result(self) -> str | None:
         return self._completed_result
 
+    @property
+    def completed_source(self) -> str | None:
+        return self._completed_source
+
     def prepare_mutation(self) -> None:
         """Persist before the first remote effect; caller already holds the host lock."""
         if self.kind == "check" or (self.kind == "token-push" and not self._prepared):
@@ -137,6 +144,19 @@ class HostSecretOperation:
         if not self._active or self._finished:
             raise HostSecretAdmissionError()
         valid_source = evidence.source == _TERMINAL_SOURCES.get(self.kind)
+        if (
+            self.kind == "source-persistence"
+            and evidence.result == "failed"
+            and evidence.source == _SOURCE_PERSISTENCE_ABSENCE_SOURCE
+            and (
+                self._mutation_started
+                or (
+                    self._completed_result == "failed"
+                    and self._completed_source == _SOURCE_PERSISTENCE_ABSENCE_SOURCE
+                )
+            )
+        ):
+            valid_source = True
         if (
             self.kind == "token-push"
             and evidence.result == "aborted"
@@ -345,6 +365,12 @@ class HostSecretController:
                         record["stage"] not in terminal_stages
                         or not (
                             record["source"] == _TERMINAL_SOURCES[record["kind"]]
+                            or (
+                                record["kind"] == "source-persistence"
+                                and record["stage"] == "failed"
+                                and pending["stage"] == "sent"
+                                and record["source"] == _SOURCE_PERSISTENCE_ABSENCE_SOURCE
+                            )
                             or (
                                 record["kind"] == "token-push"
                                 and record["stage"] == "aborted"
@@ -558,6 +584,7 @@ class HostSecretController:
             ):
                 raise HostSecretAdmissionError()
             completed = None
+            completed_source = None
             if pending is None:
                 os.lseek(descriptor, 0, os.SEEK_SET)
                 with os.fdopen(os.dup(descriptor), "r", encoding="utf-8") as source:
@@ -571,15 +598,19 @@ class HostSecretController:
                         last["kind"] != "source-persistence"
                         or last["target"] != target
                         or last["stage"] not in {"committed", "failed"}
-                        or last["source"] != "remote-terminal"
+                        or last["source"] not in {
+                            "remote-terminal", _SOURCE_PERSISTENCE_ABSENCE_SOURCE,
+                        }
                     ):
                         raise HostSecretAdmissionError()
                     completed = str(last["stage"])
+                    completed_source = str(last["source"])
             operation = HostSecretOperation(
                 descriptor, operation_id, "source-persistence", target,
                 prepared=pending is not None,
                 mutation_started=pending is not None and pending.get("stage") == "sent",
                 completed_result=completed,
+                completed_source=completed_source,
             )
             resumed = pending is not None or completed is not None
             if not resumed:

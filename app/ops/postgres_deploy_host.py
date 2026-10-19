@@ -394,6 +394,10 @@ def main(argv: list[str] | None = None) -> int:
         help='run one explicit DEV/TEST ordinary-producer identity persistence operation',
     )
     parser.add_argument(
+        '--prove-source-persistence-never-admitted', action='store_true',
+        help='retire one exact host source operation only after fixed native absence proof',
+    )
+    parser.add_argument(
         '--recover-test-source', action='store_true',
         help='reset only the exact failed TEST source projection, then deploy this candidate',
     )
@@ -438,6 +442,43 @@ def main(argv: list[str] | None = None) -> int:
         ):
             raise PostgresDeployError()
         controller = HostSecretController()
+        if args.prove_source_persistence_never_admitted:
+            if (
+                args.channel not in {'dev', 'test'}
+                or not args.automatic
+                or not args.existing_secrets_only
+                or args.operation_id is None
+                or cutover is not None
+                or args.persist_source_identity
+                or args.reconcile_pending
+                or args.prove_never_admitted
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None
+                or args.ack_forward_only
+            ):
+                raise PostgresDeployError()
+            with controller.source_persistence_operation(
+                args.channel, operation_id=args.operation_id,
+            ) as (operation, resumed):
+                if (
+                    not resumed
+                    or operation.completed_result not in {None, 'failed'}
+                    or (
+                        operation.completed_result is None
+                        and not operation.mutation_started
+                    )
+                ):
+                    raise PostgresDeployError()
+                remote = SshDeployRemote('ygg-' + args.channel)
+                proof = remote.prove_source_identity_absence(args.operation_id)
+                operation.finish(TerminalEvidence(
+                    operation.operation_id, 'source-persistence', args.channel,
+                    'failed', 'native-absence-proof',
+                ))
+            result = {**proof, 'host_operation_retired': True}
+            print(json.dumps(result, sort_keys=True))
+            return 0
         if args.persist_source_identity:
             if (
                 args.channel not in {'dev', 'test'}
@@ -448,6 +489,7 @@ def main(argv: list[str] | None = None) -> int:
                 or args.image_digest is None
                 or args.reconcile_pending
                 or args.prove_never_admitted
+                or args.prove_source_persistence_never_admitted
                 or args.recover_test_source
                 or args.reconstruct_missing_instance_state
                 or args.failed_operation_id is not None
@@ -459,6 +501,8 @@ def main(argv: list[str] | None = None) -> int:
             with controller.source_persistence_operation(
                 args.channel, operation_id=args.operation_id,
             ) as (operation, _resumed):
+                if operation.completed_source == 'native-absence-proof':
+                    raise PostgresDeployError()
                 if operation.completed_result is None:
                     operation.prepare_mutation()
                 result = remote.persist_source_identity(
