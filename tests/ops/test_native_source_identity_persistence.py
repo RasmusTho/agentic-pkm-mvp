@@ -1251,7 +1251,10 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
             "Image": f"sha256:{index:064x}",
             "Config": {
                 "Image": f"example/{service}:installed",
-                "Env": [f"{key}={value}" for key, value in installed.items()],
+                "Env": [
+                    *[f"{key}={value}" for key, value in installed.items()],
+                    "POSTGRES_PASSWORD", "PGPASSWORD", "OPTIONAL_PROVIDER",
+                ],
                 "User": f"{os.getuid()}:{os.getgid()}",
                 "Labels": {
                     "com.docker.compose.project": f"pkm-{channel}",
@@ -1351,6 +1354,11 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
         "source", "protocol", "inspect",
     ]
     assert "ensure uuid" in guard_actions
+    assert not {"POSTGRES_PASSWORD", "PGPASSWORD", "OPTIONAL_PROVIDER"} & {
+        key for key, _value in effects.source_identity_runtime_snapshot(
+            selected, require_running_capture=True,
+        ).child_environment
+    }
     assert "up" not in events
 
 

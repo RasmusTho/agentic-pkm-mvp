@@ -596,6 +596,39 @@ class SourceIdentityRuntimeSnapshot:
 
 
 _SOURCE_HELPER_IMAGE_OWNED_ENV = frozenset({'VCS_REF', 'BUILT_AT'})
+_SOURCE_REQUIRED_ASSIGNED_ENV = frozenset({
+    'LLM_PROVIDER', 'EMBED_PROVIDER', 'EMBED_MODEL', 'STORE_BACKEND',
+    'PKM_ENVIRONMENT', 'VAULT_ROOT', 'WATCHER_VAULT_PATH',
+})
+
+
+def _installed_container_environment(entries: object) -> dict[str, str]:
+    """Normalize Docker's installed env while preserving semantic unsets.
+
+    Docker records an unset as a bare ``NAME`` and an explicit empty value as
+    ``NAME=``. Bare optional names are therefore omitted from the child
+    environment; they never acquire values from the host, Compose defaults, or
+    the candidate image. Duplicate names remain ambiguous across both forms.
+    """
+    if not isinstance(entries, list):
+        raise PostgresDeployError()
+    parsed: dict[str, str] = {}
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, str) or '\x00' in entry:
+            raise PostgresDeployError()
+        key, separator, value = entry.partition('=')
+        if (
+            re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None
+            or key in seen
+            or key == 'BWS_ACCESS_TOKEN'
+            or (not separator and key in _SOURCE_REQUIRED_ASSIGNED_ENV)
+        ):
+            raise PostgresDeployError()
+        seen.add(key)
+        if separator:
+            parsed[key] = value
+    return parsed
 
 
 def _closed_source_helper_environment(
@@ -1546,22 +1579,7 @@ class LinuxEffects:
                 running.add(service)
             config = row.get('Config', {})
             entries = config.get('Env', [])
-            if not isinstance(entries, list):
-                raise PostgresDeployError()
-            parsed: dict[str, str] = {}
-            for entry in entries:
-                if not isinstance(entry, str) or '\x00' in entry:
-                    raise PostgresDeployError()
-                key, separator, value = entry.partition('=')
-                if (
-                    not separator
-                    or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key)
-                    or key in parsed
-                ):
-                    raise PostgresDeployError()
-                parsed[key] = value
-            if 'BWS_ACCESS_TOKEN' in parsed:
-                raise PostgresDeployError()
+            parsed = _installed_container_environment(entries)
             environments[service] = parsed
             mounts = row.get('Mounts')
             if not isinstance(mounts, list):

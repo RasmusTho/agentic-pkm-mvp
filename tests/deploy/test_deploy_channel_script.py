@@ -3915,6 +3915,64 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
     assert host.main(malformed) == 78
 
 
+def test_source_identity_persistence_accepts_optional_docker_unsets():
+    from app.ops import postgres_deploy_linux as linux
+
+    normalized = linux._installed_container_environment([
+        "PKM_ENVIRONMENT=dev",
+        "VAULT_ROOT=/srv/vault-alpha",
+        "POSTGRES_PASSWORD",
+        "PGPASSWORD",
+        "OPTIONAL_PROVIDER",
+        "EXPLICIT_EMPTY=",
+    ])
+    assert normalized == {
+        "PKM_ENVIRONMENT": "dev",
+        "VAULT_ROOT": "/srv/vault-alpha",
+        "EXPLICIT_EMPTY": "",
+    }
+
+
+def test_source_identity_unsets_preserve_closed_helper_environment(monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+
+    monkeypatch.setenv("OPTIONAL_PROVIDER", "ambient-must-not-cross-boundary")
+    installed = linux._installed_container_environment([
+        "PKM_ENVIRONMENT=dev",
+        "VAULT_ROOT=/srv/vault-alpha",
+        "OPTIONAL_PROVIDER",
+        "EXPLICIT_EMPTY=",
+    ])
+    child = dict(linux._closed_source_helper_environment(installed, installed))
+    assert "OPTIONAL_PROVIDER" not in child
+    assert child["EXPLICIT_EMPTY"] == ""
+    assert child["PKM_ENVIRONMENT"] == "dev"
+
+
+@pytest.mark.parametrize("entries", [
+    ["OPTIONAL_PROVIDER", "OPTIONAL_PROVIDER=value"],
+    ["OPTIONAL_PROVIDER=value", "OPTIONAL_PROVIDER"],
+    ["OPTIONAL_PROVIDER", "OPTIONAL_PROVIDER"],
+    ["BAD KEY=value"],
+    [""],
+    [None],
+    ["OPTIONAL_PROVIDER=bad\x00value"],
+    {"OPTIONAL_PROVIDER": "value"},
+    ["PKM_ENVIRONMENT"],
+    ["VAULT_ROOT"],
+    ["LLM_PROVIDER"],
+    ["STORE_BACKEND"],
+    ["BWS_ACCESS_TOKEN"],
+    ["BWS_ACCESS_TOKEN="],
+    ["BWS_ACCESS_TOKEN=secret"],
+])
+def test_source_identity_environment_normalization_refuses_unsafe_entries(entries):
+    from app.ops import postgres_deploy_linux as linux
+
+    with pytest.raises(linux.PostgresDeployError):
+        linux._installed_container_environment(entries)
+
+
 def test_source_identity_absence_proof_retires_only_exact_pending_host_operation(
     monkeypatch, tmp_path,
 ):
