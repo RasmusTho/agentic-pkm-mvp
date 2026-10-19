@@ -86,8 +86,7 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   seed copies and require failure for missing/malformed metric input, failed gates and missing
   thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
   unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
-- The full and scoped non-PG unit steps retain finite outer ceilings: 75 minutes for the full lane
-  and 60 minutes for the scoped lane. The scoped step's
+- The full and scoped non-PG unit steps both retain finite 75-minute outer ceilings. The scoped step's
   former 35-minute ceiling cut off #6091 / PR #6092 at 91% without a reported assertion failure
   ([job 116083429844](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38631158811/job/116083429844));
   its six selected subsystem groups run serially. Additional outer margin does not prove completion
@@ -101,8 +100,13 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   that repository growth can extend the full lane's parallel phase to 51m35s (including a 45m51s
   deploy shard), after which the host-sensitive serial boundary was cancelled at the 60-minute
   ceiling despite every parallel shard passing. The full lane's 75-minute bound restores finite
-  serial-phase margin; the scoped source-triggered lane remains bounded at 60 minutes. Neither
-  change alters four-process concurrency
+  serial-phase margin. The scoped lane later completed [#6222 run 39237406751](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39237406751/job/118009713887)
+  in 59m05s: 38m23s of parallel work followed by 20m42s of serial coverage, leaving only 55 seconds
+  below its former 60-minute ceiling. [#6224 run 39249448570](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39249448570/job/118049350845)
+  passed all four parallel partitions in 40m57s, then reached that ceiling after 372 of 984 serial
+  cases passed, without a reported assertion failure. Its 75-minute bound now matches the full
+  lane's finite envelope; neither the failed run nor that larger ceiling proves completion.
+  Neither change alters four-process concurrency
   or starting host-sensitive tests until all parallel processes exit. This is execution margin,
   not a speedup or a completed-run duration measurement. The `required-unit-phase-margin.v1`
   receipt (`pytest-not-pg-shards/phase-margin.json`) records exact checkout SHA, budget, watchdog,
@@ -135,10 +139,14 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   single required `Unit tests (not pg)` verdict. Other scoped selections retain the existing
   single pytest invocation. This mechanism addresses the critical-path failure recorded by
   [failed job 117620023504](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39108712261/job/117620023504)
-  from PR #6193; that unchanged consumer diff is not blindly rerun. After the implementation
-  merges, one fresh current-head Unit run after rebasing #6193 must provide
-  `github-actions-scoped-balanced-current-head.v1` evidence with at least five minutes of measured
-  margin.
+  from PR #6193. The closed #6206 balancing contract retained its 60-minute ceiling and accepted
+  the exact inventory comparison and `github-actions-scoped-balanced-current-head.v1` consumer
+  proof from [PR #6239 run 39149060861](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39149060861/job/117738853771),
+  with at least five minutes of measured margin, as recorded in
+  [its acceptance receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6206#issuecomment-6254883699).
+  The later #6224 envelope adjustment does not alter that historical scope or prove its margin
+  for another selection. Do not blindly rerun an unchanged timeout or claim a completed run from
+  configured limits alone.
 - The shared native PostgreSQL acceptance profile retains the former `pr-index-pg-contracts`
   surface (#5587), including FCA-06 second-consumer conformance (#5405) and dormant host-candidate
   admission/history/live-refusal and managed-source proofs (#5593). Each test retains the

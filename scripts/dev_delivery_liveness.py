@@ -30,6 +30,7 @@ VERDICT_CONTEXT = "post-merge-dev-test/verdict"
 GRACE = timedelta(hours=6)
 HEARTBEAT_GRACE = timedelta(hours=2)
 MAX_HISTORY_PAGES = 20
+MAX_HEARTBEAT_COMMITS = 100
 
 
 class LivenessRefused(ValueError):
@@ -143,7 +144,50 @@ def _latest_status(statuses: Any, context: str, *, allow_rotated_context: bool =
     ]
     if not matching:
         return None
-    return max(matching, key=_status_timestamp)
+    if context != HEARTBEAT_CONTEXT:
+        return max(matching, key=_status_timestamp)
+    observations: dict[int, tuple[datetime, str, str]] = {}
+    for status in matching:
+        sequence, observed = _heartbeat_order(status)
+        if sequence:
+            evidence = (observed, status['state'], status['description'])
+            if sequence in observations and observations[sequence] != evidence:
+                raise LivenessRefused("heartbeat_sequence_conflict")
+            observations[sequence] = evidence
+    ordered_times = [observations[sequence][0] for sequence in sorted(observations)]
+    if ordered_times != sorted(ordered_times):
+        raise LivenessRefused("heartbeat_clock_order_refused")
+    return max(matching, key=_heartbeat_order)
+
+
+def _heartbeat_order(status: dict[str, Any]) -> tuple[int, datetime]:
+    description = status.get("description", "")
+    match = re.fullmatch(
+        r"observed_at=([^;]+)(?:;seq=([1-9][0-9]{0,17}))?(?:;paused_issue=([1-9][0-9]{0,9});until=([^;]+))?",
+        description if isinstance(description, str) else "",
+    )
+    if (match is None or status.get("state") not in {"success", "failure"}
+            or (status['state'] == 'failure') != bool(match[3])
+            or (match[3] and not match[2])):
+        raise LivenessRefused("heartbeat_observation_refused")
+    # Shipped legacy heartbeats are normal only. Sequenced producer continuity
+    # outranks those observations even when its adoption followed a clock reset.
+    return int(match[2] or 0), _timestamp(match[1])
+
+
+def _heartbeat_pause(status: dict[str, Any] | None) -> tuple[int, datetime] | None:
+    if status is None or status.get("state") != "failure":
+        return None
+    match = re.fullmatch(
+        r"observed_at=([^;]+);seq=[1-9][0-9]{0,17};paused_issue=([1-9][0-9]{0,9});until=([^;]+)",
+        status.get("description", ""),
+    )
+    if match is None:
+        return None
+    expires = _timestamp(match[3])
+    if expires <= _status_timestamp(status):
+        raise LivenessRefused("pause_expiry_refused")
+    return int(match[2]), expires
 
 
 def evaluate(
@@ -155,6 +199,12 @@ def evaluate(
 ) -> LivenessResult:
     """Evaluate freshness without treating the dev result as a merge gate."""
     current = now.astimezone(timezone.utc)
+    heartbeat = _latest_status(heartbeat_statuses, HEARTBEAT_CONTEXT, allow_rotated_context=True)
+    pause = _heartbeat_pause(heartbeat)
+    if heartbeat is not None and _status_timestamp(heartbeat) > current:
+        return LivenessResult(False, "heartbeat_future", "controller heartbeat observation is in the future")
+    if pause is not None and heartbeat is not None and _status_timestamp(heartbeat) <= current < pause[1]:
+        return LivenessResult(False, "paused", f"paused (#{pause[0]}, until {pause[1].isoformat()})")
     verdict = _latest_status(verdict_statuses, VERDICT_CONTEXT)
     verdict_at = _status_timestamp(verdict) if verdict is not None else None
     terminal_verdict = (build is not None and verdict is not None
@@ -168,8 +218,7 @@ def evaluate(
         # signal while the next heartbeat update is in flight.
         return LivenessResult(True, "fresh_dev_verdict", f"dev verdict is fresh for {build.sha[:12]}")
 
-    heartbeat = _latest_status(heartbeat_statuses, HEARTBEAT_CONTEXT, allow_rotated_context=True)
-    if heartbeat is None or heartbeat.get("state") != "success":
+    if heartbeat is None or (heartbeat.get("state") != "success" and pause is None):
         return LivenessResult(False, "heartbeat_missing", "post-merge dev controller heartbeat is missing")
     heartbeat_age = current - _status_timestamp(heartbeat)
     if heartbeat_age < timedelta(0) or heartbeat_age > HEARTBEAT_GRACE:
@@ -199,6 +248,7 @@ def _github(path: str) -> Any:
 def _status_history(repo: str, sha: str, context: str, *, api: Callable[[str], Any]) -> list[Any]:
     """Read status history until the requested context is found or exhausted."""
     collected: list[Any] = []
+    previous_created: datetime | None = None
     for page in range(1, MAX_HISTORY_PAGES + 1):
         statuses = api(f"repos/{repo}/commits/{sha}/statuses?per_page=100&page={page}")
         if not isinstance(statuses, list):
@@ -210,9 +260,52 @@ def _status_history(repo: str, sha: str, context: str, *, api: Callable[[str], A
             and (status["context"] == context or
                  (context == HEARTBEAT_CONTEXT and status["context"].startswith(context + "/")))
         ]
-        if matching or len(statuses) < 100:
+        if len(statuses) < 100 or (matching and context != HEARTBEAT_CONTEXT):
             return collected
+        if context == HEARTBEAT_CONTEXT:
+            # GitHub lists statuses in reverse creation order. A queued old
+            # heartbeat may be written after a pause, so a match alone cannot
+            # terminate history. Stop only once older writes cannot contain a
+            # later producer observation. The trusted producer persists a
+            # nondecreasing clock with its sequence; GitHub creation precision
+            # is whole seconds, so equality cannot prove completeness. Legacy
+            # normal observations cannot prove the sequenced migration floor.
+            created = [_timestamp(status.get("created_at")) for status in statuses
+                       if isinstance(status, dict)]
+            if (len(created) != len(statuses) or created != sorted(created, reverse=True)
+                    or (previous_created is not None and created[0] > previous_created)):
+                raise LivenessRefused("statuses_creation_order_refused")
+            previous_created = created[-1]
+            latest = _latest_status(collected, context, allow_rotated_context=True)
+            if (latest is not None and _heartbeat_order(latest)[0] > 0
+                    and created[-1] < _status_timestamp(latest).replace(microsecond=0)):
+                return collected
     raise LivenessRefused("statuses_incomplete")
+
+
+def _main_heartbeat_history(repo: str, sha: str, *, api: Callable[[str], Any]) -> list[Any]:
+    # A stopped controller cannot copy its pause onto a later main SHA. Follow
+    # the actual first-parent main lineage, including commits without builds,
+    # until the nearest controller signal. A later normal tick supersedes the
+    # earlier pause; transport/history ambiguity must never produce green.
+    seen: set[str] = set()
+    for _ in range(MAX_HEARTBEAT_COMMITS):
+        if sha in seen:
+            raise LivenessRefused("heartbeat_ancestry_refused")
+        seen.add(sha)
+        statuses = _status_history(repo, sha, HEARTBEAT_CONTEXT, api=api)
+        if _latest_status(statuses, HEARTBEAT_CONTEXT, allow_rotated_context=True) is not None:
+            return statuses
+        commit = api(f"repos/{repo}/git/commits/{sha}")
+        if (not isinstance(commit, dict) or commit.get("sha") != sha
+                or not isinstance(commit.get("parents"), list)
+                or any(not isinstance(parent, dict) for parent in commit["parents"])):
+            raise LivenessRefused("heartbeat_ancestry_refused")
+        parents = [_validate_sha(parent.get("sha")) for parent in commit["parents"]]
+        if not parents:
+            return []
+        sha = parents[0]
+    raise LivenessRefused("heartbeat_ancestry_incomplete")
 
 
 def check(repo: str, github_sha: str, *, api: Callable[[str], Any] = _github,
@@ -221,7 +314,7 @@ def check(repo: str, github_sha: str, *, api: Callable[[str], Any] = _github,
     current = now or datetime.now(timezone.utc)
     builds = _admitted_builds(repo, api=api)
     build = builds[0] if builds else None
-    heartbeat = _status_history(repo, github_sha, HEARTBEAT_CONTEXT, api=api)
+    heartbeat = _main_heartbeat_history(repo, github_sha, api=api)
     progress_build = build
     progress_verdict: list[Any] = []
     outstanding: list[AdmittedBuild] = []
@@ -264,7 +357,7 @@ def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
     DEV terminality; it cannot select a status context or borrow heavy-test
     authority. Actions independently re-admits the public build proof.
     """
-    from scripts.postmerge_dev_test import LIVENESS_PROTOCOL, load_candidate
+    from scripts.postmerge_dev_test import LIVENESS_PROTOCOL, load_candidate, validate_pause, validate_observation
 
     owner = REPOSITORY.split("/", 1)[0]
     if (repo != REPOSITORY or event != "workflow_dispatch" or ref != "refs/heads/main"
@@ -277,6 +370,8 @@ def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
     fields = {"protocol", "sha", "observed_at"}
     if kind == "verdict":
         fields |= {"candidate", "result", "operation_id"}
+    elif isinstance(signal, dict):
+        fields |= set(signal) & {"pause", "sequence"}
     if not isinstance(signal, dict) or set(signal) != fields or signal["protocol"] != LIVENESS_PROTOCOL:
         raise LivenessRefused("signal_protocol_refused")
     sha = _validate_sha(signal["sha"])
@@ -291,6 +386,17 @@ def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
     state = "success"
     if kind == "heartbeat":
         context = f"{HEARTBEAT_CONTEXT}/{observed:%Y%m%d%H}"
+        if "sequence" in signal:
+            validate_observation({"sequence": signal["sequence"], "observed_at": signal["observed_at"]})
+            description += f";seq={signal['sequence']}"
+        if "pause" in signal:
+            if "sequence" not in signal:
+                raise LivenessRefused("pause_sequence_required")
+            pause = validate_pause(signal["pause"])
+            if not _timestamp(pause["engaged_at"]) <= observed < _timestamp(pause["expires_at"]):
+                raise LivenessRefused("pause_observation_refused")
+            state = "failure"
+            description += f";paused_issue={pause['issue']};until={pause['expires_at']}"
     else:
         evidence = signal["candidate"]
         if (not isinstance(evidence, dict) or type(evidence.get("run_id")) is not int

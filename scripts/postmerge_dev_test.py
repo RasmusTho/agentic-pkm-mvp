@@ -194,16 +194,102 @@ def checkpoint_lock(directory: Path):
     if (not directory.is_absolute() or directory.is_symlink() or not stat.S_ISDIR(info.st_mode)
         or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700):
         raise CandidateRefused('checkpoint_directory_refused')
-    descriptor = os.open(directory / 'postmerge-dev-test.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        descriptor = os.open(directory / 'postmerge-dev-test.lock',
+                             os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        fresh = True
+    except FileExistsError:
+        descriptor = os.open(directory / 'postmerge-dev-test.lock', os.O_RDWR | os.O_NOFOLLOW)
+        fresh = False
     try:
         lock_info = os.fstat(descriptor)
         if (not stat.S_ISREG(lock_info.st_mode) or lock_info.st_uid != os.geteuid()
             or stat.S_IMODE(lock_info.st_mode) != 0o600 or lock_info.st_nlink != 1):
             raise CandidateRefused('checkpoint_lock_refused')
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield
+        yield fresh
     finally:
         os.close(descriptor)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _pause_time(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise CandidateRefused('pause_expiry_required')
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            raise ValueError()
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        raise CandidateRefused('pause_timestamp_refused') from None
+
+
+def validate_pause(pause: Any) -> dict[str, Any]:
+    if (not isinstance(pause, dict) or set(pause) != {'issue', 'engaged_at', 'expires_at'}
+        or type(pause['issue']) is not int or not 0 < pause['issue'] < 10**10
+        or any(pause[field] != _pause_time(pause[field]).isoformat() for field in ('engaged_at', 'expires_at'))
+        or _pause_time(pause['expires_at']) <= _pause_time(pause['engaged_at'])):
+        raise CandidateRefused('pause_requires_issue_and_future_expiry')
+    return pause
+
+
+def pause_description(pause: dict[str, Any]) -> str:
+    validate_pause(pause)
+    return f"paused (#{pause['issue']}, until {pause['expires_at']})"
+
+
+def validate_observation(observation: Any) -> dict[str, Any]:
+    if (not isinstance(observation, dict) or set(observation) != {'sequence', 'observed_at'}
+        or type(observation['sequence']) is not int or not 0 < observation['sequence'] < 10**18
+        or observation['observed_at'] != _pause_time(observation['observed_at']).isoformat()):
+        raise CandidateRefused('heartbeat_observation_refused')
+    return observation
+
+
+def _next_observation(checkpoint: dict[str, Any] | None, now: datetime) -> dict[str, Any]:
+    previous = checkpoint.get('observation') if checkpoint else None
+    if previous is not None and now < _pause_time(previous['observed_at']):
+        raise CandidateRefused('controller_clock_regressed')
+    return validate_observation({'sequence': previous['sequence'] + 1 if previous else 1,
+                                 'observed_at': now.isoformat()})
+
+
+def _read_checkpoint(path: Path, *, allow_missing: bool = False) -> dict[str, Any] | None:
+    checkpoint = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        if not allow_missing:
+            raise CandidateRefused('checkpoint_missing_restore_authoritative_state') from None
+    else:
+        with os.fdopen(descriptor) as source:
+            info = os.fstat(source.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 65536 or info.st_nlink != 1):
+                raise CandidateRefused('checkpoint_refused')
+            checkpoint = json.load(source)
+            _validate_checkpoint(checkpoint)
+    return checkpoint
+
+
+def engage_pause(directory: Path, issue: int | None, until: str | None) -> None:
+    # The operator links an Issue in this repository. This local command uses
+    # no Issues API permission and does not establish live-host authorization.
+    now = _utc_now()
+    pause = validate_pause({'issue': issue, 'engaged_at': now.isoformat(),
+                            'expires_at': _pause_time(until).isoformat()})
+    with checkpoint_lock(directory) as fresh:
+        path = directory / 'postmerge-dev-test.json'
+        checkpoint = _read_checkpoint(path, allow_missing=fresh) or {}
+        checkpoint['observation'] = _next_observation(checkpoint, now)
+        checkpoint['pause'] = pause
+        _atomic_checkpoint(path, checkpoint)
+        print(json.dumps({'result': 'paused', 'description': pause_description(pause),
+                          'issue_url': f"https://github.com/{REPOSITORY}/issues/{issue}"}, sort_keys=True))
 
 
 def poll(directory: Path, *, build: Callable[[], int] = latest_build,
@@ -215,29 +301,42 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
          heavy: Callable[[Candidate], dict[str, Any]] | None = None,
          dispatch: Callable[[Candidate, dict[str, Any]], None] | None = None,
          signal: Callable[[Candidate, dict[str, Any]], None] | None = None,
-         alert: Callable[[dict[str, Any]], None] | None = None) -> int:
+         alert: Callable[[dict[str, Any]], None] | None = None,
+         heartbeat: Callable[[str, dict[str, Any] | None, dict[str, Any]], None] | None = None) -> int:
     # No CI job runs this path. It is supervised on the existing private agent
     # host, which already owns credentials, SSH dispatch and terminal recovery.
-    with checkpoint_lock(directory):
+    with checkpoint_lock(directory) as fresh:
         path = directory / 'postmerge-dev-test.json'
-        checkpoint = None
-        try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        except FileNotFoundError:
-            pass
-        else:
-            with os.fdopen(descriptor) as source:
-                info = os.fstat(source.fileno())
-                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 65536 or info.st_nlink != 1):
-                    raise CandidateRefused('checkpoint_refused')
-                checkpoint = json.load(source)
-                _validate_checkpoint(checkpoint)
+        checkpoint = _read_checkpoint(path, allow_missing=fresh)
+        pause = checkpoint.get('pause') if checkpoint else None
+        now = _utc_now()
+        observation = _next_observation(checkpoint, now)
+        if pause and now < _pause_time(pause['engaged_at']):
+            raise CandidateRefused('pause_clock_before_engagement')
+        active_pause = pause if pause and now < _pause_time(pause['expires_at']) else None
+        # The durable clock floor and causal order precede every external effect.
+        # Retries dispatch this exact observation; restart allocates the next one.
+        checkpoint = checkpoint or {}
+        checkpoint['observation'] = observation
+        _atomic_checkpoint(path, checkpoint)
+        if heartbeat is not None:
+            try:
+                heartbeat(current_main(), active_pause, observation)
+            except Exception:
+                # The existing watchdog exposes missing signals; transport
+                # failure must neither bypass a pause nor stop later delivery.
+                print(json.dumps({'result': 'heartbeat_signal_failed'}, sort_keys=True))
+        if active_pause:
+            print(json.dumps({'result': 'paused', 'description': pause_description(active_pause)}, sort_keys=True))
+            return 0
+        if checkpoint and 'candidate' not in checkpoint:
+            checkpoint = None
         last_green = dict(checkpoint.get('last_green', {})) if checkpoint else {}
 
         def save(candidate: Candidate, outcome: dict[str, Any]) -> None:
             nonlocal checkpoint
-            checkpoint = _save_outcome(path, candidate, outcome, last_green=last_green)
+            checkpoint = _save_outcome(path, candidate, outcome, last_green=last_green,
+                                       pause=pause, observation=observation)
             _signal_dev_verdict(candidate, outcome, signal)
             report_terminal()
 
@@ -351,9 +450,15 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
 
 
 def _save_outcome(path: Path, candidate: Candidate, outcome: dict[str, Any], *,
-                  last_green: dict[str, str] | None = None) -> dict[str, Any]:
+                  last_green: dict[str, str] | None = None,
+                  pause: dict[str, Any] | None = None,
+                  observation: dict[str, Any] | None = None) -> dict[str, Any]:
     checkpoint = {'candidate': asdict(candidate), 'phase': outcome['result'],
                   'channel': outcome.get('channel'), 'outcome': outcome}
+    if pause is not None:
+        checkpoint['pause'] = pause
+    if observation is not None:
+        checkpoint['observation'] = observation
     if last_green is not None:
         checkpoint['last_green'] = dict(last_green)
     _atomic_checkpoint(path, checkpoint)
@@ -443,6 +548,17 @@ def _signal_dev_verdict(candidate: Candidate, outcome: dict[str, Any],
 
 def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
     try:
+        if not isinstance(checkpoint, dict):
+            raise ValueError()
+        if 'observation' in checkpoint:
+            validate_observation(checkpoint['observation'])
+        if 'pause' in checkpoint:
+            validate_pause(checkpoint['pause'])
+            if ('observation' not in checkpoint or
+                _pause_time(checkpoint['observation']['observed_at']) < _pause_time(checkpoint['pause']['engaged_at'])):
+                raise ValueError()
+        if set(checkpoint) in ({'observation'}, {'pause', 'observation'}):
+            return
         _source_failure(checkpoint['outcome'])
         candidate = Candidate(**checkpoint['candidate'])
         if 'heavy' in checkpoint:
@@ -461,7 +577,7 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
                     not isinstance(report['last_good_sha'], str)
                     or re.fullmatch(r'[0-9a-f]{40}', report['last_good_sha']) is None))):
                 raise ValueError()
-        if (set(checkpoint) - {'heavy', 'last_green', 'channel_bug'} != {'candidate', 'phase', 'channel', 'outcome'}
+        if (set(checkpoint) - {'heavy', 'last_green', 'channel_bug', 'pause', 'observation'} != {'candidate', 'phase', 'channel', 'outcome'}
             or ('heavy' in checkpoint and (checkpoint['phase'], checkpoint['channel']) != ('passed', 'test'))
             or re.fullmatch(r'[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
             or any(type(value) is not int or value < 1
@@ -502,14 +618,19 @@ def _dispatch_liveness_signal(kind: str, payload: dict[str, Any]) -> None:
     raise CandidateRefused('liveness_signal_failed')
 
 
-def publish_heartbeat(sha: str) -> None:
-    """Publish a timestamped heartbeat; queued/replayed signals cannot renew it."""
+def publish_heartbeat(sha: str, pause: dict[str, Any] | None, observation: dict[str, Any]) -> None:
+    """Dispatch the persisted observation; transport retries cannot renew it."""
     if re.fullmatch(r'[0-9a-f]{40}', sha) is None:
         raise CandidateRefused('liveness_signal_refused')
-    _dispatch_liveness_signal('heartbeat', {
-        'protocol': LIVENESS_PROTOCOL, 'sha': sha,
-        'observed_at': datetime.now(timezone.utc).isoformat(),
-    })
+    validate_observation(observation)
+    observed = _pause_time(observation['observed_at'])
+    payload = {'protocol': LIVENESS_PROTOCOL, 'sha': sha, **observation}
+    if pause is not None:
+        validate_pause(pause)
+        if not _pause_time(pause['engaged_at']) <= observed < _pause_time(pause['expires_at']):
+            raise CandidateRefused('pause_observation_refused')
+        payload['pause'] = pause
+    _dispatch_liveness_signal('heartbeat', payload)
 
 
 def publish_dev_verdict(candidate: Candidate, outcome: dict[str, Any]) -> None:
@@ -738,27 +859,34 @@ def main(argv: list[str] | None = None) -> int:
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument('--source-run', type=int)
     selection.add_argument('--latest', action='store_true')
+    selection.add_argument('--pause', action='store_true')
+    parser.add_argument('--issue', type=int, help='linked deploy-machinery Issue in this repository')
+    parser.add_argument('--until', help='future ISO-8601 expiry with an explicit timezone')
     parser.add_argument('--admit-only', action='store_true')
     parser.add_argument('--state-directory', type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.pause:
+            if args.state_directory is None or args.admit_only:
+                raise CandidateRefused('pause_requires_private_checkpoint')
+            engage_pause(args.state_directory, args.issue, args.until)
+            return 0
+        if args.issue is not None or args.until is not None:
+            raise CandidateRefused('pause_options_require_pause')
         if args.latest:
             if args.state_directory is None or args.admit_only:
                 raise CandidateRefused('poll_requires_private_checkpoint')
-            try:
-                publish_heartbeat(_current_main())
-            except Exception:
-                # The liveness workflow intentionally owns the alert. A
-                # transient status transport failure must not stop delivery.
-                print(json.dumps({'result': 'heartbeat_signal_failed'}, sort_keys=True))
-            return poll(args.state_directory, signal=publish_dev_verdict)
+            return poll(args.state_directory, signal=publish_dev_verdict, heartbeat=publish_heartbeat)
         if args.source_run < 1:
             raise CandidateRefused('invalid_source_run')
+        if not args.admit_only:
+            if args.state_directory is None:
+                raise CandidateRefused('deploy_requires_private_checkpoint')
+            return poll(args.state_directory, build=lambda: args.source_run, load=load_candidate,
+                        signal=publish_dev_verdict, heartbeat=publish_heartbeat)
         candidate = load_candidate(args.source_run)
-        if args.admit_only:
-            print(json.dumps(asdict(candidate), sort_keys=True))
-            return 0
-        return deliver(candidate)
+        print(json.dumps(asdict(candidate), sort_keys=True))
+        return 0
     except Exception as error:
         if args.latest and isinstance(error, CandidateRefused) and str(error) == 'latest_build_not_ready':
             return 0
