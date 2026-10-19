@@ -578,6 +578,19 @@ class LinuxConfig:
         }))
 
 
+@dataclass(frozen=True)
+class SourceIdentityRuntimeSnapshot:
+    """Private installed authority plus the exact child inputs it permits."""
+
+    installed_fingerprint: str
+    execution_fingerprint: str
+    running_writers: tuple[str, ...]
+    existing_writers: tuple[str, ...]
+    container_root: str
+    vault_overlay: str
+    child_environment: tuple[tuple[str, str], ...]
+
+
 def _runtime_user_ownership_state_dir(runtime_uid: int, xdg_state_home: str | None = None) -> Path:
     """Return the canonical host-global state default for the Compose user.
 
@@ -862,6 +875,7 @@ class LinuxEffects:
     def environment(
         self, cutover: AuthorityCutover | None = None,
         candidate: DeployPlan | None = None,
+        installed_environment: tuple[tuple[str, str], ...] | None = None,
     ) -> dict[str, str]:
         cfg = self.config
         runtime_env_file = database_input_files(cfg)[1]
@@ -930,7 +944,32 @@ class LinuxEffects:
                 BWS_EXPECTED_RAW_MIGRATION_PENDING='1' if self.raw_migration_pending else '0',
                 BWS_DEPLOY_TARGET_REVISION=self.active_revision or '',
             )
-        fields = effective_database_fields(cfg, env)
+        if installed_environment is not None:
+            installed = dict(installed_environment)
+            if len(installed) != len(installed_environment):
+                raise PostgresDeployError()
+            env.update(installed)
+            for key in (
+                'LLM_PROVIDER', 'EMBED_PROVIDER', 'EMBED_MODEL', 'STORE_BACKEND',
+                'PKM_ENVIRONMENT', 'VAULT_HOST_ROOT', 'VAULT_ROOT',
+                'VAULT_ROOT_DEV', 'VAULT_ROOT_TEST', 'WATCHER_VAULT_PATH',
+                'WATCHER_ENABLE', 'DATABASE_URL', 'DB_DSN',
+            ):
+                if key in installed:
+                    env[key] = installed[key]
+                else:
+                    env.pop(key, None)
+            explicit = installed.get('DATABASE_URL') or installed.get('DB_DSN')
+            if not explicit:
+                raise PostgresDeployError()
+            fields = credential_free_database_fields(explicit)
+            fields.setdefault('user', 'app')
+            fields.setdefault('port', '5432')
+            fields.setdefault(
+                'dbname', {'dev': 'app_dev', 'test': 'app_test'}[cfg.channel],
+            )
+        else:
+            fields = effective_database_fields(cfg, env)
         if self.database_fields is not None and fields != self.database_fields:
             raise PostgresDeployError()
         self.database_fields = fields
@@ -946,17 +985,27 @@ class LinuxEffects:
     def compose(
         self, *args: str, cutover: AuthorityCutover | None = None,
         candidate: DeployPlan | None = None, timeout: int | None = None,
+        source_snapshot: SourceIdentityRuntimeSnapshot | None = None,
     ) -> str:
         cfg = self.config
         # Recovery Compose must inherit the authenticated ownership source from
         # the request.  Falling back to the supervisor's ambient/default root
         # could make the container inspect a different host ledger than the
         # one qualified for this failed operation.
-        env = self.environment(cutover, candidate)
+        env = self.environment(
+            cutover, candidate,
+            source_snapshot.child_environment if source_snapshot is not None else None,
+        )
         overlays = ['-f', str(cfg.root / 'docker-compose.bws.yml')]
         if env['BWS_DATABASE_TARGET'] == 'external':
             overlays += ['-f', str(cfg.root / 'docker-compose.bws-external.yml')]
-        if cutover is not None:
+        if cutover is not None and source_snapshot is not None:
+            env['VAULT_HOST_ROOT'] = cutover.root
+            env['DEPLOY_VAULT_CONTAINER_ROOT'] = source_snapshot.container_root
+            overlays += ['-f', str(cfg.root / source_snapshot.vault_overlay)]
+            if cfg.channel == 'test':
+                overlays += ['-f', str(cfg.root / 'docker-compose.test-vault.yml')]
+        elif cutover is not None:
             env['VAULT_HOST_ROOT'] = cutover.root
             env['DEPLOY_VAULT_CONTAINER_ROOT'] = cutover.root
             overlays += ['-f', str(cfg.root / 'docker-compose.full-host-vault.yml')]
@@ -1008,9 +1057,6 @@ class LinuxEffects:
         source_plan = self.qualify_source_identity_authority(
             revision, image_digest, selected,
         )
-        runtime_fingerprint, running_writers, existing_writers = (
-            self.source_identity_runtime_snapshot()
-        )
         receipt_path = self.config.journal.directory / (
             f"{self.config.channel}-source-identity-{operation_id}.json"
         )
@@ -1021,7 +1067,7 @@ class LinuxEffects:
             f"{self.config.channel}-source-identity-{operation_id}.producer.json"
         )
         request_base = {
-            'contract': 'native-source-identity-persistence-request.v1',
+            'contract': 'native-source-identity-persistence-request.v2',
             'operation_id': operation_id,
             'channel': self.config.channel,
             'revision': revision,
@@ -1040,34 +1086,62 @@ class LinuxEffects:
         if request_path.exists():
             request_payload = _private_json(request_path)
             if (
-                set(request_payload) != {*request_base, 'runtime_fingerprint', 'writers'}
+                set(request_payload) != {
+                    *request_base, 'installed_fingerprint', 'execution_fingerprint',
+                    'writers', 'container_root', 'vault_overlay',
+                }
                 or any(request_payload.get(key) != value for key, value in request_base.items())
-                or not isinstance(request_payload.get('runtime_fingerprint'), str)
-                or re.fullmatch(r'[0-9a-f]{64}', request_payload['runtime_fingerprint']) is None
+                or any(
+                    not isinstance(request_payload.get(key), str)
+                    or re.fullmatch(r'[0-9a-f]{64}', request_payload[key]) is None
+                    for key in ('installed_fingerprint', 'execution_fingerprint')
+                )
                 or not isinstance(request_payload.get('writers'), list)
                 or any(service not in {
                     'api', 'worker', 'watcher', 'heimdal-capture-watch', 'companion-ui',
                 } for service in request_payload['writers'])
                 or len(set(request_payload['writers'])) != len(request_payload['writers'])
+                or request_payload.get('container_root') not in {selected.root, '/app/vault'}
+                or request_payload.get('vault_overlay') not in {
+                    'docker-compose.full-host-vault.yml', 'docker-compose.legacy-vault.yml',
+                }
             ):
                 raise PostgresDeployError()
             writers = list(request_payload['writers'])
             expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
             own_cleanup = self.channel_lock_owner() == expected_owner
+            runtime = self.source_identity_runtime_snapshot(
+                selected, require_running_capture=not own_cleanup,
+            )
             if (
-                runtime_fingerprint != request_payload['runtime_fingerprint']
-                or not set(writers) <= set(existing_writers)
-                or (not own_cleanup and not set(writers) <= set(running_writers))
+                runtime.installed_fingerprint != request_payload['installed_fingerprint']
+                or runtime.container_root != request_payload['container_root']
+                or runtime.vault_overlay != request_payload['vault_overlay']
+                or not set(writers) <= set(runtime.existing_writers)
+                or (
+                    not own_cleanup
+                    and (
+                        runtime.execution_fingerprint
+                        != request_payload['execution_fingerprint']
+                        or tuple(sorted(writers)) != runtime.running_writers
+                    )
+                )
             ):
                 raise PostgresDeployError()
         else:
-            writers = list(running_writers)
+            runtime = self.source_identity_runtime_snapshot(
+                selected, require_running_capture=True,
+            )
+            writers = list(runtime.running_writers)
             if not {'api', 'worker', 'watcher'} <= set(writers):
                 raise PostgresDeployError()
             request_payload = {
                 **request_base,
-                'runtime_fingerprint': runtime_fingerprint,
+                'installed_fingerprint': runtime.installed_fingerprint,
+                'execution_fingerprint': runtime.execution_fingerprint,
                 'writers': writers,
+                'container_root': runtime.container_root,
+                'vault_overlay': runtime.vault_overlay,
             }
             _atomic_private_json(request_path, request_payload)
         if receipt_path.exists():
@@ -1080,7 +1154,8 @@ class LinuxEffects:
                 raise PostgresDeployError()
             self.reconcile_source_identity_cleanup(
                 operation_id, revision, image_digest, selected, owner, writers,
-                request_payload['runtime_fingerprint'],
+                request_payload['installed_fingerprint'],
+                request_payload['container_root'], request_payload['vault_overlay'],
             )
             return retained
         if producer_path.exists():
@@ -1093,11 +1168,14 @@ class LinuxEffects:
                 raise PostgresDeployError()
             self.reconcile_source_identity_cleanup(
                 operation_id, revision, image_digest, selected, owner, writers,
-                request_payload['runtime_fingerprint'],
+                request_payload['installed_fingerprint'],
+                request_payload['container_root'], request_payload['vault_overlay'],
             )
             _atomic_private_json(receipt_path, retained)
             return retained
-        self.require_source_identity_candidate(source_plan, selected, acquire=True)
+        self.require_source_identity_candidate(
+            source_plan, selected, acquire=True, source_snapshot=runtime,
+        )
         deploy_receipt = self.config.journal.read()
         if deploy_receipt is None or deploy_receipt.terminal_result not in {
             "committed", "aborted", "failed",
@@ -1119,23 +1197,33 @@ class LinuxEffects:
                 source_plan = self.qualify_source_identity_authority(
                     revision, image_digest, selected,
                 )
-                locked_fingerprint, locked_running, locked_existing = (
-                    self.source_identity_runtime_snapshot()
+                locked_runtime = self.source_identity_runtime_snapshot(
+                    selected, require_running_capture=True,
                 )
                 if (
-                    locked_fingerprint != request_payload['runtime_fingerprint']
-                    or not set(writers) <= set(locked_running)
-                    or not set(writers) <= set(locked_existing)
+                    locked_runtime.installed_fingerprint
+                    != request_payload['installed_fingerprint']
+                    or locked_runtime.execution_fingerprint
+                    != request_payload['execution_fingerprint']
+                    or locked_runtime.container_root != request_payload['container_root']
+                    or locked_runtime.vault_overlay != request_payload['vault_overlay']
+                    or tuple(sorted(writers)) != locked_runtime.running_writers
+                    or not set(writers) <= set(locked_runtime.existing_writers)
                 ):
                     raise PostgresDeployError()
-                self.require_source_identity_candidate(source_plan, selected, acquire=False)
+                self.require_source_identity_candidate(
+                    source_plan, selected, acquire=False, source_snapshot=locked_runtime,
+                )
                 current = self.config.journal.read()
                 if current is None or current.terminal_result not in {
                     "committed", "aborted", "failed",
                 }:
                     raise PostgresDeployError()
                 writer_stop_attempted = True
-                self.compose("stop", *writers, cutover=selected, timeout=120)
+                self.compose(
+                    "stop", *writers, cutover=selected, timeout=120,
+                    source_snapshot=locked_runtime,
+                )
                 name = f"pkm-{self.config.channel}-source-bootstrap-{operation_id}"
                 worker_attempted = True
                 worker_quiesced = False
@@ -1144,11 +1232,17 @@ class LinuxEffects:
                     "--label", f"yggdrasil.native.operation={operation_id}",
                     "--label", f"yggdrasil.native.revision={revision}",
                     "--user", str(self.config.uid),
+                    *[
+                        item
+                        for key, _value in locked_runtime.child_environment
+                        for item in ("-e", key)
+                    ],
                     "-e", f"NATIVE_SOURCE_BOOTSTRAP={self.config.channel}:{revision}",
                     "--entrypoint", "python", "api", "-m",
                     "app.ops.native_source_identity_persistence",
-                    operation_id, self.config.channel, revision, selected.root,
+                    operation_id, self.config.channel, revision, locked_runtime.container_root,
                     cutover=selected, candidate=source_plan, timeout=7200,
+                    source_snapshot=locked_runtime,
                 )
                 from app.ops.native_source_bootstrap import quiesce_owned_container
 
@@ -1162,7 +1256,10 @@ class LinuxEffects:
                 except Exception:
                     raise PostgresDeployError() from None
                 _atomic_private_json(producer_path, payload)
-                self.compose("start", *writers, cutover=selected, timeout=120)
+                self.compose(
+                    "start", *writers, cutover=selected, timeout=120,
+                    source_snapshot=locked_runtime,
+                )
                 writers_restored = True
         except Exception:
             # Best-effort restoration is allowed only for the exact stopped
@@ -1180,7 +1277,10 @@ class LinuxEffects:
                     worker_quiesced = False
             if lock_acquired and writer_stop_attempted and worker_quiesced:
                 try:
-                    self.compose("start", *writers, cutover=selected, timeout=120)
+                    self.compose(
+                        "start", *writers, cutover=selected, timeout=120,
+                        source_snapshot=locked_runtime,
+                    )
                     writers_restored = True
                 except Exception:
                     writers_restored = False
@@ -1240,7 +1340,9 @@ class LinuxEffects:
         selected: AuthorityCutover,
         owner: dict[str, str],
         writers: list[str],
-        runtime_fingerprint: str,
+        installed_fingerprint: str,
+        container_root: str,
+        vault_overlay: str,
     ) -> None:
         """Finish only this operation's retained cleanup; never rerun its producer."""
         expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
@@ -1248,8 +1350,16 @@ class LinuxEffects:
             return
         with self.failed_reconciliation_lock(expected_owner=owner) as handle:
             self.qualify_source_identity_authority(revision, image_digest, selected)
-            current_fingerprint, _running, existing = self.source_identity_runtime_snapshot()
-            if current_fingerprint != runtime_fingerprint or not set(writers) <= set(existing):
+            current = self.source_identity_runtime_snapshot(
+                selected, require_running_capture=False,
+            )
+            if (
+                current.installed_fingerprint != installed_fingerprint
+                or current.container_root != container_root
+                or current.vault_overlay != vault_overlay
+                or not set(writers) <= set(current.existing_writers)
+                or set(current.running_writers) - set(writers)
+            ):
                 raise PostgresDeployError()
             from app.ops.native_source_bootstrap import quiesce_owned_container
 
@@ -1258,7 +1368,10 @@ class LinuxEffects:
                 self.config.channel, name, operation_id, revision,
             ):
                 raise PostgresDeployError()
-            self.compose("start", *writers, cutover=selected, timeout=120)
+            self.compose(
+                "start", *writers, cutover=selected, timeout=120,
+                source_snapshot=current,
+            )
             self.retire_reconciled_channel_lock(handle, expected_owner=owner)
 
     def qualify_source_identity_authority(
@@ -1279,6 +1392,7 @@ class LinuxEffects:
 
     def require_source_identity_candidate(
         self, plan: DeployPlan, selected: AuthorityCutover, *, acquire: bool,
+        source_snapshot: SourceIdentityRuntimeSnapshot,
     ) -> None:
         """Acquire and authenticate the reviewed helper image without admitting it."""
         from app.ops.pg_acceptance import IMAGE_REPOSITORY
@@ -1290,6 +1404,7 @@ class LinuxEffects:
         if acquire:
             self.compose(
                 'pull', 'api', cutover=selected, candidate=plan, timeout=1800,
+                source_snapshot=source_snapshot,
             )
         image_ref = IMAGE_REPOSITORY + '@' + plan.image_digest
         try:
@@ -1306,8 +1421,10 @@ class LinuxEffects:
         ):
             raise PostgresDeployError()
 
-    def source_identity_runtime_snapshot(self) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
-        """Bind the operation to the unchanged installed writer/provider configuration."""
+    def source_identity_runtime_snapshot(
+        self, selected: AuthorityCutover, *, require_running_capture: bool,
+    ) -> SourceIdentityRuntimeSnapshot:
+        """Bind installed writers and the exact candidate-child configuration."""
         cfg = self.config
         ids = _command([
             'docker', 'ps', '--all', '--no-trunc', '--filter',
@@ -1321,6 +1438,8 @@ class LinuxEffects:
             raise PostgresDeployError()
         allowed = {'api', 'worker', 'watcher', 'heimdal-capture-watch', 'companion-ui'}
         snapshots: dict[str, dict[str, Any]] = {}
+        environments: dict[str, dict[str, str]] = {}
+        selected_destinations: set[str] = set()
         running: set[str] = set()
         for row in rows:
             if not isinstance(row, dict):
@@ -1342,21 +1461,191 @@ class LinuxEffects:
             if status == 'running':
                 running.add(service)
             config = row.get('Config', {})
+            entries = config.get('Env', [])
+            if not isinstance(entries, list):
+                raise PostgresDeployError()
+            parsed: dict[str, str] = {}
+            for entry in entries:
+                if not isinstance(entry, str) or '\x00' in entry:
+                    raise PostgresDeployError()
+                key, separator, value = entry.partition('=')
+                if (
+                    not separator
+                    or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key)
+                    or key in parsed
+                ):
+                    raise PostgresDeployError()
+                parsed[key] = value
+            if 'BWS_ACCESS_TOKEN' in parsed:
+                raise PostgresDeployError()
+            environments[service] = parsed
+            mounts = row.get('Mounts')
+            if not isinstance(mounts, list):
+                raise PostgresDeployError()
+            selected_mounts = [
+                mount for mount in mounts
+                if isinstance(mount, dict)
+                and mount.get('Type') == 'bind'
+                and mount.get('Source') == selected.root
+                and mount.get('Destination') in {selected.root, '/app/vault'}
+            ]
+            if service in {'api', 'worker', 'watcher'}:
+                if len(selected_mounts) != 1:
+                    raise PostgresDeployError()
+                selected_destinations.add(str(selected_mounts[0]['Destination']))
             snapshots[service] = {
                 'id': row.get('Id'),
                 'image_id': row.get('Image'),
                 'image_ref': config.get('Image'),
-                'environment': config.get('Env'),
+                'environment': entries,
                 'user': config.get('User'),
                 'mounts': row.get('Mounts'),
             }
         existing = set(snapshots)
         if not {'api', 'worker', 'watcher'} <= existing:
             raise PostgresDeployError()
-        if _capture_watch_configured(cfg) and 'heimdal-capture-watch' not in running:
+        if (
+            require_running_capture
+            and _capture_watch_configured(cfg)
+            and 'heimdal-capture-watch' not in running
+        ):
             raise PostgresDeployError()
-        encoded = json.dumps(snapshots, sort_keys=True, separators=(',', ':')).encode()
-        return hashlib.sha256(encoded).hexdigest(), tuple(sorted(running)), tuple(sorted(existing))
+        if len(selected_destinations) != 1:
+            raise PostgresDeployError()
+        container_root = next(iter(selected_destinations))
+        if container_root not in {selected.root, '/app/vault'}:
+            raise PostgresDeployError()
+        vault_overlay = (
+            'docker-compose.full-host-vault.yml'
+            if container_root == selected.root
+            else 'docker-compose.legacy-vault.yml'
+        )
+        api_environment = environments.get('api')
+        if api_environment is None:
+            raise PostgresDeployError()
+        for service in ('worker', 'watcher'):
+            current = environments.get(service)
+            if current is None:
+                raise PostgresDeployError()
+            for key in (
+                'LLM_PROVIDER', 'EMBED_PROVIDER', 'EMBED_MODEL', 'STORE_BACKEND',
+                'PKM_ENVIRONMENT', 'VAULT_HOST_ROOT', 'VAULT_ROOT',
+                'VAULT_ROOT_DEV', 'VAULT_ROOT_TEST', 'WATCHER_VAULT_PATH',
+                'DATABASE_URL', 'DB_DSN',
+            ):
+                if current.get(key) != api_environment.get(key):
+                    raise PostgresDeployError()
+        installed_payload = {
+            'containers': snapshots,
+            'container_root': container_root,
+            'vault_overlay': vault_overlay,
+        }
+
+        def stable_hash(path: Path) -> str:
+            descriptor = None
+            try:
+                descriptor = os.open(
+                    path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                )
+                before = os.fstat(descriptor)
+                if not stat.S_ISREG(before.st_mode):
+                    raise PostgresDeployError()
+                chunks = []
+                while True:
+                    chunk = os.read(descriptor, 1024 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                after = os.fstat(descriptor)
+                if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                    after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+                ):
+                    raise PostgresDeployError()
+                return hashlib.sha256(b''.join(chunks)).hexdigest()
+            except (OSError, ValueError):
+                raise PostgresDeployError() from None
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+
+        def env_values(path: Path) -> dict[str, str]:
+            from scripts.compose_env import compose_env_value
+
+            values: dict[str, str] = {}
+            try:
+                lines = path.read_text(encoding='utf-8').splitlines()
+            except (OSError, UnicodeError):
+                raise PostgresDeployError() from None
+            for line in lines:
+                match = re.match(
+                    r'^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$',
+                    line.strip(),
+                )
+                if match:
+                    key, raw = match.groups()
+                    if key in values:
+                        raise PostgresDeployError()
+                    values[key] = compose_env_value(raw)
+            return values
+
+        pin_path, runtime_path = database_input_files(cfg)
+        defaults_path = cfg.root / 'config/runtime.defaults.env'
+        pin_values = env_values(pin_path)
+        runtime_values = env_values(runtime_path)
+        defaults_values = env_values(defaults_path)
+        effective_values = {**defaults_values, **runtime_values}
+        runtime_llm = runtime_values.get('LLM_PROVIDER', '')
+        effective_values['LLM_PROVIDER'] = runtime_llm or pin_values.get('LLM_PROVIDER', '')
+        selected_host_root = pin_values.get('VAULT_HOST_ROOT', '')
+        if not selected_host_root:
+            selected_host_root = runtime_values.get('VAULT_HOST_ROOT', '')
+        if selected_host_root != selected.root:
+            raise PostgresDeployError()
+        for key in (
+            'LLM_PROVIDER', 'EMBED_PROVIDER', 'EMBED_MODEL', 'STORE_BACKEND',
+        ):
+            if effective_values.get(key, '') != api_environment.get(key, ''):
+                raise PostgresDeployError()
+        installed_database = credential_free_database_fields(
+            api_environment.get('DATABASE_URL') or api_environment.get('DB_DSN') or '',
+        )
+        current_database = effective_database_fields(cfg, {})
+        for key, value in current_database.items():
+            if installed_database.get(key) != value:
+                raise PostgresDeployError()
+
+        input_paths = [
+            pin_path, runtime_path, defaults_path,
+            cfg.root / 'docker-compose.yaml',
+            cfg.root / f'docker-compose.{cfg.channel}.yml',
+            cfg.root / 'docker-compose.bws.yml',
+            cfg.root / vault_overlay,
+        ]
+        if database_target(credential_free_database_fields(
+            api_environment.get('DATABASE_URL') or api_environment.get('DB_DSN') or '',
+        )) == 'external':
+            input_paths.append(cfg.root / 'docker-compose.bws-external.yml')
+        if cfg.channel == 'test':
+            input_paths.append(cfg.root / 'docker-compose.test-vault.yml')
+        execution_payload = {
+            'files': [(str(path), stable_hash(path)) for path in input_paths],
+            'child_environment': sorted(api_environment.items()),
+            'container_root': container_root,
+            'vault_overlay': vault_overlay,
+        }
+        return SourceIdentityRuntimeSnapshot(
+            installed_fingerprint=hashlib.sha256(json.dumps(
+                installed_payload, sort_keys=True, separators=(',', ':'),
+            ).encode()).hexdigest(),
+            execution_fingerprint=hashlib.sha256(json.dumps(
+                execution_payload, sort_keys=True, separators=(',', ':'),
+            ).encode()).hexdigest(),
+            running_writers=tuple(sorted(running)),
+            existing_writers=tuple(sorted(existing)),
+            container_root=container_root,
+            vault_overlay=vault_overlay,
+            child_environment=tuple(sorted(api_environment.items())),
+        )
 
     def channel_lock_owner(self) -> bytes | None:
         """Read a structurally valid channel owner marker without adopting it."""
