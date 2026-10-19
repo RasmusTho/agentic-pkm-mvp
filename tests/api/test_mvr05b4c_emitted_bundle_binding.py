@@ -274,3 +274,48 @@ def test_legacy_view_returns_the_newest_visible_registration(
     runtime_registry.register_emitted_bundle(older, vault_binding_id="live-binding")
     assert runtime_registry.get_emitted_bundle("cb-x").intended_use == ["orient"]
     clear_emitted_bundles()
+
+
+def test_registry_lookups_survive_concurrent_registrations() -> None:
+    """#6253 review: a lookup never fails while another thread registers bundles."""
+
+    import threading
+
+    from app.context_bundles import runtime_registry
+    from app.context_bundles.construction import build_inspectable_bundle
+
+    clear_emitted_bundles()
+    template = build_inspectable_bundle("cb-seed")
+    for index in range(100):
+        runtime_registry.register_emitted_bundle(
+            template.model_copy(update={"id": f"cb-{index}"}), vault_binding_id="binding-a"
+        )
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def register() -> None:
+        index = 0
+        while not stop.is_set():
+            runtime_registry.register_emitted_bundle(
+                template.model_copy(update={"id": f"cb-new-{index}"}), vault_binding_id="binding-b"
+            )
+            index += 1
+
+    def look_up() -> None:
+        try:
+            for _ in range(300):
+                runtime_registry.get_emitted_bundle("cb-missing", vault_binding_id="binding-a")
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the assertion below
+            errors.append(exc)
+
+    writer = threading.Thread(target=register)
+    readers = [threading.Thread(target=look_up) for _ in range(4)]
+    writer.start()
+    for reader in readers:
+        reader.start()
+    for reader in readers:
+        reader.join(timeout=30)
+    stop.set()
+    writer.join(timeout=30)
+    clear_emitted_bundles()
+    assert errors == []

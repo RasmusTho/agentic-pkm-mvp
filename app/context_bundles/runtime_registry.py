@@ -11,6 +11,7 @@ legacy view can see it, never a scoped lookup.
 """
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 
 from app.context_bundles.schema import ContextBundle
@@ -18,6 +19,10 @@ from app.context_bundles.schema import ContextBundle
 _MAX_EMITTED_BUNDLES = 128
 _RegistryKey = tuple[str | None, str]
 _EMITTED_BUNDLES: OrderedDict[_RegistryKey, ContextBundle] = OrderedDict()
+# Sync route handlers run in worker threads: every registry operation (including
+# the newest-first scan) holds this lock, so a concurrent registration never
+# mutates the dict mid-iteration.
+_REGISTRY_LOCK = threading.Lock()
 
 
 def _enforce_registry_bound() -> None:
@@ -47,9 +52,10 @@ def register_emitted_bundle(
     """
     stored = bundle.model_copy(deep=True)
     key = (vault_binding_id, stored.id)
-    _EMITTED_BUNDLES[key] = stored
-    _EMITTED_BUNDLES.move_to_end(key)
-    _enforce_registry_bound()
+    with _REGISTRY_LOCK:
+        _EMITTED_BUNDLES[key] = stored
+        _EMITTED_BUNDLES.move_to_end(key)
+        _enforce_registry_bound()
     return stored.model_copy(deep=True)
 
 
@@ -63,14 +69,17 @@ def get_emitted_bundle(
     carrier-free read sees the legacy view: the live compatibility binding, the
     no-registry sentinel and unstamped entries.
     """
-    visible = {vault_binding_id} if vault_binding_id is not None else set(_legacy_view())
+    visible: set[str | None] = (
+        {vault_binding_id} if vault_binding_id is not None else set(_legacy_view())
+    )
     # Newest visible registration wins, preserving the registry's last-write
     # behavior across the legacy view's bindings.
-    for key in reversed(_EMITTED_BUNDLES):
-        binding, entry_id = key
-        if entry_id == bundle_id and binding in visible:
-            _EMITTED_BUNDLES.move_to_end(key)
-            return _EMITTED_BUNDLES[key].model_copy(deep=True)
+    with _REGISTRY_LOCK:
+        for key in reversed(_EMITTED_BUNDLES):
+            binding, entry_id = key
+            if entry_id == bundle_id and binding in visible:
+                _EMITTED_BUNDLES.move_to_end(key)
+                return _EMITTED_BUNDLES[key].model_copy(deep=True)
     return None
 
 
@@ -79,7 +88,8 @@ def clear_emitted_bundles() -> None:
 
     This is intended for deterministic tests and process lifecycle hygiene.
     """
-    _EMITTED_BUNDLES.clear()
+    with _REGISTRY_LOCK:
+        _EMITTED_BUNDLES.clear()
 
 
 __all__ = [
