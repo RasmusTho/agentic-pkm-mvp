@@ -203,6 +203,41 @@ def test_checker_reads_verdict_from_later_status_page() -> None:
     assert result.ok and result.reason == "fresh_dev_verdict"
 
 
+def test_checker_grace_does_not_reset_for_continuous_builds() -> None:
+    head_sha = "b" * 40
+    middle_sha = "c" * 40
+    overdue_sha = "d" * 40
+
+    def run(sha: str, hours_ago: float, run_id: int) -> dict[str, object]:
+        stamp = (NOW - timedelta(hours=hours_ago)).isoformat().replace("+00:00", "Z")
+        return {
+            "id": run_id,
+            "status": "completed",
+            "conclusion": "success",
+            "event": "push",
+            "head_branch": "main",
+            "head_sha": sha,
+            "path": liveness.BUILD_WORKFLOW,
+            "created_at": stamp,
+            "completed_at": stamp,
+            "repository": {"full_name": "o/r"},
+            "head_repository": {"full_name": "o/r"},
+        }
+
+    runs = [run(head_sha, 0.5, 3), run(middle_sha, 3, 2), run(overdue_sha, 7, 1)]
+
+    def api(path: str):
+        if "actions/workflows" in path:
+            return {"workflow_runs": runs}
+        if f"commits/{head_sha}/statuses" in path:
+            return [_status(liveness.HEARTBEAT_CONTEXT, 0.1)]
+        return []
+
+    result = liveness.check("o/r", head_sha, api=api, now=NOW)
+    assert not result.ok
+    assert result.reason == "missing_dev_verdict"
+
+
 def test_latest_admitted_build_uses_creation_order_and_paginates_failures() -> None:
     newer = {"id": 200, "status": "completed", "conclusion": "success", "event": "push",
              "head_branch": "main", "head_sha": "b" * 40, "path": liveness.BUILD_WORKFLOW,

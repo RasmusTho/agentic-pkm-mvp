@@ -66,8 +66,8 @@ def _validate_sha(value: Any) -> str:
     return value
 
 
-def latest_admitted_build(repo: str, *, api: Callable[[str], Any]) -> AdmittedBuild | None:
-    candidates = []
+def _admitted_builds(repo: str, *, api: Callable[[str], Any]) -> list[AdmittedBuild]:
+    candidates: dict[str, AdmittedBuild] = {}
     for page in range(1, MAX_HISTORY_PAGES + 1):
         payload = api(
             f"repos/{repo}/actions/workflows/app-image-build.yml/runs"
@@ -97,16 +97,27 @@ def latest_admitted_build(repo: str, *, api: Callable[[str], Any]) -> AdmittedBu
                     raise ValueError()
             except (KeyError, TypeError, ValueError, LivenessRefused):
                 continue
-            candidates.append(AdmittedBuild(sha, completed_at, run_id, created_at))
+            candidate = AdmittedBuild(sha, completed_at, run_id, created_at)
+            previous = candidates.get(sha)
+            if previous is None or (candidate.created_at or candidate.completed_at, candidate.run_id) > (previous.created_at or previous.completed_at, previous.run_id):
+                candidates[sha] = candidate
         if len(runs) < 100:
             break
     else:
         raise LivenessRefused("build_runs_incomplete")
-    if not candidates:
-        return None
     # GitHub's workflow-run listing is ordered by creation. A rerun may complete
-    # later than a newer run, so completion time must not select a historical SHA.
-    return max(candidates, key=lambda candidate: candidate.created_at or candidate.completed_at)
+    # later than a newer run, so creation time selects the admitted SHA while
+    # retaining every distinct build for outstanding-verdict evaluation.
+    return sorted(
+        candidates.values(),
+        key=lambda candidate: (candidate.created_at or candidate.completed_at, candidate.run_id),
+        reverse=True,
+    )
+
+
+def latest_admitted_build(repo: str, *, api: Callable[[str], Any]) -> AdmittedBuild | None:
+    builds = _admitted_builds(repo, api=api)
+    return builds[0] if builds else None
 
 
 def _latest_status(statuses: Any, context: str, *, allow_rotated_context: bool = False) -> dict[str, Any] | None:
@@ -196,10 +207,23 @@ def check(repo: str, github_sha: str, *, api: Callable[[str], Any] = _github,
           now: datetime | None = None) -> LivenessResult:
     _validate_sha(github_sha)
     current = now or datetime.now(timezone.utc)
-    build = latest_admitted_build(repo, api=api)
+    builds = _admitted_builds(repo, api=api)
+    build = builds[0] if builds else None
     heartbeat = _status_history(repo, github_sha, HEARTBEAT_CONTEXT, api=api)
-    verdict = _status_history(repo, build.sha, VERDICT_CONTEXT, api=api) if build else []
-    return evaluate(build, heartbeat_statuses=heartbeat, verdict_statuses=verdict, now=current)
+    latest_verdict: list[Any] = []
+    for candidate in builds:
+        verdict = _status_history(repo, candidate.sha, VERDICT_CONTEXT, api=api)
+        if candidate is build:
+            latest_verdict = verdict
+        recorded = _latest_status(verdict, VERDICT_CONTEXT)
+        terminal = (recorded is not None and recorded.get("state") in {"success", "failure"}
+                    and _status_timestamp(recorded) >= candidate.completed_at
+                    and _status_timestamp(recorded) <= current)
+        if not terminal and current - candidate.completed_at > GRACE:
+            # Do not reset the grace timer just because newer admitted builds
+            # keep arriving: this oldest outstanding build is the stalled work.
+            return evaluate(candidate, heartbeat_statuses=heartbeat, verdict_statuses=[], now=current)
+    return evaluate(build, heartbeat_statuses=heartbeat, verdict_statuses=latest_verdict, now=current)
 
 
 def main(argv: list[str] | None = None) -> int:
