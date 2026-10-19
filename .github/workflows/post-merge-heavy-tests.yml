@@ -242,7 +242,8 @@ jobs:
     if: >-
       always() && github.ref == 'refs/heads/main' &&
       needs.resolve.result != 'cancelled' && needs.record-verdict.result != 'cancelled' &&
-      needs.heavy-tests.result != 'cancelled' && needs.resolve.outputs.mode != 'noop'
+      needs.heavy-tests.result != 'cancelled' && needs.resolve.outputs.mode != 'noop' &&
+      github.event.inputs.liveness_signal != 'status'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

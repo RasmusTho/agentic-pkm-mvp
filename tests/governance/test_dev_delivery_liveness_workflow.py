@@ -77,6 +77,15 @@ def test_liveness_check_reds_on_missing_heartbeat() -> None:
     assert not stale_verdict.ok
     assert stale_verdict.reason == "heartbeat_missing"
 
+    recorded_verdict = liveness.evaluate(
+        _build(7),
+        heartbeat_statuses=[_status(liveness.HEARTBEAT_CONTEXT, 0.1)],
+        verdict_statuses=[_status(liveness.VERDICT_CONTEXT, 3)],
+        now=NOW,
+    )
+    assert recorded_verdict.ok
+    assert recorded_verdict.reason == "dev_verdict_recorded"
+
     future_verdict = liveness.evaluate(
         build,
         heartbeat_statuses=[],

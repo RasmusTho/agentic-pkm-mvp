@@ -138,7 +138,8 @@ def test_workflow_records_status_and_keeps_rolling_alert() -> None:
 
     alert = jobs["alert"]
     assert alert["needs"] == ["resolve", "record-verdict", "heavy-tests"]
-    assert "always()" in alert["if"] and "cancelled" in alert["if"] and "'noop'" in alert["if"]
+    assert ("always()" in alert["if"] and "cancelled" in alert["if"]
+            and "'noop'" in alert["if"] and "liveness_signal != 'status'" in alert["if"])
     assert alert["permissions"]["issues"] == "write"
     script = alert["steps"][-1]["run"]
     assert "gh issue create" in script and "scripts/post_merge_heavy_tests_alert.py" in script

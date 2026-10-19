@@ -134,10 +134,11 @@ def evaluate(
     current = now.astimezone(timezone.utc)
     verdict = _latest_status(verdict_statuses, VERDICT_CONTEXT)
     verdict_at = _status_timestamp(verdict) if verdict is not None else None
-    if (build is not None and verdict is not None
-            and verdict.get("state") in {"success", "failure"}
-            and verdict_at is not None and verdict_at >= build.completed_at
-            and verdict_at <= current
+    terminal_verdict = (build is not None and verdict is not None
+                        and verdict.get("state") in {"success", "failure"}
+                        and verdict_at is not None and verdict_at >= build.completed_at
+                        and verdict_at <= current)
+    if (terminal_verdict
             and current - verdict_at <= HEARTBEAT_GRACE):
         # A fresh terminal verdict is itself proof that the controller was
         # alive. This also lets a fresh verdict recover a stale heartbeat
@@ -154,6 +155,9 @@ def evaluate(
 
     if build is None:
         return LivenessResult(True, "no_admitted_build", "no successful admitted main build is available")
+
+    if terminal_verdict:
+        return LivenessResult(True, "dev_verdict_recorded", f"dev verdict is recorded for {build.sha[:12]}")
 
     if current - build.completed_at > GRACE:
         hours = int(GRACE.total_seconds() // 3600)
