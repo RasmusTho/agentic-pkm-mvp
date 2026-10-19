@@ -113,8 +113,13 @@ def test_scoped_reads_use_the_bound_binding_not_the_process_selection(
     panel = client.get("/api/debug/panel", params={"note_rel": "panel.md"}, headers=scoped)
     assert panel.status_code == 200, panel.text
     assert [a["action_text"] for a in panel.json()["parsed_actions"]] == ["Promote this note"]
-    # Process-global panel-action diagnostics are not reported as the binding's.
-    assert panel.json()["panel_diagnostics"] is None
+    # MVR-05B4c6: a scoped read gets its own non-mutating mapping probe.
+    from app.settings import panel_actions
+
+    slot_before = panel_actions._LAST_PANEL_ACTIONS_ERROR
+    panel = client.get("/api/debug/panel", params={"note_rel": "panel.md"}, headers=scoped)
+    assert panel.json()["panel_diagnostics"] is not None
+    assert panel_actions._LAST_PANEL_ACTIONS_ERROR == slot_before
 
     # B's note does not exist in A: the scoped read never falls back to B.
     (root_b / "only-b.md").write_text("B only\n", encoding="utf-8")

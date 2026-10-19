@@ -60,11 +60,14 @@ def test_screen_control_refuses_authorized_scoped_session_before_legacy_read(
     manager = VaultManager()
     manager.select_vault(Path(first.path), remember=False)
     monkeypatch.setattr(vault_manager_module, "_GLOBAL_MANAGER", manager)
-    monkeypatch.setattr(
-        heimdal_screen,
-        "screen_control_status",
-        lambda *_args, **_kwargs: pytest.fail("scoped request read process-selected controls"),
-    )
+    read_roots: list[Path] = []
+
+    def binding_controls(context, **_kwargs):
+        # MVR-05B4c6: the scoped read answers from the request binding's settings.
+        read_roots.append(Path(context.active_vault_path).resolve())
+        return {"state": "paused"}
+
+    monkeypatch.setattr(heimdal_screen, "screen_control_status", binding_controls)
     session = _create(client, second.vault_binding_id)
 
     response = client.get(
@@ -72,8 +75,8 @@ def test_screen_control_refuses_authorized_scoped_session_before_legacy_read(
         headers={"X-Active-Context-Session": session["context_selection_id"]},
         params={"app_id": "com.editor"},
     )
-    assert response.status_code == 409, response.text
-    assert response.json()["detail"]["capability"] == "mvr05b4_binding_aware_read"
+    assert response.status_code == 200, response.text
+    assert read_roots == [Path(second.path).resolve()]
 
 
 @pytest.mark.parametrize(
@@ -105,8 +108,8 @@ def test_screen_control_refuses_unresolved_scoped_carrier_before_legacy_read(
     )
 
     response = client.get("/api/heimdal/screen/control", headers={header: value})
-    assert response.status_code == 409, response.text
-    assert response.json()["detail"]["capability"] == "mvr05b4_binding_aware_read"
+    # The presented carrier is validated fail-closed before any read (MVR-05B4c6).
+    assert response.status_code in (401, 403, 409), response.text
 
 
 def test_two_sessions_use_distinct_vaults_without_cross_talk(instance, client, monkeypatch) -> None:

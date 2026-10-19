@@ -64,11 +64,12 @@ cannot select the compatibility vault for mutation. The existing
 `POST /api/companion/vault/settings` writer applies the same authentication to screen keys. The
 actor is never supplied by the request body.
 
-These are carrier-free compatibility endpoints. Until the screen-control projections are
-binding-aware, requests carrying either `X-Active-Context-Session` or `X-Active-Context-Override`
-are refused: GET returns `409 capability_not_ready` (`mvr05b4_binding_aware_read`) and PUT returns
-`409 capability_not_ready` (`mvr05c_scoped_write`). Neither endpoint falls back to the current
-compatibility vault for a scoped request.
+A carrier-free GET reads the compatibility vault. A GET carrying `X-Active-Context-Session` or
+`X-Active-Context-Override` answers from the request binding's own settings under the scoped
+route read window; a malformed, expired, unauthorized or blank carrier fails closed. PUT stays a
+carrier-free compatibility write: a carrier-bearing PUT returns `409 capability_not_ready`
+(`mvr05c_scoped_write`). Neither endpoint falls back to the current compatibility vault for a
+scoped request.
 
 The response exposes accepted `controls`, `requested_state` (`paused` or `resume_requested`),
 effective `state` (`paused`, `ready`, or `degraded`), `settings_state`, visible `errors`, and

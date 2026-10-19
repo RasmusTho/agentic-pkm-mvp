@@ -71,7 +71,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from starlette.datastructures import UploadFile
 
 from app.api.compatibility_mutation import require_compatibility_write_root, seal_vault_mutation
-from app.api.request_active_context import refuse_carrier_until_binding_aware
+from app.api.request_active_context import resolve_optional_scoped_read_context
 from app.events.models import new_trace_id
 from app.heimdal import (
     media_ingress,
@@ -95,12 +95,14 @@ from app.heimdal.raw_store import RawStoreKeyMissingError
 
 logger = logging.getLogger(__name__)
 
-# MVR-05B3: media admission carries the pre-05C mutation seal; the receipt read
-# is process-global (not binding-aware until MVR-05B4) and refuses a carrier.
+# MVR-05B3: media admission carries the pre-05C mutation seal. The receipt read
+# is served from the explicitly-global media-receipt ledger (not vault-bound,
+# MVR-05B4c6): a presented carrier is validated fail-closed, then answered like a
+# carrier-free read.
 router = APIRouter(
     prefix="/api/heimdal/capture",
     tags=["heimdal"],
-    dependencies=[Depends(seal_vault_mutation), Depends(refuse_carrier_until_binding_aware)],
+    dependencies=[Depends(seal_vault_mutation)],
 )
 
 # The admitted ingress posture, stated as explicit networks rather than
@@ -703,7 +705,11 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
     )
 
 
-@router.get("/receipts", response_model=ReceiptQueryResponse)
+@router.get(
+    "/receipts",
+    response_model=ReceiptQueryResponse,
+    dependencies=[Depends(resolve_optional_scoped_read_context)],
+)
 def query_receipts(
     request: Request,
     capture_id: list[str] = Query(default_factory=list),
