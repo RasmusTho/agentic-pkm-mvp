@@ -3,26 +3,41 @@
 The registry lets runtime consumers resolve bundles that were already emitted
 in this process. It is not persistence, memory, knowledge, or authority.
 
-MVR-05B4c5: every entry is keyed by (emitting binding, bundle id), so two
-bindings emitting the same id stay independently addressable and a lookup never
-returns another binding's bundle. A carrier-free emission is not retrieved under
-a binding filter, so it registers unstamped (``None``): only the carrier-free
-legacy view can see it, never a scoped lookup.
+MVR-05B4c5: every entry is keyed by (emitting binding, emitting context
+identity, bundle id). A scoped emission is retrieved under its request's
+ActiveContextSet, so only a lookup with that same full context identity (same
+binding, scope, principal, filter, selection, ...) can address it: two bindings
+or two contexts emitting the same id stay independently addressable, and a
+lookup never returns content retrieved under another context. A carrier-free
+emission is not retrieved under a binding filter, so it registers unstamped
+(``None``, ``None``) and only a carrier-free lookup can see it.
 """
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections import OrderedDict
+from typing import Protocol
 
 from app.context_bundles.schema import ContextBundle
 
 _MAX_EMITTED_BUNDLES = 128
-_RegistryKey = tuple[str | None, str]
+_RegistryKey = tuple[str | None, str | None, str]
 _EMITTED_BUNDLES: OrderedDict[_RegistryKey, ContextBundle] = OrderedDict()
-# Sync route handlers run in worker threads: every registry operation (including
-# the newest-first scan) holds this lock, so a concurrent registration never
-# mutates the dict mid-iteration.
+# Sync route handlers run in worker threads: every registry operation holds this
+# lock, so a concurrent registration never races a lookup or the size bound.
 _REGISTRY_LOCK = threading.Lock()
+
+
+class _ContextIdentity(Protocol):
+    def context_identity_components(self) -> tuple[str, ...]: ...
+
+
+def emitted_bundle_context_key(context: _ContextIdentity) -> str:
+    """Non-reversible digest of a request context's full identity."""
+
+    material = "\n".join(context.context_identity_components())
+    return hashlib.sha256(f"emitted-context-bundle:{material}".encode()).hexdigest()
 
 
 def _enforce_registry_bound() -> None:
@@ -33,25 +48,27 @@ def _enforce_registry_bound() -> None:
         _EMITTED_BUNDLES.popitem(last=False)
 
 
-def _legacy_view() -> tuple[str | None, ...]:
-    from app.instance.compatibility_binding import legacy_view_bindings
-
-    return legacy_view_bindings()
+def _key(bundle_id: str, vault_binding_id: str | None, context_key: str | None) -> _RegistryKey:
+    if (vault_binding_id is None) != (context_key is None):
+        raise ValueError("a scoped registry key needs both a binding and a context key")
+    return (vault_binding_id, context_key, bundle_id)
 
 
 def register_emitted_bundle(
-    bundle: ContextBundle, *, vault_binding_id: str | None = None
+    bundle: ContextBundle,
+    *,
+    vault_binding_id: str | None = None,
+    context_key: str | None = None,
 ) -> ContextBundle:
-    """Record an emitted bundle under its emitting binding for process-local lookup.
+    """Record an emitted bundle under its emitting binding and context.
 
-    ``vault_binding_id`` is the scoped request's binding, whose retrieval was
-    filtered to the request's bindings. A carrier-free caller omits it and the
-    bundle is registered unstamped. A deep copy is
-    stored and returned so later caller mutation cannot silently rewrite the
-    registry entry.
+    A scoped emission passes its request binding and
+    :func:`emitted_bundle_context_key` of its ActiveContextSet; a carrier-free
+    emission passes neither and is registered unstamped. A deep copy is stored
+    and returned so later caller mutation cannot silently rewrite the entry.
     """
     stored = bundle.model_copy(deep=True)
-    key = (vault_binding_id, stored.id)
+    key = _key(stored.id, vault_binding_id, context_key)
     with _REGISTRY_LOCK:
         _EMITTED_BUNDLES[key] = stored
         _EMITTED_BUNDLES.move_to_end(key)
@@ -60,27 +77,24 @@ def register_emitted_bundle(
 
 
 def get_emitted_bundle(
-    bundle_id: str, *, vault_binding_id: str | None = None
+    bundle_id: str,
+    *,
+    vault_binding_id: str | None = None,
+    context_key: str | None = None,
 ) -> ContextBundle | None:
     """Return a copy of the emitted bundle for ``bundle_id`` if visible.
 
-    A scoped read (``vault_binding_id``) sees only that binding's own entry, so a
-    foreign or unstamped bundle is indistinguishable from an unknown id. A
-    carrier-free read sees the legacy view: the live compatibility binding, the
-    no-registry sentinel and unstamped entries.
+    A scoped lookup sees only the entry its own binding and full context
+    identity registered, so a foreign, other-context, unstamped or unknown id is
+    indistinguishable. A carrier-free lookup sees only unstamped entries.
     """
-    visible: set[str | None] = (
-        {vault_binding_id} if vault_binding_id is not None else set(_legacy_view())
-    )
-    # Newest visible registration wins, preserving the registry's last-write
-    # behavior across the legacy view's bindings.
+    key = _key(bundle_id, vault_binding_id, context_key)
     with _REGISTRY_LOCK:
-        for key in reversed(_EMITTED_BUNDLES):
-            binding, entry_id = key
-            if entry_id == bundle_id and binding in visible:
-                _EMITTED_BUNDLES.move_to_end(key)
-                return _EMITTED_BUNDLES[key].model_copy(deep=True)
-    return None
+        bundle = _EMITTED_BUNDLES.get(key)
+        if bundle is None:
+            return None
+        _EMITTED_BUNDLES.move_to_end(key)
+        return bundle.model_copy(deep=True)
 
 
 def clear_emitted_bundles() -> None:
@@ -94,6 +108,7 @@ def clear_emitted_bundles() -> None:
 
 __all__ = [
     "clear_emitted_bundles",
+    "emitted_bundle_context_key",
     "get_emitted_bundle",
     "register_emitted_bundle",
 ]

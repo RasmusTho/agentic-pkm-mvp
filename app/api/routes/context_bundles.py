@@ -16,7 +16,11 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.request_active_context import current_scoped_route_read, scoped_route_read
 from app.context_bundles.construction import build_inspectable_bundle
-from app.context_bundles.runtime_registry import get_emitted_bundle, register_emitted_bundle
+from app.context_bundles.runtime_registry import (
+    emitted_bundle_context_key,
+    get_emitted_bundle,
+    register_emitted_bundle,
+)
 from app.context_bundles.schema import AuthorityFlags, ContextBundle
 from app.instance.context_settings import IncompatibleBindingSettingsError, resolve_context_settings
 from app.instance.vault_registry import VaultRegistryStore
@@ -97,24 +101,28 @@ def get_context_bundle(
     is returned.
 
     A scoped read (MVR-05B4c5) retrieves only from the request's bindings and
-    registers the bundle under the request binding; without ``query`` it reads
-    the binding's own emitted bundle, and an unknown, foreign or unstamped id is
-    the same not-found.
+    registers the bundle under the request binding and full context identity;
+    without ``query`` it reads that context's own emitted bundle, and an unknown,
+    foreign, other-context or unstamped id is the same not-found.
     """
     scoped = current_scoped_route_read()
-    if scoped is not None and scoped.vault_binding_id is None:
+    if scoped is not None and (scoped.vault_binding_id is None or scoped.context is None):
         raise _bundle_not_found(bundle_id)
+    binding = scoped.vault_binding_id if scoped is not None else None
+    context_key = (
+        emitted_bundle_context_key(scoped.context)
+        if scoped is not None and scoped.context is not None
+        else None
+    )
     if query:
         result, _receipt = retrieve_and_emit_bundle(
             _retrieval_request(query, bundle_id, scoped.context if scoped is not None else None),
             bundle_id=bundle_id,
         )
         bundle = _scope_emitted_bundle(result.bundle, intended_use)
-        return register_emitted_bundle(
-            bundle, vault_binding_id=scoped.vault_binding_id if scoped is not None else None
-        )
+        return register_emitted_bundle(bundle, vault_binding_id=binding, context_key=context_key)
     if scoped is not None:
-        emitted = get_emitted_bundle(bundle_id, vault_binding_id=scoped.vault_binding_id)
+        emitted = get_emitted_bundle(bundle_id, vault_binding_id=binding, context_key=context_key)
         if emitted is None:
             raise _bundle_not_found(bundle_id)
         return emitted

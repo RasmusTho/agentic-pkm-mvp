@@ -256,24 +256,44 @@ def test_scoped_query_ranks_with_the_request_bindings_settings(
     assert bundle["id"] == BUNDLE_ID
 
 
-def test_legacy_view_returns_the_newest_visible_registration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """#6253 review: last write wins across the legacy view's bindings."""
+def test_registry_keys_are_exact_per_binding_and_context() -> None:
+    """#6253 review: scoped entries are addressed by binding AND full context identity."""
 
     from app.context_bundles import runtime_registry
     from app.context_bundles.construction import build_inspectable_bundle
 
     clear_emitted_bundles()
-    monkeypatch.setattr(runtime_registry, "_legacy_view", lambda: ("live-binding", None))
-    older = build_inspectable_bundle("cb-x").model_copy(update={"intended_use": ["orient"]})
-    newer = build_inspectable_bundle("cb-x").model_copy(update={"intended_use": ["resurface"]})
-    runtime_registry.register_emitted_bundle(older, vault_binding_id="live-binding")
-    runtime_registry.register_emitted_bundle(newer)
-    assert runtime_registry.get_emitted_bundle("cb-x").intended_use == ["resurface"]
-    runtime_registry.register_emitted_bundle(older, vault_binding_id="live-binding")
-    assert runtime_registry.get_emitted_bundle("cb-x").intended_use == ["orient"]
+    scoped = build_inspectable_bundle("cb-x").model_copy(update={"intended_use": ["orient"]})
+    legacy = build_inspectable_bundle("cb-x").model_copy(update={"intended_use": ["resurface"]})
+    runtime_registry.register_emitted_bundle(scoped, vault_binding_id="a", context_key="ctx-1")
+    runtime_registry.register_emitted_bundle(legacy)
+    get = runtime_registry.get_emitted_bundle
+    assert get("cb-x", vault_binding_id="a", context_key="ctx-1").intended_use == ["orient"]
+    assert get("cb-x").intended_use == ["resurface"]
+    assert get("cb-x", vault_binding_id="a", context_key="ctx-2") is None
+    assert get("cb-x", vault_binding_id="b", context_key="ctx-1") is None
+    with pytest.raises(ValueError):
+        get("cb-x", vault_binding_id="a")
     clear_emitted_bundles()
+
+
+def test_another_context_of_the_same_binding_cannot_read_the_bundle(two_bindings) -> None:
+    """#6253 review: binding alone never addresses a context-scoped emission."""
+
+    client, first, _second, _searched = two_bindings
+    emitting = _headers(client, first.vault_binding_id)
+    other_context = _headers(client, first.vault_binding_id)
+    assert emitting != other_context
+    _emit(client, emitting)
+    for path in (
+        f"/api/context-bundles/{BUNDLE_ID}",
+        f"/api/resurfacing/bundle/{BUNDLE_ID}",
+        f"/api/orientation/bundle/{BUNDLE_ID}",
+    ):
+        assert client.get(path, headers=emitting).status_code == 200, path
+        foreign = client.get(path, headers=other_context)
+        unknown = client.get(path.replace(BUNDLE_ID, "cb-unknown"), headers=other_context)
+        assert foreign.status_code == unknown.status_code == 404, path
 
 
 def test_registry_lookups_survive_concurrent_registrations() -> None:
@@ -288,7 +308,9 @@ def test_registry_lookups_survive_concurrent_registrations() -> None:
     template = build_inspectable_bundle("cb-seed")
     for index in range(100):
         runtime_registry.register_emitted_bundle(
-            template.model_copy(update={"id": f"cb-{index}"}), vault_binding_id="binding-a"
+            template.model_copy(update={"id": f"cb-{index}"}),
+            vault_binding_id="binding-a",
+            context_key="ctx-a",
         )
     errors: list[BaseException] = []
     stop = threading.Event()
@@ -297,14 +319,18 @@ def test_registry_lookups_survive_concurrent_registrations() -> None:
         index = 0
         while not stop.is_set():
             runtime_registry.register_emitted_bundle(
-                template.model_copy(update={"id": f"cb-new-{index}"}), vault_binding_id="binding-b"
+                template.model_copy(update={"id": f"cb-new-{index}"}),
+                vault_binding_id="binding-b",
+                context_key="ctx-b",
             )
             index += 1
 
     def look_up() -> None:
         try:
             for _ in range(300):
-                runtime_registry.get_emitted_bundle("cb-missing", vault_binding_id="binding-a")
+                runtime_registry.get_emitted_bundle(
+                    "cb-missing", vault_binding_id="binding-a", context_key="ctx-a"
+                )
         except BaseException as exc:  # noqa: BLE001 - surfaced to the assertion below
             errors.append(exc)
 
