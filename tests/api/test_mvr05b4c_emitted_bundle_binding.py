@@ -202,3 +202,28 @@ def test_query_backed_bundle_retrieves_only_request_bindings(two_bindings) -> No
     stored = client.get(f"/api/context-bundles/{BUNDLE_ID}", headers=headers_a).json()
     assert "note-b" not in str(stored)
     assert second.vault_binding_id not in str(stored)
+
+
+def test_carrier_free_emission_is_never_visible_to_the_live_binding(two_bindings) -> None:
+    """#6253 review: an unfiltered carrier-free emission is never stamped as any binding."""
+
+    from app.instance.settings_rebind import _install_dormant_settings_rebind
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    client, first, _second, _searched = two_bindings
+    import os
+
+    from app.instance.vault_registry import VaultRegistryStore
+
+    registry = VaultRegistryStore(Path(os.environ["INSTANCE_VAULT_REGISTRY_PATH"]))
+    _install_dormant_settings_rebind(
+        registry, binding_id=first.vault_binding_id, _capability=STORAGE_MUTATION_CAPABILITY
+    )
+    # The carrier-free query retrieves without a binding filter (both vaults' notes).
+    legacy = _emit(client, None)
+    assert _sources(legacy) == {"note-a", "note-b"}
+    headers_a = _headers(client, first.vault_binding_id)
+    for path in (f"/api/context-bundles/{BUNDLE_ID}", f"/api/resurfacing/bundle/{BUNDLE_ID}"):
+        assert client.get(path, headers=headers_a).status_code == 404
+    # The carrier-free legacy view still sees its own emission.
+    assert client.get(f"/api/resurfacing/bundle/{BUNDLE_ID}").status_code == 200

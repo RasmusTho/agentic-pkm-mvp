@@ -5,9 +5,9 @@ in this process. It is not persistence, memory, knowledge, or authority.
 
 MVR-05B4c5: every entry is keyed by (emitting binding, bundle id), so two
 bindings emitting the same id stay independently addressable and a lookup never
-returns another binding's bundle. A carrier-free emission stamps the live
-compatibility binding; an unprovable binding registers unstamped (``None``),
-which only the carrier-free legacy view can see.
+returns another binding's bundle. A carrier-free emission is not retrieved under
+a binding filter, so it registers unstamped (``None``): only the carrier-free
+legacy view can see it, never a scoped lookup.
 """
 from __future__ import annotations
 
@@ -28,18 +28,6 @@ def _enforce_registry_bound() -> None:
         _EMITTED_BUNDLES.popitem(last=False)
 
 
-def _legacy_emitting_binding() -> str | None:
-    from app.instance.compatibility_binding import (
-        CompatibilityBindingUnavailableError,
-        live_compatibility_binding_id,
-    )
-
-    try:
-        return live_compatibility_binding_id()
-    except CompatibilityBindingUnavailableError:
-        return None
-
-
 def _legacy_view() -> tuple[str | None, ...]:
     from app.instance.compatibility_binding import legacy_view_bindings
 
@@ -51,14 +39,14 @@ def register_emitted_bundle(
 ) -> ContextBundle:
     """Record an emitted bundle under its emitting binding for process-local lookup.
 
-    ``vault_binding_id`` is the scoped request's binding; a carrier-free caller
-    omits it and the live compatibility binding is stamped. A deep copy is
+    ``vault_binding_id`` is the scoped request's binding, whose retrieval was
+    filtered to the request's bindings. A carrier-free caller omits it and the
+    bundle is registered unstamped. A deep copy is
     stored and returned so later caller mutation cannot silently rewrite the
     registry entry.
     """
-    binding = vault_binding_id if vault_binding_id is not None else _legacy_emitting_binding()
     stored = bundle.model_copy(deep=True)
-    key = (binding, stored.id)
+    key = (vault_binding_id, stored.id)
     _EMITTED_BUNDLES[key] = stored
     _EMITTED_BUNDLES.move_to_end(key)
     _enforce_registry_bound()
