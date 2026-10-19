@@ -4204,6 +4204,30 @@ def test_source_identity_absence_reconciliation_is_content_free_and_never_replay
     with pytest.raises(PostgresDeployError):
         remote.prove_source_identity_absence(operation_id)
 
+    malformed_proofs = []
+    for numeric in (1, 1.0):
+        malformed_proofs.append({**expected, "native_request_absent": numeric})
+    missing = dict(expected)
+    missing.pop("native_lock_absent")
+    malformed_proofs.append(missing)
+    malformed_proofs.append({**expected, "extra": True})
+    malformed_proofs.append({
+        **expected,
+        "native_request_absent": 1,
+        "native_lock_absent": False,
+    })
+    for malformed_proof in malformed_proofs:
+        monkeypatch.setattr(
+            linux.subprocess,
+            "run",
+            lambda *_args, proof=malformed_proof, **_kwargs: SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"source_identity_absence": proof}),
+            ),
+        )
+        with pytest.raises(PostgresDeployError):
+            remote.prove_source_identity_absence(operation_id)
+
 
 def test_native_deploy_reports_source_projection_identity_refusal() -> None:
     from app.ops.native_source_bootstrap import (

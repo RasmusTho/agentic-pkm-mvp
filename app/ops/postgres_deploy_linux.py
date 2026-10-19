@@ -3986,7 +3986,17 @@ class SshDeployRemote:
         }
         try:
             response = json.loads(result.stdout)
-            if response != {'source_identity_absence': expected}:
+            if not isinstance(response, dict) or set(response) != {'source_identity_absence'}:
+                raise PostgresDeployError()
+            proof = response['source_identity_absence']
+            if (
+                not isinstance(proof, dict)
+                or set(proof) != set(expected)
+                or any(
+                    type(proof[key]) is not type(value) or proof[key] != value
+                    for key, value in expected.items()
+                )
+            ):
                 raise PostgresDeployError()
             return expected
         except Exception:
