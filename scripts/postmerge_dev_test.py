@@ -212,7 +212,8 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
          absence: Callable[[str, Candidate], dict[str, Any]] | None = None,
          current_main: Callable[[], str] = _current_main,
          heavy: Callable[[Candidate], dict[str, Any]] | None = None,
-         dispatch: Callable[[Candidate, dict[str, Any]], None] | None = None) -> int:
+         dispatch: Callable[[Candidate, dict[str, Any]], None] | None = None,
+         signal: Callable[[Candidate, dict[str, Any]], None] | None = None) -> int:
     # No CI job runs this path. It is supervised on the existing private agent
     # host, which already owns credentials, SSH dispatch and terminal recovery.
     with checkpoint_lock(directory):
@@ -256,7 +257,7 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                     'operation_id': candidate.operation_id(checkpoint['channel']),
                     'absence_proof': 'qualified',
                 }
-                _save_outcome(path, candidate, outcome)
+                _save_and_signal(path, candidate, outcome, signal)
                 checkpoint.update(phase='superseded_before_deployment', channel=None, outcome=outcome)
             else:
                 _require_terminal_profile(receipt, checkpoint['channel'], candidate)
@@ -266,7 +267,7 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                     outcome['pg_acceptance'] = receipt['pg_acceptance']
                 else:
                     outcome.update(_source_failure(receipt))
-                _save_outcome(path, candidate, outcome)
+                _save_and_signal(path, candidate, outcome, signal)
                 checkpoint.update(phase=result, outcome=outcome)
                 if result != 'passed':
                     return 78
@@ -284,7 +285,7 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                            'artifact_id': candidate.artifact_id, 'channel': checkpoint['channel'],
                            'operation_id': candidate.operation_id(checkpoint['channel']),
                            'result': 'failed', 'reason': 'pg_profile_missing_or_mismatched'}
-                _save_outcome(path, candidate, outcome)
+                _save_and_signal(path, candidate, outcome, signal)
                 checkpoint.update(phase='failed', outcome=outcome)
         if checkpoint and checkpoint['phase'] == 'passed' and checkpoint['channel'] == 'dev':
             candidate = Candidate(**checkpoint['candidate'])
@@ -301,13 +302,26 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
         ):
             return 0
         return deliver(candidate, deploy=deploy or native_deploy, current_main=current_main,
-                       emit=lambda outcome: _save_outcome(path, candidate, outcome))
+                       emit=lambda outcome: _save_and_signal(path, candidate, outcome, signal))
 
 
 def _save_outcome(path: Path, candidate: Candidate, outcome: dict[str, Any]) -> None:
     _atomic_checkpoint(path, {'candidate': asdict(candidate), 'phase': outcome['result'],
                               'channel': outcome.get('channel'), 'outcome': outcome})
     print(json.dumps(outcome, sort_keys=True))
+
+
+def _save_and_signal(path: Path, candidate: Candidate, outcome: dict[str, Any],
+                     signal: Callable[[Candidate, dict[str, Any]], None] | None) -> None:
+    _save_outcome(path, candidate, outcome)
+    if signal is None or outcome.get('channel') != 'dev' or outcome.get('result') not in {'passed', 'failed'}:
+        return
+    try:
+        signal(candidate, outcome)
+    except Exception:
+        # A status transport failure must never stall later candidates. The
+        # scheduled watchdog turns the missing signal into a visible failure.
+        print(json.dumps({'source_sha': candidate.sha, 'result': 'liveness_signal_failed'}, sort_keys=True))
 
 
 def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
@@ -336,6 +350,37 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
 
 HEAVY_WORKFLOW = 'post-merge-heavy-tests.yml'
 HEAVY_COUNTS = ('selected', 'passed', 'failed', 'skipped', 'docker_skipped')
+DEV_HEARTBEAT_CONTEXT = 'post-merge-dev-test/heartbeat'
+DEV_VERDICT_CONTEXT = 'post-merge-dev-test/verdict'
+
+
+def _publish_status(sha: str, context: str, state: str, description: str) -> None:
+    if re.fullmatch(r'[0-9a-f]{40}', sha) is None or state not in {'failure', 'success'}:
+        raise CandidateRefused('liveness_signal_refused')
+    command = ['gh', 'api', f'repos/{REPOSITORY}/statuses/{sha}',
+               '-f', f'state={state}', '-f', f'context={context}',
+               '-f', f'description={description[:140]}']
+    environment = {key: value for key, value in os.environ.items()
+                   if key not in {'SSH_AUTH_SOCK'}}
+    result = subprocess.run(command, env=environment, capture_output=True, text=True,
+                            timeout=60, check=False)
+    if result.returncode != 0:
+        raise CandidateRefused('liveness_signal_failed')
+
+
+def publish_heartbeat(sha: str) -> None:
+    """Publish the controller heartbeat without exposing deployment state."""
+    _publish_status(sha, DEV_HEARTBEAT_CONTEXT, 'success', 'post-merge dev controller heartbeat')
+
+
+def publish_dev_verdict(candidate: Candidate, outcome: dict[str, Any]) -> None:
+    """Publish a terminal dev verdict; the result never gates main merges."""
+    result = outcome.get('result')
+    if result not in {'passed', 'failed'}:
+        raise CandidateRefused('liveness_verdict_refused')
+    state = 'success' if result == 'passed' else 'failure'
+    _publish_status(candidate.sha, DEV_VERDICT_CONTEXT,
+                    state, f'dev verdict {result} for {candidate.sha[:12]}')
 
 
 def _validate_heavy(heavy: Any) -> dict[str, Any]:
@@ -558,7 +603,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.latest:
             if args.state_directory is None or args.admit_only:
                 raise CandidateRefused('poll_requires_private_checkpoint')
-            return poll(args.state_directory)
+            try:
+                publish_heartbeat(_current_main())
+            except Exception:
+                # The liveness workflow intentionally owns the alert. A
+                # transient status transport failure must not stop delivery.
+                print(json.dumps({'result': 'heartbeat_signal_failed'}, sort_keys=True))
+            return poll(args.state_directory, signal=publish_dev_verdict)
         if args.source_run < 1:
             raise CandidateRefused('invalid_source_run')
         candidate = load_candidate(args.source_run)
