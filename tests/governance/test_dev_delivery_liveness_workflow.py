@@ -484,6 +484,10 @@ def test_preceding_terminal_activity_recovers_only_within_newer_build_grace(
     def api(path):
         if "actions/workflows" in path:
             return {"workflow_runs": runs}
+        parents = {newest: preceding, preceding: skipped, skipped: None}
+        for sha, parent in parents.items():
+            if path == f"repos/o/r/git/commits/{sha}":
+                return {"sha": sha, "parents": [{"sha": parent}] if parent else []}
         if f"commits/{preceding}/statuses" in path:
             return [_status(liveness.VERDICT_CONTEXT, verdict_age, state)]
         if f"commits/{newest}/statuses" in path and heartbeat_age is not None:
@@ -619,3 +623,479 @@ def test_failed_dev_verdict_is_recorded_as_activity_not_deployment_success(monke
     observed = liveness.evaluate(_build(1), heartbeat_statuses=[],
                                 verdict_statuses=[_status(liveness.VERDICT_CONTEXT, .1, "failure")], now=NOW)
     assert observed.ok and observed.reason == "fresh_dev_verdict"
+
+
+@pytest.mark.parametrize('fault', ['missing_issue', 'missing_expiry', 'naive_expiry', 'backward_expiry',
+                                   'future_engagement', 'expired_observation', 'extra_field'])
+def test_pause_signal_refuses_malformed_authority_before_status_write(monkeypatch, fault):
+    transport = _GitHubTransport()
+    transport.actions = True
+    monkeypatch.setattr(liveness.subprocess, 'run', transport)
+    _writer_env(monkeypatch)
+    now = datetime.now(timezone.utc)
+    pause = {'issue': 6224, 'engaged_at': (now - timedelta(minutes=1)).isoformat(),
+             'expires_at': (now + timedelta(minutes=5)).isoformat()}
+    if fault == 'missing_issue':
+        pause.pop('issue')
+    elif fault == 'missing_expiry':
+        pause.pop('expires_at')
+    elif fault == 'naive_expiry':
+        pause['expires_at'] = (now + timedelta(minutes=5)).replace(tzinfo=None).isoformat()
+    elif fault == 'backward_expiry':
+        pause['expires_at'] = (now - timedelta(minutes=2)).isoformat()
+    elif fault == 'future_engagement':
+        pause['engaged_at'] = (now + timedelta(minutes=1)).isoformat()
+    elif fault == 'expired_observation':
+        pause['expires_at'] = now.isoformat()
+    else:
+        pause['authority'] = 'unapproved'
+    signal = {'protocol': controller.LIVENESS_PROTOCOL, 'sha': SHA,
+              'observed_at': now.isoformat(), 'sequence': 1, 'pause': pause}
+    assert _writer_main('heartbeat', signal) == 1
+    assert not transport.writes
+
+
+def test_pause_controller_entrypoint_has_no_extra_host_permissions(monkeypatch, tmp_path):
+    transport = _GitHubTransport()
+    monkeypatch.setattr(controller.subprocess, 'run', transport)
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(controller, '_utc_now', lambda: now)
+    tmp_path.chmod(0o700)
+    assert controller.main(['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+                            '--until', (now + timedelta(minutes=5)).isoformat()]) == 0
+    assert not transport.reads and not transport.dispatches
+    monkeypatch.setattr(controller, 'native_deploy', lambda *_: pytest.fail('paused native deployment'))
+    assert controller.main(['--latest', '--state-directory', str(tmp_path)]) == 0
+    assert transport.reads == [f'repos/{controller.REPOSITORY}/commits/main']
+    assert len(transport.liveness_dispatches) == 1
+    assert not transport.channel_dispatches and not transport.denied_writes and not transport.writes
+    fields = dict(arg.split('=', 1) for arg in transport.liveness_dispatches[0] if '=' in arg)
+    assert fields['kind'] == 'heartbeat'
+    assert json.loads(fields['payload'])['pause']['issue'] == 6224
+    transport.actions = True
+    _writer_env(monkeypatch)
+    assert _writer_main(fields['kind'], json.loads(fields['payload'])) == 0
+    assert len(transport.writes) == 1
+    assert 'state=failure' in transport.writes[0]
+
+
+
+def test_pause_remains_red_without_heartbeat_and_expiry_restores_stale_alert():
+    observed = NOW - timedelta(hours=3)
+    until = NOW + timedelta(minutes=5)
+    status = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'failure',
+              'description': f'observed_at={observed.isoformat()};seq=2;paused_issue=6224;until={until.isoformat()}'}
+    fresh_verdict = _status(liveness.VERDICT_CONTEXT, 0.1)
+    result = liveness.evaluate(_build(1), heartbeat_statuses=[status],
+                               verdict_statuses=[fresh_verdict], now=NOW)
+    assert not result.ok and result.reason == 'paused'
+    result = liveness.evaluate(_build(1), heartbeat_statuses=[status], verdict_statuses=[], now=until)
+    assert not result.ok and result.reason == 'heartbeat_stale'
+
+
+@pytest.mark.parametrize('pause_built', [True, False])
+@pytest.mark.parametrize('heartbeat_age', [0.2, 3])
+def test_pause_survives_main_advancement_without_another_heartbeat(pause_built, heartbeat_age):
+    newer, paused, preceding = "b" * 40, "c" * 40, "d" * 40
+    build_sha = paused if pause_built else preceding
+    stamp = (NOW - timedelta(hours=1)).isoformat()
+    run = {"id": 1, "status": "completed", "conclusion": "success", "event": "push",
+           "head_branch": "main", "head_sha": build_sha, "path": liveness.BUILD_WORKFLOW,
+           "created_at": stamp, "completed_at": stamp,
+           "repository": {"full_name": "o/r"}, "head_repository": {"full_name": "o/r"}}
+    expiry = NOW + timedelta(hours=1)
+    pause = {"context": liveness.HEARTBEAT_CONTEXT, "state": "failure",
+             "description": (f"observed_at={(NOW - timedelta(hours=heartbeat_age)).isoformat()};"
+                             f"seq=2;paused_issue=6224;until={expiry.isoformat()}"),
+             "updated_at": (expiry + timedelta(hours=4)).isoformat()}
+    statuses = {newer: [], paused: [pause], preceding: []}
+    statuses[build_sha].append(_status(liveness.VERDICT_CONTEXT, 0.5))
+    parents = {newer: paused, paused: preceding, preceding: None}
+    seen = []
+    def api(path):
+        seen.append(path)
+        if "actions/workflows" in path:
+            return {"workflow_runs": [run]}
+        for sha in parents:
+            if path == f"repos/o/r/git/commits/{sha}":
+                return {"sha": sha, "parents": [{"sha": parents[sha]}] if parents[sha] else []}
+            if path.startswith(f"repos/o/r/commits/{sha}/statuses?"):
+                return statuses[sha]
+        raise AssertionError(path)
+    result = liveness.check("o/r", newer, api=api, now=NOW)
+    assert not result.ok and result.reason == "paused"
+    assert result.description == f"paused (#6224, until {expiry.isoformat()})"
+    assert f"repos/o/r/git/commits/{newer}" in seen
+    # Public update time cannot extend expiry; normal fresh-verdict recovery resumes.
+    result = liveness.check("o/r", newer, api=api, now=expiry)
+    assert result.ok and result.reason == "fresh_dev_verdict"
+    # Without any further producer, the same history becomes stale after grace.
+    result = liveness.check("o/r", newer, api=api, now=expiry + timedelta(hours=2))
+    assert not result.ok and result.reason == "heartbeat_stale"
+    # A later legitimate resumed tick on new main supersedes the expired old pause.
+    resumed_at = expiry + timedelta(hours=2)
+    statuses[newer] = [{"context": liveness.HEARTBEAT_CONTEXT, "state": "success",
+                       "description": "observed_at=" + resumed_at.isoformat()}]
+    result = liveness.check("o/r", newer, api=api, now=resumed_at)
+    assert result.ok and result.reason == "dev_verdict_recorded"
+
+
+@pytest.mark.parametrize('position', [99, 100])
+def test_pause_history_has_an_exact_fail_closed_commit_bound(position):
+    commits = [f"{i + 1:040x}" for i in range(102)]
+    seen_statuses = []
+    pause = {"context": liveness.HEARTBEAT_CONTEXT, "state": "failure",
+             "description": f"observed_at={NOW.isoformat()};seq=2;paused_issue=6224;until={(NOW + timedelta(hours=1)).isoformat()}"}
+    def api(path):
+        if "actions/workflows" in path:
+            return {"workflow_runs": []}
+        if "/statuses?" in path:
+            sha = path.split("/commits/")[1].split("/")[0]
+            seen_statuses.append(sha)
+            return [pause] if sha == commits[position] else []
+        sha = path.rsplit("/", 1)[1]
+        return {"sha": sha, "parents": [{"sha": commits[commits.index(sha) + 1]}]}
+    assert liveness.MAX_HEARTBEAT_COMMITS == 100
+    if position == 99:
+        result = liveness.check("o/r", commits[0], api=api, now=NOW)
+        assert not result.ok and result.reason == "paused"
+    else:
+        with pytest.raises(liveness.LivenessRefused, match="heartbeat_ancestry_incomplete"):
+            liveness.check("o/r", commits[0], api=api, now=NOW)
+    assert len(seen_statuses) == 100
+
+
+@pytest.mark.parametrize('fault', ['wrong_sha', 'missing_parents', 'parent_shape', 'parent_sha',
+                                  'cycle', 'auth', 'statuses_shape'])
+def test_pause_history_refuses_ambiguous_ancestry(fault):
+    def api(path):
+        if "actions/workflows" in path:
+            return {"workflow_runs": []}
+        if "/statuses?" in path:
+            return {} if fault == 'statuses_shape' else []
+        commit = {"sha": SHA, "parents": []}
+        if fault == 'wrong_sha':
+            commit['sha'] = 'b' * 40
+        elif fault == 'missing_parents':
+            commit.pop('parents')
+        elif fault == 'parent_shape':
+            commit['parents'] = [False]
+        elif fault == 'parent_sha':
+            commit['parents'] = [{'sha': '../main'}]
+        elif fault == 'cycle':
+            commit['parents'] = [{'sha': SHA}]
+        elif fault == 'auth':
+            raise subprocess.CalledProcessError(403, ['gh', 'api', path])
+        return commit
+    with pytest.raises((liveness.LivenessRefused, subprocess.CalledProcessError)):
+        liveness.check("o/r", SHA, api=api, now=NOW)
+
+
+def test_pause_history_auth_failure_is_red_through_production_cli(monkeypatch, capsys):
+    def transport(command, **kwargs):
+        path = command[2]
+        if "actions/workflows" in path:
+            payload = {"workflow_runs": []}
+        elif "/statuses?" in path:
+            payload = []
+        else:
+            raise subprocess.CalledProcessError(403, command)
+        return SimpleNamespace(stdout=json.dumps(payload))
+    monkeypatch.setattr(liveness.subprocess, 'run', transport)
+    assert liveness.main(['--repo', 'o/r', '--github-sha', SHA]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert not result['ok'] and result['reason'] == 'evidence_refused'
+
+
+def test_pause_history_follows_first_parent_and_stops_at_later_resume():
+    resumed, other = 'b' * 40, 'c' * 40
+    seen = []
+    def api(path):
+        seen.append(path)
+        if 'actions/workflows' in path:
+            return {'workflow_runs': []}
+        if path == f'repos/o/r/git/commits/{SHA}':
+            return {'sha': SHA, 'parents': [{'sha': resumed}, {'sha': other}]}
+        if f'/commits/{resumed}/statuses?' in path:
+            return [_status(liveness.HEARTBEAT_CONTEXT, 0.1)]
+        if f'/commits/{SHA}/statuses?' in path:
+            return []
+        raise AssertionError(path)
+    result = liveness.check('o/r', SHA, api=api, now=NOW)
+    assert result.ok and result.reason == 'no_admitted_build'
+    assert all(other not in path for path in seen)
+    assert len(seen) == 4
+
+
+def test_pause_history_paginates_past_replayed_normal_heartbeat():
+    expiry = NOW + timedelta(hours=1)
+    replayed = _status(liveness.HEARTBEAT_CONTEXT, 1)
+    recent_writes = [{**replayed, 'created_at': (NOW - timedelta(seconds=i)).isoformat()} for i in range(100)]
+    pause = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'failure',
+             'description': f'observed_at={(NOW - timedelta(minutes=6)).isoformat()};seq=2;paused_issue=6224;until={expiry.isoformat()}',
+             'created_at': (NOW - timedelta(minutes=5)).isoformat()}
+    pages = {1: recent_writes, 2: [pause]}
+    seen = []
+    def api(path):
+        seen.append(path)
+        if 'actions/workflows' in path:
+            return {'workflow_runs': []}
+        return pages[int(path.rsplit('page=', 1)[1])]
+    result = liveness.check('o/r', SHA, api=api, now=NOW)
+    assert not result.ok and result.reason == 'paused'
+    assert any(path.endswith('page=2') for path in seen)
+    # Later genuine resume remains authoritative even with the older pause retained.
+    resumed_at = expiry + timedelta(seconds=1)
+    pages[1][0] = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'success',
+                   'description': 'observed_at=' + resumed_at.isoformat() + ';seq=3', 'created_at': resumed_at.isoformat()}
+    seen.clear()
+    result = liveness.check('o/r', SHA, api=api, now=resumed_at)
+    assert result.ok and result.reason == 'no_admitted_build'
+    assert not any(path.endswith('page=2') for path in seen)
+
+
+@pytest.mark.parametrize('replayed_match', [True, False])
+def test_pause_history_refuses_incomplete_status_pagination(replayed_match):
+    pages = []
+    def api(path):
+        if 'actions/workflows' in path:
+            return {'workflow_runs': []}
+        page = int(path.rsplit('page=', 1)[1]); pages.append(page)
+        context = liveness.HEARTBEAT_CONTEXT if replayed_match else 'unrelated'
+        return [{**_status(context, 3), 'created_at': (NOW - timedelta(seconds=page * 100 + i)).isoformat()}
+                for i in range(100)]
+    with pytest.raises(liveness.LivenessRefused, match='statuses_incomplete'):
+        liveness.check('o/r', SHA, api=api, now=NOW)
+    assert pages == list(range(1, liveness.MAX_HISTORY_PAGES + 1))
+
+
+@pytest.mark.parametrize('fault', ['missing_created', 'reordered', 'wrong_shape'])
+def test_pause_history_refuses_malformed_status_page(fault):
+    rows = [{**_status(liveness.HEARTBEAT_CONTEXT, 3),
+             'created_at': (NOW - timedelta(seconds=i)).isoformat()} for i in range(100)]
+    if fault == 'missing_created':
+        rows[0].pop('created_at')
+    elif fault == 'reordered':
+        rows.reverse()
+    else:
+        rows[0] = False
+    def api(path):
+        return {'workflow_runs': []} if 'actions/workflows' in path else rows
+    with pytest.raises(liveness.LivenessRefused):
+        liveness.check('o/r', SHA, api=api, now=NOW)
+
+
+def _pause_transport(monkeypatch, tmp_path):
+    transport = _GitHubTransport()
+    monkeypatch.setattr(controller.subprocess, 'run', transport)
+    monkeypatch.setattr(controller, 'native_deploy', _native_receipt)
+    monkeypatch.setattr(controller, 'native_heavy', lambda _: {
+        'result': 'passed', 'selected': 1, 'passed': 1, 'failed': 0, 'skipped': 0,
+        'docker_skipped': 0, 'failures': []})
+    monkeypatch.setattr(controller, 'dispatch_verdict', lambda *_: None)
+    tmp_path.chmod(0o700)
+    return transport
+
+
+def _record_heartbeat(transport, command, now):
+    fields = dict(arg.split('=', 1) for arg in command if '=' in arg)
+    assert fields['kind'] == 'heartbeat'
+    transport.actions = True
+    try:
+        liveness.record_signal('heartbeat', fields['payload'], repo=controller.REPOSITORY,
+                               event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
+                               triggering_actor='RasmusTho',
+                               run_url=f'https://github.com/{controller.REPOSITORY}/actions/runs/999',
+                               api=lambda _: {'status': 'identical'}, now=now)
+    finally:
+        transport.actions = False
+    return {**dict(arg.split('=', 1) for arg in transport.writes[-1] if '=' in arg),
+            'created_at': now.replace(microsecond=0).isoformat()}
+
+
+def _check_pause_history(statuses, now):
+    def api(path):
+        return {'workflow_runs': []} if 'actions/workflows' in path else statuses
+    return liveness.check(controller.REPOSITORY, SHA, api=api, now=now)
+
+
+def test_pause_clock_rewind_after_normal_tick_refuses_at_producer(monkeypatch, tmp_path):
+    # 6224-pause-clock-rewind-silent-green: actual normal producer -> rewind -> pause.
+    transport = _pause_transport(monkeypatch, tmp_path)
+    normal_at = NOW - timedelta(seconds=30)
+    monkeypatch.setattr(controller, '_utc_now', lambda: normal_at)
+    assert controller.main(['--latest', '--state-directory', str(tmp_path)]) == 0
+    path = tmp_path / 'postmerge-dev-test.json'
+    before = path.read_bytes()
+    dispatches = len(transport.dispatches)
+    monkeypatch.setattr(controller, '_utc_now', lambda: NOW - timedelta(seconds=90))
+    assert controller.main(['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+                            '--until', (NOW + timedelta(minutes=10)).isoformat()]) == 78
+    assert controller.main(['--latest', '--state-directory', str(tmp_path)]) == 78
+    assert path.read_bytes() == before
+    assert len(transport.dispatches) == dispatches
+    assert 'pause' not in json.loads(before)
+
+
+def test_pause_equal_time_replay_replacement_expiry_and_restart_order(monkeypatch, tmp_path):
+    transport = _pause_transport(monkeypatch, tmp_path)
+    monkeypatch.setattr(controller, '_utc_now', lambda: NOW)
+    options = ['--latest', '--state-directory', str(tmp_path)]
+    assert controller.main(options) == 0
+    normal = _record_heartbeat(transport, transport.liveness_dispatches[0], NOW)
+    pause_options = ['--pause', '--state-directory', str(tmp_path), '--issue', '6224', '--until']
+    assert controller.main([*pause_options, (NOW + timedelta(minutes=10)).isoformat()]) == 0
+    assert controller.main(options) == 0
+    paused = _record_heartbeat(transport, transport.liveness_dispatches[-1], NOW)
+    assert _check_pause_history([normal, paused, normal], NOW).reason == 'paused'
+    # The operator may shorten a pause; the later durable sequence owns expiry.
+    expiry = NOW + timedelta(minutes=5)
+    assert controller.main([*pause_options, expiry.isoformat()]) == 0
+    assert controller.main(options) == 0
+    replacement = _record_heartbeat(transport, transport.liveness_dispatches[-1], NOW)
+    result = _check_pause_history([paused, replacement, normal], NOW)
+    assert result.reason == 'paused' and expiry.isoformat() in result.description
+    monkeypatch.setattr(controller, '_utc_now', lambda: expiry)
+    assert controller.main(options) == 0
+    resumed = _record_heartbeat(transport, transport.liveness_dispatches[-1], expiry)
+    assert _check_pause_history([paused, normal, replacement, resumed], expiry).ok
+    path = tmp_path / 'postmerge-dev-test.json'
+    before = path.read_bytes()
+    monkeypatch.setattr(controller, '_utc_now', lambda: expiry - timedelta(microseconds=1))
+    dispatches = len(transport.dispatches)
+    assert controller.main(options) == 78
+    assert path.read_bytes() == before and len(transport.dispatches) == dispatches
+    assert _check_pause_history([paused, resumed], expiry).ok
+
+
+def test_pause_fractional_pagination_uses_real_producer_and_writer(monkeypatch, tmp_path):
+    # 6224-pause-fractional-pagination-cutoff: same server second, distinct source fractions.
+    transport = _pause_transport(monkeypatch, tmp_path)
+    normal_at = NOW.replace(microsecond=100000)
+    pause_at = NOW.replace(microsecond=800000)
+    monkeypatch.setattr(controller, '_utc_now', lambda: normal_at)
+    options = ['--latest', '--state-directory', str(tmp_path)]
+    assert controller.main(options) == 0
+    normal = _record_heartbeat(transport, transport.liveness_dispatches[0], normal_at)
+    monkeypatch.setattr(controller, '_utc_now', lambda: pause_at)
+    assert controller.main(['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+                            '--until', (NOW + timedelta(hours=1)).isoformat()]) == 0
+    assert controller.main(options) == 0
+    paused = _record_heartbeat(transport, transport.liveness_dispatches[-1], pause_at)
+    assert normal['created_at'] == paused['created_at']
+    pages = {1: [{'context': 'unrelated', 'created_at': (NOW + timedelta(seconds=100-i)).isoformat()}
+                 for i in range(99)] + [normal], 2: [paused]}
+    reads = []
+    def api(path):
+        if 'actions/workflows' in path:
+            return {'workflow_runs': []}
+        page = int(path.rsplit('page=', 1)[1]); reads.append(page)
+        return pages[page]
+    result = liveness.check(controller.REPOSITORY, SHA, api=api, now=NOW + timedelta(minutes=5))
+    assert not result.ok and result.reason == 'paused'
+    assert reads == [1, 2]
+
+
+def test_pause_adopts_legacy_pending_identity_despite_earlier_host_clock(monkeypatch, tmp_path):
+    transport = _pause_transport(monkeypatch, tmp_path)
+    candidate = transport.candidate
+    # The shipped legacy checkpoint producer has no observation metadata.
+    outcome = {'source_sha': SHA, 'image_digest': candidate.digest, 'source_run_id': candidate.run_id,
+               'source_run_attempt': candidate.run_attempt, 'artifact_id': candidate.artifact_id,
+               'result': 'pending', 'channel': 'dev', 'operation_id': candidate.operation_id('dev')}
+    path = tmp_path / 'postmerge-dev-test.json'
+    legacy = controller._save_outcome(path, candidate, outcome, last_green={'dev': 'b' * 40})
+    host_now = NOW - timedelta(seconds=90)
+    monkeypatch.setattr(controller, '_utc_now', lambda: host_now)
+    assert controller.main(['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+                            '--until', (NOW + timedelta(minutes=10)).isoformat()]) == 0
+    assert controller.main(['--latest', '--state-directory', str(tmp_path)]) == 0
+    retained = json.loads(path.read_text())
+    assert {k: v for k, v in retained.items() if k not in {'pause', 'observation'}} == legacy
+    paused = _record_heartbeat(transport, transport.liveness_dispatches[-1], NOW)
+    legacy_normal = _status(liveness.HEARTBEAT_CONTEXT, 30/3600)
+    assert _check_pause_history([legacy_normal, paused], NOW).reason == 'paused'
+
+
+@pytest.mark.parametrize('failure', ['before_replace', 'missing_after_bootstrap'])
+def test_pause_state_loss_and_atomic_failure_refuse_before_external_effect(monkeypatch, tmp_path, failure):
+    transport = _pause_transport(monkeypatch, tmp_path)
+    monkeypatch.setattr(controller, '_utc_now', lambda: NOW)
+    options = ['--latest', '--state-directory', str(tmp_path)]
+    path = tmp_path / 'postmerge-dev-test.json'
+    if failure == 'before_replace':
+        monkeypatch.setattr(controller.os, 'replace', lambda *_: (_ for _ in ()).throw(OSError('crash')))
+    else:
+        assert controller.main(options) == 0
+        path.unlink()
+        transport.reads.clear(); transport.dispatches.clear()
+    assert controller.main(options) == 78
+    assert not transport.reads and not transport.dispatches and not path.exists()
+    # The surviving existing lock is not authority to silently reset the counter.
+    assert controller.main(options) == 78
+    assert not transport.reads and not transport.dispatches
+
+
+def test_pause_dispatch_failure_keeps_durable_observation_for_retry_and_restart(monkeypatch, tmp_path):
+    transport = _pause_transport(monkeypatch, tmp_path)
+    monkeypatch.setattr(controller, '_utc_now', lambda: NOW)
+    monkeypatch.setattr(controller.time, 'sleep', lambda _: None)
+    options = ['--latest', '--state-directory', str(tmp_path)]
+    assert controller.main(['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+                            '--until', (NOW + timedelta(minutes=10)).isoformat()]) == 0
+    transport.fail_dispatch = True
+    assert controller.main(options) == 0
+    failed = [next(arg for arg in command if arg.startswith('payload='))
+              for command in transport.liveness_dispatches]
+    assert len(failed) == 3 and len(set(failed)) == 1
+    path = tmp_path / 'postmerge-dev-test.json'
+    persisted = json.loads(path.read_text())['observation']
+    assert json.loads(failed[0].removeprefix('payload='))['sequence'] == persisted['sequence']
+    transport.fail_dispatch = False
+    assert controller.main(options) == 0
+    restarted = json.loads(path.read_text())['observation']
+    assert restarted['sequence'] == persisted['sequence'] + 1
+    assert restarted['observed_at'] == persisted['observed_at']
+    assert _record_heartbeat(transport, transport.liveness_dispatches[-1], NOW)['state'] == 'failure'
+
+
+@pytest.mark.parametrize('observation', [
+    {'sequence': True, 'observed_at': NOW.isoformat()},
+    {'sequence': 0, 'observed_at': NOW.isoformat()},
+    {'sequence': 10**18, 'observed_at': NOW.isoformat()},
+    {'sequence': 1, 'observed_at': 'invalid'},
+    {'sequence': 1, 'observed_at': NOW.replace(tzinfo=None).isoformat()},
+    {'sequence': 1, 'observed_at': NOW.isoformat(), 'extra': 'unknown'},
+])
+def test_pause_malformed_observation_refuses_producer_and_trusted_writer(monkeypatch, tmp_path, observation):
+    # Reach metadata validation independently of the machine's calendar date.
+    class WriterClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+    monkeypatch.setattr(liveness, 'datetime', WriterClock)
+    transport = _pause_transport(monkeypatch, tmp_path)
+    controller._atomic_checkpoint(tmp_path / 'postmerge-dev-test.json', {'observation': observation})
+    assert controller.main(['--latest', '--state-directory', str(tmp_path)]) == 78
+    assert not transport.reads and not transport.dispatches
+    transport.actions = True
+    _writer_env(monkeypatch)
+    signal = {'protocol': controller.LIVENESS_PROTOCOL, 'sha': SHA, **observation}
+    assert _writer_main('heartbeat', signal) == 1
+    assert not transport.writes
+
+
+@pytest.mark.parametrize('fault', ['same_sequence_conflict', 'clock_regressed', 'unsequenced_pause'])
+def test_pause_ambiguous_public_order_cannot_recover_to_green(fault):
+    first = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'success',
+             'description': f'observed_at={NOW.isoformat()};seq=1'}
+    second = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'failure',
+              'description': f'observed_at={NOW.isoformat()};seq=2;paused_issue=6224;until={(NOW + timedelta(hours=1)).isoformat()}'}
+    if fault == 'same_sequence_conflict':
+        second['description'] = second['description'].replace('seq=2', 'seq=1')
+    elif fault == 'clock_regressed':
+        second['description'] = second['description'].replace(NOW.isoformat(), (NOW - timedelta(seconds=1)).isoformat(), 1)
+    else:
+        second['description'] = second['description'].replace(';seq=2', '')
+    with pytest.raises(liveness.LivenessRefused):
+        _check_pause_history([first, second, _status(liveness.VERDICT_CONTEXT, 0)], NOW)

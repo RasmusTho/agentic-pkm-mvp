@@ -301,6 +301,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "docker-compose.bws-external.yml",
         "docker-compose.bws.yml",
         "docker-compose.dev.yml",
+        "docker-compose.full-host-vault.yml",
         "docker-compose.legacy-vault.yml",
         "docker-compose.prod.yml",
         "docker-compose.scalar-rollback.yml",

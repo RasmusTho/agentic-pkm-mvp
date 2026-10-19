@@ -797,7 +797,10 @@ def test_candidate_helper_is_acquired_and_verified_before_writer_fence(
     monkeypatch.setattr(
         linux, "_command",
         lambda *_args, **_kwargs: json.dumps([{
-            "Config": {"Labels": {"org.opencontainers.image.revision": REVISION}},
+            "Config": {
+                "Labels": {"org.opencontainers.image.revision": REVISION},
+                "Env": ["legacy-non-assignment-shape-is-irrelevant-without-unsets"],
+            },
             "RepoDigests": [IMAGE_REPOSITORY + "@" + DIGEST],
         }]),
     )
@@ -812,6 +815,46 @@ def test_candidate_helper_is_acquired_and_verified_before_writer_fence(
         plan, selected, acquire=True, source_snapshot=snapshot,
     )
     assert events == ["source", "protocol", "pull"]
+
+
+def test_candidate_helper_refuses_image_default_for_installed_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan
+
+    selected = AuthorityCutover("vault-alpha", "/srv/vault-alpha", "/srv/instance-ownership")
+    plan = DeployPlan(
+        "dev", REVISION, ("api", "worker", "watcher"),
+        ("postgres-db", "postgres-api", "postgres-worker", "postgres-watcher", "heimdal-api-ingress"),
+        image_digest=DIGEST, authority_cutover=selected,
+    )
+    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", root=tmp_path))
+    monkeypatch.setattr(linux, "ensure_candidate_object", lambda *_args: None)
+    monkeypatch.setattr(linux, "require_file_protocol", lambda *_args: None)
+    monkeypatch.setattr(
+        linux, "_command",
+        lambda *_args, **_kwargs: json.dumps([{
+            "Config": {
+                "Labels": {"org.opencontainers.image.revision": REVISION},
+                "Env": ["OPTIONAL_PROVIDER=candidate-default"],
+            },
+            "RepoDigests": [IMAGE_REPOSITORY + "@" + DIGEST],
+        }]),
+    )
+    snapshot = linux.SourceIdentityRuntimeSnapshot(
+        "c" * 64, "d" * 64, ("api", "watcher", "worker"),
+        ("api", "watcher", "worker"), selected.root,
+        "docker-compose.full-host-vault.yml",
+        (("DATABASE_URL", "postgresql+psycopg:///?host=db"),),
+        ("OPTIONAL_PROVIDER",),
+    )
+
+    with pytest.raises(linux.PostgresDeployError):
+        effects.require_source_identity_candidate(
+            plan, selected, acquire=False, source_snapshot=snapshot,
+        )
 
 
 def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
@@ -875,6 +918,13 @@ def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
         if argv[1:3] == ["ps", "--all"]:
             return "\n".join(row["Id"] for row in rows)
         if argv[1] == "compose":
+            if "--environment" in argv:
+                project = "multiline-continuation-without-assignment\n"
+                if "OPTIONAL_PROVIDER:" in (
+                    tmp_path / "config/deploy/dev.env"
+                ).read_text():
+                    project = "OPTIONAL_PROVIDER=project-default\n"
+                return project
             resolved = {
                 entry.split("=", 1)[0]: entry.split("=", 1)[1]
                 for entry in rows[0]["Config"]["Env"]
@@ -899,6 +949,17 @@ def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
     assert before.running_writers == before.existing_writers
     assert "VCS_REF" not in dict(before.child_environment)
     assert "BUILT_AT" not in dict(before.child_environment)
+    assert before.unset_environment == ()
+    rows[0]["Config"]["Env"].append("OPTIONAL_PROVIDER")
+    pin_path = tmp_path / "config/deploy/dev.env"
+    original_pin = pin_path.read_text()
+    pin_path.write_text(original_pin + "OPTIONAL_PROVIDER: project-default\n")
+    with pytest.raises(linux.PostgresDeployError):
+        effects.source_identity_runtime_snapshot(
+            selected, require_running_capture=True,
+        )
+    pin_path.write_text(original_pin)
+    rows[0]["Config"]["Env"].remove("OPTIONAL_PROVIDER")
     (tmp_path / "tmp/runtime.env").write_text(
         "LLM_PROVIDER=ollama\n"
         "DATABASE_URL=postgresql+psycopg://app@db:5432/app_dev\n"
@@ -1045,6 +1106,8 @@ def test_configured_capture_producer_receipt_resumes_real_snapshot_cleanup_only(
         if argv[1:3] == ["ps", "--all"]:
             return "\n".join(row["Id"] for row in rows)
         if argv[1] == "compose":
+            if "--environment" in argv:
+                return "WATCHER_RUNTIME_ENV_FILE=./tmp/runtime.env\n"
             resolved = {
                 entry.split("=", 1)[0]: entry.split("=", 1)[1]
                 for entry in rows[0]["Config"]["Env"]
@@ -1096,6 +1159,8 @@ def test_configured_capture_producer_receipt_resumes_real_snapshot_cleanup_only(
     def fresh_compose(*args, **_kwargs):
         action = str(args[0])
         if action == "config":
+            if "--environment" in args:
+                raise AssertionError("assigned-only cleanup must not query project environment")
             resolved = {
                 entry.split("=", 1)[0]: entry.split("=", 1)[1]
                 for entry in rows[0]["Config"]["Env"]
@@ -1251,7 +1316,11 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
             "Image": f"sha256:{index:064x}",
             "Config": {
                 "Image": f"example/{service}:installed",
-                "Env": [f"{key}={value}" for key, value in installed.items()],
+                "Env": [
+                    *[f"{key}={value}" for key, value in installed.items()],
+                    "POSTGRES_PASSWORD", "PGPASSWORD", "OPTIONAL_PROVIDER",
+                    "VCS_REF", "BUILT_AT",
+                ],
                 "User": f"{os.getuid()}:{os.getgid()}",
                 "Labels": {
                     "com.docker.compose.project": f"pkm-{channel}",
@@ -1293,6 +1362,8 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
         events.append(action)
         environment = kwargs["env"]
         if action == "config":
+            if "--environment" in argv:
+                return "WATCHER_RUNTIME_ENV_FILE=./tmp/runtime.env\n"
             resolved = {key: environment[key] for key in installed}
             return json.dumps({"services": {"api": {"environment": resolved}}})
         if action != "run":
@@ -1305,12 +1376,20 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
         environment_keys = {value for value in environment_selectors if "=" not in value}
         assert "VCS_REF" not in environment_keys
         assert "BUILT_AT" not in environment_keys
+        optional_unsets = {"POSTGRES_PASSWORD", "PGPASSWORD", "OPTIONAL_PROVIDER"}
+        assert optional_unsets <= environment_keys
+        assert not optional_unsets & environment.keys()
         bootstrap = next(
             value.split("=", 1)[1] for value in argv
             if value.startswith("NATIVE_SOURCE_BOOTSTRAP=")
         )
+        monkeypatch.setenv("OPTIONAL_PROVIDER", "candidate-image-default")
         for key in environment_keys:
-            monkeypatch.setenv(key, environment[key])
+            if key in environment:
+                monkeypatch.setenv(key, environment[key])
+            else:
+                monkeypatch.delenv(key, raising=False)
+        assert "OPTIONAL_PROVIDER" not in os.environ
         monkeypatch.setenv("NATIVE_SOURCE_BOOTSTRAP", bootstrap)
         monkeypatch.setenv("VCS_REF", REVISION)
         monkeypatch.setenv("BUILT_AT", "candidate-build")
@@ -1351,6 +1430,15 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
         "source", "protocol", "inspect",
     ]
     assert "ensure uuid" in guard_actions
+    final_snapshot = effects.source_identity_runtime_snapshot(
+        selected, require_running_capture=True,
+    )
+    assert not {"POSTGRES_PASSWORD", "PGPASSWORD", "OPTIONAL_PROVIDER"} & {
+        key for key, _value in final_snapshot.child_environment
+    }
+    assert set(final_snapshot.unset_environment) == {
+        "POSTGRES_PASSWORD", "PGPASSWORD", "OPTIONAL_PROVIDER",
+    }
     assert "up" not in events
 
 

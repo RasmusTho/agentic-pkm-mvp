@@ -153,8 +153,12 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError('GitHub read client required')
         state = Path.home() / '.local/state/yggdrasil/secret-controller/postmerge'
         state.mkdir(mode=0o700, parents=True, exist_ok=True)
-        from scripts.postmerge_dev_test import checkpoint_lock
-        with checkpoint_lock(state):
+        from scripts.postmerge_dev_test import checkpoint_lock, _read_checkpoint, _atomic_checkpoint, _next_observation, _utc_now
+        with checkpoint_lock(state) as fresh:
+            checkpoint_path = state / 'postmerge-dev-test.json'
+            checkpoint = _read_checkpoint(checkpoint_path, allow_missing=fresh)
+            if checkpoint is None:
+                _atomic_checkpoint(checkpoint_path, {'observation': _next_observation(None, _utc_now())})
             tooling, runtime = install_tooling(args.checkout, args.python, state, sha)
             log = state / 'controller.log'
             descriptor = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
