@@ -91,7 +91,7 @@ Enactment slices (children of #6207):
 | `dev` and `test` refs advanced on green verdicts | D4 |
 | Kill switch with Issue and expiry — repository support in #6224; live host changes require an owner OK on #6224; existing #6170/#3347 gates retained | D5 |
 | Pinned controller tooling — repository support in #6225; live activation retains #6170/#3347 | D7 |
-| Heavy tests on `dev` as part of the dev verdict (prerequisite #6205; host activation #6170) | D4 |
+| Heavy tests on `dev` as part of the dev verdict — repository gate in #6227; prerequisite #6205 delivered; live host activation #6170 and qualification #3347 remain gated | D4 |
 | Prod promotion from `test` to `stable` | D4 |
 
 ## Preconditions and delivery sequence

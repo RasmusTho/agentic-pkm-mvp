@@ -160,7 +160,9 @@ build, `.github/workflows/postmerge-dev-test.yml` admits its exact source-run im
 Actions permissions. The private macOS controller in `scripts/postmerge_dev_test.py` polls that same
 proof and calls the existing native host boundary for `dev` then `test`, using one immutable digest.
 The existing health, version, fleet-image and UI smoke gates plus the fixed isolated PG acceptance
-profile must pass on dev before test starts. Each stage runs its own PG profile at the same digest.
+profile must pass on dev before test starts. The exact dev operation must also pass fixed heavy
+qualification (#6227); a red candidate is held while later builds proceed. Each stage runs its own
+PG profile at the same digest.
 Actions receives no deployment credentials; there is no extra human approval between ordinary stages.
 
 `scripts/install_postmerge_controller.py` installs the host-local LaunchAgent from a clean,
@@ -705,8 +707,8 @@ first attempt produced the image.
 
 The existing private macOS host controller runs `scripts/postmerge_dev_test.py --latest` every
 60 seconds. It independently revalidates the latest build and its artifact, then calls the native
-existing-secrets-only boundary for `dev` followed by `test`, with the same SHA and image-index
-digest. No new human approval, Actions environment or self-hosted PR runner is required. Deployment
+existing-secrets-only boundary for `dev`, qualifies that exact dev operation with the heavy profile,
+then promotes to `test` only on a pass, with the same SHA and image-index digest. No new human approval, Actions environment or self-hosted PR runner is required. Deployment
 retains the existing host-controller and VM channel locks, supervised worker, request journal,
 health/readiness/version, fleet and browser UI gates. Before `committed`, the native worker enters
 `verifying` and runs `app.ops.pg_acceptance` with the retained acceptance selection transferred
@@ -799,16 +801,27 @@ readiness requires a bounded repair contract. Actions failures remain visible in
 and never gate main merges or replay deployment. This is repository support; live activation and
 qualification retain #6170 and #3347's operator gates.
 
-After a candidate's `test` deployment commits, the controller runs the fixed post-merge heavy-test
-profile once: `qualify-heavy test <operation-id>` through the same `yggdrasil-bws-deploy` launcher
-(#6158). It reads only the committed receipt and its PG proof, takes no channel lock and touches no
-channel resource; an operation-owned network-none container from the admitted image runs the
-selector's heavy targets against a scratch depth-1 checkout of the exact candidate SHA, with the host Docker
-CLI mounted read-only and no socket. The result never gates channel advancement. The controller then
-dispatches `.github/workflows/post-merge-heavy-tests.yml` once with the bounded verdict, using a
-GitHub client limited to Actions write for that dispatch. A failed dispatch does not stall later
-candidates; the workflow's missing-verdict watchdog makes it visible. The VM tooling must be at a
-revision that contains `qualify-heavy`; see `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`.
+After a candidate's `dev` deployment commits, the repository controller runs the fixed post-merge
+heavy-test profile once: `qualify-heavy dev <operation-id>` through the same
+`yggdrasil-bws-deploy` launcher (#6227; allowlist from #6205). It reads only the committed DEV receipt
+and its PG proof, takes no channel lock and touches no channel resource; an operation-owned
+network-none container from the admitted image runs the selector's heavy targets against a scratch
+depth-1 checkout of the exact candidate SHA, with the host Docker CLI mounted read-only and no socket.
+Only a passing heavy result completes the dev verdict, advances its last-green history, and permits
+that exact candidate's test deployment. A red/refused result holds this candidate without replay;
+later admitted builds proceed to dev. A terminal dev deployment failure dispatches a persisted,
+one-time `refused` verdict with reason `dev_deploy_failed`.
+
+The controller dispatches `.github/workflows/post-merge-heavy-tests.yml` once with the bounded
+verdict, using the existing Actions read/write, Contents read, Metadata read client only. A durable
+intent precedes the heavy run and the dispatch: a crash during the run is conservatively refused,
+and an uncertain dispatch is not retried after restart. A failed dispatch never invalidates a local
+passing heavy result or stalls later candidates; the workflow's missing-verdict watchdog exposes it.
+Legacy terminal test-VM checkpoints are retained without replay. The alert uses "bug: dev verification
+is red on main" and reuses an open alert with the legacy heavy-tests title. The VM tooling must
+contain `qualify-heavy`. This repository delivery does not activate the host or accept a live channel;
+#6170 and #3347 remain the activation/qualification gates. See
+`docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`.
 
 The repository liveness path (#6222) uses a separate
 `.github/workflows/dev-delivery-liveness.yml` dispatch for timestamped heartbeats and terminal dev

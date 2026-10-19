@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import os
+import re
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -46,7 +49,7 @@ def test_verdict_mode_and_watchdog_fail_loud() -> None:
     # A host verdict for a commit on main records a ygg status.
     resolution = verdict.resolve("workflow_dispatch", INPUTS, "f" * 40, "o/r", api=_api())
     assert (resolution.mode, resolution.sha) == ("verdict", SHA)
-    assert resolution.description.startswith("ygg-test passed: selected=500")
+    assert resolution.description.startswith("dev verification passed: selected=500")
     failed = verdict.resolve("workflow_dispatch", {**INPUTS, "verdict": "failed",
                                                    "failures": "tests/deploy/test_a.py::test_x"},
                              "f" * 40, "o/r", api=_api())
@@ -155,6 +158,23 @@ def test_owner_docs_describe_vm_verdict() -> None:
                    "prio:high"):
         assert phrase in section, phrase
     deployment = (ROOT / "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md").read_text(encoding="utf-8")
-    assert "qualify-heavy test <operation-id>" in deployment
+    assert "qualify-heavy dev <operation-id>" in deployment
     testing = (ROOT / "docs/TESTING.md").read_text(encoding="utf-8")
     assert "post-merge-heavy-tests/ygg" in testing
+
+
+@pytest.mark.parametrize('title', ['bug: dev verification is red on main',
+                                 'bug: post-merge heavy tests are red on main'])
+def test_alert_workflow_lookup_reuses_current_and_legacy_title(title):
+    from scripts import post_merge_heavy_tests_alert as alert
+
+    jq = shutil.which('jq')
+    if jq is None:
+        pytest.skip('jq unavailable')
+    script = yaml.safe_load(WORKFLOW.read_text())['jobs']['alert']['steps'][-1]['run']
+    query = re.search(r"--jq '([^']+)'", script).group(1)
+    result = subprocess.run([jq, '-r', query], input=json.dumps([
+        {'number': 41, 'title': 'unrelated'}, {'number': 42, 'title': title}]),
+        env={**os.environ, 'ALERT_TITLE': alert.ALERT_TITLE, 'LEGACY_ALERT_TITLE': alert.LEGACY_ALERT_TITLE},
+        capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == '42'
