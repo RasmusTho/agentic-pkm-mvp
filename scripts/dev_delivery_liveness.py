@@ -157,6 +157,9 @@ def evaluate(
         return LivenessResult(True, "no_admitted_build", "no successful admitted main build is available")
 
     if terminal_verdict:
+        # A prior terminal verdict remains valid once heartbeat freshness is
+        # established above, even when the verdict itself is older than the
+        # heartbeat grace window.
         return LivenessResult(True, "dev_verdict_recorded", f"dev verdict is recorded for {build.sha[:12]}")
 
     if current - build.completed_at > GRACE:
