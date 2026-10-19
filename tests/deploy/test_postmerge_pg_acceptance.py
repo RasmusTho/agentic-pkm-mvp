@@ -355,7 +355,8 @@ def test_recovery_cannot_reuse_smoke_only_or_foreign_profile_evidence(tmp_path, 
                'pg_acceptance': {**_result(sha, 'dev', candidate.operation_id('dev')), field: value}}
     driver._save_outcome(state / 'postmerge-dev-test.json', candidate, outcome)
     assert driver.poll(state, build=lambda: 123, load=lambda _run: candidate,
-                       deploy=lambda *_args: pytest.fail('foreign PG result advanced test')) == 0
+                       deploy=lambda *_args: pytest.fail('foreign PG result advanced test'),
+                       alert=lambda _evidence: None) == 0
     assert json.loads((state / 'postmerge-dev-test.json').read_text())['phase'] == 'failed'
 
 
