@@ -20,13 +20,14 @@ if __package__ in {None, ''}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.postmerge_dev_test import (
-    BUILD_JOB, BUILD_WORKFLOW, Candidate, REPOSITORY, validate_channel_evidence,
+    Candidate, REPOSITORY, validate_channel_evidence, validate_source_run,
 )
 
 WORKFLOW = 'postmerge-channel-bug.yml'
 BOT = 'github-actions[bot]'
 EVENT_MARKER = '<!-- postmerge-channel-verdict:v1 -->'
 MAX_PAGES = 10
+MAX_ATTEMPTS = 100
 
 
 class AlertRefused(ValueError):
@@ -93,6 +94,38 @@ def _newer(api: Callable[..., Any], left: Candidate, right: Candidate) -> bool:
     return status == 'ahead'
 
 
+def _successful_channel_attempt(api: Callable[..., Any], run: dict[str, Any]) -> bool:
+    # A rerun replaces the run's latest conclusion, not its accepted history.
+    # Unknown/incomplete history is never permission to create a new red Issue.
+    attempt = run.get('run_attempt')
+    if (type(run.get('id')) is not int or run['id'] < 1
+        or type(attempt) is not int or attempt < 1
+        or re.fullmatch('[0-9a-f]{40}', str(run.get('head_sha'))) is None):
+        raise AlertRefused('workflow_attempt_refused')
+    failures = {'failure', 'cancelled', 'timed_out', 'action_required', 'neutral', 'skipped', 'stale', 'startup_failure'}
+    if run.get('status') == 'completed':
+        if run.get('conclusion') == 'success':
+            return True
+        if run.get('conclusion') not in failures:
+            raise AlertRefused('workflow_attempt_refused')
+    elif run.get('status') not in {'queued', 'in_progress', 'waiting', 'requested', 'pending'}:
+        raise AlertRefused('workflow_attempt_refused')
+    if attempt > MAX_ATTEMPTS:
+        raise AlertRefused('workflow_history_incomplete')
+    for previous in range(attempt - 1, 0, -1):
+        prior = api('GET', f"repos/{REPOSITORY}/actions/runs/{run['id']}/attempts/{previous}")
+        if (not isinstance(prior, dict) or type(prior.get('run_attempt')) is not int
+            or prior['run_attempt'] != previous or prior.get('status') != 'completed'
+            or any(prior.get(key) != run[key] for key in
+                   ('id', 'display_title', 'head_sha', 'head_branch', 'event', 'path'))):
+            raise AlertRefused('workflow_attempt_refused')
+        if prior.get('conclusion') == 'success':
+            return True
+        if prior.get('conclusion') not in failures:
+            raise AlertRefused('workflow_attempt_refused')
+    return False
+
+
 def _newer_completed_verdict(api: Callable[..., Any], candidate: Candidate, channel: str, run_id: int,
                              created_at: str, receipt_fingerprint: str) -> bool:
     # A green verdict with no open bug still has a durable workflow receipt.
@@ -104,23 +137,24 @@ def _newer_completed_verdict(api: Callable[..., Any], candidate: Candidate, chan
                          r'([1-9][0-9]*)/([1-9][0-9]*)/([0-9a-f]{64})')
     for page in range(1, MAX_PAGES + 1):
         result = api('GET', f'repos/{REPOSITORY}/actions/workflows/{WORKFLOW}/runs'
-                           f'?branch=main&event=workflow_dispatch&status=success&created={created}&per_page=100&page={page}')
+                           f'?branch=main&event=workflow_dispatch&created={created}&per_page=100&page={page}')
         if not isinstance(result, dict) or not isinstance(result.get('workflow_runs'), list):
             raise AlertRefused('workflow_listing_refused')
         rows = result['workflow_runs']
         for row in rows:
             match = pattern.fullmatch(row.get('display_title', ''))
-            if (row.get('id') == run_id or row.get('conclusion') != 'success'
-                or row.get('head_branch') != 'main' or row.get('event') != 'workflow_dispatch'
+            if (row.get('id') == run_id or row.get('head_branch') != 'main' or row.get('event') != 'workflow_dispatch'
                 or row.get('path') != f'.github/workflows/{WORKFLOW}' or not match or match[1] != channel):
                 continue
             other = Candidate(match[3], candidate.digest, int(match[4]), int(match[5]), candidate.artifact_id)
-            if (other.sha, other.run_id, other.run_attempt) == (candidate.sha, candidate.run_id, candidate.run_attempt):
+            same = (other.sha, other.run_id, other.run_attempt) == (candidate.sha, candidate.run_id, candidate.run_attempt)
+            if not (same or _newer(api, other, candidate)) or not _successful_channel_attempt(api, row):
+                continue
+            if same:
                 if match[6] != receipt_fingerprint:
                     raise AlertRefused('conflicting_terminal_verdict')
                 continue
-            if _newer(api, other, candidate):
-                return True
+            return True
         if len(rows) < 100:
             return False
     raise AlertRefused('workflow_listing_incomplete')
@@ -188,31 +222,16 @@ def reconcile(evidence: dict[str, Any], *, channel: str, event: str, ref: str, r
     if event != 'workflow_dispatch' or ref != 'refs/heads/main' or repository != REPOSITORY or run_id < 1:
         raise AlertRefused('workflow_authority_refused')
     candidate = validate_evidence(evidence, channel)
-    # Source run metadata changes on rerun. Authenticate the recorded image
-    # job's exact attempt; unrelated failed jobs may have been rerun later.
-    attempt_path = f'repos/{REPOSITORY}/actions/runs/{candidate.run_id}/attempts/{candidate.run_attempt}'
-    run = api('GET', attempt_path)
-    if (not isinstance(run, dict) or type(run.get('id')) is not int or run['id'] != candidate.run_id
-        or type(run.get('run_attempt')) is not int or run['run_attempt'] != candidate.run_attempt
-        or run.get('event') != 'push' or run.get('status') != 'completed'
-        or run.get('head_branch') != 'main' or run.get('path') != BUILD_WORKFLOW
-        or run.get('repository', {}).get('full_name') != REPOSITORY
-        or run.get('head_repository', {}).get('full_name') != REPOSITORY
-        or run.get('head_sha') != candidate.sha):
-        raise AlertRefused('candidate_build_refused')
-    jobs = api('GET', attempt_path + '/jobs?per_page=100')
-    if (not isinstance(jobs, dict) or not isinstance(jobs.get('jobs'), list)
-        or type(jobs.get('total_count')) is not int or not 0 <= jobs['total_count'] <= 100
-        or jobs['total_count'] != len(jobs['jobs']) or any(not isinstance(job, dict) for job in jobs['jobs'])):
-        raise AlertRefused('candidate_build_refused')
-    image_jobs = [job for job in jobs['jobs'] if job.get('name') == BUILD_JOB]
-    if (len(image_jobs) != 1
-        or any(type(image_jobs[0].get(key)) is not int for key in ('run_id', 'run_attempt'))
-        or any(image_jobs[0].get(key) != value for key, value in {
-        'run_id': candidate.run_id, 'run_attempt': candidate.run_attempt, 'head_sha': candidate.sha,
-        'status': 'completed', 'conclusion': 'success',
-    }.items())):
-        raise AlertRefused('candidate_build_refused')
+    # Candidate.run_attempt is the admitted successful workflow attempt.
+    # The trusted loader already authenticated its image job and artifact, which
+    # can come from an earlier attempt after a failed-jobs-only rerun.
+    run = api('GET', f'repos/{REPOSITORY}/actions/runs/{candidate.run_id}/attempts/{candidate.run_attempt}')
+    try:
+        if (validate_source_run(run, candidate.run_id) != candidate.sha
+            or type(run.get('id')) is not int or run['run_attempt'] != candidate.run_attempt):
+            raise ValueError()
+    except Exception:
+        raise AlertRefused('candidate_build_refused') from None
     for base, head in ((candidate.sha, 'main'), (evidence['last_good_sha'], candidate.sha)):
         if base is not None:
             comparison = api('GET', f'repos/{REPOSITORY}/compare/{base}...{head}')
