@@ -3968,12 +3968,124 @@ def test_source_identity_absence_proof_retires_only_exact_pending_host_operation
         "--prove-source-persistence-never-admitted", "--operation-id", operation_id,
     ]
     assert host.main(args) == 0
-    assert calls[:2] == [("prove", operation_id), ("host-admit", "test", operation_id)]
+    assert calls[:2] == [("host-admit", "test", operation_id), ("prove", operation_id)]
     evidence = calls[-1][1]
     assert (evidence.operation_id, evidence.kind, evidence.target, evidence.result) == (
         operation_id, "source-persistence", "test", "failed",
     )
     assert host.main([*args, "--persist-source-identity"]) == 78
+
+
+def test_source_identity_retired_host_operation_never_replays_producer(
+    monkeypatch, tmp_path,
+):
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = str(uuid4())
+    with controller.source_persistence_operation(
+        "test", operation_id=operation_id,
+    ) as (operation, resumed):
+        assert resumed is False
+        operation.prepare_mutation()
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def prove_source_identity_absence(self, requested_id):
+            assert requested_id == operation_id
+            return {
+                "contract": "native-source-identity-absence.v1",
+                "operation_id": requested_id,
+                "channel": "test",
+                "native_request_absent": True,
+                "native_producer_receipt_absent": True,
+                "native_terminal_receipt_absent": True,
+                "native_worker_absent": True,
+                "native_lock_absent": True,
+            }
+
+        def persist_source_identity(self, *_args, **_kwargs):
+            pytest.fail("a retired host operation must never replay the producer")
+
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    base = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--operation-id", operation_id,
+    ]
+    assert host.main([*base, "--prove-source-persistence-never-admitted"]) == 0
+    persist = [
+        *base, "--persist-source-identity",
+        "--image-digest", "sha256:" + "1" * 64,
+        "--authority-cutover-binding", "vault-alpha",
+        "--authority-cutover-root", "/srv/vault-alpha",
+        "--authority-cutover-ownership-root", "/srv/instance-ownership",
+    ]
+    assert host.main(persist) == 78
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["prepared", "sent", "failed"]
+
+
+def test_source_identity_absence_proof_holds_host_lock_across_remote_read(
+    monkeypatch, tmp_path,
+):
+    import threading
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = str(uuid4())
+    with controller.source_persistence_operation(
+        "test", operation_id=operation_id,
+    ) as (operation, _resumed):
+        operation.prepare_mutation()
+
+    proof_called = threading.Event()
+    native_request_present = threading.Event()
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def prove_source_identity_absence(self, requested_id):
+            assert requested_id == operation_id
+            proof_called.set()
+            if native_request_present.is_set():
+                raise PostgresDeployError()
+            pytest.fail("proof ran before the competing host lock was released")
+
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    args = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--prove-source-persistence-never-admitted", "--operation-id", operation_id,
+    ]
+    result = []
+    with controller.source_persistence_operation(
+        "test", operation_id=operation_id,
+    ):
+        thread = threading.Thread(target=lambda: result.append(host.main(args)))
+        thread.start()
+        assert proof_called.wait(0.2) is False
+        native_request_present.set()
+    thread.join(timeout=2)
+    assert thread.is_alive() is False
+    assert result == [78]
+    assert proof_called.is_set()
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["prepared", "sent"]
 
 
 def test_source_identity_absence_proof_refuses_partial_ambiguous_or_mismatched_state(
