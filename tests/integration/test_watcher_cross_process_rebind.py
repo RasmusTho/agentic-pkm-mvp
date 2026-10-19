@@ -1569,9 +1569,25 @@ def test_foreground_wait_requires_completed_first_adoption_recovery_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Recovery completion is typed and cannot be represented by an empty proof."""
+    """The foreground call site requires typed recovery evidence, not an empty proof."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
     runtime, _vault_a, _vault_b, _config_path = _first_selection_fixture(
         tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     bad_payload = {
         "schema": "settings_rebind_watcher.v1",
@@ -1598,8 +1614,46 @@ def test_foreground_wait_requires_completed_first_adoption_recovery_evidence(
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_text(json.dumps(bad_payload), encoding="utf-8")
 
+    activation = SettingsRebindActivation(
+        runtime.registry,
+        watcher_state_dir=tmp_path / "watcher-state",
+        watcher_enabled=True,
+        wait_timeout_seconds=0,
+    )
     with pytest.raises(RegistryError, match="incomplete or ambiguous"):
-        load_settings_rebind_watcher_receipt(receipt_path)
+        activation.activate(
+            selection=_selection_for(runtime, "binding-a"),
+            candidate_binding_id="binding-a",
+            candidate_root=_vault_a,
+        )
+
+    observed = RebindScanReceipt(
+        scan_kind="recovery",
+        desired_revision=1,
+        observed_at="2026-10-19T00:00:00Z",
+        watcher_ticks={"ingest": 1},
+    )
+    _write_receipt(
+        receipt_path,
+        SettingsRebindWatcherReceipt(
+            desired_revision=1,
+            prior_binding_id=None,
+            candidate_binding_id="binding-a",
+            stage="completed",
+            buffer=(),
+            acknowledgement=None,
+            drain_receipt=None,
+            resume_ready_at="2026-10-19T00:00:01Z",
+            evidence_kind="first_adoption_recovery",
+            recovery_scan=observed,
+        ),
+    )
+    result = activation.activate(
+        selection=_selection_for(runtime, "binding-a"),
+        candidate_binding_id="binding-a",
+        candidate_root=_vault_a,
+    )
+    assert result == committed
 
 
 def test_enabled_static_root_watcher_refuses_first_selection_of_foreign_root(
