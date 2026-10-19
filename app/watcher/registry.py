@@ -1660,23 +1660,6 @@ def _capture_settings_source_snapshot(
     return snapshot
 
 
-def _mark_scan_generation_seen(state: WatcherState, rel_path: str) -> None:
-    """Advance only scan presence while preserving ordinary delivery state."""
-
-    entry = state.file_entry(rel_path)
-    observation_store = state._observation_store
-    if observation_store is not None:
-        state._pending_deletes.discard(rel_path)
-        state._pending_observations[rel_path] = (
-            dict(entry) if entry is not None else {},
-            state.scan_generation,
-        )
-    elif entry is not None:
-        # Registry states use the sidecar. Keep the same no-delivery behavior
-        # for an in-memory legacy state used by narrow callers/tests.
-        state.files[rel_path] = entry
-
-
 def _collect_changed_entries(
     cfg: RegistryConfig,
     spec: WatcherSpec,
@@ -1753,7 +1736,7 @@ def _collect_changed_entries(
             and not is_runtime_gating_owner_path(rel)
         ):
             if observation_only:
-                _mark_scan_generation_seen(state, rel_str)
+                state.mark_scan_generation_seen(rel_str)
             else:
                 state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
             continue
@@ -1764,7 +1747,7 @@ def _collect_changed_entries(
             # reconciliation cannot misclassify it as removed.
             _record_scan_error(state)
             if observation_only:
-                _mark_scan_generation_seen(state, rel_str)
+                state.mark_scan_generation_seen(rel_str)
             else:
                 state.update_file_state(rel_str)
             _mark_scan_incomplete(summary, reason="hash")
@@ -1774,7 +1757,7 @@ def _collect_changed_entries(
         summary["bytes_read"] = int(summary["bytes_read"]) + read_bytes
         if previous_hash is not None and previous_hash == digest:
             if observation_only:
-                _mark_scan_generation_seen(state, rel_str)
+                state.mark_scan_generation_seen(rel_str)
             else:
                 state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
             continue
@@ -1783,7 +1766,7 @@ def _collect_changed_entries(
             # do not route settings deltas or source events here: their
             # accepted state and delivery cursor must remain available to the
             # first stable ordinary tick.
-            _mark_scan_generation_seen(state, rel_str)
+            state.mark_scan_generation_seen(rel_str)
             if not is_settings_source_path(rel) and not is_settings_control_path(
                 rel,
                 configured_system_dir=system_dir,
@@ -2455,7 +2438,7 @@ def _run_spec_tick(
     for entry in changed_entries:
         rel_path = str(entry.rel_path)
         if observation_only:
-            _mark_scan_generation_seen(state, rel_path)
+            state.mark_scan_generation_seen(rel_path)
             continue
         previous_file_state_raw = state.file_entry(rel_path)
         previous_file_state = (
