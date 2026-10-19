@@ -474,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
                 proof = remote.prove_source_identity_absence(args.operation_id)
                 operation.finish(TerminalEvidence(
                     operation.operation_id, 'source-persistence', args.channel,
-                    'failed', 'remote-terminal',
+                    'failed', 'native-absence-proof',
                 ))
             result = {**proof, 'host_operation_retired': True}
             print(json.dumps(result, sort_keys=True))
@@ -501,9 +501,10 @@ def main(argv: list[str] | None = None) -> int:
             with controller.source_persistence_operation(
                 args.channel, operation_id=args.operation_id,
             ) as (operation, _resumed):
-                if operation.completed_result is not None:
+                if operation.completed_source == 'native-absence-proof':
                     raise PostgresDeployError()
-                operation.prepare_mutation()
+                if operation.completed_result is None:
+                    operation.prepare_mutation()
                 result = remote.persist_source_identity(
                     operation.operation_id, args.revision, args.image_digest, cutover,
                 )

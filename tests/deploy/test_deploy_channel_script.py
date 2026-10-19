@@ -3859,6 +3859,7 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
             operation = SimpleNamespace(
                 operation_id=operation_id,
                 completed_result=None,
+                completed_source=None,
                 prepare_mutation=lambda: calls.append(("host-sent", channel, operation_id)),
                 finish=lambda evidence: calls.append(("host-finish", evidence)),
             )
@@ -4021,6 +4022,7 @@ def test_source_identity_retired_host_operation_never_replays_producer(
         "--operation-id", operation_id,
     ]
     assert host.main([*base, "--prove-source-persistence-never-admitted"]) == 0
+    assert host.main([*base, "--prove-source-persistence-never-admitted"]) == 0
     persist = [
         *base, "--persist-source-identity",
         "--image-digest", "sha256:" + "1" * 64,
@@ -4031,6 +4033,91 @@ def test_source_identity_retired_host_operation_never_replays_producer(
     assert host.main(persist) == 78
     records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
     assert [record["stage"] for record in records] == ["prepared", "sent", "failed"]
+    assert records[-1]["source"] == "native-absence-proof"
+
+
+def test_source_identity_admitted_failed_operation_can_finish_retained_cleanup(
+    monkeypatch, tmp_path,
+):
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = str(uuid4())
+    lifecycle = {
+        "request": False,
+        "receipt": False,
+        "fence": False,
+        "producer_calls": 0,
+        "cleanup_calls": 0,
+    }
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def persist_source_identity(self, requested_id, revision, _digest, _selected):
+            assert requested_id == operation_id
+            if not lifecycle["receipt"]:
+                lifecycle.update({
+                    "request": True,
+                    "receipt": True,
+                    "fence": True,
+                    "producer_calls": lifecycle["producer_calls"] + 1,
+                })
+            else:
+                assert lifecycle["request"] and lifecycle["fence"]
+                lifecycle["cleanup_calls"] += 1
+                lifecycle["fence"] = False
+            return {
+                "contract": "native-source-identity-persistence.v1",
+                "operation_id": requested_id,
+                "channel": "test",
+                "revision": revision,
+                "terminal_state": "failed",
+                "eligible": False,
+                "reason": "source_operation_conflict",
+                "selected_count": 1,
+                "persisted_count": 0,
+                "missing_count": 0,
+                "invalid_count": 0,
+                "ambiguous_count": 0,
+                "producer_error_count": 1,
+            }
+
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    args = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--persist-source-identity", "--operation-id", operation_id,
+        "--image-digest", "sha256:" + "1" * 64,
+        "--authority-cutover-binding", "vault-alpha",
+        "--authority-cutover-root", "/srv/vault-alpha",
+        "--authority-cutover-ownership-root", "/srv/instance-ownership",
+    ]
+    assert host.main(args) == 78
+    assert lifecycle == {
+        "request": True,
+        "receipt": True,
+        "fence": True,
+        "producer_calls": 1,
+        "cleanup_calls": 0,
+    }
+    assert host.main(args) == 78
+    assert lifecycle == {
+        "request": True,
+        "receipt": True,
+        "fence": False,
+        "producer_calls": 1,
+        "cleanup_calls": 1,
+    }
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["prepared", "sent", "failed"]
+    assert records[-1]["source"] == "remote-terminal"
 
 
 def test_source_identity_absence_proof_holds_host_lock_across_remote_read(
