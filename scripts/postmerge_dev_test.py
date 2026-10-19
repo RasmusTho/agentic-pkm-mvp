@@ -8,18 +8,15 @@ worker decides terminality without replaying an indeterminate activation.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import asdict
 from datetime import datetime, timezone
-import fcntl
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import re
-import stat
 import subprocess
 import sys
 import tempfile
@@ -32,15 +29,14 @@ if __package__ in {None, ''}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.ops.pg_acceptance import require_pass
+from scripts.postmerge_controller import (
+    CandidateRefused, _pause_time, checkpoint_lock, read_checkpoint_document, validate_observation,
+)
 
 REPOSITORY = 'RasmusTho/agentic-pkm-mvp'
 IMAGE_REPOSITORY = 'ghcr.io/rasmustho/pkm-app'
 BUILD_WORKFLOW = '.github/workflows/app-image-build.yml'
 BUILD_JOB = 'Build SHA-tagged app image'
-
-
-class CandidateRefused(RuntimeError):
-    pass
 
 
 @dataclass(frozen=True)
@@ -186,46 +182,8 @@ def _atomic_checkpoint(path: Path, checkpoint: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-@contextmanager
-def checkpoint_lock(directory: Path):
-    # A single launchd controller runs this driver; this local lock also prevents
-    # duplicate manual invocations. Native locks remain deployment authority.
-    info = directory.lstat()
-    if (not directory.is_absolute() or directory.is_symlink() or not stat.S_ISDIR(info.st_mode)
-        or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700):
-        raise CandidateRefused('checkpoint_directory_refused')
-    try:
-        descriptor = os.open(directory / 'postmerge-dev-test.lock',
-                             os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        fresh = True
-    except FileExistsError:
-        descriptor = os.open(directory / 'postmerge-dev-test.lock', os.O_RDWR | os.O_NOFOLLOW)
-        fresh = False
-    try:
-        lock_info = os.fstat(descriptor)
-        if (not stat.S_ISREG(lock_info.st_mode) or lock_info.st_uid != os.geteuid()
-            or stat.S_IMODE(lock_info.st_mode) != 0o600 or lock_info.st_nlink != 1):
-            raise CandidateRefused('checkpoint_lock_refused')
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield fresh
-    finally:
-        os.close(descriptor)
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _pause_time(value: Any) -> datetime:
-    if not isinstance(value, str):
-        raise CandidateRefused('pause_expiry_required')
-    try:
-        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
-        if parsed.tzinfo is None:
-            raise ValueError()
-        return parsed.astimezone(timezone.utc)
-    except ValueError:
-        raise CandidateRefused('pause_timestamp_refused') from None
 
 
 def validate_pause(pause: Any) -> dict[str, Any]:
@@ -242,14 +200,6 @@ def pause_description(pause: dict[str, Any]) -> str:
     return f"paused (#{pause['issue']}, until {pause['expires_at']})"
 
 
-def validate_observation(observation: Any) -> dict[str, Any]:
-    if (not isinstance(observation, dict) or set(observation) != {'sequence', 'observed_at'}
-        or type(observation['sequence']) is not int or not 0 < observation['sequence'] < 10**18
-        or observation['observed_at'] != _pause_time(observation['observed_at']).isoformat()):
-        raise CandidateRefused('heartbeat_observation_refused')
-    return observation
-
-
 def _next_observation(checkpoint: dict[str, Any] | None, now: datetime) -> dict[str, Any]:
     previous = checkpoint.get('observation') if checkpoint else None
     if previous is not None and now < _pause_time(previous['observed_at']):
@@ -259,20 +209,9 @@ def _next_observation(checkpoint: dict[str, Any] | None, now: datetime) -> dict[
 
 
 def _read_checkpoint(path: Path, *, allow_missing: bool = False) -> dict[str, Any] | None:
-    checkpoint = None
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    except FileNotFoundError:
-        if not allow_missing:
-            raise CandidateRefused('checkpoint_missing_restore_authoritative_state') from None
-    else:
-        with os.fdopen(descriptor) as source:
-            info = os.fstat(source.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 65536 or info.st_nlink != 1):
-                raise CandidateRefused('checkpoint_refused')
-            checkpoint = json.load(source)
-            _validate_checkpoint(checkpoint)
+    checkpoint = read_checkpoint_document(path, allow_missing=allow_missing)
+    if checkpoint is not None:
+        _validate_checkpoint(checkpoint)
     return checkpoint
 
 
@@ -735,12 +674,23 @@ def heavy_verdict(path: Path, checkpoint: dict[str, Any], *,
     return 0 if heavy['dispatch'] == 'sent' else 78
 
 
+def _native_host_command() -> list[str]:
+    # Keep the child on the same reviewed pin even if cwd or ambient Python
+    # configuration belongs to a broken candidate. No token enters this child.
+    return [sys.executable, '-I', '-S', '-c',
+            "import runpy, sys; from pathlib import Path; root = sys.argv.pop(1); "
+            "sys.dont_write_bytecode = True; sys.path[:0] = [root, str(Path(root).parent / 'vendor')]; "
+            "from app.ops.bws_secret_reader import _sdk_client; _sdk_client(); "
+            "runpy.run_module('app.ops.postgres_deploy_host', run_name='__main__')",
+            str(Path(__file__).resolve().parents[1])]
+
+
 def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
     # Existing host code sanitizes SSH's environment and retains the VM worker
     # through terminal evidence. Capture all streams; never print child errors.
     environment = {k: v for k, v in os.environ.items() if k not in {'GH_TOKEN', 'GITHUB_TOKEN'}}
     command = [
-        sys.executable, '-m', 'app.ops.postgres_deploy_host', channel, candidate.sha,
+        *_native_host_command(), channel, candidate.sha,
         '--operation-id', candidate.operation_id(channel),
         '--existing-secrets-only', '--automatic', '--image-digest', candidate.digest,
     ]
@@ -768,7 +718,7 @@ def native_absence(channel: str, candidate: Candidate) -> dict[str, Any]:
     """Obtain exact host+native absence proof without reading private identities."""
     environment = {k: v for k, v in os.environ.items() if k not in {'GH_TOKEN', 'GITHUB_TOKEN'}}
     command = [
-        sys.executable, '-m', 'app.ops.postgres_deploy_host', channel, candidate.sha,
+        *_native_host_command(), channel, candidate.sha,
         '--operation-id', candidate.operation_id(channel), '--existing-secrets-only',
         '--automatic', '--image-digest', candidate.digest, '--prove-never-admitted',
     ]

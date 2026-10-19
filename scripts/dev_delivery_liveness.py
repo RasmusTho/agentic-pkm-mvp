@@ -133,6 +133,11 @@ def latest_admitted_build(repo: str, *, api: Callable[[str], Any]) -> AdmittedBu
     return builds[0] if builds else None
 
 
+def _startup_failure(status: Any) -> bool:
+    return (isinstance(status, dict) and isinstance(status.get('description'), str)
+            and status['description'].endswith(';startup=self_check_failed'))
+
+
 def _latest_status(statuses: Any, context: str, *, allow_rotated_context: bool = False) -> dict[str, Any] | None:
     if not isinstance(statuses, list):
         raise LivenessRefused("statuses_unreadable")
@@ -148,8 +153,8 @@ def _latest_status(statuses: Any, context: str, *, allow_rotated_context: bool =
         return max(matching, key=_status_timestamp)
     observations: dict[int, tuple[datetime, str, str]] = {}
     for status in matching:
-        sequence, observed = _heartbeat_order(status)
-        if sequence:
+        sequence, diagnostic, observed = _heartbeat_order(status)
+        if sequence and not diagnostic:
             evidence = (observed, status['state'], status['description'])
             if sequence in observations and observations[sequence] != evidence:
                 raise LivenessRefused("heartbeat_sequence_conflict")
@@ -157,22 +162,23 @@ def _latest_status(statuses: Any, context: str, *, allow_rotated_context: bool =
     ordered_times = [observations[sequence][0] for sequence in sorted(observations)]
     if ordered_times != sorted(ordered_times):
         raise LivenessRefused("heartbeat_clock_order_refused")
+    # A read-only frontier f is after activity f and before actual activity
+    # f+1. Independent host clocks and queued writes never establish recovery.
     return max(matching, key=_heartbeat_order)
 
 
-def _heartbeat_order(status: dict[str, Any]) -> tuple[int, datetime]:
+def _heartbeat_order(status: dict[str, Any]) -> tuple[int, int, datetime]:
     description = status.get("description", "")
     match = re.fullmatch(
-        r"observed_at=([^;]+)(?:;seq=([1-9][0-9]{0,17}))?(?:;paused_issue=([1-9][0-9]{0,9});until=([^;]+))?",
+        r"observed_at=([^;]+)(?:;seq=([1-9][0-9]{0,17})(?:;paused_issue=([1-9][0-9]{0,9});until=([^;]+))?|;after_sequence=(0|[1-9][0-9]{0,17});startup=(self_check_failed))?",
         description if isinstance(description, str) else "",
     )
     if (match is None or status.get("state") not in {"success", "failure"}
-            or (status['state'] == 'failure') != bool(match[3])
-            or (match[3] and not match[2])):
+            or (status['state'] == 'failure') != bool(match[3] or match[6])):
         raise LivenessRefused("heartbeat_observation_refused")
     # Shipped legacy heartbeats are normal only. Sequenced producer continuity
     # outranks those observations even when its adoption followed a clock reset.
-    return int(match[2] or 0), _timestamp(match[1])
+    return int(match[2] or match[5] or 0), int(bool(match[6])), _timestamp(match[1])
 
 
 def _heartbeat_pause(status: dict[str, Any] | None) -> tuple[int, datetime] | None:
@@ -200,10 +206,16 @@ def evaluate(
     """Evaluate freshness without treating the dev result as a merge gate."""
     current = now.astimezone(timezone.utc)
     heartbeat = _latest_status(heartbeat_statuses, HEARTBEAT_CONTEXT, allow_rotated_context=True)
-    pause = _heartbeat_pause(heartbeat)
+    # A diagnostic cannot erase the durable sequenced pause. Even a later
+    # verdict must remain red while that pause is active.
+    activity = _latest_status([status for status in heartbeat_statuses if not _startup_failure(status)],
+                              HEARTBEAT_CONTEXT, allow_rotated_context=True)
+    pause = _heartbeat_pause(activity)
     if heartbeat is not None and _status_timestamp(heartbeat) > current:
         return LivenessResult(False, "heartbeat_future", "controller heartbeat observation is in the future")
-    if pause is not None and heartbeat is not None and _status_timestamp(heartbeat) <= current < pause[1]:
+    if _startup_failure(heartbeat):
+        return LivenessResult(False, 'startup_self_check_failed', 'controller pinned tooling startup self-check failed')
+    if pause is not None and activity is not None and _status_timestamp(activity) <= current < pause[1]:
         return LivenessResult(False, "paused", f"paused (#{pause[0]}, until {pause[1].isoformat()})")
     verdict = _latest_status(verdict_statuses, VERDICT_CONTEXT)
     verdict_at = _status_timestamp(verdict) if verdict is not None else None
@@ -276,7 +288,12 @@ def _status_history(repo: str, sha: str, context: str, *, api: Callable[[str], A
                     or (previous_created is not None and created[0] > previous_created)):
                 raise LivenessRefused("statuses_creation_order_refused")
             previous_created = created[-1]
-            latest = _latest_status(collected, context, allow_rotated_context=True)
+            # A diagnostic's frontier/time cannot prove page completeness.
+            # Its producer floors time at the snapshotted observation; only an
+            # actual activity supplies the monotone clock used by this cutoff.
+            activity = [status for status in collected if not _startup_failure(status)]
+            _latest_status(collected, context, allow_rotated_context=True)
+            latest = _latest_status(activity, context, allow_rotated_context=True)
             if (latest is not None and _heartbeat_order(latest)[0] > 0
                     and created[-1] < _status_timestamp(latest).replace(microsecond=0)):
                 return collected
@@ -286,16 +303,24 @@ def _status_history(repo: str, sha: str, context: str, *, api: Callable[[str], A
 def _main_heartbeat_history(repo: str, sha: str, *, api: Callable[[str], Any]) -> list[Any]:
     # A stopped controller cannot copy its pause onto a later main SHA. Follow
     # the actual first-parent main lineage, including commits without builds,
-    # until the nearest controller signal. A later normal tick supersedes the
-    # earlier pause; transport/history ambiguity must never produce green.
+    # until the nearest actual normal/pause activity. Startup diagnostics
+    # cannot retire ancestor activity: retain them while finding the causal
+    # signal. A later normal tick supersedes the earlier pause; transport or
+    # history ambiguity must never produce green.
+    collected: list[Any] = []
     seen: set[str] = set()
     for _ in range(MAX_HEARTBEAT_COMMITS):
         if sha in seen:
             raise LivenessRefused("heartbeat_ancestry_refused")
         seen.add(sha)
         statuses = _status_history(repo, sha, HEARTBEAT_CONTEXT, api=api)
-        if _latest_status(statuses, HEARTBEAT_CONTEXT, allow_rotated_context=True) is not None:
-            return statuses
+        # Validate diagnostics too, before following untrusted ancestry. A
+        # diagnostic-only commit changes discovery, never signal admission.
+        _latest_status(statuses, HEARTBEAT_CONTEXT, allow_rotated_context=True)
+        collected.extend(statuses)
+        activity = [status for status in statuses if not _startup_failure(status)]
+        if _latest_status(activity, HEARTBEAT_CONTEXT, allow_rotated_context=True) is not None:
+            return collected
         commit = api(f"repos/{repo}/git/commits/{sha}")
         if (not isinstance(commit, dict) or commit.get("sha") != sha
                 or not isinstance(commit.get("parents"), list)
@@ -303,7 +328,7 @@ def _main_heartbeat_history(repo: str, sha: str, *, api: Callable[[str], Any]) -
             raise LivenessRefused("heartbeat_ancestry_refused")
         parents = [_validate_sha(parent.get("sha")) for parent in commit["parents"]]
         if not parents:
-            return []
+            return collected
         sha = parents[0]
     raise LivenessRefused("heartbeat_ancestry_incomplete")
 
@@ -372,6 +397,12 @@ def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
         fields |= {"candidate", "result", "operation_id"}
     elif isinstance(signal, dict):
         fields |= set(signal) & {"pause", "sequence"}
+    if kind == 'heartbeat' and isinstance(signal, dict) and 'startup' in signal:
+        fields |= {'startup', 'after_sequence'}
+        if (signal['startup'] != 'failed' or set(signal) & {'pause', 'sequence'}
+                or type(signal.get('after_sequence')) is not int
+                or not 0 <= signal['after_sequence'] < 10**18):
+            raise LivenessRefused('signal_startup_refused')
     if not isinstance(signal, dict) or set(signal) != fields or signal["protocol"] != LIVENESS_PROTOCOL:
         raise LivenessRefused("signal_protocol_refused")
     sha = _validate_sha(signal["sha"])
@@ -397,6 +428,9 @@ def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
                 raise LivenessRefused("pause_observation_refused")
             state = "failure"
             description += f";paused_issue={pause['issue']};until={pause['expires_at']}"
+        if signal.get('startup') == 'failed':
+            state = 'failure'
+            description += f";after_sequence={signal['after_sequence']};startup=self_check_failed"
     else:
         evidence = signal["candidate"]
         if (not isinstance(evidence, dict) or type(evidence.get("run_id")) is not int

@@ -163,9 +163,36 @@ The existing health, version, fleet-image and UI smoke gates plus the fixed isol
 profile must pass on dev before test starts. Each stage runs its own PG profile at the same digest.
 Actions receives no deployment credentials; there is no extra human approval between ordinary stages.
 
-`scripts/install_postmerge_controller.py` installs the host-local LaunchAgent from a retained, clean,
-reviewed-main tooling checkout. Install the updated native VM runtime once through the existing
-deployment installer before enabling the poller. Future automatic candidates fetch their exact Git
+`scripts/install_postmerge_controller.py` installs the host-local LaunchAgent from a clean,
+reviewed-main tooling checkout. It archives the exact reviewed SHA into
+`postmerge/tooling/<sha>/source` under the existing private controller state directory and creates a
+separate `runtime` with copied Python executables. It copies the existing host SDK closure
+(`bitwarden-sdk`, `python-dateutil`, `six`) at the exact versions owned by
+`requirements-bws-deploy.txt` from the supplied qualified Python into the private pin. Distribution
+versions and copied-file hashes are checked, with no package download or candidate dependency.
+The supplied `--python` must expose those exact distributions in its isolated environment; missing,
+wrong-version or incomplete packages refuse setup before LaunchAgent replacement. The LaunchAgent runs
+that pin with `-I -S`; its stdlib startup wrapper checks the pinned interpreter identity and the real
+controller/native/lazy receipt imports and the real unauthenticated SDK factory before polling. Native host children load that same source
+explicitly, independent of candidate working directory or Python environment. A broken pin exits 78
+and reports a failed startup heartbeat through the existing Actions-write liveness workflow. The
+stdlib reporter reads the existing checkpoint sequence and time together under the existing lock;
+its `after_sequence` frontier never allocates or changes activity, native operation IDs, pause or
+last-green state. It floors the diagnostic time at that checkpoint time, preserving history
+pagination safety after host-clock correction and delayed signal admission. Failure at frontier
+`k` outranks activity through `k`; only a later actual activity supersedes it. A fresh DEV verdict
+alone cannot clear the failure, and a later active pause stays red with its existing expiry rules.
+The reader follows first-parent main history through diagnostic-only commits; only actual sequenced
+activity supplies a pagination clock floor. This relies on the existing single-host authority and
+ordinary append-only main progression. Missing, invalid or busy private state refuses reporting
+without initializing it. The writer keeps its zero-future/two-hour admission window: a future or
+stale report refuses, never lowers its saved time. Dispatch is asynchronous; `sent` records dispatch
+acceptance, not successful status admission. State/clock/transport refusal remains observable through
+the bounded startup log, failed signal workflow or scheduled missing/stale-heartbeat check. A failed new
+installation preserves the existing LaunchAgent and checkpoint; select a fresh reviewed tooling SHA
+for upgrades or recovery. An existing corrupt pin refuses reuse rather than being overwritten. Candidates never update the tooling pin. This is repository support
+(#6225), with host activation still under #6170 and release acceptance under #3347. Install the updated
+native VM runtime once through the existing deployment installer before enabling the poller. Future automatic candidates fetch their exact Git
 objects from the public repository under the native channel lock, without moving the retained
 checkout or passing credentials. A private atomic checkpoint deduplicates build attempts. Stable
 candidate/channel operation IDs resume an interrupted call through the existing native journals,

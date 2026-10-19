@@ -2171,3 +2171,20 @@ def test_owner_docs_describe_heavy_target_deferral() -> None:
         assert "post-merge-heavy-tests.yml" in doc
     assert "HEAVY_PR_DEFERRED_TARGETS" in strategy
     assert "prio:high" in strategy
+
+
+
+def test_pinned_controller_bootstrap_selects_real_runtime_and_liveness_coverage(tmp_path: Path) -> None:
+    selection = select_tests(['scripts/postmerge_controller.py'])
+    assert 'tests/deploy' in selection.targets
+    assert 'tests/deploy' not in selection.deferred_targets
+    assert 'tests/governance/test_dev_delivery_liveness_workflow.py' in selection.targets
+    output = tmp_path / 'pinned-controller-output'
+    result = subprocess.run([
+        sys.executable, 'scripts/select_pr_tests.py', '--changed-file', 'scripts/postmerge_controller.py',
+        '--github-output', str(output),
+    ], cwd=REPO_ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    assert 'tests/deploy' in fields['pytest_args'].split()
+    assert 'tests/governance/test_dev_delivery_liveness_workflow.py' in fields['pytest_args'].split()
