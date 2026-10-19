@@ -684,8 +684,31 @@ class RegistryConfig:
             logger.info("watcher registry idling: WATCHER_ENABLE=1 but no vault bound")
             enable = False
         vault_path = Path(vault_raw or ".").expanduser()
-        if enable and not _validate_registry_vault(vault_path, read_only=read_only):
-            enable = False
+        watcher_settings = load_watcher_settings(vault_path)
+        state_dir = Path(os.getenv("WATCHER_STATE_DIR") or watcher_settings.paths.watcher_state.parent).expanduser()
+        if enable:
+            registry_value = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+            reconciler = (
+                DormantSettingsRebindReconciler(
+                    registry_path=Path(registry_value).expanduser(),
+                    state_dir=state_dir,
+                )
+                if registry_value
+                else None
+            )
+            # Configuration admission precedes the scan boundary. Fence its
+            # identity-healing choice against foreground commits as well.
+            with _compatibility_watcher_window(reconciler):
+                observation_only = (
+                    reconciler is not None
+                    and reconciler.requires_observation_only_validation()
+                )
+                if not _validate_registry_vault(
+                    vault_path,
+                    read_only=read_only,
+                    heal_identity=not observation_only,
+                ):
+                    enable = False
         scope_glob, scope_source, inbox_source = _resolve_scope_glob(vault_path)
         logger.info(
             "watcher scope resolved vault_path=%s scope_glob=%s provenance=%s inbox_source=%s",
@@ -706,10 +729,8 @@ class RegistryConfig:
             parser=_parse_int_factory(fallback=30),
             logger=logger,
         )
-        watcher_settings = load_watcher_settings(vault_path)
         outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH") or watcher_settings.paths.index_outbox)
         watcher_run_log = Path(os.getenv("WATCHER_RUN_LOG_PATH") or watcher_settings.paths.watcher_run_log)
-        state_dir = Path(os.getenv("WATCHER_STATE_DIR") or watcher_settings.paths.watcher_state.parent).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)
         stop_file = Path(os.getenv("WATCHER_STOP_FILE") or watcher_settings.paths.watcher_stop_file).expanduser()
@@ -1035,7 +1056,12 @@ def _auto_exec_enabled(vault_root: Path) -> bool:
 _IDLE_VAULT_STATUSES = {"none", "uninitialized"}
 
 
-def _validate_registry_vault(vault_path: Path, *, read_only: bool = False) -> bool:
+def _validate_registry_vault(
+    vault_path: Path,
+    *,
+    read_only: bool = False,
+    heal_identity: bool = True,
+) -> bool:
     """Return True when the registry should run; False when it should idle.
 
     Raises only for a *loud* misconfiguration (set-but-missing or invalid vault
@@ -1055,7 +1081,9 @@ def _validate_registry_vault(vault_path: Path, *, read_only: bool = False) -> bo
                 raise ValueError("watcher registry requires persisted vault identities")
     else:
         manager = VaultManager()
-    context = manager.validate_vault(vault_path)
+    context = manager.validate_vault(
+        vault_path, heal_identity=heal_identity and not read_only
+    )
     if context.status in _IDLE_VAULT_STATUSES:
         logger.info(
             "watcher registry idling: no usable vault bound (status=%s path=%s)",
@@ -1670,6 +1698,7 @@ def _collect_changed_entries(
     states: Mapping[str, WatcherState],
     handled_settings_sources: set[Path] | None = None,
     settings_source_reload_results: dict[str, object] | None = None,
+    observation_only: bool = False,
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
@@ -1734,7 +1763,10 @@ def _collect_changed_entries(
             and last_mtime == mtime
             and not is_runtime_gating_owner_path(rel)
         ):
-            state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
+            if observation_only:
+                state.mark_scan_generation_seen(rel_str)
+            else:
+                state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
             continue
         hashed = _hash_file(path)
         if hashed is None:
@@ -1742,14 +1774,32 @@ def _collect_changed_entries(
             # was observed. Mark it in this generation so deletion
             # reconciliation cannot misclassify it as removed.
             _record_scan_error(state)
-            state.update_file_state(rel_str)
+            if observation_only:
+                state.mark_scan_generation_seen(rel_str)
+            else:
+                state.update_file_state(rel_str)
             _mark_scan_incomplete(summary, reason="hash")
             continue
         digest, read_bytes = hashed
         summary["hashed_files"] = int(summary["hashed_files"]) + 1
         summary["bytes_read"] = int(summary["bytes_read"]) + read_bytes
         if previous_hash is not None and previous_hash == digest:
-            state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            if observation_only:
+                state.mark_scan_generation_seen(rel_str)
+            else:
+                state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            continue
+        if observation_only:
+            # Recovery establishes only filesystem presence.  In particular,
+            # do not route settings deltas or source events here: their
+            # accepted state and delivery cursor must remain available to the
+            # first stable ordinary tick.
+            state.mark_scan_generation_seen(rel_str)
+            if not is_settings_source_path(rel) and not is_settings_control_path(
+                rel,
+                configured_system_dir=system_dir,
+            ):
+                changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
             continue
         settings_delta = handle_settings_detected_delta(
             vault_root=cfg.vault_path,
@@ -1931,6 +1981,7 @@ def _emit_changed_entry(
     panel_auto_exec_enabled: bool,
     action_mappings: Mapping[str, PanelActionMapping],
     process_panel_notes_inline: bool,
+    allow_source_writeback: bool = True,
 ) -> str | None:
     rel_path = str(entry.rel_path)
     previous_file_state = state.file_entry(rel_path)
@@ -1965,7 +2016,7 @@ def _emit_changed_entry(
         return None
     current_mtime = entry.mtime
     current_digest = entry.digest
-    if spec.emit_event == INGEST_VAULT_CHANGED:
+    if spec.emit_event == INGEST_VAULT_CHANGED and allow_source_writeback:
         current_mtime, current_digest = _maybe_heal_ingest_uuid(
             cfg, state, entry.rel_path, current_mtime, current_digest
         )
@@ -2007,7 +2058,11 @@ def _emit_changed_entry(
         emitted_at=now,
         trace_id=trace_id,
     )
-    if spec.emit_event == PANEL_SCAN_REQUESTED and process_panel_notes_inline:
+    if (
+        spec.emit_event == PANEL_SCAN_REQUESTED
+        and process_panel_notes_inline
+        and allow_source_writeback
+    ):
         _process_panel_note(
             vault_root=cfg.vault_path,
             rel_path=entry.rel_path,
@@ -2140,9 +2195,11 @@ def _run_spec_tick(
     now: float,
     states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
+    allow_source_writeback: bool = True,
     handled_settings_sources: set[Path] | None = None,
     settings_source_reload_results: dict[str, object] | None = None,
     retain_unemitted_observations: int | None = None,
+    observation_only: bool = False,
 ) -> dict[str, object]:
     tick_start = now
     handled_settings_sources = handled_settings_sources if handled_settings_sources is not None else set()
@@ -2245,6 +2302,7 @@ def _run_spec_tick(
         states=active_states,
         handled_settings_sources=handled_settings_sources,
         settings_source_reload_results=settings_source_reload_results,
+        observation_only=observation_only,
     )
     if state.scan_generation_had_error:
         _mark_scan_incomplete(summary, reason="scan")
@@ -2290,7 +2348,7 @@ def _run_spec_tick(
         if is_runtime_gating_owner_path(Path(path))
     )
     pending_runtime_gating_deletions: set[str] = set()
-    if removed_runtime_gating_owner_files:
+    if removed_runtime_gating_owner_files and not observation_only:
         summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
         for rel_path in removed_runtime_gating_owner_files:
             rel_str = str(rel_path)
@@ -2328,7 +2386,7 @@ def _run_spec_tick(
         if is_settings_source_path(Path(path))
     )
     pending_settings_source_deletions: set[str] = set()
-    if removed_settings_sources:
+    if removed_settings_sources and not observation_only:
         summary["settings_source_deletions_in_tick"] = len(
             removed_settings_sources
         )
@@ -2407,6 +2465,9 @@ def _run_spec_tick(
     committed_observations: dict[str, dict[str, dict[str, Any] | None]] = {}
     for entry in changed_entries:
         rel_path = str(entry.rel_path)
+        if observation_only:
+            state.mark_scan_generation_seen(rel_path)
+            continue
         previous_file_state_raw = state.file_entry(rel_path)
         previous_file_state = (
             dict(previous_file_state_raw)
@@ -2424,6 +2485,7 @@ def _run_spec_tick(
                 panel_auto_exec_enabled=panel_auto_exec_enabled,
                 action_mappings=action_mappings,
                 process_panel_notes_inline=process_panel_notes_inline,
+                allow_source_writeback=allow_source_writeback,
             )
             committed_observations[str(entry.rel_path)] = {
                 name: (
@@ -2536,7 +2598,10 @@ def _run_spec_tick(
         # this recovery tick still cannot reconcile rows from the discarded
         # checkpoint. Permit reconciliation only on the next clean generation.
         state.checkpoint_load_error = False
-    if scan_completed and scan_clean and not delivery_failed:
+    if scan_completed and scan_clean and not delivery_failed and not observation_only:
+        # Observation-only recovery must retain absent rows as well as the
+        # delivery cursor of present files. Only an ordinary generation can
+        # deliver pending removals and then authorize their cleanup.
         # Delivery and guardrail bookkeeping can take long enough for the
         # selected vault to be replaced. Revalidate immediately before prune;
         # the earlier check only authorizes deriving the deletion candidates.
@@ -2566,23 +2631,23 @@ def _run_spec_tick(
         scan_clean = (
             state.errors == errors_before and not state.scan_generation_had_error
         )
-    if scan_completed and scan_clean and not delivery_failed:
-        if state._observation_store is not None:
-            # Excluded historical companion rows are observations only.
-            # Prune them here, never via a source-delete/UUID purge: the note
-            # and its continuity file deliberately share identity.
-            state.prune_unseen_generation(
-                retain=pending_runtime_gating_deletions
-                | pending_settings_source_deletions
-            )
-        else:
-            state.prune_files(
-                [
-                    *scanned_paths,
-                    *pending_runtime_gating_deletions,
-                    *pending_settings_source_deletions,
-                ]
-            )
+        if scan_clean:
+            if state._observation_store is not None:
+                # Excluded historical companion rows are observations only.
+                # Prune them here, never via a source-delete/UUID purge: the note
+                # and its continuity file deliberately share identity.
+                state.prune_unseen_generation(
+                    retain=pending_runtime_gating_deletions
+                    | pending_settings_source_deletions
+                )
+            else:
+                state.prune_files(
+                    [
+                        *scanned_paths,
+                        *pending_runtime_gating_deletions,
+                        *pending_settings_source_deletions,
+                    ]
+                )
 
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 
@@ -2604,6 +2669,29 @@ def _run_registry_cycle(
     with _compatibility_watcher_window(reconciler):
         _adopt_idle_selected_binding(cfg, reconciler)
         rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+        recovery_mode = rebind_cycle is not None and rebind_cycle.mode == "recovery"
+        if recovery_mode:
+            # A missing receipt admits one new configured-root scan only. Do not
+            # let a checkpoint left by an interrupted prior tick turn that
+            # scan into a continuation of historical work; retain observations
+            # for idempotent event comparison while restarting the traversal.
+            for state in states.values():
+                if (
+                    state.scan_in_progress
+                    and state.continuation_reason == "first_adoption_recovery"
+                ):
+                    # The fresh recovery generation may span several bounded
+                    # ticks; continue that generation until one complete scan
+                    # can produce the typed receipt.
+                    continue
+                state.scan_in_progress = False
+                state.scan_root_index = 0
+                state.scan_stack = []
+                state.scan_scope_matched_files = 0
+                state.scan_generation_had_error = False
+                state.continuation_reason = None
+                state.scope_status = "ok"
+                state.observation_status = "healthy-idle"
         if rebind_cycle is not None and rebind_cycle.mode == "stable":
             if rebind_cycle.record.candidate_binding_id is None:
                 cfg.enable = False
@@ -2624,24 +2712,60 @@ def _run_registry_cycle(
                 states[spec.name],
                 now=now,
                 states=states,
-                process_panel_notes_inline=process_panel_notes_inline,
+                process_panel_notes_inline=(
+                    process_panel_notes_inline and not recovery_mode
+                ),
+                allow_source_writeback=(
+                    not recovery_mode
+                ),
+                observation_only=recovery_mode,
                 handled_settings_sources=handled_settings_sources,
                 settings_source_reload_results=settings_source_reload_results,
                 retain_unemitted_observations=rebind_observation_revision,
             )
             for spec in cfg.specs
         }
-        summaries["briefing"] = _run_briefing_tick(
-            cfg,
-            now=now,
-            cadence=briefing_cadence,
-        )
-        summaries["youtube_sync"] = _run_youtube_sync_tick(
-            cfg,
-            now=now,
-            cadence=sync_cadence,
-        )
-        summaries["journal_review"] = _run_journal_review_tick(cfg)
+        if rebind_cycle is not None and rebind_cycle.mode == "recovery":
+            for spec in cfg.specs:
+                state = states[spec.name]
+                if state.scan_in_progress:
+                    # Persist a recovery-generation marker after the scanner
+                    # starts so a bounded incomplete tick can resume this new
+                    # generation without being reset on the next tick.
+                    state.continuation_reason = "first_adoption_recovery"
+                    state.save(_state_path(cfg.state_dir, spec.name))
+        if recovery_mode:
+            # A first-adoption recovery is deliberately observation-only.  A
+            # sparse hook may materialize or enqueue source work, and queued
+            # consumers can mutate the vault after this process returns.  Keep
+            # every hook deferred until the first stable ordinary cycle.
+            deferred_reason = "first_adoption_recovery_observation_only"
+            summaries["briefing"] = {
+                "triggered": False,
+                "reason": deferred_reason,
+            }
+            summaries["youtube_sync"] = {
+                "triggered": False,
+                "reason": deferred_reason,
+            }
+            summaries["journal_review"] = {
+                "scanned": 0,
+                "materialized": 0,
+                "pending": 0,
+                "reason": deferred_reason,
+            }
+        else:
+            summaries["briefing"] = _run_briefing_tick(
+                cfg,
+                now=now,
+                cadence=briefing_cadence,
+            )
+            summaries["youtube_sync"] = _run_youtube_sync_tick(
+                cfg,
+                now=now,
+                cadence=sync_cadence,
+            )
+            summaries["journal_review"] = _run_journal_review_tick(cfg)
         if reconciler is not None and rebind_cycle is not None:
             receipt = reconciler.finish_cycle(
                 rebind_cycle,
@@ -2652,7 +2776,10 @@ def _run_registry_cycle(
                 if rebind_cycle.record.candidate_binding_id is None:
                     cfg.enable = False
                 else:
-                    cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
+                    cfg.vault_path = reconciler.candidate_vault_path(
+                        rebind_cycle.record,
+                        heal_identity=not recovery_mode,
+                    )
         return summaries
 
 

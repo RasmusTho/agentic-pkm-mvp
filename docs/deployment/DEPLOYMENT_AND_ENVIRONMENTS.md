@@ -1156,6 +1156,33 @@ producer preservation/heal mismatch and canonical Product disagreement respectiv
 CLI, bootstrap, deploy diagnostic and operation journal preserve only those fixed classes through
 cleanup and same-operation terminal reconciliation; unexpected/private failures remain generic
 and fail closed. The legacy generic identity class remains accepted for older worker evidence.
+
+`legacy_identity_persistence_refused` is cleared only through the explicit supervised ordinary-
+producer operation, never inside source-backed recovery. The host command uses
+`postgres_deploy_host <dev|test> <reviewed-helper-sha> --automatic --existing-secrets-only
+--persist-source-identity --operation-id <uuid> --image-digest <sha256:digest>` together with the
+already-qualified selected vault binding/root/ownership arguments. The digest must be the exact
+successful build for that separately reviewed helper revision. Host admission, the native supervisor and the channel
+lock bind that UUID to the selected source authority, the unchanged installed writer/provider/model
+configuration, and the reviewed helper in that exact immutable candidate image; the candidate is
+used only for the bounded one-shot and is not deployed or admitted. The operation stops only the
+actually running channel write-capable application services, mounts the selected root through the
+canonical full-host overlay when its container root equals the selected host root, or retains the
+reviewed `/app/vault` compatibility overlay when the installed binding uses that legacy container
+path; TEST appends its channel activation overlay in either case. It then runs the ordinary
+`vault-alpha` producer
+without `--source-backed-rebuild`, performs a fresh complete selected-inventory persisted-identity
+readback with stable source/root snapshots, starts the same existing stopped containers without
+recreation, and terminalizes only after its exact owner fence is retired. A crash after producer
+completion resumes cleanup from the fixed private producer receipt without rerunning the producer.
+PROD, candidate admission,
+provider/model replacement and automatic deploy chaining are refused. Child output and source
+evidence stay private; the durable `native-source-identity-persistence.v1` receipt contains only
+operation/channel/revision, terminal state, bounded counts, eligibility, and one allowlisted fixed
+reason. A committed receipt does not prove legacy-row convergence or authorize replay: canonical
+mapping and atomic legacy reconciliation remain separate mandatory gates, and the no-progress
+classifier must be reapplied before a fresh current-main candidate is admitted.
+
 Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
 History dependencies, candidate/staging or untrusted material, changed sources,
 redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again

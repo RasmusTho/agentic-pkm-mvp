@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime
+from dataclasses import replace
+from datetime import date, datetime
 from pathlib import Path
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import pytest
 
 from app.briefing.compose import briefing_note_path
 from app.briefing.config import BRIEFING_TIMEZONE
+from app.journaling.review import journal_draft_relative_path
 from app.settings.ingestion import SettingsIngestionState
 from app.vault.markdown_settings import MarkdownSettingsStore
 from app.instance._storage_boundary import RegistryError
@@ -28,7 +30,9 @@ from app.instance.vault_registry import VaultRegistration
 from app.instance.vault_registry import KnownVaultRef
 from app.api.routes.ingest_binding import ingest_binding_status
 from app.vault.manager import VaultContext
+from app.vault.paths import resolve_vault_inbox_dir_rel
 from app.watcher import registry
+from app.watcher import settings_rebind as registry_settings_rebind
 from app.watcher.settings_rebind import (
     DormantSettingsRebindReconciler,
     RebindScanReceipt,
@@ -39,6 +43,7 @@ from app.watcher.settings_rebind import (
 )
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 from tests.helpers.vault_settings import initialize_test_vault
+from scripts.yaml_roundtrip import dump_frontmatter
 
 pytestmark = pytest.mark.not_pg
 
@@ -233,6 +238,14 @@ def _event_paths(root: Path) -> list[str]:
         str((item.get("payload") or {}).get("vault_path") or "")
         for item in _outbox_payloads(root / "index-outbox.jsonl")
     ]
+
+
+def _vault_file_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
 
 
 def _revision_receipt_path(root: Path, revision: int) -> Path:
@@ -1352,6 +1365,677 @@ def test_enabled_static_root_watcher_adopts_first_selection_of_its_own_root(
     event_paths = _event_paths(tmp_path)
     assert str(later) in event_paths
     assert all(path.startswith(str(vault_a)) for path in event_paths if path)
+
+
+def test_committed_first_adoption_without_receipt_recovers_from_fresh_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A committed first adoption with a lost receipt must recover from a real scan."""
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    source_bytes = runtime.registry.path.read_bytes()
+    inbox_note = vault_a / resolve_vault_inbox_dir_rel(vault_a).value / "uuidless-recovery.md"
+    inbox_note.parent.mkdir(parents=True, exist_ok=True)
+    inbox_note.write_text("# UUID-less recovery source\n", encoding="utf-8")
+    inbox_source_bytes = inbox_note.read_bytes()
+    (vault_a / "cold-recovery.md").write_text(
+        "observed during first-adoption recovery\n", encoding="utf-8"
+    )
+
+    registry.run_registry_once(config_path)
+
+    assert runtime.registry.path.read_bytes() == source_bytes
+    assert inbox_note.read_bytes() == inbox_source_bytes
+    receipt = load_settings_rebind_watcher_receipt(
+        _revision_receipt_path(tmp_path, committed.desired_revision)
+    )
+    assert receipt.stage == "completed"
+    assert receipt.prior_binding_id is None
+    assert receipt.candidate_binding_id == "binding-a"
+    assert receipt.evidence_kind == "first_adoption_recovery"
+    assert receipt.recovery_scan is not None
+    assert receipt.recovery_scan.scan_kind == "recovery"
+    # Recovery is observation-only: source bytes and delivery eligibility are
+    # preserved until the first stable ordinary cycle.
+    assert str(vault_a / "cold-recovery.md") not in _event_paths(tmp_path)
+    registry.run_registry_once(config_path)
+    assert str(vault_a / "cold-recovery.md") in _event_paths(tmp_path)
+
+
+@pytest.mark.parametrize("entrypoint", ["once", "forever"])
+def test_first_adoption_recovery_once_and_forever_defer_source_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+) -> None:
+    """Both production entrypoints preserve the source tree until stable work resumes."""
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    day = date(2026, 10, 19)
+    candidate = vault_a / journal_draft_relative_path(vault_a, day, is_addendum=False)
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text(
+        dump_frontmatter(
+            {
+                "uuid": "journal-cold-recovery",
+                "kind": "journal-draft",
+                "journal_candidate_type": "primary",
+                "for_date": day.isoformat(),
+                "derived_by": "conversation",
+                "authority_state": "proposal",
+                "sources": ["session:6256"],
+            },
+            "Deferred journal source\n",
+        )
+        + "\n%% AI:Start %%\n"
+        + "## AI-åtgärder\n\n"
+        + "- [x] Accept this draft as today's journal entry\n"
+        + "- [ ] Dismiss this journal candidate\n"
+        + "%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    before = _vault_file_bytes(vault_a)
+
+    if entrypoint == "once":
+        registry.run_registry_once(config_path)
+    else:
+        registry.run_registry_forever(config_path, max_ticks=1)
+
+    assert _vault_file_bytes(vault_a) == before
+    assert candidate.exists()
+    assert not (vault_a / "1_Calendar/Daily/2026-10-19.md").exists()
+    assert _event_paths(tmp_path) == []
+    assert not (tmp_path / "watcher-state/journal-review-outbox.jsonl").exists()
+
+    registry.run_registry_forever(config_path, max_ticks=1)
+
+    assert not candidate.exists()
+    assert (vault_a / "1_Calendar/Daily/2026-10-19.md").exists()
+
+
+@pytest.mark.parametrize("entrypoint", ["once", "forever"])
+def test_first_adoption_recovery_preserves_settings_identity_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+) -> None:
+    """A selected root needing ordinary identity healing stays untouched in recovery."""
+    from app.vault.manager import VaultManager
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "healthy"})
+    source = vault_a / "settings/local.md"
+    settings_store = MarkdownSettingsStore()
+    document = settings_store.read(source)
+    frontmatter = dict(document.frontmatter)
+    frontmatter.pop("localInstanceId")
+    settings_store.write_frontmatter(source, frontmatter, body=document.body)
+    assert VaultManager().validate_vault(vault_a, heal_identity=False).status == "selected"
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    source_tree = _vault_file_bytes(vault_a)
+    registry_bytes = runtime.registry.path.read_bytes()
+    # The separate producer inventory's strict persisted-ID preflight is not
+    # relaxed by recovery's nonmutating classification of this selected root.
+    with pytest.raises(ValueError, match="requires persisted vault identities"):
+        registry.load_registry_config(config_path, read_only=True)
+    assert _vault_file_bytes(vault_a) == source_tree
+
+    if entrypoint == "once":
+        registry.run_registry_once(config_path)
+    else:
+        registry.run_registry_forever(config_path, max_ticks=1)
+
+    assert _vault_file_bytes(vault_a) == source_tree
+    assert runtime.registry.path.read_bytes() == registry_bytes
+    receipt = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
+    assert receipt.stage == "completed"
+    assert receipt.evidence_kind == "first_adoption_recovery"
+    # Recovery changes no machine-role or producer-policy rule: ordinary
+    # startup still performs its established, guarded identity-heal transition.
+    registry.run_registry_once(config_path)
+    assert settings_store.read(source).frontmatter.get("localInstanceId")
+
+
+@pytest.mark.parametrize("entrypoint", ["once", "forever"])
+def test_first_adoption_recovery_preserves_pending_removals_until_ordinary_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+) -> None:
+    """Recovery presence is not delivery of a retained settings-source removal."""
+    from app.receipts.settings_receipts import query_settings_receipts
+    from app.vault.manager import VaultManager
+    from app.vault.settings_service import SettingsService
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "healthy"})
+    source_rel = Path("settings/youtube.md")
+    source = vault_a / source_rel
+    settings_store = MarkdownSettingsStore()
+    document = settings_store.read(source)
+    settings_store.write_frontmatter(
+        source,
+        {**document.frontmatter, "youtubeSync.enabled": True},
+        body=document.body,
+    )
+    removed_note_rel = Path("removed-before-recovery.md")
+    removed_note = vault_a / removed_note_rel
+    removed_note.write_text("previously delivered ordinary content\n", encoding="utf-8")
+    registry.run_registry_once(config_path)
+    context = VaultManager().validate_vault(vault_a)
+    service = SettingsService()
+    assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is True
+    cfg = registry.load_registry_config(config_path)
+    state_path = registry._state_path(cfg.state_dir, "ingest")
+    before = registry._load_registry_state(state_path)
+    retained_entries = {
+        str(rel): before.file_entry(str(rel))
+        for rel in (source_rel, removed_note_rel)
+    }
+    assert all(entry and entry.get("hash") for entry in retained_entries.values())
+
+    source.unlink()
+    removed_note.unlink()
+    source_tree = _vault_file_bytes(vault_a)
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    registry_bytes = runtime.registry.path.read_bytes()
+    receipt_path = _revision_receipt_path(tmp_path, 1)
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "1")
+    incomplete_ticks = 0
+    for _ in range(100):
+        try:
+            if entrypoint == "once":
+                registry.run_registry_once(config_path)
+            else:
+                registry.run_registry_forever(config_path, max_ticks=1)
+        except RegistryError as exc:
+            assert "scan was incomplete" in str(exc)
+            incomplete_ticks += 1
+        # Every call reloads the durable checkpoint and sidecar, including the
+        # final complete generation before publishing its recovery receipt.
+        recovered_state = registry._load_registry_state(state_path)
+        assert {
+            rel: recovered_state.file_entry(rel) for rel in retained_entries
+        } == retained_entries
+        assert _vault_file_bytes(vault_a) == source_tree
+        assert runtime.registry.path.read_bytes() == registry_bytes
+        assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is True
+        if receipt_path.exists():
+            break
+    else:
+        pytest.fail("bounded recovery never completed")
+    assert incomplete_ticks > 0
+    recovery_receipt = load_settings_rebind_watcher_receipt(receipt_path)
+    assert recovery_receipt.evidence_kind == "first_adoption_recovery"
+    assert recovery_receipt.stage == "completed"
+    receipt_bytes = receipt_path.read_bytes()
+
+    # The next stable entrypoint starts a normal generation, observes the
+    # retained absence, and applies its existing governed reset exactly once.
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "10000")
+    ordinary = registry.run_registry_once(config_path)["ingest"]
+    assert ordinary["runtime_gating_owner_file_deletions_in_tick"] == 1
+    assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is False
+    ordinary_state = registry._load_registry_state(state_path)
+    assert all(ordinary_state.file_entry(rel) is None for rel in retained_entries)
+    registry.run_registry_forever(config_path, max_ticks=1)
+    rows = query_settings_receipts(outbox_path=tmp_path / "index-outbox.jsonl").rows
+    assert [
+        (row.old_value, row.new_value)
+        for row in rows
+        if row.key == "youtubeSync.enabled"
+    ] == [(False, True), (True, None)]
+    assert receipt_path.read_bytes() == receipt_bytes
+
+
+def test_first_adoption_recovery_starts_a_new_scan_generation_after_partial_cursor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recovery restarts a persisted partial cursor instead of reusing it as proof."""
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    (vault_a / "aaa-recovery-cursor-prefix.md").write_text(
+        "prefix before recovery\n", encoding="utf-8"
+    )
+    (vault_a / "zzz-recovery-cursor-tail.md").write_text(
+        "tail after cursor\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "1")
+    partial_generation: int | None = None
+    for _ in range(30):
+        summary = registry.run_registry_once(config_path)["ingest"]
+        if summary.get("scan_in_progress") is True:
+            partial_generation = int(summary["scan_generation"])
+            break
+    assert partial_generation is not None
+
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    recovered_summary: dict[str, object] | None = None
+    for _ in range(100):
+        try:
+            recovered_summary = registry.run_registry_once(config_path)["ingest"]
+            break
+        except RegistryError as exc:
+            assert "scan was incomplete" in str(exc)
+    assert recovered_summary is not None
+
+    receipt = load_settings_rebind_watcher_receipt(
+        _revision_receipt_path(tmp_path, committed.desired_revision)
+    )
+    assert receipt.stage == "completed"
+    assert receipt.evidence_kind == "first_adoption_recovery"
+    assert int(recovered_summary["scan_generation"]) > partial_generation
+
+
+def test_missing_receipt_recovery_refuses_non_first_adoption_or_wrong_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recovery never widens to prior bindings or a different configured root."""
+    runtime, _vault_a, vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    for desired_revision, case in enumerate(("prior-binding", "wrong-root"), start=1):
+        committed = SettingsRebindRecord(
+            desired_revision=desired_revision,
+            applied_revision=desired_revision,
+            phase="committed",
+            lifecycle_posture="watcher",
+            prior_binding_id="binding-a" if case == "prior-binding" else None,
+            candidate_binding_id="binding-b",
+            reload_revision=desired_revision,
+            scalar_drain_revision=desired_revision,
+        )
+        runtime.registry.set_settings_rebind_state(
+            committed.as_payload(),
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        (vault_b / f"{case}.md").write_text("must not be scanned\n", encoding="utf-8")
+
+        with pytest.raises(RegistryError, match="settings rebind|prior binding"):
+            registry.run_registry_once(config_path)
+
+        assert not _revision_receipt_path(tmp_path, desired_revision).exists()
+        assert not any(path.startswith(str(vault_b)) for path in _event_paths(tmp_path))
+
+
+def test_missing_receipt_recovery_refuses_incomplete_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A committed first adoption without the reload marker remains refused."""
+    runtime, _vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=0,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    with pytest.raises(RegistryError, match="reload completion"):
+        registry.run_registry_once(config_path)
+
+    assert not _revision_receipt_path(tmp_path, 1).exists()
+
+
+@pytest.mark.parametrize("scan_blocker", ["kill_switch", "zero_match", "receipt_write"])
+def test_first_adoption_recovery_requires_successful_scan_and_is_restart_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scan_blocker: str,
+) -> None:
+    """Failed or zero-match scans do not acknowledge; retry and repeat converge."""
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    (vault_a / "recovery-retry.md").write_text("retry me\n", encoding="utf-8")
+    if scan_blocker == "kill_switch":
+        (tmp_path / "watcher.stop").touch()
+        expected_error = "scan was paused"
+    elif scan_blocker == "zero_match":
+        (vault_a / "empty-scope").mkdir()
+        monkeypatch.setenv("WATCHER_SCOPE_GLOB", "empty-scope/**/*.md")
+        expected_error = "healthy scope"
+    else:
+        original_write_receipt = registry_settings_rebind._write_receipt
+        tripped = False
+
+        def fail_once(path: Path, receipt: SettingsRebindWatcherReceipt) -> None:
+            nonlocal tripped
+            if not tripped:
+                tripped = True
+                raise RuntimeError("injected receipt write fault")
+            original_write_receipt(path, receipt)
+
+        monkeypatch.setattr(registry_settings_rebind, "_write_receipt", fail_once)
+
+    if scan_blocker == "receipt_write":
+        with pytest.raises(RuntimeError, match="injected receipt write fault"):
+            registry.run_registry_once(config_path)
+    else:
+        with pytest.raises(RegistryError, match=expected_error):
+            registry.run_registry_once(config_path)
+    assert not _revision_receipt_path(tmp_path, 1).exists()
+
+    if scan_blocker == "kill_switch":
+        (tmp_path / "watcher.stop").unlink()
+    elif scan_blocker == "zero_match":
+        monkeypatch.delenv("WATCHER_SCOPE_GLOB")
+    registry.run_registry_once(config_path)
+    receipt_path = _revision_receipt_path(tmp_path, 1)
+    assert str(vault_a / "recovery-retry.md") not in _event_paths(tmp_path)
+    registry.run_registry_once(config_path)
+    assert str(vault_a / "recovery-retry.md") in _event_paths(tmp_path)
+    first_bytes = receipt_path.read_bytes()
+    registry.run_registry_once(config_path)
+
+    assert receipt_path.read_bytes() == first_bytes
+    receipt = load_settings_rebind_watcher_receipt(receipt_path)
+    assert receipt.evidence_kind == "first_adoption_recovery"
+    assert receipt.recovery_scan is not None
+    assert str(vault_a / "recovery-retry.md") in _event_paths(tmp_path)
+
+
+def test_first_adoption_recovery_refuses_authority_change_during_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A concurrent durable authority change cannot be completed by recovery."""
+    runtime, _vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    original_run_spec_tick = registry._run_spec_tick
+    mutated = False
+
+    def run_spec_tick_with_authority_change(*args: object, **kwargs: object):
+        nonlocal mutated
+        summary = original_run_spec_tick(*args, **kwargs)
+        if not mutated:
+            mutated = True
+            current = runtime.open_settings_rebind_store().read()
+            runtime.registry.set_settings_rebind_state(
+                replace(
+                    current,
+                    desired_revision=2,
+                    phase="prepared",
+                    prior_binding_id="binding-a",
+                    candidate_binding_id="binding-b",
+                    reload_revision=0,
+                    scalar_drain_revision=2,
+                ).as_payload(),
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
+        return summary
+
+    monkeypatch.setattr(registry, "_run_spec_tick", run_spec_tick_with_authority_change)
+    with pytest.raises(RegistryError, match="authority changed"):
+        registry.run_registry_once(config_path)
+
+    assert not _revision_receipt_path(tmp_path, 1).exists()
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id == "binding-b"
+
+
+def test_first_adoption_recovery_evidence_is_bound_to_current_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recovery receipt for another candidate cannot satisfy foreground wait."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    runtime, _vault_a, _vault_b, _config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=2,
+        applied_revision=2,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=2,
+        scalar_drain_revision=2,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    observed = RebindScanReceipt(
+        scan_kind="recovery",
+        desired_revision=2,
+        observed_at="2026-10-19T00:00:00Z",
+        watcher_ticks={"ingest": 1},
+    )
+    _write_receipt(
+        _revision_receipt_path(tmp_path, 2),
+        SettingsRebindWatcherReceipt(
+            desired_revision=2,
+            prior_binding_id=None,
+            candidate_binding_id="binding-b",
+            stage="completed",
+            buffer=(),
+            acknowledgement=None,
+            drain_receipt=None,
+            resume_ready_at="2026-10-19T00:00:01Z",
+            evidence_kind="first_adoption_recovery",
+            recovery_scan=observed,
+        ),
+    )
+    activation = SettingsRebindActivation(
+        runtime.registry,
+        watcher_state_dir=tmp_path / "watcher-state",
+        watcher_enabled=True,
+        wait_timeout_seconds=0,
+    )
+
+    with pytest.raises(RegistryError, match="does not match durable authority"):
+        activation._wait_for_stage(committed, required_stage="completed")
+
+
+def test_foreground_wait_requires_completed_first_adoption_recovery_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The foreground call site requires typed recovery evidence, not an empty proof."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    runtime, _vault_a, _vault_b, _config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    bad_payload = {
+        "schema": "settings_rebind_watcher.v1",
+        "desiredRevision": 1,
+        "priorBindingId": None,
+        "candidateBindingId": "binding-a",
+        "stage": "completed",
+        "buffer": [],
+        "acknowledgement": None,
+        "drainReceipt": None,
+        "resumeReadyAt": "2026-10-19T00:00:01Z",
+        "evidenceKind": "first_adoption_recovery",
+        "recoveryScan": None,
+    }
+    bad_payload["checksum"] = hashlib.sha256(
+        json.dumps(
+            {key: item for key, item in bad_payload.items()},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    receipt_path = _revision_receipt_path(tmp_path, 1)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.write_text(json.dumps(bad_payload), encoding="utf-8")
+
+    activation = SettingsRebindActivation(
+        runtime.registry,
+        watcher_state_dir=tmp_path / "watcher-state",
+        watcher_enabled=True,
+        wait_timeout_seconds=0,
+    )
+    with pytest.raises(RegistryError, match="incomplete or ambiguous"):
+        activation.activate(
+            selection=_selection_for(runtime, "binding-a"),
+            candidate_binding_id="binding-a",
+            candidate_root=_vault_a,
+        )
+
+    observed = RebindScanReceipt(
+        scan_kind="recovery",
+        desired_revision=1,
+        observed_at="2026-10-19T00:00:00Z",
+        watcher_ticks={"ingest": 1},
+    )
+    _write_receipt(
+        receipt_path,
+        SettingsRebindWatcherReceipt(
+            desired_revision=1,
+            prior_binding_id=None,
+            candidate_binding_id="binding-a",
+            stage="completed",
+            buffer=(),
+            acknowledgement=None,
+            drain_receipt=None,
+            resume_ready_at="2026-10-19T00:00:01Z",
+            evidence_kind="first_adoption_recovery",
+            recovery_scan=observed,
+        ),
+    )
+    result = activation.activate(
+        selection=_selection_for(runtime, "binding-a"),
+        candidate_binding_id="binding-a",
+        candidate_root=_vault_a,
+    )
+    assert result == committed
 
 
 def test_enabled_static_root_watcher_refuses_first_selection_of_foreign_root(

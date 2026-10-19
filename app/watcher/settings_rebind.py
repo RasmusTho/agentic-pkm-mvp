@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 SETTINGS_REBIND_WATCHER_SCHEMA = "settings_rebind_watcher.v1"
 SETTINGS_REBIND_WATCHER_FILENAME_TEMPLATE = "settings-rebind-watcher-r{revision}.json"
 _STAGES = {"acknowledged", "drained", "completed"}
+_SCAN_KINDS = {"pre_commit", "post_commit", "recovery"}
+_EVIDENCE_KINDS = {"transaction", "first_adoption_recovery"}
 
 
 def _now_iso() -> str:
@@ -158,7 +160,7 @@ class RebindScanReceipt:
         }:
             raise RegistryError("settings rebind watcher scan receipt is invalid")
         scan_kind = value["scanKind"]
-        if scan_kind not in {"pre_commit", "post_commit"}:
+        if scan_kind not in _SCAN_KINDS:
             raise RegistryError("settings rebind watcher scan kind is invalid")
         raw_ticks = value["watcherTicks"]
         if not isinstance(raw_ticks, dict):
@@ -194,6 +196,8 @@ class SettingsRebindWatcherReceipt:
     acknowledgement: RebindScanReceipt | None
     drain_receipt: RebindScanReceipt | None
     resume_ready_at: str | None
+    evidence_kind: str = "transaction"
+    recovery_scan: RebindScanReceipt | None = None
 
     def as_payload(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -215,6 +219,13 @@ class SettingsRebindWatcherReceipt:
             ),
             "resumeReadyAt": self.resume_ready_at,
         }
+        if self.evidence_kind != "transaction" or self.recovery_scan is not None:
+            payload["evidenceKind"] = self.evidence_kind
+            payload["recoveryScan"] = (
+                self.recovery_scan.as_payload()
+                if self.recovery_scan is not None
+                else None
+            )
         payload["checksum"] = _checksum(payload)
         return payload
 
@@ -232,7 +243,11 @@ class SettingsRebindWatcherReceipt:
             "resumeReadyAt",
             "checksum",
         }
-        if not isinstance(value, dict) or set(value) != fields:
+        optional_fields = {"evidenceKind", "recoveryScan"}
+        if not isinstance(value, dict) or set(value) not in (
+            fields,
+            fields | optional_fields,
+        ):
             raise RegistryError("settings rebind watcher receipt shape is invalid")
         if value["schema"] != SETTINGS_REBIND_WATCHER_SCHEMA:
             raise RegistryError("settings rebind watcher receipt schema is invalid")
@@ -256,10 +271,38 @@ class SettingsRebindWatcherReceipt:
             if value["drainReceipt"] is not None
             else None
         )
-        if acknowledgement is None:
-            raise RegistryError("settings rebind watcher acknowledgement is missing")
-        if stage in {"drained", "completed"} and drain_receipt is None:
-            raise RegistryError("settings rebind watcher drain receipt is missing")
+        evidence_kind = value.get("evidenceKind", "transaction")
+        if evidence_kind not in _EVIDENCE_KINDS:
+            raise RegistryError("settings rebind watcher evidence kind is invalid")
+        recovery_scan = (
+            RebindScanReceipt.from_payload(value["recoveryScan"])
+            if value.get("recoveryScan") is not None
+            else None
+        )
+        if evidence_kind == "transaction":
+            if acknowledgement is None:
+                raise RegistryError("settings rebind watcher acknowledgement is missing")
+            if acknowledgement.scan_kind != "pre_commit":
+                raise RegistryError("settings rebind watcher acknowledgement is invalid")
+            if stage in {"drained", "completed"} and drain_receipt is None:
+                raise RegistryError("settings rebind watcher drain receipt is missing")
+            if drain_receipt is not None and drain_receipt.scan_kind != "post_commit":
+                raise RegistryError("settings rebind watcher drain receipt is invalid")
+            if recovery_scan is not None:
+                raise RegistryError("transaction watcher receipt has recovery evidence")
+        else:
+            if (
+                stage != "completed"
+                or value["priorBindingId"] is not None
+                or acknowledgement is not None
+                or drain_receipt is not None
+                or raw_buffer
+                or recovery_scan is None
+                or recovery_scan.scan_kind != "recovery"
+            ):
+                raise RegistryError(
+                    "first-adoption recovery evidence is incomplete or ambiguous"
+                )
         resume_ready_at = _optional_text(
             value["resumeReadyAt"], name="resume-ready timestamp"
         )
@@ -269,6 +312,8 @@ class SettingsRebindWatcherReceipt:
         for scan in (acknowledgement, drain_receipt):
             if scan is not None and scan.desired_revision != desired_revision:
                 raise RegistryError("settings rebind watcher receipt revisions disagree")
+        if recovery_scan is not None and recovery_scan.desired_revision != desired_revision:
+            raise RegistryError("settings rebind watcher recovery revision disagrees")
         return cls(
             desired_revision=desired_revision,
             prior_binding_id=_optional_text(
@@ -282,6 +327,8 @@ class SettingsRebindWatcherReceipt:
             acknowledgement=acknowledgement,
             drain_receipt=drain_receipt,
             resume_ready_at=resume_ready_at,
+            evidence_kind=evidence_kind,
+            recovery_scan=recovery_scan,
         )
 
 
@@ -356,6 +403,21 @@ class DormantSettingsRebindReconciler:
 
         return self._store.read()
 
+    def requires_observation_only_validation(self) -> bool:
+        """Choose a write-free admission ceiling, not recovery authority.
+
+        Root, reload, policy and scan checks still belong to begin/finish-cycle.
+        Even a refused first-adoption candidate must not be healed while the
+        configuration loader determines whether recovery is admissible.
+        """
+
+        record = self.current_record()
+        return (
+            record.phase == "committed"
+            and record.prior_binding_id is None
+            and self._load_matching_receipt(record) is None
+        )
+
     @classmethod
     def from_config(
         cls,
@@ -424,6 +486,18 @@ class DormantSettingsRebindReconciler:
             receipt = self._load_matching_receipt(record)
             if receipt is not None and receipt.stage == "completed":
                 return RebindCycle(record=record, mode="stable", receipt=receipt)
+            if receipt is None and record.reload_revision != record.desired_revision:
+                raise RegistryError(
+                    "committed first adoption is awaiting settings reload completion"
+                )
+            if receipt is None and self._is_first_adoption_of_configured_root(
+                snapshot, record, cfg
+            ):
+                # This is a committed first adoption whose transactional receipt
+                # was lost.  It has no old-root acknowledgement to reconstruct:
+                # one fresh configured-root scan is the only admissible evidence.
+                self.candidate_vault_path(record, heal_identity=False)
+                return RebindCycle(record=record, mode="recovery", receipt=None)
         if record.prior_binding_id is None and not self._is_first_adoption_of_configured_root(
             snapshot, record, cfg
         ):
@@ -473,6 +547,32 @@ class DormantSettingsRebindReconciler:
         states: Mapping[str, WatcherState],
     ) -> SettingsRebindWatcherReceipt | None:
         if cycle.mode not in {"prepared", "committed"}:
+            if cycle.mode == "recovery":
+                self._assert_scan_success(summaries)
+                self.candidate_vault_path(cycle.record, heal_identity=False)
+                self._assert_authority_unchanged(cycle)
+                recovery = SettingsRebindWatcherReceipt(
+                    desired_revision=cycle.record.desired_revision,
+                    prior_binding_id=None,
+                    candidate_binding_id=cycle.record.candidate_binding_id,
+                    stage="completed",
+                    buffer=(),
+                    acknowledgement=None,
+                    drain_receipt=None,
+                    resume_ready_at=_now_iso(),
+                    evidence_kind="first_adoption_recovery",
+                    recovery_scan=RebindScanReceipt(
+                        scan_kind="recovery",
+                        desired_revision=cycle.record.desired_revision,
+                        observed_at=_now_iso(),
+                        watcher_ticks={
+                            name: state.ticks_run
+                            for name, state in states.items()
+                        },
+                    ),
+                )
+                _write_receipt(self._receipt_path(cycle.record), recovery)
+                return recovery
             return cycle.receipt
         self._assert_scan_success(summaries)
         # Validate policy before acknowledging or completing the handoff. A
@@ -559,7 +659,12 @@ class DormantSettingsRebindReconciler:
         # authorize adoption of the candidate binding.
         return drained
 
-    def candidate_vault_path(self, record: SettingsRebindRecord) -> Path:
+    def candidate_vault_path(
+        self,
+        record: SettingsRebindRecord,
+        *,
+        heal_identity: bool = True,
+    ) -> Path:
         """Resolve the committed candidate for the next watcher tick."""
 
         candidate = self._required_binding(record.candidate_binding_id, name="candidate")
@@ -568,7 +673,9 @@ class DormantSettingsRebindReconciler:
             raise RegistryError("settings rebind candidate watcher binding is missing")
         # Registration proves identity, not watcher permission. Revalidate the
         # candidate at the adoption seam immediately before changing roots.
-        return validate_settings_rebind_candidate_root(Path(registration.path))
+        return validate_settings_rebind_candidate_root(
+            Path(registration.path), heal_identity=heal_identity
+        )
 
     def _receipt_path(self, record: SettingsRebindRecord) -> Path:
         return settings_rebind_watcher_receipt_path(

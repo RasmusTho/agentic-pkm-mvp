@@ -520,6 +520,21 @@ mergeable 05B child has merged and the #6139 and #6162 sub-hubs are closed.
   keep mutation ingress gated and the prior lifecycle final-scanned/quiescent until durable commit,
   then resume; wake-up hints are never the transition authority. Per-operation authorization closes
   races between reconciliation passes.
+- A committed first adoption with no matching watcher receipt is recoverable only when the prior
+  binding is empty, the candidate is the configured watcher filesystem root, and settings reload is
+  complete for the committed revision. The watcher performs one fresh successful scan of that exact
+  root before writing typed `first_adoption_recovery` evidence; it never fabricates pre-commit
+  acknowledgement, old-root buffer, or registry/source intent. Restart and retry reuse that typed
+  evidence idempotently. Prior bindings, wrong roots, incomplete reload, stale or mismatched
+  evidence, scan failure or zero-match, and policy/GOV/ownership/lease refusal remain fail-closed;
+  operator promotion and deployed-channel claims remain separate gates.
+  Recovery is observation-only: direct and queued source work and sparse source-capable hooks
+  wait for the ordinary stable cycle without consuming delivery eligibility or cadence. Existing
+  missing-source observations also survive recovery finalization and restart, so the next normal
+  scan can deliver governed removals/resets before pruning their observations.
+  Configuration admission and candidate revalidation are also write-free during recovery:
+  selected roots are classified without identity healing. Ordinary-mode guarded healing and
+  the separate producer inventory's persisted-identity preflight remain unchanged.
 - Zero, one, and many bindings are all valid. One configured vault behaves as before; no-vault
   behavior remains truthful and idle.
 - The durable registry/default/dimension store is instance-local mechanical state; content and

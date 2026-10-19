@@ -5,6 +5,14 @@ from copy import deepcopy
 import pytest
 
 from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
+from tests.migrations.decisions_schema_helpers import migrated_decisions_db
+
+
+@pytest.fixture
+def migrated_runtime_db(monkeypatch):
+    """Isolated migrated non-production database for the coupled PG proof."""
+    with migrated_decisions_db(monkeypatch) as dsn:
+        yield dsn
 
 
 def _persist_companion_identity(root, source, oid):
@@ -59,6 +67,136 @@ def test_persisted_companion_identity_never_authorizes_reprojection(monkeypatch,
         recovery.reconcile_legacy_sources(binding, index, factory)
     assert state.rows == [original] and not state.calls and not state.vectors and not state.embedded
     assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
+def test_supervised_ordinary_persistence_precedes_normal_legacy_atomic_replacement(
+    monkeypatch, tmp_path,
+):
+    """Persisted producer identity enables reconciliation without recovery healing."""
+    from uuid import uuid4
+
+    from app.ingest import vault_alpha as producer
+    from app.ops.native_source_identity_persistence import run_ordinary_persistence
+    from app.rebuildability.product_total_loss import parse_bounded_frontmatter
+    from app.stores import reset_memory_store_backend
+
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=True,
+    )
+    retained_uuid = str(uuid4())
+    assert retained_uuid != str(original["object_id"])
+    source.write_text(
+        raw.decode().replace(f"uuid: {original['object_id']}", f"id: {retained_uuid}"),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    reset_memory_store_backend()
+    monkeypatch.setattr(
+        producer, "resolve_canonical_object_id",
+        lambda value: str(original["object_id"]) if value == retained_uuid else value,
+    )
+    monkeypatch.setattr(producer, "classify_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(producer, "index_ingest_object", lambda **_kwargs: None)
+    monkeypatch.setattr(producer, "append_jsonl", lambda *_args, **_kwargs: None)
+
+    receipt = run_ordinary_persistence(
+        operation_id="11111111-1111-4111-8111-111111111111",
+        channel="dev", revision="a" * 40, vault_root=root,
+    )
+    assert receipt["terminal_state"] == "committed"
+    assert receipt["eligible"] is True
+    frontmatter, _body, error = parse_bounded_frontmatter(source.read_text())
+    assert error is None and frontmatter["uuid"] == retained_uuid
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    assert state.rows[0]["object_id"] == original["object_id"]
+    assert state.rows[0]["payload"]["origin"] == "vault"
+    assert state.calls[0]["replacement"]["artifact_id"] == str(original["object_id"])
+    assert state.calls[0]["replacement"]["vault_uuid"] == retained_uuid
+
+
+@pytest.mark.pg
+def test_supervised_persistence_and_real_pg_transaction_preserve_distinct_canonical_id(
+    monkeypatch, tmp_path, migrated_runtime_db,
+):
+    """Reach the ordinary resolver and real PgObjectStore transaction with a UUID alias."""
+    from uuid import uuid4
+
+    import psycopg
+
+    from app.components.embeddings import EmbeddingIdentity
+    from app.index.artifact_metadata import (
+        build_indexed_unit_payload, canonicalize_indexable_text,
+    )
+    from app.ingest import vault_alpha as producer
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+    from app.ops.native_source_identity_persistence import run_ordinary_persistence
+    from app.rebuildability.product_total_loss import parse_bounded_frontmatter
+    from app.stores import pg
+
+    root = tmp_path / "vault"
+    root.mkdir()
+    layout = root / "⚙️ System" / "vault.layout.md"
+    layout.parent.mkdir()
+    layout.write_text("---\ninclude_folders: [Notes]\n---\nLayout.\n")
+    canonical_id = uuid4()
+    retained_uuid = uuid4()
+    assert canonical_id != retained_uuid
+    source = root / "Notes" / "coupled.md"
+    source.parent.mkdir()
+    source.write_text(
+        f"---\nid: {retained_uuid}\ntrust: human\nreview_state: reviewed\n---\nCoupled state.\n",
+    )
+    monkeypatch.setenv("DATABASE_URL", migrated_runtime_db)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setattr(producer, "classify_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(producer, "index_ingest_object", lambda **_kwargs: None)
+    monkeypatch.setattr(producer, "append_jsonl", lambda *_args, **_kwargs: None)
+    pg._TABLES_READY = False
+    pg._ensure_tables()
+    pg.truncate_pg_tables(vault_binding_id=COMPATIBILITY_BINDING_ID)
+    with psycopg.connect(migrated_runtime_db) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
+            (canonical_id, retained_uuid, COMPATIBILITY_BINDING_ID),
+        )
+
+    receipt = run_ordinary_persistence(
+        operation_id="11111111-1111-4111-8111-111111111111",
+        channel="dev", revision="a" * 40, vault_root=root,
+    )
+    assert receipt["terminal_state"] == "committed"
+    frontmatter, _body, error = parse_bounded_frontmatter(source.read_text())
+    assert error is None and frontmatter["uuid"] == str(retained_uuid)
+    assert frontmatter["id"] == str(retained_uuid)
+
+    store = pg.PgObjectStore(vault_binding_id=COMPATIBILITY_BINDING_ID)
+    index = pg.PgVectorIndex(vault_binding_id=COMPATIBILITY_BINDING_ID)
+    current = store.get(canonical_id)
+    assert current is not None and current["object_id"] == canonical_id
+    expected = next(
+        row for row in store.list_objects(limit=None)
+        if row["object_id"] == canonical_id
+    )
+    identity = EmbeddingIdentity(provider="mock", model="selected", dim=2, normalize=False)
+    text = canonicalize_indexable_text(expected["payload"])
+    vector = {
+        "kind": "note", "source_ref": expected["source_ref"],
+        "payload": build_indexed_unit_payload(
+            object_id=canonical_id, kind="note", source_ref=expected["source_ref"],
+            payload=expected["payload"], text=text, embedding_identity=identity,
+        ),
+        "embedding": [1.0, 2.0], "model": identity.model, "identity": identity,
+    }
+    store.reconcile_legacy_source(
+        expected, vault_uuid=str(retained_uuid), revalidate=lambda: None,
+        check_sources=lambda rows: None, replacement=expected["payload"], vector=vector,
+    )
+    after = store.get(canonical_id)
+    assert after is not None and after["object_id"] == canonical_id
+    assert str(canonical_id) in index.present_object_ids()
+    assert parse_bounded_frontmatter(source.read_text())[0]["uuid"] == str(retained_uuid)
+    pg.truncate_pg_tables(vault_binding_id=COMPATIBILITY_BINDING_ID)
 
 
 @pytest.mark.parametrize("location", ["canonical", "legacy"])
