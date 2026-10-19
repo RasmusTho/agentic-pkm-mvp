@@ -3918,7 +3918,7 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
 def test_source_identity_persistence_accepts_optional_docker_unsets():
     from app.ops import postgres_deploy_linux as linux
 
-    normalized = linux._installed_container_environment([
+    normalized, unset = linux._installed_container_environment([
         "PKM_ENVIRONMENT=dev",
         "VAULT_ROOT=/srv/vault-alpha",
         "POSTGRES_PASSWORD",
@@ -3931,13 +3931,14 @@ def test_source_identity_persistence_accepts_optional_docker_unsets():
         "VAULT_ROOT": "/srv/vault-alpha",
         "EXPLICIT_EMPTY": "",
     }
+    assert unset == ("OPTIONAL_PROVIDER", "PGPASSWORD", "POSTGRES_PASSWORD")
 
 
 def test_source_identity_unsets_preserve_closed_helper_environment(monkeypatch):
     from app.ops import postgres_deploy_linux as linux
 
     monkeypatch.setenv("OPTIONAL_PROVIDER", "ambient-must-not-cross-boundary")
-    installed = linux._installed_container_environment([
+    installed, unset = linux._installed_container_environment([
         "PKM_ENVIRONMENT=dev",
         "VAULT_ROOT=/srv/vault-alpha",
         "OPTIONAL_PROVIDER",
@@ -3947,6 +3948,26 @@ def test_source_identity_unsets_preserve_closed_helper_environment(monkeypatch):
     assert "OPTIONAL_PROVIDER" not in child
     assert child["EXPLICIT_EMPTY"] == ""
     assert child["PKM_ENVIRONMENT"] == "dev"
+    snapshot = linux.SourceIdentityRuntimeSnapshot(
+        "c" * 64, "d" * 64, ("api", "watcher", "worker"),
+        ("api", "watcher", "worker"), "/srv/vault-alpha",
+        "docker-compose.full-host-vault.yml", tuple(child.items()), unset,
+    )
+    effects = linux.LinuxEffects(type("Config", (), {"channel": "dev", "root": Path("/")})())
+    captured = {}
+    monkeypatch.setattr(
+        effects, "environment", lambda *_args: {
+            "BWS_DATABASE_TARGET": "local",
+            "OPTIONAL_PROVIDER": "ambient-must-not-cross-boundary",
+        },
+    )
+    monkeypatch.setattr(
+        linux, "_command",
+        lambda argv, **kwargs: captured.update(argv=argv, env=kwargs["env"]) or "",
+    )
+    effects.compose("run", "-e", "OPTIONAL_PROVIDER", "api", source_snapshot=snapshot)
+    assert "OPTIONAL_PROVIDER" not in captured["env"]
+    assert captured["argv"][-3:] == ["-e", "OPTIONAL_PROVIDER", "api"]
 
 
 @pytest.mark.parametrize("entries", [

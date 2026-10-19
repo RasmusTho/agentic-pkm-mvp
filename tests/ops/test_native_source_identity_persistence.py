@@ -1308,12 +1308,20 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
         environment_keys = {value for value in environment_selectors if "=" not in value}
         assert "VCS_REF" not in environment_keys
         assert "BUILT_AT" not in environment_keys
+        optional_unsets = {"POSTGRES_PASSWORD", "PGPASSWORD", "OPTIONAL_PROVIDER"}
+        assert optional_unsets <= environment_keys
+        assert not optional_unsets & environment.keys()
         bootstrap = next(
             value.split("=", 1)[1] for value in argv
             if value.startswith("NATIVE_SOURCE_BOOTSTRAP=")
         )
+        monkeypatch.setenv("OPTIONAL_PROVIDER", "candidate-image-default")
         for key in environment_keys:
-            monkeypatch.setenv(key, environment[key])
+            if key in environment:
+                monkeypatch.setenv(key, environment[key])
+            else:
+                monkeypatch.delenv(key, raising=False)
+        assert "OPTIONAL_PROVIDER" not in os.environ
         monkeypatch.setenv("NATIVE_SOURCE_BOOTSTRAP", bootstrap)
         monkeypatch.setenv("VCS_REF", REVISION)
         monkeypatch.setenv("BUILT_AT", "candidate-build")
@@ -1354,10 +1362,14 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
         "source", "protocol", "inspect",
     ]
     assert "ensure uuid" in guard_actions
+    final_snapshot = effects.source_identity_runtime_snapshot(
+        selected, require_running_capture=True,
+    )
     assert not {"POSTGRES_PASSWORD", "PGPASSWORD", "OPTIONAL_PROVIDER"} & {
-        key for key, _value in effects.source_identity_runtime_snapshot(
-            selected, require_running_capture=True,
-        ).child_environment
+        key for key, _value in final_snapshot.child_environment
+    }
+    assert set(final_snapshot.unset_environment) == {
+        "POSTGRES_PASSWORD", "PGPASSWORD", "OPTIONAL_PROVIDER",
     }
     assert "up" not in events
 
