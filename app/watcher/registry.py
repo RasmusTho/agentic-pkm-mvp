@@ -2604,6 +2604,20 @@ def _run_registry_cycle(
     with _compatibility_watcher_window(reconciler):
         _adopt_idle_selected_binding(cfg, reconciler)
         rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+        if rebind_cycle is not None and rebind_cycle.mode == "recovery":
+            # A missing receipt admits one new configured-root scan only. Do not
+            # let a checkpoint left by an interrupted prior tick turn that
+            # scan into a continuation of historical work; retain observations
+            # for idempotent event comparison while restarting the traversal.
+            for state in states.values():
+                state.scan_in_progress = False
+                state.scan_root_index = 0
+                state.scan_stack = []
+                state.scan_scope_matched_files = 0
+                state.scan_generation_had_error = False
+                state.continuation_reason = None
+                state.scope_status = "ok"
+                state.observation_status = "healthy-idle"
         if rebind_cycle is not None and rebind_cycle.mode == "stable":
             if rebind_cycle.record.candidate_binding_id is None:
                 cfg.enable = False

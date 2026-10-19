@@ -1398,6 +1398,55 @@ def test_committed_first_adoption_without_receipt_recovers_from_fresh_scan(
     assert str(vault_a / "cold-recovery.md") in _event_paths(tmp_path)
 
 
+def test_first_adoption_recovery_starts_a_new_scan_generation_after_partial_cursor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recovery restarts a persisted partial cursor instead of reusing it as proof."""
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    (vault_a / "aaa-recovery-cursor-prefix.md").write_text(
+        "prefix before recovery\n", encoding="utf-8"
+    )
+    (vault_a / "zzz-recovery-cursor-tail.md").write_text(
+        "tail after cursor\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "1")
+    partial_generation: int | None = None
+    for _ in range(30):
+        summary = registry.run_registry_once(config_path)["ingest"]
+        if summary.get("scan_in_progress") is True:
+            partial_generation = int(summary["scan_generation"])
+            break
+    assert partial_generation is not None
+
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "500")
+
+    recovered_summary = registry.run_registry_once(config_path)["ingest"]
+
+    receipt = load_settings_rebind_watcher_receipt(
+        _revision_receipt_path(tmp_path, committed.desired_revision)
+    )
+    assert receipt.stage == "completed"
+    assert receipt.evidence_kind == "first_adoption_recovery"
+    assert int(recovered_summary["scan_generation"]) > partial_generation
+
+
 def test_missing_receipt_recovery_refuses_non_first_adoption_or_wrong_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
