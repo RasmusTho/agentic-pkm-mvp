@@ -1290,6 +1290,18 @@ reason. A committed receipt does not prove legacy-row convergence or authorize r
 mapping and atomic legacy reconciliation remain separate mandatory gates, and the no-progress
 classifier must be reapplied before a fresh current-main candidate is admitted.
 
+Supervision failures retain only a closed content-free stage reason. A worker context/preflight
+refusal returns a validated failed receipt rather than disappearing behind a transport exit, while
+unexpected worker failure remains a fixed generic worker reason. The native supervisor separately
+classifies exact-owner lock acquisition, locked runtime guard, writer stop, worker transport,
+owned-worker quiescence, worker receipt validation, producer-receipt publication, writer restore,
+and exact-owner lock retirement failures. It never retains child output, exception text, source
+identity or paths, environment or mount values, or credentials. A valid worker/producer receipt is
+preserved unchanged in its producer entry; if restore or retirement later fails, the final terminal
+instead records that cleanup failure and retains the exact same-ID cleanup authority. These reasons
+are diagnostic evidence only. They do not create source eligibility, admit a candidate, authorize
+deployment, or permit an operation replay.
+
 The installed Docker environment snapshot distinguishes a bare `NAME` from `NAME=`: a syntactically
 valid bare optional name is an unset and is omitted from the helper environment, while an explicit
 empty or assigned value is preserved exactly. No unset may inherit an ambient host value, a Compose

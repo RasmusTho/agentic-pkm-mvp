@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-19 (#6227 dev-heavy qualification, #6225 pinned tooling and startup/liveness support and #6224 expiring controller-pause entry, repository-only; #6222 liveness support and #6223 rolling channel-bug entries, repository-only; prior 2026-10-16 TEST dormant-ownership boundary for #5937, repository-only; prior 2026-10-15 Companion collection-preflight output classification for #6079; prior 2026-10-14 VOICE-04 session/transcript guidance, native MVR-01C entry for #6056, native BWS embedding preflight for #6069, and fixed native TEST journaling entry for #6050, repository-only; prior #5969 web qualification, #5993 placement and other section reviews retained; no new live host or service verification)
+Last reviewed: 2026-10-19 (#6269 fixed content-free native source-persistence failure stages, repository-only; #6227 dev-heavy qualification, #6225 pinned tooling and startup/liveness support and #6224 expiring controller-pause entry, repository-only; #6222 liveness support and #6223 rolling channel-bug entries, repository-only; prior 2026-10-16 TEST dormant-ownership boundary for #5937, repository-only; prior 2026-10-15 Companion collection-preflight output classification for #6079; prior 2026-10-14 VOICE-04 session/transcript guidance, native MVR-01C entry for #6056, native BWS embedding preflight for #6069, and fixed native TEST journaling entry for #6050, repository-only; prior #5969 web qualification, #5993 placement and other section reviews retained; no new live host or service verification)
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
 BWS child-runtime repository evidence: requirements-bws-deploy.txt; scripts/install_bws_deploy_runtime.sh; tests/deploy/test_deploy_channel.py::test_bws_runtime_setup_covers_mandatory_browser_smoke and tests/deploy/test_deploy_channel_script.py::test_managed_deploy_child_uses_declared_supervisor_interpreter; Issue #5905 / PR #5906 (repository validation only; no live host installation or channel acceptance).
 Native web entry repository evidence (2026-10-12): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_web, app/ops/native_web_acceptance_runner.py::NativeWebRunner, and tests/ops/test_native_web_acceptance.py; runtime pilot qualification remains with #2443/#3314.
@@ -48,6 +48,17 @@ CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
 - Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
 - Canvas note: `python -m app.cli canvas ...` and `/api/canvas/*` now exist as bounded session surfaces behind `CANVAS_ENABLED`; they are materially supported for bounded co-authoring, but still not part of the default production operator surface.
+
+### Native source-persistence failure receipts
+
+Supervised DEV/TEST source persistence records only fixed, content-free failure stages for worker
+context, lock/guard, writer stop, worker transport/quiescence/receipt validation, producer-receipt
+publication, writer restoration, and exact-owner lock retirement. Do not treat one of these reasons as
+source eligibility or deployment acceptance. A valid producer receipt remains unchanged in its
+producer entry; a later cleanup failure is recorded separately in the final terminal and permits only
+the exact same-ID cleanup route. Child output, exception text, source identity or paths, environment
+or mount values, and credentials must never be copied into receipts or operator notes. See
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` for the detailed stage and cleanup contract.
 
 ### Mimer voice sessions (VOICE-04)
 

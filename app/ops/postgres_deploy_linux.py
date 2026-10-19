@@ -1443,11 +1443,32 @@ class LinuxEffects:
         writer_stop_attempted = False
         writers_restored = False
         lock_acquired = False
+        failure_reason = "source_lock_acquisition_failed"
+
+        def fixed_failure(reason: str) -> dict[str, Any]:
+            candidate = {
+                "contract": RECEIPT_CONTRACT,
+                "operation_id": operation_id,
+                "channel": self.config.channel,
+                "revision": revision,
+                "terminal_state": "failed",
+                "eligible": False,
+                "reason": reason,
+                "selected_count": 0,
+                "persisted_count": 0,
+                "missing_count": 0,
+                "invalid_count": 0,
+                "ambiguous_count": 0,
+                "producer_error_count": 1,
+            }
+            return validate_receipt(candidate)
+
         try:
             with self.channel_lock(
                 journal=self.config.journal, owner_marker=owner, retire_terminal=False,
             ):
                 lock_acquired = True
+                failure_reason = "source_locked_guard_failed"
                 source_plan = self.qualify_source_identity_authority(
                     revision, image_digest, selected,
                 )
@@ -1475,6 +1496,7 @@ class LinuxEffects:
                 }:
                     raise PostgresDeployError()
                 writer_stop_attempted = True
+                failure_reason = "source_writer_stop_failed"
                 self.compose(
                     "stop", *writers, cutover=selected, timeout=120,
                     source_snapshot=locked_runtime,
@@ -1482,6 +1504,7 @@ class LinuxEffects:
                 name = f"pkm-{self.config.channel}-source-bootstrap-{operation_id}"
                 worker_attempted = True
                 worker_quiesced = False
+                failure_reason = "source_worker_transport_failed"
                 raw = self.compose(
                     "run", "--no-deps", "-T", "--name", name,
                     "--label", f"yggdrasil.native.operation={operation_id}",
@@ -1506,16 +1529,20 @@ class LinuxEffects:
                 )
                 from app.ops.native_source_bootstrap import quiesce_owned_container
 
+                failure_reason = "source_worker_quiesce_failed"
                 worker_quiesced = quiesce_owned_container(
                     self.config.channel, name, operation_id, revision,
                 )
                 if not worker_quiesced:
                     raise PostgresDeployError()
+                failure_reason = "source_worker_receipt_refused"
                 try:
                     payload = validate_receipt(json.loads(raw))
                 except Exception:
                     raise PostgresDeployError() from None
+                failure_reason = "source_producer_receipt_write_failed"
                 _atomic_private_json(producer_path, payload)
+                failure_reason = "source_writer_restore_failed"
                 self.compose(
                     "start", *writers, cutover=selected, timeout=120,
                     source_snapshot=locked_runtime,
@@ -1544,22 +1571,8 @@ class LinuxEffects:
                     writers_restored = True
                 except Exception:
                     writers_restored = False
-            payload = {
-                "contract": RECEIPT_CONTRACT,
-                "operation_id": operation_id,
-                "channel": self.config.channel,
-                "revision": revision,
-                "terminal_state": "failed",
-                "eligible": False,
-                "reason": "source_operation_conflict",
-                "selected_count": 0,
-                "persisted_count": 0,
-                "missing_count": 0,
-                "invalid_count": 0,
-                "ambiguous_count": 0,
-                "producer_error_count": 1,
-            }
-            validate_receipt(payload)
+                    failure_reason = "source_writer_restore_failed"
+            payload = fixed_failure(failure_reason)
         finally:
             if lock_acquired and worker_quiesced and writers_restored:
                 try:
@@ -1568,23 +1581,12 @@ class LinuxEffects:
                 except Exception:
                     retirement_failed = True
             elif lock_acquired:
-                retirement_failed = True
+                # The stage reason already explains why cleanup could not
+                # safely reach retirement.  Reserve the retirement reason for
+                # an attempted exact-owner retirement that itself failed.
+                retirement_failed = False
         if retirement_failed:
-            payload = {
-                "contract": RECEIPT_CONTRACT,
-                "operation_id": operation_id,
-                "channel": self.config.channel,
-                "revision": revision,
-                "terminal_state": "failed",
-                "eligible": False,
-                "reason": "source_operation_conflict",
-                "selected_count": 0,
-                "persisted_count": 0,
-                "missing_count": 0,
-                "invalid_count": 0,
-                "ambiguous_count": 0,
-                "producer_error_count": 1,
-            }
+            payload = fixed_failure("source_lock_retirement_failed")
         if payload is None:
             raise PostgresDeployError()
         _atomic_private_json(receipt_path, payload)
