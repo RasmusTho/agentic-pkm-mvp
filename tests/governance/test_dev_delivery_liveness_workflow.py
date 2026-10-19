@@ -430,6 +430,46 @@ def test_latest_verdict_supersedes_older_unverdict_builds() -> None:
     assert result.reason == "fresh_dev_verdict"
 
 
+@pytest.mark.parametrize(("newest_age", "preceding_age", "verdict_age", "heartbeat_age", "state", "expected_ok"), [
+    (.25, 1, .1, None, "success", True),
+    (.25, 1, .1, 3, "success", True),
+    (.25, 1, .1, None, "failure", True),
+    (.25, 1, .1, 3, "failure", True),
+    (.25, 4, 3, None, "success", False),
+    (.25, 4, 3, 3, "success", False),
+    (.25, 4, 3, .1, "success", True),
+    (7, 8, .1, None, "success", False),
+    (7, 8, .1, 3, "success", False),
+    (7, 8, .1, .1, "success", False),
+])
+def test_preceding_terminal_activity_recovers_only_within_newer_build_grace(
+    newest_age, preceding_age, verdict_age, heartbeat_age, state, expected_ok,
+):
+    newest, preceding, skipped = "b" * 40, "c" * 40, "d" * 40
+    runs = []
+    for sha, age, run_id in ((newest, newest_age, 3), (preceding, preceding_age, 2), (skipped, 24, 1)):
+        stamp = (NOW - timedelta(hours=age)).isoformat()
+        runs.append({"id": run_id, "status": "completed", "conclusion": "success", "event": "push",
+                     "head_branch": "main", "head_sha": sha, "path": liveness.BUILD_WORKFLOW,
+                     "created_at": stamp, "completed_at": stamp,
+                     "repository": {"full_name": "o/r"}, "head_repository": {"full_name": "o/r"}})
+
+    def api(path):
+        if "actions/workflows" in path:
+            return {"workflow_runs": runs}
+        if f"commits/{preceding}/statuses" in path:
+            return [_status(liveness.VERDICT_CONTEXT, verdict_age, state)]
+        if f"commits/{newest}/statuses" in path and heartbeat_age is not None:
+            return [_status(liveness.HEARTBEAT_CONTEXT, heartbeat_age)]
+        return []
+
+    result = liveness.check("o/r", newest, api=api, now=NOW)
+    assert result.ok is expected_ok
+    if expected_ok and verdict_age <= 2:
+        assert result.reason == "fresh_dev_verdict"
+        assert preceding[:12] in result.description
+
+
 def test_checker_grace_does_not_reset_for_continuous_builds() -> None:
     head_sha = "b" * 40
     middle_sha = "c" * 40

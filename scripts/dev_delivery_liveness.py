@@ -222,12 +222,13 @@ def check(repo: str, github_sha: str, *, api: Callable[[str], Any] = _github,
     builds = _admitted_builds(repo, api=api)
     build = builds[0] if builds else None
     heartbeat = _status_history(repo, github_sha, HEARTBEAT_CONTEXT, api=api)
-    latest_verdict: list[Any] = []
+    progress_build = build
+    progress_verdict: list[Any] = []
     outstanding: list[AdmittedBuild] = []
     for candidate in builds:
         verdict = _status_history(repo, candidate.sha, VERDICT_CONTEXT, api=api)
         if candidate is build:
-            latest_verdict = verdict
+            progress_verdict = verdict
         recorded = _latest_status(verdict, VERDICT_CONTEXT)
         if recorded is not None and recorded.get("state") in {"success", "failure"}:
             recorded_at = _status_timestamp(recorded)
@@ -235,6 +236,8 @@ def check(repo: str, github_sha: str, *, api: Callable[[str], Any] = _github,
                 # Creation-ordered build identity is the progress watermark.
                 # A late verdict for an older build cannot retire newer work;
                 # a newer terminal build does retire skipped earlier history.
+                progress_build = candidate
+                progress_verdict = verdict
                 break
         outstanding.append(candidate)
 
@@ -244,7 +247,11 @@ def check(repo: str, github_sha: str, *, api: Callable[[str], Any] = _github,
             return evaluate(oldest_outstanding, heartbeat_statuses=heartbeat,
                             verdict_statuses=[], now=current)
 
-    return evaluate(build, heartbeat_statuses=heartbeat, verdict_statuses=latest_verdict, now=current)
+    # Once newer outstanding work is within grace, the qualified progress
+    # watermark also proves controller activity. Its freshness remains useful
+    # when a newer build arrives before the next heartbeat reaches main.
+    return evaluate(progress_build, heartbeat_statuses=heartbeat,
+                    verdict_statuses=progress_verdict, now=current)
 
 
 def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
