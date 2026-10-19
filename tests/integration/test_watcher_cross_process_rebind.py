@@ -1418,9 +1418,11 @@ def test_committed_first_adoption_without_receipt_recovers_from_fresh_scan(
     assert str(vault_a / "cold-recovery.md") in _event_paths(tmp_path)
 
 
+@pytest.mark.parametrize("entrypoint", ["once", "forever"])
 def test_first_adoption_recovery_once_and_forever_defer_source_effects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
 ) -> None:
     """Both production entrypoints preserve the source tree until stable work resumes."""
     runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
@@ -1465,7 +1467,10 @@ def test_first_adoption_recovery_once_and_forever_defer_source_effects(
     )
     before = _vault_file_bytes(vault_a)
 
-    registry.run_registry_once(config_path)
+    if entrypoint == "once":
+        registry.run_registry_once(config_path)
+    else:
+        registry.run_registry_forever(config_path, max_ticks=1)
 
     assert _vault_file_bytes(vault_a) == before
     assert candidate.exists()
@@ -1477,6 +1482,114 @@ def test_first_adoption_recovery_once_and_forever_defer_source_effects(
 
     assert not candidate.exists()
     assert (vault_a / "1_Calendar/Daily/2026-10-19.md").exists()
+
+
+@pytest.mark.parametrize("entrypoint", ["once", "forever"])
+def test_first_adoption_recovery_preserves_pending_removals_until_ordinary_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+) -> None:
+    """Recovery presence is not delivery of a retained settings-source removal."""
+    from app.receipts.settings_receipts import query_settings_receipts
+    from app.vault.manager import VaultManager
+    from app.vault.settings_service import SettingsService
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "healthy"})
+    source_rel = Path("settings/youtube.md")
+    source = vault_a / source_rel
+    settings_store = MarkdownSettingsStore()
+    document = settings_store.read(source)
+    settings_store.write_frontmatter(
+        source,
+        {**document.frontmatter, "youtubeSync.enabled": True},
+        body=document.body,
+    )
+    removed_note_rel = Path("removed-before-recovery.md")
+    removed_note = vault_a / removed_note_rel
+    removed_note.write_text("previously delivered ordinary content\n", encoding="utf-8")
+    registry.run_registry_once(config_path)
+    context = VaultManager().validate_vault(vault_a)
+    service = SettingsService()
+    assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is True
+    cfg = registry.load_registry_config(config_path)
+    state_path = registry._state_path(cfg.state_dir, "ingest")
+    before = registry._load_registry_state(state_path)
+    retained_entries = {
+        str(rel): before.file_entry(str(rel))
+        for rel in (source_rel, removed_note_rel)
+    }
+    assert all(entry and entry.get("hash") for entry in retained_entries.values())
+
+    source.unlink()
+    removed_note.unlink()
+    source_tree = _vault_file_bytes(vault_a)
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    registry_bytes = runtime.registry.path.read_bytes()
+    receipt_path = _revision_receipt_path(tmp_path, 1)
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "1")
+    incomplete_ticks = 0
+    for _ in range(100):
+        try:
+            if entrypoint == "once":
+                registry.run_registry_once(config_path)
+            else:
+                registry.run_registry_forever(config_path, max_ticks=1)
+        except RegistryError as exc:
+            assert "scan was incomplete" in str(exc)
+            incomplete_ticks += 1
+        # Every call reloads the durable checkpoint and sidecar, including the
+        # final complete generation before publishing its recovery receipt.
+        recovered_state = registry._load_registry_state(state_path)
+        assert {
+            rel: recovered_state.file_entry(rel) for rel in retained_entries
+        } == retained_entries
+        assert _vault_file_bytes(vault_a) == source_tree
+        assert runtime.registry.path.read_bytes() == registry_bytes
+        assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is True
+        if receipt_path.exists():
+            break
+    else:
+        pytest.fail("bounded recovery never completed")
+    assert incomplete_ticks > 0
+    recovery_receipt = load_settings_rebind_watcher_receipt(receipt_path)
+    assert recovery_receipt.evidence_kind == "first_adoption_recovery"
+    assert recovery_receipt.stage == "completed"
+    receipt_bytes = receipt_path.read_bytes()
+
+    # The next stable entrypoint starts a normal generation, observes the
+    # retained absence, and applies its existing governed reset exactly once.
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "10000")
+    ordinary = registry.run_registry_once(config_path)["ingest"]
+    assert ordinary["runtime_gating_owner_file_deletions_in_tick"] == 1
+    assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is False
+    ordinary_state = registry._load_registry_state(state_path)
+    assert all(ordinary_state.file_entry(rel) is None for rel in retained_entries)
+    registry.run_registry_forever(config_path, max_ticks=1)
+    rows = query_settings_receipts(outbox_path=tmp_path / "index-outbox.jsonl").rows
+    assert [
+        (row.old_value, row.new_value)
+        for row in rows
+        if row.key == "youtubeSync.enabled"
+    ] == [(False, True), (True, None)]
+    assert receipt_path.read_bytes() == receipt_bytes
 
 
 def test_first_adoption_recovery_starts_a_new_scan_generation_after_partial_cursor(

@@ -2571,6 +2571,9 @@ def _run_spec_tick(
         # checkpoint. Permit reconciliation only on the next clean generation.
         state.checkpoint_load_error = False
     if scan_completed and scan_clean and not delivery_failed and not observation_only:
+        # Observation-only recovery must retain absent rows as well as the
+        # delivery cursor of present files. Only an ordinary generation can
+        # deliver pending removals and then authorize their cleanup.
         # Delivery and guardrail bookkeeping can take long enough for the
         # selected vault to be replaced. Revalidate immediately before prune;
         # the earlier check only authorizes deriving the deletion candidates.
@@ -2600,23 +2603,23 @@ def _run_spec_tick(
         scan_clean = (
             state.errors == errors_before and not state.scan_generation_had_error
         )
-    if scan_completed and scan_clean and not delivery_failed:
-        if state._observation_store is not None:
-            # Excluded historical companion rows are observations only.
-            # Prune them here, never via a source-delete/UUID purge: the note
-            # and its continuity file deliberately share identity.
-            state.prune_unseen_generation(
-                retain=pending_runtime_gating_deletions
-                | pending_settings_source_deletions
-            )
-        else:
-            state.prune_files(
-                [
-                    *scanned_paths,
-                    *pending_runtime_gating_deletions,
-                    *pending_settings_source_deletions,
-                ]
-            )
+        if scan_clean:
+            if state._observation_store is not None:
+                # Excluded historical companion rows are observations only.
+                # Prune them here, never via a source-delete/UUID purge: the note
+                # and its continuity file deliberately share identity.
+                state.prune_unseen_generation(
+                    retain=pending_runtime_gating_deletions
+                    | pending_settings_source_deletions
+                )
+            else:
+                state.prune_files(
+                    [
+                        *scanned_paths,
+                        *pending_runtime_gating_deletions,
+                        *pending_settings_source_deletions,
+                    ]
+                )
 
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 
