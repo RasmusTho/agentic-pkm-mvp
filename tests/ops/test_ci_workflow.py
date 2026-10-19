@@ -386,7 +386,7 @@ def test_not_pg_steps_have_room_for_selected_coverage(step_name: str) -> None:
 def test_scoped_unit_budget_preserves_selected_coverage() -> None:
     job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
     step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
-    assert step["timeout-minutes"] == 60
+    assert step["timeout-minutes"] == 75
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert step["if"] == (
         "steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'"
@@ -412,7 +412,7 @@ def test_scoped_unit_budget_preserves_selected_command_and_failure(
 ) -> None:
     job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
     step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
-    assert step["timeout-minutes"] == 60
+    assert step["timeout-minutes"] == 75
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert step["env"]["PYTHONUNBUFFERED"] == "1"
     selected = "-q -m 'not pg and not eval' tests/governance tests/scripts/test_publication.py"
@@ -481,7 +481,7 @@ sys.exit(int(os.environ["FIXTURE_PYTEST_EXIT"]))
 def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None:
     job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
     step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
-    assert step["timeout-minutes"] == 60
+    assert step["timeout-minutes"] == 75
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert step["env"]["SCOPED_TARGETS_JSON"] == (
         "${{ steps.select-tests.outputs.pytest_targets_json }}"
