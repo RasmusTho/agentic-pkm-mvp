@@ -12,6 +12,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -594,6 +595,115 @@ class SourceIdentityRuntimeSnapshot:
     vault_overlay: str
     child_environment: tuple[tuple[str, str], ...]
     unset_environment: tuple[str, ...] = ()
+    legacy_installed_fingerprints: frozenset[str] = frozenset()
+
+
+_MAX_LEGACY_MOUNT_ORDER_CANDIDATES = 4096
+
+
+def _installed_payload_fingerprint(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()
+
+
+def _canonical_mount_records(mounts: object) -> list[dict[str, Any]]:
+    """Canonicalize only the order of complete Docker mount records."""
+    if not isinstance(mounts, list) or any(not isinstance(item, dict) for item in mounts):
+        raise PostgresDeployError()
+    for item in mounts:
+        if (
+            any(not isinstance(key, str) for key in item)
+            or item.get('Type') not in {'bind', 'volume'}
+            or not isinstance(item.get('Source'), str)
+            or not item['Source']
+            or not isinstance(item.get('Destination'), str)
+            or not item['Destination'].startswith('/')
+            or not isinstance(item.get('Mode'), str)
+            or not isinstance(item.get('RW'), bool)
+            or not isinstance(item.get('Propagation'), str)
+            or (
+                item['Type'] == 'volume'
+                and (
+                    not isinstance(item.get('Name'), str)
+                    or not item['Name']
+                    or not isinstance(item.get('Driver'), str)
+                    or not item['Driver']
+                )
+            )
+        ):
+            raise PostgresDeployError()
+    encoded = [
+        json.dumps(item, sort_keys=True, separators=(',', ':'))
+        for item in mounts
+    ]
+    if len(set(encoded)) != len(encoded):
+        raise PostgresDeployError()
+    return [item for _encoded, item in sorted(zip(encoded, mounts), key=lambda row: row[0])]
+
+
+def _legacy_mount_order_fingerprints(
+    snapshots: dict[str, dict[str, Any]],
+    *,
+    container_root: str,
+    vault_overlay: str,
+) -> frozenset[str]:
+    """Enumerate one bounded legacy order space without changing any record."""
+    services = sorted(snapshots)
+    observed_mounts: list[list[dict[str, Any]]] = []
+    combinations = 1
+    for service in services:
+        mounts = snapshots[service].get('mounts')
+        _canonical_mount_records(mounts)
+        observed = list(mounts)
+        combinations *= max(1, len(observed))
+        if combinations > _MAX_LEGACY_MOUNT_ORDER_CANDIDATES:
+            return frozenset()
+        observed_mounts.append(observed)
+    mount_orders = [
+        tuple(
+            tuple(observed[offset:] + observed[:offset])
+            for offset in range(len(observed) or 1)
+        )
+        for observed in observed_mounts
+    ]
+    fingerprints: set[str] = set()
+    for ordered_mounts in itertools.product(*mount_orders):
+        candidate = {
+            service: {**snapshots[service], 'mounts': list(mounts)}
+            for service, mounts in zip(services, ordered_mounts)
+        }
+        fingerprints.add(_installed_payload_fingerprint({
+            'containers': candidate,
+            'container_root': container_root,
+            'vault_overlay': vault_overlay,
+        }))
+    return frozenset(fingerprints)
+
+
+def _installed_fingerprint_matches(
+    snapshot: SourceIdentityRuntimeSnapshot, retained: str,
+) -> bool:
+    return (
+        retained == snapshot.installed_fingerprint
+        or retained in snapshot.legacy_installed_fingerprints
+    )
+
+
+def _legacy_mount_cleanup_allowed(
+    receipt: dict[str, Any] | None,
+    *,
+    producer_exists: bool,
+    owns_lock: bool,
+) -> bool:
+    """Fence legacy mount-order compatibility to retained failed cleanup."""
+    return bool(
+        receipt is not None
+        and receipt.get('terminal_state') == 'failed'
+        and receipt.get('eligible') is False
+        and not producer_exists
+        and owns_lock
+    )
 
 
 _SOURCE_HELPER_IMAGE_OWNED_ENV = frozenset({'VCS_REF', 'BUILT_AT'})
@@ -1208,7 +1318,26 @@ class LinuxEffects:
             "channel": self.config.channel,
             "operation_id": operation_id,
         }
+        expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
+        owns_lock = False
+        terminal_receipt: dict[str, Any] | None = None
+        if receipt_path.exists():
+            terminal_receipt = validate_receipt(_private_json(receipt_path))
+            if (
+                terminal_receipt['operation_id'] != operation_id
+                or terminal_receipt['channel'] != self.config.channel
+                or terminal_receipt['revision'] != revision
+            ):
+                raise PostgresDeployError()
+        legacy_cleanup_allowed = False
+        producer_entry_exists = os.path.lexists(producer_path)
         if request_path.exists():
+            owns_lock = self.channel_lock_owner() == expected_owner
+            legacy_cleanup_allowed = _legacy_mount_cleanup_allowed(
+                terminal_receipt,
+                producer_exists=producer_entry_exists,
+                owns_lock=owns_lock,
+            )
             request_payload = _private_json(request_path)
             if (
                 set(request_payload) != {
@@ -1233,18 +1362,19 @@ class LinuxEffects:
             ):
                 raise PostgresDeployError()
             writers = list(request_payload['writers'])
-            expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
-            own_cleanup = self.channel_lock_owner() == expected_owner
             runtime = self.source_identity_runtime_snapshot(
-                selected, require_running_capture=not own_cleanup,
+                selected, require_running_capture=not owns_lock,
+                allow_legacy_mount_order=legacy_cleanup_allowed,
             )
             if (
-                runtime.installed_fingerprint != request_payload['installed_fingerprint']
+                not _installed_fingerprint_matches(
+                    runtime, request_payload['installed_fingerprint'],
+                )
                 or runtime.container_root != request_payload['container_root']
                 or runtime.vault_overlay != request_payload['vault_overlay']
                 or not set(writers) <= set(runtime.existing_writers)
                 or (
-                    not own_cleanup
+                    not owns_lock
                     and (
                         runtime.execution_fingerprint
                         != request_payload['execution_fingerprint']
@@ -1269,21 +1399,15 @@ class LinuxEffects:
                 'vault_overlay': runtime.vault_overlay,
             }
             _atomic_private_json(request_path, request_payload)
-        if receipt_path.exists():
-            retained = validate_receipt(_private_json(receipt_path))
-            if (
-                retained['operation_id'] != operation_id
-                or retained['channel'] != self.config.channel
-                or retained['revision'] != revision
-            ):
-                raise PostgresDeployError()
+        if terminal_receipt is not None:
             self.reconcile_source_identity_cleanup(
                 operation_id, revision, image_digest, selected, owner, writers,
                 request_payload['installed_fingerprint'],
                 request_payload['container_root'], request_payload['vault_overlay'],
+                allow_legacy_mount_order=legacy_cleanup_allowed,
             )
-            return retained
-        if producer_path.exists():
+            return terminal_receipt
+        if producer_entry_exists:
             retained = validate_receipt(_private_json(producer_path))
             if (
                 retained['operation_id'] != operation_id
@@ -1295,6 +1419,7 @@ class LinuxEffects:
                 operation_id, revision, image_digest, selected, owner, writers,
                 request_payload['installed_fingerprint'],
                 request_payload['container_root'], request_payload['vault_overlay'],
+                allow_legacy_mount_order=False,
             )
             _atomic_private_json(receipt_path, retained)
             return retained
@@ -1326,8 +1451,9 @@ class LinuxEffects:
                     selected, require_running_capture=True,
                 )
                 if (
-                    locked_runtime.installed_fingerprint
-                    != request_payload['installed_fingerprint']
+                    not _installed_fingerprint_matches(
+                        locked_runtime, request_payload['installed_fingerprint'],
+                    )
                     or locked_runtime.execution_fingerprint
                     != request_payload['execution_fingerprint']
                     or locked_runtime.container_root != request_payload['container_root']
@@ -1516,6 +1642,8 @@ class LinuxEffects:
         installed_fingerprint: str,
         container_root: str,
         vault_overlay: str,
+        *,
+        allow_legacy_mount_order: bool = False,
     ) -> None:
         """Finish only this operation's retained cleanup; never rerun its producer."""
         expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
@@ -1525,9 +1653,10 @@ class LinuxEffects:
             self.qualify_source_identity_authority(revision, image_digest, selected)
             current = self.source_identity_runtime_snapshot(
                 selected, require_running_capture=False,
+                allow_legacy_mount_order=allow_legacy_mount_order,
             )
             if (
-                current.installed_fingerprint != installed_fingerprint
+                not _installed_fingerprint_matches(current, installed_fingerprint)
                 or current.container_root != container_root
                 or current.vault_overlay != vault_overlay
                 or not set(writers) <= set(current.existing_writers)
@@ -1613,7 +1742,11 @@ class LinuxEffects:
             raise PostgresDeployError()
 
     def source_identity_runtime_snapshot(
-        self, selected: AuthorityCutover, *, require_running_capture: bool,
+        self,
+        selected: AuthorityCutover,
+        *,
+        require_running_capture: bool,
+        allow_legacy_mount_order: bool = False,
     ) -> SourceIdentityRuntimeSnapshot:
         """Bind installed writers and the exact candidate-child configuration."""
         cfg = self.config
@@ -1714,8 +1847,24 @@ class LinuxEffects:
             ):
                 if current.get(key) != api_environment.get(key):
                     raise PostgresDeployError()
+        legacy_installed_fingerprints = (
+            _legacy_mount_order_fingerprints(
+                snapshots,
+                container_root=container_root,
+                vault_overlay=vault_overlay,
+            )
+            if allow_legacy_mount_order
+            else frozenset()
+        )
+        canonical_snapshots = {
+            service: {
+                **snapshot,
+                'mounts': _canonical_mount_records(snapshot['mounts']),
+            }
+            for service, snapshot in snapshots.items()
+        }
         installed_payload = {
-            'containers': snapshots,
+            'containers': canonical_snapshots,
             'container_root': container_root,
             'vault_overlay': vault_overlay,
         }
@@ -1860,9 +2009,7 @@ class LinuxEffects:
             unset_environment=api_unset_environment,
         )
         return SourceIdentityRuntimeSnapshot(
-            installed_fingerprint=hashlib.sha256(json.dumps(
-                installed_payload, sort_keys=True, separators=(',', ':'),
-            ).encode()).hexdigest(),
+            installed_fingerprint=_installed_payload_fingerprint(installed_payload),
             execution_fingerprint=hashlib.sha256(json.dumps(
                 execution_payload, sort_keys=True, separators=(',', ':'),
             ).encode()).hexdigest(),
@@ -1872,6 +2019,7 @@ class LinuxEffects:
             vault_overlay=vault_overlay,
             child_environment=child_environment,
             unset_environment=api_unset_environment,
+            legacy_installed_fingerprints=legacy_installed_fingerprints,
         )
 
     def channel_lock_owner(self) -> bytes | None:
