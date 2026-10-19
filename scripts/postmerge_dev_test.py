@@ -614,12 +614,21 @@ def heavy_verdict(path: Path, checkpoint: dict[str, Any], *,
     return 0 if heavy['dispatch'] == 'sent' else 78
 
 
+def _native_host_command() -> list[str]:
+    # Keep the child on the same reviewed pin even if cwd or ambient Python
+    # configuration belongs to a broken candidate. No token enters this child.
+    return [sys.executable, '-I', '-S', '-c',
+            "import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); "
+            "runpy.run_module('app.ops.postgres_deploy_host', run_name='__main__')",
+            str(Path(__file__).resolve().parents[1])]
+
+
 def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
     # Existing host code sanitizes SSH's environment and retains the VM worker
     # through terminal evidence. Capture all streams; never print child errors.
     environment = {k: v for k, v in os.environ.items() if k not in {'GH_TOKEN', 'GITHUB_TOKEN'}}
     command = [
-        sys.executable, '-m', 'app.ops.postgres_deploy_host', channel, candidate.sha,
+        *_native_host_command(), channel, candidate.sha,
         '--operation-id', candidate.operation_id(channel),
         '--existing-secrets-only', '--automatic', '--image-digest', candidate.digest,
     ]
@@ -647,7 +656,7 @@ def native_absence(channel: str, candidate: Candidate) -> dict[str, Any]:
     """Obtain exact host+native absence proof without reading private identities."""
     environment = {k: v for k, v in os.environ.items() if k not in {'GH_TOKEN', 'GITHUB_TOKEN'}}
     command = [
-        sys.executable, '-m', 'app.ops.postgres_deploy_host', channel, candidate.sha,
+        *_native_host_command(), channel, candidate.sha,
         '--operation-id', candidate.operation_id(channel), '--existing-secrets-only',
         '--automatic', '--image-digest', candidate.digest, '--prove-never-admitted',
     ]

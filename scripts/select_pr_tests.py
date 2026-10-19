@@ -324,6 +324,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "scripts/postgres_deploy_service.py",
         "scripts/postgres_entrypoint.sh",
         "scripts/postmerge_channel_bug.py",
+        "scripts/postmerge_controller.py",
         "scripts/postmerge_dev_test.py",
         "scripts/prod_deploy_retry_preflight.py",
         "scripts/prod_devui_gateway_preflight.py",
@@ -1692,7 +1693,7 @@ def select_tests(changed_files: list[str]) -> Selection:
     if any(path in ARO03_ROUTE_CONTRACT_PATHS for path in paths):
         targets.extend(ARO03_ROUTE_TESTS)
 
-    if "scripts/dev_delivery_liveness.py" in paths:
+    if any(path in {"scripts/dev_delivery_liveness.py", "scripts/postmerge_controller.py"} for path in paths):
         targets.extend(DEV_LIVENESS_TESTS)
 
     governance_only = _is_governance_only(paths)

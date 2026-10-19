@@ -5,6 +5,9 @@ import hashlib
 import io
 import json
 import os
+import plistlib
+import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -535,9 +538,9 @@ def test_controller_lock_and_atomic_checkpoint_survive_stale_temporary(tmp_path)
 def test_controller_launch_agent_uses_fixed_reviewed_tooling_without_secrets():
     from scripts.install_postmerge_controller import launch_agent
     config = launch_agent(Path('/tooling'), Path('/tooling/.venv/bin/python'),
-                          Path('/opt/homebrew/bin/gh'), Path('/private/state'))
-    assert config['ProgramArguments'] == ['/tooling/.venv/bin/python', '/tooling/scripts/postmerge_dev_test.py',
-                                         '--latest', '--state-directory', '/private/state']
+                          Path('/opt/homebrew/bin/gh'), Path('/private/state'), SHA)
+    assert config['ProgramArguments'] == ['/tooling/.venv/bin/python', '-I', '-S',
+                                         '/tooling/scripts/postmerge_controller.py', '--tooling-sha', SHA, '--latest', '--state-directory', '/private/state']
     assert config['StartInterval'] == 60 and config['RunAtLoad'] is True
     assert set(config['EnvironmentVariables']) == {'PATH'}
     assert 'prod' not in json.dumps(config) and 'TOKEN' not in json.dumps(config)
@@ -833,7 +836,8 @@ sys.path[0] = str(pathlib.Path(sys.argv[1]).parent)
 entry = runpy.run_path(sys.argv[1])
 globals_ = entry['main'].__globals__
 globals_['sys'].platform = 'darwin'
-globals_['require_reviewed_checkout'] = lambda *args: None
+globals_['require_reviewed_checkout'] = lambda *args: 'a' * 40
+globals_['install_tooling'] = lambda *args: (pathlib.Path('/reviewed/tooling'), pathlib.Path('/reviewed/python'))
 globals_['shutil'].which = lambda name: '/usr/bin/gh'
 globals_['Path'].home = staticmethod(lambda: pathlib.Path(sys.argv[2]))
 raise SystemExit(entry['main'](['--checkout', '/reviewed/tooling', '--python', '/reviewed/python']))
@@ -1561,3 +1565,188 @@ def test_channel_bug_private_retained_fields_never_cross_dispatch(tmp_path, chan
     assert _poll_channel(tmp_path, later) == 0
     assert github.deliveries
     assert 'review-private-canary-only' not in json.dumps(github.deliveries)
+
+
+@pytest.fixture
+def installed_controller_pin(tmp_path, monkeypatch):
+    """Real archive/runtime/install/LaunchAgent producers, with only host I/O isolated."""
+    from scripts import install_postmerge_controller as installer
+    checkout = tmp_path / 'reviewed'
+    checkout.mkdir()
+    for name in ('app/ops', 'app/config'):
+        shutil.copytree(ROOT / name, checkout / name, ignore=shutil.ignore_patterns('__pycache__'))
+    (checkout / 'app/__init__.py').write_bytes((ROOT / 'app/__init__.py').read_bytes())
+    (checkout / 'scripts').mkdir()
+    for name in ('__init__.py', 'postmerge_controller.py', 'postmerge_dev_test.py', 'select_pr_tests.py'):
+        shutil.copy2(ROOT / 'scripts' / name, checkout / 'scripts' / name)
+    def git(*args):
+        return subprocess.run(['git', '-C', str(checkout), *args], capture_output=True,
+                              text=True, check=True).stdout.strip()
+    git('init', '--quiet', '-b', 'main')
+    git('config', 'user.name', 'Fixture')
+    git('config', 'user.email', 'fixture@example.invalid')
+    git('add', '.')
+    git('commit', '--quiet', '-m', 'Reviewed real controller closure')
+    sha = git('rev-parse', 'HEAD')
+    gh = tmp_path / 'gh'
+    signals = tmp_path / 'signals.json'
+    gh.write_text('#!/bin/sh\nif [ "$1" = api ]; then\n'
+                  + "printf '%s\\n' '{\"object\":{\"sha\":\"" + SHA + "\"}}'\n"
+                  + 'else\nfor arg do case "$arg" in payload=*) printf "%s" "${arg#payload=}" > "'
+                  + str(signals) + '";; esac; done\nfi\n')
+    gh.chmod(0o700)
+    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ.get('PATH', ''))
+    home = tmp_path / 'home'
+    monkeypatch.setattr(installer.Path, 'home', staticmethod(lambda: home))
+    monkeypatch.setattr(installer.sys, 'platform', 'darwin')
+    # Canonical provenance/fetch admission has its own real-git negative matrix;
+    # this fixture begins at that admitted boundary and runs every producer after it.
+    monkeypatch.setattr(installer, 'require_reviewed_checkout', lambda *_: sha)
+    assert installer.main(['--checkout', str(checkout), '--python', sys.executable]) == 0
+    state = home / '.local/state/yggdrasil/secret-controller/postmerge'
+    config = plistlib.loads((home / 'Library/LaunchAgents' / (installer.LABEL + '.plist')).read_bytes())
+    return SimpleNamespace(checkout=checkout, source=state / 'tooling' / sha / 'source',
+                           state=state, config=config, sha=sha, signals=signals, gh=gh)
+
+
+def test_controller_runs_from_pinned_tooling(installed_controller_pin, tmp_path):
+    pin = installed_controller_pin
+    candidate = tmp_path / 'candidate'
+    candidate.mkdir()
+    marker = tmp_path / 'candidate-imported'
+    for package in ('app', 'scripts'):
+        path = candidate / package / '__init__.py'
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(f"from pathlib import Path; Path({str(marker)!r}).touch(); raise RuntimeError('candidate')")
+    (candidate / 'sitecustomize.py').write_text(f"from pathlib import Path; Path({str(marker)!r}).touch()")
+    # The original checkout can advance or become unusable after installation.
+    shutil.rmtree(pin.checkout)
+    env = {**os.environ, 'PYTHONPATH': str(candidate), 'PYTHONHOME': str(candidate)}
+    command = pin.config['ProgramArguments']
+    result = subprocess.run([*command, '--self-check'], cwd=candidate, env=env,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout) == {'result': 'startup_self_check_passed', 'tooling_sha': pin.sha}
+    assert pin.config['WorkingDirectory'] == str(pin.source)
+    assert not marker.exists() and not pin.signals.exists()
+    # Exercise the actual child import producer from the installed runtime.
+    # --help traverses the real native host imports without deployment effects.
+    native = """import sys, subprocess
+sys.path.insert(0, sys.argv[1])
+from scripts.postmerge_dev_test import _native_host_command
+raise SystemExit(subprocess.run([*_native_host_command(), '--help']).returncode)
+"""
+    child = subprocess.run([command[0], '-I', '-S', '-c', native, str(pin.source)],
+                           cwd=candidate, env=env, capture_output=True, text=True, check=False)
+    assert child.returncode == 0, child.stderr
+    assert '--existing-secrets-only' in child.stdout and not marker.exists()
+
+
+@pytest.mark.parametrize('fault', ['controller_import', 'host_import', 'lazy_import', 'pin_missing', 'python_identity', 'transport_down'])
+def test_controller_self_check_fails_loud(installed_controller_pin, monkeypatch, fault):
+    from scripts import dev_delivery_liveness as liveness
+    pin = installed_controller_pin
+    if fault in {'controller_import', 'host_import', 'lazy_import', 'transport_down'}:
+        module = {'controller_import': 'scripts/postmerge_dev_test.py',
+                  'host_import': 'app/ops/postgres_deploy_host.py',
+                  'lazy_import': 'app/ops/native_source_bootstrap.py',
+                  'transport_down': 'scripts/postmerge_dev_test.py'}[fault]
+        (pin.source / module).write_text("raise ModuleNotFoundError('private input must not leak')\n")
+    elif fault == 'pin_missing':
+        (pin.source.parent / 'pin.json').unlink()
+    else:
+        path = pin.source.parent / 'pin.json'
+        data = json.loads(path.read_text())
+        data['python_version'] = 'wrong runtime'
+        path.write_text(json.dumps(data))
+    if fault == 'transport_down':
+        pin.gh.write_text('#!/bin/sh\nexit 1\n')
+    result = subprocess.run(pin.config['ProgramArguments'], cwd=pin.source,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 78
+    assert json.loads(result.stdout) == {'result': 'startup_self_check_failed',
+                                       'liveness_signal': 'failed' if fault == 'transport_down' else 'sent'}
+    assert 'private input' not in result.stdout + result.stderr
+    assert not (pin.state / 'postmerge-dev-test.json').exists()
+    if fault == 'transport_down':
+        assert not pin.signals.exists()
+        assert not liveness.evaluate(None, heartbeat_statuses=[], verdict_statuses=[],
+                                     now=datetime.now(timezone.utc)).ok
+        return
+    payload = json.loads(pin.signals.read_text())
+    assert payload['sha'] == SHA and payload['startup'] == 'failed'
+    # Consume the real bootstrap's payload through the actual main-only status
+    # admission and liveness evaluator, including a prior fresh DEV verdict.
+    writes = []
+    monkeypatch.setattr(liveness.subprocess, 'run', lambda command, **_: writes.append(command))
+    now = datetime.fromisoformat(payload['observed_at']) + timedelta(seconds=1)
+    liveness.record_signal('heartbeat', json.dumps(payload), repo=driver.REPOSITORY,
+                           event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
+                           triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999',
+                           api=lambda _: {'status': 'identical'}, now=now)
+    fields = dict(item.split('=', 1) for item in writes[0] if '=' in item)
+    assert fields['state'] == 'failure' and fields['description'].endswith(';startup=self_check_failed')
+    status = {key: fields[key] for key in ('state', 'context', 'description')}
+    build = liveness.AdmittedBuild(SHA, now - timedelta(hours=1), 123)
+    verdict = {'state': 'success', 'context': liveness.VERDICT_CONTEXT,
+               'description': 'observed_at=' + (now - timedelta(minutes=2)).isoformat()}
+    checked = liveness.evaluate(build, heartbeat_statuses=[status], verdict_statuses=[verdict], now=now)
+    assert not checked.ok and checked.reason == 'startup_self_check_failed'
+    recovered = {**status, 'state': 'success', 'description': 'observed_at=' + now.isoformat()}
+    assert liveness.evaluate(build, heartbeat_statuses=[status, recovered], verdict_statuses=[verdict], now=now).ok
+
+
+def test_installer_partial_pin_does_not_replace_active_launch_or_checkpoint(installed_controller_pin, monkeypatch):
+    from scripts import install_postmerge_controller as installer
+    pin = installed_controller_pin
+    # Use the actual existing LaunchAgent path rather than manufacturing a
+    # replacement producer. A failed staged runtime leaves it byte-identical.
+    plist = next(pin.state.parents[4].glob('Library/LaunchAgents/*.plist'))
+    before = plist.read_bytes()
+    checkpoint = pin.state / 'postmerge-dev-test.json'
+    checkpoint.write_text('retained same-ID recovery state')
+    sha = 'c' * 40
+    monkeypatch.setattr(installer, 'require_reviewed_checkout', lambda *_: sha)
+    run = subprocess.run
+    def fail_runtime(command, **kwargs):
+        if 'venv' in command:
+            raise subprocess.CalledProcessError(1, command)
+        if 'archive' in command:
+            command = [pin.sha if part == sha else part for part in command]
+        return run(command, **kwargs)
+    monkeypatch.setattr(installer.subprocess, 'run', fail_runtime)
+    assert installer.main(['--checkout', str(pin.checkout), '--python', sys.executable]) == 78
+    assert plist.read_bytes() == before
+    assert checkpoint.read_text() == 'retained same-ID recovery state'
+    assert not (pin.state / 'tooling' / sha).exists()
+    assert not list((pin.state / 'tooling').glob('.install-*'))
+
+
+@pytest.mark.parametrize('value', ['passed', 'unknown', True, None])
+def test_startup_signal_refuses_non_failure_values(monkeypatch, value):
+    from scripts import dev_delivery_liveness as liveness
+    payload = {'protocol': driver.LIVENESS_PROTOCOL, 'sha': SHA,
+               'observed_at': datetime.now(timezone.utc).isoformat(), 'startup': value}
+    monkeypatch.setattr(liveness.subprocess, 'run', lambda *_a, **_k: pytest.fail('refused signal wrote a status'))
+    with pytest.raises(liveness.LivenessRefused, match='signal_startup_refused'):
+        liveness.record_signal('heartbeat', json.dumps(payload), repo=driver.REPOSITORY,
+                               event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
+                               triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999')
+
+
+def test_native_absence_child_uses_same_isolated_tooling_command(monkeypatch):
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    proof = _absence_proof('dev', candidate)
+    calls = []
+    monkeypatch.setenv('GH_TOKEN', 'secret-canary')
+    monkeypatch.setenv('GITHUB_TOKEN', 'secret-canary')
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(proof))
+    monkeypatch.setattr(driver.subprocess, 'run', run)
+    assert driver.native_absence('dev', candidate) == proof
+    command, options = calls[0]
+    assert command[:6] == driver._native_host_command()
+    assert command[1:4] == ['-I', '-S', '-c']
+    assert command[-1] == '--prove-never-admitted'
+    assert 'GH_TOKEN' not in options['env'] and 'GITHUB_TOKEN' not in options['env']

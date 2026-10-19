@@ -85,7 +85,7 @@ Enactment slices (children of #6207):
 | Automatic rolling channel bug Issue — repository support in #6223; live activation retains #6170/#3347 | D3 |
 | `dev` and `test` refs advanced on green verdicts | D4 |
 | Kill switch with Issue and expiry, replacing unload-as-pause | D5 |
-| Pinned controller tooling | D7 |
+| Pinned controller tooling — repository support in #6225; live activation retains #6170/#3347 | D7 |
 | Heavy tests on `dev` as part of the dev verdict (prerequisite #6205; host activation #6170) | D4 |
 | Prod promotion from `test` to `stable` | D4 |
 

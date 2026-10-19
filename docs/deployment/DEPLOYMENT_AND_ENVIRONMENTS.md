@@ -163,9 +163,19 @@ The existing health, version, fleet-image and UI smoke gates plus the fixed isol
 profile must pass on dev before test starts. Each stage runs its own PG profile at the same digest.
 Actions receives no deployment credentials; there is no extra human approval between ordinary stages.
 
-`scripts/install_postmerge_controller.py` installs the host-local LaunchAgent from a retained, clean,
-reviewed-main tooling checkout. Install the updated native VM runtime once through the existing
-deployment installer before enabling the poller. Future automatic candidates fetch their exact Git
+`scripts/install_postmerge_controller.py` installs the host-local LaunchAgent from a clean,
+reviewed-main tooling checkout. It archives the exact reviewed SHA into
+`postmerge/tooling/<sha>/source` under the existing private controller state directory and creates a
+separate `runtime` with copied Python executables and no third-party packages. The LaunchAgent runs
+that pin with `-I -S`; its stdlib startup wrapper checks the pinned interpreter identity and the real
+controller/native/lazy receipt imports before polling. Native host children load that same source
+explicitly, independent of candidate working directory or Python environment. A broken pin exits 78
+and reports a failed startup heartbeat through the existing Actions-write liveness workflow; if that
+transport is unavailable, the missing/stale-heartbeat watchdog stays fail-loud. A failed new
+installation preserves the existing LaunchAgent and checkpoint; select a fresh reviewed tooling SHA
+for upgrades or recovery. An existing corrupt pin refuses reuse rather than being overwritten. Candidates never update the tooling pin. This is repository support
+(#6225), with host activation still under #6170 and release acceptance under #3347. Install the updated
+native VM runtime once through the existing deployment installer before enabling the poller. Future automatic candidates fetch their exact Git
 objects from the public repository under the native channel lock, without moving the retained
 checkout or passing credentials. A private atomic checkpoint deduplicates build attempts. Stable
 candidate/channel operation IDs resume an interrupted call through the existing native journals,

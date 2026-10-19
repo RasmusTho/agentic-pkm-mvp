@@ -161,6 +161,12 @@ def evaluate(
                         and verdict.get("state") in {"success", "failure"}
                         and verdict_at is not None and verdict_at >= build.completed_at
                         and verdict_at <= current)
+    heartbeat = _latest_status(heartbeat_statuses, HEARTBEAT_CONTEXT, allow_rotated_context=True)
+    if (heartbeat is not None and heartbeat.get('state') == 'failure'
+            and heartbeat.get('description', '').endswith(';startup=self_check_failed')
+            and _status_timestamp(heartbeat) <= current
+            and (not terminal_verdict or _status_timestamp(heartbeat) > verdict_at)):
+        return LivenessResult(False, 'startup_self_check_failed', 'controller pinned tooling startup self-check failed')
     if (terminal_verdict
             and current - verdict_at <= HEARTBEAT_GRACE):
         # A fresh terminal verdict is itself proof that the controller was
@@ -277,6 +283,10 @@ def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
     fields = {"protocol", "sha", "observed_at"}
     if kind == "verdict":
         fields |= {"candidate", "result", "operation_id"}
+    if kind == 'heartbeat' and isinstance(signal, dict) and 'startup' in signal:
+        fields |= {'startup'}
+        if signal['startup'] != 'failed':
+            raise LivenessRefused('signal_startup_refused')
     if not isinstance(signal, dict) or set(signal) != fields or signal["protocol"] != LIVENESS_PROTOCOL:
         raise LivenessRefused("signal_protocol_refused")
     sha = _validate_sha(signal["sha"])
@@ -291,6 +301,9 @@ def record_signal(kind: str, payload: str, *, repo: str, event: str, ref: str,
     state = "success"
     if kind == "heartbeat":
         context = f"{HEARTBEAT_CONTEXT}/{observed:%Y%m%d%H}"
+        if signal.get('startup') == 'failed':
+            state = 'failure'
+            description += ';startup=self_check_failed'
     else:
         evidence = signal["candidate"]
         if (not isinstance(evidence, dict) or type(evidence.get("run_id")) is not int
