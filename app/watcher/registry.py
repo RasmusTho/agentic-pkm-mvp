@@ -2610,6 +2610,14 @@ def _run_registry_cycle(
             # scan into a continuation of historical work; retain observations
             # for idempotent event comparison while restarting the traversal.
             for state in states.values():
+                if (
+                    state.scan_in_progress
+                    and state.continuation_reason == "first_adoption_recovery"
+                ):
+                    # The fresh recovery generation may span several bounded
+                    # ticks; continue that generation until one complete scan
+                    # can produce the typed receipt.
+                    continue
                 state.scan_in_progress = False
                 state.scan_root_index = 0
                 state.scan_stack = []
@@ -2645,6 +2653,15 @@ def _run_registry_cycle(
             )
             for spec in cfg.specs
         }
+        if rebind_cycle is not None and rebind_cycle.mode == "recovery":
+            for spec in cfg.specs:
+                state = states[spec.name]
+                if state.scan_in_progress:
+                    # Persist a recovery-generation marker after the scanner
+                    # starts so a bounded incomplete tick can resume this new
+                    # generation without being reset on the next tick.
+                    state.continuation_reason = "first_adoption_recovery"
+                    state.save(_state_path(cfg.state_dir, spec.name))
         summaries["briefing"] = _run_briefing_tick(
             cfg,
             now=now,

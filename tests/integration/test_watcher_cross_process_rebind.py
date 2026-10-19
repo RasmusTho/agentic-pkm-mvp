@@ -1435,9 +1435,14 @@ def test_first_adoption_recovery_starts_a_new_scan_generation_after_partial_curs
         committed.as_payload(),
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
-    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "500")
-
-    recovered_summary = registry.run_registry_once(config_path)["ingest"]
+    recovered_summary: dict[str, object] | None = None
+    for _ in range(100):
+        try:
+            recovered_summary = registry.run_registry_once(config_path)["ingest"]
+            break
+        except RegistryError as exc:
+            assert "scan was incomplete" in str(exc)
+    assert recovered_summary is not None
 
     receipt = load_settings_rebind_watcher_receipt(
         _revision_receipt_path(tmp_path, committed.desired_revision)
