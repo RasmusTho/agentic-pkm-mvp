@@ -591,6 +591,32 @@ class SourceIdentityRuntimeSnapshot:
     child_environment: tuple[tuple[str, str], ...]
 
 
+_SOURCE_HELPER_IMAGE_OWNED_ENV = frozenset({'VCS_REF', 'BUILT_AT'})
+
+
+def _closed_source_helper_environment(
+    installed: dict[str, str], resolved_service: dict[str, str],
+) -> tuple[tuple[str, str], ...]:
+    """Return installed authority without replacing helper image identity.
+
+    Every resolved service value must equal the accepted installed API
+    container.  This closes env-file and interpolation inputs which were absent
+    when that container was created.  The candidate's baked revision/build
+    values are the one deliberate difference: they must come from the
+    separately authenticated helper image so real bootstrap preflight can bind
+    to the reviewed helper revision.
+    """
+    if _SOURCE_HELPER_IMAGE_OWNED_ENV & resolved_service.keys():
+        raise PostgresDeployError()
+    if any(installed.get(key) != value for key, value in resolved_service.items()):
+        raise PostgresDeployError()
+    return tuple(sorted(
+        (key, value)
+        for key, value in installed.items()
+        if key not in _SOURCE_HELPER_IMAGE_OWNED_ENV
+    ))
+
+
 def _runtime_user_ownership_state_dir(runtime_uid: int, xdg_state_home: str | None = None) -> Path:
     """Return the canonical host-global state default for the Compose user.
 
@@ -1627,9 +1653,43 @@ class LinuxEffects:
             input_paths.append(cfg.root / 'docker-compose.bws-external.yml')
         if cfg.channel == 'test':
             input_paths.append(cfg.root / 'docker-compose.test-vault.yml')
+        provisional = SourceIdentityRuntimeSnapshot(
+            installed_fingerprint='', execution_fingerprint='',
+            running_writers=tuple(sorted(running)),
+            existing_writers=tuple(sorted(existing)),
+            container_root=container_root, vault_overlay=vault_overlay,
+            child_environment=tuple(sorted(
+                (key, value) for key, value in api_environment.items()
+                if key not in _SOURCE_HELPER_IMAGE_OWNED_ENV
+            )),
+        )
+        try:
+            compose_payload = json.loads(self.compose(
+                'config', '--format', 'json', cutover=selected,
+                source_snapshot=provisional,
+            ))
+            resolved_raw = compose_payload['services']['api']['environment']
+            if not isinstance(resolved_raw, dict):
+                raise PostgresDeployError()
+            resolved_environment = {
+                key: value for key, value in resolved_raw.items() if value is not None
+            }
+            if any(
+                not isinstance(key, str)
+                or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key)
+                or not isinstance(value, str)
+                for key, value in resolved_environment.items()
+            ):
+                raise PostgresDeployError()
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        child_environment = _closed_source_helper_environment(
+            api_environment, resolved_environment,
+        )
         execution_payload = {
             'files': [(str(path), stable_hash(path)) for path in input_paths],
-            'child_environment': sorted(api_environment.items()),
+            'child_environment': list(child_environment),
+            'resolved_service_environment': sorted(resolved_environment.items()),
             'container_root': container_root,
             'vault_overlay': vault_overlay,
         }
@@ -1644,7 +1704,7 @@ class LinuxEffects:
             existing_writers=tuple(sorted(existing)),
             container_root=container_root,
             vault_overlay=vault_overlay,
-            child_environment=tuple(sorted(api_environment.items())),
+            child_environment=child_environment,
         )
 
     def channel_lock_owner(self) -> bytes | None:

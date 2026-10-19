@@ -5,6 +5,14 @@ from copy import deepcopy
 import pytest
 
 from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
+from tests.migrations.decisions_schema_helpers import migrated_decisions_db
+
+
+@pytest.fixture
+def migrated_runtime_db(monkeypatch):
+    """Isolated migrated non-production database for the coupled PG proof."""
+    with migrated_decisions_db(monkeypatch) as dsn:
+        yield dsn
 
 
 def _persist_companion_identity(root, source, oid):
@@ -160,7 +168,7 @@ def test_supervised_persistence_and_real_pg_transaction_preserve_distinct_canoni
     assert receipt["terminal_state"] == "committed"
     frontmatter, _body, error = parse_bounded_frontmatter(source.read_text())
     assert error is None and frontmatter["uuid"] == str(retained_uuid)
-    assert "id" not in frontmatter
+    assert frontmatter["id"] == str(retained_uuid)
 
     store = pg.PgObjectStore(vault_binding_id=COMPATIBILITY_BINDING_ID)
     index = pg.PgVectorIndex(vault_binding_id=COMPATIBILITY_BINDING_ID)
