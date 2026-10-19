@@ -40,6 +40,7 @@ def test_liveness_check_reds_on_missing_dev_verdict() -> None:
 def test_liveness_check_reds_on_missing_heartbeat() -> None:
     build = _build(1)
     verdict = [_status(liveness.VERDICT_CONTEXT, 0.5)]
+    pending_verdict = [_status(liveness.VERDICT_CONTEXT, 0.5, state="pending")]
     stale = liveness.evaluate(
         build,
         heartbeat_statuses=[],
@@ -48,6 +49,15 @@ def test_liveness_check_reds_on_missing_heartbeat() -> None:
     )
     assert not stale.ok
     assert stale.reason == "heartbeat_missing"
+
+    pending = liveness.evaluate(
+        build,
+        heartbeat_statuses=[],
+        verdict_statuses=pending_verdict,
+        now=NOW,
+    )
+    assert not pending.ok
+    assert pending.reason == "heartbeat_missing"
 
     fresh = liveness.evaluate(
         build,
@@ -113,8 +123,10 @@ def test_checker_reads_latest_admitted_build_and_both_status_surfaces() -> None:
         seen.append(path)
         if "actions/workflows" in path:
             return {"workflow_runs": [{"id": 123, "status": "completed", "conclusion": "success",
-                                       "head_branch": "main", "head_sha": SHA, "path": liveness.BUILD_WORKFLOW,
-                                       "updated_at": completed, "repository": {"full_name": "o/r"}}]}
+                                       "event": "push", "head_branch": "main", "head_sha": SHA,
+                                       "path": liveness.BUILD_WORKFLOW, "completed_at": completed,
+                                       "repository": {"full_name": "o/r"},
+                                       "head_repository": {"full_name": "o/r"}}]}
         if path.endswith(f"commits/{SHA}/statuses?per_page=100"):
             return [_status(liveness.VERDICT_CONTEXT, 0.5)]
         return [_status(liveness.HEARTBEAT_CONTEXT, 0.1)]

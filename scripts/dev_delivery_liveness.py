@@ -76,14 +76,17 @@ def latest_admitted_build(repo: str, *, api: Callable[[str], Any]) -> AdmittedBu
         if not isinstance(run, dict):
             continue
         repository = run.get("repository") or {}
+        head_repository = run.get("head_repository") or {}
         if (run.get("status") != "completed" or run.get("conclusion") != "success"
+                or run.get("event") != "push"
                 or run.get("head_branch") != "main"
                 or run.get("path") not in {None, BUILD_WORKFLOW}
-                or repository.get("full_name", repo) != repo):
+                or repository.get("full_name") != repo
+                or head_repository.get("full_name") != repo):
             continue
         try:
             sha = _validate_sha(run.get("head_sha"))
-            completed_at = _timestamp(run.get("updated_at") or run.get("completed_at"))
+            completed_at = _timestamp(run.get("completed_at") or run.get("updated_at"))
             run_id = int(run["id"])
             if run_id < 1:
                 raise ValueError()
@@ -118,6 +121,7 @@ def evaluate(
     current = now.astimezone(timezone.utc)
     verdict = _latest_status(verdict_statuses, VERDICT_CONTEXT)
     if (build is not None and verdict is not None
+            and verdict.get("state") in {"success", "failure"}
             and _status_timestamp(verdict) >= build.completed_at):
         # A fresh terminal verdict is itself proof that the controller was
         # alive. This also lets a fresh verdict recover a stale heartbeat
@@ -148,6 +152,7 @@ def _github(path: str) -> Any:
 
 def check(repo: str, github_sha: str, *, api: Callable[[str], Any] = _github,
           now: datetime | None = None) -> LivenessResult:
+    _validate_sha(github_sha)
     current = now or datetime.now(timezone.utc)
     build = latest_admitted_build(repo, api=api)
     heartbeat = api(f"repos/{repo}/commits/{github_sha}/statuses?per_page=100")
