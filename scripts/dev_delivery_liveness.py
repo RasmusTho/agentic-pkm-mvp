@@ -211,18 +211,38 @@ def check(repo: str, github_sha: str, *, api: Callable[[str], Any] = _github,
     build = builds[0] if builds else None
     heartbeat = _status_history(repo, github_sha, HEARTBEAT_CONTEXT, api=api)
     latest_verdict: list[Any] = []
+    terminal_times: list[datetime] = []
     for candidate in builds:
         verdict = _status_history(repo, candidate.sha, VERDICT_CONTEXT, api=api)
         if candidate is build:
             latest_verdict = verdict
         recorded = _latest_status(verdict, VERDICT_CONTEXT)
-        terminal = (recorded is not None and recorded.get("state") in {"success", "failure"}
-                    and _status_timestamp(recorded) >= candidate.completed_at
-                    and _status_timestamp(recorded) <= current)
-        if not terminal and current - candidate.completed_at > GRACE:
-            # Do not reset the grace timer just because newer admitted builds
-            # keep arriving: this oldest outstanding build is the stalled work.
-            return evaluate(candidate, heartbeat_statuses=heartbeat, verdict_statuses=[], now=current)
+        if (recorded is not None and recorded.get("state") in {"success", "failure"}):
+            recorded_at = _status_timestamp(recorded)
+            if candidate.completed_at <= recorded_at <= current:
+                terminal_times.append(recorded_at)
+
+    if build is not None:
+        # D2 is latest-wins: a terminal verdict for the newest admitted build
+        # supersedes older builds that never received their own verdict. When
+        # the newest build is still outstanding, anchor grace at the oldest
+        # build after the latest terminal progress so continuous traffic cannot
+        # keep resetting the timer.
+        last_progress = max(terminal_times, default=None)
+        outstanding = [
+            candidate for candidate in builds
+            if last_progress is None or candidate.completed_at > last_progress
+        ]
+        if outstanding:
+            oldest_outstanding = min(outstanding, key=lambda candidate: candidate.completed_at)
+            if current - oldest_outstanding.completed_at > GRACE:
+                return evaluate(
+                    oldest_outstanding,
+                    heartbeat_statuses=heartbeat,
+                    verdict_statuses=[],
+                    now=current,
+                )
+
     return evaluate(build, heartbeat_statuses=heartbeat, verdict_statuses=latest_verdict, now=current)
 
 

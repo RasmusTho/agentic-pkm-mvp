@@ -203,6 +203,43 @@ def test_checker_reads_verdict_from_later_status_page() -> None:
     assert result.ok and result.reason == "fresh_dev_verdict"
 
 
+def test_latest_verdict_supersedes_older_unverdict_builds() -> None:
+    newest_sha = "e" * 40
+    older_sha = "f" * 40
+
+    def run(sha: str, hours_ago: float, run_id: int) -> dict[str, object]:
+        stamp = (NOW - timedelta(hours=hours_ago)).isoformat().replace("+00:00", "Z")
+        return {
+            "id": run_id,
+            "status": "completed",
+            "conclusion": "success",
+            "event": "push",
+            "head_branch": "main",
+            "head_sha": sha,
+            "path": liveness.BUILD_WORKFLOW,
+            "created_at": stamp,
+            "completed_at": stamp,
+            "repository": {"full_name": "o/r"},
+            "head_repository": {"full_name": "o/r"},
+        }
+
+    runs = [run(newest_sha, 1, 2), run(older_sha, 24, 1)]
+
+    def api(path: str):
+        if "actions/workflows" in path:
+            return {"workflow_runs": runs}
+        if f"commits/{newest_sha}/statuses" in path:
+            return [
+                _status(liveness.HEARTBEAT_CONTEXT, 0.1),
+                _status(liveness.VERDICT_CONTEXT, 0.5),
+            ]
+        return []
+
+    result = liveness.check("o/r", newest_sha, api=api, now=NOW)
+    assert result.ok
+    assert result.reason == "fresh_dev_verdict"
+
+
 def test_checker_grace_does_not_reset_for_continuous_builds() -> None:
     head_sha = "b" * 40
     middle_sha = "c" * 40
