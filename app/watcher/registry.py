@@ -2008,7 +2008,11 @@ def _emit_changed_entry(
         emitted_at=now,
         trace_id=trace_id,
     )
-    if spec.emit_event == PANEL_SCAN_REQUESTED and process_panel_notes_inline:
+    if (
+        spec.emit_event == PANEL_SCAN_REQUESTED
+        and process_panel_notes_inline
+        and allow_source_writeback
+    ):
         _process_panel_note(
             vault_root=cfg.vault_path,
             rel_path=entry.rel_path,
