@@ -26,6 +26,16 @@ REFUSAL_REASONS = frozenset({
     "source_identity_ineligible",
     "source_identity_ambiguous",
     "source_operation_conflict",
+    "source_worker_failed",
+    "source_lock_acquisition_failed",
+    "source_locked_guard_failed",
+    "source_writer_stop_failed",
+    "source_worker_transport_failed",
+    "source_worker_quiesce_failed",
+    "source_worker_receipt_refused",
+    "source_producer_receipt_write_failed",
+    "source_writer_restore_failed",
+    "source_lock_retirement_failed",
 })
 _COUNT_FIELDS = (
     "selected_count", "persisted_count", "missing_count", "invalid_count",
@@ -285,22 +295,57 @@ def worker_main(argv: list[str]) -> int:
         return 78
     operation_id, channel, revision, root_value = argv
     try:
-        from app.ops.native_source_bootstrap import preflight
+        if (
+            str(UUID(operation_id)) != operation_id
+            or channel not in {"dev", "test"}
+            or re.fullmatch(r"[0-9a-f]{40}", revision) is None
+        ):
+            return 78
+    except (ValueError, TypeError, AttributeError):
+        return 78
 
-        selected = preflight(f"{channel}:{revision}")
-        root = Path(root_value).resolve(strict=True)
-        if selected is None or selected != root:
-            raise SourceIdentityPersistenceRefusal("source_context_refused")
-        receipt = run_ordinary_persistence(
-            operation_id=operation_id, channel=channel, revision=revision, vault_root=root,
-        )
-        print(json.dumps(receipt, sort_keys=True))
-        # A validated failed receipt is a successfully observed terminal
-        # operation.  Transport exit 78 is reserved for an unobservable/crashed
-        # worker so the supervisor never discards a finite refusal receipt.
-        return 0
+    try:
+        # Imports, preflight, producer and inventory code are private and may
+        # be noisy.  Discard both streams across the complete boundary, then
+        # emit exactly one validated fixed receipt after leaving it.
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            try:
+                try:
+                    from app.ops.native_source_bootstrap import preflight
+
+                    selected = preflight(f"{channel}:{revision}")
+                    root = Path(root_value).resolve(strict=True)
+                    if selected is None or selected != root:
+                        raise SourceIdentityPersistenceRefusal("source_context_refused")
+                except SourceIdentityPersistenceRefusal:
+                    raise
+                except Exception:
+                    raise SourceIdentityPersistenceRefusal(
+                        "source_context_refused",
+                    ) from None
+                receipt = run_ordinary_persistence(
+                    operation_id=operation_id, channel=channel, revision=revision,
+                    vault_root=root,
+                )
+            except SourceIdentityPersistenceRefusal as exc:
+                receipt = _receipt(
+                    operation_id, channel, revision, IdentityInventory(0, 0, 0, 1, 0),
+                    reason=exc.reason,
+                )
+            except Exception:
+                receipt = _receipt(
+                    operation_id, channel, revision, IdentityInventory(0, 0, 0, 0, 0),
+                    producer_error_count=1, reason="source_worker_failed",
+                )
+            receipt = validate_receipt(receipt)
     except Exception:
         return 78
+
+    print(json.dumps(receipt, sort_keys=True))
+    # A validated failed receipt is a successfully observed terminal
+    # operation.  Transport exit 78 is reserved for an unobservable/crashed
+    # worker so the supervisor never discards a finite refusal receipt.
+    return 0
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
+import sys
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -342,7 +345,7 @@ def test_native_supervisor_accepts_only_the_fixed_source_operation(
     "quiesced,restore_ok",
     [(True, True), (False, True), (True, False)],
 )
-def test_linux_effect_holds_writer_fence_until_owned_worker_is_quiescent(
+def test_stage_failures_preserve_exact_cleanup_boundaries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quiesced: bool, restore_ok: bool,
 ) -> None:
     from contextlib import contextmanager
@@ -419,7 +422,10 @@ def test_linux_effect_holds_writer_fence_until_owned_worker_is_quiescent(
         assert events == ["lock", "stop", "run", "start", "reconcile-lock", "retire"]
     else:
         assert result["terminal_state"] == "failed"
-        assert result["reason"] == "source_operation_conflict"
+        assert result["reason"] == (
+            "source_worker_quiesce_failed" if not quiesced
+            else "source_writer_restore_failed"
+        )
         if not quiesced:
             assert "start" not in events
         assert "retire" not in events
@@ -487,8 +493,144 @@ def test_linux_effect_failed_lock_acquisition_has_zero_compose_effects(
         AuthorityCutover("vault-alpha", "/srv/vault-alpha", "/srv/instance-ownership"),
     )
     assert result["terminal_state"] == "failed"
-    assert result["reason"] == "source_operation_conflict"
+    assert result["reason"] == "source_lock_acquisition_failed"
     assert mutations == []
+
+
+@pytest.mark.parametrize(
+    "failed_stage,expected_reason",
+    [
+        ("locked-guard", "source_locked_guard_failed"),
+        ("writer-stop", "source_writer_stop_failed"),
+        ("worker-transport", "source_worker_transport_failed"),
+        ("worker-quiesce", "source_worker_quiesce_failed"),
+        ("worker-receipt", "source_worker_receipt_refused"),
+        ("producer-receipt-write", "source_producer_receipt_write_failed"),
+        ("writer-restore", "source_writer_restore_failed"),
+        ("lock-retirement", "source_lock_retirement_failed"),
+    ],
+)
+def test_supervisor_failure_stage_is_fixed_and_content_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    failed_stage: str, expected_reason: str,
+) -> None:
+    from contextlib import contextmanager
+
+    from app.ops import native_source_bootstrap, postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import AuthorityCutover
+
+    operation_id = str(uuid4())
+    journal_dir = tmp_path / "journal"
+    journal_dir.mkdir()
+    journal = SimpleNamespace(
+        directory=journal_dir, channel="dev",
+        read=lambda: SimpleNamespace(terminal_result="failed"),
+    )
+    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal, uid=501))
+    selected = AuthorityCutover(
+        "vault-alpha", "/srv/vault-alpha", "/srv/instance-ownership",
+    )
+    snapshot = linux.SourceIdentityRuntimeSnapshot(
+        "c" * 64, "d" * 64, ("api", "watcher", "worker"),
+        ("api", "watcher", "worker"), selected.root,
+        "docker-compose.full-host-vault.yml",
+        (("DATABASE_URL", "postgresql+psycopg:///?host=db"),),
+    )
+    effects.source_identity_runtime_snapshot = lambda *_args, **_kwargs: snapshot  # type: ignore[method-assign]
+    qualifications = 0
+
+    def qualify(*_args):
+        nonlocal qualifications
+        qualifications += 1
+        if failed_stage == "locked-guard" and qualifications == 2:
+            raise linux.PostgresDeployError()
+        return SimpleNamespace()
+
+    effects.qualify_source_identity_authority = qualify  # type: ignore[method-assign]
+    effects.require_source_identity_candidate = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+    @contextmanager
+    def channel_lock(**_kwargs):
+        yield
+
+    @contextmanager
+    def reconciliation_lock(**_kwargs):
+        yield object()
+
+    effects.channel_lock = channel_lock  # type: ignore[method-assign]
+    effects.failed_reconciliation_lock = reconciliation_lock  # type: ignore[method-assign]
+
+    committed = {
+        "contract": "native-source-identity-persistence.v1",
+        "operation_id": operation_id, "channel": "dev", "revision": REVISION,
+        "terminal_state": "committed", "eligible": True, "reason": None,
+        "selected_count": 1, "persisted_count": 1, "missing_count": 0,
+        "invalid_count": 0, "ambiguous_count": 0, "producer_error_count": 0,
+    }
+
+    def compose(*args, **_kwargs):
+        action = str(args[0])
+        if failed_stage == "writer-stop" and action == "stop":
+            raise linux.PostgresDeployError()
+        if failed_stage == "worker-transport" and action == "run":
+            raise linux.PostgresDeployError()
+        if failed_stage == "writer-restore" and action == "start":
+            raise linux.PostgresDeployError()
+        if action == "run":
+            return "not-json" if failed_stage == "worker-receipt" else json.dumps(committed)
+        return ""
+
+    effects.compose = compose  # type: ignore[method-assign]
+    effects.retire_reconciled_channel_lock = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(linux.PostgresDeployError())
+            if failed_stage == "lock-retirement" else None
+        )
+    )
+    monkeypatch.setattr(
+        native_source_bootstrap, "quiesce_owned_container",
+        lambda *_args: failed_stage != "worker-quiesce",
+    )
+
+    def atomic(path: Path, payload: dict[str, object]) -> None:
+        if failed_stage == "producer-receipt-write" and ".producer." in path.name:
+            raise linux.PostgresDeployError()
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        path.chmod(0o600)
+
+    monkeypatch.setattr(linux, "_atomic_private_json", atomic)
+    monkeypatch.setattr(linux, "_capture_watch_configured", lambda _config: False)
+
+    result = effects.persist_source_identity(operation_id, REVISION, DIGEST, selected)
+    assert result["terminal_state"] == "failed"
+    assert result["eligible"] is False
+    assert result["reason"] == expected_reason
+    assert result["producer_error_count"] == 1
+    assert set(result) == {
+        "contract", "operation_id", "channel", "revision", "terminal_state",
+        "eligible", "reason", "selected_count", "persisted_count",
+        "missing_count", "invalid_count", "ambiguous_count",
+        "producer_error_count",
+    }
+    producer_path = journal_dir / f"dev-source-identity-{operation_id}.producer.json"
+    if failed_stage in {"writer-restore", "lock-retirement"}:
+        assert json.loads(producer_path.read_text(encoding="utf-8")) == committed
+    else:
+        assert not producer_path.exists()
+
+
+def test_restore_or_retirement_failure_requires_same_id_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for stage, reason in (
+        ("writer-restore", "source_writer_restore_failed"),
+        ("lock-retirement", "source_lock_retirement_failed"),
+    ):
+        stage_root = tmp_path / stage
+        stage_root.mkdir()
+        test_supervisor_failure_stage_is_fixed_and_content_free(
+            stage_root, monkeypatch, stage, reason,
+        )
 
 
 def test_cached_receipt_reconciles_only_matching_owned_lock(
@@ -710,7 +852,7 @@ def test_closed_helper_environment_refuses_database_or_key_authority_drift(
         linux._closed_source_helper_environment(installed, resolved)
 
 
-def test_producer_completion_crash_resumes_cleanup_without_rerunning_producer(
+def test_worker_terminal_receipt_round_trips_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from contextlib import contextmanager
@@ -1037,7 +1179,7 @@ def test_locked_admission_refuses_child_or_writer_drift_before_effects(
 
     result = effects.persist_source_identity(operation_id, REVISION, DIGEST, selected)
     assert result["terminal_state"] == "failed"
-    assert result["reason"] == "source_operation_conflict"
+    assert result["reason"] == "source_locked_guard_failed"
     assert mutations == []
 
 
@@ -1849,7 +1991,7 @@ def test_real_preflight_retains_channel_and_selected_topology(
         "binding", "missing-binding",
     ],
 )
-def test_real_worker_preflight_refuses_wrong_helper_runtime_or_binding_before_producer(
+def test_worker_context_refusal_returns_fixed_terminal_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, channel: str,
     legacy_root: bool, drift: str,
 ) -> None:
@@ -1903,9 +2045,22 @@ def test_real_worker_preflight_refuses_wrong_helper_runtime_or_binding_before_pr
         if path.is_file()
     }
 
-    assert native_source_identity_persistence.worker_main([
-        str(uuid4()), channel, REVISION, container_root,
-    ]) == 78
+    output = io.StringIO()
+    with redirect_stdout(output):
+        assert native_source_identity_persistence.worker_main([
+            str(uuid4()), channel, REVISION, container_root,
+        ]) == 0
+    receipt = json.loads(output.getvalue())
+    assert receipt["terminal_state"] == "failed"
+    assert receipt["eligible"] is False
+    assert receipt["reason"] == "source_context_refused"
+    assert receipt["invalid_count"] == 1
+    assert set(receipt) == {
+        "contract", "operation_id", "channel", "revision", "terminal_state",
+        "eligible", "reason", "selected_count", "persisted_count",
+        "missing_count", "invalid_count", "ambiguous_count",
+        "producer_error_count",
+    }
     assert producer_calls == []
     assert {
         path.relative_to(tmp_path): path.read_bytes()
@@ -1913,3 +2068,80 @@ def test_real_worker_preflight_refuses_wrong_helper_runtime_or_binding_before_pr
         for path in selected.rglob("*")
         if path.is_file()
     } == before
+
+
+def test_worker_main_discards_private_output_for_refusal_and_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops import native_source_bootstrap, native_source_identity_persistence
+
+    root = tmp_path.resolve()
+    operation_id = str(uuid4())
+
+    def noisy_refusal(_selector: str) -> Path:
+        print("private-stdout-canary")
+        print("private-stderr-canary", file=sys.stderr)
+        raise SourceIdentityPersistenceRefusal("source_context_refused")
+
+    monkeypatch.setattr(native_source_bootstrap, "preflight", noisy_refusal)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        assert native_source_identity_persistence.worker_main([
+            operation_id, "dev", REVISION, str(root),
+        ]) == 0
+    refused = json.loads(stdout.getvalue())
+    assert refused["reason"] == "source_context_refused"
+    assert "private" not in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+    monkeypatch.setattr(native_source_bootstrap, "preflight", lambda _selector: root)
+    committed = {
+        "contract": "native-source-identity-persistence.v1",
+        "operation_id": operation_id, "channel": "dev", "revision": REVISION,
+        "terminal_state": "committed", "eligible": True, "reason": None,
+        "selected_count": 1, "persisted_count": 1, "missing_count": 0,
+        "invalid_count": 0, "ambiguous_count": 0, "producer_error_count": 0,
+    }
+
+    def noisy_success(**_kwargs):
+        print("private-success-stdout")
+        print("private-success-stderr", file=sys.stderr)
+        return committed
+
+    monkeypatch.setattr(
+        native_source_identity_persistence, "run_ordinary_persistence", noisy_success,
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        assert native_source_identity_persistence.worker_main([
+            operation_id, "dev", REVISION, str(root),
+        ]) == 0
+    assert json.loads(stdout.getvalue()) == committed
+    assert "private" not in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+
+def test_worker_main_rejects_malformed_authority_without_output_or_private_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops import native_source_bootstrap, native_source_identity_persistence
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        native_source_bootstrap, "preflight", lambda _selector: calls.append("preflight"),
+    )
+    monkeypatch.setattr(
+        native_source_identity_persistence, "run_ordinary_persistence",
+        lambda **_kwargs: calls.append("producer"),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        assert native_source_identity_persistence.worker_main([
+            "not-a-uuid", "dev", REVISION, "/private/not-resolved",
+        ]) == 78
+    assert calls == []
+    assert stdout.getvalue() == ""
+    assert stderr.getvalue() == ""
