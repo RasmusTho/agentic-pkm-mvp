@@ -699,6 +699,25 @@ mismatched evidence cannot start a fresh operation or advance the candidate. Fai
 SHA/digest/run/channel/result JSON in the private controller log. A newer candidate can supersede
 an older one before deployment begins; a started chain completes with its original identity.
 
+Terminal native `dev` and `test` verdicts also dispatch
+`.github/workflows/postmerge-channel-bug.yml` with the exact SHA, digest, build attempt, operation
+receipt, gate, and previous green SHA (#6223). The existing private checkpoint retains per-channel
+last-green SHAs and records dispatch intent before calling Actions. An unknown or failed dispatch
+is reported as such and is not replayed after restart; later candidates still proceed. A retained
+checkpoint with no prior green records an explicit unknown baseline instead of inventing a range.
+The controller's approved client still needs only Actions read/write, Contents read and Metadata
+read. The main-only workflow uses its own short-lived `GITHUB_TOKEN` for Issue writes; it never
+receives deployment credentials or runs candidate code.
+
+The workflow validates main ancestry and exact receipt identity, serializes each channel, and
+opens or comments on one bot-owned, channel-marked rolling bug. Later green evidence comments and
+closes that Issue; a later failure reopens the same Issue. Candidate ordering and successful
+workflow receipts reject delayed red/green events, including a green verdict before any bug exists.
+Human-authored or other-channel Issues are not mutation targets. Generated bugs are failure intake;
+readiness requires a bounded repair contract. Actions failures remain visible in their workflow run
+and never gate main merges or replay deployment. This is repository support; live activation and
+qualification retain #6170 and #3347's operator gates.
+
 After a candidate's `test` deployment commits, the controller runs the fixed post-merge heavy-test
 profile once: `qualify-heavy test <operation-id>` through the same `yggdrasil-bws-deploy` launcher
 (#6158). It reads only the committed receipt and its PG proof, takes no channel lock and touches no

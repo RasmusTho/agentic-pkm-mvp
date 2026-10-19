@@ -1,0 +1,44 @@
+name: Post-merge channel bug
+run-name: channel-bug/${{ inputs.channel }}/${{ fromJSON(inputs.evidence).verdict }}/${{ fromJSON(inputs.evidence).candidate.sha }}/${{ fromJSON(inputs.evidence).candidate.run_id }}/${{ fromJSON(inputs.evidence).candidate.run_attempt }}
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Native channel
+        type: choice
+        options: [dev, test]
+        required: true
+      evidence:
+        description: Bounded terminal controller receipt
+        required: true
+        type: string
+
+# Queue every verdict under the channel's sole writer. Candidate ancestry and
+# retained receipt checks also reject delayed runs; queue order is not authority.
+concurrency:
+  group: postmerge-channel-bug-${{ inputs.channel }}
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    if: github.repository == 'RasmusTho/agentic-pkm-mvp' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reconcile the rolling channel bug
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+          EVIDENCE: ${{ inputs.evidence }}
+        run: python3 scripts/postmerge_channel_bug.py --channel "$CHANNEL" --evidence "$EVIDENCE"
