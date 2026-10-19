@@ -11,6 +11,7 @@ import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import asdict
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import io
@@ -368,9 +369,15 @@ def _publish_status(sha: str, context: str, state: str, description: str) -> Non
         raise CandidateRefused('liveness_signal_failed')
 
 
+def _heartbeat_context(now: datetime | None = None) -> str:
+    """Rotate heartbeat contexts hourly so an idle SHA cannot exhaust one context."""
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return f'{DEV_HEARTBEAT_CONTEXT}/{current:%Y%m%d%H}'
+
+
 def publish_heartbeat(sha: str) -> None:
     """Publish the controller heartbeat without exposing deployment state."""
-    _publish_status(sha, DEV_HEARTBEAT_CONTEXT, 'success', 'post-merge dev controller heartbeat')
+    _publish_status(sha, _heartbeat_context(), 'success', 'post-merge dev controller heartbeat')
 
 
 def publish_dev_verdict(candidate: Candidate, outcome: dict[str, Any]) -> None:

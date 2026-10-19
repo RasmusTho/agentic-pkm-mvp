@@ -22,6 +22,7 @@ HEARTBEAT_CONTEXT = "post-merge-dev-test/heartbeat"
 VERDICT_CONTEXT = "post-merge-dev-test/verdict"
 GRACE = timedelta(hours=6)
 HEARTBEAT_GRACE = timedelta(hours=2)
+MAX_HISTORY_PAGES = 20
 
 
 class LivenessRefused(ValueError):
@@ -33,6 +34,7 @@ class AdmittedBuild:
     sha: str
     completed_at: datetime
     run_id: int
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -65,45 +67,56 @@ def _validate_sha(value: Any) -> str:
 
 
 def latest_admitted_build(repo: str, *, api: Callable[[str], Any]) -> AdmittedBuild | None:
-    payload = api(
-        f"repos/{repo}/actions/workflows/app-image-build.yml/runs"
-        "?branch=main&event=push&status=completed&per_page=20"
-    )
-    if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
-        raise LivenessRefused("build_runs_unreadable")
     candidates = []
-    for run in payload["workflow_runs"]:
-        if not isinstance(run, dict):
-            continue
-        repository = run.get("repository") or {}
-        head_repository = run.get("head_repository") or {}
-        if (run.get("status") != "completed" or run.get("conclusion") != "success"
-                or run.get("event") != "push"
-                or run.get("head_branch") != "main"
-                or run.get("path") not in {None, BUILD_WORKFLOW}
-                or repository.get("full_name") != repo
-                or head_repository.get("full_name") != repo):
-            continue
-        try:
-            sha = _validate_sha(run.get("head_sha"))
-            completed_at = _timestamp(run.get("completed_at") or run.get("updated_at"))
-            run_id = int(run["id"])
-            if run_id < 1:
-                raise ValueError()
-        except (KeyError, TypeError, ValueError, LivenessRefused):
-            continue
-        candidates.append(AdmittedBuild(sha, completed_at, run_id))
+    for page in range(1, MAX_HISTORY_PAGES + 1):
+        payload = api(
+            f"repos/{repo}/actions/workflows/app-image-build.yml/runs"
+            f"?branch=main&event=push&status=completed&per_page=100&page={page}"
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
+            raise LivenessRefused("build_runs_unreadable")
+        runs = payload["workflow_runs"]
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            repository = run.get("repository") or {}
+            head_repository = run.get("head_repository") or {}
+            if (run.get("status") != "completed" or run.get("conclusion") != "success"
+                    or run.get("event") != "push"
+                    or run.get("head_branch") != "main"
+                    or run.get("path") not in {None, BUILD_WORKFLOW}
+                    or repository.get("full_name") != repo
+                    or head_repository.get("full_name") != repo):
+                continue
+            try:
+                sha = _validate_sha(run.get("head_sha"))
+                completed_at = _timestamp(run.get("completed_at") or run.get("updated_at"))
+                created_at = _timestamp(run.get("created_at")) if run.get("created_at") else completed_at
+                run_id = int(run["id"])
+                if run_id < 1:
+                    raise ValueError()
+            except (KeyError, TypeError, ValueError, LivenessRefused):
+                continue
+            candidates.append(AdmittedBuild(sha, completed_at, run_id, created_at))
+        if len(runs) < 100:
+            break
+    else:
+        raise LivenessRefused("build_runs_incomplete")
     if not candidates:
         return None
-    return max(candidates, key=lambda candidate: candidate.completed_at)
+    # GitHub's workflow-run listing is ordered by creation. A rerun may complete
+    # later than a newer run, so completion time must not select a historical SHA.
+    return max(candidates, key=lambda candidate: candidate.created_at or candidate.completed_at)
 
 
-def _latest_status(statuses: Any, context: str) -> dict[str, Any] | None:
+def _latest_status(statuses: Any, context: str, *, allow_rotated_context: bool = False) -> dict[str, Any] | None:
     if not isinstance(statuses, list):
         raise LivenessRefused("statuses_unreadable")
     matching = [
         status for status in statuses
-        if isinstance(status, dict) and status.get("context") == context
+        if (isinstance(status, dict) and isinstance(status.get("context"), str)
+                and (status.get("context") == context
+                     or (allow_rotated_context and status["context"].startswith(context + "/"))))
     ]
     if not matching:
         return None
@@ -120,15 +133,17 @@ def evaluate(
     """Evaluate freshness without treating the dev result as a merge gate."""
     current = now.astimezone(timezone.utc)
     verdict = _latest_status(verdict_statuses, VERDICT_CONTEXT)
+    verdict_at = _status_timestamp(verdict) if verdict is not None else None
     if (build is not None and verdict is not None
             and verdict.get("state") in {"success", "failure"}
-            and _status_timestamp(verdict) >= build.completed_at):
+            and verdict_at is not None and verdict_at >= build.completed_at
+            and current - verdict_at <= HEARTBEAT_GRACE):
         # A fresh terminal verdict is itself proof that the controller was
         # alive. This also lets a fresh verdict recover a stale heartbeat
         # signal while the next heartbeat update is in flight.
         return LivenessResult(True, "fresh_dev_verdict", f"dev verdict is fresh for {build.sha[:12]}")
 
-    heartbeat = _latest_status(heartbeat_statuses, HEARTBEAT_CONTEXT)
+    heartbeat = _latest_status(heartbeat_statuses, HEARTBEAT_CONTEXT, allow_rotated_context=True)
     if heartbeat is None or heartbeat.get("state") != "success":
         return LivenessResult(False, "heartbeat_missing", "post-merge dev controller heartbeat is missing")
     heartbeat_age = current - _status_timestamp(heartbeat)
@@ -150,13 +165,32 @@ def _github(path: str) -> Any:
     return json.loads(result.stdout)
 
 
+def _status_history(repo: str, sha: str, context: str, *, api: Callable[[str], Any]) -> list[Any]:
+    """Read status history until the requested context is found or exhausted."""
+    collected: list[Any] = []
+    for page in range(1, MAX_HISTORY_PAGES + 1):
+        statuses = api(f"repos/{repo}/commits/{sha}/statuses?per_page=100&page={page}")
+        if not isinstance(statuses, list):
+            raise LivenessRefused("statuses_unreadable")
+        collected.extend(statuses)
+        matching = [
+            status for status in statuses
+            if isinstance(status, dict) and isinstance(status.get("context"), str)
+            and (status["context"] == context or
+                 (context == HEARTBEAT_CONTEXT and status["context"].startswith(context + "/")))
+        ]
+        if matching or len(statuses) < 100:
+            return collected
+    raise LivenessRefused("statuses_incomplete")
+
+
 def check(repo: str, github_sha: str, *, api: Callable[[str], Any] = _github,
           now: datetime | None = None) -> LivenessResult:
     _validate_sha(github_sha)
     current = now or datetime.now(timezone.utc)
     build = latest_admitted_build(repo, api=api)
-    heartbeat = api(f"repos/{repo}/commits/{github_sha}/statuses?per_page=100")
-    verdict = api(f"repos/{repo}/commits/{build.sha}/statuses?per_page=100") if build else []
+    heartbeat = _status_history(repo, github_sha, HEARTBEAT_CONTEXT, api=api)
+    verdict = _status_history(repo, build.sha, VERDICT_CONTEXT, api=api) if build else []
     return evaluate(build, heartbeat_statuses=heartbeat, verdict_statuses=verdict, now=current)
 
 

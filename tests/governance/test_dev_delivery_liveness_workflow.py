@@ -68,6 +68,15 @@ def test_liveness_check_reds_on_missing_heartbeat() -> None:
     assert fresh.ok
     assert fresh.reason == "fresh_dev_verdict"
 
+    stale_verdict = liveness.evaluate(
+        build,
+        heartbeat_statuses=[],
+        verdict_statuses=[_status(liveness.VERDICT_CONTEXT, 3)],
+        now=NOW,
+    )
+    assert not stale_verdict.ok
+    assert stale_verdict.reason == "heartbeat_missing"
+
 
 def test_workflow_is_scheduled_read_only_and_calls_production_checker() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
@@ -110,7 +119,8 @@ def test_controller_status_signals_use_bounded_github_status_calls(monkeypatch) 
     controller.publish_heartbeat(SHA)
     controller.publish_dev_verdict(candidate, {"result": "passed"})
     contexts = [call[0][6].split("=", 1)[1] for call in calls]
-    assert contexts == [controller.DEV_HEARTBEAT_CONTEXT, controller.DEV_VERDICT_CONTEXT]
+    assert contexts[0].startswith(controller.DEV_HEARTBEAT_CONTEXT + "/")
+    assert contexts[1] == controller.DEV_VERDICT_CONTEXT
     assert all(call[0][:3] == ["gh", "api", f"repos/{controller.REPOSITORY}/statuses/{SHA}"] for call in calls)
 
 
@@ -127,12 +137,53 @@ def test_checker_reads_latest_admitted_build_and_both_status_surfaces() -> None:
                                        "path": liveness.BUILD_WORKFLOW, "completed_at": completed,
                                        "repository": {"full_name": "o/r"},
                                        "head_repository": {"full_name": "o/r"}}]}
-        if path.endswith(f"commits/{SHA}/statuses?per_page=100"):
+        if path.endswith(f"commits/{SHA}/statuses?per_page=100&page=1"):
             return [_status(liveness.VERDICT_CONTEXT, 0.5)]
         return [_status(liveness.HEARTBEAT_CONTEXT, 0.1)]
 
     result = liveness.check("o/r", head_sha, api=api, now=NOW)
     assert result.ok and result.reason == "fresh_dev_verdict"
     assert any("actions/workflows/app-image-build.yml/runs" in path for path in seen)
-    assert any(path.endswith(f"commits/{SHA}/statuses?per_page=100") for path in seen)
-    assert any(path.endswith(f"commits/{head_sha}/statuses?per_page=100") for path in seen)
+    assert any(path.endswith(f"commits/{SHA}/statuses?per_page=100&page=1") for path in seen)
+    assert any(path.endswith(f"commits/{head_sha}/statuses?per_page=100&page=1") for path in seen)
+
+
+def test_checker_reads_verdict_from_later_status_page() -> None:
+    build = _build(7)
+    pages = {
+        1: [_status(liveness.HEARTBEAT_CONTEXT, 0.1)] * 100,
+        2: [_status(liveness.VERDICT_CONTEXT, 0.5)],
+    }
+
+    def api(path: str):
+        if "actions/workflows" in path:
+            return {"workflow_runs": [{"id": 123, "status": "completed", "conclusion": "success",
+                                       "event": "push", "head_branch": "main", "head_sha": SHA,
+                                       "path": liveness.BUILD_WORKFLOW,
+                                       "completed_at": build.completed_at.isoformat(),
+                                       "repository": {"full_name": "o/r"},
+                                       "head_repository": {"full_name": "o/r"}}]}
+        page = int(path.rsplit("page=", 1)[1])
+        return pages[page]
+
+    result = liveness.check("o/r", SHA, api=api, now=NOW)
+    assert result.ok and result.reason == "fresh_dev_verdict"
+
+
+def test_latest_admitted_build_uses_creation_order_and_paginates_failures() -> None:
+    newer = {"id": 200, "status": "completed", "conclusion": "success", "event": "push",
+             "head_branch": "main", "head_sha": "b" * 40, "path": liveness.BUILD_WORKFLOW,
+             "created_at": "2026-10-19T10:00:00Z", "completed_at": "2026-10-19T10:05:00Z",
+             "repository": {"full_name": "o/r"}, "head_repository": {"full_name": "o/r"}}
+    rerun_old = {**newer, "id": 100, "head_sha": SHA, "created_at": "2026-10-19T09:00:00Z",
+                 "completed_at": "2026-10-19T11:00:00Z"}
+    failed = {**newer, "id": 300, "conclusion": "failure", "created_at": "2026-10-19T11:00:00Z"}
+
+    def api(path: str):
+        page = int(path.rsplit("page=", 1)[1])
+        return {"workflow_runs": ([failed, newer, rerun_old] if page == 1 else [])}
+
+    admitted = liveness.latest_admitted_build("o/r", api=api)
+    assert admitted is not None
+    assert admitted.sha == "b" * 40
+    assert admitted.run_id == 200
