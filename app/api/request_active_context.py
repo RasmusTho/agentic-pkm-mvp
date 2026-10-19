@@ -157,22 +157,6 @@ def reject_carrier_on_legacy_read(request: Request) -> None:
         )
 
 
-def refuse_carrier_until_binding_aware(request: Request) -> None:
-    """Refuse a carrier-bearing request on a read surface that is not binding-aware yet.
-
-    Orientation frames, emitted context bundles, resurfacing bundles, and the
-    Heimdal receipt/meeting projections read process-global stores keyed only by
-    bundle/session id. Until MVR-05B4 (#6139) makes them binding-aware, a scoped
-    request is refused rather than answered from another binding's state.
-    """
-
-    if "X-Active-Context-Session" in request.headers or "X-Active-Context-Override" in request.headers:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"error": "capability_not_ready", "capability": "mvr05b4_binding_aware_read"},
-        )
-
-
 # --- MVR-05B3: in-place scoped reads for the remaining API route modules -----
 #
 # Same journey split as the MVR-05B2 companion reads: a carrier-bearing request
@@ -190,6 +174,9 @@ class ScopedRouteRead:
     vault_binding_id: str | None
     root: Path | None
     context_generation: int
+    # The immutable request context, for a read that queries by binding set
+    # (MVR-05B4c5 query-backed context bundles).
+    context: ActiveContextSetV1 | None = None
 
 
 _SCOPED_ROUTE_READ: ContextVar[ScopedRouteRead | None] = ContextVar(
@@ -226,12 +213,14 @@ def scoped_route_read_window(context: ActiveContextSetV1) -> Iterator[ScopedRout
                     vault_binding_id=roots[0].vault_binding_id,
                     root=roots[0].root,
                     context_generation=roots[0].context_generation,
+                    context=context,
                 )
             else:
                 scoped = ScopedRouteRead(
                     vault_binding_id=None,
                     root=None,
                     context_generation=context.generation,
+                    context=context,
                 )
             token = _SCOPED_ROUTE_READ.set(scoped)
             try:
@@ -320,7 +309,6 @@ def route_read_vault_root_or_selection_required(
 __all__ = [
     "ScopedRouteRead",
     "current_scoped_route_read",
-    "refuse_carrier_until_binding_aware",
     "reject_carrier_on_legacy_read",
     "reject_scoped_vault_mutation",
     "require_scoped_read_context",

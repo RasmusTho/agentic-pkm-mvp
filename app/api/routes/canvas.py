@@ -45,6 +45,10 @@ from app.api.compatibility_mutation import (
     seal_vault_mutation,
 )
 from app.reasoning.facade import ReasoningModeFacade, get_reasoning_mode_facade
+from app.instance.compatibility_binding import (
+    CompatibilityBindingUnavailableError,
+    compatibility_binding_for_root,
+)
 from app.orientation.leave_point_cursor import capture_leave_point_cursor
 from app.panel.canvas_pipeline import CanvasPanelPipeline
 from app.panel.confirmation import _proposal_store as _panel_proposal_store
@@ -338,9 +342,22 @@ def _capture_leave_point_for_session(
             capture_reason=capture_reason,
             last_session_id=session.session_id,
             content_hash_at_capture=_content_hash(session.note_path.read_text(encoding="utf-8")),
+            vault_binding_id=_leave_point_binding(vault_root),
         )
     except Exception:
         return
+
+
+def _leave_point_binding(vault_root: Path) -> str | None:
+    """The binding this carrier-free capture proves for its session root (MVR-05B4c4).
+
+    An unprovable root captures an unstamped (legacy display-name only) cursor.
+    """
+
+    try:
+        return compatibility_binding_for_root(vault_root)
+    except CompatibilityBindingUnavailableError:
+        return None
 
 
 @router.post("/sessions", response_model=OpenSessionResponse)

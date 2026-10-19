@@ -657,6 +657,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Orientation is a derived status projection; preserve its
             # unknown-on-corruption proof when its runtime adapter changes.
             "app/orientation/runtime.py",
+            # The leave-point cursor is the derived orientation trace the
+            # status projection reads (MVR-05B4c4); its route proofs are in tests/api.
+            "app/orientation/leave_point_cursor.py",
             "tests/observability/",
             "docs/OBSERVABILITY.md",
         ),
@@ -827,6 +830,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # surface as the consumer that later admits the memory to recall.
             "app/knowledge_compilation/review_admission.py",
             "app/retrieval/",
+            # Emitted ContextBundles are the retrieval capability's process-local
+            # addressability cache (MVR-05B4c5); its route proofs are in tests/api.
+            "app/context_bundles/",
             "app/index/",
             # Index rebuild is the memory-retrieval CLI producer for the
             # canonical vector rows exercised by the index suites.
@@ -843,6 +849,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/outbox/events.py",
             "tests/agent_memory/",
             "tests/retrieval/",
+            "tests/context_bundles/",
             "tests/indexer/",
             "tests/e2e/test_index_rules_e2e.py",
             "tests/e2e/test_promotion_intent_to_index.py",
@@ -852,6 +859,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/agent_memory",
             "tests/knowledge_compilation/test_review_admission_handoff.py",
             "tests/retrieval",
+            "tests/context_bundles",
+            "tests/api/test_context_bundle_route.py",
+            "tests/api/test_mvr05b4c_emitted_bundle_binding.py",
             "tests/index",
             "tests/indexer",
             "tests/search",
