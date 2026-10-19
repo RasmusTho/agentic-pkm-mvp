@@ -35,8 +35,13 @@ def _instance_authority(tmp_path: Path, channel: str, vault_root: Path):
         OwnershipLedger(ownership_root),
     )
     binding_id = f"binding-{channel}"
+    vault_id = "00000000-0000-4000-8000-000000000001"
+    local_instance_id = "00000000-0000-4000-8000-000000000002"
     runtime.registry.register(
-        VaultRegistration(binding_id, f"path:{vault_root}", str(vault_root)),
+        VaultRegistration(
+            binding_id, f"path:{vault_root}", str(vault_root),
+            vault_id, local_instance_id,
+        ),
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
     runtime.ledger.bootstrap_legacy_owners(
@@ -1114,16 +1119,22 @@ def test_configured_capture_producer_receipt_resumes_real_snapshot_cleanup_only(
     assert events == ["qualify", "lock", "qualify", "start", "retire"]
 
 
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("legacy_root", [False, True])
 def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    channel: str, legacy_root: bool,
 ) -> None:
     """An old installed runtime can launch the reviewed helper without adoption."""
     import io
-    from contextlib import contextmanager, redirect_stdout
+    import os
+    from contextlib import redirect_stdout
+    import subprocess
 
     from app.ingest import vault_alpha as producer
     from app.ops import native_source_bootstrap, postgres_deploy_linux as linux
-    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan
+    from app.ops.postgres_deploy import AuthorityCutover
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
     from app.stores.memory import MemoryObjectStore
 
     root = (tmp_path / "vault").resolve()
@@ -1137,10 +1148,21 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
     note = root / "Notes" / "candidate.md"
     note.parent.mkdir()
     note.write_text("---\ntrust: human\nreview_state: reviewed\n---\nCandidate body.\n")
+    settings = root / "settings"
+    settings.mkdir()
+    for name in ("paths.md", "workflow.md", "design-handoff.md", "companion-ui.md"):
+        (settings / name).write_text("---\n---\n")
+    (settings / "vault.md").write_text(
+        "---\nvaultId: 00000000-0000-4000-8000-000000000001\n---\n"
+    )
+    (settings / "local.md").write_text(
+        "---\nlocalInstanceId: 00000000-0000-4000-8000-000000000002\n---\n"
+    )
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
-    monkeypatch.setenv("VAULT_ROOT", str(root))
+    container_root = "/app/vault" if legacy_root else str(root)
+    monkeypatch.setenv("PKM_ENVIRONMENT", channel)
+    monkeypatch.setenv("VAULT_ROOT", container_root)
     monkeypatch.setenv("VCS_REF", REVISION)
     monkeypatch.setenv("BUILT_AT", "candidate-build")
     monkeypatch.setattr(producer, "classify_run", lambda *_args, **_kwargs: {})
@@ -1159,88 +1181,175 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
     monkeypatch.setattr("app.services.note_uuid.DEFAULT_WRITE_GUARD", guard)
     monkeypatch.setattr("app.write_guard.DEFAULT_WRITE_GUARD", guard)
     monkeypatch.setattr("app.services.companion_note.DEFAULT_WRITE_GUARD", guard)
-    state_root, ownership_root = _instance_authority(tmp_path, "dev", root)
+    state_root, ownership_root = _instance_authority(tmp_path, channel, root)
     _map_fixed_container_mounts(
         monkeypatch,
         state_root=state_root,
         ownership_root=ownership_root,
         selected_root=root,
-        legacy_root=False,
+        legacy_root=legacy_root,
     )
     monkeypatch.setattr(native_source_bootstrap, "quiesce_owned_container", lambda *_args: True)
 
     operation_id = str(uuid4())
     journal_dir = tmp_path / "journal"
-    journal_dir.mkdir()
+    journal_dir.mkdir(mode=0o700)
     journal = SimpleNamespace(
-        directory=journal_dir, channel="dev",
+        directory=journal_dir, channel=channel,
         read=lambda: SimpleNamespace(terminal_result="failed"),
     )
-    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal, uid=501))
-    selected = AuthorityCutover("vault-alpha", str(root), "/srv/instance-ownership")
-    plan = DeployPlan(
-        "dev", REVISION, ("api", "worker", "watcher"),
-        ("postgres-db", "postgres-api", "postgres-worker", "postgres-watcher", "heimdal-api-ingress"),
-        image_digest=DIGEST, authority_cutover=selected,
+    checkout = tmp_path / "checkout"
+    deploy = checkout / "config" / "deploy"
+    deploy.mkdir(parents=True)
+    runtime_env = checkout / "runtime.env"
+    database_url = (
+        "postgresql+psycopg:///?host=db&port=5432&dbname="
+        + ("app_dev" if channel == "dev" else "app_test")
+        + "&user=app"
     )
-    snapshot = linux.SourceIdentityRuntimeSnapshot(
-        "c" * 64, "d" * 64, ("api", "watcher", "worker"),
-        ("api", "watcher", "worker"), str(root),
-        "docker-compose.full-host-vault.yml",
-        (("DATABASE_URL", "postgresql+psycopg:///?host=db"),
-         ("LLM_PROVIDER", "mock"), ("PKM_ENVIRONMENT", "dev"),
-         ("STORE_BACKEND", "pg"), ("VAULT_ROOT", str(root))),
+    (deploy / f"{channel}.env").write_text(
+        f"WATCHER_RUNTIME_ENV_FILE={runtime_env}\n"
+        f"VAULT_HOST_ROOT={root}\n"
+        f"INSTANCE_OWNERSHIP_HOST_STATE_DIR={ownership_root}\n"
+        f"DATABASE_URL={database_url}\n"
     )
-    effects.qualify_source_identity_authority = lambda *_args: plan  # type: ignore[method-assign]
-    effects.source_identity_runtime_snapshot = lambda *_args, **_kwargs: snapshot  # type: ignore[method-assign]
-    candidate_checks: list[bool] = []
-    effects.require_source_identity_candidate = (  # type: ignore[method-assign]
-        lambda _plan, _selected, *, acquire, source_snapshot: candidate_checks.append(acquire)
+    runtime_env.write_text(
+        f"LLM_PROVIDER=mock\nDATABASE_URL={database_url}\n"
+        f"VAULT_ROOT={root}\nWATCHER_VAULT_PATH={root}\n"
     )
+    (checkout / "config" / "runtime.defaults.env").write_text(
+        "EMBED_PROVIDER=mock\nEMBED_MODEL=accepted\nSTORE_BACKEND=pg\n"
+    )
+    for name in (
+        "docker-compose.yaml", f"docker-compose.{channel}.yml", "docker-compose.bws.yml",
+        "docker-compose.legacy-vault.yml" if legacy_root else "docker-compose.full-host-vault.yml",
+        *(('docker-compose.test-vault.yml',) if channel == "test" else ()),
+    ):
+        (checkout / name).write_text("services: {}\n")
+    config = SimpleNamespace(
+        channel=channel, root=checkout, journal=journal,
+        uid=os.getuid(), gid=os.getgid(), password_file=tmp_path / "password",
+        runtime_env_file=runtime_env,
+    )
+    effects = linux.LinuxEffects(config)
+    selected = AuthorityCutover(f"binding-{channel}", str(root), str(ownership_root))
+    installed = {
+        "DATABASE_URL": database_url,
+        "LLM_PROVIDER": "mock",
+        "EMBED_PROVIDER": "mock",
+        "EMBED_MODEL": "accepted",
+        "STORE_BACKEND": "pg",
+        "PKM_ENVIRONMENT": channel,
+        "VAULT_HOST_ROOT": str(root),
+        "VAULT_ROOT": container_root,
+        "WATCHER_VAULT_PATH": container_root,
+    }
+    rows = []
+    for index, service in enumerate(("api", "worker", "watcher"), 1):
+        rows.append({
+            "Id": f"{index:064x}",
+            "Image": f"sha256:{index:064x}",
+            "Config": {
+                "Image": f"example/{service}:installed",
+                "Env": [f"{key}={value}" for key, value in installed.items()],
+                "User": f"{os.getuid()}:{os.getgid()}",
+                "Labels": {
+                    "com.docker.compose.project": f"pkm-{channel}",
+                    "com.docker.compose.service": service,
+                    "com.docker.compose.oneoff": "False",
+                },
+            },
+            "State": {"Status": "running"},
+            "Mounts": [
+                {"Type": "bind", "Source": str(root), "Destination": container_root, "RW": True},
+                {"Type": "bind", "Source": str(ownership_root),
+                 "Destination": "/app/instance-ownership", "RW": True},
+                {"Type": "volume", "Source": str(state_root),
+                 "Destination": "/app/instance-state", "Name": f"pkm-{channel}_instance-state"},
+            ],
+        })
+    candidate_checks: list[str] = []
     events: list[str] = []
+    worker_statuses: list[int] = []
 
-    @contextmanager
-    def lock(**_kwargs):
-        events.append("lock")
-        yield object()
-
-    effects.channel_lock = lock  # type: ignore[method-assign]
-    effects.failed_reconciliation_lock = lock  # type: ignore[method-assign]
-    effects.retire_reconciled_channel_lock = lambda *_args, **_kwargs: events.append("retire")  # type: ignore[method-assign]
-
-    def compose(*args, **kwargs):
-        action = str(args[0])
+    def command(argv, **kwargs):
+        if argv[:2] == ["docker", "ps"]:
+            return "\n".join(row["Id"] for row in rows)
+        if argv[:3] == ["docker", "inspect", "--type"]:
+            return json.dumps(rows)
+        if argv[:3] == ["docker", "volume", "inspect"]:
+            return json.dumps([{"Mountpoint": str(state_root)}])
+        if argv[:3] == ["docker", "image", "inspect"]:
+            candidate_checks.append("inspect")
+            return json.dumps([{
+                "Config": {"Labels": {"org.opencontainers.image.revision": REVISION}},
+                "RepoDigests": [IMAGE_REPOSITORY + "@" + DIGEST],
+            }])
+        assert argv[:2] == ["docker", "compose"]
+        action = next(
+            value for value in ("config", "pull", "stop", "run", "start")
+            if value in argv
+        )
         events.append(action)
+        environment = kwargs["env"]
+        if action == "config":
+            resolved = {key: environment[key] for key in installed}
+            return json.dumps({"services": {"api": {"environment": resolved}}})
         if action != "run":
             return ""
-        assert kwargs["candidate"] is plan
-        assert kwargs["source_snapshot"] is snapshot
-        environment_keys = {
-            args[index + 1] for index, value in enumerate(args[:-1]) if value == "-e"
+        assert environment["APP_IMAGE_TAG"] == REVISION
+        assert environment["APP_IMAGE_DIGEST_SUFFIX"] == "@" + DIGEST
+        environment_selectors = {
+            argv[index + 1] for index, value in enumerate(argv[:-1]) if value == "-e"
         }
+        environment_keys = {value for value in environment_selectors if "=" not in value}
         assert "VCS_REF" not in environment_keys
         assert "BUILT_AT" not in environment_keys
         bootstrap = next(
-            value.split("=", 1)[1] for value in args
+            value.split("=", 1)[1] for value in argv
             if value.startswith("NATIVE_SOURCE_BOOTSTRAP=")
         )
+        for key in environment_keys:
+            monkeypatch.setenv(key, environment[key])
         monkeypatch.setenv("NATIVE_SOURCE_BOOTSTRAP", bootstrap)
-        module_index = args.index("app.ops.native_source_identity_persistence")
-        worker_args = list(args[module_index + 1:module_index + 5])
+        monkeypatch.setenv("VCS_REF", REVISION)
+        monkeypatch.setenv("BUILT_AT", "candidate-build")
+        module_index = argv.index("app.ops.native_source_identity_persistence")
+        worker_args = list(argv[module_index + 1:module_index + 5])
         output = io.StringIO()
         with redirect_stdout(output):
-            assert __import__(
+            status = __import__(
                 "app.ops.native_source_identity_persistence", fromlist=["worker_main"],
-            ).worker_main(worker_args) == 0
+            ).worker_main(worker_args)
+        worker_statuses.append(status)
+        assert status == 0
         return output.getvalue()
 
-    effects.compose = compose  # type: ignore[method-assign]
+    real_run = subprocess.run
+
+    def run(argv, **kwargs):
+        if len(argv) > 2 and "require_existing_authority_binding" in argv[2]:
+            if os.geteuid() != 0:
+                kwargs.pop("extra_groups")
+            return real_run(argv, **kwargs)
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(linux, "_command", command)
+    monkeypatch.setattr(linux.subprocess, "run", run)
+    monkeypatch.setattr(linux, "ensure_candidate_object", lambda *_args: candidate_checks.append("source"))
+    monkeypatch.setattr(linux, "require_file_protocol", lambda *_args: candidate_checks.append("protocol"))
+    monkeypatch.setattr(linux, "_capture_watch_configured", lambda _config: False)
 
     receipt = effects.persist_source_identity(operation_id, REVISION, DIGEST, selected)
-    assert receipt["terminal_state"] == "committed"
+    assert receipt["terminal_state"] == "committed", (
+        receipt, events, candidate_checks, worker_statuses,
+    )
     assert receipt["eligible"] is True
     assert "uuid:" in note.read_text()
-    assert candidate_checks == [True, False]
+    assert candidate_checks == [
+        "source", "protocol", "inspect",
+        "source", "protocol", "inspect",
+    ]
     assert "ensure uuid" in guard_actions
     assert "up" not in events
 
@@ -1280,7 +1389,11 @@ def test_real_preflight_retains_channel_and_selected_topology(
 @pytest.mark.parametrize("legacy_root", [False, True])
 @pytest.mark.parametrize(
     "drift",
-    ["helper-revision", "runtime-channel", "binding", "missing-binding"],
+    [
+        "helper-revision", "missing-helper-revision",
+        "runtime-channel", "missing-runtime-channel",
+        "binding", "missing-binding",
+    ],
 )
 def test_real_worker_preflight_refuses_wrong_helper_runtime_or_binding_before_producer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, channel: str,
@@ -1312,8 +1425,12 @@ def test_real_worker_preflight_refuses_wrong_helper_runtime_or_binding_before_pr
     monkeypatch.setenv("WATCHER_VAULT_PATH", container_root)
     if drift == "helper-revision":
         monkeypatch.setenv("VCS_REF", "b" * 40)
+    elif drift == "missing-helper-revision":
+        monkeypatch.delenv("VCS_REF")
     elif drift == "runtime-channel":
         monkeypatch.setenv("PKM_ENVIRONMENT", "test" if channel == "dev" else "dev")
+    elif drift == "missing-runtime-channel":
+        monkeypatch.delenv("PKM_ENVIRONMENT")
     elif drift == "binding":
         monkeypatch.setenv("VAULT_ROOT", str(wrong_root))
         monkeypatch.setenv("WATCHER_VAULT_PATH", str(wrong_root))
