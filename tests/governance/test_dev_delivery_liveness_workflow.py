@@ -100,6 +100,18 @@ def test_workflow_is_scheduled_read_only_and_calls_production_checker() -> None:
     assert "secrets" not in WORKFLOW.read_text(encoding="utf-8")
 
 
+def test_signal_writer_uses_approved_actions_dispatch_boundary() -> None:
+    heavy_workflow = yaml.safe_load((ROOT / ".github/workflows/post-merge-heavy-tests.yml").read_text())
+    signal_job = heavy_workflow["jobs"]["record-liveness-signal"]
+    assert signal_job["permissions"] == {"statuses": "write"}
+    assert signal_job["if"] == (
+        "github.event_name == 'workflow_dispatch' && "
+        "github.event.inputs.liveness_signal == 'status'"
+    )
+    resolve = heavy_workflow["jobs"]["resolve"]
+    assert "liveness_signal != 'status'" in resolve["if"]
+
+
 def test_controller_latest_entrypoint_publishes_heartbeat_and_wires_dev_verdict(monkeypatch, tmp_path: Path) -> None:
     heartbeat = []
     poll_kwargs = []
@@ -116,7 +128,7 @@ def test_controller_latest_entrypoint_publishes_heartbeat_and_wires_dev_verdict(
     assert poll_kwargs[0][1]["signal"] is controller.publish_dev_verdict
 
 
-def test_controller_status_signals_use_bounded_github_status_calls(monkeypatch) -> None:
+def test_controller_status_signals_use_bounded_actions_dispatch(monkeypatch) -> None:
     calls = []
 
     def run(argv: list[str], **kwargs: object) -> SimpleNamespace:
@@ -127,10 +139,13 @@ def test_controller_status_signals_use_bounded_github_status_calls(monkeypatch) 
     candidate = controller.Candidate(SHA, "sha256:" + "b" * 64, 123, 1, 456)
     controller.publish_heartbeat(SHA)
     controller.publish_dev_verdict(candidate, {"result": "passed"})
-    contexts = [call[0][6].split("=", 1)[1] for call in calls]
+    contexts = [next(arg.split("=", 1)[1] for arg in call[0] if arg.startswith("liveness_context="))
+                for call in calls]
     assert contexts[0].startswith(controller.DEV_HEARTBEAT_CONTEXT + "/")
     assert contexts[1] == controller.DEV_VERDICT_CONTEXT
-    assert all(call[0][:3] == ["gh", "api", f"repos/{controller.REPOSITORY}/statuses/{SHA}"] for call in calls)
+    assert all(call[0][:3] == ["gh", "workflow", "run"] for call in calls)
+    assert all("post-merge-heavy-tests.yml" in call[0] for call in calls)
+    assert all("liveness_signal=status" in call[0] for call in calls)
 
 
 def test_checker_reads_latest_admitted_build_and_both_status_surfaces() -> None:

@@ -355,18 +355,25 @@ DEV_HEARTBEAT_CONTEXT = 'post-merge-dev-test/heartbeat'
 DEV_VERDICT_CONTEXT = 'post-merge-dev-test/verdict'
 
 
-def _publish_status(sha: str, context: str, state: str, description: str) -> None:
-    if re.fullmatch(r'[0-9a-f]{40}', sha) is None or state not in {'failure', 'success'}:
+def _dispatch_liveness_signal(sha: str, context: str, state: str, description: str) -> None:
+    """Ask the approved Actions-write boundary to record a commit status."""
+    if (re.fullmatch(r'[0-9a-f]{40}', sha) is None
+            or not context or len(context) > 140
+            or state not in {'failure', 'success'}):
         raise CandidateRefused('liveness_signal_refused')
-    command = ['gh', 'api', f'repos/{REPOSITORY}/statuses/{sha}',
-               '-f', f'state={state}', '-f', f'context={context}',
-               '-f', f'description={description[:140]}']
-    environment = {key: value for key, value in os.environ.items()
-                   if key not in {'SSH_AUTH_SOCK'}}
-    result = subprocess.run(command, env=environment, capture_output=True, text=True,
-                            timeout=60, check=False)
-    if result.returncode != 0:
-        raise CandidateRefused('liveness_signal_failed')
+    command = ['gh', 'workflow', 'run', HEAVY_WORKFLOW, '--repo', REPOSITORY, '--ref', 'main',
+               '-f', 'liveness_signal=status', '-f', f'liveness_sha={sha}',
+               '-f', f'liveness_context={context}', '-f', f'liveness_state={state}',
+               '-f', f'liveness_description={description[:140]}']
+    environment = {key: value for key, value in os.environ.items() if key not in {'SSH_AUTH_SOCK'}}
+    for attempt in range(3):
+        result = subprocess.run(command, env=environment, capture_output=True, text=True,
+                                timeout=60, check=False)
+        if result.returncode == 0:
+            return
+        if attempt < 2:
+            time.sleep(20)
+    raise CandidateRefused('liveness_signal_failed')
 
 
 def _heartbeat_context(now: datetime | None = None) -> str:
@@ -377,7 +384,8 @@ def _heartbeat_context(now: datetime | None = None) -> str:
 
 def publish_heartbeat(sha: str) -> None:
     """Publish the controller heartbeat without exposing deployment state."""
-    _publish_status(sha, _heartbeat_context(), 'success', 'post-merge dev controller heartbeat')
+    _dispatch_liveness_signal(sha, _heartbeat_context(), 'success',
+                               'post-merge dev controller heartbeat')
 
 
 def publish_dev_verdict(candidate: Candidate, outcome: dict[str, Any]) -> None:
@@ -386,8 +394,8 @@ def publish_dev_verdict(candidate: Candidate, outcome: dict[str, Any]) -> None:
     if result not in {'passed', 'failed'}:
         raise CandidateRefused('liveness_verdict_refused')
     state = 'success' if result == 'passed' else 'failure'
-    _publish_status(candidate.sha, DEV_VERDICT_CONTEXT,
-                    state, f'dev verdict {result} for {candidate.sha[:12]}')
+    _dispatch_liveness_signal(candidate.sha, DEV_VERDICT_CONTEXT,
+                               state, f'dev verdict {result} for {candidate.sha[:12]}')
 
 
 def _validate_heavy(heavy: Any) -> dict[str, Any]:

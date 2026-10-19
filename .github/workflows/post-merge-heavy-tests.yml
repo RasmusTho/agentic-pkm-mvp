@@ -38,19 +38,62 @@ on:
         description: "Comma-separated failing test node IDs (bounded)"
         required: false
         default: ""
+      liveness_signal:
+        description: "Credential-free controller signal to record as a commit status"
+        required: false
+        default: ""
+      liveness_sha:
+        description: "Target SHA for a controller heartbeat or dev verdict"
+        required: false
+        default: ""
+      liveness_context:
+        description: "Commit-status context for a controller liveness signal"
+        required: false
+        default: ""
+      liveness_state:
+        description: "Commit-status state for a controller liveness signal"
+        required: false
+        default: ""
+      liveness_description:
+        description: "Bounded description for a controller liveness signal"
+        required: false
+        default: ""
 
 # Never cancel a started run. Host verdicts are grouped per SHA, so a verdict
 # never displaces a pending verdict for another commit; watchdog and manual
 # runs share one group.
 concurrency:
-  group: post-merge-heavy-tests-${{ github.event.inputs.sha || 'watchdog' }}
+  group: post-merge-heavy-tests-${{ github.event.inputs.sha || github.event.inputs.liveness_sha || 'watchdog' }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  record-liveness-signal:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.liveness_signal == 'status'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      statuses: write
+    steps:
+      - name: Record controller liveness status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.inputs.liveness_sha }}
+          CONTEXT: ${{ github.event.inputs.liveness_context }}
+          STATE: ${{ github.event.inputs.liveness_state }}
+          DESCRIPTION: ${{ github.event.inputs.liveness_description }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$STATE" == success || "$STATE" == failure ]]
+          [[ -n "$CONTEXT" && ${#CONTEXT} -le 140 ]]
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            -f state="$STATE" -f context="$CONTEXT" -f description="$DESCRIPTION" >/dev/null
+
   resolve:
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.liveness_signal != 'status'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

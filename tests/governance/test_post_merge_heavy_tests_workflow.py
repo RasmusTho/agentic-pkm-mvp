@@ -112,7 +112,9 @@ def test_workflow_records_status_and_keeps_rolling_alert() -> None:
     triggers = workflow[True]  # PyYAML parses the bare `on:` key as boolean True.
     assert "push" not in triggers, "the per-push GitHub-hosted run is retired"
     assert triggers["schedule"] and set(triggers["workflow_dispatch"]["inputs"]) == {
-        "sha", "verdict", "operation_id", "counts", "reason", "failures"}
+        "sha", "verdict", "operation_id", "counts", "reason", "failures",
+        "liveness_signal", "liveness_sha", "liveness_context", "liveness_state",
+        "liveness_description"}
     assert workflow["concurrency"]["cancel-in-progress"] is False
     assert "github.event.inputs.sha" in workflow["concurrency"]["group"]
     assert workflow["permissions"] == {"contents": "read"}
