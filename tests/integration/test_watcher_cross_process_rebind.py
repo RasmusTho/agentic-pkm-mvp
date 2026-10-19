@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 import subprocess
@@ -29,6 +30,7 @@ from app.instance.vault_registry import KnownVaultRef
 from app.api.routes.ingest_binding import ingest_binding_status
 from app.vault.manager import VaultContext
 from app.watcher import registry
+from app.watcher import settings_rebind as registry_settings_rebind
 from app.watcher.settings_rebind import (
     DormantSettingsRebindReconciler,
     RebindScanReceipt,
@@ -1457,7 +1459,7 @@ def test_missing_receipt_recovery_refuses_incomplete_reload(
     assert not _revision_receipt_path(tmp_path, 1).exists()
 
 
-@pytest.mark.parametrize("scan_blocker", ["kill_switch", "zero_match"])
+@pytest.mark.parametrize("scan_blocker", ["kill_switch", "zero_match", "receipt_write"])
 def test_first_adoption_recovery_requires_successful_scan_and_is_restart_idempotent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1485,17 +1487,33 @@ def test_first_adoption_recovery_requires_successful_scan_and_is_restart_idempot
     if scan_blocker == "kill_switch":
         (tmp_path / "watcher.stop").touch()
         expected_error = "scan was paused"
-    else:
+    elif scan_blocker == "zero_match":
         monkeypatch.setenv("WATCHER_SCOPE_GLOB", "missing-scope/**/*.md")
         expected_error = "healthy scope"
+    else:
+        original_write_receipt = registry_settings_rebind._write_receipt
+        tripped = False
 
-    with pytest.raises(RegistryError, match=expected_error):
-        registry.run_registry_once(config_path)
+        def fail_once(path: Path, receipt: SettingsRebindWatcherReceipt) -> None:
+            nonlocal tripped
+            if not tripped:
+                tripped = True
+                raise RuntimeError("injected receipt write fault")
+            original_write_receipt(path, receipt)
+
+        monkeypatch.setattr(registry_settings_rebind, "_write_receipt", fail_once)
+
+    if scan_blocker == "receipt_write":
+        with pytest.raises(RuntimeError, match="injected receipt write fault"):
+            registry.run_registry_once(config_path)
+    else:
+        with pytest.raises(RegistryError, match=expected_error):
+            registry.run_registry_once(config_path)
     assert not _revision_receipt_path(tmp_path, 1).exists()
 
     if scan_blocker == "kill_switch":
         (tmp_path / "watcher.stop").unlink()
-    else:
+    elif scan_blocker == "zero_match":
         monkeypatch.delenv("WATCHER_SCOPE_GLOB")
     registry.run_registry_once(config_path)
     receipt_path = _revision_receipt_path(tmp_path, 1)
@@ -1507,6 +1525,59 @@ def test_first_adoption_recovery_requires_successful_scan_and_is_restart_idempot
     assert receipt.evidence_kind == "first_adoption_recovery"
     assert receipt.recovery_scan is not None
     assert str(vault_a / "recovery-retry.md") in _event_paths(tmp_path)
+
+
+def test_first_adoption_recovery_refuses_authority_change_during_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A concurrent durable authority change cannot be completed by recovery."""
+    runtime, _vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    original_run_spec_tick = registry._run_spec_tick
+    mutated = False
+
+    def run_spec_tick_with_authority_change(*args: object, **kwargs: object):
+        nonlocal mutated
+        summary = original_run_spec_tick(*args, **kwargs)
+        if not mutated:
+            mutated = True
+            current = runtime.open_settings_rebind_store().read()
+            runtime.registry.set_settings_rebind_state(
+                replace(
+                    current,
+                    desired_revision=2,
+                    phase="prepared",
+                    prior_binding_id="binding-a",
+                    candidate_binding_id="binding-b",
+                    reload_revision=0,
+                    scalar_drain_revision=2,
+                ).as_payload(),
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
+        return summary
+
+    monkeypatch.setattr(registry, "_run_spec_tick", run_spec_tick_with_authority_change)
+    with pytest.raises(RegistryError, match="authority changed"):
+        registry.run_registry_once(config_path)
+
+    assert not _revision_receipt_path(tmp_path, 1).exists()
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id == "binding-b"
 
 
 def test_first_adoption_recovery_evidence_is_bound_to_current_revision(
