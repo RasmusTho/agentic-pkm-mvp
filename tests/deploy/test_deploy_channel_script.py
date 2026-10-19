@@ -3838,6 +3838,92 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
     assert captured[-1][1] is False
 
 
+def test_source_identity_persistence_operation_is_dev_test_authority_bound(
+    monkeypatch, tmp_path,
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+
+    operation_id = str(uuid4())
+    calls = []
+
+    class Controller:
+        directory = tmp_path
+
+        @contextmanager
+        def source_persistence_operation(self, channel, *, operation_id):
+            calls.append(("host-admit", channel, operation_id))
+            operation = SimpleNamespace(
+                operation_id=operation_id,
+                completed_result=None,
+                prepare_mutation=lambda: calls.append(("host-sent", channel, operation_id)),
+                finish=lambda evidence: calls.append(("host-finish", evidence)),
+            )
+            yield operation, False
+
+    class Remote:
+        def __init__(self, hostname):
+            calls.append(("remote", hostname))
+
+        def persist_source_identity(self, requested_id, revision, image_digest, selected):
+            calls.append(("persist", requested_id, revision, image_digest, selected))
+            return {
+                "contract": "native-source-identity-persistence.v1",
+                "operation_id": requested_id,
+                "channel": "dev",
+                "revision": revision,
+                "terminal_state": "committed",
+                "eligible": True,
+                "reason": None,
+                "selected_count": 1,
+                "persisted_count": 1,
+                "missing_count": 0,
+                "invalid_count": 0,
+                "ambiguous_count": 0,
+                "producer_error_count": 0,
+            }
+
+    monkeypatch.setattr(host, "HostSecretController", Controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    monkeypatch.setattr(
+        host, "deploy_from_host",
+        lambda *_args, **_kwargs: pytest.fail("source persistence must not start a deployment"),
+    )
+    args = [
+        "dev", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--persist-source-identity", "--operation-id", operation_id,
+        "--image-digest", "sha256:" + "1" * 64,
+        "--authority-cutover-binding", "vault-alpha",
+        "--authority-cutover-root", "/srv/vault-alpha",
+        "--authority-cutover-ownership-root", "/srv/instance-ownership",
+    ]
+    assert host.main(args) == 0
+    assert ("remote", "ygg-dev") in calls
+    assert any(call[0] == "persist" and call[1] == operation_id for call in calls)
+
+    without_digest = args[:]
+    digest_index = without_digest.index("--image-digest")
+    del without_digest[digest_index:digest_index + 2]
+    assert host.main(without_digest) == 78
+    assert host.main([value for value in args if value != "--existing-secrets-only"]) == 78
+    assert host.main(["prod", *args[1:]]) == 78
+    malformed = ["bad" if value == operation_id else value for value in args]
+    assert host.main(malformed) == 78
+
+
+def test_native_deploy_reports_source_projection_identity_refusal() -> None:
+    from app.ops.native_source_bootstrap import (
+        SOURCE_PROJECTION_FAILURE_CODES, source_terminal_reason,
+    )
+
+    status = SOURCE_PROJECTION_FAILURE_CODES["legacy_identity_persistence_refused"]
+    assert status == 109
+    assert source_terminal_reason(status) == "legacy_identity_persistence_refused"
+
+
 def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_path):
     from contextlib import contextmanager
     from types import SimpleNamespace

@@ -1838,6 +1838,8 @@ def test_selector_reports_deferred_targets_to_github_output(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("path", [
+    ".github/workflows/postmerge-channel-bug.yml",
+    "scripts/postmerge_channel_bug.py",
     "scripts/deploy_channel.sh",
     "scripts/lib/deploy_channel_compose.sh",
     "config/deploy/prod.env",

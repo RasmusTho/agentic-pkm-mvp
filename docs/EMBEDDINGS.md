@@ -555,6 +555,17 @@ The private boundary retains only `legacy_producer_policy_refused`, `legacy_sour
 `embedding_generation_failed` or `legacy_write_failed`; no path, identity or raw diagnostic is emitted.
 Bounded admission refusals additionally distinguish these remediation classes:
 
+For `legacy_identity_persistence_refused`, the only write-capable remediation is the separately
+admitted DEV/TEST supervised ordinary-producer operation. It invokes the canonical `vault-alpha`
+producer without source-backed recovery, with host/channel/source authority and writer isolation,
+then requires a fresh complete selected-inventory identity readback. Producer exit or summary
+counts alone are never eligibility proof. Timeout, interruption, any per-source error/skip, missing
+or invalid persisted identity, duplicate claim, configuration drift, or lock contention yields a
+fixed failed receipt. Paths, UUIDs, note content, child streams and provider diagnostics remain
+private. Success does not weaken canonical Product mapping checks, start a deployment, or authorize
+a retry; the delivery classifier and a separately qualified fresh immutable candidate remain
+required.
+
 | Fixed reason | Required area of source-authorized investigation |
 | --- | --- |
 | `legacy_candidate_refused` | Candidate-only or proposal classification |
@@ -578,6 +589,11 @@ Multiple refusing markers retain the first observed class; classification does n
 problem. Unknown/private failures retain the generic fail-closed fallback. Diagnosis grants no
 repair, admission, retirement or acceptance authority: never synthesize approval or delete protected
 history, relations or memberships to clear a refusal. Any subsequent repair remains separately governed.
+The governed ordinary-producer persistence operation is bound to an exact successful image digest
+and the unchanged installed writer/provider/model configuration. It uses that reviewed image only
+for its fenced one-shot, preserves the accepted provider/model, and does not admit or deploy the
+candidate. Eligibility requires a second stable source/root snapshot readback; same-path replacement
+or identity drift is a fixed refusal, never a reason to probe, synthesize, or replay.
 Complete private-stage stream and logging
 suppression covers settings compatibility and conflict-quarantine diagnostics too.
 The transaction rechecks source/policy and forward/reverse canonical identity, compares equivalent

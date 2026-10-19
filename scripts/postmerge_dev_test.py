@@ -1,7 +1,7 @@
 """Admit a published main image and use the existing native dev/test boundary.
 
 Only public build identities and fixed terminal fields enter the output. No test
-or deployment child receives the GitHub read token; remote/native recovery owns
+or deployment child receives the GitHub token; remote/native recovery owns
 unknown outcomes. Resumption retains the same native operation ID; the native
 worker decides terminality without replaying an indeterminate activation.
 """
@@ -214,7 +214,8 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
          current_main: Callable[[], str] = _current_main,
          heavy: Callable[[Candidate], dict[str, Any]] | None = None,
          dispatch: Callable[[Candidate, dict[str, Any]], None] | None = None,
-         signal: Callable[[Candidate, dict[str, Any]], None] | None = None) -> int:
+         signal: Callable[[Candidate, dict[str, Any]], None] | None = None,
+         alert: Callable[[dict[str, Any]], None] | None = None) -> int:
     # No CI job runs this path. It is supervised on the existing private agent
     # host, which already owns credentials, SSH dispatch and terminal recovery.
     with checkpoint_lock(directory):
@@ -232,6 +233,48 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                     raise CandidateRefused('checkpoint_refused')
                 checkpoint = json.load(source)
                 _validate_checkpoint(checkpoint)
+        last_green = dict(checkpoint.get('last_green', {})) if checkpoint else {}
+
+        def save(candidate: Candidate, outcome: dict[str, Any]) -> None:
+            nonlocal checkpoint
+            checkpoint = _save_outcome(path, candidate, outcome, last_green=last_green)
+            _signal_dev_verdict(candidate, outcome, signal)
+            report_terminal()
+
+        def report_terminal() -> None:
+            if checkpoint is None or checkpoint['phase'] not in {'passed', 'failed'}:
+                return
+            channel = checkpoint['channel']
+            candidate = Candidate(**checkpoint['candidate'])
+            if 'channel_bug' not in checkpoint:
+                checkpoint['channel_bug'] = {'last_good_sha': last_green.get(channel), 'dispatch': None}
+                if checkpoint['phase'] == 'passed':
+                    last_green[channel] = candidate.sha
+                checkpoint['last_green'] = dict(last_green)
+            report = checkpoint['channel_bug']
+            if report['dispatch'] is not None:
+                return
+            # Persist intent before the external dispatch. An unknown dispatch
+            # is not retried after restart and never replays a native operation.
+            report['dispatch'] = 'started'
+            _atomic_checkpoint(path, checkpoint)
+            outcome = checkpoint['outcome']
+            gate = ('source_projection' if 'source_failure' in outcome else
+                    'pg_acceptance' if outcome.get('reason') == 'pg_profile_missing_or_mismatched' else
+                    'native_deploy')
+            evidence = {'candidate': asdict(candidate), 'channel': channel,
+                        'verdict': checkpoint['phase'], 'gate': gate,
+                        'last_good_sha': report['last_good_sha'], 'receipt': outcome}
+            evidence['receipt_fingerprint'] = channel_verdict_fingerprint(evidence)
+            try:
+                (alert or dispatch_channel_verdict)(evidence)
+                report['dispatch'] = 'sent'
+            except Exception:
+                report['dispatch'] = 'failed'
+            _atomic_checkpoint(path, checkpoint)
+            print(json.dumps({'source_sha': candidate.sha, 'channel': channel,
+                              'channel_bug_dispatch': report['dispatch']}, sort_keys=True))
+
         if checkpoint and checkpoint['phase'] in {'started', 'pending'}:
             # The candidate's durable operation ID covers both a lost pending
             # reply and a committed native receipt preceding checkpoint fsync.
@@ -258,7 +301,7 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                     'operation_id': candidate.operation_id(checkpoint['channel']),
                     'absence_proof': 'qualified',
                 }
-                _save_and_signal(path, candidate, outcome, signal)
+                save(candidate, outcome)
                 checkpoint.update(phase='superseded_before_deployment', channel=None, outcome=outcome)
             else:
                 _require_terminal_profile(receipt, checkpoint['channel'], candidate)
@@ -268,7 +311,7 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                     outcome['pg_acceptance'] = receipt['pg_acceptance']
                 else:
                     outcome.update(_source_failure(receipt))
-                _save_and_signal(path, candidate, outcome, signal)
+                save(candidate, outcome)
                 checkpoint.update(phase=result, outcome=outcome)
                 if result != 'passed':
                     return 78
@@ -286,12 +329,13 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                            'artifact_id': candidate.artifact_id, 'channel': checkpoint['channel'],
                            'operation_id': candidate.operation_id(checkpoint['channel']),
                            'result': 'failed', 'reason': 'pg_profile_missing_or_mismatched'}
-                _save_and_signal(path, candidate, outcome, signal)
+                save(candidate, outcome)
                 checkpoint.update(phase='failed', outcome=outcome)
+        report_terminal()
         if checkpoint and checkpoint['phase'] == 'passed' and checkpoint['channel'] == 'dev':
             candidate = Candidate(**checkpoint['candidate'])
             return deliver(candidate, deploy=deploy or native_deploy, current_main=lambda: candidate.sha,
-                           emit=lambda outcome: _save_outcome(path, candidate, outcome), channels=('test',))
+                           emit=lambda outcome: save(candidate, outcome), channels=('test',))
         if checkpoint and checkpoint['phase'] == 'passed' and checkpoint['channel'] == 'test' and (
             checkpoint.get('heavy', {}).get('dispatch') is None
         ):
@@ -303,18 +347,90 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
         ):
             return 0
         return deliver(candidate, deploy=deploy or native_deploy, current_main=current_main,
-                       emit=lambda outcome: _save_and_signal(path, candidate, outcome, signal))
+                       emit=lambda outcome: save(candidate, outcome))
 
 
-def _save_outcome(path: Path, candidate: Candidate, outcome: dict[str, Any]) -> None:
-    _atomic_checkpoint(path, {'candidate': asdict(candidate), 'phase': outcome['result'],
-                              'channel': outcome.get('channel'), 'outcome': outcome})
+def _save_outcome(path: Path, candidate: Candidate, outcome: dict[str, Any], *,
+                  last_green: dict[str, str] | None = None) -> dict[str, Any]:
+    checkpoint = {'candidate': asdict(candidate), 'phase': outcome['result'],
+                  'channel': outcome.get('channel'), 'outcome': outcome}
+    if last_green is not None:
+        checkpoint['last_green'] = dict(last_green)
+    _atomic_checkpoint(path, checkpoint)
     print(json.dumps(outcome, sort_keys=True))
+    return checkpoint
 
 
-def _save_and_signal(path: Path, candidate: Candidate, outcome: dict[str, Any],
-                     signal: Callable[[Candidate, dict[str, Any]], None] | None) -> None:
-    _save_outcome(path, candidate, outcome)
+def channel_verdict_fingerprint(evidence: dict[str, Any]) -> str:
+    # Bind terminal identity in the existing successful workflow receipt even
+    # when a first green had no Issue. Last-green history is not terminal identity.
+    terminal = {key: evidence[key] for key in ('candidate', 'channel', 'verdict', 'gate', 'receipt')}
+    return hashlib.sha256(json.dumps(terminal, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def validate_channel_evidence(evidence: Any, channel: str) -> Candidate:
+    try:
+        if (not isinstance(evidence, dict)
+            or set(evidence) != {'candidate', 'channel', 'verdict', 'gate', 'last_good_sha', 'receipt', 'receipt_fingerprint'}
+            or channel not in {'dev', 'test'} or evidence['channel'] != channel
+            or evidence['verdict'] not in {'passed', 'failed'}):
+            raise ValueError()
+        candidate = Candidate(**evidence['candidate'])
+        if (re.fullmatch('[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
+            or any(type(value) is not int or value < 1
+                   for value in (candidate.run_id, candidate.run_attempt, candidate.artifact_id))):
+            raise ValueError()
+        previous = evidence['last_good_sha']
+        if previous is not None and (not isinstance(previous, str) or re.fullmatch('[0-9a-f]{40}', previous) is None):
+            raise ValueError()
+        receipt = evidence['receipt']
+        if set(receipt) - {'source_sha', 'image_digest', 'source_run_id', 'source_run_attempt', 'artifact_id',
+                           'channel', 'result', 'operation_id', 'pg_acceptance', 'source_failure',
+                           'failure_reference', 'reason'}:
+            raise ValueError()
+        if any(receipt.get(key) != value for key, value in {
+            'source_sha': candidate.sha, 'image_digest': candidate.digest, 'source_run_id': candidate.run_id,
+            'source_run_attempt': candidate.run_attempt, 'artifact_id': candidate.artifact_id,
+            'channel': channel, 'result': evidence['verdict'], 'operation_id': candidate.operation_id(channel),
+        }.items()):
+            raise ValueError()
+        if 'failure_reference' in receipt and receipt['failure_reference'] != (
+            f'https://github.com/{REPOSITORY}/actions/runs/{candidate.run_id}'
+        ):
+            raise ValueError()
+        _source_failure(receipt)
+        reason = receipt.get('reason')
+        if reason is not None and (reason != 'pg_profile_missing_or_mismatched' or evidence['verdict'] != 'failed'):
+            raise ValueError()
+        gate = 'source_projection' if 'source_failure' in receipt else 'pg_acceptance' if reason else 'native_deploy'
+        if (evidence['gate'] != gate
+            or evidence['receipt_fingerprint'] != channel_verdict_fingerprint(evidence)):
+            raise ValueError()
+        if evidence['verdict'] == 'passed':
+            require_pass(receipt.get('pg_acceptance'), candidate.sha, candidate.digest,
+                         channel, candidate.operation_id(channel))
+        elif 'pg_acceptance' in receipt:
+            raise ValueError()
+        return candidate
+    except Exception:
+        raise CandidateRefused('channel_evidence_refused') from None
+
+
+def dispatch_channel_verdict(evidence: dict[str, Any]) -> None:
+    # Existing controller Actions-write permission only. Issue writes belong
+    # to reviewed main workflow code and its short-lived GITHUB_TOKEN.
+    # Validate before any private retained field can cross the host boundary.
+    validate_channel_evidence(evidence, evidence.get('channel', ''))
+    result = subprocess.run([
+        'gh', 'workflow', 'run', 'postmerge-channel-bug.yml', '--repo', REPOSITORY, '--ref', 'main',
+        '-f', 'channel=' + evidence['channel'], '-f', 'evidence=' + json.dumps(evidence, sort_keys=True),
+    ], capture_output=True, timeout=60, check=False)
+    if result.returncode:
+        raise CandidateRefused('channel_bug_dispatch_failed')
+
+
+def _signal_dev_verdict(candidate: Candidate, outcome: dict[str, Any],
+                        signal: Callable[[Candidate, dict[str, Any]], None] | None) -> None:
     if signal is None or outcome.get('channel') != 'dev' or outcome.get('result') not in {'passed', 'failed'}:
         return
     try:
@@ -331,7 +447,21 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
         candidate = Candidate(**checkpoint['candidate'])
         if 'heavy' in checkpoint:
             _validate_heavy(checkpoint['heavy'])
-        if (set(checkpoint) - {'heavy'} != {'candidate', 'phase', 'channel', 'outcome'}
+        history = checkpoint.get('last_green', {})
+        if (not isinstance(history, dict) or set(history) - {'dev', 'test'}
+            or any(not isinstance(sha, str) or re.fullmatch(r'[0-9a-f]{40}', sha) is None
+                   for sha in history.values())):
+            raise ValueError()
+        if 'channel_bug' in checkpoint:
+            report = checkpoint['channel_bug']
+            if (checkpoint['phase'] not in {'passed', 'failed'} or not isinstance(report, dict)
+                or set(report) != {'last_good_sha', 'dispatch'}
+                or report['dispatch'] not in {None, 'started', 'sent', 'failed'}
+                or (report['last_good_sha'] is not None and (
+                    not isinstance(report['last_good_sha'], str)
+                    or re.fullmatch(r'[0-9a-f]{40}', report['last_good_sha']) is None))):
+                raise ValueError()
+        if (set(checkpoint) - {'heavy', 'last_green', 'channel_bug'} != {'candidate', 'phase', 'channel', 'outcome'}
             or ('heavy' in checkpoint and (checkpoint['phase'], checkpoint['channel']) != ('passed', 'test'))
             or re.fullmatch(r'[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
             or any(type(value) is not int or value < 1

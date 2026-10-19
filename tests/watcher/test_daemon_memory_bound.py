@@ -185,9 +185,11 @@ def test_scoped_daemon_updates_heartbeat(tmp_path: Path, monkeypatch: pytest.Mon
         now: float,
         states=None,
         process_panel_notes_inline: bool = False,
+        allow_source_writeback: bool = True,
         handled_settings_sources: set[Path] | None = None,
         settings_source_reload_results: dict[str, object] | None = None,
         retain_unemitted_observations: bool = False,
+        observation_only: bool = False,
     ) -> dict[str, object]:
         del (
             cfg_arg,
@@ -198,6 +200,8 @@ def test_scoped_daemon_updates_heartbeat(tmp_path: Path, monkeypatch: pytest.Mon
             settings_source_reload_results,
             retain_unemitted_observations,
         )
+        assert allow_source_writeback is True
+        assert observation_only is False
         state_arg.ticks_run += 1
         state_arg.last_summary_at = now
         return {"backoff_active": False}
