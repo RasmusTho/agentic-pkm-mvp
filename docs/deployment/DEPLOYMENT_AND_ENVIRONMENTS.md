@@ -733,6 +733,23 @@ GitHub client limited to Actions write for that dispatch. A failed dispatch does
 candidates; the workflow's missing-verdict watchdog makes it visible. The VM tooling must be at a
 revision that contains `qualify-heavy`; see `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`.
 
+The repository liveness path (#6222) uses a separate
+`.github/workflows/dev-delivery-liveness.yml` dispatch for timestamped heartbeats and terminal dev
+verdicts. It requires the existing owner-provisioned repository client to authenticate as the
+repository owner (`RasmusTho`), with Actions read/write, Contents read and Metadata read only;
+the controller never needs Commit statuses write. The main-branch Actions job checks the actor,
+protocol, main ancestry, exact successful build/artifact identity and dev operation before writing
+only its two liveness status contexts. Heartbeats rotate hourly, and terminal signals use separate
+run queues from heartbeats and heavy verdicts. The checker uses the original observation time, so
+queued or replayed signals cannot renew liveness. A terminal verdict retires only earlier admitted
+builds; skipped intermediate builds do not stay overdue after newer progress.
+
+These are repository implementation preconditions, not a host-activation receipt. Client
+provisioning is tracked in #6170; controller release and live acceptance retain #6227 and #3347's
+operator gates. A dispatch failure leaves native
+progress running and is exposed by the liveness watchdog; the signal is best effort with bounded
+transport retries, not a durable delivery queue.
+
 Install from a clean retained tooling checkout contained in reviewed `main` of
 `RasmusTho/agentic-pkm-mvp`, with its own working Python environment and the existing `gh` read
 client. Before importing checkout code, the installer requires one credential-free canonical

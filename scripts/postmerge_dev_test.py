@@ -11,6 +11,7 @@ import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import asdict
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import io
@@ -213,6 +214,7 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
          current_main: Callable[[], str] = _current_main,
          heavy: Callable[[Candidate], dict[str, Any]] | None = None,
          dispatch: Callable[[Candidate, dict[str, Any]], None] | None = None,
+         signal: Callable[[Candidate, dict[str, Any]], None] | None = None,
          alert: Callable[[dict[str, Any]], None] | None = None) -> int:
     # No CI job runs this path. It is supervised on the existing private agent
     # host, which already owns credentials, SSH dispatch and terminal recovery.
@@ -236,6 +238,7 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
         def save(candidate: Candidate, outcome: dict[str, Any]) -> None:
             nonlocal checkpoint
             checkpoint = _save_outcome(path, candidate, outcome, last_green=last_green)
+            _signal_dev_verdict(candidate, outcome, signal)
             report_terminal()
 
         def report_terminal() -> None:
@@ -426,6 +429,18 @@ def dispatch_channel_verdict(evidence: dict[str, Any]) -> None:
         raise CandidateRefused('channel_bug_dispatch_failed')
 
 
+def _signal_dev_verdict(candidate: Candidate, outcome: dict[str, Any],
+                        signal: Callable[[Candidate, dict[str, Any]], None] | None) -> None:
+    if signal is None or outcome.get('channel') != 'dev' or outcome.get('result') not in {'passed', 'failed'}:
+        return
+    try:
+        signal(candidate, outcome)
+    except Exception:
+        # A status transport failure must never stall later candidates. The
+        # scheduled watchdog turns the missing signal into a visible failure.
+        print(json.dumps({'source_sha': candidate.sha, 'result': 'liveness_signal_failed'}, sort_keys=True))
+
+
 def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
     try:
         _source_failure(checkpoint['outcome'])
@@ -466,6 +481,48 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
 
 HEAVY_WORKFLOW = 'post-merge-heavy-tests.yml'
 HEAVY_COUNTS = ('selected', 'passed', 'failed', 'skipped', 'docker_skipped')
+LIVENESS_WORKFLOW = 'dev-delivery-liveness.yml'
+LIVENESS_PROTOCOL = 'dev-delivery-liveness.v1'
+
+
+def _dispatch_liveness_signal(kind: str, payload: dict[str, Any]) -> None:
+    """Use the approved Actions-write client; Actions owns status admission."""
+    if kind not in {'heartbeat', 'verdict'}:
+        raise CandidateRefused('liveness_signal_refused')
+    command = ['gh', 'workflow', 'run', LIVENESS_WORKFLOW, '--repo', REPOSITORY, '--ref', 'main',
+               '-f', f'kind={kind}', '-f', 'payload=' + json.dumps(payload, sort_keys=True)]
+    environment = {key: value for key, value in os.environ.items() if key not in {'SSH_AUTH_SOCK'}}
+    for attempt in range(3):
+        result = subprocess.run(command, env=environment, capture_output=True, text=True,
+                                timeout=60, check=False)
+        if result.returncode == 0:
+            return
+        if attempt < 2:
+            time.sleep(20)
+    raise CandidateRefused('liveness_signal_failed')
+
+
+def publish_heartbeat(sha: str) -> None:
+    """Publish a timestamped heartbeat; queued/replayed signals cannot renew it."""
+    if re.fullmatch(r'[0-9a-f]{40}', sha) is None:
+        raise CandidateRefused('liveness_signal_refused')
+    _dispatch_liveness_signal('heartbeat', {
+        'protocol': LIVENESS_PROTOCOL, 'sha': sha,
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+    })
+
+
+def publish_dev_verdict(candidate: Candidate, outcome: dict[str, Any]) -> None:
+    """Publish only a terminal DEV outcome bound to its admitted native operation."""
+    if (outcome.get('result') not in {'passed', 'failed'} or outcome.get('channel') != 'dev'
+            or outcome.get('operation_id') != candidate.operation_id('dev')):
+        raise CandidateRefused('liveness_verdict_refused')
+    _dispatch_liveness_signal('verdict', {
+        'protocol': LIVENESS_PROTOCOL, 'sha': candidate.sha,
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+        'candidate': asdict(candidate), 'result': outcome['result'],
+        'operation_id': outcome['operation_id'],
+    })
 
 
 def _validate_heavy(heavy: Any) -> dict[str, Any]:
@@ -688,7 +745,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.latest:
             if args.state_directory is None or args.admit_only:
                 raise CandidateRefused('poll_requires_private_checkpoint')
-            return poll(args.state_directory)
+            try:
+                publish_heartbeat(_current_main())
+            except Exception:
+                # The liveness workflow intentionally owns the alert. A
+                # transient status transport failure must not stop delivery.
+                print(json.dumps({'result': 'heartbeat_signal_failed'}, sort_keys=True))
+            return poll(args.state_directory, signal=publish_dev_verdict)
         if args.source_run < 1:
             raise CandidateRefused('invalid_source_run')
         candidate = load_candidate(args.source_run)
