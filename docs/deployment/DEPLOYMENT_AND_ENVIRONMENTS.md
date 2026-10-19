@@ -166,9 +166,14 @@ Actions receives no deployment credentials; there is no extra human approval bet
 `scripts/install_postmerge_controller.py` installs the host-local LaunchAgent from a clean,
 reviewed-main tooling checkout. It archives the exact reviewed SHA into
 `postmerge/tooling/<sha>/source` under the existing private controller state directory and creates a
-separate `runtime` with copied Python executables and no third-party packages. The LaunchAgent runs
+separate `runtime` with copied Python executables. It copies the existing host SDK closure
+(`bitwarden-sdk`, `python-dateutil`, `six`) at the exact versions owned by
+`requirements-bws-deploy.txt` from the supplied qualified Python into the private pin. Distribution
+versions and copied-file hashes are checked, with no package download or candidate dependency.
+The supplied `--python` must expose those exact distributions in its isolated environment; missing,
+wrong-version or incomplete packages refuse setup before LaunchAgent replacement. The LaunchAgent runs
 that pin with `-I -S`; its stdlib startup wrapper checks the pinned interpreter identity and the real
-controller/native/lazy receipt imports before polling. Native host children load that same source
+controller/native/lazy receipt imports and the real unauthenticated SDK factory before polling. Native host children load that same source
 explicitly, independent of candidate working directory or Python environment. A broken pin exits 78
 and reports a failed startup heartbeat through the existing Actions-write liveness workflow; if that
 transport is unavailable, the missing/stale-heartbeat watchdog stays fail-loud. A failed new

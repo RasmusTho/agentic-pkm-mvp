@@ -1571,12 +1571,14 @@ def test_channel_bug_private_retained_fields_never_cross_dispatch(tmp_path, chan
 def installed_controller_pin(tmp_path, monkeypatch):
     """Real archive/runtime/install/LaunchAgent producers, with only host I/O isolated."""
     from scripts import install_postmerge_controller as installer
+    from scripts import postmerge_controller as bootstrap
     checkout = tmp_path / 'reviewed'
     checkout.mkdir()
     for name in ('app/ops', 'app/config'):
         shutil.copytree(ROOT / name, checkout / name, ignore=shutil.ignore_patterns('__pycache__'))
     (checkout / 'app/__init__.py').write_bytes((ROOT / 'app/__init__.py').read_bytes())
     (checkout / 'scripts').mkdir()
+    shutil.copy2(ROOT / 'requirements-bws-deploy.txt', checkout / 'requirements-bws-deploy.txt')
     for name in ('__init__.py', 'postmerge_controller.py', 'postmerge_dev_test.py', 'select_pr_tests.py'):
         shutil.copy2(ROOT / 'scripts' / name, checkout / 'scripts' / name)
     def git(*args):
@@ -1588,6 +1590,17 @@ def installed_controller_pin(tmp_path, monkeypatch):
     git('add', '.')
     git('commit', '--quiet', '-m', 'Reviewed real controller closure')
     sha = git('rev-parse', 'HEAD')
+    # Supply a real qualified source environment, including user-installed
+    # packages in this test process, then prove its removal cannot affect the pin.
+    source_runtime = checkout / '.bootstrap'
+    subprocess.run([sys.executable, '-I', '-S', '-m', 'venv', '--without-pip', '--copies', str(source_runtime)],
+                   capture_output=True, check=True)
+    source_python = source_runtime / 'bin/python'
+    library = subprocess.run([str(source_python), '-I', '-c',
+                              'import sysconfig; print(sysconfig.get_path("purelib"))'],
+                             capture_output=True, text=True, check=True).stdout.strip()
+    Path(library).rmdir()
+    bootstrap.copy_runtime_dependencies(Path(library))
     gh = tmp_path / 'gh'
     signals = tmp_path / 'signals.json'
     gh.write_text('#!/bin/sh\nif [ "$1" = api ]; then\n'
@@ -1602,11 +1615,11 @@ def installed_controller_pin(tmp_path, monkeypatch):
     # Canonical provenance/fetch admission has its own real-git negative matrix;
     # this fixture begins at that admitted boundary and runs every producer after it.
     monkeypatch.setattr(installer, 'require_reviewed_checkout', lambda *_: sha)
-    assert installer.main(['--checkout', str(checkout), '--python', sys.executable]) == 0
+    assert installer.main(['--checkout', str(checkout), '--python', str(source_python)]) == 0
     state = home / '.local/state/yggdrasil/secret-controller/postmerge'
     config = plistlib.loads((home / 'Library/LaunchAgents' / (installer.LABEL + '.plist')).read_bytes())
     return SimpleNamespace(checkout=checkout, source=state / 'tooling' / sha / 'source',
-                           state=state, config=config, sha=sha, signals=signals, gh=gh)
+                           state=state, config=config, sha=sha, signals=signals, gh=gh, source_python=source_python, source_library=Path(library))
 
 
 def test_controller_runs_from_pinned_tooling(installed_controller_pin, tmp_path):
@@ -1628,6 +1641,9 @@ def test_controller_runs_from_pinned_tooling(installed_controller_pin, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout) == {'result': 'startup_self_check_passed', 'tooling_sha': pin.sha}
     assert pin.config['WorkingDirectory'] == str(pin.source)
+    evidence = json.loads((pin.source.parent / 'pin.json').read_text())
+    assert evidence['dependencies'] == {'bitwarden-sdk': '2.1.0', 'python-dateutil': '2.9.0.post0', 'six': '1.17.0'}
+    assert len(evidence['dependency_files_sha256']) == 64
     assert not marker.exists() and not pin.signals.exists()
     # Exercise the actual child import producer from the installed runtime.
     # --help traverses the real native host imports without deployment effects.
@@ -1640,9 +1656,25 @@ raise SystemExit(subprocess.run([*_native_host_command(), '--help']).returncode)
                            cwd=candidate, env=env, capture_output=True, text=True, check=False)
     assert child.returncode == 0, child.stderr
     assert '--existing-secrets-only' in child.stdout and not marker.exists()
+    factory = """import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.dont_write_bytecode = True
+sys.path[:0] = [str(root), str(root.parent / 'vendor')]
+from app.ops.bws_secret_reader import _sdk_client
+client = _sdk_client()
+assert type(client).__module__ == 'bitwarden_sdk.bitwarden_client'
+print('real_sdk_factory_passed')
+"""
+    lazy = subprocess.run([command[0], '-I', '-S', '-c', factory, str(pin.source)],
+                          cwd=candidate, env=env, capture_output=True, text=True, check=False)
+    assert lazy.returncode == 0, lazy.stderr
+    assert lazy.stdout.strip() == 'real_sdk_factory_passed' and not marker.exists()
 
 
-@pytest.mark.parametrize('fault', ['controller_import', 'host_import', 'lazy_import', 'pin_missing', 'python_identity', 'transport_down'])
+@pytest.mark.parametrize('fault', ['controller_import', 'host_import', 'lazy_import', 'pin_missing', 'python_identity',
+                                  'transport_down', 'sdk_missing', 'sdk_native_missing', 'dependency_version',
+                                  'sdk_dependency_missing', 'sdk_hash_changed'])
 def test_controller_self_check_fails_loud(installed_controller_pin, monkeypatch, fault):
     from scripts import dev_delivery_liveness as liveness
     pin = installed_controller_pin
@@ -1652,6 +1684,29 @@ def test_controller_self_check_fails_loud(installed_controller_pin, monkeypatch,
                   'lazy_import': 'app/ops/native_source_bootstrap.py',
                   'transport_down': 'scripts/postmerge_dev_test.py'}[fault]
         (pin.source / module).write_text("raise ModuleNotFoundError('private input must not leak')\n")
+    elif fault in {'sdk_missing', 'sdk_native_missing', 'dependency_version', 'sdk_dependency_missing', 'sdk_hash_changed'}:
+        from scripts import postmerge_controller as bootstrap
+        vendor = pin.source.parent / 'vendor'
+        if fault == 'sdk_missing':
+            shutil.rmtree(vendor / 'bitwarden_sdk')
+        elif fault == 'sdk_dependency_missing':
+            shutil.rmtree(vendor / 'dateutil')
+        elif fault == 'sdk_native_missing':
+            for native in (vendor / 'bitwarden_py').glob('*.so'):
+                native.unlink()
+        elif fault == 'sdk_hash_changed':
+            entry = vendor / 'bitwarden_sdk/bitwarden_client.py'
+            entry.write_bytes(b'#' + entry.read_bytes()[1:])
+        else:
+            entry = next(vendor.glob('bitwarden_sdk-*.dist-info/METADATA'))
+            entry.write_text(entry.read_text().replace('Version: 2.1.0', 'Version: 0.0.0'))
+        # Model an incomplete producer that sealed its own incomplete bytes:
+        # metadata/import/factory preflight must still refuse, beyond the hash.
+        entry = pin.source.parent / 'pin.json'
+        data = json.loads(entry.read_text())
+        if fault != 'sdk_hash_changed':
+            data['dependency_files_sha256'] = bootstrap.dependency_fingerprint(vendor)
+        entry.write_text(json.dumps(data))
     elif fault == 'pin_missing':
         (pin.source.parent / 'pin.json').unlink()
     else:
@@ -1696,7 +1751,8 @@ def test_controller_self_check_fails_loud(installed_controller_pin, monkeypatch,
     assert liveness.evaluate(build, heartbeat_statuses=[status, recovered], verdict_statuses=[verdict], now=now).ok
 
 
-def test_installer_partial_pin_does_not_replace_active_launch_or_checkpoint(installed_controller_pin, monkeypatch):
+@pytest.mark.parametrize('stage', ['runtime', 'dependencies', 'dependency_version', 'dependency_files', 'dependency_hash'])
+def test_installer_partial_pin_does_not_replace_active_launch_or_checkpoint(installed_controller_pin, monkeypatch, stage):
     from scripts import install_postmerge_controller as installer
     pin = installed_controller_pin
     # Use the actual existing LaunchAgent path rather than manufacturing a
@@ -1707,19 +1763,32 @@ def test_installer_partial_pin_does_not_replace_active_launch_or_checkpoint(inst
     checkpoint.write_text('retained same-ID recovery state')
     sha = 'c' * 40
     monkeypatch.setattr(installer, 'require_reviewed_checkout', lambda *_: sha)
+    if stage == 'dependencies':
+        shutil.rmtree(next(pin.source_library.glob('bitwarden_sdk-*.dist-info')))
+    elif stage == 'dependency_version':
+        entry = next(pin.source_library.glob('bitwarden_sdk-*.dist-info/METADATA'))
+        entry.write_text(entry.read_text().replace('Version: 2.1.0', 'Version: 0.0.0'))
+    elif stage == 'dependency_files':
+        for native in (pin.source_library / 'bitwarden_py').glob('*.so'):
+            native.unlink()
+    elif stage == 'dependency_hash':
+        entry = pin.source_library / 'bitwarden_sdk/bitwarden_client.py'
+        entry.write_bytes(b'#' + entry.read_bytes()[1:])
     run = subprocess.run
     def fail_runtime(command, **kwargs):
-        if 'venv' in command:
+        if stage == 'runtime' and 'venv' in command:
             raise subprocess.CalledProcessError(1, command)
         if 'archive' in command:
             command = [pin.sha if part == sha else part for part in command]
         return run(command, **kwargs)
     monkeypatch.setattr(installer.subprocess, 'run', fail_runtime)
-    assert installer.main(['--checkout', str(pin.checkout), '--python', sys.executable]) == 78
+    assert installer.main(['--checkout', str(pin.checkout), '--python', str(pin.source_python)]) == 78
     assert plist.read_bytes() == before
     assert checkpoint.read_text() == 'retained same-ID recovery state'
     assert not (pin.state / 'tooling' / sha).exists()
     assert not list((pin.state / 'tooling').glob('.install-*'))
+    retained = run([*pin.config['ProgramArguments'], '--self-check'], capture_output=True, text=True)
+    assert retained.returncode == 0, retained.stdout + retained.stderr
 
 
 @pytest.mark.parametrize('value', ['passed', 'unknown', True, None])

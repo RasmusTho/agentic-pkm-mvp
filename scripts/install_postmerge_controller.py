@@ -2,7 +2,7 @@
 
 The generated LaunchAgent stays host-local. Its checkout must be clean and
 contained in reviewed main before installation; its exact source is archived
-into a separate tooling pin with an isolated stdlib runtime. Candidates never
+into a separate tooling pin with an isolated runtime with the declared native-host SDK closure. Candidates never
 update that pin.
 """
 from __future__ import annotations
@@ -86,7 +86,7 @@ def require_reviewed_checkout(checkout: Path, python: Path) -> str:
 
 
 def install_tooling(checkout: Path, python: Path, state: Path, sha: str) -> tuple[Path, Path]:
-    """Retain reviewed bytes and a private stdlib runtime; never follow a candidate."""
+    """Retain reviewed bytes and a private qualified runtime; never follow a candidate."""
     tooling = state / 'tooling'
     tooling.mkdir(mode=0o700, exist_ok=True)
     if tooling.is_symlink():
@@ -114,12 +114,20 @@ def install_tooling(checkout: Path, python: Path, state: Path, sha: str) -> tupl
             subprocess.run([str(python), '-I', '-S', '-m', 'venv', '--without-pip', '--copies', str(runtime)],
                            capture_output=True, check=True, timeout=60)
             executable = runtime / 'bin/python'
+            vendor = staging / 'vendor'
+            subprocess.run([str(python), '-I', str(source / 'scripts/postmerge_controller.py'),
+                            '--prepare-dependencies', str(vendor)], capture_output=True, check=True, timeout=60)
+            from scripts.postmerge_controller import dependency_fingerprint, runtime_dependencies
             version = subprocess.run([str(executable), '-I', '-S', '-c', 'import sys; print(sys.version)'],
                                      capture_output=True, text=True, check=True, timeout=30).stdout.strip()
             (staging / 'pin.json').write_text(json.dumps({
                 'source_sha': sha, 'python_version': version,
                 'python_sha256': hashlib.sha256(executable.read_bytes()).hexdigest(),
+                'dependencies': runtime_dependencies(source / 'requirements-bws-deploy.txt'),
+                'dependency_files_sha256': dependency_fingerprint(vendor),
             }, sort_keys=True))
+            subprocess.run([str(executable), '-I', '-S', str(source / 'scripts/postmerge_controller.py'),
+                            '--tooling-sha', sha, '--self-check'], capture_output=True, check=True, timeout=60)
             os.rename(staging, installation)
     source = installation / 'source'
     executable = installation / 'runtime/bin/python'

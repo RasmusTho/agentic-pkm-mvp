@@ -618,7 +618,9 @@ def _native_host_command() -> list[str]:
     # Keep the child on the same reviewed pin even if cwd or ambient Python
     # configuration belongs to a broken candidate. No token enters this child.
     return [sys.executable, '-I', '-S', '-c',
-            "import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); "
+            "import runpy, sys; from pathlib import Path; root = sys.argv.pop(1); "
+            "sys.dont_write_bytecode = True; sys.path[:0] = [root, str(Path(root).parent / 'vendor')]; "
+            "from app.ops.bws_secret_reader import _sdk_client; _sdk_client(); "
             "runpy.run_module('app.ops.postgres_deploy_host', run_name='__main__')",
             str(Path(__file__).resolve().parents[1])]
 
