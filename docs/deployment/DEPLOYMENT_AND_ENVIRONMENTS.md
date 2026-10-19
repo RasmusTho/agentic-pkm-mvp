@@ -1207,6 +1207,12 @@ default, or a candidate-image value. Duplicate names across bare/assigned forms,
 non-string or NUL-bearing entries, bare required channel/topology/provider/store selectors, and any
 `BWS_ACCESS_TOKEN` key presence refuse before the request or ordinary producer can run. This is
 repository support only; it is not DEV/TEST deployment or acceptance evidence.
+When semantic unsets are present, the source-persistence preflight also refuses one when Compose's canonical
+`config --environment` view of the explicit channel `--env-file` contains that name, or the exact
+authenticated candidate image bakes it into `Config.Env`; those two Docker Compose lookup sources
+are checked before writers stop or the producer starts. The Compose query covers every accepted
+project-env grammar without a parallel dotenv parser and its values are never retained or emitted.
+Assigned-only snapshots and retained cleanup do not acquire this unset-specific lookup dependency.
 
 If the host has durably marked a source-persistence operation `sent` but the selected native
 channel refuses before creating any request, producer receipt, terminal receipt, owned one-shot,

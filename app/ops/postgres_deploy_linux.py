@@ -692,6 +692,21 @@ def _closed_source_helper_environment(
     ))
 
 
+def _compose_project_environment_keys(rendered: str) -> frozenset[str]:
+    """Validate Compose's canonical interpolation environment without retaining values."""
+    keys: set[str] = set()
+    for line in rendered.splitlines():
+        key, separator, _value = line.partition('=')
+        if (
+            not separator
+            or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None
+            or key in keys
+        ):
+            raise PostgresDeployError()
+        keys.add(key)
+    return frozenset(keys)
+
+
 def _runtime_user_ownership_state_dir(runtime_uid: int, xdg_state_home: str | None = None) -> Path:
     """Return the canonical host-global state default for the Compose user.
 
@@ -1569,6 +1584,23 @@ class LinuxEffects:
             rows = json.loads(_command(['docker', 'image', 'inspect', image_ref], timeout=30))
         except (ValueError, TypeError, json.JSONDecodeError):
             raise PostgresDeployError() from None
+        image_environment_keys: set[str] = set()
+        if source_snapshot.unset_environment:
+            image_environment = rows[0].get('Config', {}).get('Env', []) if (
+                isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict)
+            ) else None
+            if not isinstance(image_environment, list):
+                raise PostgresDeployError()
+            for entry in image_environment:
+                if not isinstance(entry, str) or '\x00' in entry or '=' not in entry:
+                    raise PostgresDeployError()
+                key = entry.partition('=')[0]
+                if (
+                    re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None
+                    or key in image_environment_keys
+                ):
+                    raise PostgresDeployError()
+                image_environment_keys.add(key)
         if (
             not isinstance(rows, list)
             or len(rows) != 1
@@ -1576,6 +1608,7 @@ class LinuxEffects:
                 'org.opencontainers.image.revision'
             ) != plan.revision
             or image_ref not in rows[0].get('RepoDigests', [])
+            or image_environment_keys & set(source_snapshot.unset_environment)
         ):
             raise PostgresDeployError()
 
@@ -1785,6 +1818,17 @@ class LinuxEffects:
             unset_environment=api_unset_environment,
         )
         try:
+            # A bare ``docker compose run -e NAME`` consults Compose's project
+            # interpolation environment when the scrubbed supervisor lacks the
+            # name. Ask Compose itself so every supported --env-file grammar is
+            # covered; retain only validated key names and never emit values.
+            if api_unset_environment:
+                project_environment = _compose_project_environment_keys(self.compose(
+                    'config', '--environment', cutover=selected,
+                    source_snapshot=provisional,
+                ))
+                if set(api_unset_environment) & project_environment:
+                    raise PostgresDeployError()
             compose_payload = json.loads(self.compose(
                 'config', '--format', 'json', cutover=selected,
                 source_snapshot=provisional,
