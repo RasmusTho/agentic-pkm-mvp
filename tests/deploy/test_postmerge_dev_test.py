@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+from datetime import datetime, timedelta, timezone
 import hashlib
 import io
 import json
@@ -1561,3 +1562,215 @@ def test_channel_bug_private_retained_fields_never_cross_dispatch(tmp_path, chan
     assert _poll_channel(tmp_path, later) == 0
     assert github.deliveries
     assert 'review-private-canary-only' not in json.dumps(github.deliveries)
+
+
+@pytest.mark.parametrize('options', [
+    [], ['--issue', '6224'], ['--until', '2099-01-01T00:00:00Z'],
+    ['--issue', '0', '--until', '2099-01-01T00:00:00Z'],
+    ['--issue', '6224', '--until', 'invalid'],
+    ['--issue', '6224', '--until', '2099-01-01T00:00:00'],
+    ['--issue', '6224', '--until', '2000-01-01T00:00:00Z'],
+])
+def test_kill_switch_requires_issue_and_expiry(tmp_path, monkeypatch, options):
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(driver, '_github', lambda *_: pytest.fail('pause must not add host API permissions'))
+    assert driver.main(['--pause', '--state-directory', str(tmp_path), *options]) == 78
+    assert not (tmp_path / 'postmerge-dev-test.json').exists()
+
+
+def test_kill_switch_pauses_until_expiry(tmp_path, monkeypatch, capsys):
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 10, 19, 10, tzinfo=timezone.utc)
+    until = now + timedelta(minutes=5)
+    monkeypatch.setattr(driver, '_utc_now', lambda: now)
+    monkeypatch.setattr(driver, '_github', lambda *_: pytest.fail('pause requires no additional API scope'))
+    assert driver.main(['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+                        '--until', until.isoformat()]) == 0
+    path = tmp_path / 'postmerge-dev-test.json'
+    stored = json.loads(path.read_text())
+    assert stored['pause'] == {'issue': 6224, 'engaged_at': now.isoformat(), 'expires_at': until.isoformat()}
+    assert path.stat().st_mode & 0o777 == 0o600
+    signals = []
+    unexpected = lambda *_: pytest.fail('paused controller reached candidate or native work')
+    # A later process reads the retained checkpoint, including at the last instant before expiry.
+    for instant in (now, until - timedelta(microseconds=1)):
+        monkeypatch.setattr(driver, '_utc_now', lambda: instant)
+        assert driver.poll(tmp_path, build=unexpected, load=unexpected, deploy=unexpected,
+                           resume=unexpected, absence=unexpected, heavy=unexpected,
+                           current_main=lambda: SHA, heartbeat=lambda sha, pause, observation: signals.append((sha, pause))) == 0
+    assert signals == [(SHA, stored['pause']), (SHA, stored['pause'])]
+    assert 'paused (#6224, until 2026-10-19T10:05:00+00:00)' in capsys.readouterr().out
+    updated = json.loads(path.read_text())
+    assert updated['pause'] == stored['pause']
+    assert updated['observation']['sequence'] == stored['observation']['sequence'] + 2
+    # Exercise the real producer and trusted Actions writer, then the public
+    # checker. Only HTTP/process transport is doubled, never pause semantics.
+    from scripts import dev_delivery_liveness as liveness
+    payloads = []
+    monkeypatch.setattr(driver, '_dispatch_liveness_signal', lambda kind, payload: payloads.append((kind, payload)))
+    driver.publish_heartbeat(SHA, stored['pause'], updated['observation'])
+    writes = []
+    def status_transport(command, **kwargs):
+        writes.append(dict(arg.split('=', 1) for arg in command if '=' in arg))
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+    monkeypatch.setattr(liveness.subprocess, 'run', status_transport)
+    liveness.record_signal(payloads[0][0], json.dumps(payloads[0][1]), repo=driver.REPOSITORY,
+                           event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
+                           triggering_actor='RasmusTho',
+                           run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999',
+                           api=lambda _: {'status': 'identical'}, now=instant)
+    assert writes[0]['state'] == 'failure'
+    statuses = [writes[0], {'context': liveness.VERDICT_CONTEXT, 'state': 'success',
+                           'description': 'observed_at=' + instant.isoformat()}]
+    run, _ = _build()
+    run['completed_at'] = run['created_at'] = (now - timedelta(hours=1)).isoformat()
+    def public_api(path):
+        return {'workflow_runs': [run]} if '/workflows/' in path else statuses
+    observed = liveness.check(driver.REPOSITORY, SHA, api=public_api, now=instant)
+    assert not observed.ok and observed.reason == 'paused'
+    assert observed.description == 'paused (#6224, until 2026-10-19T10:05:00+00:00)'
+    # A replay/late write cannot extend the retained expiry or hide behind a fresh verdict.
+    statuses[0]['updated_at'] = (until + timedelta(hours=1)).isoformat()
+    assert liveness.check(driver.REPOSITORY, SHA, api=public_api, now=until).ok
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    deployments = []
+    def deploy(channel, received):
+        deployments.append((channel, received))
+        return _native_receipt(channel, received)
+    monkeypatch.setattr(driver, '_utc_now', lambda: until)
+    assert driver.poll(tmp_path, build=lambda: 123, load=lambda _: candidate, deploy=deploy,
+                       current_main=lambda: SHA, heartbeat=lambda sha, pause, observation: signals.append((sha, pause))) == 0
+    assert deployments == [('dev', candidate), ('test', candidate)]
+    assert signals[-1] == (SHA, None)
+    assert json.loads(path.read_text())['pause'] == stored['pause']
+
+
+def test_kill_switch_preserves_pending_operation_and_resumes_after_expiry(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 10, 19, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(driver, '_utc_now', lambda: now)
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    assert driver.poll(tmp_path, build=lambda: 123, load=lambda _: candidate,
+                       current_main=lambda: SHA, deploy=lambda *_: {'terminal_result': 'unknown'}) == 78
+    path = tmp_path / 'postmerge-dev-test.json'
+    pending = json.loads(path.read_text())
+    now = datetime(2026, 10, 19, 10, tzinfo=timezone.utc)
+    until = now + timedelta(minutes=5)
+    monkeypatch.setattr(driver, '_utc_now', lambda: now)
+    assert driver.main(['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+                        '--until', until.isoformat()]) == 0
+    assert {k: v for k, v in json.loads(path.read_text()).items() if k not in {'pause', 'observation'}} == {
+        k: v for k, v in pending.items() if k != 'observation'}
+    unexpected = lambda *_: pytest.fail('pause must cover recovery and deployment')
+    assert driver.poll(tmp_path, build=unexpected, deploy=unexpected, resume=unexpected) == 0
+    monkeypatch.setattr(driver, '_utc_now', lambda: until)
+    resumed = []
+    def resume(channel, received):
+        resumed.append((channel, received))
+        return _native_receipt(channel, received)
+    assert driver.poll(tmp_path, resume=resume, deploy=resume, build=unexpected) == 0
+    assert resumed == [('dev', candidate), ('test', candidate)]
+
+
+@pytest.mark.parametrize('change', [
+    {'issue': 0}, {'issue': True}, {'expires_at': 'invalid'},
+    {'expires_at': '2026-10-19T10:05:00'}, {'extra': 'unrecognized'},
+    {'engaged_at': '2026-10-19T10:06:00+00:00'},
+])
+def test_kill_switch_malformed_checkpoint_refuses_before_effect(tmp_path, monkeypatch, change):
+    tmp_path.chmod(0o700)
+    pause = {'issue': 6224, 'engaged_at': '2026-10-19T10:00:00+00:00',
+             'expires_at': '2026-10-19T10:05:00+00:00'}
+    driver._atomic_checkpoint(tmp_path / 'postmerge-dev-test.json', {'pause': {**pause, **change},
+        'observation': {'sequence': 1, 'observed_at': pause['engaged_at']}})
+    unexpected = lambda *_: pytest.fail('invalid pause reached external work')
+    with pytest.raises(driver.CandidateRefused, match='checkpoint_refused'):
+        driver.poll(tmp_path, build=unexpected, deploy=unexpected, heartbeat=unexpected)
+
+
+def test_kill_switch_failed_persistence_preserves_checkpoint(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 10, 19, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(driver, '_utc_now', lambda: now)
+    options = ['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+               '--until', (now + timedelta(minutes=5)).isoformat()]
+    assert driver.main(options) == 0
+    path = tmp_path / 'postmerge-dev-test.json'
+    before = path.read_bytes()
+    original = driver.os.replace
+    monkeypatch.setattr(driver.os, 'replace', lambda *_: (_ for _ in ()).throw(OSError('unavailable')))
+    assert driver.main([*options[:-1], (now + timedelta(minutes=10)).isoformat()]) == 78
+    assert path.read_bytes() == before
+    monkeypatch.setattr(driver.os, 'replace', original)
+    assert driver.main([*options[:-1], (now + timedelta(minutes=10)).isoformat()]) == 0
+    assert json.loads(path.read_text())['pause']['expires_at'] == (now + timedelta(minutes=10)).isoformat()
+
+
+def test_kill_switch_cannot_be_bypassed_by_manual_source_run(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(driver, 'load_candidate', lambda *_: pytest.fail('uncheckpointed deployment'))
+    assert driver.main(['--source-run', '123']) == 78
+    assert driver.main(['--latest', '--issue', '6224', '--until', '2099-01-01T00:00:00Z',
+                        '--state-directory', str(tmp_path)]) == 78
+
+
+
+def test_kill_switch_manual_entrypoint_honors_pause_and_read_only_admission(tmp_path, monkeypatch, capsys):
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(driver, '_github', lambda _: json.dumps({'sha': SHA}).encode())
+    monkeypatch.setattr(driver, 'publish_heartbeat', lambda *_: None, raising=False)
+    now = datetime(2026, 10, 19, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(driver, '_utc_now', lambda: now)
+    assert driver.main(['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+                        '--until', (now + timedelta(minutes=5)).isoformat()]) == 0
+    monkeypatch.setattr(driver, 'load_candidate', lambda *_: pytest.fail('paused manual deployment'))
+    assert driver.main(['--source-run', '123', '--state-directory', str(tmp_path)]) == 0
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    monkeypatch.setattr(driver, 'load_candidate', lambda _: candidate)
+    assert driver.main(['--source-run', '123', '--admit-only']) == 0
+    assert json.loads(capsys.readouterr().out.splitlines()[-1]) == asdict(candidate)
+
+
+def test_kill_switch_locked_checkpoint_refuses_without_replacing_state(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 10, 19, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(driver, '_utc_now', lambda: now)
+    with driver.checkpoint_lock(tmp_path):
+        assert driver.main(['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+                            '--until', (now + timedelta(minutes=5)).isoformat()]) == 78
+    assert not (tmp_path / 'postmerge-dev-test.json').exists()
+
+
+
+def test_kill_switch_clock_regression_refuses_before_effect(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 10, 19, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(driver, '_utc_now', lambda: now)
+    assert driver.main(['--pause', '--state-directory', str(tmp_path), '--issue', '6224',
+                        '--until', (now + timedelta(minutes=5)).isoformat()]) == 0
+    monkeypatch.setattr(driver, '_utc_now', lambda: now - timedelta(seconds=1))
+    unexpected = lambda *_: pytest.fail('regressed clock reached external work')
+    with pytest.raises(driver.CandidateRefused, match='controller_clock_regressed'):
+        driver.poll(tmp_path, build=unexpected, heartbeat=unexpected)
+
+
+def test_installer_initializes_observation_and_refuses_lost_checkpoint(tmp_path, monkeypatch):
+    from scripts import install_postmerge_controller as installer
+    monkeypatch.setattr(installer.sys, 'platform', 'darwin')
+    monkeypatch.setattr(installer, 'require_reviewed_checkout', lambda *_: None)
+    monkeypatch.setattr(installer.shutil, 'which', lambda _: '/usr/bin/gh')
+    monkeypatch.setattr(installer.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(installer.subprocess, 'run', lambda *_args, **_kwargs: pytest.fail('unexpected live effect'))
+    options = ['--checkout', str(tmp_path), '--python', sys.executable]
+    assert installer.main(options) == 0
+    state = tmp_path / '.local/state/yggdrasil/secret-controller/postmerge'
+    path = state / 'postmerge-dev-test.json'
+    checkpoint = json.loads(path.read_text())
+    assert checkpoint['observation']['sequence'] == 1
+    driver._validate_checkpoint(checkpoint)
+    assert path.stat().st_mode & 0o777 == 0o600
+    plist = tmp_path / 'Library/LaunchAgents' / (installer.LABEL + '.plist')
+    before = plist.read_bytes()
+    path.unlink()
+    assert installer.main([*options, '--enable']) == 78
+    assert not path.exists() and plist.read_bytes() == before

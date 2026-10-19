@@ -190,11 +190,61 @@ PG PR coverage transfers to the shared isolated native profile only after actual
 execution is verified under #5675. Non-PG PR and bounded nightly checks remain; production promotion
 is separately governed.
 
+Repository support for an explicit deploy-machinery pause is provided by #6224. Use it only when
+the deployer itself is unsafe. After the required owner OK is recorded on the governing host-change
+Issue, invoke the reviewed controller tooling with the same private state directory as the LaunchAgent:
+
+```bash
+<reviewed-python> <reviewed-tooling>/scripts/postmerge_dev_test.py --pause \
+  --state-directory "$HOME/.local/state/yggdrasil/secret-controller/postmerge" \
+  --issue <deploy-machinery-issue-number> --until <future-ISO-8601-time-with-timezone>
+```
+
+Both a positive Issue number in this repository and a future timezone-aware expiry are required.
+The local receipt links that operator-supplied Issue; this command neither checks Issue contents nor
+requests additional host API permissions. It atomically stores the pause in the existing private
+`postmerge-dev-test.json`, under the existing controller lock, without changing a retained candidate
+or its native operation ID. A busy controller lock refuses the command; it does not interrupt an
+already admitted native operation. Retry after the active tick reaches its recorded boundary.
+
+While active, the controller skips candidate lookup, deployment, pending-operation recovery, and
+heavy-test dispatch. Its existing heartbeat carries the pause to the liveness workflow, which reports
+red `paused (#N, until T)` even when a recent dev verdict exists. Expiry is evaluated on every tick:
+at or after the deadline the pause no longer blocks work, the next heartbeat omits the active pause,
+and normal liveness checks apply. If `main` advances before another heartbeat arrives, the checker
+reads the existing status history along at most 100 first-parent commits, including commits without
+an admitted build. Incomplete, malformed, or inaccessible history reports red instead of assuming
+that an earlier pause ended. A later normal heartbeat supersedes the earlier pause; delayed status
+writes cannot refresh or extend their embedded observation and expiry. The expired receipt remains
+in the checkpoint for traceability.
+
+The existing private checkpoint also retains a heartbeat sequence and UTC clock floor. Each tick
+persists them before dispatch or native work; delayed retries carry that same observation. Pause
+replacement may shorten or extend its expiry, and the later sequence wins. A backwards host clock
+refuses the command before effects instead of manufacturing a fresh timestamp. The checker rejects
+conflicting sequences and reads across ambiguous same-second status pages; bounded incomplete
+history stays red. A fresh installer or first invocation in a new private state directory creates
+this metadata atomically. Valid legacy candidate checkpoints adopt it in place, preserving pending
+operation IDs and last-green history. The released legacy protocol has normal heartbeats only;
+unsequenced pause evidence is refused.
+
+Retain the authoritative state directory when updating controller tooling. An existing lock without
+its checkpoint refuses both installation and controller work, including after an interrupted initial
+write. Recover the current authoritative checkpoint; do not delete state or restore an older copy to
+reset the sequence. Loss or rollback of the entire authority directory cannot be distinguished from
+a new installation locally and is not supported recovery. It requires reconciliation by the live
+runtime owner under the existing activation authority, without granting the host new API scopes.
+The manual mutating `--source-run N` path also requires `--state-directory` and obeys the same pause;
+read-only `--source-run N --admit-only` remains usable without host state or deployment credentials.
+Unloading or stopping the LaunchAgent is not a supported pause. A pause never gates or reverts a
+`main` merge, grants production authority, or changes the no-database-rollback rule. Repository proof
+does not activate this command on a live host or release the existing #6170/#3347 gates.
+
 Target flow: [ADR-0068](../adr/ADR-0068-continuous-dev-delivery-flow.md) (owner-directed 2026-10-18,
 parent #6207) keeps this controller running through deploy problems. A red candidate files a rolling
 channel bug Issue and the next candidate proceeds. A hold pins the `dev` ref or engages a kill switch
-with an Issue and an expiry. Unloading the LaunchAgent is not a pause mechanism, and an absent
-controller is an alert. Until those slices land, the mechanics above are current.
+with an Issue and an expiry. The supported pause above enacts D5 at repository level; the other
+slices retain their own enactment and live-activation gates. An absent controller remains an alert.
 
 RCA on 2026-06-29 (BuilderOps LearningSignal `lrn_20260629093241_59713bc1`) found that the system had **no deployment source-of-truth**. The observed reality:
 
