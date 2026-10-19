@@ -20,6 +20,68 @@ REVISION = "a" * 40
 DIGEST = "sha256:" + "b" * 64
 
 
+def _instance_authority(tmp_path: Path, channel: str, vault_root: Path):
+    from app.instance.instance_state import InstanceStateLayout
+    from app.instance.ownership_ledger import LegacyOwner, OwnershipLedger
+    from app.instance.runtime import InstanceRegistryRuntime
+    from app.instance.vault_registry import VaultRegistration
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    state_root = tmp_path / f"{channel}-instance-state"
+    state_root.mkdir(mode=0o700)
+    ownership_root = tmp_path / f"{channel}-instance-ownership"
+    runtime = InstanceRegistryRuntime(
+        InstanceStateLayout.for_channel(state_root, channel),
+        OwnershipLedger(ownership_root),
+    )
+    binding_id = f"binding-{channel}"
+    runtime.registry.register(
+        VaultRegistration(binding_id, f"path:{vault_root}", str(vault_root)),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    runtime.ledger.bootstrap_legacy_owners(
+        [LegacyOwner(channel, binding_id, vault_root)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    return state_root, ownership_root
+
+
+def _map_fixed_container_mounts(
+    monkeypatch: pytest.MonkeyPatch,
+    *, state_root: Path,
+    ownership_root: Path,
+    selected_root: Path,
+    legacy_root: bool,
+) -> None:
+    from app.config import paths as config_paths
+    from app.instance import runtime as instance_runtime
+    from app.ops import native_source_bootstrap, native_source_identity_persistence
+
+    real_path = Path
+    mounts = {
+        "/app/instance-state": state_root,
+        "/app/instance-ownership": ownership_root,
+    }
+    if legacy_root:
+        mounts["/app/vault"] = selected_root
+
+    def mounted_path(value):
+        return mounts.get(str(value), real_path(value))
+
+    monkeypatch.setattr(native_source_bootstrap, "Path", mounted_path)
+    monkeypatch.setattr(instance_runtime, "Path", mounted_path)
+    monkeypatch.setattr(native_source_identity_persistence, "Path", mounted_path)
+    original_clean_path = config_paths._clean_path
+    monkeypatch.setattr(
+        config_paths,
+        "_clean_path",
+        lambda value: selected_root if legacy_root and value == "/app/vault"
+        else original_clean_path(value),
+    )
+
+
 def _summary(**overrides: int) -> SimpleNamespace:
     values = {
         "scanned": 1,
@@ -597,6 +659,52 @@ def test_source_compose_uses_exact_candidate_and_canonical_selected_vault_overla
     assert env["DEPLOY_VAULT_CONTAINER_ROOT"] == container_root
 
 
+@pytest.mark.parametrize("database_key", ["DATABASE_URL", "DB_DSN"])
+def test_closed_helper_environment_accepts_only_semantically_equal_database_urls(
+    database_key: str,
+) -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    installed_url = (
+        "postgresql+psycopg:///?host=db&port=5432&dbname=app_dev&user=app"
+        "&sslmode=verify-full&sslrootcert=%2Frun%2Fsecrets%2Fca.pem"
+    )
+    resolved_url = (
+        "postgresql+psycopg:///?sslrootcert=%2Frun%2Fsecrets%2Fca.pem&user=app"
+        "&dbname=app_dev&port=5432&host=db&sslmode=verify-full"
+    )
+    installed = {database_key: installed_url, "LLM_PROVIDER": "ollama"}
+    resolved = {database_key: resolved_url, "LLM_PROVIDER": "ollama"}
+
+    assert dict(linux._closed_source_helper_environment(installed, resolved)) == installed
+
+
+@pytest.mark.parametrize(
+    "resolved",
+    [
+        {"DATABASE_URL": "postgresql+psycopg:///?host=db&port=5432&dbname=other&user=app"},
+        {"DATABASE_URL": "postgresql+psycopg:///?host=db&port=5432&dbname=app_dev&user=app&sslmode=disable"},
+        {"DATABASE_URL": "postgresql+psycopg:///?host=db&port=5432&dbname=app_dev&user=app&passfile=%2Fsecret"},
+        {"DB_DSN": "postgresql+psycopg:///?host=db&port=5432&dbname=app_dev&user=app"},
+        {"LLM_PROVIDER": "openai"},
+    ],
+)
+def test_closed_helper_environment_refuses_database_or_key_authority_drift(
+    resolved: dict[str, str],
+) -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    installed = {
+        "DATABASE_URL": (
+            "postgresql+psycopg:///?host=db&port=5432&dbname=app_dev&user=app"
+            "&sslmode=verify-full"
+        ),
+        "LLM_PROVIDER": "ollama",
+    }
+    with pytest.raises(linux.PostgresDeployError):
+        linux._closed_source_helper_environment(installed, resolved)
+
+
 def test_producer_completion_crash_resumes_cleanup_without_rerunning_producer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1051,10 +1159,13 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
     monkeypatch.setattr("app.services.note_uuid.DEFAULT_WRITE_GUARD", guard)
     monkeypatch.setattr("app.write_guard.DEFAULT_WRITE_GUARD", guard)
     monkeypatch.setattr("app.services.companion_note.DEFAULT_WRITE_GUARD", guard)
-    preflight_channels: list[str] = []
-    monkeypatch.setattr(
-        native_source_bootstrap, "_instance_preflight",
-        lambda channel: preflight_channels.append(channel),
+    state_root, ownership_root = _instance_authority(tmp_path, "dev", root)
+    _map_fixed_container_mounts(
+        monkeypatch,
+        state_root=state_root,
+        ownership_root=ownership_root,
+        selected_root=root,
+        legacy_root=False,
     )
     monkeypatch.setattr(native_source_bootstrap, "quiesce_owned_container", lambda *_args: True)
 
@@ -1130,7 +1241,6 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
     assert receipt["eligible"] is True
     assert "uuid:" in note.read_text()
     assert candidate_checks == [True, False]
-    assert preflight_channels == ["dev"]
     assert "ensure uuid" in guard_actions
     assert "up" not in events
 
@@ -1145,69 +1255,90 @@ def test_real_preflight_retains_channel_and_selected_topology(
     selected = (tmp_path / channel / "vault").resolve()
     selected.mkdir(parents=True)
     container_root = Path("/app/vault") if legacy_root else selected
+    state_root, ownership_root = _instance_authority(tmp_path, channel, selected)
+    _map_fixed_container_mounts(
+        monkeypatch,
+        state_root=state_root,
+        ownership_root=ownership_root,
+        selected_root=selected,
+        legacy_root=legacy_root,
+    )
     monkeypatch.setenv("NATIVE_SOURCE_BOOTSTRAP", f"{channel}:{REVISION}")
     monkeypatch.setenv("PKM_ENVIRONMENT", channel)
     monkeypatch.setenv("VCS_REF", REVISION)
     monkeypatch.setenv("BUILT_AT", "candidate-build")
     monkeypatch.setenv("STORE_BACKEND", "pg")
-    observed: list[str] = []
-    monkeypatch.setattr(
-        native_source_bootstrap, "_instance_preflight",
-        lambda value: observed.append(value),
-    )
-    if legacy_root:
-        class LegacyBinding:
-            def resolve(self, *, strict: bool):
-                assert strict is True
-                return container_root
-
-        monkeypatch.setattr(
-            "app.config.paths.resolve_optional_vault_root", lambda: LegacyBinding(),
-        )
-        original_is_dir = Path.is_dir
-        monkeypatch.setattr(
-            Path, "is_dir",
-            lambda path: True if path == container_root else original_is_dir(path),
-        )
-    else:
-        monkeypatch.setenv("VAULT_ROOT", str(selected))
+    monkeypatch.setenv("VAULT_ROOT", str(container_root))
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(container_root))
 
     assert native_source_bootstrap.preflight(
         f"{channel}:{REVISION}",
-    ) == container_root
-    assert observed == [channel]
+    ) == selected
 
 
-@pytest.mark.parametrize("drift", ["helper-revision", "runtime-channel", "binding"])
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("legacy_root", [False, True])
+@pytest.mark.parametrize(
+    "drift",
+    ["helper-revision", "runtime-channel", "binding", "missing-binding"],
+)
 def test_real_worker_preflight_refuses_wrong_helper_runtime_or_binding_before_producer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, channel: str,
+    legacy_root: bool, drift: str,
 ) -> None:
-    from app.ops import native_source_bootstrap, native_source_identity_persistence
+    from app.ops import native_source_identity_persistence
 
     root = (tmp_path / "vault").resolve()
     wrong_root = (tmp_path / "other-vault").resolve()
     root.mkdir()
     wrong_root.mkdir()
-    monkeypatch.setenv("NATIVE_SOURCE_BOOTSTRAP", f"dev:{REVISION}")
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    marker = root / "source.md"
+    marker.write_text("---\ntrust: human\n---\nunchanged\n")
+    state_root, ownership_root = _instance_authority(tmp_path, channel, root)
+    _map_fixed_container_mounts(
+        monkeypatch,
+        state_root=state_root,
+        ownership_root=ownership_root,
+        selected_root=root,
+        legacy_root=legacy_root,
+    )
+    container_root = "/app/vault" if legacy_root else str(root)
+    monkeypatch.setenv("NATIVE_SOURCE_BOOTSTRAP", f"{channel}:{REVISION}")
+    monkeypatch.setenv("PKM_ENVIRONMENT", channel)
     monkeypatch.setenv("VCS_REF", REVISION)
     monkeypatch.setenv("BUILT_AT", "candidate-build")
     monkeypatch.setenv("STORE_BACKEND", "pg")
-    monkeypatch.setenv("VAULT_ROOT", str(root))
-    monkeypatch.setattr(native_source_bootstrap, "_instance_preflight", lambda _channel: None)
+    monkeypatch.setenv("VAULT_ROOT", container_root)
+    monkeypatch.setenv("WATCHER_VAULT_PATH", container_root)
     if drift == "helper-revision":
         monkeypatch.setenv("VCS_REF", "b" * 40)
     elif drift == "runtime-channel":
-        monkeypatch.setenv("PKM_ENVIRONMENT", "test")
-    else:
+        monkeypatch.setenv("PKM_ENVIRONMENT", "test" if channel == "dev" else "dev")
+    elif drift == "binding":
         monkeypatch.setenv("VAULT_ROOT", str(wrong_root))
+        monkeypatch.setenv("WATCHER_VAULT_PATH", str(wrong_root))
+    else:
+        monkeypatch.delenv("VAULT_ROOT")
+        monkeypatch.delenv("WATCHER_VAULT_PATH")
     producer_calls: list[Path] = []
     monkeypatch.setattr(
         native_source_identity_persistence, "run_ordinary_persistence",
         lambda **kwargs: producer_calls.append(kwargs["vault_root"]),
     )
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for selected in (root, wrong_root)
+        for path in selected.rglob("*")
+        if path.is_file()
+    }
 
     assert native_source_identity_persistence.worker_main([
-        str(uuid4()), "dev", REVISION, str(root),
+        str(uuid4()), channel, REVISION, container_root,
     ]) == 78
     assert producer_calls == []
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for selected in (root, wrong_root)
+        for path in selected.rglob("*")
+        if path.is_file()
+    } == before

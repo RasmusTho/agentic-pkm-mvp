@@ -29,7 +29,11 @@ from typing import Any, Callable, Iterator
 from uuid import UUID, uuid4
 from urllib.parse import urlencode, quote
 
-from app.config.database import credential_free_database_fields, host_database_fields
+from app.config.database import (
+    DatabaseCredentialError,
+    credential_free_database_fields,
+    host_database_fields,
+)
 from app.ops.bws_secret_reader import BwsReaderConfig, BwsSecretReader
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
 from app.ops.native_web_acceptance import NativeWebRefusal, WEB_PROFILE
@@ -608,8 +612,19 @@ def _closed_source_helper_environment(
     """
     if _SOURCE_HELPER_IMAGE_OWNED_ENV & resolved_service.keys():
         raise PostgresDeployError()
-    if any(installed.get(key) != value for key, value in resolved_service.items()):
-        raise PostgresDeployError()
+    for key, value in resolved_service.items():
+        if key in {'DATABASE_URL', 'DB_DSN'}:
+            if key not in installed:
+                raise PostgresDeployError()
+            try:
+                installed_fields = credential_free_database_fields(installed[key])
+                resolved_fields = credential_free_database_fields(value)
+            except DatabaseCredentialError:
+                raise PostgresDeployError() from None
+            if installed_fields != resolved_fields:
+                raise PostgresDeployError()
+        elif installed.get(key) != value:
+            raise PostgresDeployError()
     return tuple(sorted(
         (key, value)
         for key, value in installed.items()
