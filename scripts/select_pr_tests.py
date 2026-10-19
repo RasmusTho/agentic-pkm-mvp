@@ -265,6 +265,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         ".dockerignore",
         ".github/workflows/app-image-build.yml",
         ".github/workflows/ci-smoke.yaml",
+        ".github/workflows/postmerge-channel-bug.yml",
         ".github/workflows/postmerge-dev-test.yml",
         "Dockerfile",
         "Makefile",
@@ -320,6 +321,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "scripts/post_merge_heavy_tests_verdict.py",
         "scripts/postgres_deploy_service.py",
         "scripts/postgres_entrypoint.sh",
+        "scripts/postmerge_channel_bug.py",
         "scripts/postmerge_dev_test.py",
         "scripts/prod_deploy_retry_preflight.py",
         "scripts/prod_devui_gateway_preflight.py",
@@ -1197,6 +1199,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "ops_deploy",
         (
+            ".github/workflows/postmerge-channel-bug.yml",
             "scripts/",
             "ops/",
             "config/deploy/",

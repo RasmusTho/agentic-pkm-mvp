@@ -82,7 +82,7 @@ Enactment slices (children of #6207):
 | Slice | ADR-0068 decision |
 | --- | --- |
 | Controller liveness check | D6 |
-| Automatic rolling channel bug Issue | D3 |
+| Automatic rolling channel bug Issue — repository support in #6223; live activation retains #6170/#3347 | D3 |
 | `dev` and `test` refs advanced on green verdicts | D4 |
 | Kill switch with Issue and expiry, replacing unload-as-pause | D5 |
 | Pinned controller tooling | D7 |
