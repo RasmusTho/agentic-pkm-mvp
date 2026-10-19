@@ -593,9 +593,69 @@ class SourceIdentityRuntimeSnapshot:
     container_root: str
     vault_overlay: str
     child_environment: tuple[tuple[str, str], ...]
+    unset_environment: tuple[str, ...] = ()
 
 
 _SOURCE_HELPER_IMAGE_OWNED_ENV = frozenset({'VCS_REF', 'BUILT_AT'})
+_SOURCE_REQUIRED_ASSIGNED_ENV = frozenset({
+    'LLM_PROVIDER', 'EMBED_PROVIDER', 'EMBED_MODEL', 'STORE_BACKEND',
+    'PKM_ENVIRONMENT', 'VAULT_ROOT', 'WATCHER_VAULT_PATH',
+})
+
+
+def _installed_container_environment(
+    entries: object,
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Normalize Docker's installed env while preserving semantic unsets.
+
+    Docker records an unset as a bare ``NAME`` and an explicit empty value as
+    ``NAME=``. Bare optional names are therefore omitted from the child
+    environment; they never acquire values from the host, Compose defaults, or
+    the candidate image. Duplicate names remain ambiguous across both forms.
+    """
+    if not isinstance(entries, list):
+        raise PostgresDeployError()
+    parsed: dict[str, str] = {}
+    seen: set[str] = set()
+    unset: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, str) or '\x00' in entry:
+            raise PostgresDeployError()
+        key, separator, value = entry.partition('=')
+        if (
+            re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None
+            or key in seen
+            or key == 'BWS_ACCESS_TOKEN'
+            or (not separator and key in _SOURCE_REQUIRED_ASSIGNED_ENV)
+        ):
+            raise PostgresDeployError()
+        seen.add(key)
+        if separator:
+            parsed[key] = value
+        elif key not in _SOURCE_HELPER_IMAGE_OWNED_ENV:
+            unset.add(key)
+    return parsed, tuple(sorted(unset))
+
+
+def _source_identity_execution_payload(
+    *, files: list[tuple[str, str]],
+    child_environment: tuple[tuple[str, str], ...],
+    resolved_environment: dict[str, str],
+    container_root: str,
+    vault_overlay: str,
+    unset_environment: tuple[str, ...],
+) -> dict[str, Any]:
+    """Keep the pre-unset fingerprint shape for previously admitted requests."""
+    payload: dict[str, Any] = {
+        'files': files,
+        'child_environment': list(child_environment),
+        'resolved_service_environment': sorted(resolved_environment.items()),
+        'container_root': container_root,
+        'vault_overlay': vault_overlay,
+    }
+    if unset_environment:
+        payload['unset_environment'] = list(unset_environment)
+    return payload
 
 
 def _closed_source_helper_environment(
@@ -630,6 +690,21 @@ def _closed_source_helper_environment(
         for key, value in installed.items()
         if key not in _SOURCE_HELPER_IMAGE_OWNED_ENV
     ))
+
+
+def _compose_project_environment_keys(rendered: str) -> frozenset[str]:
+    """Validate Compose's canonical interpolation environment without retaining values."""
+    keys: set[str] = set()
+    for line in rendered.splitlines():
+        key, separator, _value = line.partition('=')
+        if (
+            not separator
+            or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None
+            or key in keys
+        ):
+            raise PostgresDeployError()
+        keys.add(key)
+    return frozenset(keys)
 
 
 def _runtime_user_ownership_state_dir(runtime_uid: int, xdg_state_home: str | None = None) -> Path:
@@ -1037,6 +1112,15 @@ class LinuxEffects:
             cutover, candidate,
             source_snapshot.child_environment if source_snapshot is not None else None,
         )
+        if source_snapshot is not None:
+            if set(source_snapshot.unset_environment) & dict(
+                source_snapshot.child_environment
+            ).keys():
+                raise PostgresDeployError()
+            for key in source_snapshot.unset_environment:
+                if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None:
+                    raise PostgresDeployError()
+                env.pop(key, None)
         overlays = ['-f', str(cfg.root / 'docker-compose.bws.yml')]
         if env['BWS_DATABASE_TARGET'] == 'external':
             overlays += ['-f', str(cfg.root / 'docker-compose.bws-external.yml')]
@@ -1278,6 +1362,11 @@ class LinuxEffects:
                         for key, _value in locked_runtime.child_environment
                         for item in ("-e", key)
                     ],
+                    *[
+                        item
+                        for key in locked_runtime.unset_environment
+                        for item in ("-e", key)
+                    ],
                     "-e", f"NATIVE_SOURCE_BOOTSTRAP={self.config.channel}:{revision}",
                     "--entrypoint", "python", "api", "-m",
                     "app.ops.native_source_identity_persistence",
@@ -1495,6 +1584,23 @@ class LinuxEffects:
             rows = json.loads(_command(['docker', 'image', 'inspect', image_ref], timeout=30))
         except (ValueError, TypeError, json.JSONDecodeError):
             raise PostgresDeployError() from None
+        image_environment_keys: set[str] = set()
+        if source_snapshot.unset_environment:
+            image_environment = rows[0].get('Config', {}).get('Env', []) if (
+                isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict)
+            ) else None
+            if not isinstance(image_environment, list):
+                raise PostgresDeployError()
+            for entry in image_environment:
+                if not isinstance(entry, str) or '\x00' in entry or '=' not in entry:
+                    raise PostgresDeployError()
+                key = entry.partition('=')[0]
+                if (
+                    re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None
+                    or key in image_environment_keys
+                ):
+                    raise PostgresDeployError()
+                image_environment_keys.add(key)
         if (
             not isinstance(rows, list)
             or len(rows) != 1
@@ -1502,6 +1608,7 @@ class LinuxEffects:
                 'org.opencontainers.image.revision'
             ) != plan.revision
             or image_ref not in rows[0].get('RepoDigests', [])
+            or image_environment_keys & set(source_snapshot.unset_environment)
         ):
             raise PostgresDeployError()
 
@@ -1523,6 +1630,7 @@ class LinuxEffects:
         allowed = {'api', 'worker', 'watcher', 'heimdal-capture-watch', 'companion-ui'}
         snapshots: dict[str, dict[str, Any]] = {}
         environments: dict[str, dict[str, str]] = {}
+        environment_unsets: dict[str, tuple[str, ...]] = {}
         selected_destinations: set[str] = set()
         running: set[str] = set()
         for row in rows:
@@ -1546,23 +1654,9 @@ class LinuxEffects:
                 running.add(service)
             config = row.get('Config', {})
             entries = config.get('Env', [])
-            if not isinstance(entries, list):
-                raise PostgresDeployError()
-            parsed: dict[str, str] = {}
-            for entry in entries:
-                if not isinstance(entry, str) or '\x00' in entry:
-                    raise PostgresDeployError()
-                key, separator, value = entry.partition('=')
-                if (
-                    not separator
-                    or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key)
-                    or key in parsed
-                ):
-                    raise PostgresDeployError()
-                parsed[key] = value
-            if 'BWS_ACCESS_TOKEN' in parsed:
-                raise PostgresDeployError()
+            parsed, unset = _installed_container_environment(entries)
             environments[service] = parsed
+            environment_unsets[service] = unset
             mounts = row.get('Mounts')
             if not isinstance(mounts, list):
                 raise PostgresDeployError()
@@ -1607,6 +1701,7 @@ class LinuxEffects:
         api_environment = environments.get('api')
         if api_environment is None:
             raise PostgresDeployError()
+        api_unset_environment = environment_unsets['api']
         for service in ('worker', 'watcher'):
             current = environments.get(service)
             if current is None:
@@ -1720,8 +1815,20 @@ class LinuxEffects:
                 (key, value) for key, value in api_environment.items()
                 if key not in _SOURCE_HELPER_IMAGE_OWNED_ENV
             )),
+            unset_environment=api_unset_environment,
         )
         try:
+            # A bare ``docker compose run -e NAME`` consults Compose's project
+            # interpolation environment when the scrubbed supervisor lacks the
+            # name. Ask Compose itself so every supported --env-file grammar is
+            # covered; retain only validated key names and never emit values.
+            if api_unset_environment:
+                project_environment = _compose_project_environment_keys(self.compose(
+                    'config', '--environment', cutover=selected,
+                    source_snapshot=provisional,
+                ))
+                if set(api_unset_environment) & project_environment:
+                    raise PostgresDeployError()
             compose_payload = json.loads(self.compose(
                 'config', '--format', 'json', cutover=selected,
                 source_snapshot=provisional,
@@ -1744,13 +1851,14 @@ class LinuxEffects:
         child_environment = _closed_source_helper_environment(
             api_environment, resolved_environment,
         )
-        execution_payload = {
-            'files': [(str(path), stable_hash(path)) for path in input_paths],
-            'child_environment': list(child_environment),
-            'resolved_service_environment': sorted(resolved_environment.items()),
-            'container_root': container_root,
-            'vault_overlay': vault_overlay,
-        }
+        execution_payload = _source_identity_execution_payload(
+            files=[(str(path), stable_hash(path)) for path in input_paths],
+            child_environment=child_environment,
+            resolved_environment=resolved_environment,
+            container_root=container_root,
+            vault_overlay=vault_overlay,
+            unset_environment=api_unset_environment,
+        )
         return SourceIdentityRuntimeSnapshot(
             installed_fingerprint=hashlib.sha256(json.dumps(
                 installed_payload, sort_keys=True, separators=(',', ':'),
@@ -1763,6 +1871,7 @@ class LinuxEffects:
             container_root=container_root,
             vault_overlay=vault_overlay,
             child_environment=child_environment,
+            unset_environment=api_unset_environment,
         )
 
     def channel_lock_owner(self) -> bytes | None:

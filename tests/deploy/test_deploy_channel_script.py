@@ -3915,6 +3915,107 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
     assert host.main(malformed) == 78
 
 
+def test_source_identity_persistence_accepts_optional_docker_unsets():
+    from app.ops import postgres_deploy_linux as linux
+
+    normalized, unset = linux._installed_container_environment([
+        "PKM_ENVIRONMENT=dev",
+        "VAULT_ROOT=/srv/vault-alpha",
+        "POSTGRES_PASSWORD",
+        "PGPASSWORD",
+        "OPTIONAL_PROVIDER",
+        "EXPLICIT_EMPTY=",
+        "VCS_REF",
+        "BUILT_AT",
+    ])
+    assert normalized == {
+        "PKM_ENVIRONMENT": "dev",
+        "VAULT_ROOT": "/srv/vault-alpha",
+        "EXPLICIT_EMPTY": "",
+    }
+    assert unset == ("OPTIONAL_PROVIDER", "PGPASSWORD", "POSTGRES_PASSWORD")
+
+
+def test_source_identity_unsets_preserve_closed_helper_environment(monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+
+    monkeypatch.setenv("OPTIONAL_PROVIDER", "ambient-must-not-cross-boundary")
+    installed, unset = linux._installed_container_environment([
+        "PKM_ENVIRONMENT=dev",
+        "VAULT_ROOT=/srv/vault-alpha",
+        "OPTIONAL_PROVIDER",
+        "EXPLICIT_EMPTY=",
+    ])
+    child = dict(linux._closed_source_helper_environment(installed, installed))
+    assert "OPTIONAL_PROVIDER" not in child
+    assert child["EXPLICIT_EMPTY"] == ""
+    assert child["PKM_ENVIRONMENT"] == "dev"
+    with pytest.raises(linux.PostgresDeployError):
+        linux._closed_source_helper_environment(
+            installed, {**installed, "OPTIONAL_PROVIDER": "env-file-value"},
+        )
+    snapshot = linux.SourceIdentityRuntimeSnapshot(
+        "c" * 64, "d" * 64, ("api", "watcher", "worker"),
+        ("api", "watcher", "worker"), "/srv/vault-alpha",
+        "docker-compose.full-host-vault.yml", tuple(child.items()), unset,
+    )
+    effects = linux.LinuxEffects(type("Config", (), {"channel": "dev", "root": Path("/")})())
+    captured = {}
+    monkeypatch.setattr(
+        effects, "environment", lambda *_args: {
+            "BWS_DATABASE_TARGET": "local",
+            "OPTIONAL_PROVIDER": "ambient-must-not-cross-boundary",
+        },
+    )
+    monkeypatch.setattr(
+        linux, "_command",
+        lambda argv, **kwargs: captured.update(argv=argv, env=kwargs["env"]) or "",
+    )
+    effects.compose("run", "-e", "OPTIONAL_PROVIDER", "api", source_snapshot=snapshot)
+    assert "OPTIONAL_PROVIDER" not in captured["env"]
+    assert captured["argv"][-3:] == ["-e", "OPTIONAL_PROVIDER", "api"]
+    legacy_payload = linux._source_identity_execution_payload(
+        files=[("runtime.env", "e" * 64)],
+        child_environment=(("PKM_ENVIRONMENT", "dev"),),
+        resolved_environment={"PKM_ENVIRONMENT": "dev"},
+        container_root="/srv/vault-alpha",
+        vault_overlay="docker-compose.full-host-vault.yml",
+        unset_environment=(),
+    )
+    assert legacy_payload == {
+        "files": [("runtime.env", "e" * 64)],
+        "child_environment": [("PKM_ENVIRONMENT", "dev")],
+        "resolved_service_environment": [("PKM_ENVIRONMENT", "dev")],
+        "container_root": "/srv/vault-alpha",
+        "vault_overlay": "docker-compose.full-host-vault.yml",
+    }
+    assert "unset_environment" not in legacy_payload
+
+
+@pytest.mark.parametrize("entries", [
+    ["OPTIONAL_PROVIDER", "OPTIONAL_PROVIDER=value"],
+    ["OPTIONAL_PROVIDER=value", "OPTIONAL_PROVIDER"],
+    ["OPTIONAL_PROVIDER", "OPTIONAL_PROVIDER"],
+    ["BAD KEY=value"],
+    [""],
+    [None],
+    ["OPTIONAL_PROVIDER=bad\x00value"],
+    {"OPTIONAL_PROVIDER": "value"},
+    ["PKM_ENVIRONMENT"],
+    ["VAULT_ROOT"],
+    ["LLM_PROVIDER"],
+    ["STORE_BACKEND"],
+    ["BWS_ACCESS_TOKEN"],
+    ["BWS_ACCESS_TOKEN="],
+    ["BWS_ACCESS_TOKEN=secret"],
+])
+def test_source_identity_environment_normalization_refuses_unsafe_entries(entries):
+    from app.ops import postgres_deploy_linux as linux
+
+    with pytest.raises(linux.PostgresDeployError):
+        linux._installed_container_environment(entries)
+
+
 def test_source_identity_absence_proof_retires_only_exact_pending_host_operation(
     monkeypatch, tmp_path,
 ):
