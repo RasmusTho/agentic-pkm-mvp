@@ -312,16 +312,24 @@ def _status_history(repo: str, sha: str, context: str, *, api: Callable[[str], A
 def _main_heartbeat_history(repo: str, sha: str, *, api: Callable[[str], Any]) -> list[Any]:
     # A stopped controller cannot copy its pause onto a later main SHA. Follow
     # the actual first-parent main lineage, including commits without builds,
-    # until the nearest controller signal. A later normal tick supersedes the
-    # earlier pause; transport/history ambiguity must never produce green.
+    # until the nearest actual normal/pause activity. Startup diagnostics
+    # cannot retire ancestor activity: retain them while finding the causal
+    # signal. A later normal tick supersedes the earlier pause; transport or
+    # history ambiguity must never produce green.
+    collected: list[Any] = []
     seen: set[str] = set()
     for _ in range(MAX_HEARTBEAT_COMMITS):
         if sha in seen:
             raise LivenessRefused("heartbeat_ancestry_refused")
         seen.add(sha)
         statuses = _status_history(repo, sha, HEARTBEAT_CONTEXT, api=api)
-        if _latest_status(statuses, HEARTBEAT_CONTEXT, allow_rotated_context=True) is not None:
-            return statuses
+        # Validate diagnostics too, before following untrusted ancestry. A
+        # diagnostic-only commit changes discovery, never signal admission.
+        _latest_status(statuses, HEARTBEAT_CONTEXT, allow_rotated_context=True)
+        collected.extend(statuses)
+        activity = [status for status in statuses if not _startup_failure(status)]
+        if _latest_status(activity, HEARTBEAT_CONTEXT, allow_rotated_context=True) is not None:
+            return collected
         commit = api(f"repos/{repo}/git/commits/{sha}")
         if (not isinstance(commit, dict) or commit.get("sha") != sha
                 or not isinstance(commit.get("parents"), list)
@@ -329,7 +337,7 @@ def _main_heartbeat_history(repo: str, sha: str, *, api: Callable[[str], Any]) -
             raise LivenessRefused("heartbeat_ancestry_refused")
         parents = [_validate_sha(parent.get("sha")) for parent in commit["parents"]]
         if not parents:
-            return []
+            return collected
         sha = parents[0]
     raise LivenessRefused("heartbeat_ancestry_incomplete")
 

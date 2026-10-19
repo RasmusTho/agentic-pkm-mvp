@@ -2112,3 +2112,162 @@ def test_startup_diagnostic_cannot_borrow_activity_order(monkeypatch, activity):
         liveness.record_signal('heartbeat', json.dumps(payload), repo=driver.REPOSITORY,
                                event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
                                triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999')
+
+
+@pytest.mark.parametrize('diagnostic_lags_pause', [False, True])
+def test_startup_diagnostic_discovers_ancestor_pause_before_fresh_verdict(
+    installed_controller_pin, monkeypatch, diagnostic_lags_pause,
+):
+    from scripts import dev_delivery_liveness as liveness
+    pin = installed_controller_pin
+    pause_at = datetime.now(timezone.utc)
+    until = pause_at + timedelta(minutes=10)
+    monkeypatch.setattr(driver, '_utc_now', lambda: pause_at)
+    produced = []
+    monkeypatch.setattr(driver, '_dispatch_liveness_signal', lambda kind, payload: produced.append((kind, payload)))
+    assert driver.main(['--pause', '--state-directory', str(pin.state), '--issue', '6224',
+                        '--until', until.isoformat()]) == 0
+    unexpected = lambda *_: pytest.fail('active pause reached native or candidate work')
+    assert driver.poll(pin.state, build=unexpected, deploy=unexpected, resume=unexpected,
+                       current_main=lambda: SHA, heartbeat=driver.publish_heartbeat) == 0
+    pause_payload = produced[-1][1]
+    newer_main, newest_main = 'c' * 40, 'd' * 40
+    pin.gh.write_text(pin.gh.read_text().replace(SHA, newer_main))
+    controller_file = pin.source / 'scripts/postmerge_dev_test.py'
+    original = controller_file.read_bytes()
+    controller_file.write_text("raise ModuleNotFoundError('refused tooling fixture')\n")
+    failed = subprocess.run(pin.config['ProgramArguments'], cwd=pin.source,
+                            capture_output=True, text=True, check=False)
+    assert failed.returncode == 78 and json.loads(failed.stdout)['liveness_signal'] == 'sent'
+    startup_payload = json.loads(pin.signals.read_text())
+    assert startup_payload['sha'] == newer_main
+    startup_at = datetime.fromisoformat(startup_payload['observed_at'])
+    # The independent stdlib diagnostic has no checkpoint clock floor. Model a
+    # permitted host-clock rewind; the main-only writer still admits this age.
+    if diagnostic_lags_pause:
+        startup_at = pause_at - timedelta(seconds=2)
+        startup_payload['observed_at'] = startup_at.isoformat()
+    verdict_at = pause_at - timedelta(seconds=1) if diagnostic_lags_pause else startup_at + timedelta(seconds=1)
+    now = max(pause_at, startup_at) + timedelta(seconds=2)
+    writes = []
+    run = subprocess.run
+    monkeypatch.setattr(liveness.subprocess, 'run', lambda command, **_: writes.append(command))
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    monkeypatch.setattr(driver, 'load_candidate', lambda _: candidate)
+    def admit(kind, payload, at):
+        writes.clear()
+        liveness.record_signal(kind, json.dumps(payload), repo=driver.REPOSITORY,
+                               event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
+                               triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999',
+                               api=lambda _: {'status': 'identical'}, now=at)
+        assert writes[0][2] == f'repos/{driver.REPOSITORY}/statuses/{payload["sha"]}'
+        fields = dict(item.split('=', 1) for item in writes[0] if '=' in item)
+        return {key: fields[key] for key in ('state', 'context', 'description')}
+    paused = admit('heartbeat', pause_payload, now)
+    startup = admit('heartbeat', startup_payload, now)
+    class VerdictClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return verdict_at
+    monkeypatch.setattr(driver, 'datetime', VerdictClock)
+    driver.publish_dev_verdict(candidate, {'result': 'passed', 'channel': 'dev',
+                                          'operation_id': candidate.operation_id('dev')})
+    verdict = admit(*produced[-1], now)
+    statuses = {SHA: [paused, verdict], newer_main: [startup], newest_main: []}
+    parents = {newest_main: newer_main, newer_main: SHA, SHA: None}
+    reads = []
+    admitted_run = {**_build()[0], 'created_at': (pause_at - timedelta(hours=2)).isoformat(),
+                    'completed_at': (pause_at - timedelta(hours=1)).isoformat()}
+    def api(endpoint):
+        reads.append(endpoint)
+        if '/actions/workflows/' in endpoint:
+            return {'workflow_runs': [admitted_run]}
+        if '/statuses?' in endpoint:
+            sha = endpoint.split('/commits/', 1)[1].split('/', 1)[0]
+            page = int(endpoint.rsplit('page=', 1)[1])
+            if sha == newer_main and page == 1:
+                # A queued replay burst cannot establish completeness or hide
+                # the ancestor. Equal write timestamps retain source freshness.
+                return [{**startup, 'created_at': now.isoformat()} for _ in range(100)]
+            if sha == newer_main and page == 2:
+                return [{**startup, 'created_at': (now - timedelta(seconds=1)).isoformat()}]
+            return statuses.get(sha, [])
+        if '/git/commits/' in endpoint:
+            sha = endpoint.rsplit('/', 1)[1]
+            return {'sha': sha, 'parents': [{'sha': parents[sha]}] if parents[sha] else []}
+        pytest.fail('unexpected liveness read: ' + endpoint)
+    checked = liveness.check(driver.REPOSITORY, newest_main, api=api, now=now)
+    assert not checked.ok
+    assert checked.reason == ('paused' if diagnostic_lags_pause else 'startup_self_check_failed')
+    assert any(endpoint.endswith('/git/commits/' + newer_main) for endpoint in reads)
+    assert any(f'/commits/{newer_main}/statuses?per_page=100&page=2' in endpoint for endpoint in reads)
+    # Repair the actual pin, then let the real poller allocate a later normal
+    # observation after expiry. No admitted build or native operation follows.
+    controller_file.write_bytes(original)
+    healthy = run([*pin.config['ProgramArguments'], '--self-check'], cwd=pin.source,
+                  capture_output=True, text=True, check=False)
+    assert healthy.returncode == 0, healthy.stdout + healthy.stderr
+    monkeypatch.setattr(driver, '_utc_now', lambda: until)
+    def no_build():
+        raise driver.CandidateRefused('latest_build_not_ready')
+    with pytest.raises(driver.CandidateRefused, match='latest_build_not_ready'):
+        driver.poll(pin.state, build=no_build, deploy=unexpected, resume=unexpected,
+                    current_main=lambda: newest_main, heartbeat=driver.publish_heartbeat)
+    normal_kind, normal_payload = produced[-1]
+    assert normal_payload['sha'] == newest_main and 'pause' not in normal_payload
+    normal = admit(normal_kind, normal_payload, until)
+    statuses[newest_main] = [normal]
+    # An old startup replay remains on its actual older commit; the genuine
+    # newer normal tick retires that diagnostic and the expired ancestor pause.
+    assert liveness.check(driver.REPOSITORY, newest_main, api=api, now=until).ok
+
+
+@pytest.mark.parametrize('pause_position', [99, 100])
+def test_diagnostic_only_ancestry_preserves_exact_fail_closed_bound(pause_position):
+    from scripts import dev_delivery_liveness as liveness
+    now = datetime(2026, 10, 19, 18, tzinfo=timezone.utc)
+    commits = [f'{number + 1:040x}' for number in range(102)]
+    startup = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'failure',
+               'description': f'observed_at={(now - timedelta(minutes=1)).isoformat()};startup=self_check_failed'}
+    paused = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'failure',
+              'description': f'observed_at={(now - timedelta(minutes=2)).isoformat()};seq=9;paused_issue=6224;until={(now + timedelta(hours=1)).isoformat()}'}
+    visited = []
+    def api(endpoint):
+        if '/actions/workflows/' in endpoint:
+            return {'workflow_runs': []}
+        if '/statuses?' in endpoint:
+            sha = endpoint.split('/commits/', 1)[1].split('/', 1)[0]
+            visited.append(sha)
+            return [paused if commits.index(sha) == pause_position else startup]
+        sha = endpoint.rsplit('/', 1)[1]
+        index = commits.index(sha)
+        return {'sha': sha, 'parents': [{'sha': commits[index + 1]}]}
+    if pause_position == 99:
+        result = liveness.check(driver.REPOSITORY, commits[0], api=api, now=now)
+        assert not result.ok and result.reason == 'startup_self_check_failed'
+    else:
+        with pytest.raises(liveness.LivenessRefused, match='heartbeat_ancestry_incomplete'):
+            liveness.check(driver.REPOSITORY, commits[0], api=api, now=now)
+    assert len(visited) == liveness.MAX_HEARTBEAT_COMMITS
+
+
+@pytest.mark.parametrize('fault', ['timestamp', 'state', 'borrowed_sequence'])
+def test_diagnostic_only_history_refuses_malformed_signal_before_ancestry(fault):
+    from scripts import dev_delivery_liveness as liveness
+    now = datetime(2026, 10, 19, 18, tzinfo=timezone.utc)
+    description = f'observed_at={now.isoformat()};startup=self_check_failed'
+    status = {'context': liveness.HEARTBEAT_CONTEXT, 'state': 'failure', 'description': description}
+    if fault == 'timestamp':
+        status['description'] = 'observed_at=invalid;startup=self_check_failed'
+    elif fault == 'state':
+        status['state'] = 'success'
+    else:
+        status['description'] = description.replace(';startup=', ';seq=1;startup=')
+    def api(endpoint):
+        if '/actions/workflows/' in endpoint:
+            return {'workflow_runs': []}
+        if '/statuses?' in endpoint:
+            return [status]
+        pytest.fail('malformed diagnostic reached ancestry lookup')
+    with pytest.raises(liveness.LivenessRefused):
+        liveness.check(driver.REPOSITORY, SHA, api=api, now=now)
