@@ -1354,6 +1354,244 @@ def test_enabled_static_root_watcher_adopts_first_selection_of_its_own_root(
     assert all(path.startswith(str(vault_a)) for path in event_paths if path)
 
 
+def test_committed_first_adoption_without_receipt_recovers_from_fresh_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A committed first adoption with a lost receipt must recover from a real scan."""
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    source_bytes = runtime.registry.path.read_bytes()
+    (vault_a / "cold-recovery.md").write_text(
+        "observed during first-adoption recovery\n", encoding="utf-8"
+    )
+
+    registry.run_registry_once(config_path)
+
+    assert runtime.registry.path.read_bytes() == source_bytes
+    receipt = load_settings_rebind_watcher_receipt(
+        _revision_receipt_path(tmp_path, committed.desired_revision)
+    )
+    assert receipt.stage == "completed"
+    assert receipt.prior_binding_id is None
+    assert receipt.candidate_binding_id == "binding-a"
+    assert receipt.evidence_kind == "first_adoption_recovery"
+    assert receipt.recovery_scan is not None
+    assert receipt.recovery_scan.scan_kind == "recovery"
+    assert str(vault_a / "cold-recovery.md") in _event_paths(tmp_path)
+
+
+def test_missing_receipt_recovery_refuses_non_first_adoption_or_wrong_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recovery never widens to prior bindings or a different configured root."""
+    runtime, _vault_a, vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    for desired_revision, case in enumerate(("prior-binding", "wrong-root"), start=1):
+        committed = SettingsRebindRecord(
+            desired_revision=desired_revision,
+            applied_revision=desired_revision,
+            phase="committed",
+            lifecycle_posture="watcher",
+            prior_binding_id="binding-a" if case == "prior-binding" else None,
+            candidate_binding_id="binding-b",
+            reload_revision=desired_revision,
+            scalar_drain_revision=desired_revision,
+        )
+        runtime.registry.set_settings_rebind_state(
+            committed.as_payload(),
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        (vault_b / f"{case}.md").write_text("must not be scanned\n", encoding="utf-8")
+
+        with pytest.raises(RegistryError, match="settings rebind|prior binding"):
+            registry.run_registry_once(config_path)
+
+        assert not _revision_receipt_path(tmp_path, desired_revision).exists()
+        assert not any(path.startswith(str(vault_b)) for path in _event_paths(tmp_path))
+
+
+def test_missing_receipt_recovery_refuses_incomplete_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A committed first adoption without the reload marker remains refused."""
+    runtime, _vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=0,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    with pytest.raises(RegistryError, match="reload completion"):
+        registry.run_registry_once(config_path)
+
+    assert not _revision_receipt_path(tmp_path, 1).exists()
+
+
+def test_first_adoption_recovery_requires_successful_scan_and_is_restart_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failed scans do not acknowledge; a later recovery and repeat converge."""
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    (vault_a / "recovery-retry.md").write_text("retry me\n", encoding="utf-8")
+    (tmp_path / "watcher.stop").touch()
+
+    with pytest.raises(RegistryError, match="scan was paused"):
+        registry.run_registry_once(config_path)
+    assert not _revision_receipt_path(tmp_path, 1).exists()
+
+    (tmp_path / "watcher.stop").unlink()
+    registry.run_registry_once(config_path)
+    receipt_path = _revision_receipt_path(tmp_path, 1)
+    first_bytes = receipt_path.read_bytes()
+    registry.run_registry_once(config_path)
+
+    assert receipt_path.read_bytes() == first_bytes
+    receipt = load_settings_rebind_watcher_receipt(receipt_path)
+    assert receipt.evidence_kind == "first_adoption_recovery"
+    assert receipt.recovery_scan is not None
+    assert str(vault_a / "recovery-retry.md") in _event_paths(tmp_path)
+
+
+def test_first_adoption_recovery_evidence_is_bound_to_current_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recovery receipt for another candidate cannot satisfy foreground wait."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    runtime, _vault_a, _vault_b, _config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=2,
+        applied_revision=2,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=2,
+        scalar_drain_revision=2,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    observed = RebindScanReceipt(
+        scan_kind="recovery",
+        desired_revision=2,
+        observed_at="2026-10-19T00:00:00Z",
+        watcher_ticks={"ingest": 1},
+    )
+    _write_receipt(
+        _revision_receipt_path(tmp_path, 2),
+        SettingsRebindWatcherReceipt(
+            desired_revision=2,
+            prior_binding_id=None,
+            candidate_binding_id="binding-b",
+            stage="completed",
+            buffer=(),
+            acknowledgement=None,
+            drain_receipt=None,
+            resume_ready_at="2026-10-19T00:00:01Z",
+            evidence_kind="first_adoption_recovery",
+            recovery_scan=observed,
+        ),
+    )
+    activation = SettingsRebindActivation(
+        runtime.registry,
+        watcher_state_dir=tmp_path / "watcher-state",
+        watcher_enabled=True,
+        wait_timeout_seconds=0,
+    )
+
+    with pytest.raises(RegistryError, match="does not match durable authority"):
+        activation._wait_for_stage(committed, required_stage="completed")
+
+
+def test_foreground_wait_requires_completed_first_adoption_recovery_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recovery completion is typed and cannot be represented by an empty proof."""
+    runtime, _vault_a, _vault_b, _config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    bad_payload = {
+        "schema": "settings_rebind_watcher.v1",
+        "desiredRevision": 1,
+        "priorBindingId": None,
+        "candidateBindingId": "binding-a",
+        "stage": "completed",
+        "buffer": [],
+        "acknowledgement": None,
+        "drainReceipt": None,
+        "resumeReadyAt": "2026-10-19T00:00:01Z",
+        "evidenceKind": "first_adoption_recovery",
+        "recoveryScan": None,
+    }
+    bad_payload["checksum"] = hashlib.sha256(
+        json.dumps(
+            {key: item for key, item in bad_payload.items()},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    receipt_path = _revision_receipt_path(tmp_path, 1)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.write_text(json.dumps(bad_payload), encoding="utf-8")
+
+    with pytest.raises(RegistryError, match="incomplete or ambiguous"):
+        load_settings_rebind_watcher_receipt(receipt_path)
+
+
 def test_enabled_static_root_watcher_refuses_first_selection_of_foreign_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

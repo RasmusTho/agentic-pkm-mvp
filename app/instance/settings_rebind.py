@@ -878,6 +878,19 @@ class SettingsRebindActivation:
                     raise RegistryError(
                         "settings rebind watcher receipt does not match durable authority"
                     )
+                if (
+                    required_stage == "completed"
+                    and receipt.evidence_kind == "first_adoption_recovery"
+                    and (
+                        receipt.recovery_scan is None
+                        or receipt.recovery_scan.scan_kind != "recovery"
+                        or receipt.recovery_scan.desired_revision
+                        != record.desired_revision
+                    )
+                ):
+                    raise RegistryError(
+                        "settings rebind watcher recovery evidence is not current"
+                    )
                 if required_stage == "acknowledged" or receipt.stage == "completed":
                     return
                 if receipt.stage in {"acknowledged", "drained"} and required_stage == "completed":
