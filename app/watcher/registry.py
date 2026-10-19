@@ -1931,6 +1931,7 @@ def _emit_changed_entry(
     panel_auto_exec_enabled: bool,
     action_mappings: Mapping[str, PanelActionMapping],
     process_panel_notes_inline: bool,
+    allow_source_writeback: bool = True,
 ) -> str | None:
     rel_path = str(entry.rel_path)
     previous_file_state = state.file_entry(rel_path)
@@ -1965,7 +1966,7 @@ def _emit_changed_entry(
         return None
     current_mtime = entry.mtime
     current_digest = entry.digest
-    if spec.emit_event == INGEST_VAULT_CHANGED:
+    if spec.emit_event == INGEST_VAULT_CHANGED and allow_source_writeback:
         current_mtime, current_digest = _maybe_heal_ingest_uuid(
             cfg, state, entry.rel_path, current_mtime, current_digest
         )
@@ -2140,6 +2141,7 @@ def _run_spec_tick(
     now: float,
     states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
+    allow_source_writeback: bool = True,
     handled_settings_sources: set[Path] | None = None,
     settings_source_reload_results: dict[str, object] | None = None,
     retain_unemitted_observations: int | None = None,
@@ -2424,6 +2426,7 @@ def _run_spec_tick(
                 panel_auto_exec_enabled=panel_auto_exec_enabled,
                 action_mappings=action_mappings,
                 process_panel_notes_inline=process_panel_notes_inline,
+                allow_source_writeback=allow_source_writeback,
             )
             committed_observations[str(entry.rel_path)] = {
                 name: (
@@ -2604,7 +2607,8 @@ def _run_registry_cycle(
     with _compatibility_watcher_window(reconciler):
         _adopt_idle_selected_binding(cfg, reconciler)
         rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
-        if rebind_cycle is not None and rebind_cycle.mode == "recovery":
+        recovery_mode = rebind_cycle is not None and rebind_cycle.mode == "recovery"
+        if recovery_mode:
             # A missing receipt admits one new configured-root scan only. Do not
             # let a checkpoint left by an interrupted prior tick turn that
             # scan into a continuation of historical work; retain observations
@@ -2646,7 +2650,12 @@ def _run_registry_cycle(
                 states[spec.name],
                 now=now,
                 states=states,
-                process_panel_notes_inline=process_panel_notes_inline,
+                process_panel_notes_inline=(
+                    process_panel_notes_inline and not recovery_mode
+                ),
+                allow_source_writeback=(
+                    not recovery_mode
+                ),
                 handled_settings_sources=handled_settings_sources,
                 settings_source_reload_results=settings_source_reload_results,
                 retain_unemitted_observations=rebind_observation_revision,

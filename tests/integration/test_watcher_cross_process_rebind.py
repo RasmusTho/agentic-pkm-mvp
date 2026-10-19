@@ -29,6 +29,7 @@ from app.instance.vault_registry import VaultRegistration
 from app.instance.vault_registry import KnownVaultRef
 from app.api.routes.ingest_binding import ingest_binding_status
 from app.vault.manager import VaultContext
+from app.vault.paths import resolve_vault_inbox_dir_rel
 from app.watcher import registry
 from app.watcher import settings_rebind as registry_settings_rebind
 from app.watcher.settings_rebind import (
@@ -1379,6 +1380,10 @@ def test_committed_first_adoption_without_receipt_recovers_from_fresh_scan(
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
     source_bytes = runtime.registry.path.read_bytes()
+    inbox_note = vault_a / resolve_vault_inbox_dir_rel(vault_a).value / "uuidless-recovery.md"
+    inbox_note.parent.mkdir(parents=True, exist_ok=True)
+    inbox_note.write_text("# UUID-less recovery source\n", encoding="utf-8")
+    inbox_source_bytes = inbox_note.read_bytes()
     (vault_a / "cold-recovery.md").write_text(
         "observed during first-adoption recovery\n", encoding="utf-8"
     )
@@ -1386,6 +1391,7 @@ def test_committed_first_adoption_without_receipt_recovers_from_fresh_scan(
     registry.run_registry_once(config_path)
 
     assert runtime.registry.path.read_bytes() == source_bytes
+    assert inbox_note.read_bytes() == inbox_source_bytes
     receipt = load_settings_rebind_watcher_receipt(
         _revision_receipt_path(tmp_path, committed.desired_revision)
     )
