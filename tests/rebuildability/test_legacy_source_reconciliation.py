@@ -65,36 +65,45 @@ def test_supervised_ordinary_persistence_precedes_normal_legacy_atomic_replaceme
     monkeypatch, tmp_path,
 ):
     """Persisted producer identity enables reconciliation without recovery healing."""
-    from types import SimpleNamespace
+    from uuid import uuid4
 
+    from app.ingest import vault_alpha as producer
     from app.ops.native_source_identity_persistence import run_ordinary_persistence
-    from app.services.note_uuid import ensure_note_uuid
+    from app.rebuildability.product_total_loss import parse_bounded_frontmatter
+    from app.stores import reset_memory_store_backend
 
     recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
         monkeypatch, tmp_path, selected=True,
     )
-    source.write_text(raw.decode().replace(f"uuid: {original['object_id']}\n", ""))
-
-    def ordinary(selected_root):
-        ensure_note_uuid(
-            source, vault_root=selected_root,
-            preferred_uuid=str(original["object_id"]), write_action="ensure uuid",
-        )
-        return SimpleNamespace(
-            scanned=1, ingested=1, errors=0, malformed=0,
-            skipped_locked=0, skipped_invalid=0,
-        )
+    retained_uuid = str(uuid4())
+    assert retained_uuid != str(original["object_id"])
+    source.write_text(
+        raw.decode().replace(f"uuid: {original['object_id']}", f"id: {retained_uuid}"),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    reset_memory_store_backend()
+    monkeypatch.setattr(
+        producer, "resolve_canonical_object_id",
+        lambda value: str(original["object_id"]) if value == retained_uuid else value,
+    )
+    monkeypatch.setattr(producer, "classify_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(producer, "index_ingest_object", lambda **_kwargs: None)
+    monkeypatch.setattr(producer, "append_jsonl", lambda *_args, **_kwargs: None)
 
     receipt = run_ordinary_persistence(
         operation_id="11111111-1111-4111-8111-111111111111",
-        channel="dev", revision="a" * 40, vault_root=root, producer=ordinary,
+        channel="dev", revision="a" * 40, vault_root=root,
     )
     assert receipt["terminal_state"] == "committed"
     assert receipt["eligible"] is True
+    frontmatter, _body, error = parse_bounded_frontmatter(source.read_text())
+    assert error is None and frontmatter["uuid"] == retained_uuid
     assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
     assert state.rows[0]["object_id"] == original["object_id"]
     assert state.rows[0]["payload"]["origin"] == "vault"
     assert state.calls[0]["replacement"]["artifact_id"] == str(original["object_id"])
+    assert state.calls[0]["replacement"]["vault_uuid"] == retained_uuid
 
 
 @pytest.mark.parametrize("location", ["canonical", "legacy"])

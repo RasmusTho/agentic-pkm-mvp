@@ -445,7 +445,7 @@ def main(argv: list[str] | None = None) -> int:
                 or not args.existing_secrets_only
                 or args.operation_id is None
                 or cutover is None
-                or args.image_digest is not None
+                or args.image_digest is None
                 or args.reconcile_pending
                 or args.prove_never_admitted
                 or args.recover_test_source
@@ -462,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
                 if operation.completed_result is None:
                     operation.prepare_mutation()
                 result = remote.persist_source_identity(
-                    operation.operation_id, args.revision, cutover,
+                    operation.operation_id, args.revision, args.image_digest, cutover,
                 )
                 terminal = result['terminal_state']
                 operation.finish(TerminalEvidence(

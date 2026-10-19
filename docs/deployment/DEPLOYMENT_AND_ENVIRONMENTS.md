@@ -1137,12 +1137,19 @@ and fail closed. The legacy generic identity class remains accepted for older wo
 `legacy_identity_persistence_refused` is cleared only through the explicit supervised ordinary-
 producer operation, never inside source-backed recovery. The host command uses
 `postgres_deploy_host <dev|test> <installed-sha> --automatic --existing-secrets-only
---persist-source-identity --operation-id <uuid>` together with the already-qualified selected
-vault binding/root/ownership arguments. Host admission, the native supervisor and the channel lock
-bind that UUID to the installed runtime and selected source authority. The operation stops only the
-channel's write-capable application services, runs the existing ordinary `vault-alpha` producer
+--persist-source-identity --operation-id <uuid> --image-digest <sha256:digest>` together with the
+already-qualified selected vault binding/root/ownership arguments. The digest must be the exact
+successful build for that source revision. Host admission, the native supervisor and the channel
+lock bind that UUID to the selected source authority, the unchanged installed writer/provider/model
+configuration, and the reviewed helper in that exact immutable candidate image; the candidate is
+used only for the bounded one-shot and is not deployed or admitted. The operation stops only the
+actually running channel write-capable application services, mounts the selected root through the
+canonical full-host (and TEST activation) overlays, and runs the ordinary `vault-alpha` producer
 without `--source-backed-rebuild`, performs a fresh complete selected-inventory persisted-identity
-readback, restores the same services, and terminalizes independently. PROD, candidate admission,
+readback with stable source/root snapshots, starts the same existing stopped containers without
+recreation, and terminalizes only after its exact owner fence is retired. A crash after producer
+completion resumes cleanup from the fixed private producer receipt without rerunning the producer.
+PROD, candidate admission,
 provider/model replacement and automatic deploy chaining are refused. Child output and source
 evidence stay private; the durable `native-source-identity-persistence.v1` receipt contains only
 operation/channel/revision, terminal state, bounded counts, eligibility, and one allowlisted fixed

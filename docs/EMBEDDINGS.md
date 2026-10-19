@@ -589,6 +589,11 @@ Multiple refusing markers retain the first observed class; classification does n
 problem. Unknown/private failures retain the generic fail-closed fallback. Diagnosis grants no
 repair, admission, retirement or acceptance authority: never synthesize approval or delete protected
 history, relations or memberships to clear a refusal. Any subsequent repair remains separately governed.
+The governed ordinary-producer persistence operation is bound to an exact successful image digest
+and the unchanged installed writer/provider/model configuration. It uses that reviewed image only
+for its fenced one-shot, preserves the accepted provider/model, and does not admit or deploy the
+candidate. Eligibility requires a second stable source/root snapshot readback; same-path replacement
+or identity drift is a fixed refusal, never a reason to probe, synthesize, or replay.
 Complete private-stage stream and logging
 suppression covers settings compatibility and conflict-quarantine diagnostics too.
 The transaction rechecks source/policy and forward/reverse canonical identity, compares equivalent

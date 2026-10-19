@@ -3868,8 +3868,8 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
         def __init__(self, hostname):
             calls.append(("remote", hostname))
 
-        def persist_source_identity(self, requested_id, revision, selected):
-            calls.append(("persist", requested_id, revision, selected))
+        def persist_source_identity(self, requested_id, revision, image_digest, selected):
+            calls.append(("persist", requested_id, revision, image_digest, selected))
             return {
                 "contract": "native-source-identity-persistence.v1",
                 "operation_id": requested_id,
@@ -3895,6 +3895,7 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
     args = [
         "dev", "a" * 40, "--automatic", "--existing-secrets-only",
         "--persist-source-identity", "--operation-id", operation_id,
+        "--image-digest", "sha256:" + "1" * 64,
         "--authority-cutover-binding", "vault-alpha",
         "--authority-cutover-root", "/srv/vault-alpha",
         "--authority-cutover-ownership-root", "/srv/instance-ownership",
@@ -3903,7 +3904,10 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
     assert ("remote", "ygg-dev") in calls
     assert any(call[0] == "persist" and call[1] == operation_id for call in calls)
 
-    assert host.main([*args, "--image-digest", "sha256:" + "1" * 64]) == 78
+    without_digest = args[:]
+    digest_index = without_digest.index("--image-digest")
+    del without_digest[digest_index:digest_index + 2]
+    assert host.main(without_digest) == 78
     assert host.main([value for value in args if value != "--existing-secrets-only"]) == 78
     assert host.main(["prod", *args[1:]]) == 78
     malformed = ["bad" if value == operation_id else value for value in args]

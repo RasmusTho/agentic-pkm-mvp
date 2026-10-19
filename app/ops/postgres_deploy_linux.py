@@ -868,8 +868,16 @@ class LinuxEffects:
         env = dict(os.environ)
         if candidate is not None:
             candidate.validate()
-            if (candidate.channel != cfg.channel or not candidate.automatic
-                    or candidate.image_digest is None):
+            source_persistence_candidate = (
+                not candidate.automatic
+                and candidate.authority_cutover is not None
+                and candidate.image_digest is not None
+            )
+            if (
+                candidate.channel != cfg.channel
+                or candidate.image_digest is None
+                or not (candidate.automatic or source_persistence_candidate)
+            ):
                 raise PostgresDeployError()
             # Compose image selection is an execution boundary.  The
             # authenticated candidate overrides both the deploy env-file and
@@ -948,6 +956,12 @@ class LinuxEffects:
         overlays = ['-f', str(cfg.root / 'docker-compose.bws.yml')]
         if env['BWS_DATABASE_TARGET'] == 'external':
             overlays += ['-f', str(cfg.root / 'docker-compose.bws-external.yml')]
+        if cutover is not None:
+            env['VAULT_HOST_ROOT'] = cutover.root
+            env['DEPLOY_VAULT_CONTAINER_ROOT'] = cutover.root
+            overlays += ['-f', str(cfg.root / 'docker-compose.full-host-vault.yml')]
+            if cfg.channel == 'test':
+                overlays += ['-f', str(cfg.root / 'docker-compose.test-vault.yml')]
         return _command(['docker', 'compose', '--env-file', str(cfg.root / 'config/deploy' / (cfg.channel + '.env')),
             '-f', str(cfg.root / 'docker-compose.yaml'), '-f', str(cfg.root / ('docker-compose.' + cfg.channel + '.yml')),
             *overlays, '-p', 'pkm-' + cfg.channel, *args], cwd=cfg.root, env=env, timeout=timeout)
@@ -966,7 +980,8 @@ class LinuxEffects:
         self.qualify_authority_cutover(plan)
 
     def persist_source_identity(
-        self, operation_id: str, revision: str, selected: AuthorityCutover,
+        self, operation_id: str, revision: str, image_digest: str,
+        selected: AuthorityCutover,
     ) -> dict[str, Any]:
         """Run one fenced ordinary-producer persistence operation.
 
@@ -984,33 +999,76 @@ class LinuxEffects:
                 self.config.channel not in {"dev", "test"}
                 or str(UUID(operation_id)) != operation_id
                 or re.fullmatch(r"[0-9a-f]{40}", revision) is None
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is None
             ):
                 raise PostgresDeployError()
         except (ValueError, TypeError, AttributeError):
             raise PostgresDeployError() from None
         selected.validate()
-        require_cutover_target_config(self.config, selected)
+        source_plan = self.qualify_source_identity_authority(
+            revision, image_digest, selected,
+        )
+        runtime_fingerprint, running_writers, existing_writers = (
+            self.source_identity_runtime_snapshot()
+        )
         receipt_path = self.config.journal.directory / (
             f"{self.config.channel}-source-identity-{operation_id}.json"
         )
         request_path = self.config.journal.directory / (
             f"{self.config.channel}-source-identity-{operation_id}.request.json"
         )
-        request_payload = {
+        producer_path = self.config.journal.directory / (
+            f"{self.config.channel}-source-identity-{operation_id}.producer.json"
+        )
+        request_base = {
             'contract': 'native-source-identity-persistence-request.v1',
             'operation_id': operation_id,
             'channel': self.config.channel,
             'revision': revision,
+            'image_digest': image_digest,
             'authority_cutover': {
                 'binding_id': selected.binding_id,
                 'root': selected.root,
                 'ownership_root': selected.ownership_root,
             },
         }
+        owner = {
+            "kind": "source-identity-persistence",
+            "channel": self.config.channel,
+            "operation_id": operation_id,
+        }
         if request_path.exists():
-            if _private_json(request_path) != request_payload:
+            request_payload = _private_json(request_path)
+            if (
+                set(request_payload) != {*request_base, 'runtime_fingerprint', 'writers'}
+                or any(request_payload.get(key) != value for key, value in request_base.items())
+                or not isinstance(request_payload.get('runtime_fingerprint'), str)
+                or re.fullmatch(r'[0-9a-f]{64}', request_payload['runtime_fingerprint']) is None
+                or not isinstance(request_payload.get('writers'), list)
+                or any(service not in {
+                    'api', 'worker', 'watcher', 'heimdal-capture-watch', 'companion-ui',
+                } for service in request_payload['writers'])
+                or len(set(request_payload['writers'])) != len(request_payload['writers'])
+            ):
+                raise PostgresDeployError()
+            writers = list(request_payload['writers'])
+            expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
+            own_cleanup = self.channel_lock_owner() == expected_owner
+            if (
+                runtime_fingerprint != request_payload['runtime_fingerprint']
+                or not set(writers) <= set(existing_writers)
+                or (not own_cleanup and not set(writers) <= set(running_writers))
+            ):
                 raise PostgresDeployError()
         else:
+            writers = list(running_writers)
+            if not {'api', 'worker', 'watcher'} <= set(writers):
+                raise PostgresDeployError()
+            request_payload = {
+                **request_base,
+                'runtime_fingerprint': runtime_fingerprint,
+                'writers': writers,
+            }
             _atomic_private_json(request_path, request_payload)
         if receipt_path.exists():
             retained = validate_receipt(_private_json(receipt_path))
@@ -1020,25 +1078,37 @@ class LinuxEffects:
                 or retained['revision'] != revision
             ):
                 raise PostgresDeployError()
+            self.reconcile_source_identity_cleanup(
+                operation_id, revision, image_digest, selected, owner, writers,
+                request_payload['runtime_fingerprint'],
+            )
             return retained
+        if producer_path.exists():
+            retained = validate_receipt(_private_json(producer_path))
+            if (
+                retained['operation_id'] != operation_id
+                or retained['channel'] != self.config.channel
+                or retained['revision'] != revision
+            ):
+                raise PostgresDeployError()
+            self.reconcile_source_identity_cleanup(
+                operation_id, revision, image_digest, selected, owner, writers,
+                request_payload['runtime_fingerprint'],
+            )
+            _atomic_private_json(receipt_path, retained)
+            return retained
+        self.require_source_identity_candidate(source_plan, selected, acquire=True)
         deploy_receipt = self.config.journal.read()
         if deploy_receipt is None or deploy_receipt.terminal_result not in {
             "committed", "aborted", "failed",
         }:
             raise PostgresDeployError()
         self.operation_id = operation_id
-        owner = {
-            "kind": "source-identity-persistence",
-            "channel": self.config.channel,
-            "operation_id": operation_id,
-        }
-        writers = ["api", "worker", "watcher", "companion-ui"]
-        if _capture_watch_configured(self.config):
-            writers.append("heimdal-capture-watch")
         payload: dict[str, Any] | None = None
         retirement_failed = False
         worker_attempted = False
         worker_quiesced = True
+        writer_stop_attempted = False
         writers_restored = False
         lock_acquired = False
         try:
@@ -1046,12 +1116,25 @@ class LinuxEffects:
                 journal=self.config.journal, owner_marker=owner, retire_terminal=False,
             ):
                 lock_acquired = True
-                require_cutover_target_config(self.config, selected)
+                source_plan = self.qualify_source_identity_authority(
+                    revision, image_digest, selected,
+                )
+                locked_fingerprint, locked_running, locked_existing = (
+                    self.source_identity_runtime_snapshot()
+                )
+                if (
+                    locked_fingerprint != request_payload['runtime_fingerprint']
+                    or not set(writers) <= set(locked_running)
+                    or not set(writers) <= set(locked_existing)
+                ):
+                    raise PostgresDeployError()
+                self.require_source_identity_candidate(source_plan, selected, acquire=False)
                 current = self.config.journal.read()
                 if current is None or current.terminal_result not in {
                     "committed", "aborted", "failed",
                 }:
                     raise PostgresDeployError()
+                writer_stop_attempted = True
                 self.compose("stop", *writers, cutover=selected, timeout=120)
                 name = f"pkm-{self.config.channel}-source-bootstrap-{operation_id}"
                 worker_attempted = True
@@ -1064,8 +1147,8 @@ class LinuxEffects:
                     "-e", f"NATIVE_SOURCE_BOOTSTRAP={self.config.channel}:{revision}",
                     "--entrypoint", "python", "api", "-m",
                     "app.ops.native_source_identity_persistence",
-                    operation_id, self.config.channel, revision, "/app/vault",
-                    cutover=selected, timeout=7200,
+                    operation_id, self.config.channel, revision, selected.root,
+                    cutover=selected, candidate=source_plan, timeout=7200,
                 )
                 from app.ops.native_source_bootstrap import quiesce_owned_container
 
@@ -1078,9 +1161,9 @@ class LinuxEffects:
                     payload = validate_receipt(json.loads(raw))
                 except Exception:
                     raise PostgresDeployError() from None
-                self.compose("up", "-d", *writers, cutover=selected, timeout=120)
+                _atomic_private_json(producer_path, payload)
+                self.compose("start", *writers, cutover=selected, timeout=120)
                 writers_restored = True
-                _atomic_private_json(receipt_path, payload)
         except Exception:
             # Best-effort restoration is allowed only for the exact stopped
             # writer set.  A failure stays terminally refused and is never
@@ -1095,9 +1178,9 @@ class LinuxEffects:
                     )
                 except Exception:
                     worker_quiesced = False
-            if worker_quiesced:
+            if lock_acquired and writer_stop_attempted and worker_quiesced:
                 try:
-                    self.compose("up", "-d", *writers, cutover=selected, timeout=120)
+                    self.compose("start", *writers, cutover=selected, timeout=120)
                     writers_restored = True
                 except Exception:
                     writers_restored = False
@@ -1117,7 +1200,6 @@ class LinuxEffects:
                 "producer_error_count": 1,
             }
             validate_receipt(payload)
-            _atomic_private_json(receipt_path, payload)
         finally:
             if lock_acquired and worker_quiesced and writers_restored:
                 try:
@@ -1143,10 +1225,183 @@ class LinuxEffects:
                 "ambiguous_count": 0,
                 "producer_error_count": 1,
             }
-            _atomic_private_json(receipt_path, payload)
+        if payload is None:
+            raise PostgresDeployError()
+        _atomic_private_json(receipt_path, payload)
         if payload.get("reason") not in ({None} | REFUSAL_REASONS):
             raise PostgresDeployError()
         return validate_receipt(payload)
+
+    def reconcile_source_identity_cleanup(
+        self,
+        operation_id: str,
+        revision: str,
+        image_digest: str,
+        selected: AuthorityCutover,
+        owner: dict[str, str],
+        writers: list[str],
+        runtime_fingerprint: str,
+    ) -> None:
+        """Finish only this operation's retained cleanup; never rerun its producer."""
+        expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
+        if self.channel_lock_owner() != expected_owner:
+            return
+        with self.failed_reconciliation_lock(expected_owner=owner) as handle:
+            self.qualify_source_identity_authority(revision, image_digest, selected)
+            current_fingerprint, _running, existing = self.source_identity_runtime_snapshot()
+            if current_fingerprint != runtime_fingerprint or not set(writers) <= set(existing):
+                raise PostgresDeployError()
+            from app.ops.native_source_bootstrap import quiesce_owned_container
+
+            name = f"pkm-{self.config.channel}-source-bootstrap-{operation_id}"
+            if not quiesce_owned_container(
+                self.config.channel, name, operation_id, revision,
+            ):
+                raise PostgresDeployError()
+            self.compose("start", *writers, cutover=selected, timeout=120)
+            self.retire_reconciled_channel_lock(handle, expected_owner=owner)
+
+    def qualify_source_identity_authority(
+        self, revision: str, image_digest: str, selected: AuthorityCutover,
+    ) -> DeployPlan:
+        """Bind this explicit operation to the existing selected authority."""
+        plan = DeployPlan(
+            self.config.channel,
+            revision,
+            tuple(DATABASE_CONSUMERS.values()),
+            tuple(_BASE_DEPLOY_CONSUMERS),
+            image_digest=image_digest,
+            authority_cutover=selected,
+        )
+        plan.validate()
+        self.qualify_authority_cutover(plan)
+        return plan
+
+    def require_source_identity_candidate(
+        self, plan: DeployPlan, selected: AuthorityCutover, *, acquire: bool,
+    ) -> None:
+        """Acquire and authenticate the reviewed helper image without admitting it."""
+        from app.ops.pg_acceptance import IMAGE_REPOSITORY
+
+        if plan.image_digest is None or plan.authority_cutover != selected:
+            raise PostgresDeployError()
+        ensure_candidate_object(self.config, plan.revision)
+        require_file_protocol(self.config.root, plan.revision)
+        if acquire:
+            self.compose(
+                'pull', 'api', cutover=selected, candidate=plan, timeout=1800,
+            )
+        image_ref = IMAGE_REPOSITORY + '@' + plan.image_digest
+        try:
+            rows = json.loads(_command(['docker', 'image', 'inspect', image_ref], timeout=30))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            raise PostgresDeployError() from None
+        if (
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or rows[0].get('Config', {}).get('Labels', {}).get(
+                'org.opencontainers.image.revision'
+            ) != plan.revision
+            or image_ref not in rows[0].get('RepoDigests', [])
+        ):
+            raise PostgresDeployError()
+
+    def source_identity_runtime_snapshot(self) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+        """Bind the operation to the unchanged installed writer/provider configuration."""
+        cfg = self.config
+        ids = _command([
+            'docker', 'ps', '--all', '--no-trunc', '--filter',
+            'label=com.docker.compose.project=pkm-' + cfg.channel,
+            '--format', '{{.ID}}',
+        ]).splitlines()
+        if not ids or len(set(ids)) != len(ids):
+            raise PostgresDeployError()
+        rows = json.loads(_command(['docker', 'inspect', '--type', 'container', *ids]))
+        if not isinstance(rows, list) or len(rows) != len(ids):
+            raise PostgresDeployError()
+        allowed = {'api', 'worker', 'watcher', 'heimdal-capture-watch', 'companion-ui'}
+        snapshots: dict[str, dict[str, Any]] = {}
+        running: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise PostgresDeployError()
+            labels = row.get('Config', {}).get('Labels', {})
+            service = labels.get('com.docker.compose.service')
+            if service not in allowed:
+                continue
+            if (
+                service in snapshots
+                or labels.get('com.docker.compose.project') != 'pkm-' + cfg.channel
+                or labels.get('com.docker.compose.oneoff', 'False').lower() != 'false'
+            ):
+                raise PostgresDeployError()
+            state = row.get('State', {})
+            status = state.get('Status')
+            if status not in {'running', 'exited', 'created'}:
+                raise PostgresDeployError()
+            if status == 'running':
+                running.add(service)
+            config = row.get('Config', {})
+            snapshots[service] = {
+                'id': row.get('Id'),
+                'image_id': row.get('Image'),
+                'image_ref': config.get('Image'),
+                'environment': config.get('Env'),
+                'user': config.get('User'),
+                'mounts': row.get('Mounts'),
+            }
+        existing = set(snapshots)
+        if not {'api', 'worker', 'watcher'} <= existing:
+            raise PostgresDeployError()
+        if _capture_watch_configured(cfg) and 'heimdal-capture-watch' not in running:
+            raise PostgresDeployError()
+        encoded = json.dumps(snapshots, sort_keys=True, separators=(',', ':')).encode()
+        return hashlib.sha256(encoded).hexdigest(), tuple(sorted(running)), tuple(sorted(existing))
+
+    def channel_lock_owner(self) -> bytes | None:
+        """Read a structurally valid channel owner marker without adopting it."""
+        path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
+        parent_fd = directory_fd = lock_fd = None
+        try:
+            parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                directory_fd = os.open(
+                    path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=parent_fd,
+                )
+            except FileNotFoundError:
+                return None
+            directory_info = os.fstat(directory_fd)
+            if (
+                directory_info.st_uid != os.geteuid()
+                or stat.S_IMODE(directory_info.st_mode) != 0o700
+                or set(os.listdir(directory_fd)) != {'bws-owner'}
+            ):
+                raise PostgresDeployError()
+            lock_fd = os.open(
+                'bws-owner', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=directory_fd,
+            )
+            lock_info = os.fstat(lock_fd)
+            if (
+                not stat.S_ISREG(lock_info.st_mode)
+                or lock_info.st_uid != os.geteuid()
+                or stat.S_IMODE(lock_info.st_mode) != 0o600
+                or lock_info.st_nlink != 1
+            ):
+                raise PostgresDeployError()
+            raw = os.pread(lock_fd, 4097, 0)
+            if len(raw) > 4096 or set(os.listdir(directory_fd)) != {'bws-owner'}:
+                raise PostgresDeployError()
+            return raw
+        except FileNotFoundError:
+            return None
+        except Exception:
+            raise PostgresDeployError() from None
+        finally:
+            for descriptor in (lock_fd, directory_fd, parent_fd):
+                if descriptor is not None:
+                    os.close(descriptor)
 
     def qualify_authority_cutover(self, plan: DeployPlan) -> None:
         if plan.authority_cutover is None:
@@ -3065,14 +3320,18 @@ class DeploymentSupervisor:
                 return self._test_recovery_release_instance_state(data)
         if data.get('action') == 'source-identity-persist':
             if set(data) != {
-                'action', 'operation_id', 'revision', 'authority_cutover',
+                'action', 'operation_id', 'revision', 'image_digest', 'authority_cutover',
             }:
                 raise PostgresDeployError()
             try:
                 operation_id = str(data['operation_id'])
                 revision = str(data['revision'])
+                image_digest = str(data['image_digest'])
                 selected = AuthorityCutover(**data['authority_cutover'])
-                if str(UUID(operation_id)) != operation_id:
+                if (
+                    str(UUID(operation_id)) != operation_id
+                    or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
+                ):
                     raise PostgresDeployError()
             except (ValueError, TypeError, AttributeError):
                 raise PostgresDeployError() from None
@@ -3081,7 +3340,7 @@ class DeploymentSupervisor:
                 if self.operation is not None and not self.operation.finished.is_set():
                     raise PostgresDeployError()
                 receipt = LinuxEffects(self.config).persist_source_identity(
-                    operation_id, revision, selected,
+                    operation_id, revision, image_digest, selected,
                 )
                 return {'source_identity_persistence': receipt}
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
@@ -3225,14 +3484,19 @@ class SshDeployRemote:
         return response
 
     def persist_source_identity(
-        self, operation_id: str, revision: str, selected: AuthorityCutover,
+        self, operation_id: str, revision: str, image_digest: str,
+        selected: AuthorityCutover,
     ) -> dict[str, Any]:
         """Invoke the fixed DEV/TEST source-persistence RPC."""
         from app.ops.native_source_identity_persistence import validate_receipt
 
         selected.validate()
         try:
-            if str(UUID(operation_id)) != operation_id or re.fullmatch(r'[0-9a-f]{40}', revision) is None:
+            if (
+                str(UUID(operation_id)) != operation_id
+                or re.fullmatch(r'[0-9a-f]{40}', revision) is None
+                or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
+            ):
                 raise PostgresDeployError()
         except (ValueError, TypeError, AttributeError):
             raise PostgresDeployError() from None
@@ -3243,6 +3507,7 @@ class SshDeployRemote:
             'action': 'source-identity-persist',
             'operation_id': operation_id,
             'revision': revision,
+            'image_digest': image_digest,
             'authority_cutover': {
                 'binding_id': selected.binding_id,
                 'root': selected.root,

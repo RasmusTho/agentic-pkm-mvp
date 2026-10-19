@@ -62,11 +62,15 @@ class IdentityInventory:
 
 
 def _canonical_uuid(value: Any) -> str | None:
+    from app.ingest.vault_alpha import _normalize_uuid, _sanitize_uuid
+
     try:
-        candidate = str(value).strip()
-        return candidate if str(UUID(candidate)) == candidate else None
+        candidate, invalid = _sanitize_uuid(_normalize_uuid(value))
     except (ValueError, TypeError, AttributeError):
         return None
+    if invalid or not candidate:
+        return None
+    return candidate
 
 
 def selected_identity_inventory(vault_root: Path) -> IdentityInventory:
@@ -81,10 +85,12 @@ def selected_identity_inventory(vault_root: Path) -> IdentityInventory:
     selected_rel = tuple(path.relative_to(root).as_posix() for path in selected)
     persisted = missing = invalid = ambiguous = 0
     claims: dict[str, int] = {}
+    snapshots: dict[str, tuple[str, tuple[Any, ...], str, Any]] = {}
     for path in selected:
+        relative = path.relative_to(root).as_posix()
         try:
-            raw, _identity = read_recovery_snapshot_relative(
-                path.relative_to(root).as_posix(), vault_root=root,
+            raw, identity = read_recovery_snapshot_relative(
+                relative, vault_root=root,
             )
             frontmatter, _body, error = parse_bounded_frontmatter(raw)
         except Exception:
@@ -108,6 +114,7 @@ def selected_identity_inventory(vault_root: Path) -> IdentityInventory:
         if companion is not None and _canonical_uuid(companion.uuid) != declared:
             invalid += 1
             continue
+        snapshots[relative] = (raw, identity, declared, companion)
         persisted += 1
         claims[declared] = claims.get(declared, 0) + 1
     if tuple(
@@ -115,6 +122,20 @@ def selected_identity_inventory(vault_root: Path) -> IdentityInventory:
         for path in select_source_backed_rebuild_candidates(root)
     ) != selected_rel:
         raise SourceIdentityPersistenceRefusal("source_operation_conflict")
+    for relative, (raw, identity, declared, companion) in snapshots.items():
+        try:
+            current_raw, current_identity = read_recovery_snapshot_relative(
+                relative, vault_root=root,
+            )
+            current_companion = read_companion(root, declared)
+        except Exception:
+            raise SourceIdentityPersistenceRefusal("source_operation_conflict") from None
+        if (
+            current_raw != raw
+            or current_identity != identity
+            or current_companion != companion
+        ):
+            raise SourceIdentityPersistenceRefusal("source_operation_conflict")
     ambiguous = sum(count for count in claims.values() if count > 1)
     return IdentityInventory(len(selected), persisted, missing, invalid, ambiguous)
 
@@ -206,6 +227,9 @@ def run_ordinary_persistence(
         # output never crosses this boundary; only typed counters are consumed.
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             summary = producer(vault_root)
+    except SourceIdentityPersistenceRefusal as exc:
+        inventory = IdentityInventory(0, 0, 0, 1, 0)
+        return _receipt(operation_id, channel, revision, inventory, reason=exc.reason)
     except Exception:
         empty = IdentityInventory(0, 0, 0, 0, 0)
         return _receipt(
