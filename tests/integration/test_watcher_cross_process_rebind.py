@@ -1457,11 +1457,13 @@ def test_missing_receipt_recovery_refuses_incomplete_reload(
     assert not _revision_receipt_path(tmp_path, 1).exists()
 
 
+@pytest.mark.parametrize("scan_blocker", ["kill_switch", "zero_match"])
 def test_first_adoption_recovery_requires_successful_scan_and_is_restart_idempotent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    scan_blocker: str,
 ) -> None:
-    """Failed scans do not acknowledge; a later recovery and repeat converge."""
+    """Failed or zero-match scans do not acknowledge; retry and repeat converge."""
     runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
         tmp_path, monkeypatch
     )
@@ -1480,13 +1482,21 @@ def test_first_adoption_recovery_requires_successful_scan_and_is_restart_idempot
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
     (vault_a / "recovery-retry.md").write_text("retry me\n", encoding="utf-8")
-    (tmp_path / "watcher.stop").touch()
+    if scan_blocker == "kill_switch":
+        (tmp_path / "watcher.stop").touch()
+        expected_error = "scan was paused"
+    else:
+        monkeypatch.setenv("WATCHER_SCOPE_GLOB", "missing-scope/**/*.md")
+        expected_error = "healthy scope"
 
-    with pytest.raises(RegistryError, match="scan was paused"):
+    with pytest.raises(RegistryError, match=expected_error):
         registry.run_registry_once(config_path)
     assert not _revision_receipt_path(tmp_path, 1).exists()
 
-    (tmp_path / "watcher.stop").unlink()
+    if scan_blocker == "kill_switch":
+        (tmp_path / "watcher.stop").unlink()
+    else:
+        monkeypatch.delenv("WATCHER_SCOPE_GLOB")
     registry.run_registry_once(config_path)
     receipt_path = _revision_receipt_path(tmp_path, 1)
     first_bytes = receipt_path.read_bytes()
