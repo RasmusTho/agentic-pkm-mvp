@@ -457,6 +457,33 @@ def _private_json(path: Path) -> dict[str, Any]:
         return result
 
 
+def _atomic_private_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write one root-private durable JSON receipt with atomic replacement."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp-" + uuid4().hex)
+    descriptor = None
+    try:
+        descriptor = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+        )
+        raw = (json.dumps(payload, sort_keys=True) + "\n").encode()
+        if os.write(descriptor, raw) != len(raw):
+            raise PostgresDeployError()
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
 def _private_recovery_json(path: Path, runtime_uid: int) -> dict[str, Any]:
     """Read a recovery checkpoint across the root-to-runtime ownership handoff."""
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -910,7 +937,7 @@ class LinuxEffects:
 
     def compose(
         self, *args: str, cutover: AuthorityCutover | None = None,
-        candidate: DeployPlan | None = None,
+        candidate: DeployPlan | None = None, timeout: int | None = None,
     ) -> str:
         cfg = self.config
         # Recovery Compose must inherit the authenticated ownership source from
@@ -923,7 +950,7 @@ class LinuxEffects:
             overlays += ['-f', str(cfg.root / 'docker-compose.bws-external.yml')]
         return _command(['docker', 'compose', '--env-file', str(cfg.root / 'config/deploy' / (cfg.channel + '.env')),
             '-f', str(cfg.root / 'docker-compose.yaml'), '-f', str(cfg.root / ('docker-compose.' + cfg.channel + '.yml')),
-            *overlays, '-p', 'pkm-' + cfg.channel, *args], cwd=cfg.root, env=env)
+            *overlays, '-p', 'pkm-' + cfg.channel, *args], cwd=cfg.root, env=env, timeout=timeout)
 
     def validate_plan(self, plan: DeployPlan) -> None:
         plan.validate()
@@ -937,6 +964,189 @@ class LinuxEffects:
             ensure_candidate_object(self.config, plan.revision)
         require_file_protocol(self.config.root, plan.revision)
         self.qualify_authority_cutover(plan)
+
+    def persist_source_identity(
+        self, operation_id: str, revision: str, selected: AuthorityCutover,
+    ) -> dict[str, Any]:
+        """Run one fenced ordinary-producer persistence operation.
+
+        The channel admission lock excludes deployments while the application
+        writers are stopped.  The accepted provider is neither stopped nor
+        replaced.  Only the fixed receipt returned by the private one-shot is
+        retained or returned.
+        """
+        from app.ops.native_source_identity_persistence import (
+            REFUSAL_REASONS, RECEIPT_CONTRACT, validate_receipt,
+        )
+
+        try:
+            if (
+                self.config.channel not in {"dev", "test"}
+                or str(UUID(operation_id)) != operation_id
+                or re.fullmatch(r"[0-9a-f]{40}", revision) is None
+            ):
+                raise PostgresDeployError()
+        except (ValueError, TypeError, AttributeError):
+            raise PostgresDeployError() from None
+        selected.validate()
+        require_cutover_target_config(self.config, selected)
+        receipt_path = self.config.journal.directory / (
+            f"{self.config.channel}-source-identity-{operation_id}.json"
+        )
+        request_path = self.config.journal.directory / (
+            f"{self.config.channel}-source-identity-{operation_id}.request.json"
+        )
+        request_payload = {
+            'contract': 'native-source-identity-persistence-request.v1',
+            'operation_id': operation_id,
+            'channel': self.config.channel,
+            'revision': revision,
+            'authority_cutover': {
+                'binding_id': selected.binding_id,
+                'root': selected.root,
+                'ownership_root': selected.ownership_root,
+            },
+        }
+        if request_path.exists():
+            if _private_json(request_path) != request_payload:
+                raise PostgresDeployError()
+        else:
+            _atomic_private_json(request_path, request_payload)
+        if receipt_path.exists():
+            retained = validate_receipt(_private_json(receipt_path))
+            if (
+                retained['operation_id'] != operation_id
+                or retained['channel'] != self.config.channel
+                or retained['revision'] != revision
+            ):
+                raise PostgresDeployError()
+            return retained
+        deploy_receipt = self.config.journal.read()
+        if deploy_receipt is None or deploy_receipt.terminal_result not in {
+            "committed", "aborted", "failed",
+        }:
+            raise PostgresDeployError()
+        self.operation_id = operation_id
+        owner = {
+            "kind": "source-identity-persistence",
+            "channel": self.config.channel,
+            "operation_id": operation_id,
+        }
+        writers = ["api", "worker", "watcher", "companion-ui"]
+        if _capture_watch_configured(self.config):
+            writers.append("heimdal-capture-watch")
+        payload: dict[str, Any] | None = None
+        retirement_failed = False
+        worker_attempted = False
+        worker_quiesced = True
+        writers_restored = False
+        lock_acquired = False
+        try:
+            with self.channel_lock(
+                journal=self.config.journal, owner_marker=owner, retire_terminal=False,
+            ):
+                lock_acquired = True
+                require_cutover_target_config(self.config, selected)
+                current = self.config.journal.read()
+                if current is None or current.terminal_result not in {
+                    "committed", "aborted", "failed",
+                }:
+                    raise PostgresDeployError()
+                self.compose("stop", *writers, cutover=selected, timeout=120)
+                name = f"pkm-{self.config.channel}-source-bootstrap-{operation_id}"
+                worker_attempted = True
+                worker_quiesced = False
+                raw = self.compose(
+                    "run", "--no-deps", "-T", "--name", name,
+                    "--label", f"yggdrasil.native.operation={operation_id}",
+                    "--label", f"yggdrasil.native.revision={revision}",
+                    "--user", str(self.config.uid),
+                    "-e", f"NATIVE_SOURCE_BOOTSTRAP={self.config.channel}:{revision}",
+                    "--entrypoint", "python", "api", "-m",
+                    "app.ops.native_source_identity_persistence",
+                    operation_id, self.config.channel, revision, "/app/vault",
+                    cutover=selected, timeout=7200,
+                )
+                from app.ops.native_source_bootstrap import quiesce_owned_container
+
+                worker_quiesced = quiesce_owned_container(
+                    self.config.channel, name, operation_id, revision,
+                )
+                if not worker_quiesced:
+                    raise PostgresDeployError()
+                try:
+                    payload = validate_receipt(json.loads(raw))
+                except Exception:
+                    raise PostgresDeployError() from None
+                self.compose("up", "-d", *writers, cutover=selected, timeout=120)
+                writers_restored = True
+                _atomic_private_json(receipt_path, payload)
+        except Exception:
+            # Best-effort restoration is allowed only for the exact stopped
+            # writer set.  A failure stays terminally refused and is never
+            # represented as eligible.
+            if worker_attempted and not worker_quiesced:
+                try:
+                    from app.ops.native_source_bootstrap import quiesce_owned_container
+
+                    name = f"pkm-{self.config.channel}-source-bootstrap-{operation_id}"
+                    worker_quiesced = quiesce_owned_container(
+                        self.config.channel, name, operation_id, revision,
+                    )
+                except Exception:
+                    worker_quiesced = False
+            if worker_quiesced:
+                try:
+                    self.compose("up", "-d", *writers, cutover=selected, timeout=120)
+                    writers_restored = True
+                except Exception:
+                    writers_restored = False
+            payload = {
+                "contract": RECEIPT_CONTRACT,
+                "operation_id": operation_id,
+                "channel": self.config.channel,
+                "revision": revision,
+                "terminal_state": "failed",
+                "eligible": False,
+                "reason": "source_operation_conflict",
+                "selected_count": 0,
+                "persisted_count": 0,
+                "missing_count": 0,
+                "invalid_count": 0,
+                "ambiguous_count": 0,
+                "producer_error_count": 1,
+            }
+            validate_receipt(payload)
+            _atomic_private_json(receipt_path, payload)
+        finally:
+            if lock_acquired and worker_quiesced and writers_restored:
+                try:
+                    with self.failed_reconciliation_lock(expected_owner=owner) as handle:
+                        self.retire_reconciled_channel_lock(handle, expected_owner=owner)
+                except Exception:
+                    retirement_failed = True
+            elif lock_acquired:
+                retirement_failed = True
+        if retirement_failed:
+            payload = {
+                "contract": RECEIPT_CONTRACT,
+                "operation_id": operation_id,
+                "channel": self.config.channel,
+                "revision": revision,
+                "terminal_state": "failed",
+                "eligible": False,
+                "reason": "source_operation_conflict",
+                "selected_count": 0,
+                "persisted_count": 0,
+                "missing_count": 0,
+                "invalid_count": 0,
+                "ambiguous_count": 0,
+                "producer_error_count": 1,
+            }
+            _atomic_private_json(receipt_path, payload)
+        if payload.get("reason") not in ({None} | REFUSAL_REASONS):
+            raise PostgresDeployError()
+        return validate_receipt(payload)
 
     def qualify_authority_cutover(self, plan: DeployPlan) -> None:
         if plan.authority_cutover is None:
@@ -2417,9 +2627,13 @@ class LinuxEffects:
                 and journal.directory == self.config.journal.directory)
             karakeep = (set(owner_marker) == {'kind', 'channel', 'operation_id'}
                 and owner_marker.get('kind') in {'karakeep-deploy', 'karakeep-boot'})
+            source_persistence = (
+                set(owner_marker) == {'kind', 'channel', 'operation_id'}
+                and owner_marker.get('kind') == 'source-identity-persistence'
+            )
             if (journal is None or journal.channel != self.config.channel
                 or self.config.channel not in {'dev', 'test'}
-                or not (qualification or karakeep)
+                or not (qualification or karakeep or source_persistence)
                 or owner_marker['channel'] != self.config.channel
                 or owner_marker['operation_id'] != self.operation_id
                 or str(UUID(owner_marker['operation_id'])) != owner_marker['operation_id']):
@@ -2849,6 +3063,27 @@ class DeploymentSupervisor:
         if data.get('action') == 'test-recovery-release-instance-state':
             with self.mutex:
                 return self._test_recovery_release_instance_state(data)
+        if data.get('action') == 'source-identity-persist':
+            if set(data) != {
+                'action', 'operation_id', 'revision', 'authority_cutover',
+            }:
+                raise PostgresDeployError()
+            try:
+                operation_id = str(data['operation_id'])
+                revision = str(data['revision'])
+                selected = AuthorityCutover(**data['authority_cutover'])
+                if str(UUID(operation_id)) != operation_id:
+                    raise PostgresDeployError()
+            except (ValueError, TypeError, AttributeError):
+                raise PostgresDeployError() from None
+            with self.mutex:
+                self._require_current_config()
+                if self.operation is not None and not self.operation.finished.is_set():
+                    raise PostgresDeployError()
+                receipt = LinuxEffects(self.config).persist_source_identity(
+                    operation_id, revision, selected,
+                )
+                return {'source_identity_persistence': receipt}
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
         operation_id = str(data['operation_id'])
@@ -2953,7 +3188,11 @@ def rpc(channel: str, request: dict[str, Any]) -> dict[str, Any]:
         raise PostgresDeployError()
     path = Path('/run/yggdrasil/bws-deploy') / (channel + '.sock')
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(170 if request.get('action') in {'karakeep-acquire', 'karakeep-project'} else 35)
+        connection.settimeout(
+            7260 if request.get('action') == 'source-identity-persist'
+            else 170 if request.get('action') in {'karakeep-acquire', 'karakeep-project'}
+            else 35
+        )
         connection.connect(str(path))
         with connection.makefile('rwb') as stream:
             stream.write((json.dumps(request) + '\n').encode())
@@ -2984,6 +3223,51 @@ class SshDeployRemote:
         if not isinstance(response, dict) or response.get('refused'):
             raise PostgresDeployError()
         return response
+
+    def persist_source_identity(
+        self, operation_id: str, revision: str, selected: AuthorityCutover,
+    ) -> dict[str, Any]:
+        """Invoke the fixed DEV/TEST source-persistence RPC."""
+        from app.ops.native_source_identity_persistence import validate_receipt
+
+        selected.validate()
+        try:
+            if str(UUID(operation_id)) != operation_id or re.fullmatch(r'[0-9a-f]{40}', revision) is None:
+                raise PostgresDeployError()
+        except (ValueError, TypeError, AttributeError):
+            raise PostgresDeployError() from None
+        channel = self.host.removeprefix('ygg-')
+        if channel not in {'dev', 'test'}:
+            raise PostgresDeployError()
+        payload = {
+            'action': 'source-identity-persist',
+            'operation_id': operation_id,
+            'revision': revision,
+            'authority_cutover': {
+                'binding_id': selected.binding_id,
+                'root': selected.root,
+                'ownership_root': selected.ownership_root,
+            },
+        }
+        result = subprocess.run(
+            ['ssh', '-o', 'BatchMode=yes', '--', self.host, 'sudo', '-n',
+             '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', channel],
+            input=json.dumps(payload) + '\n', text=True, capture_output=True, check=False,
+        )
+        if result.returncode:
+            raise PostgresDeployError()
+        try:
+            response = json.loads(result.stdout)
+            receipt = validate_receipt(response['source_identity_persistence'])
+            if (
+                receipt['operation_id'] != operation_id
+                or receipt['channel'] != channel
+                or receipt['revision'] != revision
+            ):
+                raise PostgresDeployError()
+            return receipt
+        except Exception:
+            raise PostgresDeployError() from None
 
     def test_recovery_reset(self, request: TestRecoveryRequest) -> DeployReceipt:
         request.validate()

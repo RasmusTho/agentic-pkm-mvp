@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -389,6 +390,10 @@ def main(argv: list[str] | None = None) -> int:
         help='prove this exact automatic operation left no host or native mutation footprint',
     )
     parser.add_argument(
+        '--persist-source-identity', action='store_true',
+        help='run one explicit DEV/TEST ordinary-producer identity persistence operation',
+    )
+    parser.add_argument(
         '--recover-test-source', action='store_true',
         help='reset only the exact failed TEST source projection, then deploy this candidate',
     )
@@ -433,6 +438,39 @@ def main(argv: list[str] | None = None) -> int:
         ):
             raise PostgresDeployError()
         controller = HostSecretController()
+        if args.persist_source_identity:
+            if (
+                args.channel not in {'dev', 'test'}
+                or not args.automatic
+                or not args.existing_secrets_only
+                or args.operation_id is None
+                or cutover is None
+                or args.image_digest is not None
+                or args.reconcile_pending
+                or args.prove_never_admitted
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None
+                or args.ack_forward_only
+                or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None
+            ):
+                raise PostgresDeployError()
+            remote = SshDeployRemote('ygg-' + args.channel)
+            with controller.source_persistence_operation(
+                args.channel, operation_id=args.operation_id,
+            ) as (operation, _resumed):
+                if operation.completed_result is None:
+                    operation.prepare_mutation()
+                result = remote.persist_source_identity(
+                    operation.operation_id, args.revision, cutover,
+                )
+                terminal = result['terminal_state']
+                operation.finish(TerminalEvidence(
+                    operation.operation_id, 'source-persistence', args.channel,
+                    terminal, 'remote-terminal',
+                ))
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result['terminal_state'] == 'committed' else 78
         # The controller can inspect DB credentials and the API's degrade-visibly
         # binding. VM-only consumers are selected from VM runtime/migration state.
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),

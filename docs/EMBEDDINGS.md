@@ -555,6 +555,17 @@ The private boundary retains only `legacy_producer_policy_refused`, `legacy_sour
 `embedding_generation_failed` or `legacy_write_failed`; no path, identity or raw diagnostic is emitted.
 Bounded admission refusals additionally distinguish these remediation classes:
 
+For `legacy_identity_persistence_refused`, the only write-capable remediation is the separately
+admitted DEV/TEST supervised ordinary-producer operation. It invokes the canonical `vault-alpha`
+producer without source-backed recovery, with host/channel/source authority and writer isolation,
+then requires a fresh complete selected-inventory identity readback. Producer exit or summary
+counts alone are never eligibility proof. Timeout, interruption, any per-source error/skip, missing
+or invalid persisted identity, duplicate claim, configuration drift, or lock contention yields a
+fixed failed receipt. Paths, UUIDs, note content, child streams and provider diagnostics remain
+private. Success does not weaken canonical Product mapping checks, start a deployment, or authorize
+a retry; the delivery classifier and a separately qualified fresh immutable candidate remain
+required.
+
 | Fixed reason | Required area of source-authorized investigation |
 | --- | --- |
 | `legacy_candidate_refused` | Candidate-only or proposal classification |

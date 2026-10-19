@@ -61,6 +61,42 @@ def test_persisted_companion_identity_never_authorizes_reprojection(monkeypatch,
     assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
 
 
+def test_supervised_ordinary_persistence_precedes_normal_legacy_atomic_replacement(
+    monkeypatch, tmp_path,
+):
+    """Persisted producer identity enables reconciliation without recovery healing."""
+    from types import SimpleNamespace
+
+    from app.ops.native_source_identity_persistence import run_ordinary_persistence
+    from app.services.note_uuid import ensure_note_uuid
+
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=True,
+    )
+    source.write_text(raw.decode().replace(f"uuid: {original['object_id']}\n", ""))
+
+    def ordinary(selected_root):
+        ensure_note_uuid(
+            source, vault_root=selected_root,
+            preferred_uuid=str(original["object_id"]), write_action="ensure uuid",
+        )
+        return SimpleNamespace(
+            scanned=1, ingested=1, errors=0, malformed=0,
+            skipped_locked=0, skipped_invalid=0,
+        )
+
+    receipt = run_ordinary_persistence(
+        operation_id="11111111-1111-4111-8111-111111111111",
+        channel="dev", revision="a" * 40, vault_root=root, producer=ordinary,
+    )
+    assert receipt["terminal_state"] == "committed"
+    assert receipt["eligible"] is True
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    assert state.rows[0]["object_id"] == original["object_id"]
+    assert state.rows[0]["payload"]["origin"] == "vault"
+    assert state.calls[0]["replacement"]["artifact_id"] == str(original["object_id"])
+
+
 @pytest.mark.parametrize("location", ["canonical", "legacy"])
 @pytest.mark.parametrize("other_first", [False, True])
 def test_companion_discovery_filters_title_before_selection_in_every_location(monkeypatch, tmp_path, location, other_first):

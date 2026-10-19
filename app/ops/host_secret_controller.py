@@ -25,7 +25,9 @@ class HostSecretAdmissionError(RuntimeError):
         )
 
 
-_KINDS = {"check", "import", "token-push", "deploy", "bootstrap"}
+_KINDS = {
+    "check", "import", "token-push", "deploy", "bootstrap", "source-persistence",
+}
 _TARGETS = {"dev", "test", "prod", "shared", "bob-1"}
 _TERMINAL_SOURCES = {
     "check": "read-complete",
@@ -33,6 +35,7 @@ _TERMINAL_SOURCES = {
     "bootstrap": "provider-terminal",
     "token-push": "remote-terminal",
     "deploy": "remote-terminal",
+    "source-persistence": "remote-terminal",
 }
 _TOKEN_PUSH_LOCAL_ABORT_SOURCE = "host-preflight"
 _DEPLOY_ABSENCE_SOURCE = "postmerge-controller"
@@ -148,7 +151,10 @@ class HostSecretOperation:
             or evidence.result not in {"committed", "aborted", "failed"}
             or (
                 evidence.result == "failed"
-                and (self.kind != "deploy" or self.allow_bootstrap is not False)
+                and (
+                    self.kind not in {"deploy", "source-persistence"}
+                    or self.kind == "deploy" and self.allow_bootstrap is not False
+                )
             )
             or not valid_source
         ):
@@ -321,7 +327,8 @@ class HostSecretController:
                     if record["kind"] == "deploy" and record.get("allow_bootstrap") != pending.get("allow_bootstrap"):
                         raise HostSecretAdmissionError()
                     if record["stage"] == "failed" and (
-                        record["kind"] != "deploy" or pending.get("allow_bootstrap") is not False
+                        record["kind"] not in {"deploy", "source-persistence"}
+                        or record["kind"] == "deploy" and pending.get("allow_bootstrap") is not False
                     ):
                         raise HostSecretAdmissionError()
                     if (
@@ -332,7 +339,7 @@ class HostSecretController:
                         pending = record
                         continue
                     terminal_stages = {"committed", "aborted"}
-                    if record["kind"] == "deploy":
+                    if record["kind"] in {"deploy", "source-persistence"}:
                         terminal_stages.add("failed")
                     if (
                         record["stage"] not in terminal_stages
@@ -527,6 +534,58 @@ class HostSecretController:
                 operation._record("prepared")
             try:
                 yield operation, bool(pending and pending["stage"] == "sent")
+            finally:
+                operation._active = False
+
+    @contextmanager
+    def source_persistence_operation(
+        self, target: str, *, operation_id: str,
+    ) -> Iterator[tuple[HostSecretOperation, bool]]:
+        """Admit one DEV/TEST ordinary-producer operation under the host lock."""
+        if target not in {"dev", "test"}:
+            raise HostSecretAdmissionError()
+        try:
+            if str(UUID(operation_id)) != operation_id:
+                raise HostSecretAdmissionError()
+        except (ValueError, TypeError, AttributeError):
+            raise HostSecretAdmissionError() from None
+        with self._locked_journal(wait=True) as descriptor:
+            pending = self._pending(descriptor)
+            if pending is not None and (
+                pending.get("operation_id") != operation_id
+                or pending.get("kind") != "source-persistence"
+                or pending.get("target") != target
+            ):
+                raise HostSecretAdmissionError()
+            completed = None
+            if pending is None:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                with os.fdopen(os.dup(descriptor), "r", encoding="utf-8") as source:
+                    matches = [
+                        record for record in map(json.loads, source)
+                        if record["operation_id"] == operation_id
+                    ]
+                if matches:
+                    last = matches[-1]
+                    if (
+                        last["kind"] != "source-persistence"
+                        or last["target"] != target
+                        or last["stage"] not in {"committed", "failed"}
+                        or last["source"] != "remote-terminal"
+                    ):
+                        raise HostSecretAdmissionError()
+                    completed = str(last["stage"])
+            operation = HostSecretOperation(
+                descriptor, operation_id, "source-persistence", target,
+                prepared=pending is not None,
+                mutation_started=pending is not None and pending.get("stage") == "sent",
+                completed_result=completed,
+            )
+            resumed = pending is not None or completed is not None
+            if not resumed:
+                operation._deferred_prepared = True
+            try:
+                yield operation, resumed
             finally:
                 operation._active = False
 

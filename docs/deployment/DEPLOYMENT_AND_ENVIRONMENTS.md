@@ -1133,6 +1133,23 @@ producer preservation/heal mismatch and canonical Product disagreement respectiv
 CLI, bootstrap, deploy diagnostic and operation journal preserve only those fixed classes through
 cleanup and same-operation terminal reconciliation; unexpected/private failures remain generic
 and fail closed. The legacy generic identity class remains accepted for older worker evidence.
+
+`legacy_identity_persistence_refused` is cleared only through the explicit supervised ordinary-
+producer operation, never inside source-backed recovery. The host command uses
+`postgres_deploy_host <dev|test> <installed-sha> --automatic --existing-secrets-only
+--persist-source-identity --operation-id <uuid>` together with the already-qualified selected
+vault binding/root/ownership arguments. Host admission, the native supervisor and the channel lock
+bind that UUID to the installed runtime and selected source authority. The operation stops only the
+channel's write-capable application services, runs the existing ordinary `vault-alpha` producer
+without `--source-backed-rebuild`, performs a fresh complete selected-inventory persisted-identity
+readback, restores the same services, and terminalizes independently. PROD, candidate admission,
+provider/model replacement and automatic deploy chaining are refused. Child output and source
+evidence stay private; the durable `native-source-identity-persistence.v1` receipt contains only
+operation/channel/revision, terminal state, bounded counts, eligibility, and one allowlisted fixed
+reason. A committed receipt does not prove legacy-row convergence or authorize replay: canonical
+mapping and atomic legacy reconciliation remain separate mandatory gates, and the no-progress
+classifier must be reapplied before a fresh current-main candidate is admitted.
+
 Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
 History dependencies, candidate/staging or untrusted material, changed sources,
 redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again
