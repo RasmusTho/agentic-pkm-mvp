@@ -1128,25 +1128,31 @@ def test_retained_failed_cleanup_accepts_proven_legacy_mount_order_only(
     monkeypatch.setattr(linux, "_command", command)
     monkeypatch.setattr(linux, "_capture_watch_configured", lambda _config: True)
     snapshot = effects.source_identity_runtime_snapshot(
-        selected, require_running_capture=False, allow_legacy_mount_order=True,
+        selected, require_running_capture=False,
     )
     for row in rows:
         if len(row["Mounts"]) > 1:
             row["Mounts"] = row["Mounts"][1:] + row["Mounts"][:1]
     permuted_snapshot = effects.source_identity_runtime_snapshot(
-        selected, require_running_capture=False, allow_legacy_mount_order=True,
+        selected, require_running_capture=False,
     )
     assert permuted_snapshot.installed_fingerprint == snapshot.installed_fingerprint
-    assert (
-        permuted_snapshot.legacy_installed_fingerprints
-        == snapshot.legacy_installed_fingerprints
+    assert permuted_snapshot.observed_installed_fingerprint != (
+        snapshot.observed_installed_fingerprint
     )
+    assert permuted_snapshot.legacy_installed_fingerprints == frozenset()
     for row in rows:
         if len(row["Mounts"]) > 1:
             row["Mounts"] = row["Mounts"][1:] + row["Mounts"][:1]
+    legacy_snapshot = effects.source_identity_runtime_snapshot(
+        selected, require_running_capture=False, allow_legacy_mount_order=True,
+    )
     legacy_fingerprint = next(
-        value for value in snapshot.legacy_installed_fingerprints
-        if value != snapshot.installed_fingerprint
+        value for value in legacy_snapshot.legacy_installed_fingerprints
+        if value not in {
+            legacy_snapshot.installed_fingerprint,
+            legacy_snapshot.observed_installed_fingerprint,
+        }
     )
     operation_id = str(uuid4())
     owner = {"kind": "source-identity-persistence", "channel": "dev", "operation_id": operation_id}
@@ -1260,7 +1266,12 @@ def test_retained_failed_cleanup_accepts_proven_legacy_mount_order_only(
         )
     assert events == ["qualify"]
 
-    producer_request["installed_fingerprint"] = snapshot.installed_fingerprint
+    current_snapshot = effects.source_identity_runtime_snapshot(
+        selected, require_running_capture=False,
+    )
+    producer_request["installed_fingerprint"] = (
+        current_snapshot.observed_installed_fingerprint
+    )
     producer_request_path.write_text(json.dumps(producer_request))
     events.clear()
     assert fresh.persist_source_identity(
@@ -1331,27 +1342,70 @@ def _installed_test_fingerprint(snapshots) -> str:
     })
 
 
-def test_installed_fingerprint_is_invariant_to_mount_order() -> None:
+def _canonical_installed_test_fingerprint(snapshots) -> str:
     from app.ops import postgres_deploy_linux as linux
 
+    return _installed_test_fingerprint({
+        service: {
+            **snapshot,
+            "mounts": linux._canonical_mount_records(snapshot["mounts"]),
+        }
+        for service, snapshot in snapshots.items()
+    })
+
+
+def test_installed_fingerprint_is_invariant_to_mount_order() -> None:
     first = _installed_test_snapshots()
     second = {
         service: {**snapshot, "mounts": list(reversed(snapshot["mounts"]))}
         for service, snapshot in first.items()
     }
 
-    def canonical(snapshots):
-        return {
-            service: {
-                **snapshot,
-                "mounts": linux._canonical_mount_records(snapshot["mounts"]),
-            }
-            for service, snapshot in snapshots.items()
-        }
+    assert _canonical_installed_test_fingerprint(
+        first
+    ) == _canonical_installed_test_fingerprint(second)
 
-    assert _installed_test_fingerprint(canonical(first)) == _installed_test_fingerprint(
-        canonical(second)
-    )
+
+def test_installed_fingerprint_refuses_nonmount_and_full_mount_field_mutations() -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    baseline = _installed_test_snapshots()
+    baseline_canonical = _canonical_installed_test_fingerprint(baseline)
+    baseline_observed = _installed_test_fingerprint(baseline)
+    mutations = []
+
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["id"] = "d" * 64
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["image_id"] = "sha256:" + "2" * 64
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["image_ref"] = "example/changed"
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["environment"][0] = "PKM_ENVIRONMENT=test"
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["environment"].reverse()
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["user"] = "502:20"
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["mounts"][0]["Mode"] = "ro"
+    mutations.append(changed)
+    changed = json.loads(json.dumps(baseline))
+    changed["api"]["mounts"][0]["DriverData"] = {"opaque": "changed"}
+    mutations.append(changed)
+
+    for mutated in mutations:
+        assert _canonical_installed_test_fingerprint(mutated) != baseline_canonical
+        assert baseline_observed not in linux._legacy_mount_order_fingerprints(
+            mutated,
+            container_root="/srv/vault-alpha",
+            vault_overlay="docker-compose.full-host-vault.yml",
+        )
 
 
 def test_legacy_installed_fingerprint_requires_bounded_exact_mount_permutation(

@@ -1268,8 +1268,10 @@ The installed-writer fingerprint treats Docker's `Mounts` collection as an unord
 complete supported bind/volume records. Partial records and unsupported mount types refuse. Future
 requests sort the full serialized records before hashing; no mount field
 is dropped or normalized, and environment ordering plus every non-mount container field remains
-exact. A retained request created by the earlier order-sensitive implementation may enter only the
-existing same-operation cleanup path when its exact digest is found in a pre-bounded cross-product
+exact. An earlier order-sensitive request may still use the original exact guard when its digest
+equals the current raw Docker order; this preserves ordinary terminal producer cleanup without
+weakening any field. If that exact raw guard does not match, a retained request may enter only the
+existing failed/ineligible same-operation cleanup path when its exact digest is found in a pre-bounded cross-product
 of cyclic rotations of the current complete mount lists. Duplicate records, a rotation-product over
 the finite cap, a non-cyclic legacy order, no exact digest match, or any changed mount/non-mount
 field refuses. This compatibility proof never rewrites the request or terminal receipt, reruns the

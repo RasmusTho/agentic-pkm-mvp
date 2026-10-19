@@ -595,6 +595,7 @@ class SourceIdentityRuntimeSnapshot:
     vault_overlay: str
     child_environment: tuple[tuple[str, str], ...]
     unset_environment: tuple[str, ...] = ()
+    observed_installed_fingerprint: str | None = None
     legacy_installed_fingerprints: frozenset[str] = frozenset()
 
 
@@ -654,6 +655,8 @@ def _legacy_mount_order_fingerprints(
     combinations = 1
     for service in services:
         mounts = snapshots[service].get('mounts')
+        if not isinstance(mounts, list):
+            raise PostgresDeployError()
         _canonical_mount_records(mounts)
         observed = list(mounts)
         combinations *= max(1, len(observed))
@@ -686,6 +689,7 @@ def _installed_fingerprint_matches(
 ) -> bool:
     return (
         retained == snapshot.installed_fingerprint
+        or retained == snapshot.observed_installed_fingerprint
         or retained in snapshot.legacy_installed_fingerprints
     )
 
@@ -1847,6 +1851,11 @@ class LinuxEffects:
             ):
                 if current.get(key) != api_environment.get(key):
                     raise PostgresDeployError()
+        observed_installed_fingerprint = _installed_payload_fingerprint({
+            'containers': snapshots,
+            'container_root': container_root,
+            'vault_overlay': vault_overlay,
+        })
         legacy_installed_fingerprints = (
             _legacy_mount_order_fingerprints(
                 snapshots,
@@ -2019,6 +2028,7 @@ class LinuxEffects:
             vault_overlay=vault_overlay,
             child_environment=child_environment,
             unset_environment=api_unset_environment,
+            observed_installed_fingerprint=observed_installed_fingerprint,
             legacy_installed_fingerprints=legacy_installed_fingerprints,
         )
 
