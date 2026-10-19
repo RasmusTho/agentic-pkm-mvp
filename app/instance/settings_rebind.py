@@ -431,13 +431,17 @@ def require_compatibility_binding_ready(
         raise RegistryError("compatibility handoff is awaiting settings reload")
 
 
-def validate_settings_rebind_candidate_root(candidate_root: Path) -> Path:
+def validate_settings_rebind_candidate_root(
+    candidate_root: Path,
+    *,
+    heal_identity: bool = True,
+) -> Path:
     """Validate the candidate vault before any watcher adoption receipt."""
 
     from app.vault.manager import VaultManager
 
     manager = VaultManager()
-    context = manager.validate_vault(candidate_root)
+    context = manager.validate_vault(candidate_root, heal_identity=heal_identity)
     if context.status != "selected":
         raise SettingsRebindCandidatePolicyError(
             "settings rebind candidate watcher root is not a selected vault"
@@ -877,6 +881,19 @@ class SettingsRebindActivation:
                 ):
                     raise RegistryError(
                         "settings rebind watcher receipt does not match durable authority"
+                    )
+                if (
+                    required_stage == "completed"
+                    and receipt.evidence_kind == "first_adoption_recovery"
+                    and (
+                        receipt.recovery_scan is None
+                        or receipt.recovery_scan.scan_kind != "recovery"
+                        or receipt.recovery_scan.desired_revision
+                        != record.desired_revision
+                    )
+                ):
+                    raise RegistryError(
+                        "settings rebind watcher recovery evidence is not current"
                     )
                 if required_stage == "acknowledged" or receipt.stage == "completed":
                     return
