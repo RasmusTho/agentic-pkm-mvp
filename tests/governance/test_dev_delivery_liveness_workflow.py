@@ -77,6 +77,15 @@ def test_liveness_check_reds_on_missing_heartbeat() -> None:
     assert not stale_verdict.ok
     assert stale_verdict.reason == "heartbeat_missing"
 
+    future_verdict = liveness.evaluate(
+        build,
+        heartbeat_statuses=[],
+        verdict_statuses=[_status(liveness.VERDICT_CONTEXT, -1)],
+        now=NOW,
+    )
+    assert not future_verdict.ok
+    assert future_verdict.reason == "heartbeat_missing"
+
 
 def test_workflow_is_scheduled_read_only_and_calls_production_checker() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))

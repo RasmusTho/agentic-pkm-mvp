@@ -137,6 +137,7 @@ def evaluate(
     if (build is not None and verdict is not None
             and verdict.get("state") in {"success", "failure"}
             and verdict_at is not None and verdict_at >= build.completed_at
+            and verdict_at <= current
             and current - verdict_at <= HEARTBEAT_GRACE):
         # A fresh terminal verdict is itself proof that the controller was
         # alive. This also lets a fresh verdict recover a stale heartbeat
