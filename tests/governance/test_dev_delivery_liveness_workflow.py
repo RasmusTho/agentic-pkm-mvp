@@ -172,11 +172,21 @@ class _GitHubTransport:
         self.actions = False
         self.compare = "identical"
         self.fail_dispatch = False
+        self.failed_workflows = set()
+
+    @property
+    def liveness_dispatches(self):
+        return [command for command in self.dispatches if command[3] == "dev-delivery-liveness.yml"]
+
+    @property
+    def channel_dispatches(self):
+        return [command for command in self.dispatches if command[3] == "postmerge-channel-bug.yml"]
 
     def __call__(self, argv, **kwargs):
         if argv[:3] == ["gh", "workflow", "run"]:
             self.dispatches.append(argv)
-            return SimpleNamespace(returncode=int(self.fail_dispatch), stdout="", stderr="")
+            return SimpleNamespace(returncode=int(self.fail_dispatch or argv[3] in self.failed_workflows),
+                                   stdout="", stderr="")
         assert argv[:2] == ["gh", "api"], argv
         path = argv[2]
         if "/statuses/" in path:
@@ -243,10 +253,17 @@ def test_controller_latest_entrypoint_publishes_heartbeat_and_wires_dev_verdict(
     assert not transport.denied_writes and not transport.writes
     checkpoint = json.loads((tmp_path / "postmerge-dev-test.json").read_text())
     assert (checkpoint["phase"], checkpoint["channel"]) == ("passed", "test")
-    assert len(transport.dispatches) == 2
+    assert len(transport.liveness_dispatches) == 2
+    assert len(transport.channel_dispatches) == 2
+    assert checkpoint["last_green"] == {"dev": SHA, "test": SHA}
+    assert checkpoint["channel_bug"]["dispatch"] == "sent"
+    for command, channel in zip(transport.channel_dispatches, ("dev", "test"), strict=True):
+        fields = dict(item.split("=", 1) for item in command if "=" in item)
+        evidence = json.loads(fields["evidence"])
+        assert controller.validate_channel_evidence(evidence, channel) == transport.candidate
     transport.actions = True
     _writer_env(monkeypatch)
-    for command in transport.dispatches:
+    for command in transport.liveness_dispatches:
         assert command[3] == "dev-delivery-liveness.yml"
         assert command[command.index("--ref") + 1] == "main"
         fields = dict(item.split("=", 1) for item in command if "=" in item)
@@ -299,18 +316,28 @@ def test_actions_writer_refuses_unqualified_signal_before_status_write(monkeypat
     assert not transport.writes
 
 
-def test_controller_signal_transport_failure_keeps_native_progress(monkeypatch, tmp_path):
+@pytest.mark.parametrize("failed_workflows", [
+    {"dev-delivery-liveness.yml"},
+    {"postmerge-channel-bug.yml"},
+    {"dev-delivery-liveness.yml", "postmerge-channel-bug.yml"},
+])
+def test_controller_signal_transport_failure_keeps_native_progress(monkeypatch, tmp_path, failed_workflows):
     transport = _GitHubTransport()
-    transport.fail_dispatch = True
+    transport.failed_workflows = failed_workflows
     monkeypatch.setattr(controller.subprocess, "run", transport)
     monkeypatch.setattr(controller.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(controller, "native_deploy", _native_receipt)
     tmp_path.chmod(0o700)
     assert controller.main(["--latest", "--state-directory", str(tmp_path)]) == 0
-    assert len(transport.dispatches) == 6  # Three attempts per bounded signal.
-    assert not transport.denied_writes
+    expected_signals = 6 if "dev-delivery-liveness.yml" in failed_workflows else 2
+    assert len(transport.liveness_dispatches) == expected_signals
+    assert len(transport.channel_dispatches) == 2
+    assert not transport.denied_writes and not transport.writes
     checkpoint = json.loads((tmp_path / "postmerge-dev-test.json").read_text())
     assert (checkpoint["phase"], checkpoint["channel"]) == ("passed", "test")
+    assert checkpoint["last_green"] == {"dev": SHA, "test": SHA}
+    expected_report = "failed" if "postmerge-channel-bug.yml" in failed_workflows else "sent"
+    assert checkpoint["channel_bug"]["dispatch"] == expected_report
 
 
 def test_heartbeat_queue_cannot_displace_terminal_signals():
@@ -567,9 +594,9 @@ def test_pending_dev_restart_publishes_terminal_signal_without_new_operation(mon
     interrupted = False
     assert controller.main(["--latest", "--state-directory", str(tmp_path)]) == 0
     assert operations[0] == operations[1]
-    assert [next(arg for arg in command if arg.startswith("kind=")) for command in transport.dispatches] == [
+    assert [next(arg for arg in command if arg.startswith("kind=")) for command in transport.liveness_dispatches] == [
         "kind=heartbeat", "kind=heartbeat", "kind=verdict"]
-    signal = json.loads(next(arg.removeprefix("payload=") for arg in transport.dispatches[-1]
+    signal = json.loads(next(arg.removeprefix("payload=") for arg in transport.liveness_dispatches[-1]
                              if arg.startswith("payload=")))
     assert signal["operation_id"] == operations[0][1]
     assert signal["result"] == "passed"
@@ -582,7 +609,7 @@ def test_failed_dev_verdict_is_recorded_as_activity_not_deployment_success(monke
         "channel": channel, "terminal_result": "failed", "operation_id": candidate.operation_id(channel)})
     tmp_path.chmod(0o700)
     assert controller.main(["--latest", "--state-directory", str(tmp_path)]) == 78
-    signal = json.loads(next(arg.removeprefix("payload=") for arg in transport.dispatches[-1]
+    signal = json.loads(next(arg.removeprefix("payload=") for arg in transport.liveness_dispatches[-1]
                              if arg.startswith("payload=")))
     assert signal["result"] == "failed"
     transport.actions = True

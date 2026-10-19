@@ -2016,6 +2016,24 @@ def test_full_suite_selection_ignores_deferred_heavy_targets() -> None:
     assert "tests/deploy" not in select_tests(["pyproject.toml", "scripts/deploy_channel.sh"]).deferred_targets
 
 
+def test_liveness_checker_source_selects_its_contract_tests(tmp_path: Path) -> None:
+    target = "tests/governance/test_dev_delivery_liveness_workflow.py"
+    selection = select_tests(["scripts/dev_delivery_liveness.py"])
+    assert target in selection.targets
+    assert selection.deferred_targets == ("tests/deploy",)
+    assert "tests/governance" in select_tests([".github/workflows/dev-delivery-liveness.yml"]).targets
+    assert target not in select_tests(["scripts/postmerge_channel_bug.py"]).targets
+    output = tmp_path / "output"
+    result = subprocess.run([
+        sys.executable, "scripts/select_pr_tests.py", "--changed-file", "scripts/dev_delivery_liveness.py",
+        "--github-output", str(output),
+    ], cwd=REPO_ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert target in fields["pytest_args"].split()
+    assert fields["deferred_targets"] == "tests/deploy"
+
+
 def test_deploy_heavy_triggers_cover_scripts_referenced_by_deploy_tests() -> None:
     # Census: every repo file tests/deploy reads directly (scripts, compose
     # files, requirements, Dockerfile, deploy config, app/ modules by path)

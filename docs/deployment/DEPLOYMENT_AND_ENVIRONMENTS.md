@@ -744,8 +744,9 @@ run queues from heartbeats and heavy verdicts. The checker uses the original obs
 queued or replayed signals cannot renew liveness. A terminal verdict retires only earlier admitted
 builds; skipped intermediate builds do not stay overdue after newer progress.
 
-These are repository implementation preconditions, not a host-activation receipt. #6170 and #3347
-retain their explicit client-provisioning and activation holds. A dispatch failure leaves native
+These are repository implementation preconditions, not a host-activation receipt. Client
+provisioning is tracked in #6170; controller release and live acceptance retain #6227 and #3347's
+operator gates. A dispatch failure leaves native
 progress running and is exposed by the liveness watchdog; the signal is best effort with bounded
 transport retries, not a durable delivery queue.
 
