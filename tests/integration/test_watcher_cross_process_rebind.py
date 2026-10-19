@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +16,7 @@ import pytest
 
 from app.briefing.compose import briefing_note_path
 from app.briefing.config import BRIEFING_TIMEZONE
+from app.journaling.review import journal_draft_relative_path
 from app.settings.ingestion import SettingsIngestionState
 from app.vault.markdown_settings import MarkdownSettingsStore
 from app.instance._storage_boundary import RegistryError
@@ -42,6 +43,7 @@ from app.watcher.settings_rebind import (
 )
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 from tests.helpers.vault_settings import initialize_test_vault
+from scripts.yaml_roundtrip import dump_frontmatter
 
 pytestmark = pytest.mark.not_pg
 
@@ -236,6 +238,14 @@ def _event_paths(root: Path) -> list[str]:
         str((item.get("payload") or {}).get("vault_path") or "")
         for item in _outbox_payloads(root / "index-outbox.jsonl")
     ]
+
+
+def _vault_file_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
 
 
 def _revision_receipt_path(root: Path, revision: int) -> Path:
@@ -1401,7 +1411,72 @@ def test_committed_first_adoption_without_receipt_recovers_from_fresh_scan(
     assert receipt.evidence_kind == "first_adoption_recovery"
     assert receipt.recovery_scan is not None
     assert receipt.recovery_scan.scan_kind == "recovery"
+    # Recovery is observation-only: source bytes and delivery eligibility are
+    # preserved until the first stable ordinary cycle.
+    assert str(vault_a / "cold-recovery.md") not in _event_paths(tmp_path)
+    registry.run_registry_once(config_path)
     assert str(vault_a / "cold-recovery.md") in _event_paths(tmp_path)
+
+
+def test_first_adoption_recovery_once_and_forever_defer_source_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both production entrypoints preserve the source tree until stable work resumes."""
+    runtime, vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    committed = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        committed.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    day = date(2026, 10, 19)
+    candidate = vault_a / journal_draft_relative_path(vault_a, day, is_addendum=False)
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text(
+        dump_frontmatter(
+            {
+                "uuid": "journal-cold-recovery",
+                "kind": "journal-draft",
+                "journal_candidate_type": "primary",
+                "for_date": day.isoformat(),
+                "derived_by": "conversation",
+                "authority_state": "proposal",
+                "sources": ["session:6256"],
+            },
+            "Deferred journal source\n",
+        )
+        + "\n%% AI:Start %%\n"
+        + "## AI-åtgärder\n\n"
+        + "- [x] Accept this draft as today's journal entry\n"
+        + "- [ ] Dismiss this journal candidate\n"
+        + "%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    before = _vault_file_bytes(vault_a)
+
+    registry.run_registry_once(config_path)
+
+    assert _vault_file_bytes(vault_a) == before
+    assert candidate.exists()
+    assert not (vault_a / "1_Calendar/Daily/2026-10-19.md").exists()
+    assert _event_paths(tmp_path) == []
+    assert not (tmp_path / "watcher-state/journal-review-outbox.jsonl").exists()
+
+    registry.run_registry_forever(config_path, max_ticks=1)
+
+    assert not candidate.exists()
+    assert (vault_a / "1_Calendar/Daily/2026-10-19.md").exists()
 
 
 def test_first_adoption_recovery_starts_a_new_scan_generation_after_partial_cursor(
@@ -1548,7 +1623,8 @@ def test_first_adoption_recovery_requires_successful_scan_and_is_restart_idempot
         (tmp_path / "watcher.stop").touch()
         expected_error = "scan was paused"
     elif scan_blocker == "zero_match":
-        monkeypatch.setenv("WATCHER_SCOPE_GLOB", "missing-scope/**/*.md")
+        (vault_a / "empty-scope").mkdir()
+        monkeypatch.setenv("WATCHER_SCOPE_GLOB", "empty-scope/**/*.md")
         expected_error = "healthy scope"
     else:
         original_write_receipt = registry_settings_rebind._write_receipt
@@ -1577,6 +1653,9 @@ def test_first_adoption_recovery_requires_successful_scan_and_is_restart_idempot
         monkeypatch.delenv("WATCHER_SCOPE_GLOB")
     registry.run_registry_once(config_path)
     receipt_path = _revision_receipt_path(tmp_path, 1)
+    assert str(vault_a / "recovery-retry.md") not in _event_paths(tmp_path)
+    registry.run_registry_once(config_path)
+    assert str(vault_a / "recovery-retry.md") in _event_paths(tmp_path)
     first_bytes = receipt_path.read_bytes()
     registry.run_registry_once(config_path)
 

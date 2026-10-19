@@ -1660,6 +1660,23 @@ def _capture_settings_source_snapshot(
     return snapshot
 
 
+def _mark_scan_generation_seen(state: WatcherState, rel_path: str) -> None:
+    """Advance only scan presence while preserving ordinary delivery state."""
+
+    entry = state.file_entry(rel_path)
+    observation_store = state._observation_store
+    if observation_store is not None:
+        state._pending_deletes.discard(rel_path)
+        state._pending_observations[rel_path] = (
+            dict(entry) if entry is not None else {},
+            state.scan_generation,
+        )
+    elif entry is not None:
+        # Registry states use the sidecar. Keep the same no-delivery behavior
+        # for an in-memory legacy state used by narrow callers/tests.
+        state.files[rel_path] = entry
+
+
 def _collect_changed_entries(
     cfg: RegistryConfig,
     spec: WatcherSpec,
@@ -1670,6 +1687,7 @@ def _collect_changed_entries(
     states: Mapping[str, WatcherState],
     handled_settings_sources: set[Path] | None = None,
     settings_source_reload_results: dict[str, object] | None = None,
+    observation_only: bool = False,
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
@@ -1734,7 +1752,10 @@ def _collect_changed_entries(
             and last_mtime == mtime
             and not is_runtime_gating_owner_path(rel)
         ):
-            state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
+            if observation_only:
+                _mark_scan_generation_seen(state, rel_str)
+            else:
+                state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
             continue
         hashed = _hash_file(path)
         if hashed is None:
@@ -1742,14 +1763,32 @@ def _collect_changed_entries(
             # was observed. Mark it in this generation so deletion
             # reconciliation cannot misclassify it as removed.
             _record_scan_error(state)
-            state.update_file_state(rel_str)
+            if observation_only:
+                _mark_scan_generation_seen(state, rel_str)
+            else:
+                state.update_file_state(rel_str)
             _mark_scan_incomplete(summary, reason="hash")
             continue
         digest, read_bytes = hashed
         summary["hashed_files"] = int(summary["hashed_files"]) + 1
         summary["bytes_read"] = int(summary["bytes_read"]) + read_bytes
         if previous_hash is not None and previous_hash == digest:
-            state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            if observation_only:
+                _mark_scan_generation_seen(state, rel_str)
+            else:
+                state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            continue
+        if observation_only:
+            # Recovery establishes only filesystem presence.  In particular,
+            # do not route settings deltas or source events here: their
+            # accepted state and delivery cursor must remain available to the
+            # first stable ordinary tick.
+            _mark_scan_generation_seen(state, rel_str)
+            if not is_settings_source_path(rel) and not is_settings_control_path(
+                rel,
+                configured_system_dir=system_dir,
+            ):
+                changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
             continue
         settings_delta = handle_settings_detected_delta(
             vault_root=cfg.vault_path,
@@ -2149,6 +2188,7 @@ def _run_spec_tick(
     handled_settings_sources: set[Path] | None = None,
     settings_source_reload_results: dict[str, object] | None = None,
     retain_unemitted_observations: int | None = None,
+    observation_only: bool = False,
 ) -> dict[str, object]:
     tick_start = now
     handled_settings_sources = handled_settings_sources if handled_settings_sources is not None else set()
@@ -2251,6 +2291,7 @@ def _run_spec_tick(
         states=active_states,
         handled_settings_sources=handled_settings_sources,
         settings_source_reload_results=settings_source_reload_results,
+        observation_only=observation_only,
     )
     if state.scan_generation_had_error:
         _mark_scan_incomplete(summary, reason="scan")
@@ -2296,7 +2337,7 @@ def _run_spec_tick(
         if is_runtime_gating_owner_path(Path(path))
     )
     pending_runtime_gating_deletions: set[str] = set()
-    if removed_runtime_gating_owner_files:
+    if removed_runtime_gating_owner_files and not observation_only:
         summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
         for rel_path in removed_runtime_gating_owner_files:
             rel_str = str(rel_path)
@@ -2334,7 +2375,7 @@ def _run_spec_tick(
         if is_settings_source_path(Path(path))
     )
     pending_settings_source_deletions: set[str] = set()
-    if removed_settings_sources:
+    if removed_settings_sources and not observation_only:
         summary["settings_source_deletions_in_tick"] = len(
             removed_settings_sources
         )
@@ -2413,6 +2454,9 @@ def _run_spec_tick(
     committed_observations: dict[str, dict[str, dict[str, Any] | None]] = {}
     for entry in changed_entries:
         rel_path = str(entry.rel_path)
+        if observation_only:
+            _mark_scan_generation_seen(state, rel_path)
+            continue
         previous_file_state_raw = state.file_entry(rel_path)
         previous_file_state = (
             dict(previous_file_state_raw)
@@ -2543,7 +2587,7 @@ def _run_spec_tick(
         # this recovery tick still cannot reconcile rows from the discarded
         # checkpoint. Permit reconciliation only on the next clean generation.
         state.checkpoint_load_error = False
-    if scan_completed and scan_clean and not delivery_failed:
+    if scan_completed and scan_clean and not delivery_failed and not observation_only:
         # Delivery and guardrail bookkeeping can take long enough for the
         # selected vault to be replaced. Revalidate immediately before prune;
         # the earlier check only authorizes deriving the deletion candidates.
@@ -2660,6 +2704,7 @@ def _run_registry_cycle(
                 allow_source_writeback=(
                     not recovery_mode
                 ),
+                observation_only=recovery_mode,
                 handled_settings_sources=handled_settings_sources,
                 settings_source_reload_results=settings_source_reload_results,
                 retain_unemitted_observations=rebind_observation_revision,
@@ -2675,17 +2720,38 @@ def _run_registry_cycle(
                     # generation without being reset on the next tick.
                     state.continuation_reason = "first_adoption_recovery"
                     state.save(_state_path(cfg.state_dir, spec.name))
-        summaries["briefing"] = _run_briefing_tick(
-            cfg,
-            now=now,
-            cadence=briefing_cadence,
-        )
-        summaries["youtube_sync"] = _run_youtube_sync_tick(
-            cfg,
-            now=now,
-            cadence=sync_cadence,
-        )
-        summaries["journal_review"] = _run_journal_review_tick(cfg)
+        if recovery_mode:
+            # A first-adoption recovery is deliberately observation-only.  A
+            # sparse hook may materialize or enqueue source work, and queued
+            # consumers can mutate the vault after this process returns.  Keep
+            # every hook deferred until the first stable ordinary cycle.
+            deferred_reason = "first_adoption_recovery_observation_only"
+            summaries["briefing"] = {
+                "triggered": False,
+                "reason": deferred_reason,
+            }
+            summaries["youtube_sync"] = {
+                "triggered": False,
+                "reason": deferred_reason,
+            }
+            summaries["journal_review"] = {
+                "scanned": 0,
+                "materialized": 0,
+                "pending": 0,
+                "reason": deferred_reason,
+            }
+        else:
+            summaries["briefing"] = _run_briefing_tick(
+                cfg,
+                now=now,
+                cadence=briefing_cadence,
+            )
+            summaries["youtube_sync"] = _run_youtube_sync_tick(
+                cfg,
+                now=now,
+                cadence=sync_cadence,
+            )
+            summaries["journal_review"] = _run_journal_review_tick(cfg)
         if reconciler is not None and rebind_cycle is not None:
             receipt = reconciler.finish_cycle(
                 rebind_cycle,
