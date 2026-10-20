@@ -184,7 +184,13 @@ def quiesce_owned_container(channel: str, name: str, operation: str, revision: s
         channel not in {'dev', 'test', 'prod'}
         or re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', operation) is None
         or re.fullmatch(r'[0-9a-f]{40}', revision) is None
-        or name != f'pkm-{channel}-source-bootstrap-{operation}'
+        or name not in {
+            f'pkm-{channel}-source-bootstrap-{operation}',
+            *(
+                {f'pkm-dev-operator-identity-restoration-{operation}'}
+                if channel == 'dev' else set()
+            ),
+        }
     ):
         return False
 

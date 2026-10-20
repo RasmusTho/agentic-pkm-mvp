@@ -394,6 +394,14 @@ def main(argv: list[str] | None = None) -> int:
         help='run one explicit DEV/TEST ordinary-producer identity persistence operation',
     )
     parser.add_argument(
+        '--restore-operator-source-identity', action='store_true',
+        help='run the separately reviewed DEV-only established-identity restoration',
+    )
+    parser.add_argument(
+        '--resume-unattempted-operator-restoration', action='store_true',
+        help='resume only a positively undispatched restoration request',
+    )
+    parser.add_argument(
         '--prove-source-persistence-never-admitted', action='store_true',
         help='retire one exact host source operation only after fixed native absence proof',
     )
@@ -450,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
                 or args.operation_id is None
                 or cutover is not None
                 or args.persist_source_identity
+                or args.restore_operator_source_identity
                 or args.reconcile_pending
                 or args.prove_never_admitted
                 or args.recover_test_source
@@ -479,6 +488,56 @@ def main(argv: list[str] | None = None) -> int:
             result = {**proof, 'host_operation_retired': True}
             print(json.dumps(result, sort_keys=True))
             return 0
+        if args.restore_operator_source_identity:
+            if (
+                args.channel != 'dev'
+                or not args.automatic
+                or not args.existing_secrets_only
+                or args.operation_id is None
+                or cutover is None
+                or args.image_digest is None
+                or args.reconcile_pending
+                or args.prove_never_admitted
+                or args.prove_source_persistence_never_admitted
+                or args.persist_source_identity
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None
+                or args.ack_forward_only
+                or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None
+            ):
+                raise PostgresDeployError()
+            try:
+                command = json.load(sys.stdin, object_pairs_hook=_unique_metadata_object)
+            except Exception:
+                raise PostgresDeployError() from None
+            from app.ops.native_operator_identity_restoration import validate_command
+
+            command = validate_command(command)
+            remote = SshDeployRemote('ygg-dev')
+            with controller.operator_identity_restoration_operation(
+                'dev', operation_id=args.operation_id,
+            ) as (operation, resumed):
+                if operation.completed_result is None:
+                    if resumed and not args.resume_unattempted_operator_restoration:
+                        # Remote continuation remains cleanup-only by default.
+                        pass
+                    operation.prepare_mutation()
+                result = remote.restore_operator_source_identity(
+                    operation.operation_id, args.revision, args.image_digest,
+                    cutover, command,
+                    resume_unattempted=args.resume_unattempted_operator_restoration,
+                )
+                if result['cleanup'] != 'complete' or result['result'] == 'unknown':
+                    print(json.dumps(result, sort_keys=True))
+                    return 78
+                terminal = 'committed' if result['result'] == 'committed' else 'failed'
+                operation.finish(TerminalEvidence(
+                    operation.operation_id, 'operator-identity-restoration', 'dev',
+                    terminal, 'remote-terminal',
+                ))
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result['result'] == 'committed' else 78
         if args.persist_source_identity:
             if (
                 args.channel not in {'dev', 'test'}
@@ -494,6 +553,8 @@ def main(argv: list[str] | None = None) -> int:
                 or args.reconstruct_missing_instance_state
                 or args.failed_operation_id is not None
                 or args.ack_forward_only
+                or args.restore_operator_source_identity
+                or args.resume_unattempted_operator_restoration
                 or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None
             ):
                 raise PostgresDeployError()
@@ -515,6 +576,8 @@ def main(argv: list[str] | None = None) -> int:
                 ))
             print(json.dumps(result, sort_keys=True))
             return 0 if result['terminal_state'] == 'committed' else 78
+        if args.resume_unattempted_operator_restoration:
+            raise PostgresDeployError()
         # The controller can inspect DB credentials and the API's degrade-visibly
         # binding. VM-only consumers are selected from VM runtime/migration state.
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),

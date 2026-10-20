@@ -1264,6 +1264,14 @@ CLI, bootstrap, deploy diagnostic and operation journal preserve only those fixe
 cleanup and same-operation terminal reconciliation; unexpected/private failures remain generic
 and fail closed. The legacy generic identity class remains accepted for older worker evidence.
 
+An invalid scalar representation of an otherwise already-established identity is not repaired by
+the ordinary producer. The separately reviewed DEV-only operator restoration surface uses a
+distinct host/channel owner, exact immutable helper authority, the existing writer fencing and a
+fixed content-free request/attempt/terminal lineage. It permits at most one expected-version CAS
+that changes only the UUID scalar representation. The attempt marker is durable before dispatch;
+after staging, dispatch, failure or uncertainty, the operation is cleanup-only even when the worker
+reports `not_written`. It never starts a producer or deployment and is unavailable to TEST and PROD.
+
 `legacy_identity_persistence_refused` is cleared only through the explicit supervised ordinary-
 producer operation, never inside source-backed recovery. The host command uses
 `postgres_deploy_host <dev|test> <reviewed-helper-sha> --automatic --existing-secrets-only
