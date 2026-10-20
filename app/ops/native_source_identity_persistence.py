@@ -98,11 +98,15 @@ def _identity_inventory_for_paths(
     from app.knowledge.write_ops import read_recovery_snapshot_relative
     from app.rebuildability import canonical_product_body_text
     from app.rebuildability.product_total_loss import parse_bounded_frontmatter
-    from app.services.companion_note import read_companion
+    from app.services.companion_note import find_duplicate_companions, read_companion
 
     root = vault_root.expanduser().resolve(strict=True)
     persisted = missing = invalid = ambiguous = 0
     claims: dict[str, int] = {}
+    duplicate_companion_ids = (
+        {duplicate.uuid for duplicate in find_duplicate_companions(root)}
+        if require_companion else set()
+    )
     snapshots: dict[str, tuple[str, tuple[Any, ...], str, Any]] = {}
     for path in selected:
         relative = path.relative_to(root).as_posix()
@@ -131,6 +135,9 @@ def _identity_inventory_for_paths(
             continue
         if companion is None and require_companion:
             missing += 1
+            continue
+        if declared in duplicate_companion_ids:
+            invalid += 1
             continue
         if companion is not None and _canonical_uuid(companion.uuid) != declared:
             invalid += 1

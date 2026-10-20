@@ -62,7 +62,15 @@ from app.services.indexer import (
     resolve_event_object_id,
 )
 from app.rebuildability import canonical_product_body_text, parse_bounded_frontmatter
-from app.services.companion_note import CompanionNote, is_companion_path, scan_attachments, write_companion
+from app.services.companion_note import (
+    CompanionNote,
+    companion_path,
+    find_duplicate_companions,
+    is_companion_path,
+    read_companion,
+    scan_attachments,
+    write_companion,
+)
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import (
@@ -1858,19 +1866,38 @@ def persist_registry_source_identity(
         try:
             rel_path = note_path.relative_to(resolved_root)
             text_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            write_companion(
-                resolved_root,
-                CompanionNote(
-                    uuid=note_uuid,
-                    source_ref=str(rel_path),
-                    title=str(frontmatter.get("title") or note_path.stem),
-                    content_hash=text_sha256,
-                    ingest_state="tracked",
-                    last_ingested=datetime.now(timezone.utc).isoformat(),
-                    created_by_instance=_resolve_instance_id(),
-                    attachments=scan_attachments(content),
-                ),
+            companion = CompanionNote(
+                uuid=note_uuid,
+                source_ref=str(rel_path),
+                title=str(frontmatter.get("title") or note_path.stem),
+                content_hash=text_sha256,
+                ingest_state="tracked",
+                last_ingested=datetime.now(timezone.utc).isoformat(),
+                created_by_instance=_resolve_instance_id(),
+                attachments=scan_attachments(content),
             )
+            write_required = True
+            if require_persisted_evidence:
+                if any(
+                    duplicate.uuid == note_uuid
+                    for duplicate in find_duplicate_companions(resolved_root)
+                ):
+                    raise ValueError("companion identity is ambiguous")
+                existing_companion = read_companion(resolved_root, note_uuid)
+                if existing_companion is not None:
+                    if (
+                        _normalize_uuid_value(existing_companion.uuid) != note_uuid
+                        or existing_companion.source_ref != str(rel_path)
+                    ):
+                        raise ValueError("companion identity conflicts with source")
+                    if existing_companion.content_hash == text_sha256:
+                        write_required = False
+                    elif not (
+                        resolved_root / companion_path(note_uuid, resolved_root)
+                    ).is_file():
+                        raise ValueError("legacy companion cannot be overwritten")
+            if write_required:
+                write_companion(resolved_root, companion)
         except OSError as exc:
             if require_persisted_evidence:
                 raise
