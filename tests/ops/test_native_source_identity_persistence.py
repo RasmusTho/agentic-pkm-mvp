@@ -88,6 +88,15 @@ def test_registry_operation_uses_only_canonical_ordinary_registry_identity_phase
         lambda *_args, **_kwargs: None,
     )
 
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("supervised registry metadata phase crossed its effect boundary")
+
+    monkeypatch.setattr("app.ingest.vault_alpha.run_vault_alpha_ingest", forbidden)
+    monkeypatch.setattr("app.workers.outbox_worker.handle_ingest_vault_changed", forbidden)
+    monkeypatch.setattr("app.workers.outbox_worker.handle_ingest_object_created", forbidden)
+    monkeypatch.setattr("app.workers.outbox_worker.process_indexer_event", forbidden)
+    monkeypatch.setattr("app.workers.outbox_worker.write_outbox_event", forbidden)
+
     def metadata_phase(payload, **kwargs):
         assert fence["active"] is True
         calls.append({"payload": payload, **kwargs})
