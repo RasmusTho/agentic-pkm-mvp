@@ -571,6 +571,11 @@ def _cleanup(
             raise OperatorIdentityRestorationRefusal("cleanup_only_recovery")
         return True
     with effects.failed_reconciliation_lock(expected_owner=owner) as handle:
+        from app.ops.native_source_bootstrap import quiesce_owned_container
+
+        name = f"pkm-dev-operator-identity-restoration-{operation_id}"
+        if not quiesce_owned_container("dev", name, operation_id, revision):
+            raise OperatorIdentityRestorationRefusal("worker_quiesce_failed")
         effects.qualify_source_identity_authority(revision, image_digest, selected)
         runtime = effects.source_identity_runtime_snapshot(
             selected, require_running_capture=False,
@@ -586,11 +591,6 @@ def _cleanup(
             or set(runtime.running_writers) - set(writers)
         ):
             raise OperatorIdentityRestorationRefusal("cleanup_only_recovery")
-        from app.ops.native_source_bootstrap import quiesce_owned_container
-
-        name = f"pkm-dev-operator-identity-restoration-{operation_id}"
-        if not quiesce_owned_container("dev", name, operation_id, revision):
-            raise OperatorIdentityRestorationRefusal("worker_quiesce_failed")
         effects.compose(
             "start", *writers, cutover=selected, timeout=120,
             source_snapshot=runtime,
@@ -708,8 +708,6 @@ def run_host_operation(
         and attempt_evidence is None
     ):
         raise PostgresDeployError()
-    plan = effects.qualify_source_identity_authority(revision, image_digest, selected)
-
     if terminal_evidence is not None:
         receipt = terminal_evidence
         if request_evidence is None:
@@ -795,6 +793,7 @@ def run_host_operation(
         }
         _atomic_json(request_path, request)
 
+    plan = effects.qualify_source_identity_authority(revision, image_digest, selected)
     effects.require_source_identity_candidate(
         plan, selected, acquire=True,
         source_snapshot=effects.source_identity_runtime_snapshot(

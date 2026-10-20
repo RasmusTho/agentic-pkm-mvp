@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import hashlib
 import io
 import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
+from uuid import uuid4
 import pytest
 
 from app.ops import native_operator_identity_restoration as restoration
@@ -26,6 +30,61 @@ def _command() -> dict[str, object]:
         "expected_old_scalar": OLD,
         "replacement_uuid": CANONICAL,
     }
+
+
+class _CleanupEffects:
+    def __init__(self, root: Path, owner: dict[str, str]) -> None:
+        directory = root / "journal"
+        directory.mkdir(parents=True)
+        self.config = SimpleNamespace(
+            channel="dev", journal=SimpleNamespace(directory=directory),
+        )
+        self.owner = (json.dumps(owner, sort_keys=True) + "\n").encode()
+        self.running_writers: tuple[str, ...] = ()
+        self.quiesced = False
+        self.events: list[str] = []
+
+    def qualify_source_identity_authority(self, *_args):
+        assert self.quiesced
+        self.events.append("qualify")
+        return SimpleNamespace()
+
+    def channel_lock_owner(self):
+        return self.owner
+
+    @contextmanager
+    def failed_reconciliation_lock(self, *, expected_owner):
+        assert self.owner == (json.dumps(expected_owner, sort_keys=True) + "\n").encode()
+        self.events.append("lock")
+        yield object()
+
+    def source_identity_runtime_snapshot(self, _selected, *, require_running_capture):
+        assert self.quiesced
+        if require_running_capture:
+            assert self.running_writers == ("api", "watcher", "worker")
+        self.events.append(f"snapshot:{require_running_capture}")
+        return SimpleNamespace(
+            installed_fingerprint="installed",
+            observed_installed_fingerprint="installed",
+            legacy_installed_fingerprints=frozenset(),
+            execution_fingerprint="execution",
+            running_writers=self.running_writers,
+            existing_writers=("api", "watcher", "worker"),
+            container_root="/app/vault",
+            vault_overlay="docker-compose.full-host-vault.yml",
+        )
+
+    def compose(self, action, *writers, **_kwargs):
+        assert action == "start"
+        assert writers == ("api", "watcher", "worker")
+        self.events.append("start")
+        self.running_writers = writers
+        return ""
+
+    def retire_reconciled_channel_lock(self, _handle, *, expected_owner):
+        assert self.owner == (json.dumps(expected_owner, sort_keys=True) + "\n").encode()
+        self.events.append("retire")
+        self.owner = None
 
 
 def test_host_validation_imports_without_worker_yaml_dependency(tmp_path: Path) -> None:
@@ -311,6 +370,202 @@ def test_owned_container_validator_accepts_only_typed_dev_restoration_name() -> 
         "test", f"pkm-test-operator-identity-restoration-{operation}",
         operation, revision, docker_command=docker,
     ) is False
+
+
+def _cleanup_request() -> dict[str, object]:
+    return {
+        "installed_fingerprint": "installed",
+        "execution_fingerprint": "execution",
+        "writers": ["api", "watcher", "worker"],
+        "container_root": "/app/vault",
+        "vault_overlay": "docker-compose.full-host-vault.yml",
+    }
+
+
+def test_operator_cleanup_quiesces_exact_owned_oneoff_before_runtime_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from app.ops import native_source_bootstrap
+
+    operation_id = str(uuid4())
+    revision = "a" * 40
+    owner = {
+        "kind": "operator-identity-restoration",
+        "channel": "dev",
+        "operation_id": operation_id,
+    }
+    effects = _CleanupEffects(tmp_path, owner)
+
+    def quiesce(channel, name, observed_operation, observed_revision):
+        assert (channel, name, observed_operation, observed_revision) == (
+            "dev",
+            f"pkm-dev-operator-identity-restoration-{operation_id}",
+            operation_id,
+            revision,
+        )
+        effects.events.append("quiesce")
+        effects.quiesced = True
+        return True
+
+    monkeypatch.setattr(native_source_bootstrap, "quiesce_owned_container", quiesce)
+    assert restoration._cleanup(
+        effects,
+        operation_id=operation_id,
+        revision=revision,
+        image_digest="sha256:" + "1" * 64,
+        selected=object(),
+        owner=owner,
+        request=_cleanup_request(),
+    ) is True
+    assert effects.events == [
+        "lock", "quiesce", "qualify", "snapshot:False", "start",
+        "snapshot:True", "retire",
+    ]
+    assert effects.owner is None
+
+
+def test_operator_cleanup_refuses_foreign_oneoff_without_relaxing_snapshot_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from app.ops import native_source_bootstrap
+
+    operation_id = str(uuid4())
+    revision = "b" * 40
+    owner = {
+        "kind": "operator-identity-restoration",
+        "channel": "dev",
+        "operation_id": operation_id,
+    }
+    effects = _CleanupEffects(tmp_path, owner)
+    monkeypatch.setattr(
+        native_source_bootstrap, "quiesce_owned_container", lambda *_args: False,
+    )
+
+    with pytest.raises(OperatorIdentityRestorationRefusal) as exc:
+        restoration._cleanup(
+            effects,
+            operation_id=operation_id,
+            revision=revision,
+            image_digest="sha256:" + "2" * 64,
+            selected=object(),
+            owner=owner,
+            request=_cleanup_request(),
+        )
+    assert exc.value.reason == "worker_quiesce_failed"
+    assert effects.events == ["lock"]
+    assert effects.owner is not None
+
+
+@pytest.mark.parametrize("terminal_present", [False, True])
+def test_operator_cleanup_preserves_lineage_and_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, terminal_present: bool,
+) -> None:
+    from app.ops import native_source_bootstrap
+
+    operation_id = str(uuid4())
+    revision = "c" * 40
+    image_digest = "sha256:" + "3" * 64
+    command = _command()
+    command_sha256 = hashlib.sha256(
+        json.dumps(command, sort_keys=True, separators=(",", ":")).encode(),
+    ).hexdigest()
+    owner = {
+        "kind": "operator-identity-restoration",
+        "channel": "dev",
+        "operation_id": operation_id,
+    }
+    selected = SimpleNamespace(
+        binding_id="vault-alpha",
+        root="/srv/vault-alpha",
+        ownership_root="/srv/instance-ownership",
+        validate=lambda: None,
+    )
+    effects = _CleanupEffects(tmp_path, owner)
+    prefix = f"dev-operator-identity-restoration-{operation_id}"
+    request = {
+        "contract": "native-operator-identity-restoration-request.v1",
+        "operation_id": operation_id,
+        "channel": "dev",
+        "revision": revision,
+        "image_digest": image_digest,
+        "authority_cutover": {
+            "binding_id": selected.binding_id,
+            "root": selected.root,
+            "ownership_root": selected.ownership_root,
+        },
+        **_cleanup_request(),
+        "command_sha256": command_sha256,
+    }
+    attempt = {
+        "contract": "native-operator-identity-restoration-attempt.v1",
+        "operation_id": operation_id,
+        "dispatch_staged": True,
+    }
+    worker = {
+        "contract": "native-operator-identity-restoration.v1",
+        "operation_id": operation_id,
+        "channel": "dev",
+        "revision": revision,
+        "result": "failed",
+        "write_phase": "not_written",
+        "cleanup": "not_started",
+        "reason": "worker_refused",
+        "automatic_producer_started": False,
+        "automatic_deployment_started": False,
+    }
+    terminal = {**worker, "cleanup": "retained", "reason": "writer_restore_failed"}
+    paths = {
+        "request": effects.config.journal.directory / f"{prefix}.request.json",
+        "attempt": effects.config.journal.directory / f"{prefix}.attempt.json",
+        "worker": effects.config.journal.directory / f"{prefix}.worker.json",
+        "terminal": effects.config.journal.directory / f"{prefix}.json",
+    }
+    entries = {
+        "request": request,
+        "attempt": attempt,
+        "worker": worker,
+        "terminal": terminal,
+    }
+    if not terminal_present:
+        entries.pop("terminal")
+    for key, payload in entries.items():
+        paths[key].write_text(json.dumps(payload), encoding="utf-8")
+        paths[key].chmod(0o600)
+    lineage = {
+        key: hashlib.sha256(paths[key].read_bytes()).hexdigest()
+        for key in ("request", "attempt", "worker")
+    }
+
+    def quiesce(*_args):
+        effects.quiesced = True
+        return True
+
+    monkeypatch.setattr(native_source_bootstrap, "quiesce_owned_container", quiesce)
+    first = restoration.run_host_operation(
+        effects,
+        operation_id=operation_id,
+        revision=revision,
+        image_digest=image_digest,
+        selected=selected,
+        command=command,
+    )
+    terminal_after_first = paths["terminal"].read_bytes()
+    second = restoration.run_host_operation(
+        effects,
+        operation_id=operation_id,
+        revision=revision,
+        image_digest=image_digest,
+        selected=selected,
+        command=command,
+    )
+
+    assert first == second == {**worker, "cleanup": "complete"}
+    assert paths["terminal"].read_bytes() == terminal_after_first
+    assert {
+        key: hashlib.sha256(paths[key].read_bytes()).hexdigest()
+        for key in ("request", "attempt", "worker")
+    } == lineage
+    assert effects.owner is None
 
 
 def test_host_entrypoint_uses_distinct_dev_operation_and_stdin_command(
