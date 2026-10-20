@@ -566,6 +566,15 @@ private. Success does not weaken canonical Product mapping checks, start a deplo
 a retry; the delivery classifier and a separately qualified fresh immutable candidate remain
 required.
 
+When the enabled registry producer (rather than `vault-alpha`) owns the complete missing-identity
+inventory, the same supervised surface requires the explicit `registry` producer kind. It holds the
+current binding-authority/shared-effect fence and invokes only the registry handler's shared
+UUID/companion metadata phase. It does not enqueue outbox work, project Product objects, write
+vectors, or call the embedding/model route; normal registry ingestion still performs its unchanged
+projection after that shared phase. Eligibility comes only from a fresh complete same-policy,
+same-inventory persisted identity+companion readback. The fixed successful source receipt remains
+source evidence only and cannot admit a candidate or weaken any canonical Product/vector gate.
+
 When read-only Product and filesystem evidence already establish the same identity but the stored
 frontmatter scalar is a non-canonical representation, the ordinary producer remains forbidden from
 overwriting it. A separately reviewed DEV-only `operator-identity-restoration` operation may make

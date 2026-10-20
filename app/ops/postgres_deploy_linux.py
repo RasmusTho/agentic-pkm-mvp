@@ -1277,7 +1277,7 @@ class LinuxEffects:
 
     def persist_source_identity(
         self, operation_id: str, revision: str, image_digest: str,
-        selected: AuthorityCutover,
+        selected: AuthorityCutover, producer_kind: str = "vault-alpha",
     ) -> dict[str, Any]:
         """Run one fenced ordinary-producer persistence operation.
 
@@ -1287,7 +1287,8 @@ class LinuxEffects:
         retained or returned.
         """
         from app.ops.native_source_identity_persistence import (
-            REFUSAL_REASONS, RECEIPT_CONTRACT, validate_receipt,
+            PRODUCER_KINDS, REFUSAL_REASONS, RECEIPT_CONTRACT,
+            REGISTRY_RECEIPT_CONTRACT, validate_receipt,
         )
 
         try:
@@ -1296,6 +1297,7 @@ class LinuxEffects:
                 or str(UUID(operation_id)) != operation_id
                 or re.fullmatch(r"[0-9a-f]{40}", revision) is None
                 or re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is None
+                or producer_kind not in PRODUCER_KINDS
             ):
                 raise PostgresDeployError()
         except (ValueError, TypeError, AttributeError):
@@ -1314,7 +1316,11 @@ class LinuxEffects:
             f"{self.config.channel}-source-identity-{operation_id}.producer.json"
         )
         request_base = {
-            'contract': 'native-source-identity-persistence-request.v2',
+            'contract': (
+                'native-source-identity-persistence-request.v3'
+                if producer_kind == 'registry'
+                else 'native-source-identity-persistence-request.v2'
+            ),
             'operation_id': operation_id,
             'channel': self.config.channel,
             'revision': revision,
@@ -1325,11 +1331,15 @@ class LinuxEffects:
                 'ownership_root': selected.ownership_root,
             },
         }
+        if producer_kind == 'registry':
+            request_base['producer_kind'] = producer_kind
         owner = {
             "kind": "source-identity-persistence",
             "channel": self.config.channel,
             "operation_id": operation_id,
         }
+        if producer_kind == 'registry':
+            owner['producer_kind'] = producer_kind
         expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
         owns_lock = False
         terminal_receipt: dict[str, Any] | None = None
@@ -1339,6 +1349,14 @@ class LinuxEffects:
                 terminal_receipt['operation_id'] != operation_id
                 or terminal_receipt['channel'] != self.config.channel
                 or terminal_receipt['revision'] != revision
+                or (
+                    producer_kind == 'registry'
+                    and terminal_receipt.get('producer_kind') != producer_kind
+                )
+                or (
+                    producer_kind == 'vault-alpha'
+                    and 'producer_kind' in terminal_receipt
+                )
             ):
                 raise PostgresDeployError()
         legacy_cleanup_allowed = False
@@ -1425,6 +1443,14 @@ class LinuxEffects:
                 retained['operation_id'] != operation_id
                 or retained['channel'] != self.config.channel
                 or retained['revision'] != revision
+                or (
+                    producer_kind == 'registry'
+                    and retained.get('producer_kind') != producer_kind
+                )
+                or (
+                    producer_kind == 'vault-alpha'
+                    and 'producer_kind' in retained
+                )
             ):
                 raise PostgresDeployError()
             self.reconcile_source_identity_cleanup(
@@ -1455,7 +1481,11 @@ class LinuxEffects:
 
         def fixed_failure(reason: str) -> dict[str, Any]:
             candidate = {
-                "contract": RECEIPT_CONTRACT,
+                "contract": (
+                    REGISTRY_RECEIPT_CONTRACT
+                    if producer_kind == "registry"
+                    else RECEIPT_CONTRACT
+                ),
                 "operation_id": operation_id,
                 "channel": self.config.channel,
                 "revision": revision,
@@ -1469,6 +1499,8 @@ class LinuxEffects:
                 "ambiguous_count": 0,
                 "producer_error_count": 1,
             }
+            if producer_kind == "registry":
+                candidate["producer_kind"] = producer_kind
             return validate_receipt(candidate)
 
         try:
@@ -1532,6 +1564,7 @@ class LinuxEffects:
                     "--entrypoint", "python", "api", "-m",
                     "app.ops.native_source_identity_persistence",
                     operation_id, self.config.channel, revision, locked_runtime.container_root,
+                    *([producer_kind] if producer_kind == "registry" else []),
                     cutover=selected, candidate=source_plan, timeout=7200,
                     source_snapshot=locked_runtime,
                 )
@@ -4054,8 +4087,11 @@ class DeploymentSupervisor:
             with self.mutex:
                 return self._test_recovery_release_instance_state(data)
         if data.get('action') == 'source-identity-persist':
-            if set(data) != {
+            source_keys = {
                 'action', 'operation_id', 'revision', 'image_digest', 'authority_cutover',
+            }
+            if frozenset(data) not in {
+                frozenset(source_keys), frozenset(source_keys | {'producer_kind'}),
             }:
                 raise PostgresDeployError()
             try:
@@ -4063,9 +4099,12 @@ class DeploymentSupervisor:
                 revision = str(data['revision'])
                 image_digest = str(data['image_digest'])
                 selected = AuthorityCutover(**data['authority_cutover'])
+                producer_kind = str(data.get('producer_kind', 'vault-alpha'))
                 if (
                     str(UUID(operation_id)) != operation_id
                     or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
+                    or producer_kind not in {'vault-alpha', 'registry'}
+                    or (producer_kind == 'vault-alpha' and 'producer_kind' in data)
                 ):
                     raise PostgresDeployError()
             except (ValueError, TypeError, AttributeError):
@@ -4074,8 +4113,15 @@ class DeploymentSupervisor:
                 self._require_current_config()
                 if self.operation is not None and not self.operation.finished.is_set():
                     raise PostgresDeployError()
-                receipt = LinuxEffects(self.config).persist_source_identity(
-                    operation_id, revision, image_digest, selected,
+                effects = LinuxEffects(self.config)
+                receipt = (
+                    effects.persist_source_identity(
+                        operation_id, revision, image_digest, selected, producer_kind,
+                    )
+                    if producer_kind == 'registry'
+                    else effects.persist_source_identity(
+                        operation_id, revision, image_digest, selected,
+                    )
                 )
                 return {'source_identity_persistence': receipt}
         if data.get('action') == 'operator-identity-restore':
@@ -4412,7 +4458,7 @@ class SshDeployRemote:
 
     def persist_source_identity(
         self, operation_id: str, revision: str, image_digest: str,
-        selected: AuthorityCutover,
+        selected: AuthorityCutover, producer_kind: str = 'vault-alpha',
     ) -> dict[str, Any]:
         """Invoke the fixed DEV/TEST source-persistence RPC."""
         from app.ops.native_source_identity_persistence import validate_receipt
@@ -4423,6 +4469,7 @@ class SshDeployRemote:
                 str(UUID(operation_id)) != operation_id
                 or re.fullmatch(r'[0-9a-f]{40}', revision) is None
                 or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
+                or producer_kind not in {'vault-alpha', 'registry'}
             ):
                 raise PostgresDeployError()
         except (ValueError, TypeError, AttributeError):
@@ -4441,6 +4488,8 @@ class SshDeployRemote:
                 'ownership_root': selected.ownership_root,
             },
         }
+        if producer_kind == 'registry':
+            payload['producer_kind'] = producer_kind
         result = subprocess.run(
             ['ssh', '-o', 'BatchMode=yes', '--', self.host, 'sudo', '-n',
              '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', channel],
@@ -4455,6 +4504,14 @@ class SshDeployRemote:
                 receipt['operation_id'] != operation_id
                 or receipt['channel'] != channel
                 or receipt['revision'] != revision
+                or (
+                    producer_kind == 'registry'
+                    and receipt.get('producer_kind') != producer_kind
+                )
+                or (
+                    producer_kind == 'vault-alpha'
+                    and 'producer_kind' in receipt
+                )
             ):
                 raise PostgresDeployError()
             return receipt

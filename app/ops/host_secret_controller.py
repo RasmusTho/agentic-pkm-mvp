@@ -70,6 +70,7 @@ class HostSecretOperation:
         mutation_started: bool = False,
         completed_result: str | None = None,
         completed_source: str | None = None,
+        producer_kind: str | None = None,
     ) -> None:
         self._journal_fd = journal_fd
         self.operation_id = operation_id
@@ -84,6 +85,7 @@ class HostSecretOperation:
         self._mutation_started = mutation_started
         self._completed_result = completed_result
         self._completed_source = completed_source
+        self.producer_kind = producer_kind
 
     def _record(self, stage: str, source: str | None = None) -> None:
         if not self._active or self._finished or self._completed_result is not None:
@@ -101,6 +103,8 @@ class HostSecretOperation:
             record["prior_generation"] = self.prior_generation
         elif self.kind == "deploy" and self.allow_bootstrap is not None:
             record["allow_bootstrap"] = self.allow_bootstrap
+        elif self.kind == "source-persistence" and self.producer_kind is not None:
+            record["producer_kind"] = self.producer_kind
         raw = (json.dumps(record, sort_keys=True) + "\n").encode()
         # A partial write or failed fsync leaves a poison/pending journal, never admission.
         if os.write(self._journal_fd, raw) != len(raw):
@@ -339,6 +343,14 @@ class HostSecretController:
                         raise HostSecretAdmissionError()
                     if "allow_bootstrap" in record and type(record["allow_bootstrap"]) is not bool:
                         raise HostSecretAdmissionError()
+                elif record["kind"] == "source-persistence":
+                    base_fields = {"operation_id", "kind", "target", "stage", "source"}
+                    if frozenset(record) not in {
+                        frozenset(base_fields), frozenset(base_fields | {"producer_kind"}),
+                    } or (
+                        "producer_kind" in record and record["producer_kind"] != "registry"
+                    ):
+                        raise HostSecretAdmissionError()
                 elif set(record) != {"operation_id", "kind", "target", "stage", "source"}:
                     raise HostSecretAdmissionError()
                 if record["stage"] == _DEPLOY_ABSENCE_STAGE:
@@ -369,6 +381,11 @@ class HostSecretController:
                     if record["kind"] == "token-push" and record["prior_generation"] != pending["prior_generation"]:
                         raise HostSecretAdmissionError()
                     if record["kind"] == "deploy" and record.get("allow_bootstrap") != pending.get("allow_bootstrap"):
+                        raise HostSecretAdmissionError()
+                    if (
+                        record["kind"] == "source-persistence"
+                        and record.get("producer_kind") != pending.get("producer_kind")
+                    ):
                         raise HostSecretAdmissionError()
                     if record["stage"] == "failed" and (
                         record["kind"] not in {
@@ -606,9 +623,12 @@ class HostSecretController:
     @contextmanager
     def source_persistence_operation(
         self, target: str, *, operation_id: str,
+        producer_kind: str = "vault-alpha",
     ) -> Iterator[tuple[HostSecretOperation, bool]]:
         """Admit one DEV/TEST ordinary-producer operation under the host lock."""
         if target not in {"dev", "test"}:
+            raise HostSecretAdmissionError()
+        if producer_kind not in {"vault-alpha", "registry"}:
             raise HostSecretAdmissionError()
         try:
             if str(UUID(operation_id)) != operation_id:
@@ -621,6 +641,8 @@ class HostSecretController:
                 pending.get("operation_id") != operation_id
                 or pending.get("kind") != "source-persistence"
                 or pending.get("target") != target
+                or pending.get("producer_kind")
+                != ("registry" if producer_kind == "registry" else None)
             ):
                 raise HostSecretAdmissionError()
             completed = None
@@ -641,6 +663,8 @@ class HostSecretController:
                         or last["source"] not in {
                             "remote-terminal", _SOURCE_PERSISTENCE_ABSENCE_SOURCE,
                         }
+                        or last.get("producer_kind")
+                        != ("registry" if producer_kind == "registry" else None)
                     ):
                         raise HostSecretAdmissionError()
                     completed = str(last["stage"])
@@ -651,6 +675,7 @@ class HostSecretController:
                 mutation_started=pending is not None and pending.get("stage") == "sent",
                 completed_result=completed,
                 completed_source=completed_source,
+                producer_kind=("registry" if producer_kind == "registry" else None),
             )
             resumed = pending is not None or completed is not None
             if not resumed:

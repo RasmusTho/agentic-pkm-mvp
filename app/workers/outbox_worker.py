@@ -1749,22 +1749,38 @@ def _use_db_outbox() -> bool:
     backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
     return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
 
-def handle_ingest_vault_changed(
+
+@dataclass(frozen=True)
+class RegistrySourceIdentityResult:
+    note_path: Path
+    raw_text: str
+    frontmatter: dict[str, Any]
+    body: str
+    frontmatter_error: object | None
+    content: str
+    note_uuid: str
+
+
+def persist_registry_source_identity(
     payload: Mapping[str, Any],
     *,
     vault_root: Path | None = None,
     trace_id: str | None = None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
     payload_schema: str | None = None,
-) -> WorkerIngestSummary:
+    allow_retry_enqueue: bool = True,
+    require_persisted_evidence: bool = False,
+) -> RegistrySourceIdentityResult | None:
+    """Run the ordinary registry lane's identity and companion phase."""
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
     if is_companion_path(note_path, resolved_root):
-        logger.info("ingest skipped: companion continuity file")
-        return WorkerIngestSummary(ingested=0)
+        raise ValueError("companion continuity files are not ingest sources")
 
     raw_text = _stabilized_note_text(note_path)
     if raw_text is None:
+        if not allow_retry_enqueue:
+            return None
         if not _queue_transient_retry(
             INGEST_VAULT_CHANGED,
             payload,
@@ -1776,10 +1792,12 @@ def handle_ingest_vault_changed(
         ):
             if _retry_exhausted(payload):
                 logger.warning("ingest dropped after exhausted retries note_path=%s", note_path)
-                return WorkerIngestSummary(ingested=0)
-            raise TransientRetryEnqueueError(f"failed to queue retry for missing or unstable note: {note_path}")
+                return None
+            raise TransientRetryEnqueueError(
+                f"failed to queue retry for missing or unstable note: {note_path}"
+            )
         logger.warning("ingest skipped (missing note) note_path=%s", note_path)
-        return WorkerIngestSummary(ingested=0)
+        return None
 
     frontmatter, body, frontmatter_error = parse_bounded_frontmatter(raw_text)
     _assert_profile_ingestible(
@@ -1816,6 +1834,27 @@ def handle_ingest_vault_changed(
     if not note_uuid:
         logger.debug("note missing uuid after heal attempt note_path=%s", note_path)
     else:
+        if require_persisted_evidence:
+            persisted_text = _stabilized_note_text(note_path)
+            if persisted_text is None:
+                raise ValueError("source identity readback unavailable")
+            persisted_frontmatter, persisted_body, persisted_error = (
+                parse_bounded_frontmatter(persisted_text)
+            )
+            if (
+                persisted_error is not None
+                or _normalize_uuid_value(
+                    persisted_frontmatter.get("uuid")
+                    or persisted_frontmatter.get("id")
+                )
+                != note_uuid
+            ):
+                raise ValueError("source identity did not persist")
+            raw_text = persisted_text
+            frontmatter = persisted_frontmatter
+            body = persisted_body
+            frontmatter_error = persisted_error
+            content = canonical_product_body_text(body)
         try:
             rel_path = note_path.relative_to(resolved_root)
             text_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -1833,6 +1872,8 @@ def handle_ingest_vault_changed(
                 ),
             )
         except OSError as exc:
+            if require_persisted_evidence:
+                raise
             if exc.errno in {errno.EPERM, errno.EACCES, errno.EROFS}:
                 _warn_once(
                     f"companion_write_perm:{note_path}",
@@ -1843,13 +1884,59 @@ def handle_ingest_vault_changed(
             else:
                 raise
 
-    ingest_obj = watched_note_ingest_object(note_path, frontmatter, body, note_uuid=note_uuid,
-                                          source_text=raw_text, observation=payload)
+    result = RegistrySourceIdentityResult(
+        note_path,
+        raw_text,
+        frontmatter,
+        body,
+        frontmatter_error,
+        content,
+        note_uuid,
+    )
+    if require_persisted_evidence and not note_uuid:
+        raise ValueError("source identity did not persist")
+    return result
+
+
+def handle_ingest_vault_changed(
+    payload: Mapping[str, Any],
+    *,
+    vault_root: Path | None = None,
+    trace_id: str | None = None,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    payload_schema: str | None = None,
+) -> WorkerIngestSummary:
+    resolved_root = _resolve_vault_root(vault_root)
+    note_path = _note_path_from_payload(payload, vault_root=resolved_root)
+    if is_companion_path(note_path, resolved_root):
+        logger.info("ingest skipped: companion continuity file")
+        return WorkerIngestSummary(ingested=0)
+
+    persisted = persist_registry_source_identity(
+        payload,
+        vault_root=resolved_root,
+        trace_id=trace_id,
+        source_vault_binding_id=source_vault_binding_id,
+        payload_schema=payload_schema,
+    )
+    if persisted is None:
+        return WorkerIngestSummary(ingested=0)
+
+    ingest_obj = watched_note_ingest_object(
+        persisted.note_path,
+        persisted.frontmatter,
+        persisted.body,
+        note_uuid=persisted.note_uuid,
+        source_text=persisted.raw_text,
+        observation=payload,
+    )
 
     handle_ingest_object_created(
         ingest_obj,
         vault_root=resolved_root,
-        source_snapshot=None if frontmatter_error else raw_text,
+        source_snapshot=(
+            None if persisted.frontmatter_error else persisted.raw_text
+        ),
     )
     return WorkerIngestSummary(ingested=1)
 

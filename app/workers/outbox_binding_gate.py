@@ -120,6 +120,27 @@ def worker_effect_window(
 
 
 @contextmanager
+def current_binding_effect_window(runtime: ScalarBindingRuntime) -> Iterator[None]:
+    """Hold the ordinary current-binding effect lease without an outbox row.
+
+    Explicit supervised source producers are not durable outbox consumers, but
+    they must share the same live binding/GOV/ownership fence before touching
+    source metadata.  The caller obtains ``runtime`` through
+    ``resolve_scalar_binding_runtime`` for the exact selected root; this seam
+    revalidates it after the shared lease lands and freezes it for nested
+    WriteGuard/provenance operations.
+    """
+    with runtime.effect_leases.shared_effect(
+        runtime.vault_binding_id,
+        channel_id=runtime.channel_id,
+        root=Path(runtime.root),
+    ):
+        validate_frozen_binding_runtime(runtime)
+        with frozen_binding_effect(runtime):
+            yield
+
+
+@contextmanager
 def _binding_effect_window(
     message: Mapping[str, Any], runtime: ScalarBindingRuntime
 ) -> Iterator[None]:
@@ -141,6 +162,7 @@ def _binding_effect_window(
 __all__ = [
     "OutboxBindingDeferred",
     "eligible_worker_bindings",
+    "current_binding_effect_window",
     "required_worker_binding_stamp",
     "worker_effect_window",
 ]

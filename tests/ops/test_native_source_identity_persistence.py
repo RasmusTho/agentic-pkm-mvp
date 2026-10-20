@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import json
 import sys
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -14,6 +14,7 @@ from app.ops.native_source_identity_persistence import (
     IdentityInventory,
     SourceIdentityPersistenceRefusal,
     run_ordinary_persistence,
+    run_registry_persistence,
     selected_identity_inventory,
     validate_receipt,
 )
@@ -21,6 +22,378 @@ from app.ops.native_source_identity_persistence import (
 
 REVISION = "a" * 40
 DIGEST = "sha256:" + "b" * 64
+
+
+def _registry_test_authority(root: Path) -> tuple[SimpleNamespace, SimpleNamespace]:
+    policy = SimpleNamespace(
+        enabled=True, root=root, scopes=("**/*.md",), sources=frozenset({root / "source.md"}),
+    )
+    observation = SimpleNamespace(
+        path=root / "source.md",
+        relative_path=Path("source.md"),
+        mtime=1.0,
+        content_hash="c" * 64,
+        watcher="notes",
+    )
+    return policy, observation
+
+
+def test_registry_operation_binds_exact_current_producer_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path.resolve()
+    (root / "source.md").write_text("source", encoding="utf-8")
+    monkeypatch.setattr(
+        "app.instance.scalar_binding_runtime.resolve_scalar_binding_runtime",
+        lambda **_kwargs: None,
+    )
+    receipt = run_registry_persistence(
+        operation_id=str(uuid4()), channel="dev", revision=REVISION,
+        vault_root=root,
+    )
+    assert receipt["terminal_state"] == "failed"
+    assert receipt["reason"] == "source_context_refused"
+    assert receipt["producer_kind"] == "registry"
+
+
+def test_registry_operation_uses_only_canonical_ordinary_registry_identity_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops import native_source_identity_persistence as persistence
+
+    root = tmp_path.resolve()
+    (root / "source.md").write_text("source", encoding="utf-8")
+    policy, observation = _registry_test_authority(root)
+    runtime = SimpleNamespace(root=root, channel_id="dev", vault_binding_id="binding-dev")
+    calls: list[dict[str, object]] = []
+    fence = {"active": False}
+    monkeypatch.setattr(
+        "app.instance.scalar_binding_runtime.resolve_scalar_binding_runtime",
+        lambda **_kwargs: runtime,
+    )
+    @contextmanager
+    def effect_window(_runtime):
+        fence["active"] = True
+        try:
+            yield
+        finally:
+            fence["active"] = False
+
+    monkeypatch.setattr(
+        "app.workers.outbox_binding_gate.current_binding_effect_window", effect_window,
+    )
+    monkeypatch.setattr(persistence, "_registry_plan", lambda _root: (policy, (observation,)))
+    monkeypatch.setattr(
+        "app.events.topic_schema_registry.validate_topic_payload",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def metadata_phase(payload, **kwargs):
+        assert fence["active"] is True
+        calls.append({"payload": payload, **kwargs})
+        return SimpleNamespace(note_uuid=str(uuid4()))
+
+    monkeypatch.setattr(
+        "app.workers.outbox_worker.persist_registry_source_identity", metadata_phase,
+    )
+    monkeypatch.setattr(
+        persistence, "registry_identity_inventory",
+        lambda _root, _observations: IdentityInventory(1, 1, 0, 0, 0),
+    )
+    receipt = run_registry_persistence(
+        operation_id=str(uuid4()), channel="dev", revision=REVISION,
+        vault_root=root,
+    )
+    assert receipt["terminal_state"] == "committed"
+    assert len(calls) == 1
+    assert calls[0]["allow_retry_enqueue"] is False
+    assert calls[0]["require_persisted_evidence"] is True
+    assert fence["active"] is False
+
+
+def test_registry_operation_refuses_partial_or_drifted_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops import native_source_identity_persistence as persistence
+
+    root = tmp_path.resolve()
+    (root / "source.md").write_text("source", encoding="utf-8")
+    policy, observation = _registry_test_authority(root)
+    changed = SimpleNamespace(**{**policy.__dict__, "registry_digest": "changed"})
+    plans = iter(((policy, (observation,)), (changed, (observation,))))
+    runtime = SimpleNamespace(root=root, channel_id="dev", vault_binding_id="binding-dev")
+    monkeypatch.setattr(
+        "app.instance.scalar_binding_runtime.resolve_scalar_binding_runtime",
+        lambda **_kwargs: runtime,
+    )
+    monkeypatch.setattr(
+        "app.workers.outbox_binding_gate.current_binding_effect_window",
+        lambda _runtime: nullcontext(),
+    )
+    monkeypatch.setattr(persistence, "_registry_plan", lambda _root: next(plans))
+    monkeypatch.setattr(
+        "app.events.topic_schema_registry.validate_topic_payload",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.workers.outbox_worker.persist_registry_source_identity",
+        lambda *_args, **_kwargs: SimpleNamespace(note_uuid=str(uuid4())),
+    )
+    receipt = run_registry_persistence(
+        operation_id=str(uuid4()), channel="dev", revision=REVISION,
+        vault_root=root,
+    )
+    assert receipt["terminal_state"] == "failed"
+    assert receipt["reason"] == "source_operation_conflict"
+
+
+def test_registry_postwrite_eligibility_is_complete_and_content_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops import native_source_identity_persistence as persistence
+
+    root = tmp_path.resolve()
+    (root / "source.md").write_text("source", encoding="utf-8")
+    policy, observation = _registry_test_authority(root)
+    runtime = SimpleNamespace(root=root, channel_id="dev", vault_binding_id="binding-dev")
+    monkeypatch.setattr(
+        "app.instance.scalar_binding_runtime.resolve_scalar_binding_runtime",
+        lambda **_kwargs: runtime,
+    )
+    monkeypatch.setattr(
+        "app.workers.outbox_binding_gate.current_binding_effect_window",
+        lambda _runtime: nullcontext(),
+    )
+    monkeypatch.setattr(persistence, "_registry_plan", lambda _root: (policy, (observation,)))
+    monkeypatch.setattr(
+        "app.events.topic_schema_registry.validate_topic_payload",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.workers.outbox_worker.persist_registry_source_identity",
+        lambda *_args, **_kwargs: SimpleNamespace(note_uuid=str(uuid4())),
+    )
+    monkeypatch.setattr(
+        persistence, "registry_identity_inventory",
+        lambda _root, _observations: IdentityInventory(1, 0, 1, 0, 0),
+    )
+    receipt = run_registry_persistence(
+        operation_id=str(uuid4()), channel="dev", revision=REVISION,
+        vault_root=root,
+    )
+    assert receipt["reason"] == "source_identity_ineligible"
+    assert set(receipt) == {
+        "contract", "producer_kind", "operation_id", "channel", "revision",
+        "terminal_state", "eligible", "reason", "selected_count",
+        "persisted_count", "missing_count", "invalid_count", "ambiguous_count",
+        "producer_error_count",
+    }
+
+
+def test_registry_inventory_requires_matching_persisted_companion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops.native_source_identity_persistence import registry_identity_inventory
+
+    note_uuid = str(uuid4())
+    note = tmp_path / "source.md"
+    note.write_text("source", encoding="utf-8")
+    observation = SimpleNamespace(path=note)
+    monkeypatch.setattr(
+        "app.knowledge.write_ops.read_recovery_snapshot_relative",
+        lambda *_args, **_kwargs: ("source", ((1, 2, 3),)),
+    )
+    monkeypatch.setattr(
+        "app.rebuildability.product_total_loss.parse_bounded_frontmatter",
+        lambda _raw: ({"uuid": note_uuid}, "source", None),
+    )
+    monkeypatch.setattr(
+        "app.services.companion_note.read_companion", lambda *_args, **_kwargs: None,
+    )
+    inventory = registry_identity_inventory(tmp_path, (observation,))
+    assert inventory == IdentityInventory(1, 0, 1, 0, 0)
+
+
+def test_normal_registry_handler_preserves_projection_after_shared_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers import outbox_worker
+
+    note = tmp_path / "source.md"
+    note.write_text("source", encoding="utf-8")
+    events: list[str] = []
+    persisted = outbox_worker.RegistrySourceIdentityResult(
+        note_path=note,
+        raw_text="source",
+        frontmatter={"uuid": str(uuid4())},
+        body="source",
+        frontmatter_error=None,
+        content="source",
+        note_uuid=str(uuid4()),
+    )
+    monkeypatch.setattr(
+        outbox_worker, "persist_registry_source_identity",
+        lambda *_args, **_kwargs: (events.append("identity") or persisted),
+    )
+    monkeypatch.setattr(
+        outbox_worker, "watched_note_ingest_object",
+        lambda *_args, **_kwargs: {"kind": "projection"},
+    )
+    def project(*_args, **_kwargs) -> None:
+        events.append("projection")
+
+    monkeypatch.setattr(outbox_worker, "handle_ingest_object_created", project)
+    summary = outbox_worker.handle_ingest_vault_changed(
+        {"relative_path": "source.md"}, vault_root=tmp_path,
+    )
+    assert summary.ingested == 1
+    assert events == ["identity", "projection"]
+
+
+def test_supervised_metadata_phase_does_not_swallow_companion_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers import outbox_worker
+
+    note_uuid = str(uuid4())
+    note = tmp_path / "source.md"
+    note.write_text("source", encoding="utf-8")
+    monkeypatch.setattr(outbox_worker, "_stabilized_note_text", lambda _path: "source")
+    monkeypatch.setattr(
+        outbox_worker, "parse_bounded_frontmatter",
+        lambda _text: ({"uuid": note_uuid}, "source", None),
+    )
+    monkeypatch.setattr(outbox_worker, "_assert_profile_ingestible", lambda *_a, **_k: None)
+    monkeypatch.setattr(outbox_worker, "_maybe_heal_uuid", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        outbox_worker, "write_companion",
+        lambda *_a, **_k: (_ for _ in ()).throw(PermissionError("refused")),
+    )
+    with pytest.raises(PermissionError):
+        outbox_worker.persist_registry_source_identity(
+            {"relative_path": "source.md"},
+            vault_root=tmp_path,
+            allow_retry_enqueue=False,
+            require_persisted_evidence=True,
+        )
+
+
+def test_supervised_metadata_phase_refuses_derived_unpersisted_uuid_before_companion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers import outbox_worker
+
+    note = tmp_path / "source.md"
+    note.write_text("source", encoding="utf-8")
+    monkeypatch.setattr(outbox_worker, "_stabilized_note_text", lambda _path: "source")
+    monkeypatch.setattr(
+        outbox_worker, "parse_bounded_frontmatter",
+        lambda _text: ({}, "source", None),
+    )
+    monkeypatch.setattr(outbox_worker, "_assert_profile_ingestible", lambda *_a, **_k: None)
+    monkeypatch.setattr(outbox_worker, "_maybe_heal_uuid", lambda *_a, **_k: "")
+    monkeypatch.setattr(
+        outbox_worker, "_ensure_uuid_with_backoff", lambda *_a, **_k: str(uuid4()),
+    )
+    companion_calls: list[object] = []
+    monkeypatch.setattr(
+        outbox_worker, "write_companion",
+        lambda *args, **_kwargs: companion_calls.append(args),
+    )
+    with pytest.raises(ValueError, match="did not persist"):
+        outbox_worker.persist_registry_source_identity(
+            {"relative_path": "source.md"},
+            vault_root=tmp_path,
+            allow_retry_enqueue=False,
+            require_persisted_evidence=True,
+        )
+    assert companion_calls == []
+
+
+def test_native_supervisor_binds_registry_producer_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    operation_id = str(uuid4())
+    config = SimpleNamespace(channel="dev")
+    calls: list[tuple[object, ...]] = []
+    committed = {
+        "contract": "native-source-identity-persistence.v2",
+        "producer_kind": "registry",
+        "operation_id": operation_id,
+        "channel": "dev",
+        "revision": REVISION,
+        "terminal_state": "committed",
+        "eligible": True,
+        "reason": None,
+        "selected_count": 1,
+        "persisted_count": 1,
+        "missing_count": 0,
+        "invalid_count": 0,
+        "ambiguous_count": 0,
+        "producer_error_count": 0,
+    }
+
+    class Effects:
+        def __init__(self, selected_config):
+            assert selected_config is config
+
+        def persist_source_identity(self, *args):
+            calls.append(args)
+            return committed
+
+    monkeypatch.setattr(linux.LinuxConfig, "load", lambda _channel: config)
+    monkeypatch.setattr(linux, "LinuxEffects", Effects)
+    supervisor = linux.DeploymentSupervisor(config)
+    request = {
+        "action": "source-identity-persist",
+        "operation_id": operation_id,
+        "revision": REVISION,
+        "image_digest": DIGEST,
+        "producer_kind": "registry",
+        "authority_cutover": {
+            "binding_id": "vault-alpha",
+            "root": "/srv/vault-alpha",
+            "ownership_root": "/srv/instance-ownership",
+        },
+    }
+    assert supervisor.request(request) == {"source_identity_persistence": committed}
+    assert calls[0][-1] == "registry"
+
+
+def test_registry_operation_preserves_terminal_lineage_and_cleanup_boundaries(
+    tmp_path: Path,
+) -> None:
+    from app.ops.host_secret_controller import (
+        HostSecretAdmissionError,
+        HostSecretController,
+        TerminalEvidence,
+    )
+
+    operation_id = str(uuid4())
+    controller = HostSecretController(tmp_path / "controller")
+    with controller.source_persistence_operation(
+        "dev", operation_id=operation_id, producer_kind="registry",
+    ) as (operation, resumed):
+        assert resumed is False
+        operation.prepare_mutation()
+        operation.finish(TerminalEvidence(
+            operation_id, "source-persistence", "dev", "failed", "remote-terminal",
+        ))
+    with controller.source_persistence_operation(
+        "dev", operation_id=operation_id, producer_kind="registry",
+    ) as (operation, resumed):
+        assert resumed is True
+        assert operation.completed_result == "failed"
+        operation.finish(TerminalEvidence(
+            operation_id, "source-persistence", "dev", "failed", "remote-terminal",
+        ))
+    with pytest.raises(HostSecretAdmissionError):
+        with controller.source_persistence_operation(
+            "dev", operation_id=operation_id,
+        ):
+            pass
 
 
 def _instance_authority(tmp_path: Path, channel: str, vault_root: Path):

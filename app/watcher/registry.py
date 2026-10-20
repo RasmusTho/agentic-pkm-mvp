@@ -131,6 +131,31 @@ def _hash_file(path: Path) -> tuple[str, int] | None:
     return hashlib.sha256(data).hexdigest(), len(data)
 
 
+@dataclass(frozen=True)
+class RegistryIngestObservation:
+    """One complete, private ordinary-registry source observation."""
+
+    path: Path
+    relative_path: Path
+    mtime: float
+    content_hash: str
+    watcher: str
+
+
+def ingest_vault_changed_payload(
+    *, vault_root: Path, relative_path: Path, mtime: float,
+    content_hash: str | None, watcher: str,
+) -> dict[str, object]:
+    """Build the canonical registry watcher payload without emitting it."""
+    return {
+        "vault_path": str(vault_root / relative_path),
+        "relative_path": str(relative_path),
+        "mtime": mtime,
+        "hash": content_hash,
+        "watcher": watcher,
+    }
+
+
 def _matches_scope(rel_path: Path, scope_glob: str) -> bool:
     return matches_scope(rel_path, scope_glob)
 
@@ -1647,6 +1672,65 @@ def source_backed_registry_inventory(cfg: RegistryConfig) -> frozenset[Path]:
     return frozenset(paths)
 
 
+def source_backed_registry_observations(
+    cfg: RegistryConfig,
+) -> tuple[RegistryIngestObservation, ...]:
+    """Read the exact ordinary ingest inventory as stable private observations.
+
+    The supervised source-persistence operation uses this read-only adapter to
+    invoke the existing worker handler without opening watcher state or an
+    unrelated durable outbox queue.  A path claimed by more than one ingest
+    specification is ambiguous and therefore refused instead of being run
+    twice.
+    """
+    root = cfg.vault_path.resolve(strict=True)
+    observations: dict[Path, RegistryIngestObservation] = {}
+    system_dir = resolve_vault_system_dir_rel_or_default(root)
+    for spec in cfg.specs:
+        if spec.emit_event != INGEST_VAULT_CHANGED:
+            continue
+        state = WatcherState()
+        roots = _normalized_scan_roots(
+            root, registry_scan_roots(root, spec.scope_glob), state=state,
+        )
+        _begin_or_resume_scan(
+            state, vault_root=root, scan_roots=roots, scope_glob=spec.scope_glob,
+        )
+        cache: dict[str, tuple[list[str], list[Path]]] = {}
+        while True:
+            entry, complete = _next_incremental_markdown(
+                vault_root=root,
+                scan_roots=roots,
+                scope_glob=spec.scope_glob,
+                state=state,
+                summary={},
+                deadline=float("inf"),
+                directory_cache=cache,
+            )
+            if entry is not None:
+                relative, mtime, path = entry
+                if not is_settings_control_path(
+                    relative, configured_system_dir=system_dir,
+                ):
+                    hashed = _hash_file(path)
+                    if hashed is None:
+                        raise ValueError("producer inventory ambiguous")
+                    digest, _size = hashed
+                    if path in observations:
+                        raise ValueError("producer inventory ambiguous")
+                    observations[path] = RegistryIngestObservation(
+                        path, relative, mtime, digest, spec.name,
+                    )
+            if complete:
+                break
+        if state.errors or state.scan_generation_had_error:
+            raise ValueError("producer inventory ambiguous")
+    return tuple(
+        observations[path]
+        for path in sorted(observations, key=lambda item: item.relative_to(root).as_posix())
+    )
+
+
 def _capture_settings_source_snapshot(
     *,
     vault_root: Path,
@@ -2134,13 +2218,13 @@ def _emit_watch_event(
         return trace_id
 
     trace_id = uuid4().hex
-    payload = {
-        "vault_path": str(vault_root / rel_path),
-        "relative_path": str(rel_path),
-        "mtime": mtime,
-        "hash": content_hash,
-        "watcher": spec.name,
-    }
+    payload = ingest_vault_changed_payload(
+        vault_root=vault_root,
+        relative_path=rel_path,
+        mtime=mtime,
+        content_hash=content_hash,
+        watcher=spec.name,
+    )
     event = {
         "event": spec.emit_event,
         "event_id": uuid4().hex,
