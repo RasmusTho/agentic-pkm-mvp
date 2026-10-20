@@ -394,6 +394,11 @@ def main(argv: list[str] | None = None) -> int:
         help='run one explicit DEV/TEST ordinary-producer identity persistence operation',
     )
     parser.add_argument(
+        '--source-producer-kind', choices=('vault-alpha', 'registry'),
+        default='vault-alpha',
+        help='explicit ordinary producer for --persist-source-identity',
+    )
+    parser.add_argument(
         '--preflight-source-persistence-admission', action='store_true',
         help='read exact value-free host admission before allocating a source operation ID',
     )
@@ -452,6 +457,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.failed_operation_id is not None:
             raise PostgresDeployError()
         if args.automatic and not args.existing_secrets_only:
+            raise PostgresDeployError()
+        if (
+            not (args.persist_source_identity or args.prove_source_persistence_never_admitted)
+            and args.source_producer_kind != 'vault-alpha'
+        ):
             raise PostgresDeployError()
         if args.operation_id is not None and (
             not (args.automatic or cutover is not None) or str(UUID(args.operation_id)) != args.operation_id
@@ -551,9 +561,17 @@ def main(argv: list[str] | None = None) -> int:
                 or args.ack_forward_only
             ):
                 raise PostgresDeployError()
-            with controller.source_persistence_operation(
-                args.channel, operation_id=args.operation_id,
-            ) as (operation, resumed):
+            source_operation = (
+                controller.source_persistence_operation(
+                    args.channel, operation_id=args.operation_id,
+                    producer_kind=args.source_producer_kind,
+                )
+                if args.source_producer_kind == 'registry'
+                else controller.source_persistence_operation(
+                    args.channel, operation_id=args.operation_id,
+                )
+            )
+            with source_operation as (operation, resumed):
                 if (
                     not resumed
                     or operation.completed_result not in {None, 'failed'}
@@ -647,15 +665,31 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise PostgresDeployError()
             remote = SshDeployRemote('ygg-' + args.channel)
-            with controller.source_persistence_operation(
-                args.channel, operation_id=args.operation_id,
-            ) as (operation, _resumed):
+            source_operation = (
+                controller.source_persistence_operation(
+                    args.channel, operation_id=args.operation_id,
+                    producer_kind=args.source_producer_kind,
+                )
+                if args.source_producer_kind == 'registry'
+                else controller.source_persistence_operation(
+                    args.channel, operation_id=args.operation_id,
+                )
+            )
+            with source_operation as (operation, _resumed):
                 if operation.completed_source == 'native-absence-proof':
                     raise PostgresDeployError()
                 if operation.completed_result is None:
                     operation.prepare_mutation()
-                result = remote.persist_source_identity(
-                    operation.operation_id, args.revision, args.image_digest, cutover,
+                result = (
+                    remote.persist_source_identity(
+                        operation.operation_id, args.revision, args.image_digest,
+                        cutover, args.source_producer_kind,
+                    )
+                    if args.source_producer_kind == 'registry'
+                    else remote.persist_source_identity(
+                        operation.operation_id, args.revision, args.image_digest,
+                        cutover,
+                    )
                 )
                 terminal = result['terminal_state']
                 operation.finish(TerminalEvidence(

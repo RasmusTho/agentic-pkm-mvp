@@ -1310,6 +1310,20 @@ reason. A committed receipt does not prove legacy-row convergence or authorize r
 mapping and atomic legacy reconciliation remain separate mandatory gates, and the no-progress
 classifier must be reapplied before a fresh current-main candidate is admitted.
 
+An explicit `--source-producer-kind registry` selects the separately versioned registry-producer
+receipt. It freezes the enabled canonical registry configuration and complete fresh real-scanner
+inventory under the current vault binding/GOV shared-effect lease. Every admitted source runs the
+same UUID/companion metadata phase used by the ordinary registry handler; the ordinary handler then
+continues through its unchanged Product projection, while this supervised mode stops before durable
+outbox enqueue, Product projection, vector/indexing, or model work. The phase retains the existing
+WriteGuard, provenance, expected-version/CAS, never-overwrite and companion-write boundaries. A
+second fresh policy/inventory and persisted UUID+companion readback is mandatory: phase return or a
+derived UUID alone is not eligibility. Registry receipts use
+`native-source-identity-persistence.v2`, add only the fixed `producer_kind=registry` discriminator,
+and otherwise retain the same content-free counters/reasons, exact same-ID cleanup-only replay, and
+mandatory delivery-classifier reapplication. Omitting the flag preserves the existing
+`vault-alpha` request and v1 receipt byte shape.
+
 Supervision failures retain only a closed content-free stage reason. A worker context/preflight
 refusal returns a validated failed receipt rather than disappearing behind a transport exit, while
 unexpected worker failure remains a fixed generic worker reason. The native supervisor separately
