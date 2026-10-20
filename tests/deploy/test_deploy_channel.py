@@ -3756,6 +3756,21 @@ def test_postgres_secret_is_readable_by_configured_non_root_service_user(tmp_pat
         source.verify()
 
 
+def test_password_source_and_source_worker_share_configured_group_contract(
+    tmp_path, monkeypatch,
+):
+    from app.ops import postgres_deploy_linux as linux
+
+    source, cfg, events = _password_source_fixture(tmp_path, monkeypatch)
+    source.materialize('fake-file-canary')
+    probe = next(event[1] for event in events if event[0] == 'probe')
+    assert (probe['user'], probe['group'], probe['extra_groups']) == (
+        cfg.uid, cfg.gid, [],
+    )
+    assert linux._source_worker_user(cfg) == f'{cfg.uid}:{cfg.gid}'
+    assert cfg.password_file.stat().st_mode & 0o777 == 0o440
+
+
 def test_postgres_secret_file_is_private_and_cleaned_after_consumers_stop(tmp_path, monkeypatch):
     from app.ops.postgres_deploy import PostgresDeployError
     source, cfg, _ = _password_source_fixture(tmp_path, monkeypatch)

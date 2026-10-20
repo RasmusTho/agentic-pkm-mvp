@@ -1088,6 +1088,11 @@ def ensure_candidate_object(config: LinuxConfig, revision: str) -> None:
         raise PostgresDeployError()
 
 
+def _source_worker_user(config: LinuxConfig) -> str:
+    """Return the exact non-root UID:GID admitted for the source worker."""
+    return f"{config.uid}:{config.gid}"
+
+
 class LinuxEffects:
     def __init__(self, config: LinuxConfig) -> None:
         self.config = config
@@ -1509,7 +1514,7 @@ class LinuxEffects:
                     "run", "--no-deps", "-T", "--name", name,
                     "--label", f"yggdrasil.native.operation={operation_id}",
                     "--label", f"yggdrasil.native.revision={revision}",
-                    "--user", str(self.config.uid),
+                    "--user", _source_worker_user(self.config),
                     *[
                         item
                         for key, _value in locked_runtime.child_environment
