@@ -17,10 +17,6 @@ import stat
 from typing import Any
 from uuid import UUID
 
-import yaml
-from yaml.nodes import MappingNode, ScalarNode
-from yaml.tokens import AliasToken, AnchorToken
-
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 
 
@@ -112,6 +108,10 @@ def prepare_uuid_scalar_rewrite(
     raw: str, *, expected_old_scalar: str, replacement_uuid: str,
 ) -> PreparedRewrite:
     """Prepare one scalar-only representation repair; never select a new identity."""
+    import yaml
+    from yaml.nodes import MappingNode, ScalarNode
+    from yaml.tokens import AliasToken, AnchorToken
+
     replacement = str(UUID(replacement_uuid))
     if replacement != replacement_uuid:
         raise OperatorIdentityRestorationRefusal("context_refused")
