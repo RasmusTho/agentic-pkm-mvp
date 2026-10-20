@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -347,6 +348,123 @@ def test_inventory_proof_derives_all_thirteen_sources_and_product_binding(
         restoration._prove_inventory_and_product(
             Connection(), root=tmp_path, target=target,
             current=raw_by_rel[target.name], command=_command(),
+        )
+
+
+def _peer_preservation_fixture(
+    monkeypatch: pytest.MonkeyPatch, root: Path,
+) -> tuple[list[Path], dict[str, tuple[str, tuple[object, ...], object]]]:
+    from app.ingest import vault_alpha
+    from app.knowledge.write_ops import read_recovery_snapshot_relative
+    from app.services.companion_note import read_companion
+
+    directory = root / "rewritten"
+    directory.mkdir()
+    candidates = [directory / f"note-{index}.md" for index in range(13)]
+    for index, path in enumerate(candidates):
+        scalar = OLD if index == 0 else f"{index:08d}-1111-4111-8111-111111111111"
+        path.write_text(f"---\nuuid: '{scalar}'\n---\npeer {index}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        vault_alpha, "select_source_backed_rebuild_candidates", lambda _root: candidates,
+    )
+    snapshots = {}
+    for path in candidates:
+        relative = path.relative_to(root).as_posix()
+        raw, identity = read_recovery_snapshot_relative(relative, vault_root=root)
+        snapshots[relative] = (raw, identity, read_companion(root, None))
+    return candidates, snapshots
+
+
+def test_operator_peer_preservation_accepts_intended_shared_parent_metadata_churn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from app.knowledge import multiwriter
+    from app.knowledge.multiwriter import NoteClass
+    from app.vault import paths as vault_paths
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    candidates, snapshots = _peer_preservation_fixture(monkeypatch, tmp_path)
+    target = candidates[0]
+    monkeypatch.setattr(
+        multiwriter, "classify_note_in_vault", lambda *_args, **_kwargs: NoteClass.REWRITTEN,
+    )
+    monkeypatch.setattr(vault_paths, "get_vault_capture_note_rel", lambda _root: "Inbox/capture.md")
+    monkeypatch.setattr(vault_paths, "get_vault_sources_dir_rel", lambda _root: "Sources")
+    monkeypatch.setattr(
+        restoration, "_prove_inventory_and_product", lambda *_args, **_kwargs: snapshots,
+    )
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "healthy"})
+
+    receipt = restoration.run_worker(
+        operation_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        revision="a" * 40,
+        vault_root=tmp_path,
+        command={**_command(), "target_rel": target.relative_to(tmp_path).as_posix()},
+        connection=object(),
+    )
+
+    assert receipt["write_phase"] == "written"
+    assert any(
+        path.read_text(encoding="utf-8") == snapshots[target.relative_to(tmp_path).as_posix()][0]
+        for path in (target.parent / "_conflicts").glob("*.conflict")
+    )
+    for peer in candidates[1:]:
+        relative = peer.relative_to(tmp_path).as_posix()
+        assert peer.read_text(encoding="utf-8") == snapshots[relative][0]
+        assert peer.stat().st_ino == snapshots[relative][1][-1][1]
+
+
+def test_operator_peer_preservation_refuses_peer_content_or_inode_replacement(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    candidates, snapshots = _peer_preservation_fixture(monkeypatch, tmp_path)
+    peer = candidates[1]
+
+    peer.write_text(peer.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
+    with pytest.raises(OperatorIdentityRestorationRefusal, match="worker_refused"):
+        restoration._prove_other_sources_preserved(
+            root=tmp_path, target=candidates[0], snapshots=snapshots,
+        )
+
+    peer.write_text(snapshots[peer.relative_to(tmp_path).as_posix()][0], encoding="utf-8")
+    replacement = peer.with_suffix(".replacement")
+    replacement.write_bytes(peer.read_bytes())
+    os.replace(replacement, peer)
+    with pytest.raises(OperatorIdentityRestorationRefusal, match="worker_refused"):
+        restoration._prove_other_sources_preserved(
+            root=tmp_path, target=candidates[0], snapshots=snapshots,
+        )
+
+
+@pytest.mark.parametrize("ancestor_field", [0, 1, 2], ids=["device", "inode", "mode"])
+def test_operator_peer_preservation_refuses_ancestor_or_companion_mutation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ancestor_field: int,
+) -> None:
+    from app.knowledge import write_ops
+    from app.services import companion_note
+
+    candidates, snapshots = _peer_preservation_fixture(monkeypatch, tmp_path)
+    original_reader = write_ops.read_recovery_snapshot_relative
+
+    def changed_ancestor(relative: str, *, vault_root: Path):
+        raw, identity = original_reader(relative, vault_root=vault_root)
+        changed = list(identity)
+        ancestor = list(changed[0])
+        ancestor[ancestor_field] += 1
+        changed[0] = tuple(ancestor)
+        return raw, tuple(changed)
+
+    monkeypatch.setattr(write_ops, "read_recovery_snapshot_relative", changed_ancestor)
+    with pytest.raises(OperatorIdentityRestorationRefusal, match="worker_refused"):
+        restoration._prove_other_sources_preserved(
+            root=tmp_path, target=candidates[0], snapshots=snapshots,
+        )
+
+    monkeypatch.setattr(write_ops, "read_recovery_snapshot_relative", original_reader)
+    monkeypatch.setattr(companion_note, "read_companion", lambda *_args: object())
+    with pytest.raises(OperatorIdentityRestorationRefusal, match="worker_refused"):
+        restoration._prove_other_sources_preserved(
+            root=tmp_path, target=candidates[0], snapshots=snapshots,
         )
 
 
