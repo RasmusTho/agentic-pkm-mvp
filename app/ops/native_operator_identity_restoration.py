@@ -355,6 +355,26 @@ def _prove_other_sources_preserved(
     from app.services.companion_note import read_companion
 
     target_rel = target.relative_to(root).as_posix()
+
+    def post_cas_identity_matches(
+        expected: tuple[Any, ...], observed: tuple[Any, ...],
+    ) -> bool:
+        if len(expected) != len(observed) or not expected:
+            return False
+        expected_ancestors, expected_leaf = expected[:-1], expected[-1]
+        observed_ancestors, observed_leaf = observed[:-1], observed[-1]
+        return (
+            expected_leaf == observed_leaf
+            and all(
+                len(before) == 7
+                and len(after) == 7
+                and before[:3] == after[:3]
+                for before, after in zip(
+                    expected_ancestors, observed_ancestors, strict=True,
+                )
+            )
+        )
+
     if tuple(
         path.resolve().relative_to(root).as_posix()
         for path in select_source_backed_rebuild_candidates(root)
@@ -367,7 +387,11 @@ def _prove_other_sources_preserved(
         frontmatter, _body, error = parse_bounded_frontmatter(raw)
         declared = _canonical_uuid(frontmatter.get("uuid")) if error is None else None
         companion = read_companion(root, declared) if declared is not None else None
-        if (raw, identity, companion) != expected:
+        if (
+            raw != expected[0]
+            or not post_cas_identity_matches(expected[1], identity)
+            or companion != expected[2]
+        ):
             raise OperatorIdentityRestorationRefusal("worker_refused")
 
 
