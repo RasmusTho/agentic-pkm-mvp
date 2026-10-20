@@ -784,6 +784,393 @@ def test_host_entrypoint_retains_pending_lineage_until_cleanup_is_proven(
     assert [record["stage"] for record in records] == ["prepared", "sent"]
 
 
+def _operator_reconciliation_argv(operation_id: str) -> list[str]:
+    return [
+        "dev", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--reconcile-operator-unknown-cleanup", "--operation-id", operation_id,
+        "--image-digest", "sha256:" + "1" * 64,
+        "--authority-cutover-binding", "vault-alpha",
+        "--authority-cutover-root", "/srv/vault-alpha",
+        "--authority-cutover-ownership-root", "/srv/instance-ownership",
+    ]
+
+
+def test_host_reconciles_exact_cleanup_complete_native_unknown_without_relabeling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    with controller.operator_identity_restoration_operation(
+        "dev", operation_id=operation_id,
+    ) as (operation, resumed):
+        assert resumed is False
+        operation.prepare_mutation()
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-dev"
+
+        def reconcile_operator_identity_restoration_unknown(
+            self, observed_id, revision, _image_digest, _selected,
+        ):
+            assert observed_id == operation_id
+            return {
+                "contract": "native-operator-identity-restoration-host-reconciliation.v1",
+                "operation_id": operation_id,
+                "channel": "dev",
+                "revision": revision,
+                "native_result": "unknown",
+                "write_phase": "indeterminate",
+                "cleanup": "complete",
+                "reason": "worker_refused",
+                "native_lineage_sha256": {
+                    key: key[0] * 64 for key in ("request", "attempt", "worker", "terminal")
+                },
+                "owned_worker_absent": True,
+                "owned_lock_absent": True,
+                "writers_restored": True,
+                "native_replayed": False,
+            }
+
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    assert host.main(_operator_reconciliation_argv(operation_id)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["native_result"] == "unknown"
+    assert payload["host_terminal_projection"] == "reconciled-unknown"
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["stage"] for record in records] == [
+        "prepared", "sent", "reconciled-unknown",
+    ]
+    assert records[-1]["source"] == "remote-terminal-unknown-cleanup-complete"
+
+
+def test_host_operator_unknown_reconciliation_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController, TerminalEvidence
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    with controller.operator_identity_restoration_operation(
+        "dev", operation_id=operation_id,
+    ) as (operation, _resumed):
+        operation.prepare_mutation()
+        operation.finish(TerminalEvidence(
+            operation_id, "operator-identity-restoration", "dev",
+            "reconciled-unknown", "remote-terminal-unknown-cleanup-complete",
+        ))
+
+    class Remote:
+        def __init__(self, _hostname):
+            raise AssertionError("idempotent host replay must not call native")
+
+    before = (state / "operations.jsonl").read_bytes()
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    assert host.main(_operator_reconciliation_argv(operation_id)) == 0
+    assert (state / "operations.jsonl").read_bytes() == before
+
+
+def test_host_reader_refuses_reconciled_unknown_without_sent_lineage(
+    tmp_path: Path,
+) -> None:
+    from app.ops.host_secret_controller import (
+        HostSecretAdmissionError, HostSecretController,
+    )
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    with controller.operator_identity_restoration_operation(
+        "dev", operation_id=operation_id,
+    ):
+        pass
+    journal = state / "operations.jsonl"
+    with journal.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            "operation_id": operation_id,
+            "kind": "operator-identity-restoration",
+            "target": "dev",
+            "stage": "reconciled-unknown",
+            "source": "remote-terminal-unknown-cleanup-complete",
+        }, sort_keys=True) + "\n")
+    before = journal.read_bytes()
+    restarted = HostSecretController(state)
+    with pytest.raises(HostSecretAdmissionError):
+        restarted.source_persistence_preflight("dev")
+    assert journal.read_bytes() == before
+
+
+def test_source_preflight_refuses_pending_operator_before_uuid_allocation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController, TerminalEvidence
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    with controller.operator_identity_restoration_operation(
+        "dev", operation_id=operation_id,
+    ) as (operation, _resumed):
+        operation.prepare_mutation()
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    preflight = [
+        "dev", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--preflight-source-persistence-admission",
+    ]
+    assert host.main(preflight) == 78
+    blocked = json.loads(capsys.readouterr().out)
+    assert blocked == {
+        "contract": "host-source-persistence-admission.v1",
+        "target": "dev",
+        "ready": False,
+        "pending_operation_id": operation_id,
+        "pending_kind": "operator-identity-restoration",
+        "pending_target": "dev",
+        "pending_stage": "sent",
+    }
+    with controller.operator_identity_restoration_operation(
+        "dev", operation_id=operation_id,
+    ) as (operation, resumed):
+        assert resumed is True
+        operation.finish(TerminalEvidence(
+            operation_id, "operator-identity-restoration", "dev",
+            "reconciled-unknown", "remote-terminal-unknown-cleanup-complete",
+        ))
+    assert host.main(preflight) == 0
+    assert json.loads(capsys.readouterr().out)["ready"] is True
+
+
+def test_reconciled_operator_host_projection_unblocks_distinct_source_admission(
+    tmp_path: Path,
+) -> None:
+    from app.ops.host_secret_controller import HostSecretController, TerminalEvidence
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operator_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    with controller.operator_identity_restoration_operation(
+        "dev", operation_id=operator_id,
+    ) as (operation, _resumed):
+        operation.prepare_mutation()
+        operation.finish(TerminalEvidence(
+            operator_id, "operator-identity-restoration", "dev",
+            "reconciled-unknown", "remote-terminal-unknown-cleanup-complete",
+        ))
+    source_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    with controller.source_persistence_operation(
+        "dev", operation_id=source_id,
+    ) as (operation, resumed):
+        assert resumed is False
+        assert operation.operation_id == source_id
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["operation_id"] for record in records] == [operator_id] * 3
+
+
+def _write_operator_reconciliation_fixture(
+    root: Path, *, operation_id: str, revision: str,
+) -> tuple[SimpleNamespace, SimpleNamespace, dict[str, Path]]:
+    directory = root / "journal"
+    directory.mkdir()
+    authority = {
+        "binding_id": "vault-alpha",
+        "root": "/srv/vault-alpha",
+        "ownership_root": "/srv/instance-ownership",
+    }
+    request = {
+        "contract": "native-operator-identity-restoration-request.v1",
+        "operation_id": operation_id,
+        "channel": "dev",
+        "revision": revision,
+        "image_digest": "sha256:" + "1" * 64,
+        "authority_cutover": authority,
+        "installed_fingerprint": "installed",
+        "execution_fingerprint": "execution",
+        "writers": ["api", "watcher", "worker"],
+        "container_root": "/app/vault",
+        "vault_overlay": "docker-compose.full-host-vault.yml",
+        "command_sha256": "2" * 64,
+    }
+    attempt = {
+        "contract": "native-operator-identity-restoration-attempt.v1",
+        "operation_id": operation_id,
+        "dispatch_staged": True,
+    }
+    worker = {
+        "contract": "native-operator-identity-restoration.v1",
+        "operation_id": operation_id,
+        "channel": "dev",
+        "revision": revision,
+        "result": "unknown",
+        "write_phase": "indeterminate",
+        "cleanup": "not_started",
+        "reason": "worker_refused",
+        "automatic_producer_started": False,
+        "automatic_deployment_started": False,
+    }
+    terminal = {**worker, "cleanup": "complete"}
+    prefix = f"dev-operator-identity-restoration-{operation_id}"
+    paths = {
+        "request": directory / f"{prefix}.request.json",
+        "attempt": directory / f"{prefix}.attempt.json",
+        "worker": directory / f"{prefix}.worker.json",
+        "terminal": directory / f"{prefix}.json",
+    }
+    for key, payload in {
+        "request": request, "attempt": attempt, "worker": worker, "terminal": terminal,
+    }.items():
+        paths[key].write_text(json.dumps(payload), encoding="utf-8")
+        paths[key].chmod(0o600)
+    effects = SimpleNamespace(config=SimpleNamespace(
+        channel="dev", journal=SimpleNamespace(directory=directory),
+    ))
+    selected = SimpleNamespace(**authority, validate=lambda: None)
+    return effects, selected, paths
+
+
+def test_host_operator_unknown_reconciliation_refuses_unqualified_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from app.ops.postgres_deploy_linux import PostgresDeployError
+
+    operation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    revision = "a" * 40
+    effects, selected, paths = _write_operator_reconciliation_fixture(
+        tmp_path, operation_id=operation_id, revision=revision,
+    )
+    from app.ops import postgres_deploy_linux
+
+    effects.channel_lock_owner = lambda: None
+    effects.qualify_source_identity_authority = lambda *_args: object()
+    effects.qualify_authority_cutover = lambda _plan: None
+    effects.source_identity_runtime_snapshot = lambda *_args, **_kwargs: SimpleNamespace(
+        installed_fingerprint="installed",
+        observed_installed_fingerprint="installed",
+        legacy_installed_fingerprints=frozenset(),
+        execution_fingerprint="execution",
+        running_writers=("api", "watcher", "worker"),
+        existing_writers=("api", "watcher", "worker"),
+        container_root="/app/vault",
+        vault_overlay="docker-compose.full-host-vault.yml",
+    )
+    monkeypatch.setattr(postgres_deploy_linux, "_command", lambda _argv: "")
+    monkeypatch.setattr(
+        postgres_deploy_linux, "_installed_fingerprint_matches",
+        lambda _runtime, expected: expected == "installed",
+    )
+    before = {key: path.read_bytes() for key, path in paths.items()}
+    result = restoration.reconcile_cleanup_complete_unknown(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest="sha256:" + "1" * 64, selected=selected,
+    )
+    assert result["native_result"] == "unknown"
+    assert result["native_replayed"] is False
+    assert {key: path.read_bytes() for key, path in paths.items()} == before
+
+    terminal = json.loads(paths["terminal"].read_text())
+    terminal["cleanup"] = "retained"
+    paths["terminal"].write_text(json.dumps(terminal), encoding="utf-8")
+    paths["terminal"].chmod(0o600)
+    with pytest.raises(PostgresDeployError):
+        restoration.reconcile_cleanup_complete_unknown(
+            effects, operation_id=operation_id, revision=revision,
+            image_digest="sha256:" + "1" * 64, selected=selected,
+        )
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        "foreign_operation",
+        "owned_lock_present",
+        "owned_container_present",
+        "writer_missing",
+        "installed_fingerprint_changed",
+        "authority_changed",
+    ],
+)
+def test_host_operator_unknown_reconciliation_refusal_matrix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, refusal: str,
+) -> None:
+    from app.ops import postgres_deploy_linux
+    from app.ops.postgres_deploy_linux import PostgresDeployError
+
+    operation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    revision = "a" * 40
+    effects, selected, paths = _write_operator_reconciliation_fixture(
+        tmp_path, operation_id=operation_id, revision=revision,
+    )
+    effects.channel_lock_owner = lambda: None
+    effects.qualify_source_identity_authority = lambda *_args: object()
+    effects.qualify_authority_cutover = lambda _plan: None
+    effects.source_identity_runtime_snapshot = lambda *_args, **_kwargs: SimpleNamespace(
+        installed_fingerprint="installed",
+        observed_installed_fingerprint="installed",
+        legacy_installed_fingerprints=frozenset(),
+        execution_fingerprint="execution",
+        running_writers=("api", "watcher", "worker"),
+        existing_writers=("api", "watcher", "worker"),
+        container_root="/app/vault",
+        vault_overlay="docker-compose.full-host-vault.yml",
+    )
+    monkeypatch.setattr(postgres_deploy_linux, "_command", lambda _argv: "")
+    monkeypatch.setattr(
+        postgres_deploy_linux, "_installed_fingerprint_matches",
+        lambda _runtime, expected: expected == "installed",
+    )
+
+    if refusal == "foreign_operation":
+        terminal = json.loads(paths["terminal"].read_text())
+        terminal["operation_id"] = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        paths["terminal"].write_text(json.dumps(terminal), encoding="utf-8")
+        paths["terminal"].chmod(0o600)
+    elif refusal == "owned_lock_present":
+        effects.channel_lock_owner = lambda: b"owned"
+    elif refusal == "owned_container_present":
+        monkeypatch.setattr(postgres_deploy_linux, "_command", lambda _argv: "container-id\n")
+    elif refusal == "writer_missing":
+        effects.source_identity_runtime_snapshot = lambda *_args, **_kwargs: SimpleNamespace(
+            installed_fingerprint="installed",
+            observed_installed_fingerprint="installed",
+            legacy_installed_fingerprints=frozenset(),
+            execution_fingerprint="execution",
+            running_writers=("api", "worker"),
+            existing_writers=("api", "watcher", "worker"),
+            container_root="/app/vault",
+            vault_overlay="docker-compose.full-host-vault.yml",
+        )
+    elif refusal == "installed_fingerprint_changed":
+        monkeypatch.setattr(
+            postgres_deploy_linux, "_installed_fingerprint_matches",
+            lambda _runtime, _expected: False,
+        )
+    elif refusal == "authority_changed":
+        effects.qualify_authority_cutover = lambda _plan: (_ for _ in ()).throw(
+            PostgresDeployError()
+        )
+
+    before = {key: path.read_bytes() for key, path in paths.items()}
+    with pytest.raises(PostgresDeployError):
+        restoration.reconcile_cleanup_complete_unknown(
+            effects, operation_id=operation_id, revision=revision,
+            image_digest="sha256:" + "1" * 64, selected=selected,
+        )
+    assert {key: path.read_bytes() for key, path in paths.items()} == before
+
+
 def test_host_reader_accepts_failed_dev_restoration_and_refuses_other_channels(
     tmp_path,
 ) -> None:

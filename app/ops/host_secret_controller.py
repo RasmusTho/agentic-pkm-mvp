@@ -43,6 +43,8 @@ _TOKEN_PUSH_LOCAL_ABORT_SOURCE = "host-preflight"
 _DEPLOY_ABSENCE_SOURCE = "postmerge-controller"
 _DEPLOY_ABSENCE_STAGE = "retired-before-admission"
 _SOURCE_PERSISTENCE_ABSENCE_SOURCE = "native-absence-proof"
+_OPERATOR_UNKNOWN_CLEANUP_RESULT = "reconciled-unknown"
+_OPERATOR_UNKNOWN_CLEANUP_SOURCE = "remote-terminal-unknown-cleanup-complete"
 
 
 @dataclass(frozen=True)
@@ -145,7 +147,17 @@ class HostSecretOperation:
     def finish(self, evidence: TerminalEvidence) -> None:
         if not self._active or self._finished:
             raise HostSecretAdmissionError()
-        valid_source = evidence.source == _TERMINAL_SOURCES.get(self.kind)
+        valid_source = (
+            evidence.source == _TERMINAL_SOURCES.get(self.kind)
+            and evidence.result != _OPERATOR_UNKNOWN_CLEANUP_RESULT
+        )
+        if (
+            self.kind == "operator-identity-restoration"
+            and evidence.result == _OPERATOR_UNKNOWN_CLEANUP_RESULT
+            and evidence.source == _OPERATOR_UNKNOWN_CLEANUP_SOURCE
+            and self._mutation_started
+        ):
+            valid_source = True
         if (
             self.kind == "source-persistence"
             and evidence.result == "failed"
@@ -170,7 +182,13 @@ class HostSecretOperation:
             evidence.operation_id != self.operation_id
             or evidence.kind != self.kind
             or evidence.target != self.target
-            or evidence.result not in {"committed", "aborted", "failed"}
+            or evidence.result not in {
+                "committed", "aborted", "failed", _OPERATOR_UNKNOWN_CLEANUP_RESULT,
+            }
+            or (
+                evidence.result == _OPERATOR_UNKNOWN_CLEANUP_RESULT
+                and self.kind != "operator-identity-restoration"
+            )
             or (
                 evidence.result == "failed"
                 and (
@@ -371,10 +389,21 @@ class HostSecretController:
                         "deploy", "source-persistence", "operator-identity-restoration",
                     }:
                         terminal_stages.add("failed")
+                    if record["kind"] == "operator-identity-restoration":
+                        terminal_stages.add(_OPERATOR_UNKNOWN_CLEANUP_RESULT)
                     if (
                         record["stage"] not in terminal_stages
                         or not (
-                            record["source"] == _TERMINAL_SOURCES[record["kind"]]
+                            (
+                                record["source"] == _TERMINAL_SOURCES[record["kind"]]
+                                and record["stage"] != _OPERATOR_UNKNOWN_CLEANUP_RESULT
+                            )
+                            or (
+                                record["kind"] == "operator-identity-restoration"
+                                and record["stage"] == _OPERATOR_UNKNOWN_CLEANUP_RESULT
+                                and pending["stage"] == "sent"
+                                and record["source"] == _OPERATOR_UNKNOWN_CLEANUP_SOURCE
+                            )
                             or (
                                 record["kind"] == "source-persistence"
                                 and record["stage"] == "failed"
@@ -631,6 +660,22 @@ class HostSecretController:
             finally:
                 operation._active = False
 
+    def source_persistence_preflight(self, target: str) -> dict[str, str | bool | None]:
+        """Read exact value-free host admission state before a caller allocates an ID."""
+        if target not in {"dev", "test"}:
+            raise HostSecretAdmissionError()
+        with self._locked_journal(wait=True) as descriptor:
+            pending = self._pending(descriptor)
+        return {
+            "contract": "host-source-persistence-admission.v1",
+            "target": target,
+            "ready": pending is None,
+            "pending_operation_id": None if pending is None else str(pending["operation_id"]),
+            "pending_kind": None if pending is None else str(pending["kind"]),
+            "pending_target": None if pending is None else str(pending["target"]),
+            "pending_stage": None if pending is None else str(pending["stage"]),
+        }
+
     @contextmanager
     def operator_identity_restoration_operation(
         self, target: str, *, operation_id: str,
@@ -652,6 +697,7 @@ class HostSecretController:
             ):
                 raise HostSecretAdmissionError()
             completed = None
+            completed_source = None
             if pending is None:
                 os.lseek(descriptor, 0, os.SEEK_SET)
                 with os.fdopen(os.dup(descriptor), "r", encoding="utf-8") as source:
@@ -664,17 +710,29 @@ class HostSecretController:
                     if (
                         last["kind"] != "operator-identity-restoration"
                         or last["target"] != "dev"
-                        or last["stage"] not in {"committed", "failed"}
-                        or last["source"] != "remote-terminal"
+                        or last["stage"] not in {
+                            "committed", "failed", _OPERATOR_UNKNOWN_CLEANUP_RESULT,
+                        }
+                        or not (
+                            (
+                                last["source"] == "remote-terminal"
+                                and last["stage"] != _OPERATOR_UNKNOWN_CLEANUP_RESULT
+                            )
+                            or (
+                                last["stage"] == _OPERATOR_UNKNOWN_CLEANUP_RESULT
+                                and last["source"] == _OPERATOR_UNKNOWN_CLEANUP_SOURCE
+                            )
+                        )
                     ):
                         raise HostSecretAdmissionError()
                     completed = str(last["stage"])
+                    completed_source = str(last["source"])
             operation = HostSecretOperation(
                 descriptor, operation_id, "operator-identity-restoration", target,
                 prepared=pending is not None,
                 mutation_started=pending is not None and pending.get("stage") == "sent",
                 completed_result=completed,
-                completed_source="remote-terminal" if completed is not None else None,
+                completed_source=completed_source,
             )
             resumed = pending is not None or completed is not None
             if not resumed:

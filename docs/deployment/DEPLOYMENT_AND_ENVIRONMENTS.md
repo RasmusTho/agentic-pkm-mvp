@@ -1271,6 +1271,15 @@ fixed content-free request/attempt/terminal lineage. It permits at most one expe
 that changes only the UUID scalar representation. The attempt marker is durable before dispatch;
 after staging, dispatch, failure or uncertainty, the operation is cleanup-only even when the worker
 reports `not_written`. It never starts a producer or deployment and is unavailable to TEST and PROD.
+When its native terminal remains `unknown` with an indeterminate write phase after exact cleanup has
+completed, the native classification remains unchanged. A separate same-ID host reconciliation may
+append the distinct `reconciled-unknown` host projection only after re-reading the unchanged native
+request/attempt/worker/terminal lineage, proving the exact worker and channel lock absent, proving the
+request-recorded writers and fingerprints restored, and refusing every foreign or incomplete state.
+This projection is neither committed nor failed and cannot replay the command, worker or CAS. Before
+an ordinary source-persistence caller allocates a new UUID, it must use the value-free host admission
+preflight and stop when any host operation remains pending; the authoritative operation lock still
+rechecks admission after UUID allocation.
 
 `legacy_identity_persistence_refused` is cleared only through the explicit supervised ordinary-
 producer operation, never inside source-backed recovery. The host command uses

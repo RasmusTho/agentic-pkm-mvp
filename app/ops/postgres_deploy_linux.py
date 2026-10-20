@@ -1625,6 +1625,26 @@ class LinuxEffects:
             resume_unattempted=resume_unattempted,
         )
 
+    def reconcile_operator_identity_restoration_unknown(
+        self,
+        operation_id: str,
+        revision: str,
+        image_digest: str,
+        selected: AuthorityCutover,
+    ) -> dict[str, Any]:
+        """Qualify cleanup-complete native unknown for host-only retirement."""
+        from app.ops.native_operator_identity_restoration import (
+            reconcile_cleanup_complete_unknown,
+        )
+
+        return reconcile_cleanup_complete_unknown(
+            self,
+            operation_id=operation_id,
+            revision=revision,
+            image_digest=image_digest,
+            selected=selected,
+        )
+
     def prove_source_identity_absence(self, operation_id: str) -> dict[str, Any]:
         """Prove one source-persistence ID never crossed native admission."""
         try:
@@ -4089,6 +4109,36 @@ class DeploymentSupervisor:
                     data['command'], resume_unattempted=data['resume_unattempted'],
                 )
                 return {'operator_identity_restoration': receipt}
+        if data.get('action') == 'operator-identity-reconcile-unknown-cleanup':
+            if set(data) != {
+                'action', 'operation_id', 'revision', 'image_digest', 'authority_cutover',
+            }:
+                raise PostgresDeployError()
+            try:
+                operation_id = str(data['operation_id'])
+                revision = str(data['revision'])
+                image_digest = str(data['image_digest'])
+                selected = AuthorityCutover(**data['authority_cutover'])
+                if (
+                    str(UUID(operation_id)) != operation_id
+                    or re.fullmatch(r'[0-9a-f]{40}', revision) is None
+                    or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
+                ):
+                    raise PostgresDeployError()
+            except (ValueError, TypeError, AttributeError):
+                raise PostgresDeployError() from None
+            with self.mutex:
+                self._require_current_config()
+                if self.config.channel != 'dev' or (
+                    self.operation is not None and not self.operation.finished.is_set()
+                ):
+                    raise PostgresDeployError()
+                receipt = LinuxEffects(
+                    self.config,
+                ).reconcile_operator_identity_restoration_unknown(
+                    operation_id, revision, image_digest, selected,
+                )
+                return {'operator_identity_restoration_reconciliation': receipt}
         if data.get('action') == 'source-identity-prove-absence':
             if set(data) != {'action', 'operation_id'}:
                 raise PostgresDeployError()
@@ -4289,6 +4339,74 @@ class SshDeployRemote:
             ):
                 raise PostgresDeployError()
             return receipt
+        except Exception:
+            raise PostgresDeployError() from None
+
+    def reconcile_operator_identity_restoration_unknown(
+        self, operation_id: str, revision: str, image_digest: str,
+        selected: AuthorityCutover,
+    ) -> dict[str, Any]:
+        """Read and qualify a cleanup-complete native unknown over the fixed RPC."""
+        if self.host != 'ygg-dev':
+            raise PostgresDeployError()
+        selected.validate()
+        payload = {
+            'action': 'operator-identity-reconcile-unknown-cleanup',
+            'operation_id': operation_id,
+            'revision': revision,
+            'image_digest': image_digest,
+            'authority_cutover': {
+                'binding_id': selected.binding_id,
+                'root': selected.root,
+                'ownership_root': selected.ownership_root,
+            },
+        }
+        result = subprocess.run(
+            ['ssh', '-o', 'BatchMode=yes', '--', self.host, 'sudo', '-n',
+             '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', 'dev'],
+            input=json.dumps(payload) + '\n', text=True, capture_output=True, check=False,
+        )
+        if result.returncode:
+            raise PostgresDeployError()
+        try:
+            response = json.loads(result.stdout)
+            if (
+                not isinstance(response, dict)
+                or set(response) != {'operator_identity_restoration_reconciliation'}
+            ):
+                raise PostgresDeployError()
+            receipt = response['operator_identity_restoration_reconciliation']
+            expected = {
+                'contract', 'operation_id', 'channel', 'revision', 'native_result',
+                'write_phase', 'cleanup', 'reason', 'native_lineage_sha256',
+                'owned_worker_absent', 'owned_lock_absent', 'writers_restored',
+                'native_replayed',
+            }
+            if (
+                not isinstance(receipt, dict) or set(receipt) != expected
+                or receipt['contract']
+                != 'native-operator-identity-restoration-host-reconciliation.v1'
+                or receipt['operation_id'] != operation_id
+                or receipt['channel'] != 'dev'
+                or receipt['revision'] != revision
+                or receipt['native_result'] != 'unknown'
+                or receipt['write_phase'] != 'indeterminate'
+                or receipt['cleanup'] != 'complete'
+                or receipt['reason'] != 'worker_refused'
+                or any(receipt[key] is not True for key in {
+                    'owned_worker_absent', 'owned_lock_absent', 'writers_restored',
+                })
+                or receipt['native_replayed'] is not False
+                or not isinstance(receipt['native_lineage_sha256'], dict)
+                or set(receipt['native_lineage_sha256'])
+                != {'request', 'attempt', 'worker', 'terminal'}
+                or any(
+                    re.fullmatch(r'[0-9a-f]{64}', value) is None
+                    for value in receipt['native_lineage_sha256'].values()
+                )
+            ):
+                raise PostgresDeployError()
+            return dict(receipt)
         except Exception:
             raise PostgresDeployError() from None
 
