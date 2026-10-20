@@ -1579,6 +1579,26 @@ class LinuxEffects:
                 failure_reason = "source_worker_receipt_refused"
                 try:
                     payload = validate_receipt(json.loads(raw))
+                    if (
+                        payload['operation_id'] != operation_id
+                        or payload['channel'] != self.config.channel
+                        or payload['revision'] != revision
+                        or (
+                            producer_kind == 'registry'
+                            and (
+                                payload['contract'] != REGISTRY_RECEIPT_CONTRACT
+                                or payload.get('producer_kind') != 'registry'
+                            )
+                        )
+                        or (
+                            producer_kind == 'vault-alpha'
+                            and (
+                                payload['contract'] != RECEIPT_CONTRACT
+                                or 'producer_kind' in payload
+                            )
+                        )
+                    ):
+                        raise PostgresDeployError()
                 except Exception:
                     raise PostgresDeployError() from None
                 failure_reason = "source_producer_receipt_write_failed"

@@ -199,6 +199,8 @@ def _registry_plan(
         load_registry_config,
         source_backed_registry_observations,
     )
+    from app.vault.paths import resolve_vault_system_dir_rel_or_default
+    from app.watcher.settings_delta import is_settings_control_path
 
     root = vault_root.expanduser().resolve(strict=True)
     policy = registry_producer_policy(root)
@@ -220,9 +222,16 @@ def _registry_plan(
     if DEFAULT_REGISTRY_CONFIG_PATH.read_bytes() != config_snapshot:
         raise SourceIdentityPersistenceRefusal("source_operation_conflict")
     paths = tuple(observation.path for observation in observations)
+    configured_system_dir = resolve_vault_system_dir_rel_or_default(root)
+    expected_paths = frozenset(
+        path for path in policy.sources
+        if not is_settings_control_path(
+            path.relative_to(root), configured_system_dir=configured_system_dir,
+        )
+    )
     if not paths or len(paths) != len(set(paths)):
         raise SourceIdentityPersistenceRefusal("source_context_refused")
-    if any(path not in policy.sources for path in paths):
+    if frozenset(paths) != expected_paths:
         raise SourceIdentityPersistenceRefusal("source_context_refused")
     return policy, observations
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import sys
@@ -154,6 +155,47 @@ def test_registry_operation_refuses_partial_or_drifted_inventory(
     )
     assert receipt["terminal_state"] == "failed"
     assert receipt["reason"] == "source_operation_conflict"
+
+
+def test_registry_plan_refuses_policy_source_missing_from_fresh_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ops import native_source_identity_persistence as persistence
+    from app.watcher import registry
+
+    root = tmp_path.resolve()
+    present = root / "present.md"
+    vanished = root / "vanished.md"
+    present.write_text("present", encoding="utf-8")
+    config_path = tmp_path / "watchers.yaml"
+    config_path.write_text("watchers: []\n", encoding="utf-8")
+    spec = SimpleNamespace(
+        name="notes", emit_event="ingest.vault.changed", scope_glob="**/*.md",
+    )
+    cfg = SimpleNamespace(enable=True, vault_path=root, specs=[spec])
+    policy = SimpleNamespace(
+        enabled=True,
+        root=root,
+        scopes=("**/*.md",),
+        specifications=(("notes", "ingest.vault.changed", "**/*.md"),),
+        sources=frozenset({present, vanished}),
+        registry_digest=hashlib.sha256(config_path.read_bytes()).hexdigest(),
+    )
+    observation = SimpleNamespace(
+        path=present, relative_path=Path("present.md"), mtime=1.0,
+        content_hash="c" * 64, watcher="notes",
+    )
+    monkeypatch.setattr(
+        "app.ingest.producer_policy.registry_producer_policy", lambda _root: policy,
+    )
+    monkeypatch.setattr(registry, "DEFAULT_REGISTRY_CONFIG_PATH", config_path)
+    monkeypatch.setattr(registry, "load_registry_config", lambda *_a, **_k: cfg)
+    monkeypatch.setattr(
+        registry, "source_backed_registry_observations",
+        lambda _cfg: (observation,),
+    )
+    with pytest.raises(SourceIdentityPersistenceRefusal, match="source_context_refused"):
+        persistence._registry_plan(root)
 
 
 def test_registry_postwrite_eligibility_is_complete_and_content_free(
@@ -317,6 +359,63 @@ def test_supervised_metadata_phase_refuses_derived_unpersisted_uuid_before_compa
             require_persisted_evidence=True,
         )
     assert companion_calls == []
+
+
+def test_supervised_metadata_phase_refuses_noncanonical_uuid_before_companion_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers import outbox_worker
+
+    note = tmp_path / "source.md"
+    note.write_text("source", encoding="utf-8")
+    monkeypatch.setattr(outbox_worker, "_stabilized_note_text", lambda _path: "source")
+    monkeypatch.setattr(
+        outbox_worker, "parse_bounded_frontmatter",
+        lambda _text: ({"uuid": "../../other-note"}, "source", None),
+    )
+    monkeypatch.setattr(outbox_worker, "_assert_profile_ingestible", lambda *_a, **_k: None)
+    monkeypatch.setattr(outbox_worker, "_maybe_heal_uuid", lambda *_a, **_k: "")
+    monkeypatch.setattr(
+        outbox_worker, "companion_path",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("path effect")),
+    )
+    with pytest.raises(ValueError, match="canonical UUID"):
+        outbox_worker.persist_registry_source_identity(
+            {"relative_path": "source.md"}, vault_root=tmp_path,
+            allow_retry_enqueue=False, require_persisted_evidence=True,
+        )
+
+
+def test_supervised_metadata_phase_refuses_malformed_existing_companion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers import outbox_worker
+
+    note_uuid = str(uuid4())
+    note = tmp_path / "source.md"
+    note.write_text("source", encoding="utf-8")
+    relative_companion = Path("system/companions") / f"{note_uuid}.md"
+    companion = tmp_path / relative_companion
+    companion.parent.mkdir(parents=True)
+    companion.write_text("malformed", encoding="utf-8")
+    monkeypatch.setattr(outbox_worker, "_stabilized_note_text", lambda _path: "source")
+    monkeypatch.setattr(
+        outbox_worker, "parse_bounded_frontmatter",
+        lambda _text: ({"uuid": note_uuid}, "source", None),
+    )
+    monkeypatch.setattr(outbox_worker, "_assert_profile_ingestible", lambda *_a, **_k: None)
+    monkeypatch.setattr(outbox_worker, "_maybe_heal_uuid", lambda *_a, **_k: "")
+    monkeypatch.setattr(outbox_worker, "companion_path", lambda *_a: relative_companion)
+    monkeypatch.setattr(outbox_worker, "read_companion", lambda *_a: None)
+    monkeypatch.setattr(
+        outbox_worker, "write_companion",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("overwrite")),
+    )
+    with pytest.raises(ValueError, match="malformed"):
+        outbox_worker.persist_registry_source_identity(
+            {"relative_path": "source.md"}, vault_root=tmp_path,
+            allow_retry_enqueue=False, require_persisted_evidence=True,
+        )
 
 
 def test_native_supervisor_binds_registry_producer_kind(
@@ -897,6 +996,11 @@ def test_linux_effect_failed_lock_acquisition_has_zero_compose_effects(
         ("worker-transport", "source_worker_transport_failed"),
         ("worker-quiesce", "source_worker_quiesce_failed"),
         ("worker-receipt", "source_worker_receipt_refused"),
+        ("worker-v1-for-registry", "source_worker_receipt_refused"),
+        ("worker-v2-for-alpha", "source_worker_receipt_refused"),
+        ("worker-wrong-operation", "source_worker_receipt_refused"),
+        ("worker-wrong-channel", "source_worker_receipt_refused"),
+        ("worker-wrong-revision", "source_worker_receipt_refused"),
         ("producer-receipt-write", "source_producer_receipt_write_failed"),
         ("writer-restore", "source_writer_restore_failed"),
         ("lock-retirement", "source_lock_retirement_failed"),
@@ -959,6 +1063,11 @@ def test_supervisor_failure_stage_is_fixed_and_content_free(
         "selected_count": 1, "persisted_count": 1, "missing_count": 0,
         "invalid_count": 0, "ambiguous_count": 0, "producer_error_count": 0,
     }
+    registry_committed = {
+        **committed,
+        "contract": "native-source-identity-persistence.v2",
+        "producer_kind": "registry",
+    }
 
     def compose(*args, **_kwargs):
         action = str(args[0])
@@ -969,7 +1078,19 @@ def test_supervisor_failure_stage_is_fixed_and_content_free(
         if failed_stage == "writer-restore" and action == "start":
             raise linux.PostgresDeployError()
         if action == "run":
-            return "not-json" if failed_stage == "worker-receipt" else json.dumps(committed)
+            if failed_stage == "worker-receipt":
+                return "not-json"
+            if failed_stage == "worker-v1-for-registry":
+                return json.dumps(committed)
+            if failed_stage == "worker-v2-for-alpha":
+                return json.dumps(registry_committed)
+            if failed_stage == "worker-wrong-operation":
+                return json.dumps({**registry_committed, "operation_id": str(uuid4())})
+            if failed_stage == "worker-wrong-channel":
+                return json.dumps({**registry_committed, "channel": "test"})
+            if failed_stage == "worker-wrong-revision":
+                return json.dumps({**registry_committed, "revision": "b" * 40})
+            return json.dumps(committed)
         return ""
 
     effects.compose = compose  # type: ignore[method-assign]
@@ -993,17 +1114,29 @@ def test_supervisor_failure_stage_is_fixed_and_content_free(
     monkeypatch.setattr(linux, "_atomic_private_json", atomic)
     monkeypatch.setattr(linux, "_capture_watch_configured", lambda _config: False)
 
-    result = effects.persist_source_identity(operation_id, REVISION, DIGEST, selected)
+    registry_case = failed_stage in {
+        "worker-v1-for-registry", "worker-wrong-operation",
+        "worker-wrong-channel", "worker-wrong-revision",
+    }
+    result = effects.persist_source_identity(
+        operation_id, REVISION, DIGEST, selected,
+        "registry" if registry_case else "vault-alpha",
+    )
     assert result["terminal_state"] == "failed"
     assert result["eligible"] is False
     assert result["reason"] == expected_reason
     assert result["producer_error_count"] == 1
-    assert set(result) == {
+    expected_keys = {
         "contract", "operation_id", "channel", "revision", "terminal_state",
         "eligible", "reason", "selected_count", "persisted_count",
         "missing_count", "invalid_count", "ambiguous_count",
         "producer_error_count",
     }
+    if registry_case:
+        expected_keys.add("producer_kind")
+        assert result["contract"] == "native-source-identity-persistence.v2"
+        assert result["producer_kind"] == "registry"
+    assert set(result) == expected_keys
     producer_path = journal_dir / f"dev-source-identity-{operation_id}.producer.json"
     if failed_stage in {"writer-restore", "lock-retirement"}:
         assert json.loads(producer_path.read_text(encoding="utf-8")) == committed

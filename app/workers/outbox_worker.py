@@ -4,6 +4,7 @@ import errno
 import hashlib
 import logging
 import os
+import stat
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -65,7 +66,6 @@ from app.rebuildability import canonical_product_body_text, parse_bounded_frontm
 from app.services.companion_note import (
     CompanionNote,
     companion_path,
-    find_duplicate_companions,
     is_companion_path,
     read_companion,
     scan_attachments,
@@ -1858,6 +1858,11 @@ def persist_registry_source_identity(
                 != note_uuid
             ):
                 raise ValueError("source identity did not persist")
+            try:
+                if str(UUID(note_uuid)) != note_uuid:
+                    raise ValueError
+            except (ValueError, TypeError, AttributeError):
+                raise ValueError("source identity is not a canonical UUID") from None
             raw_text = persisted_text
             frontmatter = persisted_frontmatter
             body = persisted_body
@@ -1878,12 +1883,31 @@ def persist_registry_source_identity(
             )
             write_required = True
             if require_persisted_evidence:
-                if any(
-                    duplicate.uuid == note_uuid
-                    for duplicate in find_duplicate_companions(resolved_root)
-                ):
+                canonical_companion_path = (
+                    resolved_root / companion_path(note_uuid, resolved_root)
+                )
+                legacy_companion_path = (
+                    resolved_root / "_system" / "companions" / f"{note_uuid}.md"
+                )
+                companion_paths = tuple(dict.fromkeys((
+                    canonical_companion_path, legacy_companion_path,
+                )))
+                existing_paths: list[Path] = []
+                for candidate in companion_paths:
+                    if not os.path.lexists(candidate):
+                        continue
+                    try:
+                        observed = candidate.lstat()
+                    except OSError:
+                        raise ValueError("companion evidence is unreadable") from None
+                    if not stat.S_ISREG(observed.st_mode):
+                        raise ValueError("companion evidence is not a regular file")
+                    existing_paths.append(candidate)
+                if len(existing_paths) > 1:
                     raise ValueError("companion identity is ambiguous")
                 existing_companion = read_companion(resolved_root, note_uuid)
+                if existing_paths and existing_companion is None:
+                    raise ValueError("companion evidence is malformed")
                 if existing_companion is not None:
                     if (
                         _normalize_uuid_value(existing_companion.uuid) != note_uuid
@@ -1892,9 +1916,7 @@ def persist_registry_source_identity(
                         raise ValueError("companion identity conflicts with source")
                     if existing_companion.content_hash == text_sha256:
                         write_required = False
-                    elif not (
-                        resolved_root / companion_path(note_uuid, resolved_root)
-                    ).is_file():
+                    elif canonical_companion_path not in existing_paths:
                         raise ValueError("legacy companion cannot be overwritten")
             if write_required:
                 write_companion(resolved_root, companion)
