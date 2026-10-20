@@ -1277,8 +1277,11 @@ actually running channel write-capable application services, mounts the selected
 canonical full-host overlay when its container root equals the selected host root, or retains the
 reviewed `/app/vault` compatibility overlay when the installed binding uses that legacy container
 path; TEST appends its channel activation overlay in either case. It then runs the ordinary
-`vault-alpha` producer
-without `--source-backed-rebuild`, performs a fresh complete selected-inventory persisted-identity
+`vault-alpha` producer as the configured non-root UID and configured primary GID, without
+`--source-backed-rebuild`. That exact primary group is the intended-reader half of the existing
+`root:<configured gid>` mode `0440` PostgreSQL password-file contract; the source worker does not
+gain root, supplementary groups, or permission-changing fallbacks. The operation performs a fresh
+complete selected-inventory persisted-identity
 readback with stable source/root snapshots, starts the same existing stopped containers without
 recreation, and terminalizes only after its exact owner fence is retired. A crash after producer
 completion resumes cleanup from the fixed private producer receipt without rerunning the producer.

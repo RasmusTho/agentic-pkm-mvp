@@ -341,11 +341,17 @@ def test_native_supervisor_accepts_only_the_fixed_source_operation(
         supervisor.request({**request, "operation_id": "not-a-uuid"})
 
 
+def test_source_worker_uses_configured_uid_and_primary_gid() -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    assert linux._source_worker_user(SimpleNamespace(uid=501, gid=20)) == "501:20"
+
+
 @pytest.mark.parametrize(
     "quiesced,restore_ok",
     [(True, True), (False, True), (True, False)],
 )
-def test_stage_failures_preserve_exact_cleanup_boundaries(
+def test_source_worker_primary_gid_change_preserves_cleanup_and_retirement_boundaries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quiesced: bool, restore_ok: bool,
 ) -> None:
     from contextlib import contextmanager
@@ -359,9 +365,10 @@ def test_stage_failures_preserve_exact_cleanup_boundaries(
         channel="dev",
         read=lambda: SimpleNamespace(terminal_result="failed"),
     )
-    config = SimpleNamespace(channel="dev", journal=journal, uid=501)
+    config = SimpleNamespace(channel="dev", journal=journal, uid=501, gid=20)
     effects = linux.LinuxEffects(config)
     events: list[str] = []
+    worker_users: list[str] = []
 
     @contextmanager
     def channel_lock(**_kwargs):
@@ -377,6 +384,8 @@ def test_stage_failures_preserve_exact_cleanup_boundaries(
         action = str(args[0])
         events.append(action)
         if action == "run":
+            user_index = args.index("--user")
+            worker_users.append(str(args[user_index + 1]))
             return json.dumps({
                 "contract": "native-source-identity-persistence.v1",
                 "operation_id": operation_id,
@@ -417,6 +426,7 @@ def test_stage_failures_preserve_exact_cleanup_boundaries(
         operation_id, REVISION, DIGEST,
         AuthorityCutover("vault-alpha", "/srv/vault-alpha", "/srv/instance-ownership"),
     )
+    assert worker_users == ["501:20"]
     if quiesced and restore_ok:
         assert result["terminal_state"] == "committed"
         assert events == ["lock", "stop", "run", "start", "reconcile-lock", "retire"]
@@ -438,7 +448,7 @@ def test_linux_effect_refuses_preflight_binding_without_compose_effects(
     from app.ops.postgres_deploy import AuthorityCutover
 
     journal = SimpleNamespace(directory=tmp_path / "journal", channel="dev")
-    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal, uid=501))
+    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal, uid=501, gid=20))
     mutations: list[tuple[object, ...]] = []
     effects.qualify_source_identity_authority = (  # type: ignore[method-assign]
         lambda *_args: (_ for _ in ()).throw(linux.PostgresDeployError())
@@ -466,7 +476,7 @@ def test_linux_effect_failed_lock_acquisition_has_zero_compose_effects(
         directory=tmp_path / "journal", channel="dev",
         read=lambda: SimpleNamespace(terminal_result="failed"),
     )
-    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal, uid=501))
+    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal, uid=501, gid=20))
     mutations: list[tuple[object, ...]] = []
 
     @contextmanager
@@ -526,7 +536,7 @@ def test_supervisor_failure_stage_is_fixed_and_content_free(
         directory=journal_dir, channel="dev",
         read=lambda: SimpleNamespace(terminal_result="failed"),
     )
-    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal, uid=501))
+    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal, uid=501, gid=20))
     selected = AuthorityCutover(
         "vault-alpha", "/srv/vault-alpha", "/srv/instance-ownership",
     )
@@ -656,7 +666,7 @@ def test_cached_receipt_reconciles_only_matching_owned_lock(
     receipt_path.write_text(json.dumps(retained), encoding="utf-8")
     receipt_path.chmod(0o600)
     effects = linux.LinuxEffects(SimpleNamespace(
-        channel="dev", journal=SimpleNamespace(directory=journal_dir, channel="dev"), uid=501,
+        channel="dev", journal=SimpleNamespace(directory=journal_dir, channel="dev"), uid=501, gid=20,
     ))
     monkeypatch.setattr(linux, "_private_json", lambda path: json.loads(path.read_text()))
     owner = {
@@ -717,7 +727,7 @@ def test_cached_receipt_retry_under_matching_lock_contention_has_no_writer_effec
     receipt_path.write_text(json.dumps(retained), encoding="utf-8")
     receipt_path.chmod(0o600)
     effects = linux.LinuxEffects(SimpleNamespace(
-        channel="dev", journal=SimpleNamespace(directory=journal_dir, channel="dev"), uid=501,
+        channel="dev", journal=SimpleNamespace(directory=journal_dir, channel="dev"), uid=501, gid=20,
     ))
     monkeypatch.setattr(linux, "_private_json", lambda path: json.loads(path.read_text()))
     owner = {
@@ -874,7 +884,7 @@ def test_worker_terminal_receipt_round_trips_unchanged(
     producer_path.write_text(json.dumps(retained), encoding="utf-8")
     producer_path.chmod(0o600)
     effects = linux.LinuxEffects(SimpleNamespace(
-        channel="dev", journal=SimpleNamespace(directory=journal_dir, channel="dev"), uid=501,
+        channel="dev", journal=SimpleNamespace(directory=journal_dir, channel="dev"), uid=501, gid=20,
     ))
     owner = {
         "kind": "source-identity-persistence", "channel": "dev", "operation_id": operation_id,
@@ -1143,7 +1153,7 @@ def test_locked_admission_refuses_child_or_writer_drift_before_effects(
         directory=journal_dir, channel="dev",
         read=lambda: SimpleNamespace(terminal_result="failed"),
     )
-    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal, uid=501))
+    effects = linux.LinuxEffects(SimpleNamespace(channel="dev", journal=journal, uid=501, gid=20))
     selected = AuthorityCutover("vault-alpha", "/srv/vault-alpha", "/srv/instance-ownership")
     base = linux.SourceIdentityRuntimeSnapshot(
         "c" * 64, "d" * 64, ("api", "watcher", "worker"),
