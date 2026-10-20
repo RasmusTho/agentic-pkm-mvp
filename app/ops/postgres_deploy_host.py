@@ -394,12 +394,20 @@ def main(argv: list[str] | None = None) -> int:
         help='run one explicit DEV/TEST ordinary-producer identity persistence operation',
     )
     parser.add_argument(
+        '--preflight-source-persistence-admission', action='store_true',
+        help='read exact value-free host admission before allocating a source operation ID',
+    )
+    parser.add_argument(
         '--restore-operator-source-identity', action='store_true',
         help='run the separately reviewed DEV-only established-identity restoration',
     )
     parser.add_argument(
         '--resume-unattempted-operator-restoration', action='store_true',
         help='resume only a positively undispatched restoration request',
+    )
+    parser.add_argument(
+        '--reconcile-operator-unknown-cleanup', action='store_true',
+        help='retire one exact host operator operation after qualified native unknown cleanup',
     )
     parser.add_argument(
         '--prove-source-persistence-never-admitted', action='store_true',
@@ -450,6 +458,80 @@ def main(argv: list[str] | None = None) -> int:
         ):
             raise PostgresDeployError()
         controller = HostSecretController()
+        if args.preflight_source_persistence_admission:
+            if (
+                args.channel not in {'dev', 'test'}
+                or not args.automatic
+                or not args.existing_secrets_only
+                or args.operation_id is not None
+                or cutover is not None
+                or args.persist_source_identity
+                or args.restore_operator_source_identity
+                or args.resume_unattempted_operator_restoration
+                or args.reconcile_operator_unknown_cleanup
+                or args.reconcile_pending
+                or args.prove_never_admitted
+                or args.prove_source_persistence_never_admitted
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None
+                or args.ack_forward_only
+            ):
+                raise PostgresDeployError()
+            preflight = controller.source_persistence_preflight(args.channel)
+            print(json.dumps(preflight, sort_keys=True))
+            return 0 if preflight['ready'] is True else 78
+        if args.reconcile_operator_unknown_cleanup:
+            if (
+                args.channel != 'dev'
+                or not args.automatic
+                or not args.existing_secrets_only
+                or args.operation_id is None
+                or cutover is None
+                or args.image_digest is None
+                or args.persist_source_identity
+                or args.restore_operator_source_identity
+                or args.resume_unattempted_operator_restoration
+                or args.reconcile_pending
+                or args.prove_never_admitted
+                or args.prove_source_persistence_never_admitted
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None
+                or args.ack_forward_only
+                or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None
+            ):
+                raise PostgresDeployError()
+            with controller.operator_identity_restoration_operation(
+                'dev', operation_id=args.operation_id,
+            ) as (operation, resumed):
+                if not resumed:
+                    raise PostgresDeployError()
+                if operation.completed_result == 'reconciled-unknown':
+                    print(json.dumps({
+                        'contract': 'operator-restoration-host-reconciliation.v1',
+                        'operation_id': operation.operation_id,
+                        'host_terminal_projection': 'reconciled-unknown',
+                        'idempotent_replay': True,
+                        'native_replayed': False,
+                    }, sort_keys=True))
+                    return 0
+                if operation.completed_result is not None or not operation.mutation_started:
+                    raise PostgresDeployError()
+                remote = SshDeployRemote('ygg-dev')
+                reconciliation = remote.reconcile_operator_identity_restoration_unknown(
+                    operation.operation_id, args.revision, args.image_digest, cutover,
+                )
+                operation.finish(TerminalEvidence(
+                    operation.operation_id, 'operator-identity-restoration', 'dev',
+                    'reconciled-unknown', 'remote-terminal-unknown-cleanup-complete',
+                ))
+            print(json.dumps({
+                **reconciliation,
+                'host_terminal_projection': 'reconciled-unknown',
+                'idempotent_replay': False,
+            }, sort_keys=True))
+            return 0
         if args.prove_source_persistence_never_admitted:
             if (
                 args.channel not in {'dev', 'test'}
@@ -458,7 +540,9 @@ def main(argv: list[str] | None = None) -> int:
                 or args.operation_id is None
                 or cutover is not None
                 or args.persist_source_identity
+                or args.preflight_source_persistence_admission
                 or args.restore_operator_source_identity
+                or args.reconcile_operator_unknown_cleanup
                 or args.reconcile_pending
                 or args.prove_never_admitted
                 or args.recover_test_source
@@ -500,6 +584,8 @@ def main(argv: list[str] | None = None) -> int:
                 or args.prove_never_admitted
                 or args.prove_source_persistence_never_admitted
                 or args.persist_source_identity
+                or args.preflight_source_persistence_admission
+                or args.reconcile_operator_unknown_cleanup
                 or args.recover_test_source
                 or args.reconstruct_missing_instance_state
                 or args.failed_operation_id is not None
@@ -555,6 +641,8 @@ def main(argv: list[str] | None = None) -> int:
                 or args.ack_forward_only
                 or args.restore_operator_source_identity
                 or args.resume_unattempted_operator_restoration
+                or args.preflight_source_persistence_admission
+                or args.reconcile_operator_unknown_cleanup
                 or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None
             ):
                 raise PostgresDeployError()

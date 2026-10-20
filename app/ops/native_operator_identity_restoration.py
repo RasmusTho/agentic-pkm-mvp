@@ -537,6 +537,29 @@ def _read_private_json(path: Path) -> Any:
             os.close(descriptor)
 
 
+def _private_sha256(path: Path) -> str:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        raise OperatorIdentityRestorationRefusal("context_refused") from exc
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_nlink != 1
+            or not 0 < info.st_size <= 65536
+        ):
+            raise OperatorIdentityRestorationRefusal("context_refused")
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 65536):
+            digest.update(chunk)
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result = dict(pairs)
     if len(result) != len(pairs):
@@ -631,6 +654,130 @@ def _cleanup(
             raise OperatorIdentityRestorationRefusal("writer_restore_failed")
         effects.retire_reconciled_channel_lock(handle, expected_owner=owner)
     return True
+
+
+def reconcile_cleanup_complete_unknown(
+    effects: Any, *, operation_id: str, revision: str, image_digest: str,
+    selected: Any,
+) -> dict[str, Any]:
+    """Qualify one cleanup-complete native unknown without replaying its command."""
+    from app.ops.postgres_deploy_linux import PostgresDeployError
+
+    try:
+        if (
+            effects.config.channel != "dev"
+            or str(UUID(operation_id)) != operation_id
+            or re.fullmatch(r"[0-9a-f]{40}", revision) is None
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is None
+        ):
+            raise ValueError
+    except (ValueError, TypeError, AttributeError):
+        raise PostgresDeployError() from None
+    selected.validate()
+    directory = effects.config.journal.directory
+    prefix = f"dev-operator-identity-restoration-{operation_id}"
+    paths = {
+        "request": directory / f"{prefix}.request.json",
+        "attempt": directory / f"{prefix}.attempt.json",
+        "worker": directory / f"{prefix}.worker.json",
+        "terminal": directory / f"{prefix}.json",
+    }
+    if not all(_private_entry_present(path) for path in paths.values()):
+        raise PostgresDeployError()
+    before = {key: _private_sha256(path) for key, path in paths.items()}
+    request = _read_private_json(paths["request"])
+    attempt = _read_private_json(paths["attempt"])
+    worker = validate_receipt(_read_private_json(paths["worker"]))
+    terminal = validate_receipt(_read_private_json(paths["terminal"]))
+    authority = request.get("authority_cutover") if isinstance(request, dict) else None
+    if (
+        not isinstance(request, dict)
+        or set(request) != {
+            "contract", "operation_id", "channel", "revision", "image_digest",
+            "authority_cutover", "installed_fingerprint", "execution_fingerprint",
+            "writers", "container_root", "vault_overlay", "command_sha256",
+        }
+        or request["contract"] != REQUEST_CONTRACT
+        or request["operation_id"] != operation_id
+        or request["channel"] != "dev"
+        or request["revision"] != revision
+        or request["image_digest"] != image_digest
+        or authority != {
+            "binding_id": selected.binding_id,
+            "root": selected.root,
+            "ownership_root": selected.ownership_root,
+        }
+        or re.fullmatch(r"[0-9a-f]{64}", request["command_sha256"]) is None
+        or not isinstance(request["writers"], list)
+        or any(not isinstance(item, str) for item in request["writers"])
+        or any(not isinstance(request[key], str) or not request[key] for key in {
+            "installed_fingerprint", "execution_fingerprint", "container_root", "vault_overlay",
+        })
+        or attempt != {
+            "contract": "native-operator-identity-restoration-attempt.v1",
+            "operation_id": operation_id,
+            "dispatch_staged": True,
+        }
+    ):
+        raise PostgresDeployError()
+    expected_terminal = {
+        "contract": RECEIPT_CONTRACT,
+        "operation_id": operation_id,
+        "channel": "dev",
+        "revision": revision,
+        "result": "unknown",
+        "write_phase": "indeterminate",
+        "cleanup": "complete",
+        "reason": "worker_refused",
+        "automatic_producer_started": False,
+        "automatic_deployment_started": False,
+    }
+    if terminal != expected_terminal or worker != {**expected_terminal, "cleanup": "not_started"}:
+        raise PostgresDeployError()
+    from app.ops.postgres_deploy_linux import _command, _installed_fingerprint_matches
+
+    if effects.channel_lock_owner() is not None:
+        raise PostgresDeployError()
+    worker_ids = _command([
+        "docker", "ps", "--all", "--no-trunc",
+        "--filter", f"label=yggdrasil.native.operation={operation_id}",
+        "--format", "{{.ID}}",
+    ]).splitlines()
+    if worker_ids:
+        raise PostgresDeployError()
+    plan = effects.qualify_source_identity_authority(revision, image_digest, selected)
+    effects.qualify_authority_cutover(plan)
+    runtime = effects.source_identity_runtime_snapshot(
+        selected, require_running_capture=True,
+    )
+    if (
+        not _installed_fingerprint_matches(runtime, request["installed_fingerprint"])
+        or runtime.execution_fingerprint != request["execution_fingerprint"]
+        or runtime.container_root != request["container_root"]
+        or runtime.vault_overlay != request["vault_overlay"]
+        or tuple(sorted(request["writers"])) != runtime.running_writers
+        or not set(request["writers"]) <= set(runtime.existing_writers)
+        or effects.channel_lock_owner() is not None
+    ):
+        raise PostgresDeployError()
+    after = {key: _private_sha256(path) for key, path in paths.items()}
+    if before != after:
+        raise PostgresDeployError()
+    return {
+        "contract": "native-operator-identity-restoration-host-reconciliation.v1",
+        "operation_id": operation_id,
+        "channel": "dev",
+        "revision": revision,
+        "native_result": "unknown",
+        "write_phase": "indeterminate",
+        "cleanup": "complete",
+        "reason": "worker_refused",
+        "native_lineage_sha256": before,
+        "owned_worker_absent": True,
+        "owned_lock_absent": True,
+        "writers_restored": True,
+        "native_replayed": False,
+    }
 
 
 def run_host_operation(
@@ -937,6 +1084,7 @@ __all__ = [
     "PreparedRewrite",
     "RECEIPT_CONTRACT",
     "prepare_uuid_scalar_rewrite",
+    "reconcile_cleanup_complete_unknown",
     "run_host_operation",
     "run_worker",
     "validate_command",
