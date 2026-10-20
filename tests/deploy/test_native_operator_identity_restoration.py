@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
+import subprocess
+import sys
 import pytest
 
 from app.ops import native_operator_identity_restoration as restoration
@@ -22,6 +25,49 @@ def _command() -> dict[str, object]:
         "target_rel": "rewritten/example.md",
         "expected_old_scalar": OLD,
         "replacement_uuid": CANONICAL,
+    }
+
+
+def test_host_validation_imports_without_worker_yaml_dependency(tmp_path: Path) -> None:
+    from scripts.postmerge_controller import copy_runtime_dependencies
+
+    vendor = tmp_path / "vendor"
+    copy_runtime_dependencies(vendor)
+    root = Path(__file__).resolve().parents[2]
+    program = """
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+vendor = Path(sys.argv[2])
+sys.path[:0] = [str(root), str(vendor)]
+import app.ops.postgres_deploy_host
+from app.ops.native_operator_identity_restoration import validate_command
+
+command = {
+    "target_rel": "rewritten/example.md",
+    "expected_old_scalar": "legacy::11111111-1111-4111-8111-111111111111",
+    "replacement_uuid": "11111111-1111-4111-8111-111111111111",
+}
+assert validate_command(command) == command
+assert "yaml" not in sys.modules
+print(json.dumps({"host_import": True, "validated": True, "yaml_imported": False}, sort_keys=True))
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", program, str(root), str(vendor)],
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert json.loads(result.stdout) == {
+        "host_import": True,
+        "validated": True,
+        "yaml_imported": False,
     }
 
 
