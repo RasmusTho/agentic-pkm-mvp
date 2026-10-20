@@ -214,11 +214,12 @@ def _guard_failure_boundary() -> Iterator[dict[str, str]]:
 def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
              pass_fds: tuple[int, ...] = (), deploy_diagnostics: bool = False,
              timeout: int | None = None,
-             retain_source_failure: Callable[[str], None] | None = None) -> str:
+             retain_source_failure: Callable[[str], None] | None = None,
+             input_text: str | None = None) -> str:
     try:
         result = subprocess.run(argv, cwd=cwd, env=env, pass_fds=pass_fds, capture_output=True,
                                 text=True, errors='replace' if deploy_diagnostics else 'strict',
-                                check=False, timeout=timeout)
+                                check=False, timeout=timeout, input=input_text)
     except subprocess.TimeoutExpired:
         raise PostgresDeployError() from None
     if result.returncode:
@@ -1221,6 +1222,7 @@ class LinuxEffects:
         self, *args: str, cutover: AuthorityCutover | None = None,
         candidate: DeployPlan | None = None, timeout: int | None = None,
         source_snapshot: SourceIdentityRuntimeSnapshot | None = None,
+        input_text: str | None = None,
     ) -> str:
         cfg = self.config
         # Recovery Compose must inherit the authenticated ownership source from
@@ -1257,7 +1259,8 @@ class LinuxEffects:
                 overlays += ['-f', str(cfg.root / 'docker-compose.test-vault.yml')]
         return _command(['docker', 'compose', '--env-file', str(cfg.root / 'config/deploy' / (cfg.channel + '.env')),
             '-f', str(cfg.root / 'docker-compose.yaml'), '-f', str(cfg.root / ('docker-compose.' + cfg.channel + '.yml')),
-            *overlays, '-p', 'pkm-' + cfg.channel, *args], cwd=cfg.root, env=env, timeout=timeout)
+            *overlays, '-p', 'pkm-' + cfg.channel, *args], cwd=cfg.root, env=env,
+            timeout=timeout, input_text=input_text)
 
     def validate_plan(self, plan: DeployPlan) -> None:
         plan.validate()
@@ -1598,6 +1601,29 @@ class LinuxEffects:
         if payload.get("reason") not in ({None} | REFUSAL_REASONS):
             raise PostgresDeployError()
         return validate_receipt(payload)
+
+    def restore_operator_source_identity(
+        self,
+        operation_id: str,
+        revision: str,
+        image_digest: str,
+        selected: AuthorityCutover,
+        command: dict[str, Any],
+        *,
+        resume_unattempted: bool = False,
+    ) -> dict[str, Any]:
+        """Run or reconcile one distinct DEV-only operator restoration."""
+        from app.ops.native_operator_identity_restoration import run_host_operation
+
+        return run_host_operation(
+            self,
+            operation_id=operation_id,
+            revision=revision,
+            image_digest=image_digest,
+            selected=selected,
+            command=command,
+            resume_unattempted=resume_unattempted,
+        )
 
     def prove_source_identity_absence(self, operation_id: str) -> dict[str, Any]:
         """Prove one source-persistence ID never crossed native admission."""
@@ -3567,9 +3593,17 @@ class LinuxEffects:
                 set(owner_marker) == {'kind', 'channel', 'operation_id'}
                 and owner_marker.get('kind') == 'source-identity-persistence'
             )
+            operator_identity_restoration = (
+                set(owner_marker) == {'kind', 'channel', 'operation_id'}
+                and owner_marker.get('kind') == 'operator-identity-restoration'
+                and self.config.channel == 'dev'
+            )
             if (journal is None or journal.channel != self.config.channel
                 or self.config.channel not in {'dev', 'test'}
-                or not (qualification or karakeep or source_persistence)
+                or not (
+                    qualification or karakeep or source_persistence
+                    or operator_identity_restoration
+                )
                 or owner_marker['channel'] != self.config.channel
                 or owner_marker['operation_id'] != self.operation_id
                 or str(UUID(owner_marker['operation_id'])) != owner_marker['operation_id']):
@@ -4024,6 +4058,37 @@ class DeploymentSupervisor:
                     operation_id, revision, image_digest, selected,
                 )
                 return {'source_identity_persistence': receipt}
+        if data.get('action') == 'operator-identity-restore':
+            if set(data) != {
+                'action', 'operation_id', 'revision', 'image_digest',
+                'authority_cutover', 'command', 'resume_unattempted',
+            }:
+                raise PostgresDeployError()
+            try:
+                operation_id = str(data['operation_id'])
+                revision = str(data['revision'])
+                image_digest = str(data['image_digest'])
+                selected = AuthorityCutover(**data['authority_cutover'])
+                if (
+                    str(UUID(operation_id)) != operation_id
+                    or re.fullmatch(r'[0-9a-f]{40}', revision) is None
+                    or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
+                    or type(data['resume_unattempted']) is not bool
+                ):
+                    raise PostgresDeployError()
+            except (ValueError, TypeError, AttributeError):
+                raise PostgresDeployError() from None
+            with self.mutex:
+                self._require_current_config()
+                if self.config.channel != 'dev' or (
+                    self.operation is not None and not self.operation.finished.is_set()
+                ):
+                    raise PostgresDeployError()
+                receipt = LinuxEffects(self.config).restore_operator_source_identity(
+                    operation_id, revision, image_digest, selected,
+                    data['command'], resume_unattempted=data['resume_unattempted'],
+                )
+                return {'operator_identity_restoration': receipt}
         if data.get('action') == 'source-identity-prove-absence':
             if set(data) != {'action', 'operation_id'}:
                 raise PostgresDeployError()
@@ -4178,6 +4243,54 @@ class SshDeployRemote:
         if not isinstance(response, dict) or response.get('refused'):
             raise PostgresDeployError()
         return response
+
+    def restore_operator_source_identity(
+        self, operation_id: str, revision: str, image_digest: str,
+        selected: AuthorityCutover, command: dict[str, Any], *,
+        resume_unattempted: bool = False,
+    ) -> dict[str, Any]:
+        """Invoke the distinct DEV-only restoration RPC through stdin."""
+        from app.ops.native_operator_identity_restoration import (
+            validate_command, validate_receipt,
+        )
+
+        if self.host != 'ygg-dev' or type(resume_unattempted) is not bool:
+            raise PostgresDeployError()
+        selected.validate()
+        payload = {
+            'action': 'operator-identity-restore',
+            'operation_id': operation_id,
+            'revision': revision,
+            'image_digest': image_digest,
+            'authority_cutover': {
+                'binding_id': selected.binding_id,
+                'root': selected.root,
+                'ownership_root': selected.ownership_root,
+            },
+            'command': validate_command(command),
+            'resume_unattempted': resume_unattempted,
+        }
+        result = subprocess.run(
+            ['ssh', '-o', 'BatchMode=yes', '--', self.host, 'sudo', '-n',
+             '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', 'dev'],
+            input=json.dumps(payload) + '\n', text=True, capture_output=True, check=False,
+        )
+        if result.returncode:
+            raise PostgresDeployError()
+        try:
+            response = json.loads(result.stdout)
+            if not isinstance(response, dict) or set(response) != {'operator_identity_restoration'}:
+                raise PostgresDeployError()
+            receipt = validate_receipt(response['operator_identity_restoration'])
+            if (
+                receipt['operation_id'] != operation_id
+                or receipt['revision'] != revision
+                or receipt['channel'] != 'dev'
+            ):
+                raise PostgresDeployError()
+            return receipt
+        except Exception:
+            raise PostgresDeployError() from None
 
     def persist_source_identity(
         self, operation_id: str, revision: str, image_digest: str,

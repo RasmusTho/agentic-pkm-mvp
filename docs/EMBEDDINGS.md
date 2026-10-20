@@ -566,6 +566,15 @@ private. Success does not weaken canonical Product mapping checks, start a deplo
 a retry; the delivery classifier and a separately qualified fresh immutable candidate remain
 required.
 
+When read-only Product and filesystem evidence already establish the same identity but the stored
+frontmatter scalar is a non-canonical representation, the ordinary producer remains forbidden from
+overwriting it. A separately reviewed DEV-only `operator-identity-restoration` operation may make
+one expected-version CAS that changes only that scalar representation to the already-established
+canonical UUID. It has its own owner kind, fixed content-free request/attempt/terminal receipts,
+the normal WriteGuard, exact writer fencing and cleanup-only recovery. It cannot select an identity,
+run a producer, heal missing identity, operate in TEST/PROD, deploy, or retry after a CAS was staged,
+dispatched, failed or became indeterminate.
+
 | Fixed reason | Required area of source-authorized investigation |
 | --- | --- |
 | `legacy_candidate_refused` | Candidate-only or proposal classification |

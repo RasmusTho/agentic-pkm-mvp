@@ -27,6 +27,7 @@ class HostSecretAdmissionError(RuntimeError):
 
 _KINDS = {
     "check", "import", "token-push", "deploy", "bootstrap", "source-persistence",
+    "operator-identity-restoration",
 }
 _TARGETS = {"dev", "test", "prod", "shared", "bob-1"}
 _TERMINAL_SOURCES = {
@@ -36,6 +37,7 @@ _TERMINAL_SOURCES = {
     "token-push": "remote-terminal",
     "deploy": "remote-terminal",
     "source-persistence": "remote-terminal",
+    "operator-identity-restoration": "remote-terminal",
 }
 _TOKEN_PUSH_LOCAL_ABORT_SOURCE = "host-preflight"
 _DEPLOY_ABSENCE_SOURCE = "postmerge-controller"
@@ -172,7 +174,7 @@ class HostSecretOperation:
             or (
                 evidence.result == "failed"
                 and (
-                    self.kind not in {"deploy", "source-persistence"}
+                    self.kind not in {"deploy", "source-persistence", "operator-identity-restoration"}
                     or self.kind == "deploy" and self.allow_bootstrap is not False
                 )
             )
@@ -293,6 +295,10 @@ class HostSecretController:
                     or not {"operation_id", "kind", "target", "stage", "source"} <= set(record)
                     or record["kind"] not in _KINDS
                     or record["target"] not in _TARGETS
+                    or (
+                        record["kind"] == "operator-identity-restoration"
+                        and record["target"] != "dev"
+                    )
                     or str(UUID(record["operation_id"])) != record["operation_id"]
                 ):
                     raise HostSecretAdmissionError()
@@ -347,7 +353,9 @@ class HostSecretController:
                     if record["kind"] == "deploy" and record.get("allow_bootstrap") != pending.get("allow_bootstrap"):
                         raise HostSecretAdmissionError()
                     if record["stage"] == "failed" and (
-                        record["kind"] not in {"deploy", "source-persistence"}
+                        record["kind"] not in {
+                            "deploy", "source-persistence", "operator-identity-restoration",
+                        }
                         or record["kind"] == "deploy" and pending.get("allow_bootstrap") is not False
                     ):
                         raise HostSecretAdmissionError()
@@ -359,7 +367,9 @@ class HostSecretController:
                         pending = record
                         continue
                     terminal_stages = {"committed", "aborted"}
-                    if record["kind"] in {"deploy", "source-persistence"}:
+                    if record["kind"] in {
+                        "deploy", "source-persistence", "operator-identity-restoration",
+                    }:
                         terminal_stages.add("failed")
                     if (
                         record["stage"] not in terminal_stages
@@ -389,6 +399,7 @@ class HostSecretController:
             kind not in _KINDS
             or target not in _TARGETS
             or kind == "token-push"
+            or (kind == "operator-identity-restoration" and target != "dev")
             or (target == "shared" and kind not in {"check", "import"})
             or (target == "bob-1" and kind not in {"check", "import", "deploy"})
         ):
@@ -611,6 +622,59 @@ class HostSecretController:
                 mutation_started=pending is not None and pending.get("stage") == "sent",
                 completed_result=completed,
                 completed_source=completed_source,
+            )
+            resumed = pending is not None or completed is not None
+            if not resumed:
+                operation._deferred_prepared = True
+            try:
+                yield operation, resumed
+            finally:
+                operation._active = False
+
+    @contextmanager
+    def operator_identity_restoration_operation(
+        self, target: str, *, operation_id: str,
+    ) -> Iterator[tuple[HostSecretOperation, bool]]:
+        """Admit only the separately reviewed DEV operator restoration."""
+        if target != "dev":
+            raise HostSecretAdmissionError()
+        try:
+            if str(UUID(operation_id)) != operation_id:
+                raise HostSecretAdmissionError()
+        except (ValueError, TypeError, AttributeError):
+            raise HostSecretAdmissionError() from None
+        with self._locked_journal(wait=True) as descriptor:
+            pending = self._pending(descriptor)
+            if pending is not None and (
+                pending.get("operation_id") != operation_id
+                or pending.get("kind") != "operator-identity-restoration"
+                or pending.get("target") != target
+            ):
+                raise HostSecretAdmissionError()
+            completed = None
+            if pending is None:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                with os.fdopen(os.dup(descriptor), "r", encoding="utf-8") as source:
+                    matches = [
+                        record for record in map(json.loads, source)
+                        if record["operation_id"] == operation_id
+                    ]
+                if matches:
+                    last = matches[-1]
+                    if (
+                        last["kind"] != "operator-identity-restoration"
+                        or last["target"] != "dev"
+                        or last["stage"] not in {"committed", "failed"}
+                        or last["source"] != "remote-terminal"
+                    ):
+                        raise HostSecretAdmissionError()
+                    completed = str(last["stage"])
+            operation = HostSecretOperation(
+                descriptor, operation_id, "operator-identity-restoration", target,
+                prepared=pending is not None,
+                mutation_started=pending is not None and pending.get("stage") == "sent",
+                completed_result=completed,
+                completed_source="remote-terminal" if completed is not None else None,
             )
             resumed = pending is not None or completed is not None
             if not resumed:

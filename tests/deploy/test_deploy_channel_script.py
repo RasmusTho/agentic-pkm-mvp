@@ -5954,6 +5954,422 @@ def test_vm_channel_lock_is_retained_until_matching_terminal_receipt(tmp_path):
     assert not (other / 'config/deploy/test.env.lock').exists()
 
 
+def test_operator_identity_restoration_owner_is_dev_only_and_typed(tmp_path):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops.postgres_deploy import PostgresDeployError
+    from app.ops.postgres_deploy_linux import LinuxEffects
+
+    operation_id = str(uuid4())
+
+    def effects_for(channel: str, suffix: str):
+        root = tmp_path / suffix
+        (root / 'config/deploy').mkdir(parents=True)
+        journal = SimpleNamespace(channel=channel, directory=root / 'journal', read=lambda: None)
+        effects = LinuxEffects(SimpleNamespace(root=root, channel=channel, journal=journal))
+        effects.operation_id = operation_id
+        return effects, journal
+
+    effects, journal = effects_for('dev', 'accepted')
+    owner = {
+        'kind': 'operator-identity-restoration',
+        'channel': 'dev',
+        'operation_id': operation_id,
+    }
+    with effects.channel_lock(journal=journal, owner_marker=owner, retire_terminal=False):
+        assert effects.channel_lock_owner() == (json.dumps(owner, sort_keys=True) + '\n').encode()
+
+    for channel, marker in (
+        ('test', {**owner, 'channel': 'test'}),
+        ('dev', {**owner, 'kind': 'operator-identity-restoration-other'}),
+        ('dev', {**owner, 'unexpected': 'field'}),
+    ):
+        candidate, candidate_journal = effects_for(channel, channel + marker.get('kind', 'malformed'))
+        with pytest.raises(PostgresDeployError):
+            with candidate.channel_lock(
+                journal=candidate_journal, owner_marker=marker, retire_terminal=False,
+            ):
+                pass
+
+
+def _operator_restoration_effects(tmp_path, worker_receipt):
+    from types import SimpleNamespace
+
+    operation_id = worker_receipt['operation_id']
+    writers = ('api', 'watcher', 'worker')
+
+    class Effects:
+        def __init__(self):
+            directory = tmp_path / 'journal'
+            directory.mkdir(parents=True)
+            self.config = SimpleNamespace(
+                channel='dev', uid=1000, gid=1000,
+                journal=SimpleNamespace(directory=directory),
+            )
+            self.operation_id = None
+            self.owner = None
+            self.running = writers
+            self.calls = []
+
+        def qualify_source_identity_authority(self, *_args):
+            return SimpleNamespace()
+
+        def source_identity_runtime_snapshot(self, _selected, *, require_running_capture):
+            if require_running_capture and not self.running:
+                raise AssertionError('running writers required')
+            return SimpleNamespace(
+                installed_fingerprint='installed',
+                observed_installed_fingerprint='installed',
+                legacy_installed_fingerprints=frozenset(),
+                execution_fingerprint='execution',
+                existing_writers=writers,
+                running_writers=self.running,
+                container_root='/app/vault',
+                vault_overlay='docker-compose.full-host-vault.yml',
+                child_environment=(('DATABASE_URL_FILE', '/run/secrets/db'),),
+                unset_environment=('DATABASE_URL',),
+            )
+
+        def require_source_identity_candidate(self, *_args, **_kwargs):
+            return None
+
+        @contextmanager
+        def channel_lock(self, *, journal, owner_marker, retire_terminal):
+            assert journal is self.config.journal and retire_terminal is False
+            self.owner = (json.dumps(owner_marker, sort_keys=True) + '\n').encode()
+            yield
+
+        def channel_lock_owner(self):
+            return self.owner
+
+        @contextmanager
+        def failed_reconciliation_lock(self, *, expected_owner):
+            assert self.owner == (json.dumps(expected_owner, sort_keys=True) + '\n').encode()
+            yield object()
+
+        def retire_reconciled_channel_lock(self, _handle, *, expected_owner):
+            assert self.owner == (json.dumps(expected_owner, sort_keys=True) + '\n').encode()
+            self.owner = None
+
+        def compose(self, action, *args, input_text=None, **_kwargs):
+            self.calls.append((action, args, input_text))
+            if action == 'stop':
+                self.running = ()
+                return ''
+            if action == 'start':
+                self.running = writers
+                return ''
+            assert action == 'run'
+            attempt = self.config.journal.directory / (
+                f'dev-operator-identity-restoration-{operation_id}.attempt.json'
+            )
+            assert attempt.exists()
+            assert input_text is not None and 'target_rel' in json.loads(input_text)
+            return json.dumps(worker_receipt)
+
+    return Effects()
+
+
+def test_operator_identity_restoration_fences_and_restores_exact_writers(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import native_source_bootstrap
+    from app.ops.native_operator_identity_restoration import run_host_operation
+
+    operation_id = str(uuid4())
+    revision = 'a' * 40
+    worker = {
+        'contract': 'native-operator-identity-restoration.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'result': 'unknown', 'write_phase': 'written', 'cleanup': 'not_started',
+        'reason': None, 'automatic_producer_started': False,
+        'automatic_deployment_started': False,
+    }
+    effects = _operator_restoration_effects(tmp_path, worker)
+    monkeypatch.setattr(native_source_bootstrap, 'quiesce_owned_container', lambda *_args: True)
+    selected = SimpleNamespace(
+        binding_id='vault-alpha', root='/srv/vault', ownership_root='/srv/state',
+        validate=lambda: None,
+    )
+    receipt = run_host_operation(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest='sha256:' + '1' * 64, selected=selected,
+        command={
+            'target_rel': 'rewritten/target.md',
+            'expected_old_scalar': 'legacy-identity',
+            'replacement_uuid': str(uuid4()),
+        },
+    )
+    assert receipt['result'] == 'committed'
+    assert [call[0] for call in effects.calls] == ['stop', 'run', 'start']
+    assert effects.running == ('api', 'watcher', 'worker') and effects.owner is None
+    request = json.loads(next(effects.config.journal.directory.glob('*.request.json')).read_text())
+    assert 'command' not in request and len(request['command_sha256']) == 64
+
+
+def test_operator_identity_restoration_write_phase_and_cleanup_only_recovery(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import native_source_bootstrap
+    from app.ops.native_operator_identity_restoration import run_host_operation, validate_receipt
+
+    operation_id = str(uuid4())
+    revision = 'b' * 40
+    worker = {
+        'contract': 'native-operator-identity-restoration.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'result': 'unknown', 'write_phase': 'indeterminate', 'cleanup': 'not_started',
+        'reason': 'worker_transport_failed', 'automatic_producer_started': False,
+        'automatic_deployment_started': False,
+    }
+    effects = _operator_restoration_effects(tmp_path, worker)
+    monkeypatch.setattr(native_source_bootstrap, 'quiesce_owned_container', lambda *_args: True)
+    selected = SimpleNamespace(
+        binding_id='vault-alpha', root='/srv/vault', ownership_root='/srv/state',
+        validate=lambda: None,
+    )
+    command = {
+        'target_rel': 'rewritten/target.md',
+        'expected_old_scalar': 'legacy-identity',
+        'replacement_uuid': str(uuid4()),
+    }
+    first = run_host_operation(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest='sha256:' + '2' * 64, selected=selected, command=command,
+    )
+    assert first['write_phase'] == 'indeterminate' and first['result'] == 'unknown'
+    run_calls = sum(call[0] == 'run' for call in effects.calls)
+    second = run_host_operation(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest='sha256:' + '2' * 64, selected=selected, command=command,
+    )
+    assert second == first
+    assert sum(call[0] == 'run' for call in effects.calls) == run_calls
+    for phase in ('not_started', 'not_written', 'written', 'indeterminate'):
+        payload = {**worker, 'write_phase': phase}
+        if phase == 'written':
+            payload['reason'] = None
+        assert validate_receipt(payload)['write_phase'] == phase
+
+
+def test_operator_identity_restoration_request_only_crash_cleans_without_dispatch(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import native_source_bootstrap
+    from app.ops.native_operator_identity_restoration import run_host_operation
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    operation_id = str(uuid4())
+    revision = 'c' * 40
+    command = {
+        'target_rel': 'rewritten/target.md',
+        'expected_old_scalar': 'legacy-identity',
+        'replacement_uuid': str(uuid4()),
+    }
+    worker = {
+        'contract': 'native-operator-identity-restoration.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'result': 'unknown', 'write_phase': 'written', 'cleanup': 'not_started',
+        'reason': None, 'automatic_producer_started': False,
+        'automatic_deployment_started': False,
+    }
+    effects = _operator_restoration_effects(tmp_path, worker)
+    selected = SimpleNamespace(
+        binding_id='vault-alpha', root='/srv/vault', ownership_root='/srv/state',
+        validate=lambda: None,
+    )
+    command_hash = hashlib.sha256(
+        json.dumps(command, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()
+    request = {
+        'contract': 'native-operator-identity-restoration-request.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'image_digest': 'sha256:' + '3' * 64,
+        'authority_cutover': {
+            'binding_id': selected.binding_id, 'root': selected.root,
+            'ownership_root': selected.ownership_root,
+        },
+        'installed_fingerprint': 'installed',
+        'execution_fingerprint': 'execution',
+        'writers': ['api', 'watcher', 'worker'],
+        'container_root': '/app/vault',
+        'vault_overlay': 'docker-compose.full-host-vault.yml',
+        'command_sha256': command_hash,
+    }
+    request_path = effects.config.journal.directory / (
+        f'dev-operator-identity-restoration-{operation_id}.request.json'
+    )
+    request_path.write_text(json.dumps(request), encoding='utf-8')
+    request_path.chmod(0o600)
+    owner = {
+        'kind': 'operator-identity-restoration', 'channel': 'dev',
+        'operation_id': operation_id,
+    }
+    effects.owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
+    monkeypatch.setattr(native_source_bootstrap, 'quiesce_owned_container', lambda *_args: True)
+    with pytest.raises(PostgresDeployError):
+        run_host_operation(
+            effects, operation_id=operation_id, revision=revision,
+            image_digest='sha256:' + '3' * 64, selected=selected, command=command,
+        )
+    assert [call[0] for call in effects.calls] == ['start']
+    assert effects.owner is None
+
+
+def test_operator_identity_restoration_written_evidence_commits_after_later_cleanup(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import native_source_bootstrap
+    from app.ops.native_operator_identity_restoration import run_host_operation
+
+    operation_id = str(uuid4())
+    revision = 'd' * 40
+    worker = {
+        'contract': 'native-operator-identity-restoration.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'result': 'unknown', 'write_phase': 'written', 'cleanup': 'not_started',
+        'reason': None, 'automatic_producer_started': False,
+        'automatic_deployment_started': False,
+    }
+    effects = _operator_restoration_effects(tmp_path, worker)
+    selected = SimpleNamespace(
+        binding_id='vault-alpha', root='/srv/vault', ownership_root='/srv/state',
+        validate=lambda: None,
+    )
+    command = {
+        'target_rel': 'rewritten/target.md',
+        'expected_old_scalar': 'legacy-identity',
+        'replacement_uuid': str(uuid4()),
+    }
+    quiesced = {'value': False}
+    monkeypatch.setattr(
+        native_source_bootstrap, 'quiesce_owned_container',
+        lambda *_args: quiesced['value'],
+    )
+    first = run_host_operation(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest='sha256:' + '4' * 64, selected=selected, command=command,
+    )
+    assert first['result'] == 'unknown' and first['cleanup'] == 'retained'
+    quiesced['value'] = True
+    second = run_host_operation(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest='sha256:' + '4' * 64, selected=selected, command=command,
+    )
+    assert second['result'] == 'committed'
+    assert second['write_phase'] == 'written' and second['cleanup'] == 'complete'
+    assert sum(call[0] == 'run' for call in effects.calls) == 1
+
+
+def test_operator_identity_restoration_orphan_dangling_and_foreign_lineage_refuse(
+    tmp_path,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops.native_operator_identity_restoration import run_host_operation
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    operation_id = str(uuid4())
+    revision = 'e' * 40
+    command = {
+        'target_rel': 'rewritten/target.md',
+        'expected_old_scalar': 'legacy-identity',
+        'replacement_uuid': str(uuid4()),
+    }
+    worker = {
+        'contract': 'native-operator-identity-restoration.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'result': 'unknown', 'write_phase': 'not_written', 'cleanup': 'not_started',
+        'reason': 'worker_refused', 'automatic_producer_started': False,
+        'automatic_deployment_started': False,
+    }
+    selected = SimpleNamespace(
+        binding_id='vault-alpha', root='/srv/vault', ownership_root='/srv/state',
+        validate=lambda: None,
+    )
+
+    def invoke(effects):
+        return run_host_operation(
+            effects, operation_id=operation_id, revision=revision,
+            image_digest='sha256:' + '5' * 64, selected=selected, command=command,
+        )
+
+    orphan = _operator_restoration_effects(tmp_path / 'orphan', worker)
+    prefix = f'dev-operator-identity-restoration-{operation_id}'
+    for suffix, payload in (
+        ('.attempt.json', {
+            'contract': 'native-operator-identity-restoration-attempt.v1',
+            'operation_id': operation_id, 'dispatch_staged': True,
+        }),
+        ('.worker.json', worker),
+    ):
+        path = orphan.config.journal.directory / (prefix + suffix)
+        path.write_text(json.dumps(payload), encoding='utf-8')
+        path.chmod(0o600)
+    with pytest.raises(PostgresDeployError):
+        invoke(orphan)
+    assert orphan.calls == [] and orphan.owner is None
+
+    dangling = _operator_restoration_effects(tmp_path / 'dangling', worker)
+    (dangling.config.journal.directory / (prefix + '.request.json')).symlink_to(
+        dangling.config.journal.directory / 'missing-private-entry'
+    )
+    with pytest.raises(Exception):
+        invoke(dangling)
+    assert dangling.calls == [] and dangling.owner is None
+
+    foreign = _operator_restoration_effects(tmp_path / 'foreign', worker)
+    command_hash = hashlib.sha256(
+        json.dumps(command, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()
+    request = {
+        'contract': 'native-operator-identity-restoration-request.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'image_digest': 'sha256:' + '5' * 64,
+        'authority_cutover': {
+            'binding_id': selected.binding_id, 'root': selected.root,
+            'ownership_root': selected.ownership_root,
+        },
+        'installed_fingerprint': 'installed', 'execution_fingerprint': 'execution',
+        'writers': ['api', 'watcher', 'worker'], 'container_root': '/app/vault',
+        'vault_overlay': 'docker-compose.full-host-vault.yml',
+        'command_sha256': command_hash,
+    }
+    path = foreign.config.journal.directory / (prefix + '.request.json')
+    path.write_text(json.dumps(request), encoding='utf-8')
+    path.chmod(0o600)
+    foreign.owner = b'foreign-owner\n'
+    with pytest.raises(PostgresDeployError):
+        invoke(foreign)
+    assert foreign.calls == [] and foreign.owner == b'foreign-owner\n'
+
+    poison = _operator_restoration_effects(tmp_path / 'phase-poison', worker)
+    request_path = poison.config.journal.directory / (prefix + '.request.json')
+    request_path.write_text(json.dumps(request), encoding='utf-8')
+    request_path.chmod(0o600)
+    terminal = {**worker, 'write_phase': 'indeterminate', 'cleanup': 'retained'}
+    terminal_path = poison.config.journal.directory / (prefix + '.json')
+    terminal_path.write_text(json.dumps(terminal), encoding='utf-8')
+    terminal_path.chmod(0o600)
+    with pytest.raises(PostgresDeployError):
+        invoke(poison)
+    assert poison.calls == [] and poison.owner is None
+
+
 def test_deploy_does_not_create_plaintext_postgres_env_file(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from app.ops import postgres_deploy_linux as linux

@@ -131,7 +131,7 @@ companion exists, companion.source_ref ≠ current vault path
 | `title` | Vault note (frontmatter) | Cache in companion for repair; never authoritative |
 | `review_state` | Vault note (frontmatter) | Read for policy; never write |
 | `maturity` | Vault note (frontmatter) | Read for policy; never write |
-| `uuid` | Vault note (frontmatter) | Write if missing; never overwrite existing |
+| `uuid` | Vault note (frontmatter) | Write if missing; never overwrite an established identity. A separately reviewed DEV-only operator operation may replace only a non-canonical scalar representation when Product and filesystem evidence prove the exact same identity, using one expected-version CAS and cleanup-only recovery. |
 | `content_hash` | Companion note | Compute and write |
 | `ingest_state` | Companion note | Compute and write |
 | `attachments` manifest | Companion note | Observe and write; never repair vault embeds |
