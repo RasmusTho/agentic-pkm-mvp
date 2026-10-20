@@ -374,12 +374,77 @@ def test_supervised_metadata_phase_refuses_noncanonical_uuid_before_companion_pa
         lambda _text: ({"uuid": "../../other-note"}, "source", None),
     )
     monkeypatch.setattr(outbox_worker, "_assert_profile_ingestible", lambda *_a, **_k: None)
-    monkeypatch.setattr(outbox_worker, "_maybe_heal_uuid", lambda *_a, **_k: "")
+    monkeypatch.setattr(
+        outbox_worker, "_maybe_heal_uuid",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("identity effect")),
+    )
     monkeypatch.setattr(
         outbox_worker, "companion_path",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("path effect")),
     )
     with pytest.raises(ValueError, match="canonical UUID"):
+        outbox_worker.persist_registry_source_identity(
+            {"relative_path": "source.md"}, vault_root=tmp_path,
+            allow_retry_enqueue=False, require_persisted_evidence=True,
+        )
+
+
+def test_supervised_metadata_phase_preserves_canonical_legacy_id_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers import outbox_worker
+
+    note_uuid = str(uuid4())
+    note = tmp_path / "source.md"
+    note.write_text("source", encoding="utf-8")
+    monkeypatch.setattr(outbox_worker, "_stabilized_note_text", lambda _path: "source")
+    monkeypatch.setattr(
+        outbox_worker, "parse_bounded_frontmatter",
+        lambda _text: ({"id": note_uuid}, "source", None),
+    )
+    monkeypatch.setattr(outbox_worker, "_assert_profile_ingestible", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        outbox_worker, "_maybe_heal_uuid",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("identity changed")),
+    )
+    monkeypatch.setattr(outbox_worker, "read_companion", lambda *_a: None)
+    written: list[object] = []
+    monkeypatch.setattr(
+        outbox_worker, "write_companion", lambda *_a, **_k: written.append(object()),
+    )
+    result = outbox_worker.persist_registry_source_identity(
+        {"relative_path": "source.md"}, vault_root=tmp_path,
+        allow_retry_enqueue=False, require_persisted_evidence=True,
+    )
+    assert result is not None
+    assert result.note_uuid == note_uuid
+    assert len(written) == 1
+
+
+def test_supervised_metadata_phase_refuses_companion_parent_alias_before_identity_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers import outbox_worker
+
+    note = tmp_path / "source.md"
+    note.write_text("source", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "system").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(outbox_worker, "_stabilized_note_text", lambda _path: "source")
+    monkeypatch.setattr(
+        outbox_worker, "parse_bounded_frontmatter", lambda _text: ({}, "source", None),
+    )
+    monkeypatch.setattr(outbox_worker, "_assert_profile_ingestible", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        outbox_worker, "companion_path",
+        lambda *_a, **_k: Path("system/companions") / f"{uuid4()}.md",
+    )
+    monkeypatch.setattr(
+        outbox_worker, "_maybe_heal_uuid",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("identity changed")),
+    )
+    with pytest.raises(ValueError, match="contains an alias"):
         outbox_worker.persist_registry_source_identity(
             {"relative_path": "source.md"}, vault_root=tmp_path,
             allow_retry_enqueue=False, require_persisted_evidence=True,

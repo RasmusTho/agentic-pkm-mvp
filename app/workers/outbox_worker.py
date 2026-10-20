@@ -1769,6 +1769,35 @@ class RegistrySourceIdentityResult:
     note_uuid: str
 
 
+def _assert_strict_companion_storage_boundary(vault_root: Path) -> None:
+    """Refuse configured companion storage that traverses aliases or non-directories."""
+    sentinel_uuid = "00000000-0000-0000-0000-000000000000"
+    directories = tuple(dict.fromkeys((
+        companion_path(sentinel_uuid, vault_root).parent,
+        Path("_system/companions"),
+    )))
+    for relative in directories:
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            raise ValueError("companion storage path is not vault-relative")
+        candidate = vault_root
+        for part in relative.parts:
+            candidate = candidate / part
+            if not os.path.lexists(candidate):
+                continue
+            try:
+                observed = candidate.lstat()
+            except OSError:
+                raise ValueError("companion storage boundary is unreadable") from None
+            if stat.S_ISLNK(observed.st_mode):
+                raise ValueError("companion storage boundary contains an alias")
+            if not stat.S_ISDIR(observed.st_mode):
+                raise ValueError("companion storage boundary is not a directory")
+
+
 def persist_registry_source_identity(
     payload: Mapping[str, Any],
     *,
@@ -1814,7 +1843,22 @@ def persist_registry_source_identity(
         note_uuid=frontmatter.get("uuid") or frontmatter.get("id"),
         source_text=raw_text,
     )
-    healed_uuid = _maybe_heal_uuid(note_path, resolved_root)
+    declared_uuid = _normalize_uuid_value(
+        frontmatter.get("uuid") or frontmatter.get("id")
+    )
+    if require_persisted_evidence and declared_uuid:
+        try:
+            if str(UUID(declared_uuid)) != declared_uuid:
+                raise ValueError
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("source identity is not a canonical UUID") from None
+    if require_persisted_evidence:
+        _assert_strict_companion_storage_boundary(resolved_root)
+    healed_uuid = (
+        ""
+        if require_persisted_evidence and declared_uuid
+        else _maybe_heal_uuid(note_path, resolved_root)
+    )
     # Canonicalize on the AI-panel-stripped body (KERNEL-06, #2768 fix): the panel
     # agent writes both the `%% AI:Start/End %%` fence contents and a separate
     # `> [!info]- AI status` receipt callout back into the note body on disk (see
@@ -1829,7 +1873,7 @@ def persist_registry_source_identity(
     # all three consumers looking at the same canonical source body.
     content = canonical_product_body_text(body)
 
-    note_uuid = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
+    note_uuid = declared_uuid
     if not note_uuid and healed_uuid:
         note_uuid = healed_uuid
     if not note_uuid:
@@ -1919,6 +1963,8 @@ def persist_registry_source_identity(
                     elif canonical_companion_path not in existing_paths:
                         raise ValueError("legacy companion cannot be overwritten")
             if write_required:
+                if require_persisted_evidence:
+                    _assert_strict_companion_storage_boundary(resolved_root)
                 write_companion(resolved_root, companion)
         except OSError as exc:
             if require_persisted_evidence:
