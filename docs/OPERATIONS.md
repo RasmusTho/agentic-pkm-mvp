@@ -63,6 +63,15 @@ the exact same-ID cleanup route. Child output, exception text, source identity o
 or mount values, and credentials must never be copied into receipts or operator notes. See
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` for the detailed stage and cleanup contract.
 
+The exact supportable source-identity repair module is an inert DEV library, not an operator CLI or
+standing recovery route. A separately governed native owner must supply one reviewed 23+26 private
+batch whose revision, image, selection, target-set digest, and physical vault identity match fresh
+host authority inside one owned fence. The library performs no discovery, producer allocation,
+controller load, deployment, inference, or promotion. Do not replay partial/indeterminate outcomes;
+reconcile only against retained exact hashes. Rollback is permitted only for a validated batch
+member whose current bytes equal its admitted candidate and must run under the same pre/post fence.
+No raw path, UUID, content, or exception text belongs in its public count-only receipt.
+
 ### Mimer voice sessions (VOICE-04)
 
 `POST /api/ask/voice` returns a `session_id` when a question turn opens a transcript
