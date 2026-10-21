@@ -22,6 +22,11 @@ ALLOW_FILES = (
     # required before supervised channel activation; no Product data writes.
     'app/config/database.py',
     'app/ops/postgres_deploy.py',
+    # Issue #6289: the DEV-only operator identity worker is a bounded,
+    # read-only proof adapter.  It owns the existing PGOPTIONS preflight and
+    # uses the public DSN seam; keep this exact exception finite so unknown
+    # direct callers remain rejected.
+    'app/ops/native_operator_identity_restoration.py',
     # BuilderOps independent PostgreSQL authority (BCP-01, #3792). This is the
     # dedicated storage adapter behind the domain-neutral control-plane port;
     # callers do not import psycopg or Product app.db through this exception.

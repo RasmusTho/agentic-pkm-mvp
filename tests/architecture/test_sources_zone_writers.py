@@ -57,6 +57,7 @@ REGISTERED_SOURCE_WRITERS = {
     ("app/heimdal/candidate_projection.py", "write_reading_candidate_note"),
     ("app/heimdal/candidate_projection.py", "project_pending_candidates"),
     ("app/heimdal/meeting_finalization.py", "finalize_session"),
+    ("app/ops/native_operator_identity_restoration.py", "run_worker"),
 }
 
 # Bare packaged names remain only in the resolver or pure path/classification helpers. These exact
@@ -94,6 +95,7 @@ SOURCE_RESOLVER_CALLERS = {
     ("app/knowledge_acquisition/source_frames.py", "_bundle_folder"),
     ("app/mcp/vault_tools.py", "append_note"),
     ("app/ops/karakeep_runtime.py", "child_preflight"),
+    ("app/ops/native_operator_identity_restoration.py", "run_worker"),
     ("app/services/artifact_identity.py", "_is_create_once"),
     ("app/settings/mimer_scaffolder.py", "MimerScaffolder.scaffold"),
     ("app/vault/paths.py", "get_vault_sources_dir_rel"),
@@ -105,6 +107,10 @@ SOURCE_CLASSIFICATION_FORWARDING_CALLERS = {
     ("app/knowledge/adapters.py", "FsVaultAdapter._classify_target"): "self.sources_root_rel",
     ("app/knowledge/adapters.py", "ObsidianCliAdapter.write_note"): "self.sources_root_rel",
     ("app/services/artifact_identity.py", "_is_create_once"): "sources_root_rel",
+    (
+        "app/ops/native_operator_identity_restoration.py",
+        "run_worker",
+    ): "get_vault_sources_dir_rel(root)",
 }
 
 # Every shipped production helper or constructor whose packaged fallback names Sources. Values
@@ -164,6 +170,11 @@ SOURCE_DEFAULT_ROOT_FORWARDING_CALLERS = {
         "_build_adapter",
         "app.knowledge.adapters.FsVaultAdapter",
     ): ("sources_root_rel",),
+    (
+        "app/ops/native_operator_identity_restoration.py",
+        "run_worker",
+        "app.knowledge.multiwriter.classify_note_in_vault",
+    ): ("get_vault_sources_dir_rel(root)",),
     (
         "app/heimdal/candidate_projection.py",
         "write_candidate_note",
@@ -1306,6 +1317,7 @@ def test_classifier_callsite_inventory_rejects_missing_or_default_sources_root()
             "app/knowledge/__init__.py",
             "app/knowledge/adapters.py",
             "app/knowledge/multiwriter.py",
+            "app/ops/native_operator_identity_restoration.py",
             "app/services/artifact_identity.py",
         )
     }
@@ -1412,7 +1424,7 @@ def test_classifier_callsite_inventory_rejects_missing_or_default_sources_root()
 
     for caller, root_expression in SOURCE_CLASSIFICATION_FORWARDING_CALLERS.items():
         relative, scope = caller
-        forwarded = f"            sources_root_rel={root_expression},\n"
+        forwarded = f"sources_root_rel={root_expression},\n"
         mutated = dict(sources)
         source = mutated[relative]
         if scope == "ObsidianCliAdapter.write_note":
