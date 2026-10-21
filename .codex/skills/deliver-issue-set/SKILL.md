@@ -10,7 +10,7 @@ Blocked and needs-human candidates must carry the compatible `action:*` subtype 
 
 Use this skill when asked to review, plan, make ready, or deliver an epic, parent feature issue, Kanban/Project lane, or larger set of issues that should move through agent pickup.
 
-The goal is to produce an executable implementation plan and, when requested, deliver the full epic or all in-scope Kanban/Project issues that can truthfully be delivered. When a delivery request leaves scope implicit, automatically select one default scope from the current repository using the rule below; do not pause to ask which issue set the owner means. When the ready pool is too small, repair or create bounded ready issues using the repo's existing backlog workflows.
+The goal is to produce an executable implementation plan and, when requested, deliver the full epic or all in-scope Kanban/Project issues that can truthfully be delivered. When a delivery request leaves scope implicit, automatically select a bounded set of one or more issues/epics from the current repository using the rule below; do not pause to ask which issue set the owner means. When the ready pool is too small, repair or create bounded ready issues using the repo's existing backlog workflows.
 
 This skill is a coordinator. It does not replace `issue-to-code`, `verification-and-closure`, `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`.
 
