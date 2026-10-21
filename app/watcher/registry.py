@@ -415,13 +415,15 @@ def _single_registry_writer(func: Callable[..., Any]) -> Callable[..., Any]:
 @contextmanager
 def _compatibility_watcher_window(
     reconciler: DormantSettingsRebindReconciler | None,
+    *,
+    read_only: bool = False,
 ) -> Iterator[None]:
     """Fence the complete watcher tick against foreground compatibility commit."""
 
     if reconciler is None:
         yield
         return
-    with compatibility_ingress_window(reconciler.registry):
+    with compatibility_ingress_window(reconciler.registry, read_only=read_only):
         yield
 
 
@@ -723,10 +725,12 @@ class RegistryConfig:
             )
             # Configuration admission precedes the scan boundary. Fence its
             # identity-healing choice against foreground commits as well.
-            with _compatibility_watcher_window(reconciler):
+            with _compatibility_watcher_window(reconciler, read_only=read_only):
                 observation_only = (
                     reconciler is not None
-                    and reconciler.requires_observation_only_validation()
+                    and reconciler.requires_observation_only_validation(
+                        read_only=read_only,
+                    )
                 )
                 if not _validate_registry_vault(
                     vault_path,

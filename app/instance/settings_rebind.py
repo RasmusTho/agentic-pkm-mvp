@@ -4,6 +4,7 @@ import hashlib
 import fcntl
 import json
 import os
+import stat
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -33,6 +34,7 @@ def compatibility_ingress_window(
     registry: VaultRegistryStore,
     *,
     transition: bool = False,
+    read_only: bool = False,
 ) -> Iterator[None]:
     """Coordinate compatibility effects with one foreground rebind.
 
@@ -42,6 +44,8 @@ def compatibility_ingress_window(
     fail-closed on the next attempt.
     """
 
+    if transition and read_only:
+        raise RegistryError("read-only compatibility ingress cannot transition")
     identity = (os.getpid(), str(registry.path.resolve()))
     held: frozenset[tuple[int, str]] = getattr(
         _TRANSITION_LOCKS, "held", frozenset()
@@ -50,12 +54,23 @@ def compatibility_ingress_window(
         yield
         return
     lock_path = registry.path.parent / "settings-rebind-ingress.lock"
+    flags = os.O_RDONLY if read_only else os.O_RDWR | os.O_CREAT
     descriptor = os.open(
         lock_path,
-        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
         0o600,
     )
     try:
+        if read_only:
+            info = os.fstat(descriptor)
+            registry_info = registry.path.stat(follow_symlinks=False)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_uid != registry_info.st_uid
+            ):
+                raise RegistryError("settings rebind ingress lock is unqualified")
         fcntl.flock(descriptor, fcntl.LOCK_EX if transition else fcntl.LOCK_SH)
         if transition:
             _TRANSITION_LOCKS.held = held | {identity}
@@ -257,6 +272,13 @@ class SettingsRebindStore:
 
     def read(self) -> SettingsRebindRecord:
         value = self._registry.load().settings_rebind
+        if value is None:
+            raise RegistryError("settings rebind record is not installed")
+        return SettingsRebindRecord.from_payload(value)
+
+    def read_existing(self) -> SettingsRebindRecord:
+        """Read qualified existing authority without initialization or recovery."""
+        value = self._registry.read_existing().settings_rebind
         if value is None:
             raise RegistryError("settings rebind record is not installed")
         return SettingsRebindRecord.from_payload(value)
@@ -929,4 +951,9 @@ def _install_dormant_settings_rebind(
         binding_id=binding_id,
         _capability=_capability,
     )
+    # The read-only policy path may only open an existing shared-fence inode.
+    # Provision it here while the canonical bootstrap owner still has mutation
+    # authority; readers never create or repair this prerequisite.
+    with compatibility_ingress_window(registry):
+        pass
     return SettingsRebindRecord.from_payload(snapshot.settings_rebind)

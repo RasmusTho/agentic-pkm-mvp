@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import sys
 from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -196,6 +197,80 @@ def test_registry_plan_refuses_policy_source_missing_from_fresh_observations(
     )
     with pytest.raises(SourceIdentityPersistenceRefusal, match="source_context_refused"):
         persistence._registry_plan(root)
+
+
+def test_registry_plan_is_physically_read_only_with_existing_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.instance import settings_rebind
+    from app.instance.instance_state import InstanceStateLayout
+    from app.instance.runtime import InstanceRegistryRuntime
+    from app.instance.settings_rebind import _install_dormant_settings_rebind
+    from app.instance.vault_registry import VaultRegistration, VaultRegistryStore
+    from app.ops import native_source_identity_persistence as persistence
+    from app.watcher import registry
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    root = tmp_path / "vault"
+    initialize_test_vault(root)
+    source = root / "source.md"
+    source.write_text("source", encoding="utf-8")
+    config_path = tmp_path / "watchers.yaml"
+    config_path.write_text(
+        "watchers:\n  - name: notes\n    scope_glob: '*.md,**/*.md'\n"
+        "    emit_event: ingest.vault.changed\n",
+        encoding="utf-8",
+    )
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "instance-state", "dev"),
+        tmp_path / "ownership",
+    )
+    runtime.registry.register(
+        VaultRegistration(
+            vault_binding_id="binding-dev", ref=f"path:{root}", path=str(root),
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    _install_dormant_settings_rebind(
+        runtime.registry, binding_id="binding-dev",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    for key, value in {
+        "WATCHER_ENABLE": "1", "WATCHER_VAULT_PATH": str(root),
+        "WATCHER_SCOPE_GLOB": "*.md,**/*.md",
+        "WATCHER_STATE_DIR": str(tmp_path / "watcher-state"),
+        "INSTANCE_VAULT_REGISTRY_PATH": str(runtime.registry.path),
+        "PKM_SETTINGS_PROFILE": "lab",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(registry, "DEFAULT_REGISTRY_CONFIG_PATH", config_path)
+    original_open = settings_rebind.os.open
+    ingress = runtime.registry.path.parent / "settings-rebind-ingress.lock"
+
+    def guarded_open(path, flags, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if Path(path) == ingress:
+            assert not flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(settings_rebind.os, "open", guarded_open)
+    monkeypatch.setattr(
+        VaultRegistryStore, "load",
+        lambda _self: pytest.fail("production read-only policy used mutating load"),
+    )
+    before = {
+        path.name: path.read_bytes() for path in runtime.registry.path.parent.iterdir()
+        if path.is_file()
+    }
+    policy, observations = persistence._registry_plan(root)
+    after = {
+        path.name: path.read_bytes() for path in runtime.registry.path.parent.iterdir()
+        if path.is_file()
+    }
+    assert policy.enabled is True and policy.root == root
+    assert source in policy.sources
+    assert any(observation.path == source for observation in observations)
+    assert before == after
 
 
 def test_registry_postwrite_eligibility_is_complete_and_content_free(

@@ -1223,7 +1223,11 @@ remain untouched. Producer applicability uses the same strict configuration and 
 the default native registry and optional legacy entrypoints, not an assumption that the registry is
 alpha-gated. Native registry activation, selected root, configured event specs and effective scope
 come from its ordinary loader's read-only mode: persisted vault identities are required and the
-normal settings identity-heal seam is denied. Recovery drains its actual incremental scanner using memory-only
+normal settings identity-heal seam is denied. That read-only loader also requires the canonical
+settings-rebind bootstrap owner to have provisioned the existing mode-`0600`, single-link ingress
+lock. It opens that inode read-only and takes only the shared fence; missing, linked, malformed or
+foreign-owned lock authority refuses without creation, repair, transaction recovery or registry
+mutation. Recovery drains its actual incremental scanner using memory-only
 state and prepares claimed sources through the ordinary registry worker/indexer payload factories.
 No source heal, companion, event or ordinary store-write path is invoked. The supported native
 Compose graph shares the governed runtime-env and selected-root binding across API/worker/watcher;
