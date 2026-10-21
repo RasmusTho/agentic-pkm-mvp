@@ -179,6 +179,95 @@ def test_operator_identity_restoration_preserves_identity_and_original(
     assert retained and any(path.read_text(encoding="utf-8") == original for path in retained)
 
 
+def test_worker_database_boundary_preserves_read_only_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    import app.db.dsn as db_dsn
+
+    from app.knowledge import multiwriter
+    from app.knowledge.multiwriter import NoteClass
+    from app.vault import paths as vault_paths
+    from app.write_guard import DEFAULT_WRITE_GUARD
+    from psycopg.rows import dict_row
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(
+        multiwriter, "classify_note_in_vault", lambda *_args, **_kwargs: NoteClass.REWRITTEN,
+    )
+    monkeypatch.setattr(vault_paths, "get_vault_capture_note_rel", lambda _root: "Inbox/capture.md")
+    monkeypatch.setattr(vault_paths, "get_vault_sources_dir_rel", lambda _root: "ConfiguredSources")
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "healthy"})
+    monkeypatch.setattr(restoration, "_prove_other_sources_preserved", lambda **_kwargs: None)
+
+    proof_connections: list[object] = []
+
+    def prove_inventory(connection: object, **_kwargs):
+        proof_connections.append(connection)
+        return {}
+
+    monkeypatch.setattr(restoration, "_prove_inventory_and_product", prove_inventory)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://fixture@db:5432/app_test")
+    monkeypatch.setenv("PGOPTIONS", "-c default_transaction_read_only=on -c application_name=test")
+
+    positive_root = tmp_path / "positive"
+    positive_target = positive_root / "rewritten" / "example.md"
+    positive_target.parent.mkdir(parents=True)
+    positive_original = f"---\nuuid: '{OLD}'\n---\nbody\n"
+    positive_target.write_text(positive_original, encoding="utf-8")
+    positive_connection = _Connection()
+    connect_calls: list[tuple[str, dict[str, object]]] = []
+
+    def connect(dsn: str, **kwargs: object) -> _Connection:
+        connect_calls.append((dsn, kwargs))
+        return positive_connection
+
+    monkeypatch.setattr(db_dsn, "connect", connect)
+    receipt = restoration.run_worker(
+        operation_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        revision="a" * 40,
+        vault_root=positive_root,
+        command=_command(),
+    )
+
+    assert receipt["write_phase"] == "written"
+    assert connect_calls == [(
+        "postgresql://fixture@db:5432/app_test",
+        {"row_factory": dict_row},
+    )]
+    assert proof_connections == [positive_connection]
+    assert positive_connection.closed
+
+    negative_root = tmp_path / "negative"
+    negative_target = negative_root / "rewritten" / "example.md"
+    negative_target.parent.mkdir(parents=True)
+    negative_original = f"---\nuuid: '{OLD}'\n---\nbody\n"
+    negative_target.write_text(negative_original, encoding="utf-8")
+    proof_connections.clear()
+    connect_calls.clear()
+    monkeypatch.delenv("PGOPTIONS")
+
+    def unexpected_connect(*_args: object, **_kwargs: object) -> _Connection:
+        raise AssertionError("worker connected before read-only prerequisite")
+
+    monkeypatch.setattr(db_dsn, "connect", unexpected_connect)
+    with pytest.raises(OperatorIdentityRestorationRefusal, match="authority_refused"):
+        restoration.run_worker(
+            operation_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            revision="a" * 40,
+            vault_root=negative_root,
+            command=_command(),
+        )
+    assert not proof_connections
+    assert not connect_calls
+    assert negative_target.read_text(encoding="utf-8") == negative_original
+
+
 def test_operator_identity_restoration_guard_and_stale_cas_fail_closed(
     monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
