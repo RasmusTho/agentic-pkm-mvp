@@ -383,3 +383,49 @@ def test_daily_briefing_identity_migration_serializes_profile_initialization(
     initializer.join(timeout=1)
     assert initialization_finished.is_set()
     assert initialization_errors == []
+
+
+def test_daily_briefing_identity_migration_rejects_nonregular_authority_before_cas(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compose_module.compose_briefing(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    note = load_briefing(vault_context=vault, for_date=PAST)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    proposal = compose_module.prepare_briefing_identity_migration(
+        vault_context=vault,
+        for_date=PAST,
+    )
+    assert proposal is not None
+    monkeypatch.setattr(
+        compose_module,
+        "prepare_briefing_identity_migration",
+        lambda **_kwargs: proposal,
+    )
+
+    original_path_target = compose_module._briefing_path_target
+    calls = 0
+
+    def replace_authority_before_fence(**kwargs: object) -> tuple[Path, str]:
+        nonlocal calls
+        resolved_target, expected_uuid = original_path_target(**kwargs)
+        calls += 1
+        if calls == 2:
+            store = ProfileAuthorityStore(root, profile_note_id=None)
+            os.mkfifo(store.path, mode=0o600)
+        return resolved_target, expected_uuid
+
+    monkeypatch.setattr(
+        compose_module,
+        "_briefing_path_target",
+        replace_authority_before_fence,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="not eligible"):
+        migrate_briefing_identity(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+
+    assert calls == 2
+    assert target.read_text(encoding="utf-8") == legacy

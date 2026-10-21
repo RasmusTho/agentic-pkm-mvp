@@ -205,7 +205,9 @@ class ProfileAuthorityStore:
         try:
             descriptor = os.open(
                 self.path,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
             )
         except FileNotFoundError:
             return ()
@@ -219,8 +221,15 @@ class ProfileAuthorityStore:
                 raise ProfileAuthorityContractError(
                     "profile authority stream must be a regular file"
                 )
-            with os.fdopen(descriptor, "rb", closefd=False) as handle:
-                raw = handle.read()
+            chunks: list[bytes] = []
+            remaining = metadata.st_size
+            while remaining:
+                chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
         finally:
             os.close(descriptor)
         return decode_profile_records(raw)
