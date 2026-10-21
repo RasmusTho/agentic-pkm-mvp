@@ -29,6 +29,9 @@ from scripts.yaml_roundtrip import load_frontmatter
 
 RUN_ENV = "RUN_EXPANSION_CONNECT_CREATE_ACCEPT_UAT"
 TEST_ACTOR_ENV = "RUN_EXPANSION_CONNECT_CREATE_ACCEPT_TEST_ACTOR"
+EXPANSION_ACTOR_AUTHORIZATION_REF = (
+    "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4826#issuecomment-6107736254"
+)
 EXPECTED_IDENTITY = {
     "provider": "ollama",
     "model": "bge-m3:latest",
@@ -601,7 +604,10 @@ def test_accept_rejects_unchecked_checkbox(uat_context: UatContext) -> None:
 
 def test_checked_checkbox_uses_only_governed_materialization_path(uat_context: UatContext) -> None:
     if not _enabled(TEST_ACTOR_ENV):
-        pytest.skip(f"authorized synthetic actor phase; set {TEST_ACTOR_ENV}=1 only after #3320 qualifies TEST")
+        pytest.skip(
+            f"authorized synthetic actor phase; set {TEST_ACTOR_ENV}=1 only after current TEST "
+            "qualification and the #4826 owner authorization are verified"
+        )
     receipt = uat_context.receipt()
     assert receipt.get("technical_phase") == "pass", "synthetic action requires the prior complete technical PASS"
     assert receipt.get("candidate") == uat_context.candidate, "candidate changed after technical PASS"
@@ -619,12 +625,24 @@ def test_checked_checkbox_uses_only_governed_materialization_path(uat_context: U
     assert "test_actor_attempt" not in receipt, "an earlier action attempt is uncertain; reconcile it read-only and do not replay"
 
     uat_context.record(
-        test_actor_attempt={"status": "started", "actor": "synthetic_test_actor", "authorization_ref": "#3320", "checkbox_count": 1}
+        test_actor_attempt={
+            "status": "started",
+            "actor": "synthetic_test_actor",
+            "authorization_ref": EXPANSION_ACTOR_AUTHORIZATION_REF,
+            "checkbox_count": 1,
+        }
     )
     draft_path.write_text(text.replace(unchecked, checked_lower, 1), encoding="utf-8")
     checked_text = draft_path.read_text(encoding="utf-8")
     assert checked_text.count(checked_lower) == 1 and unchecked not in checked_text
-    uat_context.record(test_actor_attempt={"status": "checkbox_checked", "actor": "synthetic_test_actor", "authorization_ref": "#3320", "checkbox_count": 1})
+    uat_context.record(
+        test_actor_attempt={
+            "status": "checkbox_checked",
+            "actor": "synthetic_test_actor",
+            "authorization_ref": EXPANSION_ACTOR_AUTHORIZATION_REF,
+            "checkbox_count": 1,
+        }
+    )
 
     result = accept_draft(draft_path, vault_root=uat_context.vault_root, outbox_path=uat_context.outbox_path)
     assert result.status == "accepted" and result.final_note_path and result.receipt_id
@@ -640,7 +658,7 @@ def test_checked_checkbox_uses_only_governed_materialization_path(uat_context: U
         accepted={
             "status": "accepted",
             "actor": "synthetic_test_actor",
-            "authorization_ref": "#3320",
+            "authorization_ref": EXPANSION_ACTOR_AUTHORIZATION_REF,
             "draft_path": Path(receipt["draft_path"]).as_posix(),
             "final_note_path": Path(result.final_note_path).as_posix(),
             "source_ids": [source.object_id for source in uat_context.sources],
@@ -658,7 +676,8 @@ def test_runbook_documents_required_test_channel_guards() -> None:
     assert runbook_path.is_file()
     runbook = runbook_path.read_text(encoding="utf-8")
     for required in (
-        "#3320",
+        "#issuecomment-6107736254",
+        "#3320 tracks a separate TEST recovery/security decision and does not authorize this Expansion actor",
         "channel-preflight",
         "index doctor --strict --json",
         "index convergence",

@@ -1191,7 +1191,10 @@ parent validation hub #1921.
 Last reviewed (Expansion acceptance boundary): 2026-10-21 UTC
 Last verified against (Expansion acceptance boundary): Issue #6293 candidate, `app/expansion/accept.py`,
 `tests/expansion/test_accept_promotion.py`, and the focused UAT suite; repository-only evidence.
-No live TEST UAT is claimed; #3320 qualification remains required.
+No live TEST UAT is claimed. The synthetic test-actor authority is the owner amendment on
+[#4826](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4826#issuecomment-6107736254);
+current TEST qualification remains unproven. #3320 tracks a separate TEST recovery/security
+decision and does not grant Expansion actor authority.
 
 This system pursues two classes of value (see `docs/COGNITIVE_PROSTHESIS_CHARTER.md` §2.1):
 **Cognitive Maintenance** (preserve cognition) and **Cognitive Expansion** (improve cognition).
