@@ -57,7 +57,18 @@ class DailyBriefingState:
             'decision_receipts': composer._read_section(lambda: composer._read_decision_receipts(vault_root=self.vault, system_dir=system, for_date=self.day)),
             'calendar_episodes': composer._read_section(lambda: composer._read_calendar_episodes(vault_root=self.vault, for_date=self.day)),
         }
-        note = composer.BriefingNote(self.day, tuple(name for name in composer.SECTION_ORDER if sections[name].status == 'degraded'), sections)
+        from app.services.note_uuid import resolve_read_only_derived_uuid
+        note = composer.BriefingNote(
+            briefing_date=self.day,
+            degraded_sections=tuple(
+                name for name in composer.SECTION_ORDER if sections[name].status == 'degraded'
+            ),
+            sections=sections,
+            uuid=resolve_read_only_derived_uuid(
+                self.vault / self.path,
+                vault_root=self.vault,
+            ),
+        )
         return composer._render_note(note).encode()
 
     def grant(self, effect: str) -> None:
