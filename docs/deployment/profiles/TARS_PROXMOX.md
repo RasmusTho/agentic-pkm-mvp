@@ -14,7 +14,7 @@ Owner: Platform and Operations System, with the BuilderOps deployment owner
 Temporal class: operational
 Review cadence: before a TARS BuilderOps deployment and whenever host, VM, network, or disk posture changes
 Source of truth: a fresh qualification input and deployment receipts
-Last reviewed: 2026-09-20
+Last reviewed: 2026-10-21 (current-status routing only; qualification requirements unchanged)
 Last verified against: repository deployment contract at `8312fc757c5390d9c98da10ce7f6d29df84b77fb`, `product_tars_channel_topology.v1`, Builder Vault dated TARS access/runtime receipts from 2026-09-07, and the read-only Proxmox/QGA Bob-1 snapshot `BUILDER_SYSTEM_BOB1_DEPLOYMENT_READBACK_2026-09-20.md`; that snapshot is not a qualification or deployment receipt. Owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`
 
 # TARS / Proxmox Deployment Profile
@@ -24,6 +24,16 @@ Last verified against: repository deployment contract at `8312fc757c5390d9c98da1
 This profile isolates one TARS/Proxmox setup from the portable BuilderOps deployment contract.
 Alternative hosts, hypervisors, VM layouts, container runtimes, and alerting mechanisms may satisfy
 the generic contract with equivalent evidence.
+
+## Current-status view
+
+[yggdrasil-infra — Current local infrastructure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+owns the dated observed Macs, guest services, Docker engines, networking and storage. The
+2026-10-21 observation includes strict guest SSH, Docker and HTTP checks; it does not include a
+fresh Proxmox VM/hardware/storage inventory. This profile retains placement and qualification
+requirements, not a second current-status inventory. Its September access and role evidence below
+retains its original date. Builder Vault's current infrastructure handoff links the status and
+protected host-local evidence; older transition notes are historical context.
 
 ## Product Runtime channel placement boundary
 
@@ -79,10 +89,11 @@ workstation:
 | 103 | retired `ygg-ingest-gpu` / Bishop | Deleted with VM-owned disks on 2026-08-22. No access or restore action without a new architecture and owner decision. |
 | 9000 | stopped `ygg-base` provisioning definition | No OS disk or guest host key. Do not start, rebuild, or use it as a relay implicitly. |
 
-The common TARS administrative route remains the owner-authenticated Proxmox browser session; persistent
-unattended PVE API/root SSH is not established by the Vault receipts. Guest SSH, QGA, and Proxmox
-administration are separate evidence surfaces and must be reverified only when the planned operation
-needs them.
+The September Vault receipts describe an owner-authenticated Proxmox browser route; they do not
+establish current unattended PVE API/root SSH. The infrastructure repository's README and Issue #1
+own the later, narrowly scoped VM104 provider-access qualification. That pilot is not a fleet
+inventory grant. Guest SSH, QGA and Proxmox administration remain separate evidence surfaces, each
+reverified only when the planned operation needs it.
 
 On this Linux placement, API/worker recreation changes the container address behind the loopback
 forwarder. The governed BuilderOps wrapper must restart `builderops-loopback-forwarder.service`
