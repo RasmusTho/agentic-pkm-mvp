@@ -17,6 +17,8 @@ _colima_runtime_receipt() {
   COLIMA_RECEIPT_CONTAINERD="${COLIMA_CONTAINERD_READY:-false}" \
   COLIMA_RECEIPT_METADATA="${COLIMA_METADATA_READY:-false}" \
   COLIMA_RECEIPT_INVENTORY="${COLIMA_INVENTORY_EXACT:-false}" \
+  COLIMA_RECEIPT_TERMINAL="${COLIMA_TERMINAL_COUNT:-}" \
+  COLIMA_RECEIPT_REQUIRED_DIGEST="${COLIMA_REQUIRED_DIGEST:-}" \
   COLIMA_RECEIPT_PATH="$path" \
   python3 - "$path" <<'PY'
 import json
@@ -38,6 +40,8 @@ payload = {
     "containerd_metadata_ready": os.environ.get("COLIMA_RECEIPT_METADATA") == "true",
     "persisted_inventory_count": optional_int("COLIMA_RECEIPT_PERSISTED"),
     "docker_inventory_count": optional_int("COLIMA_RECEIPT_DOCKER"),
+    "terminal_residue_count": optional_int("COLIMA_RECEIPT_TERMINAL"),
+    "required_inventory_sha256": os.environ.get("COLIMA_RECEIPT_REQUIRED_DIGEST") or None,
     "inventory_exact": os.environ.get("COLIMA_RECEIPT_INVENTORY") == "true",
 }
 target = Path(os.environ["COLIMA_RECEIPT_PATH"])
@@ -216,29 +220,46 @@ colima_guest_readiness_gate() {
   return 0
 }
 
-_colima_runtime_persisted_count() {
-  local root="${COLIMA_PERSISTED_CONFIG_ROOT:-/var/lib/docker/containers}" count entries
+_colima_runtime_inventory_reader() {
+  local directory
+  directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -f "$directory/colima_inventory.py" ]; then
+    printf '%s\n' "$directory/colima_inventory.py"
+  else
+    printf '%s\n' "$directory/yggdrasil-colima-inventory.py"
+  fi
+}
+
+_colima_runtime_inventory_json() {
+  local root="${COLIMA_PERSISTED_CONFIG_ROOT:-/var/lib/docker/containers}"
   if [ -d "$root" ]; then
-    entries="$(find "$root" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null)" || return 1
-    printf '%s\n' "$entries" | awk 'NF {count++} END {print count + 0}'
-    return 0
+    python3 "$(_colima_runtime_inventory_reader)" --root "$root"
+  else
+    _colima_runtime_bounded "${COLIMA_SSH_TIMEOUT_SECONDS:-30}" "${COLIMA_BIN:-colima}" ssh --profile "${COLIMA_PROFILE:-default}" -- sudo /usr/local/libexec/yggdrasil-colima-runtime-readiness --inventory-json
   fi
-  if command -v "${COLIMA_BIN:-colima}" >/dev/null 2>&1; then
-    entries="$(_colima_runtime_bounded "${COLIMA_SSH_TIMEOUT_SECONDS:-30}" "${COLIMA_BIN:-colima}" ssh --profile "${COLIMA_PROFILE:-default}" -- sudo sh -c "[ ! -e '$root' ] && exit 0; [ -d '$root' ] || exit 1; find '$root' -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null")" || return 1
-    count="$(printf '%s\n' "$entries" | awk 'NF {count++} END {print count + 0}')"
-    printf '%s\n' "$count"
-    return 0
-  fi
-  return 1
+}
+
+_colima_runtime_persisted_count() {
+  _colima_runtime_inventory_json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["required"]))'
 }
 
 colima_runtime_assert_inventory() {
-  local persisted expected docker_count
-  persisted="$(_colima_runtime_persisted_count)" || {
+  local persisted expected docker_count inventory_json
+  COLIMA_INVENTORY_EXACT=false
+  COLIMA_TERMINAL_COUNT=
+  COLIMA_REQUIRED_DIGEST=
+  export COLIMA_INVENTORY_EXACT COLIMA_TERMINAL_COUNT COLIMA_REQUIRED_DIGEST
+  inventory_json="$(_colima_runtime_inventory_json)" || {
+    _colima_runtime_fail persisted-inventory-unreadable
+    return 1
+  }
+  persisted="$(printf '%s' "$inventory_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["required"]))')" || {
     _colima_runtime_fail persisted-inventory-root-not-readable
     return 1
   }
   case "$persisted" in ''|*[!0-9]*) _colima_runtime_fail persisted-inventory-count-unreadable; return 1;; esac
+  COLIMA_TERMINAL_COUNT="$(printf '%s' "$inventory_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["terminal"]))')"
+  COLIMA_REQUIRED_DIGEST="$(printf '%s' "$inventory_json" | python3 -c 'import hashlib,json,sys; print(hashlib.sha256("\n".join(json.load(sys.stdin)["required"]).encode()).hexdigest())')"
   expected="${COLIMA_EXPECTED_PERSISTED_INVENTORY:-$persisted}"
   case "$expected" in ''|*[!0-9]*) _colima_runtime_fail expected-inventory-count-invalid; return 1;; esac
   if [ "$persisted" -ne "$expected" ]; then
@@ -256,12 +277,12 @@ colima_runtime_assert_inventory() {
   }
   fi
   local docker_listing
-  docker_listing="$(_colima_runtime_bounded "${COLIMA_DOCKER_COMMAND_TIMEOUT_SECONDS:-15}" docker ps -aq 2>/dev/null)" || {
+  docker_listing="$(_colima_runtime_bounded "${COLIMA_DOCKER_COMMAND_TIMEOUT_SECONDS:-15}" docker ps -aq --no-trunc 2>/dev/null)" || {
     _colima_runtime_fail docker-inventory-unreadable "$expected" ""
     return 1
   }
   docker_count="$(printf '%s\n' "$docker_listing" | awk 'NF {count++} END {print count + 0}')"
-  if [ "$docker_count" -ne "$expected" ]; then
+  if ! printf '%s\n%s' "$inventory_json" "$docker_listing" | python3 "$(_colima_runtime_inventory_reader)" --compare; then
     _colima_runtime_fail persisted-inventory-mismatch "$persisted" "$docker_count"
     return 1
   fi
@@ -371,6 +392,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   unset DOCKER_CONTEXT
   export DOCKER_HOST=unix:///var/run/docker.sock
   case "${1:-}" in
+    --inventory-json) python3 "$(_colima_runtime_inventory_reader)" --root "${COLIMA_PERSISTED_CONFIG_ROOT:-/var/lib/docker/containers}";;
     --substrate) colima_guest_check_persistent_substrate || _colima_runtime_fail persistent-substrate-not-ready;;
     --guest) colima_guest_readiness_gate;;
     --docker-preflight)

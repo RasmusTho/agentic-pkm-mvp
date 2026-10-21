@@ -42,7 +42,7 @@ elif name == 'ctr':
     sys.exit(1 if mode == 'ctr-down' else 0)
 elif name == 'docker':
     if args[:2] == ['ps', '-aq']:
-        print('one' if mode == 'truncated' else 'one\\ntwo')
+        print('1'*64 if mode == 'truncated' else '1'*64 + '\\n' + ('3' if mode == 'wrong-id' else '2')*64)
     elif args[:2] == ['context', 'inspect'] and '--format' in args:
         print('unix:///wrong' if mode == 'wrong-socket' else 'unix://' + os.environ['HOME'] + '/.colima/default/docker.sock')
 elif name == 'colima':
@@ -52,6 +52,8 @@ elif name == 'colima':
         pathlib.Path(os.environ['TEST_CALLS'] + '.usernet').write_text(os.environ.get('LIMA_USERNET_RESOLVE_IP_ADDRESS_TIMEOUT', ''))
         sys.exit(1)
     if args[0] == 'ssh' and args[-1] == '--guest' and mode == 'guest-failure':
+        sys.exit(1)
+    if args[0] == 'ssh' and 'python3' in args and mode == 'missing-python':
         sys.exit(1)
     if args[0] == 'ssh' and 'mask' in args:
         pathlib.Path(os.environ['TEST_CALLS'] + '.masked').write_text('persistent')
@@ -106,10 +108,27 @@ elif name not in ('mountpoint', 'systemctl', 'mount'):
     persistent, docker, containerd = (tmp_path / n for n in ("persistent", "docker", "containerd"))
     for p in (persistent, docker, containerd):
         p.mkdir()
-    for name in ("one", "two"):
+    for name in ("1" * 64, "2" * 64):
         p = docker / "containers" / name
         p.mkdir(parents=True)
-        (p / "config.v2.json").write_text("{}")
+        (p / "config.v2.json").write_text(
+            json.dumps(
+                {
+                    "ID": name,
+                    "State": {"Dead": False, "Running": False},
+                    "HasBeenStartedBefore": True,
+                    "MountPoints": {},
+                }
+            )
+        )
+        (p / "hostconfig.json").write_text(
+            json.dumps(
+                {
+                    "AutoRemove": False,
+                    "RestartPolicy": {"Name": "no"},
+                }
+            )
+        )
     return {
         **{k: os.environ[k] for k in ("HOME", "TMPDIR") if k in os.environ},
         "PATH": f"{bins}:{os.environ['PATH']}",
@@ -206,7 +225,7 @@ def test_startup_entrypoints_share_one_bounded_colima_readiness_helper(
     ]
     assert Path(env["TEST_CALLS"] + ".usernet").read_text() == "3"
     assert any(c[-1] == "--guest" for c in commands)
-    assert ["docker", "ps", "-aq"] in commands
+    assert ["docker", "ps", "-aq", "--no-trunc"] in commands
 
 
 def test_persisted_inventory_mismatch_fails_without_mutating_metadata(
@@ -215,6 +234,7 @@ def test_persisted_inventory_mismatch_fails_without_mutating_metadata(
     env = {
         **runtime,
         "TEST_MODE": "truncated",
+        "COLIMA_INVENTORY_EXACT": "true",
         "COLIMA_RUNTIME_RECEIPT_PATH": str(Path(runtime["TEST_CALLS"]).with_suffix(".json")),
     }
     before = {
@@ -225,9 +245,13 @@ def test_persisted_inventory_mismatch_fails_without_mutating_metadata(
     result = run("colima_runtime_assert_inventory", env)
     assert result.returncode != 0 and "inventory" in result.stderr
     assert before == {p: p.read_bytes() for p in before}
-    assert calls(env) == [["docker", "context", "inspect", "colima"], ["docker", "ps", "-aq"]]
+    assert calls(env) == [
+        ["docker", "context", "inspect", "colima"],
+        ["docker", "ps", "-aq", "--no-trunc"],
+    ]
     receipt = json.loads(Path(env["COLIMA_RUNTIME_RECEIPT_PATH"]).read_text())
     assert receipt["state"] == "refused" and receipt["docker_inventory_count"] == 1
+    assert receipt["inventory_exact"] is False
     assert env["COLIMA_PERSISTED_CONFIG_ROOT"] not in json.dumps(receipt)
 
 
@@ -281,6 +305,9 @@ def test_installer_streams_checked_in_units_only_after_host_gates(
     assert not calls(env)
     env.update(COLIMA_COLD_START_AUTHORIZED="1", COLIMA_ISOLATED_PROOF_ACCEPTED="1")
     start = len(calls(env))
+    assert install({**env, "TEST_MODE": "missing-python"}).returncode != 0
+    assert not any("mask" in c or "install" in c for c in calls(env)[start:])
+    start = len(calls(env))
     assert install({**env, "TEST_MODE": "units-active"}).returncode != 0
     assert not any("mask" in c or "install" in c for c in calls(env)[start:])
     result = install(env)
@@ -294,6 +321,9 @@ def test_installer_streams_checked_in_units_only_after_host_gates(
     assert (
         installed / "usr/local/libexec/yggdrasil-colima-runtime-readiness"
     ).read_bytes() == HELPER.read_bytes()
+    assert (installed / "usr/local/libexec/yggdrasil-colima-inventory.py").read_bytes() == (
+        ROOT / "scripts/lib/colima_inventory.py"
+    ).read_bytes()
     assert Path(env["TEST_CALLS"] + ".masked").is_file()
     assert not any("restart" in c or "start" in c for c in calls(env))
     assert install({**env, "TEST_MODE": "install-interrupted"}).returncode != 0
@@ -350,8 +380,13 @@ def test_mount_producer_preserves_data_and_resumes_partial_mounts(
     assert provision(env).returncode != 0
     assert not any(c[0] == "mount" and "--bind" in c for c in calls(env))
     assert (
-        Path(env["COLIMA_DOCKER_DATA_PATH"]) / "containers/one/config.v2.json"
-    ).read_text() == "{}"
+        json.loads(
+            (
+                Path(env["COLIMA_DOCKER_DATA_PATH"]) / "containers" / ("1" * 64) / "config.v2.json"
+            ).read_text()
+        )["ID"]
+        == "1" * 64
+    )
     # Empty bind targets model boot before their persistent filesystem is bound.
     docker, containerd = tmp_path / "empty-docker", tmp_path / "empty-containerd"
     docker.mkdir()
@@ -387,3 +422,40 @@ def test_docker_prestart_and_poststart_emit_invocation_bound_containerd_pid(
         )
         assert result.returncode == 0, result.stderr
         assert f"containerd-pid-{phase}=31415" in result.stdout
+
+
+def test_same_count_wrong_identity_refuses(runtime: dict[str, str]) -> None:
+    result = run("colima_runtime_assert_inventory", {**runtime, "TEST_MODE": "wrong-id"})
+    assert result.returncode != 0
+
+
+@pytest.mark.parametrize("anonymous,malformed", [(False, False), (True, False), (False, True)])
+def test_terminal_residue_requires_proven_volume_preservation(
+    runtime: dict[str, str],
+    anonymous: bool,
+    malformed: bool,
+) -> None:
+    identity = "3" * 64
+    entry = Path(runtime["COLIMA_PERSISTED_CONFIG_ROOT"]) / identity
+    entry.mkdir()
+    config = {
+        "ID": identity,
+        "State": {"Dead": True, "Running": False},
+        "HasBeenStartedBefore": False,
+        "MountPoints": {
+            "/data": {"Type": "volume", "Spec": {"Source": "" if anonymous else "named"}}
+        },
+    }
+    (entry / "config.v2.json").write_text("{" if malformed else json.dumps(config))
+    (entry / "hostconfig.json").write_text(
+        json.dumps(
+            {
+                "AutoRemove": True,
+                "RestartPolicy": {"Name": "no"},
+            }
+        )
+    )
+    before = {p: p.read_bytes() for p in entry.iterdir()}
+    result = run("colima_runtime_assert_inventory", runtime)
+    assert (result.returncode == 0) == (not anonymous and not malformed)
+    assert before == {p: p.read_bytes() for p in entry.iterdir()}

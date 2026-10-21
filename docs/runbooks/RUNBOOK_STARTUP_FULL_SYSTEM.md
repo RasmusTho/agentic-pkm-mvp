@@ -226,10 +226,16 @@ before interrupting the VM, including any BuilderOps control-plane services.
 
 1. Bind the exact host/profile, reviewed candidate SHA and artifact hashes, existing Docker socket,
    context endpoint, filesystem UUID/LABEL/PARTUUID, ext4 mount target and bind roots, resource
-   allocation, free-block/inode floors, and expected persisted container-config count. Compare the
-   persisted count with `docker ps -aq` through that explicit socket; discrepancies are incident
+   allocation, free-block/inode floors, and expected required persisted container count. Compare exact
+   full container IDs with `docker ps -aq --no-trunc` through that explicit socket; discrepancies are incident
    evidence, never permission to remove configurations. Do not emit config bodies, environment
    values, vault paths, or credentials in the receipt.
+   Required identities include stopped durable containers. Separately account for terminal AutoRemove
+   records only when dead, never started, not running, and restart-disabled, with no anonymous volume
+   association: every volume mount must have an explicit named `Spec.Source`. Unknown or malformed
+   records refuse readiness. Docker may retain or automatically remove those terminal identities;
+   all required identities must remain present, and no unaccounted API identity is accepted. Record
+   required-ID digest and terminal count, never subtract a fixed number from disk inventory.
 2. Establish a serialized host window with the owners of active Git/worktree and Docker lifecycle
    operations. Check live operation/lease state and process cwd/parent evidence. Do not interrupt
    another session or use a process-name snapshot as exclusive ownership. During the window,

@@ -76,6 +76,9 @@ PYVALIDATE
 if [ "$PROFILE" = default ]; then
   [ "${COLIMA_ISOLATED_PROOF_ACCEPTED:-0}" = 1 ] || { echo "isolated proof required before default installation" >&2; exit 78; }
 fi
+# The identity reader is a startup dependency, so refuse before installing or
+# unmasking anything when the existing guest image cannot execute it.
+_colima_runtime_bounded 30 "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'
 # Variables in the remote script are expanded in the guest.
 # shellcheck disable=SC2016
 _colima_runtime_bounded 30 "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo sh -c '
@@ -103,6 +106,8 @@ install_guest_file_atomic() {
 
 install_guest_file_atomic "$ROOT/scripts/lib/colima_runtime_readiness.sh" \
   "$GUEST_LIBEXEC/yggdrasil-colima-runtime-readiness" 0755
+install_guest_file_atomic "$ROOT/scripts/lib/colima_inventory.py" \
+  "$GUEST_LIBEXEC/yggdrasil-colima-inventory.py" 0644
 install_guest_file_atomic "$ROOT/scripts/lib/colima_data_mount_provision.sh" \
   "$GUEST_LIBEXEC/yggdrasil-colima-data-mount" 0755
 install_guest_file_atomic "$HERE/systemd/yggdrasil-colima-persistent-substrate.service" \
