@@ -57,6 +57,26 @@ class ProfileAuthorityStore:
         with self.locked_state() as state:
             return state
 
+    def load_state_read_only(self) -> ProfileAuthorityState | None:
+        """Read one stable authority snapshot without creating lock state.
+
+        Proposal-only callers must not create the authority directory or lock
+        merely to determine whether a path is already Profile-owned.  Two
+        descriptor-bound reads reject an authority stream that appears,
+        disappears, or is atomically replaced while it is being observed.
+        """
+
+        first = self._read_raw_snapshot_read_only()
+        second = self._read_raw_snapshot_read_only()
+        if first is None and second is None:
+            return None
+        if first is None or second is None or first != second:
+            raise ProfileAuthorityContractError(
+                "profile authority changed during read-only inspection"
+            )
+        records = decode_profile_records(first[0])
+        return replay_profile_records(records) if records else None
+
     @contextmanager
     def locked_state(self) -> Iterator[ProfileAuthorityState | None]:
         """Yield one replayed state while holding the authority-stream lock."""
@@ -183,6 +203,77 @@ class ProfileAuthorityStore:
             os.close(descriptor)
         return decode_profile_records(raw)
 
+    def _read_raw_snapshot_read_only(
+        self,
+    ) -> tuple[bytes, tuple[int, int, int, int]] | None:
+        """Open the authority stream through no-follow directory descriptors."""
+
+        descriptors: list[int] = []
+        try:
+            current = os.open(
+                self.vault_root,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            descriptors.append(current)
+            for component in (".mimer", "profile-authority"):
+                try:
+                    current = os.open(
+                        component,
+                        os.O_RDONLY
+                        | getattr(os, "O_DIRECTORY", 0)
+                        | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=current,
+                    )
+                except FileNotFoundError:
+                    return None
+                descriptors.append(current)
+            try:
+                stream = os.open(
+                    self.path.name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=current,
+                )
+            except FileNotFoundError:
+                return None
+            descriptors.append(stream)
+            before = os.fstat(stream)
+            if not stat.S_ISREG(before.st_mode):
+                raise ProfileAuthorityContractError(
+                    "profile authority stream must be a regular file"
+                )
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(stream, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            after = os.fstat(stream)
+            identity = (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+            )
+            if identity != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                raise ProfileAuthorityContractError(
+                    "profile authority changed during read-only inspection"
+                )
+            return b"".join(chunks), identity
+        except ProfileAuthorityContractError:
+            raise
+        except OSError as exc:
+            raise ProfileAuthorityContractError(
+                "profile authority stream cannot be opened safely"
+            ) from exc
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+
     def _atomic_replace(self, content: bytes) -> None:
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{self.path.name}.",
@@ -274,6 +365,23 @@ def is_profile_note_source(
     """Return whether a source path or UUID is bound to this vault's Profile Note."""
 
     state = ProfileAuthorityStore(vault_root, profile_note_id=None).load_state()
+    if state is None:
+        return False
+    return _matches_profile_identity(
+        state.identity, note_path=note_path, note_uuid=note_uuid
+    )
+
+
+def is_profile_note_source_read_only(
+    vault_root: Path | str,
+    note_path: str,
+    note_uuid: str | None = None,
+) -> bool:
+    """Read Profile ownership without creating authority or lock artifacts."""
+
+    state = ProfileAuthorityStore(
+        vault_root, profile_note_id=None
+    ).load_state_read_only()
     if state is None:
         return False
     return _matches_profile_identity(
