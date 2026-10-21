@@ -123,6 +123,7 @@ def test_companion_continuity_repairs_only_source_ref_hash_and_bounded_history(
     "identity_history: []\n",
     "identity_history: [{event: prior, reason: keep}]\n",
     "identity_history:\n- event: prior\n  reason: keep\n",
+    "identity_history:\n  - event: prior\n    reason: keep\n",
 ))
 def test_exact_companion_candidate_supports_absent_flow_and_block_history(
     history_yaml: str,

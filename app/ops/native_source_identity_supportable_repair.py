@@ -543,10 +543,17 @@ def _exact_companion_candidate(
             else "\n" if replaced_history.endswith("\n")
             else ""
         )
+        if history_node.flow_style:
+            history_replacement = history_text
+        else:
+            continuation_indent = " " * history_node.start_mark.column
+            history_replacement = history_block.replace(
+                "\n", f"\n{continuation_indent}",
+            )
         replacements.append((
             history_start,
             history_end,
-            (history_text if history_node.flow_style else history_block) + line_ending,
+            history_replacement + line_ending,
         ))
     else:
         raise SupportableRepairRefusal("authority_refused")
