@@ -5,8 +5,8 @@ Doc role: Core SoT
 Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy. Release-channel semantics (channel identity, DB-per-channel, promotion, rollback) are owned by `docs/RELEASE_CHANNELS/README.md`.
 Temporal class: operational
 Review cadence: as environment/channel posture changes
-Last reviewed: 2026-10-04
-Last live runtime verification: 2026-10-03 UTC (read-only dev/test host and API checks from Demerzel; prod was not queried)
+Last reviewed: 2026-10-21 (infrastructure-status routing only; environment policy unchanged)
+Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; earlier runtime/acceptance receipts retain their original scope and dates.
 Last verified against: docs/RELEASE_CHANNELS/README.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, app/release_channels/promotion_receipt.py, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/deployment/profiles/TARS_PROXMOX.md, config/platform/product_tars_channel_topology.v1.schema.json, app/ops/product_tars_channel_topology.py, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md; Builder Vault dated evidence `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live dev/test evidence in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903)
 
 ## Overview
@@ -19,40 +19,30 @@ Reading rule:
 - Use this document when a change touches environment-specific behavior, storage boundaries, runtime topology, write safety, rollout posture, or local bootstrap expectations.
 - Use `docs/ARCHITECTURE.md` for system structure, `docs/OPERATIONS.md` for operator procedure, `docs/TESTING.md` for verification layers, and `docs/STATUS.md` for current rollout posture.
 
-## Current live runtime topology
+## Current infrastructure status and environment ownership
 
-The Product Runtime channels are intended to run on TARS-hosted Linux VMs. The Mac mini is not a
-Product API channel host; it is the designated Codex CLI model executor, reached over the VLAN-only
-mTLS path. Tailscale is not a prerequisite for this Model Access route. The Mac mini's legacy `pkm-*`
-Compose stacks are not Product Runtime evidence. The following is the latest read-only live check
-from Demerzel, performed on 2026-10-03 UTC. The `prod` row remains based on the last dated Builder
-Vault evidence from 2026-09-07 and was not rechecked in this pass.
+The dated physical inventory is owned by [yggdrasil-infra — Current local infrastructure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md).
+It records observed Macs, TARS guest roles, Docker engines, network, storage and services, with
+explicit gaps and a 2026-10-21 observation date. Builder Vault carries the sanitized operational
+handoff and protected host-local evidence locator. Private addresses and data bindings are not
+copied into this environment contract.
 
-| Environment | Live endpoint evidence | Current state | Artifact identity |
-| --- | --- | --- | --- |
-| `dev` (`ygg-dev`) | API `:18001`; API, worker, watcher, and Companion UI containers are running and Docker-healthy | `/version` reports `8cb453986944b98b7dac483973aae67e8c5e64e7`; API `required_ok=true`; enforced route is `ollama/llama3.2:3b`. The current health response still has an Ollama check and no `llm_access` check. No `MODEL_ACCESS_CODEX_VLAN_*` settings are passed to the Product containers. | Image `8cb453986944b98b7dac483973aae67e8c5e64e7` |
-| `test` (`ygg-test`) | API `:18002`; only API and DB containers are running and Docker-healthy | `/version` reports an unknown build and API `required_ok=false`; `LLM_PROVIDER=mock`; worker and watcher are absent. No `MODEL_ACCESS_CODEX_VLAN_*` settings are passed to the Product containers. | Image tag `dev-local`; candidate identity is not running |
-| `prod` (`ygg-prod`) | Not queried on 2026-10-03 | The latest reviewed evidence remains the dated Builder Vault report from 2026-09-07; this pass makes no new health, deployment, or acceptance claim. | No new runtime identity verified |
+This document continues to own environment selection, path scoping and isolation. The
+[TARS profile](deployment/profiles/TARS_PROXMOX.md) retains placement/qualification requirements;
+[deployment](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md) and
+[release channels](RELEASE_CHANNELS/README.md) retain deployment, promotion and acceptance authority.
+The observed status is descriptive and grants none of those operations.
 
-The accepted MARR-06 receipt in Issue #5624 proves one Luna completion through the Mac mini's VLAN
-Codex CLI executor; it does not prove persistent Product routing. The running dev/test Product
-containers still lack the VLAN caller settings, and the merged candidate is not running on either
-channel. Promotion remains blocked until caller mTLS configuration, an exact-SHA staged deployment,
-and a green test verification receipt are established. No production host was contacted or changed.
-Local Compose commands remain a development/testing fallback and are not promotion evidence.
+The October 3 dev/test table and September prod summary formerly embedded here are dated history,
+not the current inventory. Earlier single-call Model Access and staged deployment receipts retain
+only the exact scope they proved. Current host liveness, Docker health or an installed executor
+does not replace candidate-bound functional or promotion evidence.
 
-TARS guest roles remain separate: VM 100 (`ygg-dev`), VM 104 (`ygg-test`), and VM 101 (`ygg-prod`)
-are Product Runtime channels; VM 102 (`bob-1`, guest/system `builder-system`) is the separate Builder
-System; VM 103 (`ygg-ingest-gpu`) is retired and deleted; and VM 9000 (`ygg-base`) is a stopped
-provisioning definition without an OS disk. Channel SSH evidence from Demerzel does not authorize
-VM-102 access, and no channel key is to be copied to Builder System. Do not start VM 9000 or restore
-VM 103 without a new owner-authorized decision.
-
-The exact TARS channel VM and engine identities are intentionally not hardcoded here. They are
-qualification inputs, not environment-selection values, and must be supplied by the redaction-safe
-`product_tars_channel_topology.v1` contract. TARS VM `bob-1` (VM ID `102`, formerly `vm102`) belongs
-to the separate complete Builder System / Dev System boundary, where guest/system `builder-system`
-runs, and is not a Product Runtime channel target.
+The existing placement and access constraints remain: exact channel VM and Docker engine identities
+are fresh `product_tars_channel_topology.v1` qualification inputs, not environment-selection values.
+VM 102 (`bob-1`, guest/system `builder-system`) remains separate from Product channel placement.
+Channel SSH evidence does not authorize VM-102 access, and no channel key is to be copied to Builder
+System. Do not start VM 9000 or restore VM 103 without a new owner-authorized decision.
 
 ## Vault terminology
 

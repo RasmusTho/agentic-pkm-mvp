@@ -124,14 +124,18 @@ The same 2026-10-05 readback found that `ygg-prod` still reports `required_ok=fa
 
 Production remains on the current `main`-tracking deployment baseline; the `stable` ref is dormant. The Issue #5868 repository candidate adds an explicit existing-value TARS deployment mode: it validates the selected values, refuses a missing PostgreSQL password before RPC, binds the mode to the host operation journal, and performs no BWS write. Once merged, that path will not require bootstrap-only writer qualification; BWS bootstrap writes remain under #5667. This is repository-candidate evidence only and does not qualify the production caller or change live routing/deployment. Before promotion, verify the production caller binding and selected existing values, obtain candidate-bound TEST verification (or follow the governed bypass procedure), and prepare the exact release plan. Forward-only migrations require acknowledgment for that exact plan. Ollama model installation and embedding-index rebuild are separate operational steps. The live readback and decision do not claim that any of these actions occurred.
 
-### Live environment baseline (2026-08-22)
+### Current infrastructure status
 
-The Mac mini is now an Ollama/model host only. Product runtime evidence is on the new Linux/Tailscale
-hosts: `ygg-dev` is reachable but degraded, `ygg-test` is not available, and `ygg-prod` has API
-liveness but failing functional health (stale watcher/no worker heartbeat; Companion UI unavailable).
-Both new-host APIs report unknown build identity. The promotion chain is therefore not yet executable;
-the missing test host, immutable artifact identity, and authoritative deployment handoff are explicit
-follow-up gates rather than implied by local Compose or old Mac mini state.
+The observed local environment is maintained in
+[yggdrasil-infra — Current local infrastructure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md), with a 2026-10-21 read-only snapshot and
+explicit gaps. Builder Vault carries the operational handoff and private evidence locator. This is
+a descriptive status view; application deployment, release eligibility and capability acceptance
+remain with their existing owners.
+
+The August 22 baseline formerly here and the dated October 5 observations above are historical.
+Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those
+older paragraphs. Infrastructure-reference review on 2026-10-21 does not revalidate the other
+capability or acceptance claims in this document.
 
 The BWS-04 implementation (#5680) adds a supervised Linux database deployment path with selected
 host/VM secret checks, durable same-ID receipts, file-only PostgreSQL credentials, and real
