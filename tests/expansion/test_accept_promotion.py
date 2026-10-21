@@ -169,6 +169,49 @@ def test_accept_materializes_note_with_receipts_and_provenance(
 # --- create_never_autowrites_canonical: unchecked draft is NOT materialized ---
 
 
+def test_checked_unrelated_task_does_not_authorize_acceptance(tmp_path: Path) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    text = draft_path.read_text(encoding="utf-8")
+    draft_path.write_text("- [x] unrelated task\n" + text, encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    after = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+    assert after == before
+    assert draft_path.exists()
+    assert not (vault_root / "notes/should-not-exist.md").exists()
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+@pytest.mark.parametrize("control_mutation", ["wrong_draft_id", "duplicate_control"])
+def test_acceptance_control_must_be_bound_and_unique(tmp_path: Path, control_mutation: str) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    text = draft_path.read_text(encoding="utf-8")
+    control = next(line for line in text.splitlines() if line.startswith("- [ ] Accept this draft into the vault"))
+    if control_mutation == "wrong_draft_id":
+        text = text.replace(control, control.replace("(draft ", "(draft wrong-", 1), 1)
+    else:
+        text = text.replace(control, f"{control}\n{control}", 1)
+    draft_path.write_text(text, encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(draft_path, vault_root=vault_root, outbox_path=outbox_path)
+
+    after = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+    assert after == before
+    assert draft_path.exists()
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
 def test_unchecked_draft_is_never_materialized(tmp_path: Path) -> None:
     vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
     # Do NOT check the box.

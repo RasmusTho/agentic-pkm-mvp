@@ -158,9 +158,35 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
-def _is_checked(text: str) -> bool:
-    """True iff the draft's acceptance checkbox has been checked by a human."""
-    return "- [x]" in text or "- [X]" in text
+def _is_checked(text: str, draft_id: str) -> bool:
+    """Accept only the generated checkbox for this draft inside an AI panel.
+
+    Draft text may contain ordinary checked tasks. They are human content, not
+    acceptance authority. The generated control binds its short draft identity
+    into the exact label, and duplicate/malformed copies fail closed.
+    """
+    expected_label = f"Accept this draft into the vault (draft {draft_id[:12]})"
+    in_ai_panel = False
+    matches: list[bool] = []
+    for line in text.splitlines():
+        marker = line.strip()
+        if marker == "%% AI:Start %%":
+            if in_ai_panel:
+                return False
+            in_ai_panel = True
+            continue
+        if marker == "%% AI:End %%":
+            if not in_ai_panel:
+                return False
+            in_ai_panel = False
+            continue
+        if not in_ai_panel:
+            continue
+        if marker == f"- [ ] {expected_label}":
+            matches.append(False)
+        elif marker in {f"- [x] {expected_label}", f"- [X] {expected_label}"}:
+            matches.append(True)
+    return not in_ai_panel and len(matches) == 1 and matches[0]
 
 
 @dataclass(frozen=True)
@@ -235,12 +261,14 @@ def _load_draft(draft_path: Path) -> _LoadedDraft:
     except OSError as exc:
         raise DraftNotFoundError(f"staged draft {draft_path} is not readable: {exc}") from exc
     frontmatter, body = load_frontmatter(raw_text)
+    frontmatter = frontmatter or {}
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
     return _LoadedDraft(
         path=draft_path,
-        frontmatter=frontmatter or {},
+        frontmatter=frontmatter,
         body=body,
         raw_text=raw_text,
-        checked=_is_checked(raw_text),
+        checked=_is_checked(raw_text, draft_id),
     )
 
 
