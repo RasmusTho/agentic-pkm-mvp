@@ -22,6 +22,8 @@ import re
 import stat
 from typing import Any, Protocol
 
+import yaml
+
 from app.briefing.compose import (
     BriefingIdentityMigration,
     migrate_briefing_identity,
@@ -435,10 +437,41 @@ def _canonical_inventory(root: Path) -> tuple[Any, ...]:
     return observations
 
 
+def _strict_source_frontmatter(raw: str) -> dict[str, Any]:
+    """Capture one source mapping without normalizing ambiguous YAML to absence."""
+
+    from app.rebuildability.product_total_loss import capture_source_frontmatter
+
+    lines = raw.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return {}
+    closing = next(
+        (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
+        None,
+    )
+    if closing is None:
+        raise SupportableRepairRefusal("authority_refused")
+    try:
+        node = yaml.compose("".join(lines[1:closing]), Loader=yaml.SafeLoader)
+    except yaml.YAMLError:
+        raise SupportableRepairRefusal("authority_refused") from None
+    if node is not None:
+        if not isinstance(node, yaml.MappingNode):
+            raise SupportableRepairRefusal("authority_refused")
+        seen: set[str] = set()
+        for key_node, _value_node in node.value:
+            if not isinstance(key_node, yaml.ScalarNode) or key_node.value in seen:
+                raise SupportableRepairRefusal("authority_refused")
+            seen.add(key_node.value)
+    captured = capture_source_frontmatter(raw)
+    if captured is None:
+        raise SupportableRepairRefusal("authority_refused")
+    return captured
+
+
 def _source_claims(root: Path, observations: tuple[Any, ...]) -> tuple[dict[str, int], set[str]]:
     from app.knowledge.write_ops import read_recovery_snapshot_relative
     from app.ops.native_source_identity_persistence import _canonical_uuid
-    from app.rebuildability import parse_bounded_frontmatter
 
     claims: dict[str, int] = {}
     locators: set[str] = set()
@@ -451,10 +484,11 @@ def _source_claims(root: Path, observations: tuple[Any, ...]) -> tuple[dict[str,
             raw, _identity = read_recovery_snapshot_relative(relative, vault_root=root)
         except Exception:
             raise SupportableRepairRefusal("authority_refused") from None
-        frontmatter, _body, error = parse_bounded_frontmatter(raw)
-        if error is not None:
+        frontmatter = _strict_source_frontmatter(raw)
+        raw_declared = frontmatter.get("uuid")
+        declared = _canonical_uuid(raw_declared)
+        if declared is None and raw_declared not in (None, ""):
             raise SupportableRepairRefusal("authority_refused")
-        declared = _canonical_uuid(frontmatter.get("uuid"))
         if declared is not None:
             claims[declared] = claims.get(declared, 0) + 1
     return claims, locators

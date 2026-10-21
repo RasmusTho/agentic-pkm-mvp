@@ -182,12 +182,19 @@ def test_companion_continuity_refuses_canonical_equivalent_duplicate_uuid(
         )
 
 
-def test_source_claims_fail_closed_on_unparseable_observation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("unknown", (
+    "---\nuuid: [unclosed\n---\ninvalid\n",
+    "---\nuuid: definitely-not-a-uuid\n---\ninvalid\n",
+    "---\nuuid: first\nuuid: second\n---\ninvalid\n",
+))
+def test_source_claims_fail_closed_on_unknown_identity_observation(
+    tmp_path: Path, unknown: str,
+) -> None:
     identity = str(uuid4())
     valid = tmp_path / "valid.md"
     invalid = tmp_path / "invalid.md"
     valid.write_text(dump_frontmatter({"uuid": identity}, "valid\n"))
-    invalid.write_text(f"---\nuuid: [{identity}\n---\ninvalid\n")
+    invalid.write_text(unknown)
     observations = (
         SimpleNamespace(path=valid),
         SimpleNamespace(path=invalid),
