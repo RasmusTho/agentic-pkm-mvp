@@ -49,6 +49,24 @@ class OperatorIdentityRestorationRefusal(RuntimeError):
         super().__init__(reason)
 
 
+def _connect_worker_database() -> Any:
+    """Open the worker's read-only database proof connection.
+
+    Keep the worker on the public DSN/connect boundary while preserving the
+    legacy store connector's connection semantics: the caller has already
+    enforced ``PGOPTIONS`` and owns the returned connection, which uses
+    psycopg's default transaction mode and dict rows.
+    """
+    from psycopg.rows import dict_row
+
+    from app.db.dsn import connect, resolve_dsn
+
+    dsn = resolve_dsn()
+    if not dsn:
+        raise RuntimeError("DATABASE_URL is required for postgres store access")
+    return connect(dsn, row_factory=dict_row)
+
+
 @dataclass(frozen=True)
 class PreparedRewrite:
     original_sha256: str
@@ -426,11 +444,9 @@ def run_worker(
         raise OperatorIdentityRestorationRefusal("authority_refused")
     owns_connection = connection is None
     if connection is None:
-        from app.stores.pg import _connect
-
         if "default_transaction_read_only=on" not in os.environ.get("PGOPTIONS", ""):
             raise OperatorIdentityRestorationRefusal("authority_refused")
-        connection = _connect()
+        connection = _connect_worker_database()
     try:
         snapshots = _prove_inventory_and_product(
             connection, root=root, target=target, current=current, command=command,
