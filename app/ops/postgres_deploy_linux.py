@@ -807,19 +807,78 @@ def _closed_source_helper_environment(
     ))
 
 
-def _compose_project_environment_keys(rendered: str) -> frozenset[str]:
-    """Validate Compose's canonical interpolation environment without retaining values."""
-    keys: set[str] = set()
-    for line in rendered.splitlines():
-        key, separator, _value = line.partition('=')
-        if (
-            not separator
-            or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None
-            or key in keys
-        ):
+_PROJECT_ENVIRONMENT_PRESENCE_EXTENSION = (
+    'x-pkm-source-project-environment-presence'
+)
+_PROJECT_ENVIRONMENT_PRESENT = 'present'
+
+
+def _reject_duplicate_project_environment_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in values:
             raise PostgresDeployError()
-        keys.add(key)
-    return frozenset(keys)
+        values[key] = value
+    return values
+
+
+def _compose_project_environment_probe(keys: tuple[str, ...]) -> str:
+    """Build a value-free Compose interpolation probe for exact environment names."""
+    if (
+        not keys
+        or any(
+            not isinstance(key, str)
+            or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None
+            for key in keys
+        )
+        or len(set(keys)) != len(keys)
+    ):
+        raise PostgresDeployError()
+    return json.dumps({
+        'services': {},
+        _PROJECT_ENVIRONMENT_PRESENCE_EXTENSION: {
+            key: '${' + key + '+' + _PROJECT_ENVIRONMENT_PRESENT + '}'
+            for key in sorted(keys)
+        },
+    }, sort_keys=True, separators=(',', ':'))
+
+
+def _compose_project_environment_keys(
+    rendered: str, expected_keys: tuple[str, ...],
+) -> frozenset[str]:
+    """Read only exact presence sentinels from Compose's evaluated JSON probe."""
+    try:
+        payload = json.loads(
+            rendered,
+            object_pairs_hook=_reject_duplicate_project_environment_keys,
+        )
+        values = payload[_PROJECT_ENVIRONMENT_PRESENCE_EXTENSION]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        raise PostgresDeployError() from None
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(values, dict)
+        or not expected_keys
+        or any(
+            not isinstance(key, str)
+            or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None
+            for key in expected_keys
+        )
+        or len(set(expected_keys)) != len(expected_keys)
+        or set(values) != set(expected_keys)
+        or any(
+            not isinstance(value, str)
+            or value not in {'', _PROJECT_ENVIRONMENT_PRESENT}
+            for value in values.values()
+        )
+    ):
+        raise PostgresDeployError()
+    return frozenset(
+        key for key, value in values.items()
+        if value == _PROJECT_ENVIRONMENT_PRESENT
+    )
 
 
 def _runtime_user_ownership_state_dir(runtime_uid: int, xdg_state_home: str | None = None) -> Path:
@@ -1223,6 +1282,7 @@ class LinuxEffects:
         candidate: DeployPlan | None = None, timeout: int | None = None,
         source_snapshot: SourceIdentityRuntimeSnapshot | None = None,
         input_text: str | None = None,
+        stdin_compose_file: bool = False,
     ) -> str:
         cfg = self.config
         # Recovery Compose must inherit the authenticated ownership source from
@@ -1257,6 +1317,10 @@ class LinuxEffects:
             overlays += ['-f', str(cfg.root / 'docker-compose.full-host-vault.yml')]
             if cfg.channel == 'test':
                 overlays += ['-f', str(cfg.root / 'docker-compose.test-vault.yml')]
+        if stdin_compose_file:
+            if input_text is None:
+                raise PostgresDeployError()
+            overlays += ['-f', '-']
         return _command(['docker', 'compose', '--env-file', str(cfg.root / 'config/deploy' / (cfg.channel + '.env')),
             '-f', str(cfg.root / 'docker-compose.yaml'), '-f', str(cfg.root / ('docker-compose.' + cfg.channel + '.yml')),
             *overlays, '-p', 'pkm-' + cfg.channel, *args], cwd=cfg.root, env=env,
@@ -2084,13 +2148,19 @@ class LinuxEffects:
         try:
             # A bare ``docker compose run -e NAME`` consults Compose's project
             # interpolation environment when the scrubbed supervisor lacks the
-            # name. Ask Compose itself so every supported --env-file grammar is
-            # covered; retain only validated key names and never emit values.
+            # name. Ask Compose itself to evaluate fixed presence sentinels so
+            # every supported --env-file grammar is covered without parsing or
+            # retaining its values (including multiline values).
             if api_unset_environment:
+                project_environment_probe = _compose_project_environment_probe(
+                    api_unset_environment,
+                )
                 project_environment = _compose_project_environment_keys(self.compose(
-                    'config', '--environment', cutover=selected,
+                    'config', '--format', 'json', cutover=selected,
                     source_snapshot=provisional,
-                ))
+                    input_text=project_environment_probe,
+                    stdin_compose_file=True,
+                ), api_unset_environment)
                 if set(api_unset_environment) & project_environment:
                     raise PostgresDeployError()
             compose_payload = json.loads(self.compose(

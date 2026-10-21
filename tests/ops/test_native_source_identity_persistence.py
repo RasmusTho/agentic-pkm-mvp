@@ -1589,7 +1589,7 @@ def test_candidate_helper_refuses_image_default_for_installed_unset(
         )
 
 
-def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
+def test_source_identity_runtime_snapshot_handles_multiline_project_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.ops import postgres_deploy_linux as linux
@@ -1646,22 +1646,39 @@ def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
         channel="dev", root=tmp_path, uid=501, gid=20,
         password_file=tmp_path / "password",
     ))
+    project_environment: dict[str, str] = {}
+    probe_response_override: str | None = None
 
     def command(argv, **_kwargs):
         if argv[1:3] == ["ps", "--all"]:
             return "\n".join(row["Id"] for row in rows)
         if argv[1] == "compose":
-            if "--environment" in argv:
-                project = "multiline-continuation-without-assignment\n"
-                if "OPTIONAL_PROVIDER:" in (
-                    tmp_path / "config/deploy/dev.env"
-                ).read_text():
-                    project = "OPTIONAL_PROVIDER=project-default\n"
-                return project
+            if "-" in argv:
+                assert argv[argv.index("-") - 1] == "-f"
+                config_index = argv.index("config")
+                assert argv[config_index:config_index + 3] == [
+                    "config", "--format", "json",
+                ]
+                probe = json.loads(_kwargs["input_text"])
+                requested = probe[
+                    "x-pkm-source-project-environment-presence"
+                ]
+                assert requested == {
+                    "OPTIONAL_PROVIDER": "${OPTIONAL_PROVIDER+present}",
+                }
+                if probe_response_override is not None:
+                    return probe_response_override
+                return json.dumps({
+                    "x-pkm-source-project-environment-presence": {
+                        key: "present" if key in project_environment else ""
+                        for key in requested
+                    },
+                })
             resolved = {
                 entry.split("=", 1)[0]: entry.split("=", 1)[1]
                 for entry in rows[0]["Config"]["Env"]
-                if not entry.startswith(("VCS_REF=", "BUILT_AT="))
+                if "=" in entry
+                and not entry.startswith(("VCS_REF=", "BUILT_AT="))
             }
             runtime = (tmp_path / "tmp/runtime.env").read_text()
             for key in ("LLM_FORCE_PROVIDER", "LLM_FORCE_MODEL"):
@@ -1684,14 +1701,42 @@ def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
     assert "BUILT_AT" not in dict(before.child_environment)
     assert before.unset_environment == ()
     rows[0]["Config"]["Env"].append("OPTIONAL_PROVIDER")
-    pin_path = tmp_path / "config/deploy/dev.env"
-    original_pin = pin_path.read_text()
-    pin_path.write_text(original_pin + "OPTIONAL_PROVIDER: project-default\n")
+    project_environment["UNRELATED_MULTILINE"] = (
+        "first line\nOPTIONAL_PROVIDER=lookalike"
+    )
+    multiline = effects.source_identity_runtime_snapshot(
+        selected, require_running_capture=True,
+    )
+    assert multiline.unset_environment == ("OPTIONAL_PROVIDER",)
+    project_environment["OPTIONAL_PROVIDER"] = ""
     with pytest.raises(linux.PostgresDeployError):
         effects.source_identity_runtime_snapshot(
             selected, require_running_capture=True,
         )
-    pin_path.write_text(original_pin)
+    project_environment["OPTIONAL_PROVIDER"] = "first line\nKEY_LIKE=second"
+    with pytest.raises(linux.PostgresDeployError):
+        effects.source_identity_runtime_snapshot(
+            selected, require_running_capture=True,
+        )
+    project_environment.clear()
+    invalid_probe_responses = (
+        '{"x-pkm-source-project-environment-presence":'
+        '{"OPTIONAL_PROVIDER":"present","OPTIONAL_PROVIDER":""}}',
+        '{"x-pkm-source-project-environment-presence":{},'
+        '"x-pkm-source-project-environment-presence":'
+        '{"OPTIONAL_PROVIDER":""}}',
+        '{"x-pkm-source-project-environment-presence":{}}',
+        '{"x-pkm-source-project-environment-presence":'
+        '{"OPTIONAL_PROVIDER":"unexpected"}}',
+        '{"x-pkm-source-project-environment-presence":'
+        '{"OPTIONAL_PROVIDER":[]}}',
+    )
+    for probe_response_override in invalid_probe_responses:
+        with pytest.raises(linux.PostgresDeployError):
+            effects.source_identity_runtime_snapshot(
+                selected, require_running_capture=True,
+            )
+    probe_response_override = None
     rows[0]["Config"]["Env"].remove("OPTIONAL_PROVIDER")
     (tmp_path / "tmp/runtime.env").write_text(
         "LLM_PROVIDER=ollama\n"
@@ -2460,8 +2505,15 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
         events.append(action)
         environment = kwargs["env"]
         if action == "config":
-            if "--environment" in argv:
-                return "WATCHER_RUNTIME_ENV_FILE=./tmp/runtime.env\n"
+            if "-" in argv:
+                requested = json.loads(kwargs["input_text"])[
+                    "x-pkm-source-project-environment-presence"
+                ]
+                return json.dumps({
+                    "x-pkm-source-project-environment-presence": {
+                        key: "" for key in requested
+                    },
+                })
             resolved = {key: environment[key] for key in installed}
             return json.dumps({"services": {"api": {"environment": resolved}}})
         if action != "run":
