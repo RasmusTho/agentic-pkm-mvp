@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date, timedelta
 import hashlib
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -125,6 +127,61 @@ def test_companion_continuity_refuses_uuid_locator_hash_version_or_descriptor_dr
         )
 
 
+def test_descriptor_reads_refuse_ancestor_alias_swap_and_fifo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "note.md").write_text("ok")
+    (tmp_path / "alias").symlink_to(real, target_is_directory=True)
+    with pytest.raises(repair.SupportableRepairRefusal, match="authority_refused"):
+        repair._regular_nofollow_text(tmp_path, "alias/note.md")
+
+    fifo = tmp_path / "pipe.md"
+    os.mkfifo(fifo)
+    with pytest.raises(repair.SupportableRepairRefusal, match="authority_refused"):
+        repair._regular_nofollow_text(tmp_path, "pipe.md")
+
+    stable = tmp_path / "stable"
+    stable.mkdir()
+    (stable / "one.md").write_text("one")
+    original_listdir = os.listdir
+    calls = 0
+
+    def swapping_listdir(descriptor):
+        nonlocal calls
+        calls += 1
+        result = original_listdir(descriptor)
+        if calls == 1:
+            stable.rename(tmp_path / "moved")
+            stable.mkdir()
+            (stable / "two.md").write_text("two")
+        return result
+
+    monkeypatch.setattr(repair.os, "listdir", swapping_listdir)
+    with pytest.raises(repair.SupportableRepairRefusal, match="authority_refused"):
+        repair._stable_directory_names(tmp_path, "stable")
+
+
+def test_companion_continuity_refuses_canonical_equivalent_duplicate_uuid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity, source_rel, companion, _fm, _original = _companion_fixture(
+        tmp_path, monkeypatch,
+    )
+    duplicate = companion.with_name("duplicate.md")
+    duplicate.write_text(dump_frontmatter({
+        "uuid": identity.upper(),
+        "source_ref": "_system/companions/another-sidecar.md",
+    }, ""))
+    with pytest.raises(repair.SupportableRepairRefusal, match="authority_refused"):
+        repair.prepare_companion_continuity_repair(
+            vault_root=tmp_path,
+            source_rel=source_rel,
+            observed_at="2026-10-22T00:00:00+00:00",
+        )
+
+
 def _briefing_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     target = tmp_path / "System/Briefings/2026-10-22.md"
     target.parent.mkdir(parents=True)
@@ -236,25 +293,32 @@ def _batch(tmp_path: Path) -> tuple[repair.RepairBatch, FakeEffects, VaultContex
     revision = "a" * 40
     image = "sha256:" + "b" * 64
     selection = "c" * 64
-    companions = tuple(
-        repair.CompanionContinuityProposal(
+    companion_rows = []
+    from app.services.companion_note import companion_path
+    for index in range(repair.EXPECTED_COMPANION_COUNT):
+        identity = str(uuid4())
+        companion_rows.append(repair.CompanionContinuityProposal(
             source_rel=f"notes/{index}.md",
-            companion_rel=f"_system/companions/{index}.md",
-            identity=str(uuid4()),
+            companion_rel=companion_path(identity, tmp_path).as_posix(),
+            identity=identity,
             observed_at="2026-10-22T00:00:00+00:00",
             original_text="before",
             candidate_text="after",
             original_sha256=_sha("before"),
             candidate_sha256=_sha("after"),
-        )
-        for index in range(repair.EXPECTED_COMPANION_COUNT)
-    )
+        ))
+    companions = tuple(companion_rows)
     start = date(2026, 9, 26)
+    context = VaultContext(status="selected", active_vault_path=str(tmp_path))
+    from app.briefing.compose import briefing_note_path
     briefings = tuple(
         repair.BriefingRepairProposal(
             for_date=start + timedelta(days=index),
             migration=BriefingIdentityMigration(
-                note_rel_path=f"System/Briefings/{index}.md",
+                note_rel_path=briefing_note_path(
+                    vault_context=context,
+                    for_date=start + timedelta(days=index),
+                ).relative_to(tmp_path).as_posix(),
                 expected_version=_sha("before"),
                 content="after",
             ),
@@ -264,19 +328,29 @@ def _batch(tmp_path: Path) -> tuple[repair.RepairBatch, FakeEffects, VaultContex
         )
         for index in range(repair.EXPECTED_BRIEFING_COUNT)
     )
-    batch = repair.RepairBatch(revision, image, selection, companions, briefings)
+    target_set = repair._target_set_sha256(companions, briefings)
+    vault_fingerprint = repair._vault_fingerprint(tmp_path)
+    batch = repair.RepairBatch(
+        revision,
+        image,
+        selection,
+        target_set,
+        vault_fingerprint,
+        companions,
+        briefings,
+    )
     authority = repair.RepairAuthoritySnapshot(
         revision,
         image,
         selection,
+        target_set,
+        vault_fingerprint,
         controller_unloaded=True,
         write_guard_healthy=True,
         writers_isolated=True,
         owned_operation_fences_healthy=True,
     )
-    return batch, FakeEffects(authority), VaultContext(
-        status="selected", active_vault_path=str(tmp_path),
-    )
+    return batch, FakeEffects(authority), context
 
 
 def test_batch_fences_partial_commit_and_indeterminate_readback(
@@ -315,6 +389,32 @@ def test_batch_fences_partial_commit_and_indeterminate_readback(
     assert effects.events == ["enter", "read", "read", "exit"]
 
 
+def test_batch_binds_exact_target_set_and_vault_root(
+    tmp_path: Path,
+) -> None:
+    batch, effects, context = _batch(tmp_path)
+    with pytest.raises(repair.SupportableRepairRefusal, match="context_refused"):
+        repair.run_supportable_repair_batch(
+            replace(batch, target_set_sha256="0" * 64),
+            effects=effects,
+            vault_root=tmp_path,
+            vault_context=context,
+            write_guard=AllowGuard(),  # type: ignore[arg-type]
+        )
+
+    other = tmp_path / "other"
+    other.mkdir()
+    other_context = VaultContext(status="selected", active_vault_path=str(other))
+    with pytest.raises(repair.SupportableRepairRefusal, match="context_refused"):
+        repair.run_supportable_repair_batch(
+            batch,
+            effects=effects,
+            vault_root=tmp_path,
+            vault_context=other_context,
+            write_guard=AllowGuard(),  # type: ignore[arg-type]
+        )
+
+
 def test_rollback_requires_exact_repair_bytes_and_never_deletes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -326,10 +426,18 @@ def test_rollback_requires_exact_repair_bytes_and_never_deletes(
         source_rel=source_rel,
         observed_at="2026-10-22T00:00:00+00:00",
     )
+    batch, effects, context = _batch(tmp_path)
+    companions = (proposal, *batch.companion[1:])
+    target_set = repair._target_set_sha256(companions, batch.briefings)
+    batch = replace(batch, companion=companions, target_set_sha256=target_set)
+    effects.authority = replace(effects.authority, target_set_sha256=target_set)
     companion.write_text(proposal.candidate_text)
     assert repair.rollback_companion_continuity_repair(
         proposal,
+        batch=batch,
+        effects=effects,
         vault_root=tmp_path,
+        vault_context=context,
         write_guard=AllowGuard(),  # type: ignore[arg-type]
     ) == "committed"
     assert companion.exists()
@@ -337,10 +445,73 @@ def test_rollback_requires_exact_repair_bytes_and_never_deletes(
     companion.write_text("foreign")
     assert repair.rollback_companion_continuity_repair(
         proposal,
+        batch=batch,
+        effects=effects,
         vault_root=tmp_path,
+        vault_context=context,
         write_guard=AllowGuard(),  # type: ignore[arg-type]
     ) == "indeterminate"
     assert companion.read_text() == "foreign"
+
+
+def test_rollback_refuses_tampered_bytes_path_escape_and_authority_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _identity, source_rel, companion, _fm, _original = _companion_fixture(
+        tmp_path, monkeypatch,
+    )
+    proposal = repair.prepare_companion_continuity_repair(
+        vault_root=tmp_path,
+        source_rel=source_rel,
+        observed_at="2026-10-22T00:00:00+00:00",
+    )
+    batch, effects, context = _batch(tmp_path)
+    companions = (proposal, *batch.companion[1:])
+    target_set = repair._target_set_sha256(companions, batch.briefings)
+    batch = replace(batch, companion=companions, target_set_sha256=target_set)
+    effects.authority = replace(effects.authority, target_set_sha256=target_set)
+    companion.write_text(proposal.candidate_text)
+
+    tampered = replace(proposal, original_text=proposal.original_text + "tampered")
+    with pytest.raises(repair.SupportableRepairRefusal, match="context_refused"):
+        repair.rollback_companion_continuity_repair(
+            tampered,
+            batch=replace(batch, companion=(tampered, *batch.companion[1:])),
+            effects=effects,
+            vault_root=tmp_path,
+            vault_context=context,
+            write_guard=AllowGuard(),  # type: ignore[arg-type]
+        )
+    assert companion.read_text() == proposal.candidate_text
+
+    escaped = replace(proposal, companion_rel="../outside.md")
+    with pytest.raises(repair.SupportableRepairRefusal, match="context_refused"):
+        repair.rollback_companion_continuity_repair(
+            escaped,
+            batch=replace(batch, companion=(escaped, *batch.companion[1:])),
+            effects=effects,
+            vault_root=tmp_path,
+            vault_context=context,
+            write_guard=AllowGuard(),  # type: ignore[arg-type]
+        )
+    assert companion.read_text() == proposal.candidate_text
+
+    class DriftingEffects(FakeEffects):
+        def read_repair_authority(self) -> repair.RepairAuthoritySnapshot:
+            value = super().read_repair_authority()
+            if self.events.count("read") == 2:
+                return replace(value, writers_isolated=False)
+            return value
+
+    drifting = DriftingEffects(effects.authority)
+    assert repair.rollback_companion_continuity_repair(
+        proposal,
+        batch=batch,
+        effects=drifting,
+        vault_root=tmp_path,
+        vault_context=context,
+        write_guard=AllowGuard(),  # type: ignore[arg-type]
+    ) == "indeterminate"
 
 
 def test_public_receipt_is_closed_content_free_and_reconciled() -> None:

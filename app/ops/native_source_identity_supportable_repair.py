@@ -15,8 +15,9 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date, datetime
 import hashlib
+import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import stat
 from typing import Any, Protocol
@@ -40,6 +41,7 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _RESULTS = frozenset({"committed", "failed", "indeterminate"})
+_MAX_PRIVATE_FILE_BYTES = 8 * 1024 * 1024
 _REASONS = frozenset({
     "authority_refused",
     "context_refused",
@@ -56,6 +58,10 @@ class SupportableRepairRefusal(RuntimeError):
             reason = "context_refused"
         self.reason = reason
         super().__init__(reason)
+
+
+class _MissingRelative(FileNotFoundError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,8 @@ class RepairBatch:
     revision: str
     image_digest: str
     selection_sha256: str
+    target_set_sha256: str
+    vault_fingerprint: str
     companion: tuple[CompanionContinuityProposal, ...]
     briefings: tuple[BriefingRepairProposal, ...]
 
@@ -101,6 +109,8 @@ class RepairAuthoritySnapshot:
     revision: str
     image_digest: str
     selection_sha256: str
+    target_set_sha256: str
+    vault_fingerprint: str
     controller_unloaded: bool
     write_guard_healthy: bool
     writers_isolated: bool
@@ -132,42 +142,248 @@ def _vault_context_root(vault_context: Any) -> Path:
     return root
 
 
-def _regular_nofollow_text(path: Path) -> tuple[str, str]:
-    """Read one stable regular file through a no-follow descriptor."""
-
+def _safe_relative(value: str) -> PurePosixPath:
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        relative = PurePosixPath(value)
+    except (TypeError, ValueError):
+        raise SupportableRepairRefusal("context_refused") from None
+    if (
+        not value
+        or relative.is_absolute()
+        or value != relative.as_posix()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise SupportableRepairRefusal("context_refused")
+    return relative
+
+
+def _stable_stat_tuple(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+    )
+
+
+def _open_root(root: Path) -> tuple[Path, int, os.stat_result]:
+    try:
+        resolved = root.expanduser().resolve(strict=True)
+        named_before = os.stat(resolved, follow_symlinks=False)
+        descriptor = os.open(
+            resolved,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or _stable_stat_tuple(named_before) != _stable_stat_tuple(opened)
+        ):
+            os.close(descriptor)
+            raise OSError
+        return resolved, descriptor, named_before
     except OSError:
         raise SupportableRepairRefusal("authority_refused") from None
+
+
+def _open_relative_parent(
+    root: Path, relative: PurePosixPath,
+) -> tuple[Path, int, list[tuple[int, int, os.stat_result]], str]:
+    resolved, root_fd, root_named = _open_root(root)
+    opened: list[tuple[int, int, os.stat_result]] = [(root_fd, -1, root_named)]
+    current_fd = root_fd
     try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            raise SupportableRepairRefusal("authority_refused")
-        chunks: list[bytes] = []
-        while chunk := os.read(descriptor, 1024 * 1024):
-            chunks.append(chunk)
-        after = os.fstat(descriptor)
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
+        for part in relative.parts[:-1]:
+            named_before = os.stat(part, dir_fd=current_fd, follow_symlinks=False)
+            child_fd = os.open(
+                part,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+                dir_fd=current_fd,
+            )
+            child = os.fstat(child_fd)
+            if (
+                not stat.S_ISDIR(child.st_mode)
+                or _stable_stat_tuple(named_before) != _stable_stat_tuple(child)
+            ):
+                os.close(child_fd)
+                raise OSError
+            opened.append((child_fd, current_fd, named_before))
+            current_fd = child_fd
+        return resolved, current_fd, opened, relative.name
+    except FileNotFoundError:
+        for descriptor, _parent, _named in reversed(opened):
+            os.close(descriptor)
+        raise _MissingRelative from None
+    except OSError:
+        for descriptor, _parent, _named in reversed(opened):
+            os.close(descriptor)
+        raise SupportableRepairRefusal("authority_refused") from None
+
+
+def _verify_open_chain(
+    resolved_root: Path,
+    opened: list[tuple[int, int, os.stat_result]],
+    parts: tuple[str, ...],
+) -> None:
+    try:
+        for index in range(len(opened) - 1, 0, -1):
+            descriptor, parent_fd, named_before = opened[index]
+            named_after = os.stat(parts[index - 1], dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                _stable_stat_tuple(named_before) != _stable_stat_tuple(named_after)
+                or _stable_stat_tuple(named_before)
+                != _stable_stat_tuple(os.fstat(descriptor))
+            ):
+                raise OSError
+        root_after = os.stat(resolved_root, follow_symlinks=False)
+        root_fd, _parent, root_before = opened[0]
+        if (
+            _stable_stat_tuple(root_before) != _stable_stat_tuple(root_after)
+            or _stable_stat_tuple(root_before) != _stable_stat_tuple(os.fstat(root_fd))
         ):
-            raise SupportableRepairRefusal("authority_refused")
-        raw = b"".join(chunks)
+            raise OSError
+    except OSError:
+        raise SupportableRepairRefusal("authority_refused") from None
+
+
+def _regular_nofollow_text(root: Path, relative_value: str) -> tuple[str, str]:
+    """Read one bounded regular file through stable root-relative descriptors."""
+
+    relative = _safe_relative(relative_value)
+    try:
+        resolved, parent_fd, opened, leaf = _open_relative_parent(root, relative)
+    except _MissingRelative:
+        raise SupportableRepairRefusal("authority_refused") from None
+    descriptor: int | None = None
+    try:
+        named_before = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        descriptor = os.open(
+            leaf,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=parent_fd,
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size > _MAX_PRIVATE_FILE_BYTES
+            or _stable_stat_tuple(named_before) != _stable_stat_tuple(before)
+        ):
+            raise OSError
+        raw = b""
+        while len(raw) <= before.st_size:
+            chunk = os.read(descriptor, min(1024 * 1024, before.st_size + 1 - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+        after = os.fstat(descriptor)
+        named_after = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            len(raw) != before.st_size
+            or _stable_stat_tuple(before) != _stable_stat_tuple(after)
+            or _stable_stat_tuple(before) != _stable_stat_tuple(named_after)
+        ):
+            raise OSError
+        _verify_open_chain(resolved, opened, relative.parts[:-1])
         return raw.decode("utf-8"), hashlib.sha256(raw).hexdigest()
     except (OSError, UnicodeDecodeError):
         raise SupportableRepairRefusal("authority_refused") from None
     finally:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
+        for directory_fd, _parent, _named in reversed(opened):
+            os.close(directory_fd)
 
 
-def _companion_file(root: Path, identity: str) -> Path:
+def _relative_entry_exists(root: Path, relative_value: str) -> bool:
+    relative = _safe_relative(relative_value)
+    try:
+        resolved, parent_fd, opened, leaf = _open_relative_parent(root, relative)
+    except _MissingRelative:
+        return False
+    try:
+        try:
+            found = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            found = None
+        _verify_open_chain(resolved, opened, relative.parts[:-1])
+        if found is None:
+            return False
+        if not stat.S_ISREG(found.st_mode) or found.st_nlink != 1:
+            raise SupportableRepairRefusal("authority_refused")
+        return True
+    finally:
+        for directory_fd, _parent, _named in reversed(opened):
+            os.close(directory_fd)
+
+
+def _stable_directory_names(root: Path, relative_value: str) -> tuple[str, ...]:
+    relative = _safe_relative(relative_value)
+    try:
+        resolved, parent_fd, opened, leaf = _open_relative_parent(root, relative)
+    except _MissingRelative:
+        return ()
+    descriptor: int | None = None
+    try:
+        try:
+            named_before = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            _verify_open_chain(resolved, opened, relative.parts[:-1])
+            return ()
+        descriptor = os.open(
+            leaf,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=parent_fd,
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(before.st_mode)
+            or _stable_stat_tuple(named_before) != _stable_stat_tuple(before)
+        ):
+            raise OSError
+        first = tuple(sorted(os.listdir(descriptor)))
+        second = tuple(sorted(os.listdir(descriptor)))
+        named_after = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            first != second
+            or _stable_stat_tuple(before) != _stable_stat_tuple(os.fstat(descriptor))
+            or _stable_stat_tuple(before) != _stable_stat_tuple(named_after)
+        ):
+            raise OSError
+        _verify_open_chain(resolved, opened, relative.parts[:-1])
+        return first
+    except OSError:
+        raise SupportableRepairRefusal("authority_refused") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        for directory_fd, _parent, _named in reversed(opened):
+            os.close(directory_fd)
+
+
+def _companion_file(root: Path, identity: str) -> str:
     from app.services.companion_note import companion_path
 
-    canonical = root / companion_path(identity, root)
-    legacy = root / "_system" / "companions" / f"{identity}.md"
-    present = [path for path in (canonical, legacy) if path.exists() or path.is_symlink()]
+    canonical = companion_path(identity, root).as_posix()
+    legacy = f"_system/companions/{identity}.md"
+    present = [
+        relative
+        for relative in dict.fromkeys((canonical, legacy))
+        if _relative_entry_exists(root, relative)
+    ]
     if len(present) != 1:
         raise SupportableRepairRefusal("authority_refused")
     return present[0]
@@ -178,33 +394,37 @@ def _companion_claim_counts(
 ) -> tuple[int, int]:
     """Count exact companion UUID/current-locator claims across both supported trees."""
 
+    from app.ops.native_source_identity_persistence import _canonical_uuid
     from app.services.companion_note import companion_path
 
-    canonical = (root / companion_path(identity, root)).parent
-    legacy = root / "_system" / "companions"
-    directories: list[Path] = []
+    canonical = companion_path(identity, root).parent.as_posix()
+    legacy = "_system/companions"
+    directories: list[str] = []
     for directory in (canonical, legacy):
         if any(directory == existing for existing in directories):
             continue
         directories.append(directory)
     identity_claims = current_locator_claims = 0
     for directory in directories:
-        if not directory.exists():
-            continue
-        if directory.is_symlink() or not directory.is_dir():
-            raise SupportableRepairRefusal("authority_refused")
-        for candidate in sorted(directory.iterdir()):
-            if candidate.suffix != ".md":
+        names = _stable_directory_names(root, directory)
+        for name in names:
+            if not name.endswith(".md") or "/" in name:
                 continue
-            raw, _version = _regular_nofollow_text(candidate)
+            candidate = f"{directory}/{name}"
+            raw, _version = _regular_nofollow_text(root, candidate)
             try:
                 frontmatter, _body = load_frontmatter(raw)
             except Exception:
                 raise SupportableRepairRefusal("authority_refused") from None
             if not isinstance(frontmatter, dict):
                 raise SupportableRepairRefusal("authority_refused")
-            identity_claims += frontmatter.get("uuid") == identity
+            declared = _canonical_uuid(frontmatter.get("uuid"))
+            if declared is None:
+                raise SupportableRepairRefusal("authority_refused")
+            identity_claims += declared == identity
             current_locator_claims += frontmatter.get("source_ref") == current_source_rel
+        if _stable_directory_names(root, directory) != names:
+            raise SupportableRepairRefusal("authority_refused")
     return identity_claims, current_locator_claims
 
 
@@ -316,8 +536,8 @@ def prepare_companion_continuity_repair(
     if companion.content_hash == current_hash:
         raise SupportableRepairRefusal("authority_refused")
 
-    companion_file = _companion_file(root, declared)
-    original, original_sha256 = _regular_nofollow_text(companion_file)
+    companion_rel = _companion_file(root, declared)
+    original, original_sha256 = _regular_nofollow_text(root, companion_rel)
     try:
         companion_fm, companion_body = load_frontmatter(original)
     except Exception:
@@ -359,7 +579,7 @@ def prepare_companion_continuity_repair(
         raise SupportableRepairRefusal("authority_refused")
     return CompanionContinuityProposal(
         source_rel=source_rel,
-        companion_rel=companion_file.relative_to(root).as_posix(),
+        companion_rel=companion_rel,
         identity=declared,
         observed_at=timestamp,
         original_text=original,
@@ -398,7 +618,7 @@ def commit_companion_continuity_repair(
         )
     except Exception:
         raise SupportableRepairRefusal("write_refused") from None
-    _text, version = _regular_nofollow_text(target)
+    _text, version = _regular_nofollow_text(root, proposal.companion_rel)
     if version != proposal.candidate_sha256:
         raise SupportableRepairRefusal("readback_indeterminate")
 
@@ -415,8 +635,7 @@ def prepare_briefing_repair(
     if migration is None:
         raise SupportableRepairRefusal("authority_refused")
     root = _vault_context_root(vault_context)
-    target = root / migration.note_rel_path
-    original, version = _regular_nofollow_text(target)
+    original, version = _regular_nofollow_text(root, migration.note_rel_path)
     if version != migration.expected_version:
         raise SupportableRepairRefusal("authority_refused")
     try:
@@ -444,6 +663,96 @@ def prepare_briefing_repair(
     )
 
 
+def _vault_fingerprint(root: Path) -> str:
+    resolved, descriptor, named = _open_root(root)
+    try:
+        _verify_open_chain(resolved, [(descriptor, -1, named)], ())
+        payload = {"device": named.st_dev, "inode": named.st_ino}
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def _target_set_sha256(
+    companion: tuple[CompanionContinuityProposal, ...],
+    briefings: tuple[BriefingRepairProposal, ...],
+) -> str:
+    payload = {
+        "briefings": [
+            {
+                "candidate_sha256": item.candidate_sha256,
+                "date": item.for_date.isoformat(),
+                "expected_version": item.migration.expected_version,
+                "note_rel": item.migration.note_rel_path,
+                "original_sha256": item.original_sha256,
+            }
+            for item in briefings
+        ],
+        "companion": [
+            {
+                "candidate_sha256": item.candidate_sha256,
+                "companion_rel": item.companion_rel,
+                "identity": item.identity,
+                "observed_at": item.observed_at,
+                "original_sha256": item.original_sha256,
+                "source_rel": item.source_rel,
+            }
+            for item in companion
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _validate_companion_proposal(
+    root: Path, proposal: CompanionContinuityProposal,
+) -> None:
+    from app.ops.native_source_identity_persistence import _canonical_uuid
+    from app.services.companion_note import companion_path, is_companion_path
+
+    source_rel = _safe_relative(proposal.source_rel).as_posix()
+    companion_rel = _safe_relative(proposal.companion_rel).as_posix()
+    canonical_identity = _canonical_uuid(proposal.identity)
+    canonical_companion = (
+        companion_path(proposal.identity, root).as_posix()
+        if canonical_identity is not None
+        else ""
+    )
+    legacy_companion = f"_system/companions/{proposal.identity}.md"
+    if (
+        canonical_identity != proposal.identity
+        or is_companion_path(Path(source_rel), vault_root=root)
+        or companion_rel not in {canonical_companion, legacy_companion}
+        or _sha256_text(proposal.original_text) != proposal.original_sha256
+        or _sha256_text(proposal.candidate_text) != proposal.candidate_sha256
+    ):
+        raise SupportableRepairRefusal("context_refused")
+    _validated_timestamp(proposal.observed_at)
+
+
+def _validate_briefing_proposal(
+    root: Path, vault_context: Any, proposal: BriefingRepairProposal,
+) -> None:
+    from app.briefing.compose import briefing_note_path
+
+    note_rel = _safe_relative(proposal.migration.note_rel_path).as_posix()
+    expected = briefing_note_path(
+        vault_context=vault_context,
+        for_date=proposal.for_date,
+    ).relative_to(root).as_posix()
+    if (
+        note_rel != expected
+        or proposal.migration.expected_version != proposal.original_sha256
+        or proposal.migration.content == proposal.original_text
+        or _sha256_text(proposal.original_text) != proposal.original_sha256
+        or _sha256_text(proposal.migration.content) != proposal.candidate_sha256
+    ):
+        raise SupportableRepairRefusal("context_refused")
+
+
 def prepare_repair_batch(
     *,
     vault_root: Path,
@@ -457,6 +766,9 @@ def prepare_repair_batch(
 ) -> RepairBatch:
     """Freeze the exact reviewed target set without publishing private material."""
 
+    root = vault_root.expanduser().resolve(strict=True)
+    if _vault_context_root(vault_context) != root:
+        raise SupportableRepairRefusal("context_refused")
     if (
         len(companion_sources) != EXPECTED_COMPANION_COUNT
         or len(set(companion_sources)) != EXPECTED_COMPANION_COUNT
@@ -464,27 +776,31 @@ def prepare_repair_batch(
         or len(set(briefing_dates)) != EXPECTED_BRIEFING_COUNT
     ):
         raise SupportableRepairRefusal("context_refused")
+    companion = tuple(
+        prepare_companion_continuity_repair(
+            vault_root=root,
+            source_rel=source_rel,
+            observed_at=observed_at,
+        )
+        for source_rel in companion_sources
+    )
+    briefings = tuple(
+        prepare_briefing_repair(
+            vault_context=vault_context,
+            for_date=for_date,
+        )
+        for for_date in briefing_dates
+    )
     batch = RepairBatch(
         revision=revision,
         image_digest=image_digest,
         selection_sha256=selection_sha256,
-        companion=tuple(
-            prepare_companion_continuity_repair(
-                vault_root=vault_root,
-                source_rel=source_rel,
-                observed_at=observed_at,
-            )
-            for source_rel in companion_sources
-        ),
-        briefings=tuple(
-            prepare_briefing_repair(
-                vault_context=vault_context,
-                for_date=for_date,
-            )
-            for for_date in briefing_dates
-        ),
+        target_set_sha256=_target_set_sha256(companion, briefings),
+        vault_fingerprint=_vault_fingerprint(root),
+        companion=companion,
+        briefings=briefings,
     )
-    _validate_batch(batch)
+    _validate_batch(batch, vault_root=root, vault_context=vault_context)
     return batch
 
 
@@ -512,15 +828,15 @@ def commit_briefing_repair(
         raise SupportableRepairRefusal("write_refused") from None
     if receipt is None:
         raise SupportableRepairRefusal("readback_indeterminate")
-    target = _vault_context_root(vault_context) / proposal.migration.note_rel_path
-    _text, version = _regular_nofollow_text(target)
+    root = _vault_context_root(vault_context)
+    _text, version = _regular_nofollow_text(root, proposal.migration.note_rel_path)
     if version != proposal.candidate_sha256:
         raise SupportableRepairRefusal("readback_indeterminate")
 
 
 def _rollback_exact(
     *,
-    target: Path,
+    relative: str,
     root: Path,
     expected_candidate_sha256: str,
     original_text: str,
@@ -529,15 +845,20 @@ def _rollback_exact(
 ) -> str:
     """Rollback only exact repair bytes; mismatch is preserved and indeterminate."""
 
+    if (
+        _sha256_text(original_text) != original_sha256
+        or _SHA256.fullmatch(expected_candidate_sha256) is None
+    ):
+        raise SupportableRepairRefusal("context_refused")
     try:
-        _current, current_sha256 = _regular_nofollow_text(target)
+        _current, current_sha256 = _regular_nofollow_text(root, relative)
     except SupportableRepairRefusal:
         return "indeterminate"
     if current_sha256 != expected_candidate_sha256:
         return "indeterminate"
     try:
         write_note_from_absolute(
-            target,
+            root / _safe_relative(relative),
             original_text,
             vault_root=root,
             action=ACTION,
@@ -545,7 +866,7 @@ def _rollback_exact(
             expected_version=expected_candidate_sha256,
             writer_identity=WRITER_IDENTITY,
         )
-        _restored, restored_sha256 = _regular_nofollow_text(target)
+        _restored, restored_sha256 = _regular_nofollow_text(root, relative)
     except Exception:
         return "indeterminate"
     return "committed" if restored_sha256 == original_sha256 else "indeterminate"
@@ -554,46 +875,84 @@ def _rollback_exact(
 def rollback_companion_continuity_repair(
     proposal: CompanionContinuityProposal,
     *,
+    batch: RepairBatch,
+    effects: RepairEffects,
     vault_root: Path,
+    vault_context: Any,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
 ) -> str:
     root = vault_root.expanduser().resolve(strict=True)
-    return _rollback_exact(
-        target=root / proposal.companion_rel,
-        root=root,
-        expected_candidate_sha256=proposal.candidate_sha256,
-        original_text=proposal.original_text,
-        original_sha256=proposal.original_sha256,
-        write_guard=write_guard,
+    _validate_batch(batch, vault_root=root, vault_context=vault_context)
+    _validate_companion_proposal(root, proposal)
+    if proposal not in batch.companion:
+        raise SupportableRepairRefusal("context_refused")
+    return _fenced_rollback(
+        batch=batch,
+        effects=effects,
+        rollback=lambda: _rollback_exact(
+            relative=proposal.companion_rel,
+            root=root,
+            expected_candidate_sha256=proposal.candidate_sha256,
+            original_text=proposal.original_text,
+            original_sha256=proposal.original_sha256,
+            write_guard=write_guard,
+        ),
     )
 
 
 def rollback_briefing_repair(
     proposal: BriefingRepairProposal,
     *,
+    batch: RepairBatch,
+    effects: RepairEffects,
+    vault_root: Path,
     vault_context: Any,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
 ) -> str:
-    root = _vault_context_root(vault_context)
-    return _rollback_exact(
-        target=root / proposal.migration.note_rel_path,
-        root=root,
-        expected_candidate_sha256=proposal.candidate_sha256,
-        original_text=proposal.original_text,
-        original_sha256=proposal.original_sha256,
-        write_guard=write_guard,
+    root = vault_root.expanduser().resolve(strict=True)
+    _validate_batch(batch, vault_root=root, vault_context=vault_context)
+    _validate_briefing_proposal(root, vault_context, proposal)
+    if proposal not in batch.briefings:
+        raise SupportableRepairRefusal("context_refused")
+    return _fenced_rollback(
+        batch=batch,
+        effects=effects,
+        rollback=lambda: _rollback_exact(
+            relative=proposal.migration.note_rel_path,
+            root=root,
+            expected_candidate_sha256=proposal.candidate_sha256,
+            original_text=proposal.original_text,
+            original_sha256=proposal.original_sha256,
+            write_guard=write_guard,
+        ),
     )
 
 
-def _validate_batch(batch: RepairBatch) -> None:
+def _validate_batch(
+    batch: RepairBatch, *, vault_root: Path, vault_context: Any,
+) -> None:
+    root = vault_root.expanduser().resolve(strict=True)
     if (
-        _REVISION.fullmatch(batch.revision) is None
+        _vault_context_root(vault_context) != root
+        or _REVISION.fullmatch(batch.revision) is None
         or _IMAGE_DIGEST.fullmatch(batch.image_digest) is None
         or _SHA256.fullmatch(batch.selection_sha256) is None
+        or _SHA256.fullmatch(batch.target_set_sha256) is None
+        or _SHA256.fullmatch(batch.vault_fingerprint) is None
         or len(batch.companion) != EXPECTED_COMPANION_COUNT
         or len(batch.briefings) != EXPECTED_BRIEFING_COUNT
         or len({item.source_rel for item in batch.companion}) != len(batch.companion)
         or len({item.for_date for item in batch.briefings}) != len(batch.briefings)
+    ):
+        raise SupportableRepairRefusal("context_refused")
+    for companion_proposal in batch.companion:
+        _validate_companion_proposal(root, companion_proposal)
+    for briefing_proposal in batch.briefings:
+        _validate_briefing_proposal(root, vault_context, briefing_proposal)
+    if (
+        _target_set_sha256(batch.companion, batch.briefings)
+        != batch.target_set_sha256
+        or _vault_fingerprint(root) != batch.vault_fingerprint
     ):
         raise SupportableRepairRefusal("context_refused")
 
@@ -603,6 +962,8 @@ def _validate_authority(batch: RepairBatch, authority: RepairAuthoritySnapshot) 
         authority.revision != batch.revision
         or authority.image_digest != batch.image_digest
         or authority.selection_sha256 != batch.selection_sha256
+        or authority.target_set_sha256 != batch.target_set_sha256
+        or authority.vault_fingerprint != batch.vault_fingerprint
         or any(type(value) is not bool for value in (
             authority.controller_unloaded,
             authority.write_guard_healthy,
@@ -617,6 +978,24 @@ def _validate_authority(batch: RepairBatch, authority: RepairAuthoritySnapshot) 
         ))
     ):
         raise SupportableRepairRefusal("authority_refused")
+
+
+def _fenced_rollback(
+    *, batch: RepairBatch, effects: RepairEffects, rollback: Any,
+) -> str:
+    before: RepairAuthoritySnapshot | None = None
+    try:
+        with effects.owned_repair_fence():
+            before = effects.read_repair_authority()
+            _validate_authority(batch, before)
+            outcome = rollback()
+            after = effects.read_repair_authority()
+            _validate_authority(batch, after)
+            return outcome if after == before else "indeterminate"
+    except Exception:
+        if before is None:
+            raise SupportableRepairRefusal("authority_refused") from None
+        return "indeterminate"
 
 
 def _public_receipt(
@@ -669,9 +1048,11 @@ def validate_public_receipt(payload: Any) -> dict[str, Any]:
     return dict(payload)
 
 
-def _classify_readback(target: Path, *, original: str, candidate: str) -> str:
+def _classify_readback(
+    root: Path, relative: str, *, original: str, candidate: str,
+) -> str:
     try:
-        _text, current = _regular_nofollow_text(target)
+        _text, current = _regular_nofollow_text(root, relative)
     except SupportableRepairRefusal:
         return "indeterminate"
     if current == candidate:
@@ -691,8 +1072,8 @@ def run_supportable_repair_batch(
 ) -> dict[str, Any]:
     """Run one exact private batch inside a host-owned fence; never replay internally."""
 
-    _validate_batch(batch)
     root = vault_root.expanduser().resolve(strict=True)
+    _validate_batch(batch, vault_root=root, vault_context=vault_context)
     planned = len(batch.companion) + len(batch.briefings)
     repaired = refused = indeterminate = 0
     before: RepairAuthoritySnapshot | None = None
@@ -710,7 +1091,8 @@ def run_supportable_repair_batch(
                     outcome = "committed"
                 except Exception:
                     outcome = _classify_readback(
-                        root / proposal.companion_rel,
+                        root,
+                        proposal.companion_rel,
                         original=proposal.original_sha256,
                         candidate=proposal.candidate_sha256,
                     )
@@ -718,7 +1100,6 @@ def run_supportable_repair_batch(
                 refused += outcome == "refused"
                 indeterminate += outcome == "indeterminate"
             for briefing_proposal in batch.briefings:
-                target = root / briefing_proposal.migration.note_rel_path
                 try:
                     commit_briefing_repair(
                         briefing_proposal,
@@ -728,7 +1109,8 @@ def run_supportable_repair_batch(
                     outcome = "committed"
                 except Exception:
                     outcome = _classify_readback(
-                        target,
+                        root,
+                        briefing_proposal.migration.note_rel_path,
                         original=briefing_proposal.original_sha256,
                         candidate=briefing_proposal.candidate_sha256,
                     )
