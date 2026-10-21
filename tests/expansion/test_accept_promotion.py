@@ -39,6 +39,7 @@ from app.expansion.accept import (
     ACCEPT_MATERIALIZE_WRITE_ACTION,
     CREATE_ACCEPTED_EVENT,
     CREATE_DECLINED_EVENT,
+    AcceptError,
     AcceptResult,
     DraftNotAcceptedError,
     ModifyExistingRequiresAskError,
@@ -166,6 +167,25 @@ def test_accept_materializes_note_with_receipts_and_provenance(
     assert payload["authority_receipt_id"] == result.receipt_id
 
 
+def test_accept_destination_prefix_sibling_is_outside_vault(tmp_path: Path) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    _check_the_box(draft_path)
+    sibling_destination = tmp_path / "vault-backup" / "outside.md"
+
+    with pytest.raises(AcceptError, match="outside the vault root"):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="../vault-backup/outside.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert not sibling_destination.exists()
+    assert draft_path.exists()
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
 def test_code_fenced_html_comment_does_not_hide_the_generated_control(tmp_path: Path) -> None:
     vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
     text = draft_path.read_text(encoding="utf-8")
@@ -200,6 +220,309 @@ def test_indented_html_comment_does_not_hide_the_generated_control(tmp_path: Pat
 
     assert isinstance(result, AcceptResult)
     assert (vault_root / "notes/topic-x.md").exists()
+
+
+def test_mixed_space_tab_indented_comment_cannot_hide_unchecked_control(
+    tmp_path: Path,
+) -> None:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    frontmatter, text = load_frontmatter(draft_path.read_text(encoding="utf-8"))
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked_literal = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    # A tab after three spaces advances to CommonMark column four, so this is
+    # literal indented code, not an HTML comment that can hide the control.
+    replacement = f"{checked_literal}\n   \t<!--\n{unchecked}\n-->"
+    draft_path.write_text(text.replace(unchecked, replacement, 1), encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists(), "mixed indentation must not hide the generated control"
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+@pytest.mark.parametrize("tag", ["pre", "code", "div", "script", "textarea", "svg", "custom-panel"])
+def test_checked_lookalike_inside_html_block_does_not_authorize_acceptance(
+    tmp_path: Path, tag: str
+) -> None:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    frontmatter, text = load_frontmatter(draft_path.read_text(encoding="utf-8"))
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked_literal = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    text = text.replace(unchecked, f"<{tag}>\n{checked_literal}\n</{tag}>", 1)
+    draft_path.write_text(text, encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists(), "literal HTML code must leave the draft staged"
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+def test_checked_lookalike_inside_unclosed_html_block_does_not_authorize_acceptance(
+    tmp_path: Path,
+) -> None:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    frontmatter, text = load_frontmatter(draft_path.read_text(encoding="utf-8"))
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked_literal = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    text = text.replace(unchecked, f"<pre>\n{checked_literal}", 1)
+    draft_path.write_text(text, encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists(), "an unclosed literal HTML block must leave the draft staged"
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+@pytest.mark.parametrize(
+    "html_prefix",
+    ["<div></div>", "<div><!-- visible block opener -->", "<!DOCTYPE html>"],
+    ids=["same-line-open-close", "comment-after-opener", "declaration"],
+)
+def test_checked_lookalike_in_markdown_html_block_does_not_authorize_acceptance(
+    tmp_path: Path, html_prefix: str
+) -> None:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    frontmatter, text = load_frontmatter(draft_path.read_text(encoding="utf-8"))
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked_literal = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    replacement = f"{html_prefix}\n{checked_literal}\n\n{unchecked}"
+    draft_path.write_text(text.replace(unchecked, replacement, 1), encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists(), "literal Markdown HTML must leave the draft staged"
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+def test_unclosed_html_comment_cannot_hide_generated_unchecked_control(
+    tmp_path: Path,
+) -> None:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    frontmatter, text = load_frontmatter(draft_path.read_text(encoding="utf-8"))
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked_literal = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    draft_path.write_text(
+        text.replace(unchecked, f"{checked_literal}\n<!--\n{unchecked}", 1),
+        encoding="utf-8",
+    )
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists(), "an open HTML comment must leave the draft staged"
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+def test_nonbreaking_space_cannot_be_normalized_into_acceptance_control(
+    tmp_path: Path,
+) -> None:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    frontmatter, text = load_frontmatter(draft_path.read_text(encoding="utf-8"))
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked_literal = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    draft_path.write_text(text.replace(unchecked, f"\u00a0{checked_literal}", 1), encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists(), "a visually similar Unicode-prefixed line is not the control"
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+def test_unicode_line_separator_cannot_create_a_false_checkbox_line(tmp_path: Path) -> None:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    frontmatter, text = load_frontmatter(draft_path.read_text(encoding="utf-8"))
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked_literal = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    draft_path.write_text(text.replace(unchecked, f"\u2028{checked_literal}", 1), encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists(), "a Unicode line separator must not create a Markdown control line"
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+def test_self_closing_pre_remains_a_raw_html_block_until_its_end_tag(tmp_path: Path) -> None:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    frontmatter, text = load_frontmatter(draft_path.read_text(encoding="utf-8"))
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked_literal = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    replacement = f"<pre />\n\n{checked_literal}\n</pre>"
+    draft_path.write_text(text.replace(unchecked, replacement, 1), encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists(), "a self-closing raw-block opener must leave the draft staged"
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+def test_markdown_fence_after_self_closing_pre_cannot_be_hidden_from_parser(tmp_path: Path) -> None:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    frontmatter, text = load_frontmatter(draft_path.read_text(encoding="utf-8"))
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked_literal = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    replacement = f"<pre />\n</pre>\n```\n\n{checked_literal}"
+    draft_path.write_text(text.replace(unchecked, replacement, 1), encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists(), "a fence following a closed raw block must remain literal"
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+@pytest.mark.parametrize(
+    "literal_html",
+    [
+        "<pre>\n<pre></pre>\n{control}\n</pre>",
+        "</pre><pre>\n{control}\n</pre>",
+        '<pre title="</pre>">\n{control}\n</pre>',
+    ],
+    ids=["nested-same-tag", "close-then-open", "close-text-in-attribute"],
+)
+def test_nested_html_block_cannot_expose_a_checked_lookalike(
+    tmp_path: Path, literal_html: str
+) -> None:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    frontmatter, text = load_frontmatter(draft_path.read_text(encoding="utf-8"))
+    draft_id = str(frontmatter.get("uuid") or draft_path.stem)
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked_literal = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    draft_path.write_text(
+        text.replace(unchecked, literal_html.replace("{control}", checked_literal), 1),
+        encoding="utf-8",
+    )
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists(), "nested literal markup must leave the draft staged"
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
 
 
 # --- create_never_autowrites_canonical: unchecked draft is NOT materialized ---
@@ -315,6 +638,30 @@ def test_commented_acceptance_control_does_not_mint_authority(tmp_path: Path) ->
         accept_draft(draft_path, vault_root=vault_root, outbox_path=outbox_path)
 
     assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+def test_visible_checked_copy_cannot_replace_unchecked_control_hidden_in_comment(
+    tmp_path: Path,
+) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    text = draft_path.read_text(encoding="utf-8")
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    frontmatter, _body = load_frontmatter(text)
+    draft_id = str(frontmatter["uuid"])
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    replacement = f"{checked}\n<!--\n{unchecked}\n-->"
+    draft_path.write_text(text.replace(unchecked, replacement, 1), encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(draft_path, vault_root=vault_root, outbox_path=outbox_path)
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert draft_path.exists()
     assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
 
 

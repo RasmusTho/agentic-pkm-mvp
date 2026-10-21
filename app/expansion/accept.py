@@ -85,6 +85,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -183,6 +184,84 @@ def _strip_html_comments(line: str, in_comment: bool) -> tuple[str, bool]:
     return "".join(visible), in_comment
 
 
+def _commonmark_indent_columns(line: str) -> int:
+    """Count leading indentation using CommonMark's four-column tab stops."""
+    columns = 0
+    for character in line:
+        if character == " ":
+            columns += 1
+        elif character == "\t":
+            columns = ((columns // 4) + 1) * 4
+        else:
+            break
+    return columns
+
+
+def _is_commonmark_indented_code(line: str) -> bool:
+    return _commonmark_indent_columns(line) >= 4
+
+
+_HTML_VOID_TAGS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+_HTML_RAW_BLOCK_TAGS = frozenset({"pre", "script", "style"})
+_HTML_BLOCK_START = re.compile(
+    r"^ {0,3}(?:</?[A-Za-z][A-Za-z0-9:-]*(?:[\t />]|$)|<![A-Za-z\[]|<\?)"
+)
+_HTML_RAW_BLOCK_START = re.compile(r"^ {0,3}<(pre|script|style)(?:[\t />]|$)", re.IGNORECASE)
+
+
+class _AcceptanceHtmlScope(HTMLParser):
+    """Track raw HTML containers so checkbox-looking content cannot authorize acceptance."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.open_tags: list[str] = []
+        self.closed_tags: list[str] = []
+
+    @property
+    def has_open_markup(self) -> bool:
+        return bool(self.open_tags or self.rawdata)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        normalized = tag.lower()
+        if normalized not in _HTML_VOID_TAGS:
+            self.open_tags.append(normalized)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        normalized = tag.lower()
+        if normalized in _HTML_RAW_BLOCK_TAGS:
+            # CommonMark starts a type-1 raw HTML block from `<pre ` even
+            # when HTMLParser sees an XHTML-style self-closing tag. Keep that
+            # block literal until the matching end tag is encountered.
+            self.open_tags.append(normalized)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.lower()
+        for index in range(len(self.open_tags) - 1, -1, -1):
+            if self.open_tags[index] == normalized:
+                del self.open_tags[index:]
+                self.closed_tags.append(normalized)
+                break
+
+
 def _is_checked(text: str, draft_id: str) -> bool:
     """Accept only the generated checkbox for this draft inside an AI panel.
 
@@ -191,11 +270,22 @@ def _is_checked(text: str, draft_id: str) -> bool:
     into the exact label, and duplicate/malformed copies fail closed.
     """
     expected_label = f"Accept this draft into the vault (draft {draft_id[:12]})"
+    # A visible checked copy must not stand in for the generated unchecked
+    # control when that original is hidden in a comment, code block, or HTML.
+    # The draft-bound label is unique, so any duplicate occurrence is an
+    # ambiguous authority signal and fails closed.
+    unique_label = text.count(expected_label) == 1
     in_ai_panel = False
     in_html_comment = False
+    html_scope = _AcceptanceHtmlScope()
+    html_block_until_blank = False
+    html_raw_block_tag: str | None = None
     fence: tuple[str, int] | None = None
     matches: list[bool] = []
-    for original_line in text.splitlines():
+    # CommonMark recognizes LF, CR, and CRLF as line endings; str.splitlines()
+    # also splits Unicode separators such as U+2028 and could turn literal
+    # text into a flush-left generated control.
+    for original_line in re.split(r"\r\n|\r|\n", text):
         if fence is not None:
             fence_marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", original_line)
             if fence_marker:
@@ -204,23 +294,58 @@ def _is_checked(text: str, draft_id: str) -> bool:
                     fence = None
             continue
 
-        original_indentation = len(original_line) - len(original_line.lstrip(" "))
-        if not in_html_comment and (
-            original_line.startswith("\t") or original_indentation >= 4
-        ):
+        if not in_html_comment and _is_commonmark_indented_code(original_line):
             # Indented Markdown code is literal content, so HTML-like text in
             # it cannot open a comment that hides the later generated control.
             continue
 
         comment_was_active = in_html_comment
         line, in_html_comment = _strip_html_comments(original_line, in_html_comment)
-        indentation = len(line) - len(line.lstrip(" "))
-        if line.startswith("\t") or indentation >= 4:
+        if _is_commonmark_indented_code(line):
             # Markdown's indented-code form is literal example text. The
             # generated action is flush-left, so indentation never carries
             # acceptance authority.
             continue
-        marker = original_line.strip()
+        if html_raw_block_tag is not None:
+            html_scope.closed_tags.clear()
+            html_scope.feed(line + "\n")
+            if html_raw_block_tag in html_scope.closed_tags:
+                # CommonMark type-1 HTML blocks end on the line containing
+                # the matching raw-element close, even when no blank line
+                # follows. Let Markdown fences and controls parse next line.
+                html_raw_block_tag = None
+            continue
+        if html_block_until_blank:
+            html_scope.feed(line + "\n")
+            if not line.strip() and not in_html_comment and not html_scope.has_open_markup:
+                # CommonMark type-6/7 HTML blocks end at a blank line. Keep
+                # raw/unclosed markup fail-closed even across that boundary.
+                html_block_until_blank = False
+            continue
+        html_was_open = html_scope.has_open_markup
+        if _HTML_BLOCK_START.match(line):
+            raw_block_match = _HTML_RAW_BLOCK_START.match(line)
+            if raw_block_match:
+                html_raw_block_tag = raw_block_match.group(1).lower()
+            else:
+                # Markdown keeps type-3 through type-7 block HTML literal
+                # through a blank line, even when tags open and close on the
+                # same source line. This also conservatively covers custom
+                # elements and declarations.
+                html_block_until_blank = True
+            html_scope.closed_tags.clear()
+            html_scope.feed(line + "\n")
+            if html_raw_block_tag and html_raw_block_tag in html_scope.closed_tags:
+                html_raw_block_tag = None
+            continue
+        html_scope.closed_tags.clear()
+        html_scope.feed(line + "\n")
+        if html_was_open or html_scope.has_open_markup:
+            # HTML blocks are literal markup content. A checkbox-looking line
+            # inside one is never the generated interactive control.
+            continue
+        # Do not normalize non-ASCII whitespace into the generated control.
+        marker = original_line
         has_comment_delimiter = "<!--" in original_line or "-->" in original_line
         exact_visible_line = (
             not comment_was_active and not in_html_comment and not has_comment_delimiter
@@ -230,7 +355,7 @@ def _is_checked(text: str, draft_id: str) -> bool:
             delimiter, _suffix = fence_marker.groups()
             fence = (delimiter[0], len(delimiter))
             continue
-        if indentation:
+        if _commonmark_indent_columns(line):
             # Generated controls and panel delimiters are flush-left. A
             # nested-list checkbox is rendered as a different control and
             # cannot stand in for the dedicated generated action.
@@ -253,7 +378,16 @@ def _is_checked(text: str, draft_id: str) -> bool:
             matches.append(False)
         elif marker in {f"- [x] {expected_label}", f"- [X] {expected_label}"}:
             matches.append(True)
-    return fence is None and not in_ai_panel and len(matches) == 1 and matches[0]
+    return (
+        fence is None
+        and not in_html_comment
+        and not html_block_until_blank
+        and not html_scope.has_open_markup
+        and not in_ai_panel
+        and unique_label
+        and len(matches) == 1
+        and matches[0]
+    )
 
 
 @dataclass(frozen=True)
@@ -442,13 +576,14 @@ def _resolve_destination(
         candidate = rel.resolve()
     else:
         candidate = (vault_root / rel).resolve()
-    # Contain within the vault (no traversal outside the vault root).
-    if not str(candidate).startswith(str(vault_root)):
+    if candidate.suffix != ".md":
+        candidate = candidate.with_suffix(".md")
+    # Compare path ancestry, not string prefixes (e.g. `/vault-backup` is not
+    # inside `/vault`). Resolve above so existing symlinks cannot escape either.
+    if not candidate.is_relative_to(vault_root):
         raise AcceptError(
             f"destination {destination!r} resolves outside the vault root; refusing"
         )
-    if candidate.suffix != ".md":
-        candidate = candidate.with_suffix(".md")
     return candidate
 
 
