@@ -196,6 +196,15 @@ def _is_checked(text: str, draft_id: str) -> bool:
     fence: tuple[str, int] | None = None
     matches: list[bool] = []
     for original_line in text.splitlines():
+        if fence is not None:
+            fence_marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", original_line)
+            if fence_marker:
+                delimiter, suffix = fence_marker.groups()
+                if delimiter[0] == fence[0] and len(delimiter) >= fence[1] and not suffix.strip():
+                    fence = None
+            continue
+
+        comment_was_active = in_html_comment
         line, in_html_comment = _strip_html_comments(original_line, in_html_comment)
         indentation = len(line) - len(line.lstrip(" "))
         if line.startswith("\t") or indentation >= 4:
@@ -203,14 +212,12 @@ def _is_checked(text: str, draft_id: str) -> bool:
             # generated action is flush-left, so indentation never carries
             # acceptance authority.
             continue
-        marker = line.strip()
+        marker = original_line.strip()
+        has_comment_delimiter = "<!--" in original_line or "-->" in original_line
+        exact_visible_line = (
+            not comment_was_active and not in_html_comment and not has_comment_delimiter
+        )
         fence_marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
-        if fence is not None:
-            if fence_marker:
-                delimiter, suffix = fence_marker.groups()
-                if delimiter[0] == fence[0] and len(delimiter) >= fence[1] and not suffix.strip():
-                    fence = None
-            continue
         if fence_marker:
             delimiter, _suffix = fence_marker.groups()
             fence = (delimiter[0], len(delimiter))
@@ -219,6 +226,8 @@ def _is_checked(text: str, draft_id: str) -> bool:
             # Generated controls and panel delimiters are flush-left. A
             # nested-list checkbox is rendered as a different control and
             # cannot stand in for the dedicated generated action.
+            continue
+        if not exact_visible_line:
             continue
         if marker == "%% AI:Start %%":
             if in_ai_panel:

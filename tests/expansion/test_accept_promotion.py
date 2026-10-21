@@ -166,6 +166,24 @@ def test_accept_materializes_note_with_receipts_and_provenance(
     assert payload["authority_receipt_id"] == result.receipt_id
 
 
+def test_code_fenced_html_comment_does_not_hide_the_generated_control(tmp_path: Path) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    text = draft_path.read_text(encoding="utf-8")
+    text = text.replace("%% AI:Start %%", "```html\n<!--\n```\n%% AI:Start %%", 1)
+    draft_path.write_text(text, encoding="utf-8")
+    _check_the_box(draft_path)
+
+    result = accept_draft(
+        draft_path,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        destination="notes/topic-x.md",
+    )
+
+    assert isinstance(result, AcceptResult)
+    assert (vault_root / "notes/topic-x.md").exists()
+
+
 # --- create_never_autowrites_canonical: unchecked draft is NOT materialized ---
 
 
@@ -272,6 +290,27 @@ def test_commented_acceptance_control_does_not_mint_authority(tmp_path: Path) ->
         "%% AI:Start %%\n<!--\n" + checked + "\n-->\n",
         1,
     )
+    draft_path.write_text(text, encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(draft_path, vault_root=vault_root, outbox_path=outbox_path)
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+def test_html_comment_fragments_cannot_synthesize_acceptance_control(tmp_path: Path) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    text = draft_path.read_text(encoding="utf-8")
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    frontmatter, _body = load_frontmatter(text)
+    draft_id = str(frontmatter["uuid"])
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    fragmented = f"- [<!-- hidden -->x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    text = text.replace(unchecked + "\n", fragmented + "\n", 1)
     draft_path.write_text(text, encoding="utf-8")
     before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
 
