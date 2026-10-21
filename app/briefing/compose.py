@@ -38,7 +38,10 @@ from app.episodes.stream_registry import STATUS_LIVE, load_registry
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.profile_authority import ProfileAuthorityContractError
-from app.knowledge.profile_authority_store import is_profile_note_source_read_only
+from app.knowledge.profile_authority_store import (
+    ProfileAuthorityStore,
+    is_profile_note_source_read_only,
+)
 from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
 from app.receipts.decision_receipt_log import iter_decision_receipts
 from app.relevance.now_surface import InvalidMomentSourceRecord, collect_now_moments
@@ -428,31 +431,52 @@ def _atomic_write(
             # canonical expected-version-aware path performs its atomic exchange.
             # The canonical path rechecks the target and preserves it on conflict.
             try:
-                _briefing_identity_target(
+                target, expected_uuid = _briefing_path_target(
                     vault_root=vault_root,
                     note_rel_path=note_rel_path,
                 )
-            except BriefingReadError as exc:
-                raise KnowledgeWriteConflict(
-                    "briefing write target is not eligible"
-                ) from exc
-            return write_note_relative(
-                note_rel_path,
-                content,
-                vault_root=vault_root,
-                action=BRIEFING_WRITE_ACTION,
-                write_guard=write_guard,
-                expected_version=expected_version,
-            )
+                store = ProfileAuthorityStore(vault_root, profile_note_id=None)
+                with store.locked_source_match(
+                    note_rel_path,
+                    expected_uuid,
+                ) as profile_bound:
+                    # Recheck path authority after acquiring the Profile fence.
+                    _briefing_path_target(
+                        vault_root=vault_root,
+                        note_rel_path=note_rel_path,
+                    )
+                    if profile_bound:
+                        raise BriefingReadError("briefing identity is authority-bound elsewhere")
+                    return write_note_relative(
+                        note_rel_path,
+                        content,
+                        vault_root=vault_root,
+                        action=BRIEFING_WRITE_ACTION,
+                        write_guard=write_guard,
+                        expected_version=expected_version,
+                    )
+            except (BriefingReadError, ProfileAuthorityContractError) as exc:
+                raise KnowledgeWriteConflict("briefing write target is not eligible") from exc
         try:
-            target, _expected_uuid = _briefing_identity_target(
+            target, expected_uuid = _briefing_path_target(
                 vault_root=vault_root,
                 note_rel_path=note_rel_path,
             )
-        except BriefingReadError as exc:
+            store = ProfileAuthorityStore(vault_root, profile_note_id=None)
+            with store.locked_source_match(
+                note_rel_path,
+                expected_uuid,
+            ) as profile_bound:
+                target, _expected_uuid = _briefing_path_target(
+                    vault_root=vault_root,
+                    note_rel_path=note_rel_path,
+                )
+                if profile_bound:
+                    raise BriefingReadError("briefing identity is authority-bound elsewhere")
+                os.replace(staged_file, target)
+                return receipt
+        except (BriefingReadError, ProfileAuthorityContractError) as exc:
             raise KnowledgeWriteConflict("briefing write target is not eligible") from exc
-        os.replace(staged_file, target)
-        return receipt
 
 
 def _briefing_identity_target(
@@ -461,6 +485,30 @@ def _briefing_identity_target(
     note_rel_path: str,
 ) -> tuple[Path, str]:
     """Bind one lexical briefing locator to non-Profile, non-aliased identity."""
+
+    target, expected_uuid = _briefing_path_target(
+        vault_root=vault_root,
+        note_rel_path=note_rel_path,
+    )
+    try:
+        profile_bound = is_profile_note_source_read_only(
+            vault_root,
+            note_rel_path,
+            expected_uuid,
+        )
+    except ProfileAuthorityContractError as exc:
+        raise BriefingReadError("briefing authority cannot be verified") from exc
+    if profile_bound:
+        raise BriefingReadError("briefing identity is authority-bound elsewhere")
+    return target, expected_uuid
+
+
+def _briefing_path_target(
+    *,
+    vault_root: Path,
+    note_rel_path: str,
+) -> tuple[Path, str]:
+    """Bind one lexical briefing locator without consulting Profile state."""
 
     relative = PurePosixPath(note_rel_path)
     if (
@@ -478,17 +526,6 @@ def _briefing_identity_target(
             raise BriefingReadError("briefing identity or path is incompatible")
     if target.resolve(strict=False) != target:
         raise BriefingReadError("briefing identity or path is incompatible")
-    expected_uuid = resolve_read_only_derived_uuid(target, vault_root=vault_root)
-    try:
-        profile_bound = is_profile_note_source_read_only(
-            vault_root,
-            note_rel_path,
-            expected_uuid,
-        )
-    except ProfileAuthorityContractError as exc:
-        raise BriefingReadError("briefing authority cannot be verified") from exc
-    if profile_bound:
-        raise BriefingReadError("briefing identity is authority-bound elsewhere")
     current = vault_root
     for part in relative.parts:
         current = current / part
@@ -496,7 +533,7 @@ def _briefing_identity_target(
             raise BriefingReadError("briefing identity or path is incompatible")
     if target.resolve(strict=False) != target:
         raise BriefingReadError("briefing identity or path is incompatible")
-    return target, expected_uuid
+    return target, resolve_read_only_derived_uuid(target, vault_root=vault_root)
 
 
 def _vault_root(context: VaultContext) -> Path:

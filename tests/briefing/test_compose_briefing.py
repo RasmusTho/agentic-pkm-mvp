@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 from copy import deepcopy
 from dataclasses import replace
 from datetime import date
@@ -1054,7 +1055,8 @@ def test_daily_briefing_identity_migration_refuses_unreadable_profile_authority(
     legacy = compose_module._render_note(replace(note, uuid=None))
     target.write_text(legacy, encoding="utf-8")
     store = ProfileAuthorityStore(root, profile_note_id=None)
-    store.directory.mkdir(parents=True)
+    store.directory.mkdir(parents=True, exist_ok=True)
+    lock_existed = store.lock_path.exists()
     store.path.write_text("not-jsonl\n", encoding="utf-8")
 
     with pytest.raises(BriefingReadError, match="authority cannot be verified"):
@@ -1064,7 +1066,38 @@ def test_daily_briefing_identity_migration_refuses_unreadable_profile_authority(
         )
 
     assert target.read_text(encoding="utf-8") == legacy
-    assert not store.lock_path.exists()
+    assert store.lock_path.exists() is lock_existed
+
+
+def test_daily_briefing_identity_migration_refuses_nonregular_profile_authority(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    from app.briefing import compose as compose_module
+
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    store = ProfileAuthorityStore(root, profile_note_id=None)
+    store.directory.mkdir(parents=True, exist_ok=True)
+    lock_existed = store.lock_path.exists()
+    os.mkfifo(store.path, mode=0o600)
+
+    with pytest.raises(BriefingReadError, match="authority cannot be verified"):
+        prepare_briefing_identity_migration(
+            vault_context=context,
+            for_date=BRIEFING_DATE,
+        )
+
+    assert target.read_text(encoding="utf-8") == legacy
+    assert store.lock_path.exists() is lock_existed
 
 
 @pytest.mark.parametrize(

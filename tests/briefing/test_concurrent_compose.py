@@ -268,3 +268,118 @@ def test_daily_briefing_identity_migration_revalidates_authority_at_write_seam(
     else:
         assert foreign.read_text(encoding="utf-8") == legacy
         assert target.is_symlink()
+
+
+def test_daily_briefing_identity_migration_fences_profile_authority_before_cas(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compose_module.compose_briefing(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    note = load_briefing(vault_context=vault, for_date=PAST)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    proposal = compose_module.prepare_briefing_identity_migration(
+        vault_context=vault,
+        for_date=PAST,
+    )
+    assert proposal is not None
+    monkeypatch.setattr(
+        compose_module,
+        "prepare_briefing_identity_migration",
+        lambda **_kwargs: proposal,
+    )
+
+    original_path_target = compose_module._briefing_path_target
+    calls = 0
+
+    def initialize_after_precheck(**kwargs: object) -> tuple[Path, str]:
+        nonlocal calls
+        resolved_target, expected_uuid = original_path_target(**kwargs)
+        calls += 1
+        if calls == 2:
+            ProfileAuthorityStore(root, profile_note_id=expected_uuid).initialize(
+                ProfileIdentityRecord(
+                    event_id="daily-briefing-profile-cas-race",
+                    vault_id="test-vault",
+                    profile_note_id=expected_uuid,
+                    note_path=target.relative_to(root).as_posix(),
+                    initial_content_digest=hashlib.sha256(legacy.encode()).hexdigest(),
+                )
+            )
+        return resolved_target, expected_uuid
+
+    monkeypatch.setattr(
+        compose_module,
+        "_briefing_path_target",
+        initialize_after_precheck,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="not eligible"):
+        migrate_briefing_identity(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+
+    assert calls == 3
+    assert target.read_text(encoding="utf-8") == legacy
+
+
+def test_daily_briefing_identity_migration_serializes_profile_initialization(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compose_module.compose_briefing(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    note = load_briefing(vault_context=vault, for_date=PAST)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    expected_uuid = note_uuid_module.resolve_read_only_derived_uuid(
+        target,
+        vault_root=root,
+    )
+    store = ProfileAuthorityStore(root, profile_note_id=expected_uuid)
+    original_write = compose_module.write_note_relative
+    initialization_started = threading.Event()
+    initialization_finished = threading.Event()
+    initialization_errors: list[BaseException] = []
+    initializer: threading.Thread | None = None
+
+    def initialize_profile() -> None:
+        initialization_started.set()
+        try:
+            store.initialize(
+                ProfileIdentityRecord(
+                    event_id="daily-briefing-profile-serialized",
+                    vault_id="test-vault",
+                    profile_note_id=expected_uuid,
+                    note_path=target.relative_to(root).as_posix(),
+                    initial_content_digest=hashlib.sha256(legacy.encode()).hexdigest(),
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            initialization_errors.append(exc)
+        finally:
+            initialization_finished.set()
+
+    def race_at_canonical_write(*args: object, **kwargs: object) -> object:
+        nonlocal initializer
+        if kwargs.get("expected_version") is not None and kwargs.get("vault_root") == root:
+            initializer = threading.Thread(target=initialize_profile)
+            initializer.start()
+            assert initialization_started.wait(timeout=1)
+            time.sleep(0.05)
+            assert not initialization_finished.is_set()
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(compose_module, "write_note_relative", race_at_canonical_write)
+    receipt = migrate_briefing_identity(
+        vault_context=vault,
+        for_date=PAST,
+        write_guard=HEALTHY,
+    )
+    assert receipt is not None and receipt.outcome == "written"
+    assert initializer is not None
+    initializer.join(timeout=1)
+    assert initialization_finished.is_set()
+    assert initialization_errors == []

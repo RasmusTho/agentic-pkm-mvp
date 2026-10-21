@@ -88,6 +88,28 @@ class ProfileAuthorityStore:
             records = self._load_records_locked()
             yield replay_profile_records(records) if records else None
 
+    @contextmanager
+    def locked_source_match(
+        self,
+        note_path: str,
+        note_uuid: str | None = None,
+    ) -> Iterator[bool]:
+        """Fence Profile ownership while a caller linearizes another write.
+
+        Unlike ``locked_state``, this context always acquires the authority lock,
+        including when the stream is absent.  That closes the absent-to-initialized
+        race for callers that must publish only while a source is not Profile-owned.
+        """
+
+        with self._locked():
+            records = self._load_records_locked()
+            state = replay_profile_records(records) if records else None
+            yield state is not None and _matches_profile_identity(
+                state.identity,
+                note_path=note_path,
+                note_uuid=note_uuid,
+            )
+
     def initialize(self, identity: ProfileIdentityRecord) -> ProfileAuthorityState:
         if self.profile_note_id is None or identity.profile_note_id != self.profile_note_id:
             raise ProfileAuthorityConflict(
@@ -230,7 +252,9 @@ class ProfileAuthorityStore:
             try:
                 stream = os.open(
                     self.path.name,
-                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0),
                     dir_fd=current,
                 )
             except FileNotFoundError:
@@ -242,11 +266,13 @@ class ProfileAuthorityStore:
                     "profile authority stream must be a regular file"
                 )
             chunks: list[bytes] = []
-            while True:
-                chunk = os.read(stream, 1024 * 1024)
+            remaining = before.st_size
+            while remaining:
+                chunk = os.read(stream, min(remaining, 1024 * 1024))
                 if not chunk:
                     break
                 chunks.append(chunk)
+                remaining -= len(chunk)
             after = os.fstat(stream)
             identity = (
                 before.st_dev,
