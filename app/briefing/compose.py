@@ -9,7 +9,6 @@ keeps ingest uuid healing from rewriting it, so the composer stays its only writ
 
 from __future__ import annotations
 
-import os
 import re
 import tempfile
 from dataclasses import dataclass, replace
@@ -411,6 +410,44 @@ def _atomic_write(
         bootstrap_actions=write_guard.bootstrap_actions,
     )
     adapter_guard.assert_writes_allowed(BRIEFING_WRITE_ACTION)
+    if expected_version is None:
+        try:
+            target, expected_uuid = _briefing_path_target(
+                vault_root=vault_root,
+                note_rel_path=note_rel_path,
+            )
+            store = ProfileAuthorityStore(vault_root, profile_note_id=None)
+            with store.locked_source_match(
+                note_rel_path,
+                expected_uuid,
+            ) as profile_bound:
+                _briefing_path_target(
+                    vault_root=vault_root,
+                    note_rel_path=note_rel_path,
+                )
+                if profile_bound:
+                    raise BriefingReadError(
+                        "briefing identity is authority-bound elsewhere"
+                    )
+                receipt = write_note_relative(
+                    note_rel_path,
+                    content,
+                    vault_root=vault_root,
+                    action=BRIEFING_WRITE_ACTION,
+                    write_guard=adapter_guard,
+                    create_once=True,
+                )
+                if receipt.outcome != "written":
+                    raise KnowledgeWriteConflict(
+                        "briefing target was created concurrently",
+                        receipt=receipt,
+                    )
+                return receipt
+        except (BriefingReadError, ProfileAuthorityContractError, OSError) as exc:
+            raise KnowledgeWriteConflict(
+                "briefing write target is not eligible"
+            ) from exc
+
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         dir=target.parent,
@@ -425,38 +462,9 @@ def _atomic_write(
             action=BRIEFING_WRITE_ACTION,
             write_guard=adapter_guard,
         )
-        staged_file = staging_root / note_rel_path
-        if expected_version is not None:
-            # The private stage proves the complete proposal exists before the
-            # canonical expected-version-aware path performs its atomic exchange.
-            # The canonical path rechecks the target and preserves it on conflict.
-            try:
-                target, expected_uuid = _briefing_path_target(
-                    vault_root=vault_root,
-                    note_rel_path=note_rel_path,
-                )
-                store = ProfileAuthorityStore(vault_root, profile_note_id=None)
-                with store.locked_source_match(
-                    note_rel_path,
-                    expected_uuid,
-                ) as profile_bound:
-                    # Recheck path authority after acquiring the Profile fence.
-                    _briefing_path_target(
-                        vault_root=vault_root,
-                        note_rel_path=note_rel_path,
-                    )
-                    if profile_bound:
-                        raise BriefingReadError("briefing identity is authority-bound elsewhere")
-                    return write_note_relative(
-                        note_rel_path,
-                        content,
-                        vault_root=vault_root,
-                        action=BRIEFING_WRITE_ACTION,
-                        write_guard=write_guard,
-                        expected_version=expected_version,
-                    )
-            except (BriefingReadError, ProfileAuthorityContractError) as exc:
-                raise KnowledgeWriteConflict("briefing write target is not eligible") from exc
+        # The private stage proves the complete proposal exists before the
+        # canonical expected-version-aware path performs its atomic exchange.
+        # The canonical path rechecks the target and preserves it on conflict.
         try:
             target, expected_uuid = _briefing_path_target(
                 vault_root=vault_root,
@@ -473,8 +481,14 @@ def _atomic_write(
                 )
                 if profile_bound:
                     raise BriefingReadError("briefing identity is authority-bound elsewhere")
-                os.replace(staged_file, target)
-                return receipt
+                return write_note_relative(
+                    note_rel_path,
+                    content,
+                    vault_root=vault_root,
+                    action=BRIEFING_WRITE_ACTION,
+                    write_guard=write_guard,
+                    expected_version=expected_version,
+                )
         except (BriefingReadError, ProfileAuthorityContractError) as exc:
             raise KnowledgeWriteConflict("briefing write target is not eligible") from exc
 

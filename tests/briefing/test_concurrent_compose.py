@@ -135,6 +135,68 @@ def test_concurrent_first_contact_composes_one_readable_briefing(
     assert _conflict_copies(vault, TODAY) == []
 
 
+def test_daily_briefing_initial_create_preserves_concurrent_winner(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    original_write = compose_module.write_note_relative
+
+    def create_winner_at_publication(*args: object, **kwargs: object) -> object:
+        if kwargs.get("create_once") is True and kwargs.get("vault_root") == root:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("concurrent owner bytes\n", encoding="utf-8")
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(
+        compose_module,
+        "write_note_relative",
+        create_winner_at_publication,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="created concurrently"):
+        compose_module.compose_briefing(
+            vault_context=vault,
+            for_date=PAST,
+            write_guard=HEALTHY,
+        )
+
+    assert target.read_text(encoding="utf-8") == "concurrent owner bytes\n"
+
+
+def test_daily_briefing_initial_create_refuses_parent_alias_at_publication(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_write = compose_module.write_note_relative
+
+    def alias_parent_at_publication(*args: object, **kwargs: object) -> object:
+        if kwargs.get("create_once") is True and kwargs.get("vault_root") == root:
+            target.parent.parent.mkdir(parents=True, exist_ok=True)
+            target.parent.symlink_to(outside, target_is_directory=True)
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(
+        compose_module,
+        "write_note_relative",
+        alias_parent_at_publication,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="not eligible"):
+        compose_module.compose_briefing(
+            vault_context=vault,
+            for_date=PAST,
+            write_guard=HEALTHY,
+        )
+
+    assert target.parent.is_symlink()
+    assert not (outside / target.name).exists()
+
+
 def test_existing_past_briefing_is_not_recomposed(vault: VaultContext) -> None:
     compose_module.compose_briefing(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
     past = briefing_note_path(vault_context=vault, for_date=PAST)
