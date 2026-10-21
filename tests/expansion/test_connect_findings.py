@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from app.agents.panel.parser import parse_panel
 from app.curation.findings import CONNECT_FINDING_CLASSES, FindingClass, FindingTrack
 from app.expansion.connect import (
     ConnectPassConfig,
@@ -134,7 +135,10 @@ def test_related_unlinked_pair_produces_finding_with_both_refs_and_spans(
     ]
     outbox_path = tmp_path / "outbox.jsonl"
     source_paths = (sv_en_vault / "sv-note.md", sv_en_vault / "en-note.md")
-    before_text = {path: path.read_text(encoding="utf-8") for path in source_paths}
+    for path in source_paths:
+        original = path.read_bytes().replace(b"\r\n", b"\n")
+        path.write_bytes(original.replace(b"\n", b"\r\n"))
+    before_bytes = {path: path.read_bytes() for path in source_paths}
     before_markdown = {path.relative_to(sv_en_vault) for path in sv_en_vault.rglob("*.md")}
 
     report = run_connect_pass(
@@ -174,17 +178,29 @@ def test_related_unlinked_pair_produces_finding_with_both_refs_and_spans(
     assert sv_text.count("- [ ]") == 1
     assert en_text.count("- [ ]") == 1
     assert "- [x]" not in sv_text and "- [x]" not in en_text
+    path_by_uuid = {"uuid-sv": source_paths[0], "uuid-en": source_paths[1]}
+    for finding in report.findings:
+        note_text = path_by_uuid[finding.note_uuid].read_bytes().decode("utf-8")
+        expected_label = (
+            f"[curation:{finding.finding_class.value}] {finding.proposed} "
+            f"(finding {finding.finding_id[:12]})"
+        )
+        matching_actions = [action for action in parse_panel(note_text).actions if action.text == expected_label]
+        assert len(matching_actions) == 1
+        assert not matching_actions[0].checked
+        assert matching_actions[0].option_id and matching_actions[0].proposal_pending
 
     after_markdown = {path.relative_to(sv_en_vault) for path in sv_en_vault.rglob("*.md")}
     assert after_markdown == before_markdown == {Path("sv-note.md"), Path("en-note.md")}
     for path in source_paths:
-        before = before_text[path]
-        after = path.read_text(encoding="utf-8")
+        before = before_bytes[path]
+        after = path.read_bytes()
         for text in (before, after):
-            assert text.count("%% AI:Start %%") == 1 and text.count("%% AI:End %%") == 1
-        before_outside_panel = before.split("%% AI:Start %%", 1)[0] + before.split("%% AI:End %%", 1)[1]
-        after_outside_panel = after.split("%% AI:Start %%", 1)[0] + after.split("%% AI:End %%", 1)[1]
+            assert text.count(b"%% AI:Start %%") == 1 and text.count(b"%% AI:End %%") == 1
+        before_outside_panel = before.split(b"%% AI:Start %%", 1)[0] + before.split(b"%% AI:End %%", 1)[1]
+        after_outside_panel = after.split(b"%% AI:Start %%", 1)[0] + after.split(b"%% AI:End %%", 1)[1]
         assert after_outside_panel == before_outside_panel
+        assert b"\n" not in after.replace(b"\r\n", b""), "Connect normalized CRLF source line endings"
 
 
 def test_connect_finding_class_is_in_closed_connect_set() -> None:

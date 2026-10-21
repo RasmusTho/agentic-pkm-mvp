@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from app.agents.panel.parser import parse_panel
 from app.expansion.accept import DraftNotAcceptedError, accept_draft
 from app.expansion.connect import ConnectPassConfig, run_connect_pass
 from app.expansion.create import CreateRequest, OutputKind, SourceInput, run_create_pass
@@ -183,20 +184,6 @@ def _outside_ai_panels(text: str) -> str:
             remaining.append(line)
     assert not in_panel, "unterminated AI panel in a source note"
     return "".join(remaining)
-
-
-def _panel_lines(text: str) -> list[str]:
-    lines: list[str] = []
-    in_panel = False
-    for line in text.splitlines():
-        marker = line.strip()
-        if marker == "%% AI:Start %%":
-            in_panel = True
-        elif marker == "%% AI:End %%":
-            in_panel = False
-        elif in_panel:
-            lines.append(marker)
-    return lines
 
 
 def _relative_source_path(raw: str, vault_root: Path) -> Path:
@@ -449,7 +436,7 @@ def test_connect_is_candidate_only_and_unchecked(uat_context: UatContext) -> Non
     receipt = uat_context.receipt()
     assert receipt.get("technical_phase") == "doctor_pass", "run the strict identity/doctor phase first"
     assert receipt.get("candidate") == uat_context.candidate, "candidate changed during the UAT"
-    before_text = {path: path.read_text(encoding="utf-8") for path in uat_context.source_paths}
+    before_text = {path: path.read_bytes().decode("utf-8") for path in uat_context.source_paths}
     before_frontmatter = {path: load_frontmatter(text)[0] for path, text in before_text.items()}
     before_markdown = {
         path.relative_to(uat_context.vault_root): path.read_bytes()
@@ -483,7 +470,7 @@ def test_connect_is_candidate_only_and_unchecked(uat_context: UatContext) -> Non
     assert selected_finding_ids, "Connect produced no one-finding same-scope result containing both selected identities"
 
     changed_paths = {
-        path for path, original in before_text.items() if path.read_text(encoding="utf-8") != original
+        path for path, original in before_text.items() if path.read_bytes().decode("utf-8") != original
     }
     after_markdown = {
         path.relative_to(uat_context.vault_root): path.read_bytes()
@@ -500,19 +487,24 @@ def test_connect_is_candidate_only_and_unchecked(uat_context: UatContext) -> Non
     }
     assert changed_markdown <= selected_relative_paths, "Connect changed Markdown outside the selected source pair"
     for path in uat_context.source_paths:
-        after = path.read_text(encoding="utf-8")
+        after = path.read_bytes().decode("utf-8")
         assert load_frontmatter(after)[0] == before_frontmatter[path], "Connect changed source frontmatter"
         assert _outside_ai_panels(before_text[path]) == _outside_ai_panels(after), "Connect changed source text outside its governed AI proposal block"
-        panel_lines = _panel_lines(after)
+        panel_actions = parse_panel(after).actions
         expected = [
-            f"- [ ] [curation:{finding.finding_class.value}] {finding.proposed} (finding {finding.finding_id[:12]})"
+            f"[curation:{finding.finding_class.value}] {finding.proposed} (finding {finding.finding_id[:12]})"
             for finding in report.findings
             if finding.note_uuid == next(source.object_id for source in uat_context.sources if source.note_path == path.relative_to(uat_context.vault_root).as_posix())
             and finding.finding_id in selected_finding_ids
         ]
         assert expected, "the selected logical finding lacks its source-side proposal"
         for proposal in expected:
-            assert panel_lines.count(proposal) == 1, "selected source must contain one exact unchecked Connect proposal"
+            matching_actions = [action for action in panel_actions if action.text == proposal]
+            assert len(matching_actions) == 1, "selected source must contain one Connect proposal"
+            assert not matching_actions[0].checked, "a Connect proposal must remain unchecked"
+            assert matching_actions[0].option_id and matching_actions[0].proposal_pending, (
+                "a Connect proposal must retain its persistent option and human-gate markers"
+            )
     drafts_after = set(drafts_dir.glob("*.md")) if drafts_dir.exists() else set()
     assert drafts_after == drafts_before, "Connect created or removed a staged draft"
     assert changed_paths <= set(uat_context.source_paths), "Connect changed a path outside the selected source pair"
