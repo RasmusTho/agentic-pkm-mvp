@@ -398,12 +398,12 @@ class DormantSettingsRebindReconciler:
 
         return self._registry
 
-    def current_record(self) -> SettingsRebindRecord:
+    def current_record(self, *, read_only: bool = False) -> SettingsRebindRecord:
         """Read the current durable rebind authority for loop reconciliation."""
 
-        return self._store.read()
+        return self._store.read_existing() if read_only else self._store.read()
 
-    def requires_observation_only_validation(self) -> bool:
+    def requires_observation_only_validation(self, *, read_only: bool = False) -> bool:
         """Choose a write-free admission ceiling, not recovery authority.
 
         Root, reload, policy and scan checks still belong to begin/finish-cycle.
@@ -411,7 +411,7 @@ class DormantSettingsRebindReconciler:
         configuration loader determines whether recovery is admissible.
         """
 
-        record = self.current_record()
+        record = self.current_record(read_only=read_only)
         return (
             record.phase == "committed"
             and record.prior_binding_id is None

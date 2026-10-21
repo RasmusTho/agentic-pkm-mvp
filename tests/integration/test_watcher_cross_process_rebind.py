@@ -25,6 +25,7 @@ from app.instance.runtime import InstanceRegistryRuntime
 from app.instance.settings_rebind import (
     SettingsRebindRecord,
     _install_dormant_settings_rebind,
+    compatibility_ingress_window,
 )
 from app.instance.vault_registry import VaultRegistration
 from app.instance.vault_registry import KnownVaultRef
@@ -238,6 +239,132 @@ def _event_paths(root: Path) -> list[str]:
         str((item.get("payload") or {}).get("vault_path") or "")
         for item in _outbox_payloads(root / "index-outbox.jsonl")
     ]
+
+
+def test_read_only_registry_config_uses_existing_shared_fence_without_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _vault_a, _vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, prepare=False,
+    )
+    from app.instance import settings_rebind
+    from app.instance.vault_registry import VaultRegistryStore
+
+    ingress = runtime.registry.path.parent / "settings-rebind-ingress.lock"
+    assert ingress.exists()
+    original_open = settings_rebind.os.open
+    opens: list[int] = []
+
+    def guarded_open(path, flags, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if Path(path) == ingress:
+            opens.append(flags)
+            assert not flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(settings_rebind.os, "open", guarded_open)
+    monkeypatch.setattr(
+        VaultRegistryStore,
+        "load",
+        lambda _self: pytest.fail("read-only config used mutating registry load"),
+    )
+    cfg = registry.load_registry_config(config_path, read_only=True)
+    assert cfg.enable is True
+    assert opens
+
+
+@pytest.mark.parametrize("failure", ["missing-lock", "symlink-lock", "pending-transaction"])
+def test_read_only_registry_config_refuses_unqualified_existing_state_without_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    runtime, _vault_a, _vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, prepare=False,
+    )
+    ingress = runtime.registry.path.parent / "settings-rebind-ingress.lock"
+    if failure == "missing-lock":
+        ingress.unlink()
+    elif failure == "symlink-lock":
+        ingress.unlink()
+        ingress.symlink_to(runtime.registry.path)
+    else:
+        runtime.registry.transaction_path.write_text("pending", encoding="utf-8")
+    before = {
+        path.name: path.read_bytes()
+        for path in runtime.registry.path.parent.iterdir()
+        if path.is_file() and not path.is_symlink()
+    }
+    with pytest.raises((OSError, RegistryError)):
+        registry.load_registry_config(config_path, read_only=True)
+    after = {
+        path.name: path.read_bytes()
+        for path in runtime.registry.path.parent.iterdir()
+        if path.is_file() and not path.is_symlink()
+    }
+    assert after == before
+
+
+def test_registry_writers_provision_read_only_ingress_prerequisites(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    ingress = runtime.registry.path.parent / "settings-rebind-ingress.lock"
+    assert not ingress.exists()
+    _install_dormant_settings_rebind(
+        runtime.registry,
+        binding_id=None,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    assert ingress.exists()
+    info = ingress.stat()
+    assert info.st_mode & 0o777 == 0o600
+
+
+def test_read_only_transition_is_refused_inside_held_window(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    with compatibility_ingress_window(runtime.registry, transition=True):
+        with pytest.raises(RegistryError, match="cannot transition"):
+            with compatibility_ingress_window(
+                runtime.registry, transition=True, read_only=True,
+            ):
+                pytest.fail("invalid read-only transition entered")
+
+
+def test_read_only_registry_config_blocks_behind_transition_without_writing(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    _install_dormant_settings_rebind(
+        runtime.registry,
+        binding_id=None,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    with compatibility_ingress_window(runtime.registry):
+        pass
+    transition_entered = threading.Event()
+    release_transition = threading.Event()
+    reader_entered = threading.Event()
+
+    def transition() -> None:
+        with compatibility_ingress_window(runtime.registry, transition=True):
+            transition_entered.set()
+            assert release_transition.wait(timeout=5)
+
+    def reader() -> None:
+        with compatibility_ingress_window(runtime.registry, read_only=True):
+            reader_entered.set()
+
+    writer = threading.Thread(target=transition)
+    observer = threading.Thread(target=reader)
+    writer.start()
+    assert transition_entered.wait(timeout=5)
+    observer.start()
+    assert not reader_entered.wait(timeout=0.1)
+    release_transition.set()
+    writer.join(timeout=5)
+    observer.join(timeout=5)
+    assert reader_entered.is_set()
 
 
 def _vault_file_bytes(root: Path) -> dict[str, bytes]:
