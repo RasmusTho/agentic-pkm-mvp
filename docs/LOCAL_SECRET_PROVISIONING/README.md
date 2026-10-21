@@ -5,7 +5,7 @@ Owner: Architecture / operations
 Temporal class: strategic
 Review cadence: event-driven (task merge, host-topology change, or first CI/multi-host use)
 Source of truth: this directory for the proposed capability; GitHub parent/child issues are execution artifacts once filed
-Last reviewed: 2026-10-15
+Last reviewed: 2026-10-21 (bounded TypeSafe DEV acceptance writeback; broader channel acceptance unchanged)
 Last verified against: #5667 comments #6114638077, #6114724380, and #6114787299; merged BWS slices #5703, #5717, #5725, and #5732. These verify current entitlement, existing reader scopes, the MARR non-prod binding, active encrypted reader services on all three channel VMs, and the accepted normal-writer model; Product/Builder acceptance and full channel deployment/runtime acceptance remain separate.
 
 # Local Secret Provisioning
@@ -158,9 +158,12 @@ entitlement, reader, token, cleanup, and MARR facts they report, not the complet
 deployment/runtime acceptance.
 Any live MARR runtime use requires owner confirmation of rotation after the earlier exposure, scoped MARR dev
 host installation, explicit one-call authorization with synthetic input, and a redacted receipt.
-Product and Builder routes remain off pending their separate post-merge dev acceptance on #5764.
-No rotation, Keychain read/import, installation, live provider call, or channel activation occurred
-as part of this repository slice.
+The separate actual Product and Builder DEV receipts are verified under
+[TypeSafe development host acceptance](../TYPESAFE_SYSTEM_ONE/README.md#typesafe-development-host-acceptance).
+Both allowances are consumed; ordinary routes remain off and broader #5667 channel acceptance
+retains its own gates. The original repository slice performed no rotation, Keychain read/import,
+installation, live provider call or channel activation; the linked operational receipts supply the
+separate DEV evidence.
 
 The Discord binding is granted only to the Heimdal-owned `heimdal-external-alerts` consumer on
 `dev`, `test`, and `prod`, and is one-way notification transport only. Creating, rotating, deleting,
