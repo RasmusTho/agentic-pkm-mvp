@@ -82,6 +82,7 @@ ADR; ``docs/testing/invariant-tests.md`` names these invariants):
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -167,9 +168,32 @@ def _is_checked(text: str, draft_id: str) -> bool:
     """
     expected_label = f"Accept this draft into the vault (draft {draft_id[:12]})"
     in_ai_panel = False
+    fence: tuple[str, int] | None = None
     matches: list[bool] = []
     for line in text.splitlines():
+        indentation = len(line) - len(line.lstrip(" "))
+        if line.startswith("\t") or indentation >= 4:
+            # Markdown's indented-code form is literal example text. The
+            # generated action is flush-left, so indentation never carries
+            # acceptance authority.
+            continue
         marker = line.strip()
+        fence_marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence is not None:
+            if fence_marker:
+                delimiter, suffix = fence_marker.groups()
+                if delimiter[0] == fence[0] and len(delimiter) >= fence[1] and not suffix.strip():
+                    fence = None
+            continue
+        if fence_marker:
+            delimiter, _suffix = fence_marker.groups()
+            fence = (delimiter[0], len(delimiter))
+            continue
+        if indentation:
+            # Generated controls and panel delimiters are flush-left. A
+            # nested-list checkbox is rendered as a different control and
+            # cannot stand in for the dedicated generated action.
+            continue
         if marker == "%% AI:Start %%":
             if in_ai_panel:
                 return False
@@ -186,7 +210,7 @@ def _is_checked(text: str, draft_id: str) -> bool:
             matches.append(False)
         elif marker in {f"- [x] {expected_label}", f"- [X] {expected_label}"}:
             matches.append(True)
-    return not in_ai_panel and len(matches) == 1 and matches[0]
+    return fence is None and not in_ai_panel and len(matches) == 1 and matches[0]
 
 
 @dataclass(frozen=True)
@@ -268,7 +292,9 @@ def _load_draft(draft_path: Path) -> _LoadedDraft:
         frontmatter=frontmatter,
         body=body,
         raw_text=raw_text,
-        checked=_is_checked(raw_text, draft_id),
+        # Frontmatter is metadata, not rendered acceptance content. Only the
+        # parsed Markdown body can carry the governed checkbox.
+        checked=_is_checked(body, draft_id),
     )
 
 

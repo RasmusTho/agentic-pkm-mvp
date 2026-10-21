@@ -16,8 +16,8 @@ Connect may materialize only the existing governed unchecked `AI-åtgärder` pro
 
 1. Child #6293 is merged. Work from a clean checkout of the exact candidate to be evaluated; record `git rev-parse HEAD`, `git merge-base HEAD origin/main`, and confirm `git status --porcelain` is empty.
 2. Read #3320. Do not run either UAT phase until it contains the current explicit TEST-only authorization and qualification. The user-level TEST channel must already be bound and running; API/DB reachability alone is insufficient.
-3. The host environment must already provide explicit `PKM_ENVIRONMENT=test`, `PKM_CHANNEL=test`, `VAULT_ROOT_TEST`, a host-reachable `app_test` DSN, `STORE_BACKEND=postgres`, and a TEST-scoped `INDEX_OUTBOX_PATH`. The effective reasoning route must resolve to a real provider; mock/golden backends are rejected. Set no production or operator-vault values. Do not paste DSNs or credentials into the issue.
-4. Choose exactly two seeded, indexed TEST notes with distinct identities. They must either carry the same explicit `domain` or both be unscoped (Connect treats that as the shared `unscoped` boundary); a mixed scoped/unscoped pair is invalid. The notes must be unlinked, contain no unresolved prior disposition for the selected Connect proposal, and the query must retrieve both. The existing bootstrap seeds an unlinked example pair: `reflection-journal.md` and `summary-request.md`.
+3. The host environment must already provide explicit `PKM_ENVIRONMENT=test`, `PKM_CHANNEL=test`, `VAULT_ROOT_TEST`, a host-reachable `app_test` DSN, `STORE_BACKEND=postgres`, and a TEST-scoped `INDEX_OUTBOX_PATH`. The selected reasoning backend must resolve to the live provider agent, and the effective reasoning route must resolve to a real provider; unsupported, mock, and golden backends are rejected. Create must record `outcome: success`, `degraded: false`, and no degradation reason before the technical phase can pass. Set no production or operator-vault values. Do not paste DSNs or credentials into the issue.
+4. Choose exactly two seeded, indexed TEST notes with distinct identities. They must either carry the same explicit `domain` or both be unscoped (Connect treats that as the shared `unscoped` boundary); a mixed scoped/unscoped pair is invalid. The notes must be unlinked, contain no unresolved prior disposition for the selected Connect proposal, and the query must retrieve both as the top two results. The UAT verifies that exact top-two set before Connect runs, then sets `retrieval_k=2` to bound the production write scope to that pair. Do not run another Connect pass or modify either note concurrently. The existing bootstrap seeds an unlinked example pair: `reflection-journal.md` and `summary-request.md`.
 5. The TEST index must already store `ollama/bge-m3:latest/1024/normalize=true`. Do not download models or run any repair if the preflight or doctor fails.
 
 ## Technical phase
@@ -32,15 +32,15 @@ export UAT_EXPANSION_CONNECT_QUERY='LangGraph agent experiments and concise summ
 
 python -m app.cli ops channel-preflight --channel test --context host
 python -m app.cli index doctor --strict --json
-python -m pytest -q tests/uat/test_expansion_connect_create_accept_test_channel.py \
-  -k 'not checked_checkbox'
+python -m pytest -q tests/uat/test_expansion_connect_create_accept_test_channel.py
 ```
 
-The runner repeats the channel preflight and doctor checks before the automated journey. All selected runtime scenarios must pass. The intentionally deselected test-actor action remains pending. The technical phase establishes:
+The runner repeats the channel preflight and doctor checks before the automated journey. All selected runtime scenarios must pass. The final synthetic-actor test self-skips unless its separate `RUN_EXPANSION_CONNECT_CREATE_ACCEPT_TEST_ACTOR` variable is set. The technical phase establishes:
 
 - The candidate SHA, isolated TEST binding, and stored model identity.
 - One same-scope Connect finding containing both selected identities; only the governed proposal block changes, and no draft or canonical artifact is created.
 - One provenance-bearing Create draft, current source hashes in stable durable index snapshots, and an exhaustive direct index read that excludes the draft. Retrieval is also checked after that convergence observation.
+- A successful, non-degraded live cognition receipt; deterministic fallback collation is not a technical pass.
 - An unchecked dedicated acceptance control is refused without a canonical write or acceptance receipt.
 
 The redacted receipt is written under the TEST vault's configured system receipts directory as `expansion-connect-create-accept-<run-id>.json`. It records only relative artifact references, candidate/channel identity, the effective provider/model names, results, and the tested source identifiers/scope; it contains no source text, absolute vault path, DSN, or credential.

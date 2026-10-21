@@ -197,9 +197,11 @@ def test_acceptance_control_must_be_bound_and_unique(tmp_path: Path, control_mut
     text = draft_path.read_text(encoding="utf-8")
     control = next(line for line in text.splitlines() if line.startswith("- [ ] Accept this draft into the vault"))
     if control_mutation == "wrong_draft_id":
-        text = text.replace(control, control.replace("(draft ", "(draft wrong-", 1), 1)
+        checked_wrong_control = control.replace("- [ ]", "- [x]", 1).replace("(draft ", "(draft wrong-", 1)
+        text = text.replace(control, checked_wrong_control, 1)
     else:
-        text = text.replace(control, f"{control}\n{control}", 1)
+        checked_control = control.replace("- [ ]", "- [x]", 1)
+        text = text.replace(control, f"{checked_control}\n{checked_control}", 1)
     draft_path.write_text(text, encoding="utf-8")
     before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
 
@@ -209,6 +211,64 @@ def test_acceptance_control_must_be_bound_and_unique(tmp_path: Path, control_mut
     after = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
     assert after == before
     assert draft_path.exists()
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+@pytest.mark.parametrize("example_location", ["fenced_body", "frontmatter", "indented_body"])
+def test_acceptance_examples_do_not_mint_authority(tmp_path: Path, example_location: str) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    text = draft_path.read_text(encoding="utf-8")
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    frontmatter, _body = load_frontmatter(text)
+    draft_id = str(frontmatter["uuid"])
+    checked = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    if example_location == "fenced_body":
+        text = text.replace(
+            "%% AI:Start %%\n",
+            "%% AI:Start %%\n```markdown\n" + checked + "\n```\n",
+            1,
+        )
+    elif example_location == "indented_body":
+        text = text.replace("%% AI:Start %%\n", "%% AI:Start %%\n  " + checked + "\n", 1)
+    else:
+        parts = text.split("---", 2)
+        assert len(parts) == 3, "staged draft must have YAML frontmatter"
+        parts[1] += (
+            "acceptance_example: |-\n"
+            "  %% AI:Start %%\n"
+            f"  {checked}\n"
+            "  %% AI:End %%\n"
+        )
+        text = "---".join(parts)
+    draft_path.write_text(text, encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(draft_path, vault_root=vault_root, outbox_path=outbox_path)
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+@pytest.mark.parametrize("panel_mutation", ["nested_start", "unmatched_end", "unmatched_start"])
+def test_malformed_acceptance_panel_fails_closed(tmp_path: Path, panel_mutation: str) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    _check_the_box(draft_path)
+    text = draft_path.read_text(encoding="utf-8")
+    if panel_mutation == "nested_start":
+        text = text.replace("%% AI:Start %%", "%% AI:Start %%\n%% AI:Start %%", 1)
+    elif panel_mutation == "unmatched_end":
+        text = text.replace("%% AI:End %%", "%% AI:End %%\n%% AI:End %%", 1)
+    else:
+        text = text.replace("%% AI:End %%", "", 1)
+    draft_path.write_text(text, encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(draft_path, vault_root=vault_root, outbox_path=outbox_path)
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
     assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
 
 

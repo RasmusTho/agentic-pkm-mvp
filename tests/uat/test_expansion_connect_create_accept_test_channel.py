@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 
 from app.expansion.accept import DraftNotAcceptedError, accept_draft
-from app.expansion.connect import run_connect_pass
+from app.expansion.connect import ConnectPassConfig, run_connect_pass
 from app.expansion.create import CreateRequest, OutputKind, SourceInput, run_create_pass
 from app.index.artifact_metadata import compute_indexed_content_hash
 from app.retrieval.capability import RetrievalRequest, retrieve
@@ -137,14 +137,30 @@ def _read_doctor(vault_root: Path) -> dict[str, Any]:
 
 def _assert_no_mock_reasoning_route() -> dict[str, str]:
     from app.settings.reasoning_route import resolve_effective_reasoning_route
+    from app.reasoning.provider import OllamaDeliberationAgent, get_deliberation_agent
 
     backend = (os.getenv("REASONING_PROVIDER") or "").strip().lower()
-    assert backend not in {"mock", "golden"} and not (os.getenv("CI") == "1" and not backend), (
-        "no-mock TEST UAT refuses a mock reasoning backend"
+    assert backend in {"", "llm", "ollama"}, "no-mock TEST UAT requires a supported live reasoning backend"
+    assert (os.getenv("LLM_PROVIDER") or "").strip().lower() != "mock", (
+        "no-mock TEST UAT refuses the reasoning provider's mock-agent fallback"
     )
+    assert not (os.getenv("CI") == "1" and not backend), "no-mock TEST UAT refuses CI's implicit mock backend"
+    agent = get_deliberation_agent()
+    assert isinstance(agent, OllamaDeliberationAgent), "effective reasoning selection resolved to a mock or unknown agent"
     route = resolve_effective_reasoning_route()
     assert route.provider.strip().lower() != "mock", "no-mock TEST UAT refuses a mock effective reasoning route"
     return {"provider": route.provider, "model": route.model}
+
+
+def _successful_cognition(frontmatter: dict[str, Any]) -> dict[str, Any]:
+    proposed_by = frontmatter.get("proposed_by")
+    cognition = proposed_by.get("cognition") if isinstance(proposed_by, dict) else None
+    assert isinstance(cognition, dict), "Create draft lacks its cognition execution receipt"
+    assert cognition.get("outcome") == "success", "Create cognition did not complete successfully"
+    assert cognition.get("degraded") is False and cognition.get("degraded_reason") is None, (
+        "Create cognition degraded to deterministic collation; do not report technical UAT PASS"
+    )
+    return cognition
 
 
 def _outside_ai_panels(text: str) -> str:
@@ -432,13 +448,26 @@ def test_connect_is_candidate_only_and_unchecked(uat_context: UatContext) -> Non
     assert receipt.get("candidate") == uat_context.candidate, "candidate changed during the UAT"
     before_text = {path: path.read_text(encoding="utf-8") for path in uat_context.source_paths}
     before_frontmatter = {path: load_frontmatter(text)[0] for path, text in before_text.items()}
-    before_files = {path.relative_to(uat_context.vault_root) for path in uat_context.vault_root.rglob("*.md")}
+    before_markdown = {
+        path.relative_to(uat_context.vault_root): path.read_bytes()
+        for path in uat_context.vault_root.rglob("*.md")
+    }
+    top_hits = retrieve(RetrievalRequest(query=uat_context.connect_query, k=2)).hits
+    selected_paths = set(uat_context.source_paths)
+    assert len(top_hits) == 2, "the bounded Connect preflight must return exactly two top-ranked sources"
+    assert all(any(_source_ref_matches(hit.source_ref, path, uat_context.vault_root) for path in selected_paths) for hit in top_hits), (
+        "the query's top two results include a source outside the selected pair; Connect was not run"
+    )
+    assert all(any(_source_ref_matches(hit.source_ref, path, uat_context.vault_root) for hit in top_hits) for path in selected_paths), (
+        "the query's top two results must contain both selected sources; Connect was not run"
+    )
     drafts_dir = uat_context.vault_root / Path(get_vault_system_dir_rel(uat_context.vault_root)) / "drafts"
     drafts_before = set(drafts_dir.glob("*.md")) if drafts_dir.exists() else set()
 
     report = run_connect_pass(
         vault_root=uat_context.vault_root,
         queries=[uat_context.connect_query],
+        config=ConnectPassConfig(retrieval_k=2),
         outbox_path=uat_context.outbox_path,
     )
     logical_pairs: dict[str, set[str]] = {}
@@ -453,12 +482,20 @@ def test_connect_is_candidate_only_and_unchecked(uat_context: UatContext) -> Non
     changed_paths = {
         path for path, original in before_text.items() if path.read_text(encoding="utf-8") != original
     }
-    all_changed_markdown = {
-        path
+    after_markdown = {
+        path.relative_to(uat_context.vault_root): path.read_bytes()
         for path in uat_context.vault_root.rglob("*.md")
-        if path.relative_to(uat_context.vault_root) not in before_files
     }
-    assert not all_changed_markdown, "Connect created a new Markdown artifact"
+    assert after_markdown.keys() == before_markdown.keys(), "Connect created or removed a Markdown artifact"
+    changed_markdown = {
+        relative_path
+        for relative_path, original in before_markdown.items()
+        if after_markdown[relative_path] != original
+    }
+    selected_relative_paths = {
+        path.relative_to(uat_context.vault_root) for path in uat_context.source_paths
+    }
+    assert changed_markdown <= selected_relative_paths, "Connect changed Markdown outside the selected source pair"
     for path in uat_context.source_paths:
         after = path.read_text(encoding="utf-8")
         assert load_frontmatter(after)[0] == before_frontmatter[path], "Connect changed source frontmatter"
@@ -512,6 +549,7 @@ def test_create_stages_resolvable_sources_and_excludes_draft_from_retrieval(uat_
     assert frontmatter.get("derived_by") == "synthesis"
     assert frontmatter.get("authority_state") == "proposal"
     assert frontmatter.get("sources") == [source.object_id for source in uat_context.sources]
+    cognition = _successful_cognition(frontmatter)
     acceptance_line = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
     assert draft_text.count(acceptance_line) == 1, "Create did not write exactly one dedicated unchecked acceptance control"
 
@@ -533,6 +571,13 @@ def test_create_stages_resolvable_sources_and_excludes_draft_from_retrieval(uat_
         draft_path=Path(report.draft_path).as_posix(),
         draft_id=draft_id,
         create_receipt_id=report.receipt_id,
+        cognition={
+            "outcome": cognition["outcome"],
+            "degraded": cognition["degraded"],
+            "degraded_reason": cognition.get("degraded_reason"),
+            "claim_count": cognition.get("claims"),
+            "inference_count": cognition.get("inferences"),
+        },
         index_convergence={"status": "stable_source_hashes", "generation": generation, "rows_scanned": len(rows)},
         draft_excluded_from_full_index=True,
         draft_excluded_from_retrieval=True,
@@ -625,10 +670,53 @@ def test_runbook_documents_required_test_channel_guards() -> None:
         "reflection-journal.md",
         "summary-request.md",
         "unscoped",
+        "retrieval_k=2",
+        "outcome: success",
     ):
         assert required in runbook
+    assert "-k 'not checked_checkbox'" not in runbook
+    assert "python -m pytest -q tests/uat/test_expansion_connect_create_accept_test_channel.py\n```" in runbook
     docs_index = (repo_root / "docs/DOCS_INDEX.md").read_text(encoding="utf-8")
     assert "docs/runbooks/UAT_EXPANSION_CONNECT_CREATE_ACCEPT.md" in docs_index
+
+
+@pytest.mark.parametrize("backend", ["openai", "unexpected", "mock", "golden"])
+def test_no_mock_route_rejects_non_runtime_reasoning_backends(monkeypatch: pytest.MonkeyPatch, backend: str) -> None:
+    monkeypatch.setenv("REASONING_PROVIDER", backend)
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    with pytest.raises(AssertionError, match="supported live reasoning backend"):
+        _assert_no_mock_reasoning_route()
+
+
+def test_no_mock_route_rejects_reasoning_provider_mock_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REASONING_PROVIDER", "llm")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    with pytest.raises(AssertionError, match="mock-agent fallback"):
+        _assert_no_mock_reasoning_route()
+
+
+@pytest.mark.parametrize(
+    "cognition",
+    [
+        {"outcome": "provider_failure", "degraded": True, "degraded_reason": "provider_failure"},
+        {"outcome": "missing_input", "degraded": True, "degraded_reason": "missing_input"},
+        {"outcome": "empty_output", "degraded": True, "degraded_reason": "empty_provider_output"},
+    ],
+)
+def test_successful_cognition_gate_rejects_degraded_create(cognition: dict[str, Any]) -> None:
+    with pytest.raises(AssertionError, match="did not complete successfully"):
+        _successful_cognition({"proposed_by": {"cognition": cognition}})
+
+
+def test_successful_cognition_gate_rejects_inconsistent_degraded_flag() -> None:
+    cognition = {"outcome": "success", "degraded": True, "degraded_reason": "provider_failure"}
+    with pytest.raises(AssertionError, match="degraded to deterministic collation"):
+        _successful_cognition({"proposed_by": {"cognition": cognition}})
+
+
+def test_successful_cognition_gate_accepts_only_success_receipt() -> None:
+    cognition = {"outcome": "success", "degraded": False, "degraded_reason": None, "claims": 2}
+    assert _successful_cognition({"proposed_by": {"cognition": cognition}}) is cognition
 
 
 @pytest.mark.parametrize(
