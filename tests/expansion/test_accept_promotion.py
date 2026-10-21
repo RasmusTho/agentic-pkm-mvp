@@ -184,6 +184,24 @@ def test_code_fenced_html_comment_does_not_hide_the_generated_control(tmp_path: 
     assert (vault_root / "notes/topic-x.md").exists()
 
 
+def test_indented_html_comment_does_not_hide_the_generated_control(tmp_path: Path) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    text = draft_path.read_text(encoding="utf-8")
+    text = text.replace("%% AI:Start %%", "    <!--\n\n%% AI:Start %%", 1)
+    draft_path.write_text(text, encoding="utf-8")
+    _check_the_box(draft_path)
+
+    result = accept_draft(
+        draft_path,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        destination="notes/topic-x.md",
+    )
+
+    assert isinstance(result, AcceptResult)
+    assert (vault_root / "notes/topic-x.md").exists()
+
+
 # --- create_never_autowrites_canonical: unchecked draft is NOT materialized ---
 
 

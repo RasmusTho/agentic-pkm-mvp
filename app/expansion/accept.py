@@ -204,6 +204,14 @@ def _is_checked(text: str, draft_id: str) -> bool:
                     fence = None
             continue
 
+        original_indentation = len(original_line) - len(original_line.lstrip(" "))
+        if not in_html_comment and (
+            original_line.startswith("\t") or original_indentation >= 4
+        ):
+            # Indented Markdown code is literal content, so HTML-like text in
+            # it cannot open a comment that hides the later generated control.
+            continue
+
         comment_was_active = in_html_comment
         line, in_html_comment = _strip_html_comments(original_line, in_html_comment)
         indentation = len(line) - len(line.lstrip(" "))
