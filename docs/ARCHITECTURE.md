@@ -124,8 +124,10 @@ In the current v5.5 baseline, the implemented center of gravity is still the Mim
 
 This subsection is **non-SBS-owned**: it is a current-reality infrastructure classification, not a
 boundary allocation, and it does not create a new allocation table. The Compose rows describe the
-local fallback; the live product runtime is the Linux/Tailscale host split recorded in
-`docs/ENVIRONMENTS.md`. It applies the four-class
+local fallback; `docs/ENVIRONMENTS.md` retains the application placement contract.
+[The infrastructure status view](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+owns dated physical host and service observations. This table is not an inventory of all Mac or
+Linux guest services. It applies the four-class
 lifecycle-role rule from `docs/architecture/system-context-overlay.md` (SBI-1) — SoI component /
 COTS system element (deployed configuration) / enabling system / external system — to every
 `docker-compose.yaml` service and every host process listed in
@@ -139,7 +141,7 @@ ports, gateways) — this table references, and does not duplicate, either.
 | `app/`, `mimer_runtime/`, contracts/schemas, companion-note surface | in-repo runtime code | SoI component |
 | `db` (Postgres/pgvector, `docker-compose.yaml:2-14`) | compose service | COTS system element |
 | `ollama` (`docker-compose.yaml:16-31`) | local fallback compose service | COTS system element |
-| Dedicated Ollama host reached from the Linux runtime | Tailscale-reachable remote provider | External system |
+| Externally hosted Ollama provider, when selected | Environment contract owns endpoint and reachability; this row does not describe the whole model host | External system |
 | `api` (`docker-compose.yaml:37-99`) | compose service (SoI component runtime, containerized) | SoI component |
 | `worker` (`docker-compose.yaml:101-142`) | compose service (SoI component runtime, containerized) | SoI component |
 | `watcher` (`docker-compose.yaml:144-188`) | compose service (SoI component runtime, containerized) | SoI component |
@@ -159,8 +161,10 @@ above because they are two distinct bindings, never both at once for a given dep
 This table classifies lifecycle role only; it does not resolve the dual-role hazard (infrastructure
 as both enabling system and a domain of interest the SoI observes/actuates), which is deferred to
 the companion thread named in `docs/architecture/system-context-overlay.md`. The Compose entries are
-the local fallback classification; live new-host deployment remains unqualified until the authoritative
-deployment handoff, immutable artifact identity, and host isolation proofs exist.
+the local fallback classification. Candidate-specific native deployment receipts and remaining
+qualification gates belong to [the deployment owner](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
+Infrastructure observations alone do not establish immutable artifact identity, host isolation,
+or cutover acceptance.
 
 The host-global ownership ledger is an additional deployment-boundary guard:
 ledger schema v2 stores the selected vault's primary filesystem identity and
