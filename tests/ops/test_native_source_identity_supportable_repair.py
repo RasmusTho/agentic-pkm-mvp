@@ -53,7 +53,23 @@ def _companion_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "reason": "prior",
         }],
     }
-    original = dump_frontmatter(original_fm, "")
+    original = (
+        "---\n"
+        f'uuid: "{identity}"\n'
+        "# preservation sentinel\n"
+        'source_ref: "_system/companions/old-sidecar.md"\n'
+        "title: Current  # retain inline comment\n"
+        f'content_hash: "{old_hash}"\n'
+        "ingest_state: indexed\n"
+        'last_ingested: "2026-10-20T00:00:00+00:00"\n'
+        "created_by_instance: dev\n"
+        "custom: {preserve: true}\n"
+        "identity_history:\n"
+        '- {timestamp: "2026-10-19T00:00:00+00:00", event: repair, before: {}, '
+        'after: {}, reason: prior}\n'
+        "---\n"
+        "\n  companion body with edge spaces  \n\n"
+    )
     companion.write_text(original)
     observation = SimpleNamespace(path=source)
     monkeypatch.setattr(repair, "_canonical_inventory", lambda _root: (observation,))
@@ -89,6 +105,10 @@ def test_companion_continuity_repairs_only_source_ref_hash_and_bounded_history(
         after.pop(key, None)
     assert after == before
     assert after_body == before_body
+    assert "# preservation sentinel\n" in proposal.candidate_text
+    assert "title: Current  # retain inline comment\n" in proposal.candidate_text
+    assert "custom: {preserve: true}\n" in proposal.candidate_text
+    assert proposal.candidate_text.endswith("---\n\n  companion body with edge spaces  \n\n")
 
     repair.commit_companion_continuity_repair(
         proposal,

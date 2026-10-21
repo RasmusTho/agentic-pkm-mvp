@@ -31,7 +31,7 @@ from app.briefing.compose import (
 )
 from app.knowledge.write_ops import write_note_from_absolute
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
-from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+from scripts.yaml_roundtrip import load_frontmatter
 
 
 RECEIPT_CONTRACT = "native-source-identity-supportable-repair.v1"
@@ -414,12 +414,7 @@ def _companion_claim_counts(
                 continue
             candidate = f"{directory}/{name}"
             raw, _version = _regular_nofollow_text(root, candidate)
-            try:
-                frontmatter, _body = load_frontmatter(raw)
-            except Exception:
-                raise SupportableRepairRefusal("authority_refused") from None
-            if not isinstance(frontmatter, dict):
-                raise SupportableRepairRefusal("authority_refused")
+            frontmatter = _strict_source_frontmatter(raw)
             declared = _canonical_uuid(frontmatter.get("uuid"))
             if declared is None:
                 raise SupportableRepairRefusal("authority_refused")
@@ -437,36 +432,128 @@ def _canonical_inventory(root: Path) -> tuple[Any, ...]:
     return observations
 
 
-def _strict_source_frontmatter(raw: str) -> dict[str, Any]:
-    """Capture one source mapping without normalizing ambiguous YAML to absence."""
+def _strict_frontmatter_layout(
+    raw: str,
+) -> tuple[dict[str, Any], yaml.MappingNode, int, int]:
+    """Capture a strict mapping plus exact inner/closing byte offsets."""
 
     from app.rebuildability.product_total_loss import capture_source_frontmatter
 
     lines = raw.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
-        return {}
+        raise SupportableRepairRefusal("authority_refused")
     closing = next(
         (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
         None,
     )
     if closing is None:
         raise SupportableRepairRefusal("authority_refused")
+    yaml_text = "".join(lines[1:closing])
     try:
-        node = yaml.compose("".join(lines[1:closing]), Loader=yaml.SafeLoader)
+        node = yaml.compose(yaml_text, Loader=yaml.SafeLoader)
     except yaml.YAMLError:
         raise SupportableRepairRefusal("authority_refused") from None
-    if node is not None:
-        if not isinstance(node, yaml.MappingNode):
+    if not isinstance(node, yaml.MappingNode):
+        raise SupportableRepairRefusal("authority_refused")
+    seen: set[str] = set()
+    for key_node, _value_node in node.value:
+        if not isinstance(key_node, yaml.ScalarNode) or key_node.value in seen:
             raise SupportableRepairRefusal("authority_refused")
-        seen: set[str] = set()
-        for key_node, _value_node in node.value:
-            if not isinstance(key_node, yaml.ScalarNode) or key_node.value in seen:
-                raise SupportableRepairRefusal("authority_refused")
-            seen.add(key_node.value)
+        seen.add(key_node.value)
     captured = capture_source_frontmatter(raw)
     if captured is None:
         raise SupportableRepairRefusal("authority_refused")
+    yaml_start = len(lines[0])
+    closing_start = sum(len(line) for line in lines[:closing])
+    return captured, node, yaml_start, closing_start
+
+
+def _strict_source_frontmatter(raw: str) -> dict[str, Any]:
+    """Capture one source mapping without normalizing ambiguous YAML to absence."""
+
+    lines = raw.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return {}
+    captured, _node, _yaml_start, _closing_start = _strict_frontmatter_layout(raw)
     return captured
+
+
+def _exact_companion_candidate(
+    original: str,
+    *,
+    source_ref: str,
+    content_hash: str,
+    identity_history: list[Any],
+) -> str:
+    """Change only the three authorized companion field values/entry bytes."""
+
+    _frontmatter, node, yaml_start, closing_start = _strict_frontmatter_layout(original)
+    values = {
+        key_node.value: value_node
+        for key_node, value_node in node.value
+        if isinstance(key_node, yaml.ScalarNode)
+    }
+    source_node = values.get("source_ref")
+    hash_node = values.get("content_hash")
+    if not isinstance(source_node, yaml.ScalarNode) or not isinstance(
+        hash_node, yaml.ScalarNode
+    ):
+        raise SupportableRepairRefusal("authority_refused")
+    history_text = yaml.safe_dump(
+        identity_history,
+        sort_keys=False,
+        default_flow_style=True,
+        width=10_000,
+    ).strip()
+    history_block = yaml.safe_dump(
+        identity_history,
+        sort_keys=False,
+        default_flow_style=False,
+        width=10_000,
+    ).rstrip("\r\n")
+    if not history_text.startswith("[") or not history_text.endswith("]"):
+        raise SupportableRepairRefusal("authority_refused")
+    replacements: list[tuple[int, int, str]] = [
+        (
+            yaml_start + source_node.start_mark.index,
+            yaml_start + source_node.end_mark.index,
+            json.dumps(source_ref),
+        ),
+        (
+            yaml_start + hash_node.start_mark.index,
+            yaml_start + hash_node.end_mark.index,
+            json.dumps(content_hash),
+        ),
+    ]
+    history_node = values.get("identity_history")
+    if history_node is None:
+        yaml_text = original[yaml_start:closing_start]
+        separator = "" if not yaml_text or yaml_text.endswith(("\n", "\r")) else "\n"
+        replacements.append((
+            closing_start,
+            closing_start,
+            f"{separator}identity_history: {history_text}\n",
+        ))
+    elif isinstance(history_node, yaml.SequenceNode):
+        history_start = yaml_start + history_node.start_mark.index
+        history_end = yaml_start + history_node.end_mark.index
+        replaced_history = original[history_start:history_end]
+        line_ending = (
+            "\r\n" if replaced_history.endswith("\r\n")
+            else "\n" if replaced_history.endswith("\n")
+            else ""
+        )
+        replacements.append((
+            history_start,
+            history_end,
+            history_block + line_ending,
+        ))
+    else:
+        raise SupportableRepairRefusal("authority_refused")
+    candidate = original
+    for start, end, replacement in sorted(replacements, reverse=True):
+        candidate = candidate[:start] + replacement + candidate[end:]
+    return candidate
 
 
 def _source_claims(root: Path, observations: tuple[Any, ...]) -> tuple[dict[str, int], set[str]]:
@@ -575,12 +662,9 @@ def prepare_companion_continuity_repair(
 
     companion_rel = _companion_file(root, declared)
     original, original_sha256 = _regular_nofollow_text(root, companion_rel)
-    try:
-        companion_fm, companion_body = load_frontmatter(original)
-    except Exception:
-        raise SupportableRepairRefusal("authority_refused") from None
-    if not isinstance(companion_fm, dict):
-        raise SupportableRepairRefusal("authority_refused")
+    companion_fm, _companion_node, _yaml_start, closing_start = (
+        _strict_frontmatter_layout(original)
+    )
     before = dict(companion_fm)
     if (
         before.get("uuid") != declared
@@ -601,18 +685,28 @@ def prepare_companion_continuity_repair(
         "after": {"source_ref": source_rel, "content_hash": current_hash},
         "reason": "canonical source continuity repair",
     }
-    candidate_fm = dict(before)
-    candidate_fm["source_ref"] = source_rel
-    candidate_fm["content_hash"] = current_hash
-    candidate_fm["identity_history"] = [*history, entry][-IDENTITY_HISTORY_MAX:]
-    candidate = dump_frontmatter(candidate_fm, companion_body)
-    after, after_body = load_frontmatter(candidate)
+    next_history = [*history, entry][-IDENTITY_HISTORY_MAX:]
+    candidate = _exact_companion_candidate(
+        original,
+        source_ref=source_rel,
+        content_hash=current_hash,
+        identity_history=next_history,
+    )
+    after, _after_node, _after_yaml_start, after_closing_start = (
+        _strict_frontmatter_layout(candidate)
+    )
     unchanged_before = dict(before)
     unchanged_after = dict(after)
     for key in ("source_ref", "content_hash", "identity_history"):
         unchanged_before.pop(key, None)
         unchanged_after.pop(key, None)
-    if unchanged_before != unchanged_after or companion_body != after_body:
+    if (
+        after.get("source_ref") != source_rel
+        or after.get("content_hash") != current_hash
+        or after.get("identity_history") != next_history
+        or unchanged_before != unchanged_after
+        or original[closing_start:] != candidate[after_closing_start:]
+    ):
         raise SupportableRepairRefusal("authority_refused")
     return CompanionContinuityProposal(
         source_rel=source_rel,
