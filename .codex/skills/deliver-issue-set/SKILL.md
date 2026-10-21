@@ -1,6 +1,6 @@
 ---
 name: deliver-issue-set
-description: "Review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set in agentic-pkm-mvp; build a pickup order and verification ledger, repair readiness when needed, and execute issues through the repo delivery chain. When delivery scope is omitted, automatically choose one bounded executable scope by priority, bug urgency, dependency value, and executable epic size instead of asking the owner to choose."
+description: "Review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set in agentic-pkm-mvp; build a pickup order and verification ledger, repair readiness when needed, and execute issues through the repo delivery chain. When delivery scope is omitted, automatically choose a bounded set: high-priority bugs first, then work that unblocks other work, then executable epics unless current evidence makes other work more important. Do not ask the owner to choose the set."
 ---
 
 # Deliver Issue Set
@@ -369,21 +369,24 @@ bounded remediation, record that fact and follow the normal maintenance or Human
 
 ### Automatic default scope
 
-When a delivery request names no issue IDs, parent/epic, Project, or lane, resolve one default scope from this repository's live GitHub state. Do not stop to ask the owner which issue set to pick; state the selected scope and its basis, then continue. Never search or combine unrelated repositories. Inspect Project state only when the request names a Project or Kanban lane.
+When a request names no issue IDs, parent/epic, Project, or lane, automatically select a bounded issue set from this repository's live GitHub state. A bare `deliver-issue-set` invocation is a delivery request. Do not ask the owner to choose the set or confirm the selection; state the chosen issues/epics and rationale, then execute the requested mode. An explicit selection-only, planning, or review request stops at that requested outcome. Explicit scope always overrides this default. Never search or combine unrelated repositories; inspect Project state only for an explicitly Project/Kanban-scoped request.
 
-Treat open epic/feature parents and bounded standalone issues as candidate scopes. A candidate qualifies only if an in-scope issue has an autonomous next action: it passes strict `agent:ready` validation, or an owning workflow can repair readiness from clear source authority without a human decision. A blocked parent does not disqualify independent ready children; exclude scopes whose only remaining work requires a human or external action.
+Inspect high-priority bugs, dependency chains, and open epic/feature parents, not just the current `agent:ready` pool. Check current `main`, issue contracts, linked PRs, and live claims before ranking work. A candidate has an autonomous next action when it is strictly ready or its owning workflow can repair readiness or a blocker from clear source authority. A blocked parent may still have independent executable children. Preserve live foreign claims and existing operator gates.
 
-Rank qualifying scopes lexicographically:
+Use this default priority order:
 
-1. Best actionable issue priority: `prio:high`, then `prio:med`, then `prio:low`, following `issue-to-code`.
-2. Among equal-priority work, apply the confirmed bug route in `AGENTS.md :: Transition-period bug-delivery policy` and `bug-to-issue`: P0/P1/protected work stays in repair, valid P2 goes through the Known Defects route, and P3 is informational. Do not infer severity or let `type:bug` alone outrank other work.
-3. Apply the remaining `issue-to-code` tie-breakers in order: unblocked work with clear Source Anchors, bounded scope, dependency-unlocking value, smallest safe implementation surface, then reduced fragmentation or rollout drift.
-4. Executable scope size: count ready or source-authoritatively repairable children in a parent; a standalone issue counts as one. “Largest epic” means the largest executable child set, not the most raw or blocked children.
-5. Lowest parent/issue number as a stable final tie-break.
+1. **High-priority bugs first:** confirmed open `type:bug` issues with `prio:high`, including active failures of runtime or delivery infrastructure. Within this group, use established severity and current impact; never invent severity. Keep the existing P0/P1/protected repair, valid deferred P2 Known Defects, and P3 informational routes from `bug-to-issue`.
+2. **Work that unblocks other work next:** prioritize a source-backed prerequisite or remediation with verified downstream dependencies. Prefer the work that unlocks the most important blocked outcomes; do not rank by raw reference count or a speculative dependency.
+3. **Epics/parent features next:** when nothing else is more important, prefer a coherent epic with executable children and useful delivered value. Compare actionable priority and executable child coverage rather than raw epic size. Keep the parent as the validation hub.
+4. **Other bounded work:** use `issue-to-code` priority, clear Source Anchors, bounded scope, and the smallest safe complete outcome. Within otherwise equal choices, prefer greater executable coverage, then the lowest issue number.
 
-Compare standalone issues and parent scopes in the same ranking, so a high-priority active bug can outrank a larger medium-priority epic. Select only the top-ranked scope; do not combine unrelated issues into a synthetic set. For a selected parent, deliver its complete in-scope child set in dependency and priority order, continuing independent children while another is blocked. For a standalone fallback, deliver that one bounded issue through its full chain.
+An evidence-backed urgent incident, deadline, or explicit owner priority may override the default order. State the concrete consequence that justifies the exception; convenience or the size of the ready pool alone does not. `type:bug` without high priority or established urgency does not automatically outrank every other candidate.
 
-If no candidate qualifies, use the Ready Pool Rule and No-progress final gate to repair source-supported work or identify the genuine blocker. Request owner input only for the actual human decision or action through `owner-decision-brief`, never to choose a scope. An explicitly scoped request overrides this default and must not be broadened.
+Address blockers before abandoning a higher-ranked candidate: apply the Ready Pool Rule and No-progress final gate, repair stale contracts or dependency state through `issue-maintenance-change-control`, and include bounded source-authorized remediation when needed. A live foreign claim is not permission to duplicate its implementation. For a genuine human/external hold, record the exact blocker and next action, preserve the affected gate, and continue independent authorized work. Do not ask the owner to choose a different set.
+
+The selected set may contain one or more bounded issues, one or more epics, or their source-backed prerequisites. Combine scopes only when their dependency/value relationship or proven independence makes the set executable and lowers TCD; do not sweep the whole backlog into scope. Record the exact selected members, parent/child boundaries, pickup order, and blockers before claims. Do not silently drop a selected blocked member or add unrelated work after selection. For an epic, keep its complete in-scope child set and the full-set completion invariant; dispatch only executable slices and continue independent children while another is blocked.
+
+If no candidate has an authorized next action after blocker remediation, report the verified blockers and their next action/owner. Request input through `owner-decision-brief` only for an actual human decision or action, never merely because no issue set was named.
 
 For an epic or parent feature issue:
 
@@ -463,7 +466,7 @@ Classify each candidate as exactly one:
 - `needs docs-to-issue`
 - `needs human decision`
 
-When classifying priority, follow `issue-to-code`: `prio:high` before `prio:med` before `prio:low`, then prefer clear source anchors, bounded scope, dependency-unlocking work, smallest safe implementation surface, and reduced rollout drift.
+For automatic set selection, apply the default order above first. When ordering executable slices within the selected set, follow `issue-to-code`: `prio:high` before `prio:med` before `prio:low`, then prefer clear source anchors, bounded scope, dependency-unlocking work, smallest safe implementation surface, and reduced rollout drift.
 
 ### SBS classification and impact gate
 
