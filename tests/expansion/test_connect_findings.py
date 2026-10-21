@@ -133,6 +133,9 @@ def test_related_unlinked_pair_produces_finding_with_both_refs_and_spans(
         ),
     ]
     outbox_path = tmp_path / "outbox.jsonl"
+    source_paths = (sv_en_vault / "sv-note.md", sv_en_vault / "en-note.md")
+    before_text = {path: path.read_text(encoding="utf-8") for path in source_paths}
+    before_markdown = {path.relative_to(sv_en_vault) for path in sv_en_vault.rglob("*.md")}
 
     report = run_connect_pass(
         vault_root=sv_en_vault,
@@ -171,6 +174,17 @@ def test_related_unlinked_pair_produces_finding_with_both_refs_and_spans(
     assert sv_text.count("- [ ]") == 1
     assert en_text.count("- [ ]") == 1
     assert "- [x]" not in sv_text and "- [x]" not in en_text
+
+    after_markdown = {path.relative_to(sv_en_vault) for path in sv_en_vault.rglob("*.md")}
+    assert after_markdown == before_markdown == {Path("sv-note.md"), Path("en-note.md")}
+    for path in source_paths:
+        before = before_text[path]
+        after = path.read_text(encoding="utf-8")
+        for text in (before, after):
+            assert text.count("%% AI:Start %%") == 1 and text.count("%% AI:End %%") == 1
+        before_outside_panel = before.split("%% AI:Start %%", 1)[0] + before.split("%% AI:End %%", 1)[1]
+        after_outside_panel = after.split("%% AI:Start %%", 1)[0] + after.split("%% AI:End %%", 1)[1]
+        assert after_outside_panel == before_outside_panel
 
 
 def test_connect_finding_class_is_in_closed_connect_set() -> None:

@@ -670,6 +670,76 @@ def test_checked_checkbox_uses_only_governed_materialization_path(uat_context: U
     )
 
 
+@pytest.mark.parametrize(
+    ("binding", "value", "message"),
+    [
+        ("PKM_ENVIRONMENT", None, "PKM_ENVIRONMENT must be explicitly test"),
+        ("PKM_ENVIRONMENT", "development", "PKM_ENVIRONMENT must be explicitly test"),
+        ("PKM_CHANNEL", None, "PKM_CHANNEL must be explicitly test"),
+        ("PKM_CHANNEL", "prod", "PKM_CHANNEL must be explicitly test"),
+        ("STORE_BACKEND", "memory", "TEST UAT requires the Postgres backend"),
+    ],
+)
+def test_uat_context_rejects_non_test_bindings_before_channel_preflight(
+    monkeypatch: pytest.MonkeyPatch, binding: str, value: str | None, message: str
+) -> None:
+    captured = {name: None for name in CHANNEL_ENV_KEYS}
+    captured.update(
+        {
+            "PKM_ENVIRONMENT": "test",
+            "PKM_CHANNEL": "test",
+            "STORE_BACKEND": "postgres",
+            "DATABASE_URL": "postgresql://localhost/app_test",
+        }
+    )
+    captured[binding] = value
+    monkeypatch.setattr(sys.modules[__name__], "_CAPTURED_TEST_ENV", captured)
+    monkeypatch.setenv(RUN_ENV, "1")
+
+    def unexpected_preflight(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("channel preflight must not run for invalid TEST bindings")
+
+    monkeypatch.setattr(sys.modules[__name__], "_assert_test_channel_preflight", unexpected_preflight)
+    with pytest.raises(AssertionError, match=message):
+        uat_context.__wrapped__(monkeypatch)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"status": "degraded"},
+        {"issues": [{"code": "identity_mismatch"}]},
+        {"expected_identity": {"provider": "openai", "model": "wrong", "dim": 3, "normalize": False}},
+        {"stored_identity": {"provider": "openai", "model": "wrong", "dim": 3, "normalize": False}},
+        {"stored_identity": None},
+    ],
+)
+def test_read_doctor_rejects_missing_or_mismatched_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changes: dict[str, Any]
+) -> None:
+    report: dict[str, Any] = {
+        "status": "ok",
+        "issues": [],
+        "expected_identity": dict(EXPECTED_IDENTITY),
+        "stored_identity": dict(EXPECTED_IDENTITY),
+    }
+    report.update(changes)
+    result = subprocess.CompletedProcess(
+        args=["app.cli", "index", "doctor"],
+        returncode=0,
+        stdout=json.dumps(report),
+        stderr="",
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_run_channel_command",
+        lambda *_args, **_kwargs: result,
+    )
+
+    with pytest.raises(AssertionError):
+        _read_doctor(tmp_path)
+
+
 def test_runbook_documents_required_test_channel_guards() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     runbook_path = repo_root / "docs/runbooks/UAT_EXPANSION_CONNECT_CREATE_ACCEPT.md"
