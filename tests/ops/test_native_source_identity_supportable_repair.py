@@ -182,6 +182,48 @@ def test_companion_continuity_refuses_canonical_equivalent_duplicate_uuid(
         )
 
 
+def test_source_claims_fail_closed_on_unparseable_observation(tmp_path: Path) -> None:
+    identity = str(uuid4())
+    valid = tmp_path / "valid.md"
+    invalid = tmp_path / "invalid.md"
+    valid.write_text(dump_frontmatter({"uuid": identity}, "valid\n"))
+    invalid.write_text(f"---\nuuid: [{identity}\n---\ninvalid\n")
+    observations = (
+        SimpleNamespace(path=valid),
+        SimpleNamespace(path=invalid),
+    )
+    with pytest.raises(repair.SupportableRepairRefusal, match="authority_refused"):
+        repair._source_claims(tmp_path, observations)
+
+
+def test_companion_commit_rechecks_and_refuses_unknown_global_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    production_source_claims = repair._source_claims
+    _identity, source_rel, _companion, _fm, _original = _companion_fixture(
+        tmp_path, monkeypatch,
+    )
+    proposal = repair.prepare_companion_continuity_repair(
+        vault_root=tmp_path,
+        source_rel=source_rel,
+        observed_at="2026-10-22T00:00:00+00:00",
+    )
+    malformed = tmp_path / "notes" / "unknown.md"
+    malformed.write_text("---\nuuid: [unclosed\n---\nunknown\n")
+    observations = (
+        SimpleNamespace(path=tmp_path / source_rel),
+        SimpleNamespace(path=malformed),
+    )
+    monkeypatch.setattr(repair, "_canonical_inventory", lambda _root: observations)
+    monkeypatch.setattr(repair, "_source_claims", production_source_claims)
+    with pytest.raises(repair.SupportableRepairRefusal, match="authority_refused"):
+        repair.commit_companion_continuity_repair(
+            proposal,
+            vault_root=tmp_path,
+            write_guard=AllowGuard(),  # type: ignore[arg-type]
+        )
+
+
 def _briefing_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     target = tmp_path / "System/Briefings/2026-10-22.md"
     target.parent.mkdir(parents=True)

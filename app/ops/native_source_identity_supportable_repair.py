@@ -447,10 +447,13 @@ def _source_claims(root: Path, observations: tuple[Any, ...]) -> tuple[dict[str,
         if relative in locators:
             raise SupportableRepairRefusal("authority_refused")
         locators.add(relative)
-        raw, _identity = read_recovery_snapshot_relative(relative, vault_root=root)
+        try:
+            raw, _identity = read_recovery_snapshot_relative(relative, vault_root=root)
+        except Exception:
+            raise SupportableRepairRefusal("authority_refused") from None
         frontmatter, _body, error = parse_bounded_frontmatter(raw)
         if error is not None:
-            continue
+            raise SupportableRepairRefusal("authority_refused")
         declared = _canonical_uuid(frontmatter.get("uuid"))
         if declared is not None:
             claims[declared] = claims.get(declared, 0) + 1
