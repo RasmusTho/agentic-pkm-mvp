@@ -1,11 +1,19 @@
-State: SoT v5.5 baseline (descriptive, ops-oriented). Local Compose is the fallback runtime; the live
-product topology is the new Linux/Tailscale host split recorded below. If a detail drifts, prefer live
-host evidence and the deployment contract, then update this doc.
+State: Application runtime reference on the SoT v5.5 baseline. Local Compose is a development
+fallback. Current physical infrastructure status is owned by `yggdrasil-infra/CURRENT_STATUS.md`.
+Doc role: Application infrastructure reference
+Authority: Describes this repository's local Compose fallback; environment selection, deployment
+and release policy remain with their linked owner documents.
+Temporal class: operational
+Review cadence: when the application Compose reference or infrastructure reading path changes
+Source of truth: repository Compose files and the linked owner contracts
+Last reviewed: 2026-10-21 (status ownership and stale host references only)
+Last verified against: `docker-compose.yaml`, `docs/ENVIRONMENTS.md`,
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and the infrastructure current-status view
 
 Documentation hierarchy: `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the
-target operational-platform boundary. This document owns the local Docker/Colima fallback description
-and records the verified live host boundary; it does not claim that the new-host deployment handoff is
-already a separately delivered implementation.
+target operational-platform boundary. This document owns the application-side Docker/Colima
+fallback description. The infrastructure repository owns the observed host, VM, network, storage
+and service inventory; this reference does not duplicate that current-status view.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -13,22 +21,25 @@ already a separately delivered implementation.
 - Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
-# Infrastructure — Local Fallback and New-Host Runtime
+# Infrastructure — Application Runtime Reference
 
-This document describes the local Docker + Colima fallback and the current live host boundary for the
-Agentic PKM stack. It does not claim that local Compose is the live product deployment.
+This document describes the application's local Docker + Colima fallback and routes operators to
+the current physical inventory. Local Compose is not evidence of a Linux channel deployment.
 
-## Current live host boundary (verified 2026-08-22)
+## Current infrastructure status
 
-- Dedicated Ollama host: Ollama/model serving only; no product API, worker, watcher, database, or Companion UI.
-- `ygg-dev`: Linux/Tailscale dev runtime, API `:18001`, Companion UI `:8111`; reachable but degraded.
-- `ygg-test`: intended isolated test runtime; no reachable host or endpoint was found.
-- `ygg-prod`: Linux/Tailscale prod runtime, API `:18000`; liveness responds but functional health is
-  failing and Companion UI `:8113` is unavailable.
-- Both live APIs report `git_sha=unknown`; promotion cannot use them as immutable artifact evidence.
+Use [yggdrasil-infra — Current local infrastructure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+for the dated Macs, TARS/Proxmox guest roles, Docker engines, networking, storage and related
+services, including explicit unverified areas. It is an observed status view, not a requirement,
+deployment plan or acceptance receipt. Builder Vault holds its sanitized handoff and the private
+host-local evidence locator. Private bindings and raw observations stay outside Git and synchronized
+folders.
 
-The repository still documents and supports local Compose commands for fallback development and
-verification. Those commands do not deploy the new hosts and are not promotion evidence.
+The August host snapshot formerly embedded here is superseded as current status. In particular,
+an Ollama-only Mac, an absent TEST host and universally unknown API build identities must not be
+inferred from that old snapshot. [ENVIRONMENTS](ENVIRONMENTS.md) owns environment selection;
+[the deployment contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md) owns physical application
+deployment and [release channels](RELEASE_CHANNELS/README.md) own promotion and rollback.
 
 ## Local fallback stack overview
 - Host: macOS

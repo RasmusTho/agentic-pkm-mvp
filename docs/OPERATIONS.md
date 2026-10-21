@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6.0 seams are shipped in bounded form and broader v6.1+ consumption remains planned. The Product Runtime placement contract uses TARS-hosted Linux with private Linux/Tailscale ingress for dev, test, and prod; the Mac mini is a control, development, client, and operator computer, not Product Runtime placement. Latest dated environment evidence is recorded in `docs/ENVIRONMENTS.md` and is not a fresh host readback from this workstation.
+State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6.0 seams are shipped in bounded form and broader v6.1+ consumption remains planned. The Product Runtime placement contract uses TARS-hosted Linux guests for dev, test and prod; the Mac mini provides control, client and model-execution services. The infrastructure repository's current-status view owns dated physical host and service observations; environment and deployment contracts remain separate.
 Doc role: Core SoT
 Authority: Top-level operator guidance for the current runtime; delegates specialized operational detail to linked companion docs but remains the main operational entrypoint.
 Owner: Runtime / operator playbook
@@ -6,7 +6,8 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-10-19 (#6269 fixed content-free native source-persistence failure stages, repository-only; #6227 dev-heavy qualification, #6225 pinned tooling and startup/liveness support and #6224 expiring controller-pause entry, repository-only; #6222 liveness support and #6223 rolling channel-bug entries, repository-only; prior 2026-10-16 TEST dormant-ownership boundary for #5937, repository-only; prior 2026-10-15 Companion collection-preflight output classification for #6079; prior 2026-10-14 VOICE-04 session/transcript guidance, native MVR-01C entry for #6056, native BWS embedding preflight for #6069, and fixed native TEST journaling entry for #6050, repository-only; prior #5969 web qualification, #5993 placement and other section reviews retained; no new live host or service verification)
-Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
+Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; this is not a new deployment, release or functional-acceptance receipt.
+Infrastructure reference review: 2026-10-21; other sections retain their individual verification dates.
 BWS child-runtime repository evidence: requirements-bws-deploy.txt; scripts/install_bws_deploy_runtime.sh; tests/deploy/test_deploy_channel.py::test_bws_runtime_setup_covers_mandatory_browser_smoke and tests/deploy/test_deploy_channel_script.py::test_managed_deploy_child_uses_declared_supervisor_interpreter; Issue #5905 / PR #5906 (repository validation only; no live host installation or channel acceptance).
 Native web entry repository evidence (2026-10-12): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_web, app/ops/native_web_acceptance_runner.py::NativeWebRunner, and tests/ops/test_native_web_acceptance.py; runtime pilot qualification remains with #2443/#3314.
 Native journaling entry repository evidence (2026-10-14): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_journaling, app/ops/native_journaling_acceptance_runner.py::NativeJournalingRunner, and tests/ops/test_native_journaling_acceptance.py; actual-image/provider TEST acceptance remains with #3347.
@@ -23,7 +24,8 @@ Use this document as the operator-facing starting point for runtime operations.
 Specialized companion documents:
 - `docs/HEALTH.md` - health CLI behavior and runtime health contract
 - `docs/OBSERVABILITY.md` - runtime observability signals, counters, and span/log contracts
-- `docs/INFRASTRUCTURE.md` - local runtime stack, Docker/Colima setup, and local observability stack
+- `docs/INFRASTRUCTURE.md` - application Compose fallback and local observability reference
+- [yggdrasil-infra current status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md) - dated Macs, TARS/VMs, Docker engines, network, storage and related-service observations; Builder Vault carries the operational handoff and private evidence locator
 - `docs/SECURITY_ARCHITECTURE.md` - security review routing, threat-model tiers, and security invariants
 - `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` - target ownership boundary for the
   ecosystem operational platform; this playbook remains the current operator entrypoint and runbook
@@ -615,15 +617,14 @@ Companion docs:
 - The Companion UI proxy pins `/api/companion/*` to the same runtime origin so browser UAT does not
   cross providers or devices accidentally. Runtime-unreachable and wrong-device states are distinct
   operator-visible failures rather than generic vault setup prompts.
-- Companion TTS is a local-first runtime surface: configured local voices can be selected for clean
-  Markdown read-back, mixed-language segments may route to different voices, and production
-  deployment depends on an explicitly configured, Tailscale-reachable external Ollama endpoint; the
-  Mac mini is model-serving infrastructure only.
-- Repository-side Model Access Router work may add a bounded Codex CLI adapter, but that adapter is
-  not a host activation or Product route. Until the separate designated-host and Tailscale
-  acceptance is complete, the Mac mini remains Ollama/model-serving only; no Product inference is
-  routed through Codex CLI, and no host login, CLI profile, service, or tailnet grant is implied by
-  a merged code change.
+- Companion TTS remains a local-first runtime surface with configured voices for Markdown
+  read-back. Ollama embedding identity and any selected remote endpoint are governed by
+  [the environment topology contract](ENVIRONMENTS.md#prod-ollama-topology); this playbook does not
+  establish a Tailscale prerequisite for the Model Access text route.
+- The accepted Model Access route uses VLAN mTLS to the loopback-bound Mac mini Codex CLI
+  executor. See [the dated infrastructure status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+  for installed and observed services. A merged adapter or running listener does not establish
+  persistent Product routing, inference qualification or release acceptance.
 - The repository resolves the MARR-only `typesafe.api-key` binding from the exact
   `dev/typesafe.api-key` identity in the existing `non-prod` BWS project through the existing
   read-only `non-prod-reader` account (#5801 / #5808). Its BWS reader token remains a

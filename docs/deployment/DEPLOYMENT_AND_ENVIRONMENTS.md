@@ -5,6 +5,7 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
+Infrastructure reference review: 2026-10-21 (status ownership and stale October 3 paragraph only)
 Last reviewed: 2026-10-17 (TEST dormant preparation context/admission continuity; BWS secret-provisioning review remains 2026-10-15; other deployment sections were not re-audited)
 Last live runtime verification: 2026-10-11 UTC (accepted native DEV/TEST activation, health/version/UI and isolated PostgreSQL verification under #5675; the earlier read-only route checks remain separate, and `prod` was not queried)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903); Issue #5868 and the existing-secret deployment Verify targets, which establish repository behavior only.
@@ -133,25 +134,21 @@ separate authority boundaries.
 Provider and model selection is resolved by capability configuration. Neither this placement profile
 nor the topology qualification input encodes a provider, model, or Codex-only runtime architecture.
 
-## Current live runtime posture
+## Current infrastructure status
 
-The latest read-only check from Demerzel (2026-10-03 UTC) reached `ygg-dev` and `ygg-test` over VLAN;
-it was not a deployment run. `ygg-dev` runs image
-`8cb453986944b98b7dac483973aae67e8c5e64e7`, reports `required_ok=true`, and enforces
-`ollama/llama3.2:3b`; its current health response still checks Ollama and does not yet report
-`llm_access`. `ygg-test` runs `dev-local`, reports unknown application SHA and `required_ok=false`,
-uses `LLM_PROVIDER=mock`, and has only API and DB containers (no worker or watcher). Product
-containers on both channels lack the Model Access VLAN caller settings. The existing test checkout
-was stale and dirty and was left untouched.
+[yggdrasil-infra — Current local infrastructure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md) owns the dated observed host, VM-role,
+engine, network, storage and service inventory. Its 2026-10-21 read-only pass includes the three
+Product guests and BOB-1's dedicated BuilderOps engine; it is not a deployment, qualification,
+functional-acceptance or promotion receipt. Builder Vault holds the sanitized handoff and private
+host-local evidence locator. The October 3 runtime paragraph formerly here is superseded as current
+status, including its absent-worker and unknown-TEST-image claims.
 
-The accepted MARR-06 receipt proves one Luna completion through the active, loopback-bound Mac mini
-Codex CLI executor over VLAN mTLS; it does not prove persistent Product routing. The merged candidate
-is not running on either channel, and its pending migrations have not been applied. The read-only SSH
-path does not establish the qualified deployment executor or Linux caller-secret qualification
-tracked by #5667. No candidate-bound backup or staged-rollout receipt was created. Do not use the old
-local Compose projects or matrix below as evidence for the new-host runtime. The remaining authorized
-sequence is exact candidate identity and backup/migration review → dev deployment and verification →
-test deployment and verification. Production was not contacted and remains out of scope.
+This document retains the physical application deployment procedure, managed-unit topology,
+migration and health gates. The dated successful native DEV/TEST flow recorded above remains
+historical acceptance for its exact candidate; it does not establish today's channel health.
+Infrastructure observations neither alter the remaining qualification/credential gates nor grant
+production action. Local Compose projects remain fallback resources rather than evidence for the
+Linux channel deployment.
 
 ### CI deployment automation posture
 

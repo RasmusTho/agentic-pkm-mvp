@@ -18,29 +18,25 @@ Doc role: Core SoT for the release-channels capability
 Owner: `docs/ROADMAP.md`
 Temporal class: strategic
 Review cadence: biweekly
-Last reviewed: 2026-10-04
-Last live runtime verification: 2026-10-03 UTC (read-only `dev`/`test` checks from Demerzel over VLAN; `prod` was not queried)
+Last reviewed: 2026-10-21 (current-status routing only; channel requirements unchanged)
+Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; dated acceptance receipts remain separately scoped.
 Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/DB_SCHEMA.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, config/platform/product_tars_channel_topology.v1.schema.json, app/ops/product_tars_channel_topology.py, app/release_channels/promotion_receipt.py, docs/adr/ADR-0040-prod-promotion-ref-main-interim.md; live read-only checks and MARR acceptance state in [Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903)
 
 # Release Channels Specification
 
 ## Current live posture
 
-The Product Runtime channels are intended for TARS-hosted Linux VMs. The latest read-only check from
-Demerzel reached `ygg-dev` and `ygg-test` over VLAN; this is not a deployment qualification or receipt.
-`ygg-dev` runs image `8cb453986944b98b7dac483973aae67e8c5e64e7`, with API `required_ok=true` and an
-enforced `ollama/llama3.2:3b` route. Its running health contract still reports the old Ollama check,
-not the provider-neutral `llm_access` check. `ygg-test` runs image tag `dev-local`, reports an unknown
-build and `required_ok=false`, uses `LLM_PROVIDER=mock`, and has only API and DB containers; worker
-and watcher are absent. Neither channel passes the Product VLAN caller settings for the Codex executor.
-`prod` was not queried in this pass; this specification makes no new production health claim.
+Current physical host, VM-role, engine, network, storage and service observations belong to
+[yggdrasil-infra — Current local infrastructure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md),
+with a dated 2026-10-21 snapshot and explicit gaps. Builder Vault carries the operational handoff
+and private evidence locator. This specification retains release-channel identity, isolation,
+promotion and rollback requirements; the status view is descriptive and grants no operation.
 
-The accepted MARR-06 receipt records one successful Luna completion through the Mac mini's Codex CLI
-executor over VLAN mTLS. It does not establish persistent Product routing. That Model Access path does
-not require Tailscale or Ollama; embedding identity remains separately governed. The merged candidate
-is not running in `dev` or `test`, and the staged rollout remains blocked pending qualified caller
-configuration, exact-SHA deployment, and test verification. The old single-host Compose model in this
-specification remains a local fallback/reference model, not the current live topology.
+The October 3 dev/test observations formerly repeated here are historical, including the unknown
+TEST build and absent-worker claims. Earlier single-call Model Access and staged deployment receipts
+retain their exact candidate and scope; they do not establish current health or promotion eligibility.
+The single-host Compose model below remains a fallback/reference model rather than current fleet
+inventory.
 
 The promotion chain remains `dev → test → prod`, but it cannot start until the candidate identity is
 immutable and observable, the new-host deployment handoff is authoritative, `test` is reachable, and
