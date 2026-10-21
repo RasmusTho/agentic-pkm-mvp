@@ -222,6 +222,11 @@ def test_acceptance_examples_do_not_mint_authority(tmp_path: Path, example_locat
 
     frontmatter, _body = load_frontmatter(text)
     draft_id = str(frontmatter["uuid"])
+    generated_control = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(generated_control) == 1
+    # Leave the example as the only possible acceptance signal, so each case
+    # would have reproduced an implementation that treated literal text as authority.
+    text = text.replace(generated_control + "\n", "", 1)
     checked = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
     if example_location == "fenced_body":
         text = text.replace(
@@ -241,6 +246,32 @@ def test_acceptance_examples_do_not_mint_authority(tmp_path: Path, example_locat
             "  %% AI:End %%\n"
         )
         text = "---".join(parts)
+    draft_path.write_text(text, encoding="utf-8")
+    before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
+
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(draft_path, vault_root=vault_root, outbox_path=outbox_path)
+
+    assert {path.relative_to(vault_root) for path in vault_root.rglob("*.md")} == before
+    assert not [record for record in _outbox_records(outbox_path) if record["event"] == CREATE_ACCEPTED_EVENT]
+
+
+def test_commented_acceptance_control_does_not_mint_authority(tmp_path: Path) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    text = draft_path.read_text(encoding="utf-8")
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    frontmatter, _body = load_frontmatter(text)
+    draft_id = str(frontmatter["uuid"])
+    unchecked = f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})"
+    checked = f"- [x] Accept this draft into the vault (draft {draft_id[:12]})"
+    assert text.count(unchecked) == 1
+    text = text.replace(unchecked + "\n", "", 1)
+    text = text.replace(
+        "%% AI:Start %%\n",
+        "%% AI:Start %%\n<!--\n" + checked + "\n-->\n",
+        1,
+    )
     draft_path.write_text(text, encoding="utf-8")
     before = {path.relative_to(vault_root) for path in vault_root.rglob("*.md")}
 

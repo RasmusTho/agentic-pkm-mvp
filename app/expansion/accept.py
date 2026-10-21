@@ -159,6 +159,30 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
+def _strip_html_comments(line: str, in_comment: bool) -> tuple[str, bool]:
+    """Remove Markdown-hidden HTML comments while carrying multiline state."""
+    visible: list[str] = []
+    offset = 0
+    while offset < len(line):
+        if in_comment:
+            close = line.find("-->", offset)
+            if close < 0:
+                return "".join(visible), True
+            offset = close + len("-->")
+            in_comment = False
+            continue
+
+        start = line.find("<!--", offset)
+        if start < 0:
+            visible.append(line[offset:])
+            break
+        visible.append(line[offset:start])
+        offset = start + len("<!--")
+        in_comment = True
+
+    return "".join(visible), in_comment
+
+
 def _is_checked(text: str, draft_id: str) -> bool:
     """Accept only the generated checkbox for this draft inside an AI panel.
 
@@ -168,9 +192,11 @@ def _is_checked(text: str, draft_id: str) -> bool:
     """
     expected_label = f"Accept this draft into the vault (draft {draft_id[:12]})"
     in_ai_panel = False
+    in_html_comment = False
     fence: tuple[str, int] | None = None
     matches: list[bool] = []
-    for line in text.splitlines():
+    for original_line in text.splitlines():
+        line, in_html_comment = _strip_html_comments(original_line, in_html_comment)
         indentation = len(line) - len(line.lstrip(" "))
         if line.startswith("\t") or indentation >= 4:
             # Markdown's indented-code form is literal example text. The
