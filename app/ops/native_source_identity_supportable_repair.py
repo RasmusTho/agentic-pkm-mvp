@@ -546,7 +546,7 @@ def _exact_companion_candidate(
         replacements.append((
             history_start,
             history_end,
-            history_block + line_ending,
+            (history_text if history_node.flow_style else history_block) + line_ending,
         ))
     else:
         raise SupportableRepairRefusal("authority_refused")

@@ -118,6 +118,42 @@ def test_companion_continuity_repairs_only_source_ref_hash_and_bounded_history(
     assert _sha(companion.read_text()) == proposal.candidate_sha256
 
 
+@pytest.mark.parametrize("history_yaml", (
+    "",
+    "identity_history: []\n",
+    "identity_history: [{event: prior, reason: keep}]\n",
+    "identity_history:\n- event: prior\n  reason: keep\n",
+))
+def test_exact_companion_candidate_supports_absent_flow_and_block_history(
+    history_yaml: str,
+) -> None:
+    original = (
+        "---\n"
+        'uuid: "00000000-0000-4000-8000-000000000001"\n'
+        "# keep exact comment\n"
+        'source_ref: "old.md"\n'
+        f'content_hash: "{"0" * 64}"\n'
+        f"{history_yaml}"
+        "---\n"
+        "\n body edge  \n\n"
+    )
+    next_history = [{"event": "path_change", "reason": "reviewed"}]
+    candidate = repair._exact_companion_candidate(
+        original,
+        source_ref="new.md",
+        content_hash="1" * 64,
+        identity_history=next_history,
+    )
+    after, _node, _yaml_start, closing_start = repair._strict_frontmatter_layout(
+        candidate,
+    )
+    assert after["source_ref"] == "new.md"
+    assert after["content_hash"] == "1" * 64
+    assert after["identity_history"] == next_history
+    assert "# keep exact comment\n" in candidate
+    assert candidate[closing_start:] == "---\n\n body edge  \n\n"
+
+
 def test_companion_continuity_refuses_uuid_locator_hash_version_or_descriptor_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
