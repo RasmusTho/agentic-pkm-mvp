@@ -5,8 +5,7 @@ description: "Verify coverage, merge the current candidate, and reconcile its ex
 
 # Verification and Closure
 
-This skill declares `execution_selection_intent: verification`. It owns merge and delivery closure, not deployment.
-Choose review capability under `docs/development/TOTAL_COST_OF_DEVELOPMENT.md :: Capability selection`. User authority, exact scope, current-head checks, and truthful effects remain gates.
+This skill declares `execution_selection_intent: verification`. It owns merge and delivery closure, not deployment. Choose review capability under `docs/development/TOTAL_COST_OF_DEVELOPMENT.md :: Capability selection`. User authority, exact scope, current-head checks, and truthful effects remain gates.
 
 ## Routing
 
@@ -74,15 +73,10 @@ independent current-head review and `Final-Review-Rounds: 1`. Read `.codex/skill
 P0/P1 repair and fresh independent review remain mandatory. P2 needs a durable defect reference in Known Defects registry Issue #4172
 and disposition; P3 is informational. No second consecutive clean review is required.
 
-An independent pre-CI review may serve the final native gate if candidate, contract and relevant check
-configuration are unchanged. Inspect final CI: failures invalidate affected conclusions; completion
+An independent pre-CI review may serve the final native gate if candidate, contract and relevant check configuration are unchanged. Inspect final CI: failures invalidate affected conclusions; completion
 alone never requires another clean review. Executor sequencing stays with its full-path contract.
 
-Before the first effect of a newly constructed native diagnostic that starts temporary workers,
-complete the required review of its exact final packet through the existing review/clearance
-machinery. An asynchronous review still in progress is not clearance. Reuse accepted review when
-the packet and relevant inputs are unchanged under the existing evidence-reuse rule; this sequencing
-requires neither another review for ordinary metadata-only reads nor a new human approval.
+Before the first effect of a newly constructed native diagnostic that starts temporary workers, complete the required review of its exact final packet through the existing review/clearance machinery. An asynchronous review still in progress is not clearance. Reuse accepted review when the packet and relevant inputs are unchanged under the existing evidence-reuse rule; this sequencing requires neither another review for ordinary metadata-only reads nor a new human approval.
 
 After two independent change-request rounds apply `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`.
 
