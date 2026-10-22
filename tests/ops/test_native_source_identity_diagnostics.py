@@ -445,10 +445,15 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
                 return b'["PATH=/usr/bin"]'
             return source_image.encode("ascii")
         if argv == (
-            "docker", "compose", "config", "--images",
+            "docker", "compose", "config", "--format", "json",
             diagnostics.DATABASE_WITNESS_SERVICE,
         ):
-            return witness_image.encode("ascii") + b"\n"
+            return json.dumps({
+                "services": {
+                    "db": {"image": "postgres:16"},
+                    diagnostics.DATABASE_WITNESS_SERVICE: {"image": witness_image},
+                },
+            }).encode("utf-8")
         if argv == source_prepare:
             return json.dumps(prepare).encode("utf-8")
         if argv == diagnostics.database_witness_compose_argv(
@@ -482,7 +487,7 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
     assert [call[2] for call in calls] == [
         diagnostics.MAX_RECEIPT_BYTES,
         1024,
-        1024,
+        diagnostics.MAX_PRIVATE_FRAME_BYTES,
         1024,
         diagnostics.MAX_PRIVATE_FRAME_BYTES,
         diagnostics.MAX_RECEIPT_BYTES,
@@ -522,10 +527,15 @@ def test_production_diagnostic_uses_configured_witness_image_before_container_cr
         ):
             return image_id
         if argv == (
-            "docker", "compose", "config", "--images",
+            "docker", "compose", "config", "--format", "json",
             diagnostics.DATABASE_WITNESS_SERVICE,
         ):
-            return witness_image.encode("ascii") + b"\n"
+            return json.dumps({
+                "services": {
+                    "db": {"image": "postgres:16"},
+                    diagnostics.DATABASE_WITNESS_SERVICE: {"image": witness_image},
+                },
+            }).encode("utf-8")
         if argv == (
             "docker", "image", "inspect", "--format", "{{.Id}}", witness_image,
         ):
@@ -549,7 +559,7 @@ def test_production_diagnostic_uses_configured_witness_image_before_container_cr
         ("docker", "image", "inspect", "--format", "{{json .Config.Env}}", source_image),
         ("docker", "image", "inspect", "--format", "{{.Id}}", source_image),
         (
-            "docker", "compose", "config", "--images",
+            "docker", "compose", "config", "--format", "json",
             diagnostics.DATABASE_WITNESS_SERVICE,
         ),
         ("docker", "image", "inspect", "--format", "{{.Id}}", witness_image),
@@ -560,11 +570,21 @@ def test_production_diagnostic_uses_configured_witness_image_before_container_cr
     ("configured", "witness_id"),
     [
         (b"", b"sha256:" + b"a" * 64),
-        (b"one\ntwo\n", b"sha256:" + b"a" * 64),
-        (b"ghcr.io/rasmustho/pkm-app:latest\n", b"sha256:" + b"a" * 64),
+        (b"{}", b"sha256:" + b"a" * 64),
+        (b'{"services":{}}', b"sha256:" + b"a" * 64),
+        (b'{"services":{"source-identity-db-witness":{}}}', b"sha256:" + b"a" * 64),
+        (b'{"services":{"source-identity-db-witness":{"image":"latest"}}}', b"sha256:" + b"a" * 64),
+        (b'{"services":{"source-identity-db-witness":{"image":false}}}', b"sha256:" + b"a" * 64),
+        (b'{"services":{},"services":{}}', b"sha256:" + b"a" * 64),
         (b"\xff\n", b"sha256:" + b"a" * 64),
-        (b"sha256:" + b"e" * 64 + b"\n", b""),
-        (b"sha256:" + b"e" * 64 + b"\n", b"sha256:" + b"b" * 64),
+        (
+            b'{"services":{"source-identity-db-witness":{"image":"sha256:'
+            + b"e" * 64 + b'"}}}', b"",
+        ),
+        (
+            b'{"services":{"source-identity-db-witness":{"image":"sha256:'
+            + b"e" * 64 + b'"}}}', b"sha256:" + b"b" * 64,
+        ),
     ],
 )
 def test_production_diagnostic_refuses_invalid_configured_witness_image_evidence(
@@ -589,7 +609,7 @@ def test_production_diagnostic_refuses_invalid_configured_witness_image_evidence
         ):
             return source_id
         if argv == (
-            "docker", "compose", "config", "--images",
+            "docker", "compose", "config", "--format", "json",
             diagnostics.DATABASE_WITNESS_SERVICE,
         ):
             return configured
