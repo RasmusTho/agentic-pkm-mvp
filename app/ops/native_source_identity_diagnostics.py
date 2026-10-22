@@ -12,7 +12,7 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import secrets
 import shlex
@@ -73,6 +73,12 @@ SOURCE_COUNT_FIELDS = (
     "authority_candidate_count",
     "protected_authority_candidate_count",
     "source_observation_unknown_count",
+)
+_SOURCE_CONFIGURATION_KEYS = (
+    "PKM_SETTINGS_PROFILE",
+    "VAULT_INBOX_DIR_REL",
+    "VAULT_SYSTEM_DIR_REL",
+    "WATCHER_SCOPE_GLOB",
 )
 
 
@@ -450,7 +456,13 @@ def validate_source_observation_create_argv(
     return argv
 
 
-def _source_capture(vault_root: Path, *, channel: str, revision: str) -> dict[str, Any]:
+def _source_capture(
+    vault_root: Path,
+    *,
+    source_ref_root: str,
+    channel: str,
+    revision: str,
+) -> dict[str, Any]:
     """Capture one private canonical registry snapshot without source mutation."""
     from app.knowledge.profile_authority_store import is_profile_note_source_read_only
     from app.knowledge.write_ops import read_recovery_snapshot_relative
@@ -466,6 +478,12 @@ def _source_capture(vault_root: Path, *, channel: str, revision: str) -> dict[st
     from app.services.note_uuid import is_read_only_derived_artifact
 
     root = vault_root.expanduser().resolve(strict=True)
+    canonical_ref_root = PurePosixPath(source_ref_root)
+    if (
+        not canonical_ref_root.is_absolute()
+        or str(canonical_ref_root) != source_ref_root
+    ):
+        raise SourceIdentityDiagnosticRefusal("database_witness_refused")
     policy, observations = _registry_plan(root)
     inventory = registry_identity_inventory(root, observations)
     request_observations: list[dict[str, str]] = []
@@ -506,7 +524,7 @@ def _source_capture(vault_root: Path, *, channel: str, revision: str) -> dict[st
                 canonical_product_body_text(body).encode("utf-8"),
             ).hexdigest()
             request_observations.append({
-                "source_ref": str(observation.path.resolve(strict=True)),
+                "source_ref": str(canonical_ref_root / relative),
                 "body_sha256": body_sha256,
                 "source_version_sha256": source_version_sha256,
             })
@@ -603,6 +621,7 @@ def finalize_source_observation(
     database_receipt: Any,
     *,
     vault_root: Path,
+    source_ref_root: str,
     channel: str,
     revision: str,
 ) -> dict[str, Any]:
@@ -614,7 +633,12 @@ def finalize_source_observation(
         or receipt["channel"] != channel
         or receipt["revision"] != revision
         or receipt["selected_count"] != len(prepared["request"]["observations"])
-        or _source_capture(vault_root, channel=channel, revision=revision) != prepared
+        or _source_capture(
+            vault_root,
+            source_ref_root=source_ref_root,
+            channel=channel,
+            revision=revision,
+        ) != prepared
     ):
         raise SourceIdentityDiagnosticRefusal("database_witness_refused")
     result = {
@@ -836,6 +860,8 @@ def source_observation_run_argv(
     mode: str,
     source_image: str,
     source_root: Path,
+    container_source_root: str,
+    source_environment: tuple[str, ...],
     channel: str,
     revision: str,
     container_name: str,
@@ -851,22 +877,49 @@ def source_observation_run_argv(
         or re.fullmatch(r"[0-9a-f]{32}", owner_token) is None
     ):
         raise SourceIdentityDiagnosticRefusal("database_witness_refused")
+    container_root = PurePosixPath(container_source_root)
+    if (
+        not container_root.is_absolute()
+        or str(container_root) != container_source_root
+        or container_source_root in {"/", "/run", "/var/run"}
+        or container_source_root.startswith(("/run/", "/var/run/"))
+        or "," in container_source_root
+    ):
+        raise SourceIdentityDiagnosticRefusal("database_witness_refused")
     root = source_root.expanduser().resolve(strict=True)
     if "," in str(root):
         raise SourceIdentityDiagnosticRefusal("database_witness_refused")
-    return (
+    argv = (
         "docker", "run", "--rm", "--name", container_name,
         "--label", f"{OWNER_LABEL}={owner_token}",
         "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges:true",
-        "--env", "WATCHER_ENABLE=1",
-        "--env", "WATCHER_VAULT_PATH=/source",
+        *(item for entry in source_environment for item in ("--env", entry)),
         "--mount",
-        f"type=bind,source={root},target=/source,readonly",
+        f"type=bind,source={root},target={container_source_root},readonly",
         source_image,
         "python", "-m", "app.ops.native_source_identity_diagnostics",
-        mode, channel, revision, "/source",
+        mode, channel, revision, container_source_root,
     )
+    validate_source_observation_create_argv(argv, image_environment=())
+    return argv
+
+
+def _closed_source_environment(
+    environment: dict[str, str],
+    *,
+    container_source_root: str,
+) -> tuple[str, ...]:
+    """Retain canonical non-DB registry inputs for the isolated source actor."""
+    values = {
+        "WATCHER_ENABLE": "1",
+        "WATCHER_VAULT_PATH": container_source_root,
+    }
+    for key in _SOURCE_CONFIGURATION_KEYS:
+        value = environment.get(key)
+        if value is not None:
+            values[key] = value
+    return tuple(f"{key}={values[key]}" for key in sorted(values))
 
 
 def _inspect_image_environment(
@@ -920,6 +973,7 @@ def run_production_diagnostic(
     *,
     source_image: str,
     source_root: Path,
+    container_source_root: str,
     compose_prefix: tuple[str, ...],
     channel: str,
     revision: str,
@@ -945,10 +999,15 @@ def run_production_diagnostic(
         "finalize": f"pkm-source-id-finalize-{revision[:12]}",
     }
     owner_token = secrets.token_hex(16)
+    source_environment = _closed_source_environment(
+        dict(os.environ), container_source_root=container_source_root,
+    )
     source_prepare_argv = source_observation_run_argv(
         mode="source-prepare",
         source_image=source_image,
         source_root=source_root,
+        container_source_root=container_source_root,
+        source_environment=source_environment,
         channel=channel,
         revision=revision,
         container_name=names["prepare"],
@@ -958,6 +1017,8 @@ def run_production_diagnostic(
         mode="source-finalize",
         source_image=source_image,
         source_root=source_root,
+        container_source_root=container_source_root,
+        source_environment=source_environment,
         channel=channel,
         revision=revision,
         container_name=names["finalize"],
@@ -1062,15 +1123,19 @@ def database_witness_compose_argv(
 
 def worker_main(argv: list[str]) -> int:
     if (
-        len(argv) == 5
+        len(argv) == 6
         and argv[0] == "coordinate"
         and _valid_channel_revision(argv[1], argv[2])
     ):
-        _mode, channel, revision, source_image, vault_root_raw = argv
+        (
+            _mode, channel, revision, source_image, vault_root_raw,
+            container_source_root,
+        ) = argv
         try:
             receipt = run_production_diagnostic(
                 source_image=source_image,
                 source_root=Path(vault_root_raw),
+                container_source_root=container_source_root,
                 compose_prefix=(
                     "docker", "compose", "--profile",
                     "native-source-diagnostics",
@@ -1092,7 +1157,10 @@ def worker_main(argv: list[str]) -> int:
             vault_root = Path(vault_root_raw)
             if mode == "source-prepare":
                 result = _source_capture(
-                    vault_root, channel=channel, revision=revision,
+                    vault_root,
+                    source_ref_root=vault_root_raw,
+                    channel=channel,
+                    revision=revision,
                 )
             else:
                 raw = sys.stdin.buffer.read(MAX_PRIVATE_FRAME_BYTES + 1)
@@ -1111,6 +1179,7 @@ def worker_main(argv: list[str]) -> int:
                     payload["prepare"],
                     payload["database_receipt"],
                     vault_root=vault_root,
+                    source_ref_root=vault_root_raw,
                     channel=channel,
                     revision=revision,
                 )

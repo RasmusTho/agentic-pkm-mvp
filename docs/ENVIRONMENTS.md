@@ -512,6 +512,27 @@ Notes:
 - The `test` compose override sets `PKM_ENVIRONMENT: test` (first-class as of Issue #848 / PR #940), gives the one-shot migration service the in-container `app_test` DSN, and binds runtime services to the existing mock provider. The universal test overlay remains vault-neutral for the no-vault idle/picker posture: it disables the watcher and clears `WATCHER_VAULT_PATH` as well as omitting `VAULT_ROOT` / `VAULT_ROOT_TEST` and the `/app/vault` mount. An explicit test-vault startup adds `docker-compose.legacy-vault.yml` followed by the TEST-only `docker-compose.test-vault.yml`: the first mounts the selected host vault and binds `VAULT_ROOT` / `VAULT_ROOT_TEST` to `/app/vault`; the second deterministically restores `WATCHER_ENABLE=1` and `WATCHER_VAULT_PATH=/app/vault` even when the parent shell carries conflicting values. Test-channel isolation comes from that matching scoped DB, explicit scoped vault (`vault-test/` or operator-selected `VAULT_ROOT_TEST`), scoped artifact paths (`tmp-test/`), and port separation.
 - Full parallel isolation still depends on DB separation work tracked by Issue #594.
 
+### Native source-identity database diagnostics
+
+The opt-in `native-source-diagnostics` profile provides a bounded diagnostic
+boundary for source-identity authority checks. The source observer remains in
+an immutable, `--network none` container and mounts the selected source at the
+same explicit container root used by the accepted runtime, so Product
+`source_ref` comparisons preserve their canonical locator. It carries forward
+only the closed non-database registry inputs (`WATCHER_SCOPE_GLOB`, settings
+profile, system directory, and inbox directory) needed to reproduce the
+canonical registry plan.
+
+A separate `source-identity-db-witness` service has no source mounts, requires
+PostgreSQL read-only mode, and returns only schema-closed aggregate counts. The
+private request is size-bounded and synchronously bound to the exact channel,
+revision, canonical body digest, source-version digest, immutable image, and
+unchanged before/after source snapshot. The coordinator refuses on malformed
+frames, topology drift, image mismatch, writable database state, timeout,
+overproduction, count incoherence, or temporary-container ownership conflict.
+This diagnostic does not mutate source, metadata, Product rows, controller
+state, deployment state, TEST, or PROD.
+
 ## Relation to Current Health, Write Guard, and Settings Direction
 
 ### Health and Write Guard

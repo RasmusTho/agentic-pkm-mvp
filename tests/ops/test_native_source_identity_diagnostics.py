@@ -291,7 +291,10 @@ def test_source_prepare_and_finalize_refence_canonical_inventory(
     )
 
     prepare = diagnostics._source_capture(  # noqa: SLF001 - exact production seam
-        root, channel="dev", revision=REVISION,
+        root,
+        source_ref_root="/accepted-vault",
+        channel="dev",
+        revision=REVISION,
     )
     assert set(prepare) == {
         "contract", "channel", "revision", "source_snapshot_sha256",
@@ -308,6 +311,9 @@ def test_source_prepare_and_finalize_refence_canonical_inventory(
         "source_observation_unknown_count": 0,
     }
     assert len(prepare["request"]["observations"]) == 1
+    assert prepare["request"]["observations"][0]["source_ref"] == (
+        "/accepted-vault/note.md"
+    )
     database_receipt = diagnostics._receipt(  # noqa: SLF001
         channel="dev",
         revision=REVISION,
@@ -325,6 +331,7 @@ def test_source_prepare_and_finalize_refence_canonical_inventory(
         prepare,
         database_receipt,
         vault_root=root,
+        source_ref_root="/accepted-vault",
         channel="dev",
         revision=REVISION,
     )
@@ -338,6 +345,7 @@ def test_source_prepare_and_finalize_refence_canonical_inventory(
             prepare,
             database_receipt,
             vault_root=root,
+            source_ref_root="/accepted-vault",
             channel="dev",
             revision=REVISION,
         )
@@ -352,10 +360,20 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
     source_image = "sha256:" + "d" * 64
     owner_token = "f" * 32
     monkeypatch.setattr(diagnostics.secrets, "token_hex", lambda _size: owner_token)
+    for key in diagnostics._SOURCE_CONFIGURATION_KEYS:  # noqa: SLF001
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "accepted/**/*.md")
+    container_source_root = "/accepted-vault"
+    source_environment = diagnostics._closed_source_environment(  # noqa: SLF001
+        dict(diagnostics.os.environ),
+        container_source_root=container_source_root,
+    )
     source_prepare = diagnostics.source_observation_run_argv(
         mode="source-prepare",
         source_image=source_image,
         source_root=source_root,
+        container_source_root=container_source_root,
+        source_environment=source_environment,
         channel="dev",
         revision=REVISION,
         container_name=f"pkm-source-id-prepare-{REVISION[:12]}",
@@ -365,6 +383,8 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         mode="source-finalize",
         source_image=source_image,
         source_root=source_root,
+        container_source_root=container_source_root,
+        source_environment=source_environment,
         channel="dev",
         revision=REVISION,
         container_name=f"pkm-source-id-finalize-{REVISION[:12]}",
@@ -443,6 +463,7 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
     receipt = diagnostics.run_production_diagnostic(
         source_image=source_image,
         source_root=source_root,
+        container_source_root=container_source_root,
         compose_prefix=("docker", "compose"),
         channel="dev",
         revision=REVISION,
@@ -462,6 +483,11 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
     assert [phase for phase, _name in fenced] == [
         "before", "after", "before", "after", "before", "after",
     ]
+    assert "WATCHER_SCOPE_GLOB=accepted/**/*.md" in source_prepare
+    assert f"target={container_source_root}" in next(
+        item for item in source_prepare if item.startswith("type=bind,")
+    )
+    assert source_prepare[-1] == container_source_root
 
 
 def test_cleanup_never_removes_a_container_with_foreign_ownership(
@@ -599,10 +625,12 @@ def test_worker_main_coordinate_calls_concrete_production_path(
     monkeypatch.setattr(diagnostics, "run_production_diagnostic", run)
     assert diagnostics.worker_main([
         "coordinate", "dev", REVISION, source_image, str(tmp_path),
+        "/accepted-vault",
     ]) == 0
     assert captured == {
         "source_image": source_image,
         "source_root": tmp_path,
+        "container_source_root": "/accepted-vault",
         "compose_prefix": (
             "docker", "compose", "--profile", "native-source-diagnostics",
         ),
