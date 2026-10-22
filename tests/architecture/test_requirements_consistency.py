@@ -269,6 +269,39 @@ def test_docker_and_ci_install_same_numpy_major() -> None:
     )
 
 
+def test_controller_proof_producers_install_qualified_sdk_closure() -> None:
+    qualified = _parse_requirements(REPO_ROOT / "requirements-bws-deploy.txt")
+    packages = ("bitwarden-sdk", "python-dateutil", "six")
+    producers: dict[str, str] = {}
+    for filename, job_name, execution_step in (
+        ("ci-smoke.yaml", "pr-unit-tests-not-pg", "Run scoped not-pg unit tests"),
+        ("integration-nightly.yaml", "full-suite", "Full test suite (memory, not pg)"),
+        ("post-merge-heavy-tests.yml", "heavy-tests", "Run heavy not-pg tests"),
+    ):
+        steps = _load_workflow(WORKFLOWS / filename)["jobs"][job_name]["steps"]
+        execution_index = next(
+            index for index, step in enumerate(steps)
+            if step.get("name") == execution_step
+        )
+        producers[f"{filename}:{job_name}"] = "\n".join(
+            str(step.get("run", "")) for step in steps[:execution_index]
+        )
+    smoke_setup, execution, _ = PY312_SMOKE.read_text(encoding="utf-8").partition(" pytest ")
+    assert execution, "Python 3.12 smoke must execute its controller proof suite"
+    producers[_relative(PY312_SMOKE)] = smoke_setup
+
+    for producer, commands in producers.items():
+        installed: dict[str, RequirementEntry] = {}
+        for match in REQUIREMENTS_REF_RE.finditer(commands):
+            manifest = REPO_ROOT / match.group("path").strip("'\"")
+            installed.update(_parse_requirements(manifest))
+        for package in packages:
+            assert package in installed, f"{producer} does not provision {package}"
+            assert installed[package].requirement.specifier == qualified[package].requirement.specifier, (
+                f"{producer} does not preserve the qualified controller pin: {package}"
+            )
+
+
 def test_settings_ci_runtime_lock_runs_on_ci_python_line() -> None:
     workflow = _load_workflow(SETTINGS_CI_WORKFLOW)
     settings_job = workflow["jobs"]["settings"]
