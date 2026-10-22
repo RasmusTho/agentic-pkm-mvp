@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 import httpx
 import httpx2
 import pytest
-import truststore
 
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.codex_executor_service import create_codex_executor_app
@@ -319,9 +318,10 @@ def test_adapter_setup_failure_is_presend_and_closes_owned_transport(
         pytest.fail("setup regression must never open a socket")
 
     monkeypatch.setattr(socket, "create_connection", forbidden_network)
+    monkeypatch.setattr(socket.socket, "connect", forbidden_network)
     if stage == "tls":
-        # Keep the real default HTTPTransport constructor; replace its OS TLS seam.
-        monkeypatch.setattr(truststore, "SSLContext", fail)
+        # Keep the real default HTTPTransport constructor; replace its shared TLS factory.
+        monkeypatch.setattr("httpx2._transports.default.create_ssl_context", fail)
         adapter = TypeSafeAdapter()
     else:
         adapter = TypeSafeAdapter(transport_factory=factory)
