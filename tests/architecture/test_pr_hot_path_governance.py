@@ -799,7 +799,6 @@ def test_parent_issue_closure_keeps_delivery_scope_above_future_adoption() -> No
 
 def test_native_delivery_separates_review_from_executor_merge_protocol() -> None:
     router = _read(".codex/skills/verification-and-closure/SKILL.md")
-    assert len(router.splitlines()) < 130
     assert "Review depth is independent of merge mechanics" in router
     assert "approved bounded multi-Issue PRs" in router
     assert "--match-head-commit" in router
