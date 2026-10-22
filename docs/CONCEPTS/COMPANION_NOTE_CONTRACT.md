@@ -356,3 +356,20 @@ test/guardrail set should include:
 - regression tests for missing-companion rebuild and stale-companion repair
 - explicit ambiguity tests proving semantic similarity never auto-assigns identity
 - compatibility tests for transitional `VaultMirror` -> companion-note migration behavior
+
+## Governed exact continuity repair
+
+DEV includes an inert, operator-invoked repair mechanism for a pre-classified companion continuity
+case: one ordinary canonical source has one established UUID, exactly one companion claims that
+UUID, the companion points only to a stale companion-side locator, and its content hash is stale.
+The mechanism may update only `source_ref`, `content_hash`, and bounded `identity_history`; all other
+frontmatter and body bytes remain unchanged. It re-reads the canonical inventory and the full
+companion claim set through bounded root-relative no-follow descriptors immediately before the
+WriteGuard CAS. Ambiguous, malformed, duplicate, profile, read-only-derived, or already-current
+cases fail closed.
+
+The batch wrapper binds the reviewed revision, image, source selection, exact private target set,
+and physical vault identity inside one owned fence. It neither discovers targets nor starts a
+producer, controller, deployment, inference, TEST, or PROD effect. Rollback is equally exact: only
+the admitted candidate bytes may be restored to their hash-verified original bytes under the same
+authority fence; drift is preserved as indeterminate.
