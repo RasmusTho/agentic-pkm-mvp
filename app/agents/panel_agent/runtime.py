@@ -396,7 +396,32 @@ def _write_proposals_to_panel(
     if not proposed_labels:
         return markdown
 
-    lines = markdown.splitlines()
+    # Preserve each original line ending. Inserting a checkbox inside the
+    # governed panel must not normalize text outside it (including the final
+    # newline), because callers may use that boundary as an integrity check.
+    raw_lines = markdown.splitlines(keepends=True)
+
+    def content(line: str) -> str:
+        if line.endswith("\r\n"):
+            return line[:-2]
+        if line.endswith(("\n", "\r")):
+            return line[:-1]
+        return line
+
+    lines = [content(line) for line in raw_lines]
+    line_offsets = [0]
+    for raw_line in raw_lines:
+        line_offsets.append(line_offsets[-1] + len(raw_line))
+
+    def line_ending(start: int = 0, end: int | None = None) -> str:
+        for raw_line in raw_lines[start:end]:
+            if raw_line.endswith("\r\n"):
+                return "\r\n"
+            if raw_line.endswith("\n"):
+                return "\n"
+            if raw_line.endswith("\r"):
+                return "\r"
+        return "\n"
 
     # Find the last panel block (by looking for start/end fences from end to start).
     # This handles multiple panels by choosing the last one.
@@ -446,9 +471,13 @@ def _write_proposals_to_panel(
     if panel_end is None or panel_start is None:
         # Never append a loose authority-bearing checkbox. Establish the
         # smallest fenced Panel that the parser recognises instead.
-        if lines and lines[-1].strip():
-            lines.append("")
-        lines.extend(
+        eol = line_ending()
+        suffix = markdown
+        if suffix and not suffix.endswith(("\n", "\r")):
+            suffix += eol
+        if suffix and not suffix.endswith(eol * 2):
+            suffix += eol
+        return suffix + eol.join(
             [
                 "%% AI:Start %%%%",
                 "## AI-instruktion",
@@ -458,7 +487,6 @@ def _write_proposals_to_panel(
                 "%% AI:End %%%%",
             ]
         )
-        return "\n".join(lines)
 
     # Find the AI-åtgärder / AI-actions heading within the panel.
     # Look for common action section headings (Swedish and English variants).
@@ -472,9 +500,11 @@ def _write_proposals_to_panel(
 
     if actions_section_start is None:
         # No actions section found; insert before panel end fence.
-        for proposal in reversed(proposal_lines):
-            lines.insert(panel_end, proposal)
-        return "\n".join(lines)
+        insert_pos = panel_end
+        eol = line_ending(panel_start, panel_end + 1)
+        offset = line_offsets[insert_pos]
+        insertion = eol.join(proposal_lines) + eol
+        return markdown[:offset] + insertion + markdown[offset:]
 
     # Find the position to insert: after the last checkbox in the actions section,
     # before the next section heading or panel end fence.
@@ -489,10 +519,10 @@ def _write_proposals_to_panel(
             break
 
     # Insert proposals at the determined position.
-    for proposal in reversed(proposal_lines):
-        lines.insert(insert_pos, proposal)
-
-    return "\n".join(lines)
+    eol = line_ending(panel_start, panel_end + 1)
+    insertion = eol.join(proposal_lines) + eol
+    offset = line_offsets[insert_pos]
+    return markdown[:offset] + insertion + markdown[offset:]
 
 
 def _apply_note_writeback(
