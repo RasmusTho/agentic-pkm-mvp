@@ -1187,6 +1187,17 @@ Quick issue routing:
 - Go-live/startup diagnostics -> `docs/runbooks/RUNBOOK_GO_LIVE.md`
 - Prod go-live acceptance (preflight through soak, rollback rehearsal, receipt) -> `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`
 
+Native source-identity database diagnostics are opt-in and fail closed. Run the
+`app.ops.native_source_identity_diagnostics coordinate` entrypoint only with an
+immutable image and the accepted runtime's exact host source root plus exact
+container source root. The coordinator reproduces the canonical non-database
+registry settings, keeps source observation on `--network none`, and uses the
+separate volume-free read-only database witness from the
+`native-source-diagnostics` Compose profile. A diagnostic refusal never
+authorizes retry, source repair, controller loading, deployment, TEST, or PROD.
+See `docs/ENVIRONMENTS.md :: Native source-identity database diagnostics` for
+the boundary contract.
+
 ## Companion UI Entry Surfaces
 
 - Current Companion UI operator-visible entry surfaces include the server-rendered System Entry Point substrate: entry-state declarations, latency-ladder re-entry treatment, unified topbar/overlay host, Panel command palette, governed capture modal, memory review drawer, read-only receipts history modal, system map overlay, opt-in guidance layer, settings drawer, read-only commitment surfacing, and the state-gallery validation harness.

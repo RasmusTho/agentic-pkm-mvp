@@ -83,6 +83,50 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Read-only Product database witness for the count-only source-identity
+  # diagnostic.  It deliberately has no volumes: source observation remains in
+  # a separate `--network none` actor, while this actor receives a bounded
+  # private request on stdin and returns only fixed aggregate counters.  The
+  # opt-in profile prevents ordinary stack startup from creating it.
+  source-identity-db-witness:
+    profiles: ["native-source-diagnostics"]
+    labels:
+      # This actor cannot emit outbox work or participate in the scalar-runtime
+      # cutover. It is a one-shot, transaction-read-only evidence reader.
+      com.agentic-pkm.mvr05.db-role: non-client
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:-unknown}
+        BUILT_AT: ${BUILT_AT:-unknown}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}${APP_IMAGE_DIGEST_SUFFIX:-}
+    working_dir: /app
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
+    command:
+      - python
+      - -m
+      - app.ops.native_source_identity_diagnostics
+      - database-witness
+      - ${PKM_ENVIRONMENT:-dev}
+      - ${VCS_REF:-unknown}
+    environment:
+      PGOPTIONS: "-c default_transaction_read_only=on"
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
   # MVR-01B durable mechanical state producer. The channel registry uses a
   # project-scoped named volume; the ownership ledger uses one host bind shared
   # across dev/test/prod. Run as root only to establish private ownership, then
