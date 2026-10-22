@@ -4,8 +4,8 @@ Authority: Proposes the post-merge Product Runtime `dev` → `test` automation b
 Temporal class: operational
 Review cadence: before implementation and after the first ten merged candidates
 Source of truth: repository workflows/scripts plus fresh, redaction-safe runtime receipts
-Last reviewed: 2026-10-19 (#6224 pause support, repository-only; prior live receipt dates retained)
-Last verified against: `tests/deploy/test_postmerge_dev_test.py::test_kill_switch_requires_issue_and_expiry` and `::test_kill_switch_pauses_until_expiry` (#6224 repository proof); #5922, #5932 and #5950; `.github/workflows/postmerge-dev-test.yml`, `scripts/postmerge_dev_test.py`, `scripts/install_postmerge_controller.py`, native DeployPlan/RPC and digest-pin tests; [actual same-candidate native DEV/TEST receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) under #5675
+Last reviewed: 2026-10-22 (#6226 green channel-ref and linked-Issue hold support, repository-only; #6224 pause support, repository-only; prior live receipt dates retained)
+Last verified against: `tests/deploy/test_postmerge_dev_test.py::test_channel_refs_advance_only_on_green_verdicts` and `::test_dev_hold_pins_ref_and_records_candidates` (#6226 repository proof); `tests/deploy/test_postmerge_dev_test.py::test_kill_switch_requires_issue_and_expiry` and `::test_kill_switch_pauses_until_expiry` (#6224 repository proof); #5922, #5932 and #5950; `.github/workflows/postmerge-dev-test.yml`, `scripts/postmerge_dev_test.py`, `scripts/install_postmerge_controller.py`, native DeployPlan/RPC and digest-pin tests; [actual same-candidate native DEV/TEST receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) under #5675
 
 # Fast PR-to-merge with automatic dev/test delivery
 
@@ -88,7 +88,7 @@ Enactment slices (children of #6207):
 | --- | --- |
 | Controller liveness check | D6 |
 | Automatic rolling channel bug Issue — repository support in #6223; live activation retains #6170/#3347 | D3 |
-| `dev` and `test` refs advanced on green verdicts | D4 |
+| `dev` and `test` refs advanced on exact green verdicts, with linked-Issue dev hold — repository support in #6226; live activation retains #6170/#3347 | D4 |
 | Kill switch with Issue and expiry — repository support in #6224; live host changes require an owner OK on #6224; existing #6170/#3347 gates retained | D5 |
 | Pinned controller tooling — repository support in #6225; live activation retains #6170/#3347 | D7 |
 | Heavy tests on `dev` as part of the dev verdict — repository gate in #6227; prerequisite #6205 delivered; live host activation #6170 and qualification #3347 remain gated | D4 |

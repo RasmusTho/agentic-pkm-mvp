@@ -787,7 +787,7 @@ retained fields fail reporting without transmission. The main-only workflow uses
 `GITHUB_TOKEN` for Issue writes; it never receives deployment credentials or runs candidate code.
 
 The workflow validates main ancestry, the exact successful admitted workflow attempt and receipt identity,
-serializes each channel, and opens or comments on one bot-owned, channel-marked rolling bug. Later
+serializes its consumers across both channels, and opens or comments on one bot-owned, channel-marked rolling bug. Later
 green evidence comments and closes that Issue; a later failure reopens the same Issue. Candidate ordering and successful
 workflow receipts reject delayed red/green events. A terminal-evidence fingerprint in workflow
 metadata also rejects conflicting replays after a first green before any bug exists. Successful
@@ -797,6 +797,54 @@ Human-authored or other-channel Issues are not mutation targets. Generated bugs 
 readiness requires a bounded repair contract. Actions failures remain visible in their workflow run
 and never gate main merges or replay deployment. This is repository support; live activation and
 qualification retain #6170 and #3347's operator gates.
+
+Channel-ref repository support (#6226) reuses that trusted-main workflow, with a separate
+`record-channel-ref` job. The Issue job retains Contents read; only the ref job has Contents write,
+alongside Actions read and Issues read. The ref consumer admits only the repository owner's
+main-branch dispatch and reads back its exact workflow identity. It reuses the source loader to
+authenticate the candidate's successful historical build attempt, selected image job, digest and
+artifact. Candidate code, deployment credentials and a host Contents-write permission do not enter
+this boundary. The host client's approved scope remains Actions read/write, Contents read and
+Metadata read.
+
+A green dev verdict creates an absent `dev` ref or advances it with `force: false`. A green native
+test deployment may do the same for `test` only with a retained, digest-checked artifact containing
+that exact candidate's green dev receipt from a successful workflow attempt. The current dev
+acceptance validator applies to that receipt, including its heavy-test evidence. The single Actions
+concurrency group prevents simultaneous consumer effects, but does not promise dispatch order:
+reordered, cancelled or replaced requests cannot substitute for the artifact. Successful earlier
+attempts remain valid after later reporting reruns. A stale candidate, non-fast-forward move,
+foreign receipt, missing/expired evidence or incomplete history refuses the affected operation.
+`main` and `stable` are never mutation targets.
+
+For a deliberate dev-ref hold, the repository owner opens a linked Issue whose body starts with
+this exact marker and the current full `dev` SHA, followed by the technical reason:
+
+````text
+<!-- postmerge-dev-hold:v1 -->
+```json
+{"sha":"<current 40-character dev SHA>"}
+```
+Technical reason and release condition.
+````
+
+The request becomes active when a ref job reports `channel_ref: held`, the matching SHA and the
+Issue URL. If an earlier ref move wins during activation, the mismatched pin fails loudly; reconcile
+the Issue's documented pin against the actual ref before relying on the hold. An absent dev ref,
+malformed or ambiguous hold, failed Issue read or incomplete listing also refuses advancement.
+While the acknowledged hold Issue remains open, later candidates and their verdict artifacts are
+still recorded and deployments continue; this is distinct from the expiring machinery pause.
+Close the linked Issue to release the hold. The next green dev request, or a rerun of the latest
+held dev workflow, can advance the ref by fast-forward.
+
+Every ref effect requires exact readback. If a ref write succeeds before its response or receipt
+upload is lost, rerun that same Actions workflow: the exact SHA is idempotent and its green artifact
+can be published without a native deployment replay. If test ran before dev evidence was published,
+rerun the corresponding test workflow after the dev workflow succeeds. These failures remain visible
+in Actions and never gate main merges or stop newer candidates. The canonical tests execute the
+real poller, dispatch argv, CLI consumers and historical image/receipt loaders over fake GitHub/native
+transports; they establish repository support, not live ref movement or host activation. Existing
+#6170/#3347 activation and release gates remain.
 
 After a candidate's `dev` deployment commits, the repository controller runs the fixed post-merge
 heavy-test profile once: `qualify-heavy dev <operation-id>` through the same

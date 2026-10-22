@@ -121,15 +121,26 @@ def _github(path: str) -> bytes:
     return result.stdout
 
 
-def load_candidate(run_id: int) -> Candidate:
-    run = json.loads(_github(f'repos/{REPOSITORY}/actions/runs/{run_id}'))
+def load_candidate(run_id: int, *, run_attempt: int | None = None,
+                   read: Callable[[str], bytes] | None = None) -> Candidate:
+    read = read or _github
+    suffix = '' if run_attempt is None else f'/attempts/{run_attempt}'
+    run = json.loads(read(f'repos/{REPOSITORY}/actions/runs/{run_id}{suffix}'))
+    if run_attempt is not None and (type(run_attempt) is not int or run_attempt < 1
+                                    or run.get('run_attempt') != run_attempt):
+        raise CandidateRefused('source_build_refused')
     sha = validate_source_run(run, run_id)
-    jobs = json.loads(_github(f'repos/{REPOSITORY}/actions/runs/{run_id}/jobs?filter=all&per_page=100'))
+    jobs = json.loads(read(f'repos/{REPOSITORY}/actions/runs/{run_id}/jobs?filter=all&per_page=100'))
     if jobs['total_count'] > 100:
         raise CandidateRefused('build_job_listing_incomplete')
     builds = [j for j in jobs['jobs'] if j.get('name') == BUILD_JOB]
     if not builds or any(j.get('run_id') != run_id or type(j.get('run_attempt')) is not int
-                         or not 1 <= j['run_attempt'] <= run['run_attempt'] for j in builds):
+                         or j['run_attempt'] < 1 for j in builds):
+        raise CandidateRefused('build_job_identity_refused')
+    # A retained admitted attempt survives later workflow reruns. Future jobs
+    # cannot authenticate an earlier image; select only its completed history.
+    builds = [j for j in builds if j['run_attempt'] <= run['run_attempt']]
+    if not builds:
         raise CandidateRefused('build_job_identity_refused')
     attempt = max(j['run_attempt'] for j in builds)
     latest = [j for j in builds if j['run_attempt'] == attempt]
@@ -137,7 +148,7 @@ def load_candidate(run_id: int) -> Candidate:
         raise CandidateRefused('build_job_identity_refused')
     # A failed-jobs-only rerun may reuse the already-passed image job. Bind its
     # actual attempt rather than requiring an unnecessary rebuild or new commit.
-    artifacts = json.loads(_github(f'repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100'))
+    artifacts = json.loads(read(f'repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100'))
     if artifacts['total_count'] > 100:
         raise CandidateRefused('artifact_listing_incomplete')
     prefix = 'app-image-tts-engine-proof-' + sha
@@ -147,7 +158,7 @@ def load_candidate(run_id: int) -> Candidate:
     if len(matches) != 1 or matches[0].get('size_in_bytes', 1048577) > 1048576:
         raise CandidateRefused('artifact_missing_or_ambiguous')
     artifact = matches[0]
-    archive = _github(f'repos/{REPOSITORY}/actions/artifacts/{artifact["id"]}/zip')
+    archive = read(f'repos/{REPOSITORY}/actions/artifacts/{artifact["id"]}/zip')
     return validate_artifact(run, artifact, archive, build_attempt=attempt)
 
 
