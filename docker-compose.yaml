@@ -91,7 +91,9 @@ services:
   source-identity-db-witness:
     profiles: ["native-source-diagnostics"]
     labels:
-      com.agentic-pkm.mvr05.db-role: client
+      # This actor cannot emit outbox work or participate in the scalar-runtime
+      # cutover. It is a one-shot, transaction-read-only evidence reader.
+      com.agentic-pkm.mvr05.db-role: non-client
     build:
       context: .
       args:

@@ -153,6 +153,9 @@ def test_database_witness_has_no_source_mounts_and_enforces_read_only(
     service = compose["services"][diagnostics.DATABASE_WITNESS_SERVICE]
     assert "volumes" not in service
     assert service["read_only"] is True
+    assert service["labels"] == {
+        "com.agentic-pkm.mvr05.db-role": "non-client",
+    }
     assert service["environment"] == {
         "PGOPTIONS": "-c default_transaction_read_only=on",
     }

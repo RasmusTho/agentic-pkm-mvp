@@ -3251,9 +3251,15 @@ def test_fence_inventory_covers_every_enabled_db_outbox_process(tmp_path) -> Non
     discovered = {
         name
         for name, service in compose["services"].items()
-        if "db" in (service.get("depends_on") or {})
+        if (
+            "db" in (service.get("depends_on") or {})
+            and (service.get("labels") or {}).get(
+                "com.agentic-pkm.mvr05.db-role"
+            ) in {"client", "migration-runner"}
+        )
     }
     assert set(plan.db_clients) == discovered
+    assert "source-identity-db-witness" not in plan.db_clients
     assert set(plan.stopped_services) | {plan.migration_runner} == discovered
     for service_name in plan.stopped_services:
         environment = compose["services"][service_name].get("environment") or {}
