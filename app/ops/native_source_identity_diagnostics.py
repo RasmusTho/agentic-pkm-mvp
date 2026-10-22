@@ -955,8 +955,22 @@ def _prove_same_witness_image(
         input_bytes=b"",
         max_output_bytes=1024,
     ).strip()
+    configured = child_runner(
+        (*compose_prefix, "config", "--images", DATABASE_WITNESS_SERVICE),
+        input_bytes=b"",
+        max_output_bytes=1024,
+    )
+    try:
+        configured_images = configured.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        raise SourceIdentityDiagnosticRefusal("database_witness_refused") from None
+    if len(configured_images) != 1:
+        raise SourceIdentityDiagnosticRefusal("database_witness_refused")
+    witness_image = configured_images[0].strip()
+    if not witness_image or not _immutable_image_reference(witness_image):
+        raise SourceIdentityDiagnosticRefusal("database_witness_refused")
     witness_id = child_runner(
-        (*compose_prefix, "images", "--quiet", DATABASE_WITNESS_SERVICE),
+        ("docker", "image", "inspect", "--format", "{{.Id}}", witness_image),
         input_bytes=b"",
         max_output_bytes=1024,
     ).strip()
