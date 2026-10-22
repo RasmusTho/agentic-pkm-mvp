@@ -148,6 +148,12 @@ ambiguous. Review remains responsible for those cases.
   `tests/api/conftest.py::mock_product_api_routes` fixture only on those test functions. It forces
   the deterministic mock provider because compiled model routing can override `LLM_PROVIDER=mock`;
   keep selected-route health and admission tests outside this fixture. Do not make it autouse.
+- Operational caller or launcher changes must be checked as the final assembled invocation,
+  including its interpreter, cwd, configuration and import/validation boundary. Keep core
+  orchestration, public contract readers and validation real; substitute only external effect
+  ports. Cover both DEV and TEST when the affected caller supports both non-production channels,
+  including a credible refusal or partial-failure path. Apply the existing evidence-reuse and
+  stop rule in `docs/development/GOVERNANCE_PROPORTIONALITY.md`; this does not require a broader suite.
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
 
