@@ -82,6 +82,10 @@ COMPOSE_NON_AUTH_SERVICES: frozenset[str] = frozenset(
         "db",  # Postgres; authenticates with its own DSN, mints no instance principal
         "migrate",  # one-shot Alembic runner, no request path and no auth state
         "ollama",  # local model server, no #2223 gate and no auth-state write handle
+        # One-shot read-only PostgreSQL witness. It receives a schema-closed private
+        # request on stdin, has no source volume, and neither resolves nor writes the
+        # instance principal.
+        "source-identity-db-witness",
     }
 )
 

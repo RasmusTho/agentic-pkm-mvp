@@ -20,6 +20,7 @@ def _native_chains(tmp_path, monkeypatch, *, run_ids=(123,)):
 
     repository, sha = _repository(tmp_path)
     actual_run = driver.subprocess.run
+    native_command = driver._native_host_command()
     records, outcomes, native_envs, docker_envs = [], [], [], []
     active = []
 
@@ -28,10 +29,10 @@ def _native_chains(tmp_path, monkeypatch, *, run_ids=(123,)):
             docker_envs.append(options['env'])
             data = active[0].command(*argv[1:], timeout=options.get('timeout', 60))
             return SimpleNamespace(returncode=0, stdout=data)
-        if argv[1:3] != ['-m', 'app.ops.postgres_deploy_host']:
+        if argv[:len(native_command)] != native_command:
             return actual_run(argv, **options)
         native_envs.append(options['env'])
-        channel, revision = argv[3:5]
+        channel, revision = argv[len(native_command):len(native_command) + 2]
         operation_id = argv[argv.index('--operation-id') + 1]
         digest = argv[argv.index('--image-digest') + 1]
         assert '--existing-secrets-only' in argv and '--automatic' in argv
@@ -62,7 +63,8 @@ def _native_chains(tmp_path, monkeypatch, *, run_ids=(123,)):
     for run_id in run_ids:
         candidate = driver.Candidate(sha, DIGEST, run_id, 1, 456)
         assert driver.deliver(candidate, deploy=driver.native_deploy,
-                              current_main=lambda: sha, emit=outcomes.append) == 0
+                              current_main=lambda: sha, emit=outcomes.append,
+                              channels=('dev', 'test')) == 0
     return records, outcomes, native_envs, docker_envs
 
 

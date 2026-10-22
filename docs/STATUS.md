@@ -124,14 +124,18 @@ The same 2026-10-05 readback found that `ygg-prod` still reports `required_ok=fa
 
 Production remains on the current `main`-tracking deployment baseline; the `stable` ref is dormant. The Issue #5868 repository candidate adds an explicit existing-value TARS deployment mode: it validates the selected values, refuses a missing PostgreSQL password before RPC, binds the mode to the host operation journal, and performs no BWS write. Once merged, that path will not require bootstrap-only writer qualification; BWS bootstrap writes remain under #5667. This is repository-candidate evidence only and does not qualify the production caller or change live routing/deployment. Before promotion, verify the production caller binding and selected existing values, obtain candidate-bound TEST verification (or follow the governed bypass procedure), and prepare the exact release plan. Forward-only migrations require acknowledgment for that exact plan. Ollama model installation and embedding-index rebuild are separate operational steps. The live readback and decision do not claim that any of these actions occurred.
 
-### Live environment baseline (2026-08-22)
+### Current infrastructure status
 
-The Mac mini is now an Ollama/model host only. Product runtime evidence is on the new Linux/Tailscale
-hosts: `ygg-dev` is reachable but degraded, `ygg-test` is not available, and `ygg-prod` has API
-liveness but failing functional health (stale watcher/no worker heartbeat; Companion UI unavailable).
-Both new-host APIs report unknown build identity. The promotion chain is therefore not yet executable;
-the missing test host, immutable artifact identity, and authoritative deployment handoff are explicit
-follow-up gates rather than implied by local Compose or old Mac mini state.
+The observed local environment is maintained in
+[yggdrasil-infra — Current local infrastructure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md), with a 2026-10-21 read-only snapshot and
+explicit gaps. Builder Vault carries the operational handoff and private evidence locator. This is
+a descriptive status view; application deployment, release eligibility and capability acceptance
+remain with their existing owners.
+
+The August 22 baseline formerly here and the dated October 5 observations above are historical.
+Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those
+older paragraphs. Infrastructure-reference review on 2026-10-21 does not revalidate the other
+capability or acceptance claims in this document.
 
 The BWS-04 implementation (#5680) adds a supervised Linux database deployment path with selected
 host/VM secret checks, durable same-ID receipts, file-only PostgreSQL credentials, and real
@@ -1188,6 +1192,14 @@ parent validation hub #1921.
 
 ## Cognitive Expansion — activation status (2026-07-05)
 
+Last reviewed (Expansion acceptance boundary): 2026-10-21 UTC
+Last verified against (Expansion acceptance boundary): Issue #6293 candidate, `app/expansion/accept.py`,
+`tests/expansion/test_accept_promotion.py`, and the focused UAT suite; repository-only evidence.
+No live TEST UAT is claimed. The synthetic test-actor authority is the owner amendment on
+[#4826](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4826#issuecomment-6107736254);
+current TEST qualification remains unproven. #3320 tracks a separate TEST recovery/security
+decision and does not grant Expansion actor authority.
+
 This system pursues two classes of value (see `docs/COGNITIVE_PROSTHESIS_CHARTER.md` §2.1):
 **Cognitive Maintenance** (preserve cognition) and **Cognitive Expansion** (improve cognition).
 Maintenance is broadly live and test-backed. The Contextual Relevance Engine above is the first
@@ -1208,7 +1220,7 @@ truth, not a backlog.
 | Source Understanding lenses | `app/source_understanding/*` | **seam** (`/p0` route reachable, no runtime caller) | a consuming flow + admissibility |
 | Planner / next-action | `app/planner/*`, `app/orchestrator/*` | **dormant** (orchestrator imported only by CLI/smoke, not the three runtime services) | proven loop + commitment surfacing |
 | Commitment surfacing | `app/domain/commitments.py`, `app/commitments/*`, Companion workspace state/API/UI | **live read-side** (durable vault-backed commitment artifacts feed a read-only Companion projection; no mutation/transition affordance) | mutation, reminders, automatic closure, and CRE reach-out remain follow-ons |
-| Knowledge compilation / cross-note synthesis | `app/knowledge_compilation/*`, `app/reasoning/multi.py`, `app/expansion/create.py`, `app/expansion/accept.py` | **gated-active-via-contract** (EXP-3, #2996: `run_create_pass` is the first runtime caller of both `run_multi_note_reasoning` and `proposal_builders.build_compilation_draft`, activated through `app/activation/gate.py` at `proposal` authority — the gate's second proof after ASK #2026. EXP-4, #2997: governed acceptance now lands the checked-checkbox path — `app.expansion.accept.accept_draft` is the ONLY path from a staged draft to a canonical note, WriteGuard-gated with a decision-token + acceptance receipt. Output kinds: `create.overview`, `create.answer_note`, and `create.digest` (EXP-5, #2998) all share the identical staged-draft lifecycle; digests are explicit-ask only, never auto-run from a moment. The shared `ReasoningOutput` result keeps runtime-owned `success` / `empty_output` / `provider_failure` / `missing_input` outcomes explicit; degraded runs never fabricate claims or inferences, and Create records that outcome separately from deterministic source collation.) | test-channel UAT with the live (Ollama) provider before prod promotion |
+| Knowledge compilation / cross-note synthesis | `app/knowledge_compilation/*`, `app/reasoning/multi.py`, `app/expansion/create.py`, `app/expansion/accept.py` | **gated-active-via-contract** (EXP-3, #2996: `run_create_pass` is the first runtime caller of both `run_multi_note_reasoning` and `proposal_builders.build_compilation_draft`, activated through `app/activation/gate.py` at `proposal` authority — the gate's second proof after ASK #2026. EXP-4, #2997: governed acceptance now lands the checked-checkbox path — `app.expansion.accept.accept_draft` is the ONLY path from a staged draft to a canonical note, WriteGuard-gated with a decision-token + acceptance receipt. Acceptance recognizes only the single draft-ID-bound checked control in the balanced body AI panel; frontmatter, unrelated tasks, duplicate/wrong-ID controls, and literal examples do not authorize materialization. Output kinds: `create.overview`, `create.answer_note`, and `create.digest` (EXP-5, #2998) all share the identical staged-draft lifecycle; digests are explicit-ask only, never auto-run from a moment. The shared `ReasoningOutput` result keeps runtime-owned `success` / `empty_output` / `provider_failure` / `missing_input` outcomes explicit; degraded runs never fabricate claims or inferences, and Create records that outcome separately from deterministic source collation.) | test-channel UAT with the live (Ollama) provider before prod promotion |
 | Conversational Journaling draft (`journal_draft_proposal`) | `app/journaling/draft.py`, `app/activation/journal_draft.py` | **gated-active-via-contract** (JRNL-03/#3349: a guarded, serialized no-follow transaction stages one proposal per day under `<system_folder>/drafts/journal/`; every transcript/day-context source retains its actual review posture and must independently reach cited-proposal admission (`revised` stays read-only; rejected/unknown is excluded) before cognition or staging. UUID-addressable cognition consumes the runtime-owned explicit reasoning outcome and bounded degradation reason, never infers success from counts, and never fabricates claims or synthesis; deterministic cited collation remains visibly separate. The content-free activation receipt is embedded atomically with the draft. The canonical daily note is never written; accepted-entry follow-ups route to a separate addendum candidate.) | JRNL-04 owns explicit human acceptance/promotion; test-channel UAT before prod promotion |
 | Connect — relationship surfacing (`connection_proposal`) | `app/expansion/connect.py`, `app/curation/findings.py`, `app/curation/proposal_writer.py` | **gated-active-via-contract** (EXP-1/#2994, EXP-2/#2995, EXP-5/#2998: `run_connect_pass` proposes `connect.related_unlinked`/`connect.thematic_link` findings and `find_cluster_emergence` proposes `connect.cluster_emergence` findings — all candidate-only, materialized as unchecked panel checkboxes via the G2 writer, never auto-applied. An accepted `connect.cluster_emergence` finding hands off to a `create.overview` request via `cluster_emergence_to_create_request`, still through the full staged-draft lifecycle) — moved dormant → gated-active as its EXP-6 (#2998) activation-gate record (`app/activation/expansion_records.py::evaluate_connection_proposal_activation`) went green | test-channel UAT before prod promotion |
 | Create — synthesized outputs (`synthesis_note_proposal`) | `app/expansion/create.py`, `app/expansion/accept.py`, `app/activation/expansion_records.py` | **gated-active-via-contract** — moved dormant → gated-active as its EXP-6 (#2998) activation-gate record (`evaluate_synthesis_note_proposal_activation`) went green; a regressed precondition on either Expansion record yields blocked-with-reason, never a silent run (`expansion_requires_activation_record`) | test-channel UAT before prod promotion |

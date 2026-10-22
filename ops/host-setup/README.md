@@ -1,21 +1,23 @@
-# Yggdrasil Ollama host setup
+# Legacy optional Ollama host setup
 
 State: Legacy host-setup reference; product runtime deployment is owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`.
 
-**Current boundary (2026-08-22): the Mac mini is Ollama-only.** Do not install or run the Yggdrasil
-API, database, worker, watcher, Companion UI, or gateway on it. Product runtime belongs on the new
-Linux/Tailscale `ygg-dev`, `ygg-test`, and `ygg-prod` hosts. The playbooks below predate that split and
-must not be treated as a live deployment procedure until they are reconciled with the new host handoff.
+Reference review: 2026-10-21. [The infrastructure repository's current status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+owns observed host roles and services. The old Ollama-only description of the entire Mac is
+superseded; Demerzel also provides model execution, control and client services. These legacy
+playbooks retain only their bounded optional-Ollama setup scope. They do not install or activate
+the Product API, database, worker, watcher, Companion UI or gateway. Product channel deployment
+remains governed by the application deployment contract.
 
-The remaining supported purpose of this setup is to provide optional Ollama capacity to the product
-runtime over the private Tailscale network.
+The purpose of this legacy setup is optional Ollama capacity over its explicitly configured
+private route. It is not the current Model Access VLAN mTLS setup or a complete host inventory.
 
 ```
             Tailscale (private, MagicDNS)
   MacBook Air ──────── ygg-dev / ygg-test / ygg-prod
   thin client          Linux product runtime hosts
        │                         │
-       └──── Tailscale ──── Mac mini Ollama-only
+       └──── Tailscale ──── optional Mac mini Ollama service
                               (optional Gaming PC Ollama)
 ```
 
@@ -43,7 +45,7 @@ deployed and verified through the governed deployment handoff.
 
 | Machine | Role | Installs |
 |---|---|---|
-| `mac-mini/` | Ollama-only model host | Ollama (`nomic-embed-text` + `llama3.1:8b`); no product runtime or gateway |
+| `mac-mini/` | Legacy optional Ollama setup scope | Ollama (`nomic-embed-text` + `llama3.1:8b`); this playbook installs no product runtime or gateway |
 | `gaming-pc/` | burst inference | Ollama (`gpt-oss:20b`), `gpu-warden` (Scheduled Task) |
 | `macbook-air/` | thin client | nothing — Tailscale + Screen Sharing / Moonlight |
 
@@ -139,9 +141,9 @@ filesystem repair, weakened barriers/fsync, or upgrades as readiness recovery.
 
 ## How the routing works
 
-- The current Linux/Tailscale runtime binds to one explicit Ollama endpoint. The
-  dedicated Ollama host provides model service only; it does not run the Yggdrasil
-  API, watcher, or an `llm-gateway`.
+- This legacy optional-Ollama setup uses one explicit endpoint. Its model-service scope does not
+  describe all services currently running on the Mac; use the infrastructure status view above.
+  It does not install the Product API, watcher or an `llm-gateway`.
 - Keep the embedding model identity stable. A runtime change of embedding provider
   or model requires the repository's explicit index-rebuild decision; it is not an
   automatic routing fallback.

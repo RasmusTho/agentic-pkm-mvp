@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -12,9 +15,12 @@ from app.briefing import (
     BriefingReadError,
     compose_briefing,
     load_briefing,
+    prepare_briefing_identity_migration,
 )
 from app.domain.commitments import CommitmentRecord
 from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.profile_authority import ProfileIdentityRecord
+from app.knowledge.profile_authority_store import ProfileAuthorityStore
 from app.relevance.schema import (
     Moment,
     MomentNeed,
@@ -24,6 +30,7 @@ from app.relevance.schema import (
     SurfacedRef,
 )
 from app.services.commitment_persistence import commitment_artifact_path, persist_commitment
+from app.services.note_uuid import ensure_note_uuid, resolve_read_only_derived_uuid
 from app.vault.manager import VaultContext
 from app.vault.markdown_settings import render_markdown_settings
 from app.write_guard import WriteGuard, WritesBlockedError
@@ -837,6 +844,260 @@ def test_load_briefing_keeps_schema_v1_artifacts_readable(
     note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
     assert note is not None
     assert note.sections["calendar_episodes"].items == ()
+
+
+def test_daily_briefing_uses_deterministic_read_only_derived_uuid(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    expected = resolve_read_only_derived_uuid(target, vault_root=root)
+    rendered = target.read_text(encoding="utf-8")
+    frontmatter = yaml.safe_load(rendered.split("---", 2)[1])
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+
+    assert frontmatter["uuid"] == expected
+    assert note is not None and note.uuid == expected
+    assert ensure_note_uuid(target, vault_root=root) == expected
+    assert target.read_text(encoding="utf-8") == rendered
+
+
+def test_daily_briefing_loader_accepts_legacy_bytes_and_validates_declared_uuid(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    from app.briefing import compose as compose_module
+
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None and note.uuid is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+
+    loaded = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert loaded is not None and loaded.uuid is None
+
+    invalid = yaml.safe_load(legacy.split("---", 2)[1])
+    invalid["uuid"] = "00000000-0000-4000-8000-000000000001"
+    target.write_text(
+        "---\n" + yaml.safe_dump(invalid, sort_keys=False) + "---" + legacy.split("---", 2)[2],
+        encoding="utf-8",
+    )
+    with pytest.raises(BriefingReadError):
+        load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_daily_briefing_identity_migration_preserves_v1_and_v2_semantics(
+    vault: tuple[Path, VaultContext], schema_version: int
+) -> None:
+    from app.briefing import compose as compose_module
+
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None
+    order = compose_module._V1_SECTION_ORDER if schema_version == 1 else compose_module.SECTION_ORDER
+    legacy = compose_module._render_note(
+        replace(note, uuid=None),
+        schema_version=schema_version,
+        section_order=order,
+    )
+    target = _target(root)
+    target.write_text(legacy, encoding="utf-8")
+
+    proposal = prepare_briefing_identity_migration(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+    )
+    assert proposal is not None
+    before_fm = yaml.safe_load(legacy.split("---", 2)[1])
+    after_fm = yaml.safe_load(proposal.content.split("---", 2)[1])
+    assert after_fm.pop("uuid") == resolve_read_only_derived_uuid(target, vault_root=root)
+    assert after_fm == before_fm
+    assert proposal.content.split("---", 2)[2] == legacy.split("---", 2)[2]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("artifact_class", "profile"),
+        ("agent_maintained", False),
+        ("briefing_date", "2026-07-09"),
+        ("schema_version", 999),
+        ("uuid", "00000000-0000-4000-8000-000000000001"),
+    ],
+)
+def test_daily_briefing_identity_migration_refuses_unowned_or_unqualified_sources(
+    vault: tuple[Path, VaultContext], field: str, value: object
+) -> None:
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    content = target.read_text(encoding="utf-8")
+    frontmatter = yaml.safe_load(content.split("---", 2)[1])
+    frontmatter[field] = value
+    if field != "uuid":
+        frontmatter.pop("uuid", None)
+    changed = "---\n" + yaml.safe_dump(frontmatter, sort_keys=False) + "---" + content.split("---", 2)[2]
+    target.write_text(changed, encoding="utf-8")
+
+    with pytest.raises(BriefingReadError):
+        prepare_briefing_identity_migration(
+            vault_context=context,
+            for_date=BRIEFING_DATE,
+        )
+    assert target.read_text(encoding="utf-8") == changed
+
+
+def test_daily_briefing_identity_migration_refuses_profile_authority_without_lock_mutation(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    from app.briefing import compose as compose_module
+
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    note_rel_path = target.relative_to(root).as_posix()
+    expected_uuid = resolve_read_only_derived_uuid(target, vault_root=root)
+    store = ProfileAuthorityStore(root, profile_note_id=expected_uuid)
+    store.initialize(
+        ProfileIdentityRecord(
+            event_id="daily-briefing-profile-identity",
+            vault_id="test-vault",
+            profile_note_id=expected_uuid,
+            note_path=note_rel_path,
+            initial_content_digest=hashlib.sha256(legacy.encode()).hexdigest(),
+        )
+    )
+    store.lock_path.unlink()
+
+    with pytest.raises(BriefingReadError, match="authority-bound"):
+        prepare_briefing_identity_migration(
+            vault_context=context,
+            for_date=BRIEFING_DATE,
+        )
+
+    assert target.read_text(encoding="utf-8") == legacy
+    assert not store.lock_path.exists()
+
+
+def test_daily_briefing_identity_migration_refuses_symlinked_dated_locator(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    from app.briefing import compose as compose_module
+
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    foreign = root / "foreign.md"
+    foreign.write_text(legacy, encoding="utf-8")
+    target.unlink()
+    target.symlink_to(foreign)
+
+    with pytest.raises(BriefingReadError, match="path is incompatible"):
+        prepare_briefing_identity_migration(
+            vault_context=context,
+            for_date=BRIEFING_DATE,
+        )
+
+    assert foreign.read_text(encoding="utf-8") == legacy
+    assert target.is_symlink()
+
+
+def test_daily_briefing_identity_migration_refuses_unreadable_profile_authority(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    from app.briefing import compose as compose_module
+
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    store = ProfileAuthorityStore(root, profile_note_id=None)
+    store.directory.mkdir(parents=True, exist_ok=True)
+    lock_existed = store.lock_path.exists()
+    store.path.write_text("not-jsonl\n", encoding="utf-8")
+
+    with pytest.raises(BriefingReadError, match="authority cannot be verified"):
+        prepare_briefing_identity_migration(
+            vault_context=context,
+            for_date=BRIEFING_DATE,
+        )
+
+    assert target.read_text(encoding="utf-8") == legacy
+    assert store.lock_path.exists() is lock_existed
+
+
+def test_daily_briefing_identity_migration_refuses_nonregular_profile_authority(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    from app.briefing import compose as compose_module
+
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    store = ProfileAuthorityStore(root, profile_note_id=None)
+    store.directory.mkdir(parents=True, exist_ok=True)
+    lock_existed = store.lock_path.exists()
+    os.mkfifo(store.path, mode=0o600)
+
+    with pytest.raises(BriefingReadError, match="authority cannot be verified"):
+        prepare_briefing_identity_migration(
+            vault_context=context,
+            for_date=BRIEFING_DATE,
+        )
+
+    assert target.read_text(encoding="utf-8") == legacy
+    assert store.lock_path.exists() is lock_existed
 
 
 @pytest.mark.parametrize(

@@ -9,10 +9,9 @@ keeps ingest uuid healing from rewriting it, so the composer stays its only writ
 
 from __future__ import annotations
 
-import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, TypeAlias, get_args
@@ -36,11 +35,18 @@ from app.episodes.notes import EPISODE_NOTES_DIR, parse_validated_episode_note
 from app.episodes.schema import EpisodeSchemaValidationError
 from app.episodes.stream_registry import STATUS_LIVE, load_registry
 from app.knowledge.contracts import WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.profile_authority import ProfileAuthorityContractError
+from app.knowledge.profile_authority_store import (
+    ProfileAuthorityStore,
+    is_profile_note_source_read_only,
+)
 from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
 from app.receipts.decision_receipt_log import iter_decision_receipts
 from app.relevance.now_surface import InvalidMomentSourceRecord, collect_now_moments
 from app.relevance.schema import NeedBasis, URGENCY_ORDER
 from app.services.commitment_persistence import commitment_artifact_path, load_commitments
+from app.services.note_uuid import resolve_read_only_derived_uuid
 from app.vault.manager import VaultContext, iter_vault_markdown_files
 from app.vault.paths import get_vault_system_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
@@ -140,6 +146,16 @@ class BriefingNote:
     briefing_date: date
     degraded_sections: tuple[SectionName, ...]
     sections: dict[SectionName, BriefingSection]
+    uuid: str | None = None
+
+
+@dataclass(frozen=True)
+class BriefingIdentityMigration:
+    """One exact-version proposal for adding composer-owned identity metadata."""
+
+    note_rel_path: str
+    expected_version: str
+    content: str
 
 
 def compose_briefing(
@@ -191,6 +207,10 @@ def compose_briefing(
         briefing_date=for_date,
         degraded_sections=degraded,
         sections=sections,
+        uuid=resolve_read_only_derived_uuid(
+            vault_root / note_rel_path,
+            vault_root=vault_root,
+        ),
     )
     content = _render_note(note)
 
@@ -222,7 +242,13 @@ def load_briefing(
 
     vault_root = _vault_root(vault_context)
     system_dir = get_vault_system_dir_rel(vault_root)
-    target = briefing_note_path(vault_context=vault_context, for_date=for_date)
+    target, expected_uuid = _briefing_identity_target(
+        vault_root=vault_root,
+        note_rel_path=briefing_note_path(
+            vault_context=vault_context,
+            for_date=for_date,
+        ).relative_to(vault_root).as_posix(),
+    )
     if not target.exists():
         return None
     try:
@@ -233,6 +259,7 @@ def load_briefing(
             expected_date=for_date,
             vault_root=vault_root,
             system_dir=system_dir,
+            expected_uuid=expected_uuid,
         )
         # Canonical re-render makes frontmatter and body one tamper-evident projection.
         schema_version = frontmatter.get("schema_version")
@@ -259,6 +286,87 @@ def briefing_note_path(*, vault_context: VaultContext, for_date: date) -> Path:
     return vault_root / system_dir / BRIEFINGS_DIR_NAME / f"{for_date.isoformat()}.md"
 
 
+def prepare_briefing_identity_migration(
+    *,
+    vault_context: VaultContext,
+    for_date: date,
+) -> BriefingIdentityMigration | None:
+    """Prepare an identity-only CAS proposal from canonical legacy bytes.
+
+    The stored structured projection is the sole section authority.  This does
+    not re-read or recompute any historical source section, change schema, or
+    publish bytes.  ``None`` means the exact deterministic identity is already
+    present.
+    """
+
+    vault_root = _vault_root(vault_context)
+    system_dir = get_vault_system_dir_rel(vault_root)
+    target = briefing_note_path(vault_context=vault_context, for_date=for_date)
+    note_rel_path = target.relative_to(vault_root).as_posix()
+    target, expected_uuid = _briefing_identity_target(
+        vault_root=vault_root,
+        note_rel_path=note_rel_path,
+    )
+    if not target.exists():
+        raise BriefingReadError("briefing note is absent")
+    content, expected_version = read_note_text_with_version(target)
+    frontmatter = _load_frontmatter(content)
+    note = _note_from_frontmatter(
+        frontmatter,
+        expected_date=for_date,
+        vault_root=vault_root,
+        system_dir=system_dir,
+        expected_uuid=expected_uuid,
+    )
+    schema_version = frontmatter.get("schema_version")
+    if schema_version not in (1, BRIEFING_SCHEMA_VERSION):
+        raise BriefingReadError("briefing identity or schema is incompatible")
+    section_order = _V1_SECTION_ORDER if schema_version == 1 else SECTION_ORDER
+    if content != _render_note(
+        note,
+        schema_version=schema_version,
+        section_order=section_order,
+    ):
+        raise BriefingReadError("briefing body disagrees with structured content")
+    if note.uuid is not None:
+        return None
+    migrated = replace(note, uuid=expected_uuid)
+    return BriefingIdentityMigration(
+        note_rel_path=note_rel_path,
+        expected_version=expected_version,
+        content=_render_note(
+            migrated,
+            schema_version=schema_version,
+            section_order=section_order,
+        ),
+    )
+
+
+def migrate_briefing_identity(
+    *,
+    vault_context: VaultContext,
+    for_date: date,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+) -> WriteReceipt | None:
+    """Publish one prepared identity-only migration with expected-version CAS."""
+
+    proposal = prepare_briefing_identity_migration(
+        vault_context=vault_context,
+        for_date=for_date,
+    )
+    if proposal is None:
+        return None
+    vault_root = _vault_root(vault_context)
+    write_guard.assert_writes_allowed(BRIEFING_WRITE_ACTION)
+    return _atomic_write(
+        vault_root=vault_root,
+        note_rel_path=proposal.note_rel_path,
+        content=proposal.content,
+        write_guard=write_guard,
+        expected_version=proposal.expected_version,
+    )
+
+
 def _atomic_write(
     *,
     vault_root: Path,
@@ -274,8 +382,13 @@ def _atomic_write(
     target and is returned unchanged after ``os.replace``.
     """
 
-    target = (vault_root / note_rel_path).resolve()
-    target.relative_to(vault_root)
+    try:
+        target, _expected_uuid = _briefing_identity_target(
+            vault_root=vault_root,
+            note_rel_path=note_rel_path,
+        )
+    except BriefingReadError as exc:
+        raise KnowledgeWriteConflict("briefing write target is not eligible") from exc
 
     # Preserve the port's independent guard-at-seam check without allowing a
     # second live health decision after filesystem mutation. The caller check in
@@ -297,6 +410,44 @@ def _atomic_write(
         bootstrap_actions=write_guard.bootstrap_actions,
     )
     adapter_guard.assert_writes_allowed(BRIEFING_WRITE_ACTION)
+    if expected_version is None:
+        try:
+            target, expected_uuid = _briefing_path_target(
+                vault_root=vault_root,
+                note_rel_path=note_rel_path,
+            )
+            store = ProfileAuthorityStore(vault_root, profile_note_id=None)
+            with store.locked_source_match(
+                note_rel_path,
+                expected_uuid,
+            ) as profile_bound:
+                _briefing_path_target(
+                    vault_root=vault_root,
+                    note_rel_path=note_rel_path,
+                )
+                if profile_bound:
+                    raise BriefingReadError(
+                        "briefing identity is authority-bound elsewhere"
+                    )
+                receipt = write_note_relative(
+                    note_rel_path,
+                    content,
+                    vault_root=vault_root,
+                    action=BRIEFING_WRITE_ACTION,
+                    write_guard=adapter_guard,
+                    create_once=True,
+                )
+                if receipt.outcome != "written":
+                    raise KnowledgeWriteConflict(
+                        "briefing target was created concurrently",
+                        receipt=receipt,
+                    )
+                return receipt
+        except (BriefingReadError, ProfileAuthorityContractError, OSError) as exc:
+            raise KnowledgeWriteConflict(
+                "briefing write target is not eligible"
+            ) from exc
+
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         dir=target.parent,
@@ -311,21 +462,92 @@ def _atomic_write(
             action=BRIEFING_WRITE_ACTION,
             write_guard=adapter_guard,
         )
-        staged_file = staging_root / note_rel_path
-        if expected_version is not None:
-            # The private stage proves the complete proposal exists before the
-            # canonical expected-version-aware path performs its atomic exchange.
-            # The canonical path rechecks the target and preserves it on conflict.
-            return write_note_relative(
-                note_rel_path,
-                content,
+        # The private stage proves the complete proposal exists before the
+        # canonical expected-version-aware path performs its atomic exchange.
+        # The canonical path rechecks the target and preserves it on conflict.
+        try:
+            target, expected_uuid = _briefing_path_target(
                 vault_root=vault_root,
-                action=BRIEFING_WRITE_ACTION,
-                write_guard=write_guard,
-                expected_version=expected_version,
+                note_rel_path=note_rel_path,
             )
-        os.replace(staged_file, target)
-        return receipt
+            store = ProfileAuthorityStore(vault_root, profile_note_id=None)
+            with store.locked_source_match(
+                note_rel_path,
+                expected_uuid,
+            ) as profile_bound:
+                target, _expected_uuid = _briefing_path_target(
+                    vault_root=vault_root,
+                    note_rel_path=note_rel_path,
+                )
+                if profile_bound:
+                    raise BriefingReadError("briefing identity is authority-bound elsewhere")
+                return write_note_relative(
+                    note_rel_path,
+                    content,
+                    vault_root=vault_root,
+                    action=BRIEFING_WRITE_ACTION,
+                    write_guard=write_guard,
+                    expected_version=expected_version,
+                )
+        except (BriefingReadError, ProfileAuthorityContractError) as exc:
+            raise KnowledgeWriteConflict("briefing write target is not eligible") from exc
+
+
+def _briefing_identity_target(
+    *,
+    vault_root: Path,
+    note_rel_path: str,
+) -> tuple[Path, str]:
+    """Bind one lexical briefing locator to non-Profile, non-aliased identity."""
+
+    target, expected_uuid = _briefing_path_target(
+        vault_root=vault_root,
+        note_rel_path=note_rel_path,
+    )
+    try:
+        profile_bound = is_profile_note_source_read_only(
+            vault_root,
+            note_rel_path,
+            expected_uuid,
+        )
+    except ProfileAuthorityContractError as exc:
+        raise BriefingReadError("briefing authority cannot be verified") from exc
+    if profile_bound:
+        raise BriefingReadError("briefing identity is authority-bound elsewhere")
+    return target, expected_uuid
+
+
+def _briefing_path_target(
+    *,
+    vault_root: Path,
+    note_rel_path: str,
+) -> tuple[Path, str]:
+    """Bind one lexical briefing locator without consulting Profile state."""
+
+    relative = PurePosixPath(note_rel_path)
+    if (
+        not note_rel_path
+        or relative.is_absolute()
+        or relative.as_posix() != note_rel_path
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise BriefingReadError("briefing identity or path is incompatible")
+    target = vault_root.joinpath(*relative.parts)
+    current = vault_root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise BriefingReadError("briefing identity or path is incompatible")
+    if target.resolve(strict=False) != target:
+        raise BriefingReadError("briefing identity or path is incompatible")
+    current = vault_root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise BriefingReadError("briefing identity or path is incompatible")
+    if target.resolve(strict=False) != target:
+        raise BriefingReadError("briefing identity or path is incompatible")
+    return target, resolve_read_only_derived_uuid(target, vault_root=vault_root)
 
 
 def _vault_root(context: VaultContext) -> Path:
@@ -622,6 +844,8 @@ def _render_note(
             name: _section_to_mapping(note.sections[name]) for name in section_order
         },
     }
+    if note.uuid is not None:
+        frontmatter["uuid"] = note.uuid
     body = [
         f"# Daily Briefing — {note.briefing_date.isoformat()}",
         "",
@@ -742,6 +966,7 @@ def _note_from_frontmatter(
     expected_date: date,
     vault_root: Path,
     system_dir: str,
+    expected_uuid: str | None = None,
 ) -> BriefingNote:
     schema_version = frontmatter.get("schema_version")
     if type(schema_version) is not int or schema_version not in (1, BRIEFING_SCHEMA_VERSION):
@@ -760,6 +985,16 @@ def _note_from_frontmatter(
         for key, value in required_identity.items()
     ):
         raise BriefingReadError("briefing identity or schema is incompatible")
+    declared_uuid: str | None = None
+    if "uuid" in frontmatter:
+        raw_uuid = frontmatter.get("uuid")
+        if (
+            expected_uuid is None
+            or not isinstance(raw_uuid, str)
+            or raw_uuid != expected_uuid
+        ):
+            raise BriefingReadError("briefing identity or schema is incompatible")
+        declared_uuid = raw_uuid
     degraded_raw = frontmatter.get("degraded_sections")
     sections_raw = frontmatter.get("sections")
     if not isinstance(degraded_raw, list) or not isinstance(sections_raw, dict):
@@ -805,6 +1040,7 @@ def _note_from_frontmatter(
         briefing_date=expected_date,
         degraded_sections=degraded,
         sections=sections,
+        uuid=declared_uuid,
     )
 
 

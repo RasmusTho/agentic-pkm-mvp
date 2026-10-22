@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import sys
 from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -196,6 +197,80 @@ def test_registry_plan_refuses_policy_source_missing_from_fresh_observations(
     )
     with pytest.raises(SourceIdentityPersistenceRefusal, match="source_context_refused"):
         persistence._registry_plan(root)
+
+
+def test_registry_plan_is_physically_read_only_with_existing_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.instance import settings_rebind
+    from app.instance.instance_state import InstanceStateLayout
+    from app.instance.runtime import InstanceRegistryRuntime
+    from app.instance.settings_rebind import _install_dormant_settings_rebind
+    from app.instance.vault_registry import VaultRegistration, VaultRegistryStore
+    from app.ops import native_source_identity_persistence as persistence
+    from app.watcher import registry
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    root = tmp_path / "vault"
+    initialize_test_vault(root)
+    source = root / "source.md"
+    source.write_text("source", encoding="utf-8")
+    config_path = tmp_path / "watchers.yaml"
+    config_path.write_text(
+        "watchers:\n  - name: notes\n    scope_glob: '*.md,**/*.md'\n"
+        "    emit_event: ingest.vault.changed\n",
+        encoding="utf-8",
+    )
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "instance-state", "dev"),
+        tmp_path / "ownership",
+    )
+    runtime.registry.register(
+        VaultRegistration(
+            vault_binding_id="binding-dev", ref=f"path:{root}", path=str(root),
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    _install_dormant_settings_rebind(
+        runtime.registry, binding_id="binding-dev",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    for key, value in {
+        "WATCHER_ENABLE": "1", "WATCHER_VAULT_PATH": str(root),
+        "WATCHER_SCOPE_GLOB": "*.md,**/*.md",
+        "WATCHER_STATE_DIR": str(tmp_path / "watcher-state"),
+        "INSTANCE_VAULT_REGISTRY_PATH": str(runtime.registry.path),
+        "PKM_SETTINGS_PROFILE": "lab",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(registry, "DEFAULT_REGISTRY_CONFIG_PATH", config_path)
+    original_open = settings_rebind.os.open
+    ingress = runtime.registry.path.parent / "settings-rebind-ingress.lock"
+
+    def guarded_open(path, flags, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if Path(path) == ingress:
+            assert not flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(settings_rebind.os, "open", guarded_open)
+    monkeypatch.setattr(
+        VaultRegistryStore, "load",
+        lambda _self: pytest.fail("production read-only policy used mutating load"),
+    )
+    before = {
+        path.name: path.read_bytes() for path in runtime.registry.path.parent.iterdir()
+        if path.is_file()
+    }
+    policy, observations = persistence._registry_plan(root)
+    after = {
+        path.name: path.read_bytes() for path in runtime.registry.path.parent.iterdir()
+        if path.is_file()
+    }
+    assert policy.enabled is True and policy.root == root
+    assert source in policy.sources
+    assert any(observation.path == source for observation in observations)
+    assert before == after
 
 
 def test_registry_postwrite_eligibility_is_complete_and_content_free(
@@ -1589,7 +1664,7 @@ def test_candidate_helper_refuses_image_default_for_installed_unset(
         )
 
 
-def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
+def test_source_identity_runtime_snapshot_handles_multiline_project_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.ops import postgres_deploy_linux as linux
@@ -1646,22 +1721,39 @@ def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
         channel="dev", root=tmp_path, uid=501, gid=20,
         password_file=tmp_path / "password",
     ))
+    project_environment: dict[str, str] = {}
+    probe_response_override: str | None = None
 
     def command(argv, **_kwargs):
         if argv[1:3] == ["ps", "--all"]:
             return "\n".join(row["Id"] for row in rows)
         if argv[1] == "compose":
-            if "--environment" in argv:
-                project = "multiline-continuation-without-assignment\n"
-                if "OPTIONAL_PROVIDER:" in (
-                    tmp_path / "config/deploy/dev.env"
-                ).read_text():
-                    project = "OPTIONAL_PROVIDER=project-default\n"
-                return project
+            if "-" in argv:
+                assert argv[argv.index("-") - 1] == "-f"
+                config_index = argv.index("config")
+                assert argv[config_index:config_index + 3] == [
+                    "config", "--format", "json",
+                ]
+                probe = json.loads(_kwargs["input_text"])
+                requested = probe[
+                    "x-pkm-source-project-environment-presence"
+                ]
+                assert requested == {
+                    "OPTIONAL_PROVIDER": "${OPTIONAL_PROVIDER+present}",
+                }
+                if probe_response_override is not None:
+                    return probe_response_override
+                return json.dumps({
+                    "x-pkm-source-project-environment-presence": {
+                        key: "present" if key in project_environment else ""
+                        for key in requested
+                    },
+                })
             resolved = {
                 entry.split("=", 1)[0]: entry.split("=", 1)[1]
                 for entry in rows[0]["Config"]["Env"]
-                if not entry.startswith(("VCS_REF=", "BUILT_AT="))
+                if "=" in entry
+                and not entry.startswith(("VCS_REF=", "BUILT_AT="))
             }
             runtime = (tmp_path / "tmp/runtime.env").read_text()
             for key in ("LLM_FORCE_PROVIDER", "LLM_FORCE_MODEL"):
@@ -1684,14 +1776,42 @@ def test_runtime_snapshot_fences_stale_active_capture_and_model_drift(
     assert "BUILT_AT" not in dict(before.child_environment)
     assert before.unset_environment == ()
     rows[0]["Config"]["Env"].append("OPTIONAL_PROVIDER")
-    pin_path = tmp_path / "config/deploy/dev.env"
-    original_pin = pin_path.read_text()
-    pin_path.write_text(original_pin + "OPTIONAL_PROVIDER: project-default\n")
+    project_environment["UNRELATED_MULTILINE"] = (
+        "first line\nOPTIONAL_PROVIDER=lookalike"
+    )
+    multiline = effects.source_identity_runtime_snapshot(
+        selected, require_running_capture=True,
+    )
+    assert multiline.unset_environment == ("OPTIONAL_PROVIDER",)
+    project_environment["OPTIONAL_PROVIDER"] = ""
     with pytest.raises(linux.PostgresDeployError):
         effects.source_identity_runtime_snapshot(
             selected, require_running_capture=True,
         )
-    pin_path.write_text(original_pin)
+    project_environment["OPTIONAL_PROVIDER"] = "first line\nKEY_LIKE=second"
+    with pytest.raises(linux.PostgresDeployError):
+        effects.source_identity_runtime_snapshot(
+            selected, require_running_capture=True,
+        )
+    project_environment.clear()
+    invalid_probe_responses = (
+        '{"x-pkm-source-project-environment-presence":'
+        '{"OPTIONAL_PROVIDER":"present","OPTIONAL_PROVIDER":""}}',
+        '{"x-pkm-source-project-environment-presence":{},'
+        '"x-pkm-source-project-environment-presence":'
+        '{"OPTIONAL_PROVIDER":""}}',
+        '{"x-pkm-source-project-environment-presence":{}}',
+        '{"x-pkm-source-project-environment-presence":'
+        '{"OPTIONAL_PROVIDER":"unexpected"}}',
+        '{"x-pkm-source-project-environment-presence":'
+        '{"OPTIONAL_PROVIDER":[]}}',
+    )
+    for probe_response_override in invalid_probe_responses:
+        with pytest.raises(linux.PostgresDeployError):
+            effects.source_identity_runtime_snapshot(
+                selected, require_running_capture=True,
+            )
+    probe_response_override = None
     rows[0]["Config"]["Env"].remove("OPTIONAL_PROVIDER")
     (tmp_path / "tmp/runtime.env").write_text(
         "LLM_PROVIDER=ollama\n"
@@ -2460,8 +2580,15 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
         events.append(action)
         environment = kwargs["env"]
         if action == "config":
-            if "--environment" in argv:
-                return "WATCHER_RUNTIME_ENV_FILE=./tmp/runtime.env\n"
+            if "-" in argv:
+                requested = json.loads(kwargs["input_text"])[
+                    "x-pkm-source-project-environment-presence"
+                ]
+                return json.dumps({
+                    "x-pkm-source-project-environment-presence": {
+                        key: "" for key in requested
+                    },
+                })
             resolved = {key: environment[key] for key in installed}
             return json.dumps({"services": {"api": {"environment": resolved}}})
         if action != "run":

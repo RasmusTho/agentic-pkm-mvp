@@ -751,12 +751,17 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "addition to the port's own guard (#2807)."
     ),
     ("app/briefing/compose.py", "_atomic_write", 1): (
+        "guarded_by_caller: the canonical first-write-wins briefing publication "
+        "receives the cached caller guard/action under the Profile-authority fence, "
+        "and the create-once port asserts that guard before I/O (#6301)."
+    ),
+    ("app/briefing/compose.py", "_atomic_write", 2): (
         "guarded_by_caller: compose_briefing asserts write_guard."
         "assert_writes_allowed(BRIEFING_WRITE_ACTION) before the private atomic "
         "staging directory is created, and passes the same guard/action through "
         "to the port's own guard (#3315)."
     ),
-    ("app/briefing/compose.py", "_atomic_write", 2): (
+    ("app/briefing/compose.py", "_atomic_write", 3): (
         "guarded_by_caller: the canonical expected-version-aware rewrite in "
         "_atomic_write receives the same guard/action after the complete private "
         "stage is prepared, and the port asserts that guard before its atomic "
@@ -924,6 +929,9 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
 # WriteGuard census above: create-once is a producer contract, while the
 # guard classification proves only that the shared seam is protected.
 WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
+    ("app/briefing/compose.py", "_atomic_write", 1): (
+        "create_once: deterministic dated Daily Briefing preserves a concurrent first writer."
+    ),
     ("app/agent_memory/materialization.py", "materialize_promoted_memory", 1): (
         "create_once: deterministic promoted-memory artifact; retry/recovery logic owns idempotency."
     ),

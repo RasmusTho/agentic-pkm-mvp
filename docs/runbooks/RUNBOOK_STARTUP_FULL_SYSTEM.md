@@ -8,11 +8,13 @@ Reading note:
 - not the full target-state architecture,
 - and not a claim that the current compose/runtime wiring is the permanent system decomposition.
 
-## New-host boundary (verified 2026-08-22)
+## Local fallback and current infrastructure
 
 This runbook's `make` and Compose commands operate the local fallback runtime. They do not deploy or
-verify the new Linux/Tailscale hosts. The Mac mini is reserved for Ollama/model serving only. Do not
-use the old Mac mini `pkm-*` containers, or a local Compose health check, as evidence for promotion to
+verify the Linux channel hosts. Reference review, 2026-10-21: use
+[yggdrasil-infra current status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+for the dated Macs, VM roles and observed services; the former Ollama-only Mac description is
+superseded. Do not use retained Mac mini `pkm-*` containers, or a local Compose health check, as evidence for promotion to
 the new `ygg-dev`, `ygg-test`, or `ygg-prod` runtime. Promotion requires the exact-host deployment
 handoff and a durable test verification receipt.
 

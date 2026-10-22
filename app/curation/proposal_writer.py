@@ -170,7 +170,10 @@ def _materialize_for_note(
     producing_binding: str,
 ) -> None:
     try:
-        original_text = note_path.read_text(encoding="utf-8")
+        # Text-mode reads normalize CRLF to LF, which would rewrite bytes
+        # outside the governed AI panel when the proposal is inserted.
+        original_bytes = note_path.read_bytes()
+        original_text = original_bytes.decode("utf-8")
     except OSError:
         return
 
@@ -182,7 +185,7 @@ def _materialize_for_note(
         # receipt. Matches the "re-running... is a no-op" contract (spec §2).
         return
 
-    note_path.write_text(updated_text, encoding="utf-8")
+    note_path.write_bytes(updated_text.encode("utf-8"))
 
     # One panel.action.logged receipt per *newly inserted* finding. Detect
     # "newly inserted" the same way `_write_proposals_to_panel` itself dedupes

@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6.0 seams are shipped in bounded form and broader v6.1+ consumption remains planned. The Product Runtime placement contract uses TARS-hosted Linux with private Linux/Tailscale ingress for dev, test, and prod; the Mac mini is a control, development, client, and operator computer, not Product Runtime placement. Latest dated environment evidence is recorded in `docs/ENVIRONMENTS.md` and is not a fresh host readback from this workstation.
+State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6.0 seams are shipped in bounded form and broader v6.1+ consumption remains planned. The Product Runtime placement contract uses TARS-hosted Linux guests for dev, test and prod; the Mac mini provides control, client and model-execution services. The infrastructure repository's current-status view owns dated physical host and service observations; environment and deployment contracts remain separate.
 Doc role: Core SoT
 Authority: Top-level operator guidance for the current runtime; delegates specialized operational detail to linked companion docs but remains the main operational entrypoint.
 Owner: Runtime / operator playbook
@@ -6,7 +6,8 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-10-19 (#6269 fixed content-free native source-persistence failure stages, repository-only; #6227 dev-heavy qualification, #6225 pinned tooling and startup/liveness support and #6224 expiring controller-pause entry, repository-only; #6222 liveness support and #6223 rolling channel-bug entries, repository-only; prior 2026-10-16 TEST dormant-ownership boundary for #5937, repository-only; prior 2026-10-15 Companion collection-preflight output classification for #6079; prior 2026-10-14 VOICE-04 session/transcript guidance, native MVR-01C entry for #6056, native BWS embedding preflight for #6069, and fixed native TEST journaling entry for #6050, repository-only; prior #5969 web qualification, #5993 placement and other section reviews retained; no new live host or service verification)
-Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
+Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; this is not a new deployment, release or functional-acceptance receipt.
+Infrastructure reference review: 2026-10-21; other sections retain their individual verification dates.
 BWS child-runtime repository evidence: requirements-bws-deploy.txt; scripts/install_bws_deploy_runtime.sh; tests/deploy/test_deploy_channel.py::test_bws_runtime_setup_covers_mandatory_browser_smoke and tests/deploy/test_deploy_channel_script.py::test_managed_deploy_child_uses_declared_supervisor_interpreter; Issue #5905 / PR #5906 (repository validation only; no live host installation or channel acceptance).
 Native web entry repository evidence (2026-10-12): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_web, app/ops/native_web_acceptance_runner.py::NativeWebRunner, and tests/ops/test_native_web_acceptance.py; runtime pilot qualification remains with #2443/#3314.
 Native journaling entry repository evidence (2026-10-14): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_journaling, app/ops/native_journaling_acceptance_runner.py::NativeJournalingRunner, and tests/ops/test_native_journaling_acceptance.py; actual-image/provider TEST acceptance remains with #3347.
@@ -15,6 +16,7 @@ TEST dormant-ownership section reviewed and verified against repository-only #59
 Last verified against: scripts/postmerge_dev_test.py and tests/deploy/test_postmerge_dev_test.py::test_test_promotion_requires_passing_dev_heavy_verdict (#6227 repository-only dev-heavy gate evidence); requirements-bws-deploy.txt (host SDK closure), scripts/install_postmerge_controller.py, scripts/postmerge_controller.py, scripts/postmerge_dev_test.py, scripts/dev_delivery_liveness.py and tests/deploy/test_postmerge_dev_test.py::test_controller_runs_from_pinned_tooling / ::test_controller_self_check_fails_loud (#6225 repository-only pinned tooling and startup proof); scripts/postmerge_dev_test.py::engage_pause and tests/deploy/test_postmerge_dev_test.py::test_kill_switch_pauses_until_expiry (#6224 repository-only pause evidence); scripts/dev_delivery_liveness.py and tests/governance/test_dev_delivery_liveness_workflow.py (#6222 repository-only liveness evidence); scripts/postmerge_dev_test.py, scripts/postmerge_channel_bug.py and tests/deploy/test_postmerge_dev_test.py (#6223 repository-only rolling channel-bug evidence); scripts/companion_ui_postdeploy_smoke.sh::preflight and tests/companion_ui/test_gateway_postdeploy_smoke.py::test_collection_preflight_classifies_captured_output_without_pipe_race (#6079 repository-only evidence), docs/MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md, app/api/routes/ask.py::ask_voice, app/chat/voice_session.py::VoiceSessions, tests/voice/test_session_transcript.py::test_only_write_is_appendonly_transcript (VOICE-04 repository evidence), docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/KARAKEEP_MIMER_ACQUISITION/README.md, docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md, docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md, config/secrets/host_secret_contract.json, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, app/ops/native_source_bootstrap.py, scripts/deploy_channel.sh, tests/deploy/test_deploy_channel_script.py::test_native_deploy_rebuilds_source_projection_before_health_gate, tests/deploy/test_deploy_channel_script.py::test_native_api_source_selector_refuses_before_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_unbound_api_preserves_idle_without_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_prepares_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_refuses_unavailable_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_preserves_selected_embedding_identity, Issue #6069 candidate containing origin/main 8ec709f (repository-only; no live channel verification), tests/ops/test_ci_workflow.py::test_not_pg_steps_have_room_for_selected_coverage, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-14
 TypeSafe credential boundary evidence: config/secrets/host_secret_contract.json; tests/ops/test_host_secret_contract.py::test_typesafe_key_uses_non_prod_project_and_marr_only_consumer, tests/ops/test_secret_admin.py::test_typesafe_import_targets_non_prod_and_rejects_other_channels, and tests/architecture/test_typesafe_runtime_boundary.py::test_runtime_key_stays_on_marr_and_callers_keep_separate_policy; Issue #5808 follows Issue #5801 / PR #5803 on 2026-10-07. Repository-only fake/injected-source evidence; no live BWS permission or host/provider verification.
 TypeSafe Builder CKM repository evidence: app/builderops/ckm/judgment.py, app/model_access/ckm_judgment_executor.py, tests/builderops/ckm/test_semantic_typesafe.py, and Issue #5768 on 2026-10-05; fake-provider proofs only, with runtime disabled and no live host or provider verification.
+TypeSafe DEV actual-consumer evidence: the [2026-10-21 Product receipt and external cleanup](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6288#issuecomment-6309809365) and [preserved Builder receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5764#issuecomment-6203507688) verify the separate synthetic calls. Both allowances are consumed, temporary listeners/processes are absent, and ordinary routes remain disabled; broader #5667 and TEST/PROD activation keep their separate gates.
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -22,7 +24,8 @@ Use this document as the operator-facing starting point for runtime operations.
 Specialized companion documents:
 - `docs/HEALTH.md` - health CLI behavior and runtime health contract
 - `docs/OBSERVABILITY.md` - runtime observability signals, counters, and span/log contracts
-- `docs/INFRASTRUCTURE.md` - local runtime stack, Docker/Colima setup, and local observability stack
+- `docs/INFRASTRUCTURE.md` - application Compose fallback and local observability reference
+- [yggdrasil-infra current status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md) - dated Macs, TARS/VMs, Docker engines, network, storage and related-service observations; Builder Vault carries the operational handoff and private evidence locator
 - `docs/SECURITY_ARCHITECTURE.md` - security review routing, threat-model tiers, and security invariants
 - `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` - target ownership boundary for the
   ecosystem operational platform; this playbook remains the current operator entrypoint and runbook
@@ -59,6 +62,15 @@ producer entry; a later cleanup failure is recorded separately in the final term
 the exact same-ID cleanup route. Child output, exception text, source identity or paths, environment
 or mount values, and credentials must never be copied into receipts or operator notes. See
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` for the detailed stage and cleanup contract.
+
+The exact supportable source-identity repair module is an inert DEV library, not an operator CLI or
+standing recovery route. A separately governed native owner must supply one reviewed 23+26 private
+batch whose revision, image, selection, target-set digest, and physical vault identity match fresh
+host authority inside one owned fence. The library performs no discovery, producer allocation,
+controller load, deployment, inference, or promotion. Do not replay partial/indeterminate outcomes;
+reconcile only against retained exact hashes. Rollback is permitted only for a validated batch
+member whose current bytes equal its admitted candidate and must run under the same pre/post fence.
+No raw path, UUID, content, or exception text belongs in its public count-only receipt.
 
 ### Mimer voice sessions (VOICE-04)
 
@@ -614,15 +626,14 @@ Companion docs:
 - The Companion UI proxy pins `/api/companion/*` to the same runtime origin so browser UAT does not
   cross providers or devices accidentally. Runtime-unreachable and wrong-device states are distinct
   operator-visible failures rather than generic vault setup prompts.
-- Companion TTS is a local-first runtime surface: configured local voices can be selected for clean
-  Markdown read-back, mixed-language segments may route to different voices, and production
-  deployment depends on an explicitly configured, Tailscale-reachable external Ollama endpoint; the
-  Mac mini is model-serving infrastructure only.
-- Repository-side Model Access Router work may add a bounded Codex CLI adapter, but that adapter is
-  not a host activation or Product route. Until the separate designated-host and Tailscale
-  acceptance is complete, the Mac mini remains Ollama/model-serving only; no Product inference is
-  routed through Codex CLI, and no host login, CLI profile, service, or tailnet grant is implied by
-  a merged code change.
+- Companion TTS remains a local-first runtime surface with configured voices for Markdown
+  read-back. Ollama embedding identity and any selected remote endpoint are governed by
+  [the environment topology contract](ENVIRONMENTS.md#prod-ollama-topology); this playbook does not
+  establish a Tailscale prerequisite for the Model Access text route.
+- The accepted Model Access route uses VLAN mTLS to the loopback-bound Mac mini Codex CLI
+  executor. See [the dated infrastructure status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+  for installed and observed services. A merged adapter or running listener does not establish
+  persistent Product routing, inference qualification or release acceptance.
 - The repository resolves the MARR-only `typesafe.api-key` binding from the exact
   `dev/typesafe.api-key` identity in the existing `non-prod` BWS project through the existing
   read-only `non-prod-reader` account (#5801 / #5808). Its BWS reader token remains a
@@ -633,17 +644,17 @@ Companion docs:
   while the application code-level MARR grant remains the sole runtime binding. Codex and Claude
   receive no code-level provider-key grant. Fake-backed repository proofs do not establish the broader
   integrated channel deployment/runtime acceptance, which remains open under #5667. Product/Builder
-  caller acceptance remains a separate #5764 gate. The already-authorized
-  synthetic Product and Builder attempts remain single-shot and require separate redacted acceptance
-  receipts before either route is activated. Follow `docs/LOCAL_SECRET_PROVISIONING/README.md`
+  actual-consumer DEV receipts are now verified separately on #5764, as linked above. Both
+  allowances are consumed; the historical Builder call and used MARR check were not repeated.
+  Ordinary route activation remains separately gated. Follow `docs/LOCAL_SECRET_PROVISIONING/README.md`
   (`Declared identifier contract`) and `docs/TYPESAFE_SYSTEM_ONE/README.md`
   (`Data and Credential Boundary`) for the details.
-- Builder CKM association has dormant repository support through its own authenticated
-  `/v1/ckm-judgment` MARR operation and pinned Builder profile. Derived evidence remains
-  candidate-only under the existing explicit confirmation and rebuild rules. The concrete
-  actual-consumer synthetic call and redacted receipt plan live in
-  `docs/TYPESAFE_SYSTEM_ONE/MIGRATE_BUILDER_CKM_ASSOCIATION.md :: Development Acceptance Gate`;
-  the separate operator gates above must be satisfied before runtime activation.
+- Builder CKM association has repository support through its own authenticated
+  `/v1/ckm-judgment` MARR operation and pinned Builder profile. The preserved actual-consumer DEV
+  receipt above verifies its completed call, with a below-floor result and zero candidate or
+  confirmed edges. Derived evidence remains candidate-only under the existing explicit confirmation
+  and rebuild rules. `docs/TYPESAFE_SYSTEM_ONE/MIGRATE_BUILDER_CKM_ASSOCIATION.md :: Development Acceptance Gate`
+  retains the acceptance contract; ordinary runtime activation remains separately gated.
 - Governed channel deploys obtain `TTS_ENABLED` and `TTS_HOST_ROOT` only from the selected generated
   runtime-env snapshot. The canonical exporter publishes that file atomically; deploy preflight
   fail-closes unreadable, malformed, duplicate, or invalid enabled configuration before migration,
@@ -1175,6 +1186,17 @@ Quick issue routing:
 - Watcher/panel manual walkthrough -> `docs/runbooks/UAT_PANEL_WATCHER.md`
 - Go-live/startup diagnostics -> `docs/runbooks/RUNBOOK_GO_LIVE.md`
 - Prod go-live acceptance (preflight through soak, rollback rehearsal, receipt) -> `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`
+
+Native source-identity database diagnostics are opt-in and fail closed. Run the
+`app.ops.native_source_identity_diagnostics coordinate` entrypoint only with an
+immutable image and the accepted runtime's exact host source root plus exact
+container source root. The coordinator reproduces the canonical non-database
+registry settings, keeps source observation on `--network none`, and uses the
+separate volume-free read-only database witness from the
+`native-source-diagnostics` Compose profile. A diagnostic refusal never
+authorizes retry, source repair, controller loading, deployment, TEST, or PROD.
+See `docs/ENVIRONMENTS.md :: Native source-identity database diagnostics` for
+the boundary contract.
 
 ## Companion UI Entry Surfaces
 
