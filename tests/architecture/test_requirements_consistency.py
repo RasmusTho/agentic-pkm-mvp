@@ -272,7 +272,10 @@ def test_docker_and_ci_install_same_numpy_major() -> None:
 def test_controller_proof_producers_install_qualified_sdk_closure() -> None:
     qualified = _parse_requirements(REPO_ROOT / "requirements-bws-deploy.txt")
     packages = ("bitwarden-sdk", "python-dateutil", "six")
-    producers: dict[str, str] = {}
+    # Native heavy acceptance executes the same strict deploy fixtures in this image.
+    producers: dict[str, str] = {
+        _relative(DOCKERFILE): DOCKERFILE.read_text(encoding="utf-8"),
+    }
     for filename, job_name, execution_step in (
         ("ci-smoke.yaml", "pr-unit-tests-not-pg", "Run scoped not-pg unit tests"),
         ("integration-nightly.yaml", "full-suite", "Full test suite (memory, not pg)"),
