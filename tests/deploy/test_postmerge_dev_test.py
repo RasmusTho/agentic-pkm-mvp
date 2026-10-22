@@ -2049,6 +2049,18 @@ def test_startup_signal_refuses_non_failure_values(monkeypatch, value):
                                triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999')
 
 
+def test_native_host_command_preserves_interpreter_alias(tmp_path, monkeypatch):
+    interpreter = tmp_path / 'runtime' / 'bin' / 'python3'
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(sys.executable)
+    assert str(interpreter.resolve()) != str(interpreter)
+    monkeypatch.setattr(driver.sys, 'executable', str(interpreter))
+    command = driver._native_host_command()
+    assert command[0] == str(interpreter)
+    assert command[1:4] == ['-I', '-S', '-c']
+    assert command[5] == str(ROOT)
+
+
 def test_native_absence_child_uses_same_isolated_tooling_command(monkeypatch):
     candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
     proof = _absence_proof('dev', candidate)

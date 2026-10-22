@@ -78,6 +78,12 @@ An independent pre-CI review may serve the final native gate if candidate, contr
 configuration are unchanged. Inspect final CI: failures invalidate affected conclusions; completion
 alone never requires another clean review. Executor sequencing stays with its full-path contract.
 
+Before the first effect of a newly constructed native diagnostic that starts temporary workers,
+complete the required review of its exact final packet through the existing review/clearance
+machinery. An asynchronous review still in progress is not clearance. Reuse accepted review when
+the packet and relevant inputs are unchanged under the existing evidence-reuse rule; this sequencing
+requires neither another review for ordinary metadata-only reads nor a new human approval.
+
 After two independent change-request rounds apply `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`.
 
 When prior review threads are implicated, retain their original IDs, disposition each finding,

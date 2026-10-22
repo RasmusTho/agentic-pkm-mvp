@@ -354,12 +354,18 @@ def test_source_prepare_and_finalize_refence_canonical_inventory(
         )
 
 
-def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
+@pytest.fixture(params=["dev", "test"])
+def coordinate_pipeline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    request: pytest.FixtureRequest,
+) -> SimpleNamespace:
+    channel = request.param
     source_root = tmp_path / "source"
     source_root.mkdir()
+    note = source_root / "note.md"
+    original = b"---\nuuid: invalid-identity\n---\nsynthetic-private-body\n"
+    note.write_bytes(original)
     source_image = "sha256:" + "d" * 64
     owner_token = "f" * 32
     monkeypatch.setattr(diagnostics.secrets, "token_hex", lambda _size: owner_token)
@@ -377,7 +383,7 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         source_root=source_root,
         container_source_root=container_source_root,
         source_environment=source_environment,
-        channel="dev",
+        channel=channel,
         revision=REVISION,
         container_name=f"pkm-source-id-prepare-{REVISION[:12]}",
         owner_token=owner_token,
@@ -388,15 +394,16 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         source_root=source_root,
         container_source_root=container_source_root,
         source_environment=source_environment,
-        channel="dev",
+        channel=channel,
         revision=REVISION,
         container_name=f"pkm-source-id-finalize-{REVISION[:12]}",
         owner_token=owner_token,
     )
     request = _request(("/private/source", hashlib.sha256(b"body").hexdigest()))
+    request["channel"] = channel
     prepare = {
         "contract": diagnostics.SOURCE_PREPARE_CONTRACT,
-        "channel": "dev",
+        "channel": channel,
         "revision": REVISION,
         "source_snapshot_sha256": "c" * 64,
         "counts": {
@@ -412,7 +419,7 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         "request": request,
     }
     database_receipt = diagnostics._receipt(  # noqa: SLF001
-        channel="dev",
+        channel=channel,
         revision=REVISION,
         reason=None,
         counts={
@@ -426,7 +433,7 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
     )
     final = {
         "contract": diagnostics.SOURCE_RECEIPT_CONTRACT,
-        "channel": "dev",
+        "channel": channel,
         "revision": REVISION,
         "terminal_state": "observed",
         "reason": None,
@@ -434,6 +441,8 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         **{field: database_receipt[field] for field in diagnostics.COUNT_FIELDS},
     }
     calls: list[tuple[tuple[str, ...], bytes, int]] = []
+    state = SimpleNamespace(refuse_witness=False)
+    compose_prefix = ("docker", "compose", "--profile", "native-source-diagnostics")
 
     def runner(
         argv: tuple[str, ...], *, input_bytes: bytes, max_output_bytes: int,
@@ -445,7 +454,7 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
                 return b'["PATH=/usr/bin"]'
             return source_image.encode("ascii")
         if argv == (
-            "docker", "compose", "config", "--format", "json",
+            *compose_prefix, "config", "--format", "json",
             diagnostics.DATABASE_WITNESS_SERVICE,
         ):
             return json.dumps({
@@ -457,11 +466,13 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         if argv == source_prepare:
             return json.dumps(prepare).encode("utf-8")
         if argv == diagnostics.database_witness_compose_argv(
-            ("docker", "compose"),
+            compose_prefix,
             container_name=f"pkm-source-id-witness-{REVISION[:12]}",
             owner_token=owner_token,
         ):
             assert json.loads(input_bytes) == request
+            if state.refuse_witness:
+                return b'{"private":"synthetic-private-body"}'
             return json.dumps(database_receipt).encode("utf-8")
         assert argv == source_finalize
         envelope = json.loads(input_bytes)
@@ -471,19 +482,28 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         }
         return json.dumps(final).encode("utf-8")
 
-    fenced: list[tuple[str, str]] = []
-    receipt = diagnostics.run_production_diagnostic(
-        source_image=source_image,
-        source_root=source_root,
-        container_source_root=container_source_root,
-        compose_prefix=("docker", "compose"),
-        channel="dev",
-        revision=REVISION,
-        child_runner=runner,
-        container_absence=lambda name: fenced.append(("before", name)),
-        container_cleanup=lambda name, _owner: fenced.append(("after", name)),
+    fenced: list[tuple[str, str, str | None]] = []
+    # The CLI does not take effect-port arguments. Replace only the external
+    # defaults on the real coordinator; never replace the caller/coordinator.
+    monkeypatch.setattr(diagnostics.run_production_diagnostic, "__kwdefaults__", {
+        **diagnostics.run_production_diagnostic.__kwdefaults__,
+        "child_runner": runner,
+        "container_absence": lambda name: fenced.append(("before", name, None)),
+        "container_cleanup": lambda name, owner: fenced.append(("after", name, owner)),
+    })
+    return SimpleNamespace(
+        arguments=dict(source_image=source_image, source_root=source_root,
+                       container_source_root=container_source_root,
+                       compose_prefix=compose_prefix, channel=channel, revision=REVISION),
+        calls=calls, fenced=fenced, final=final, note=note, original=original,
+        owner_token=owner_token, source_prepare=source_prepare, state=state,
     )
-    assert receipt == final
+
+
+def _assert_complete_coordinate_pipeline(pipeline: SimpleNamespace) -> None:
+    calls, fenced = pipeline.calls, pipeline.fenced
+    source_prepare = pipeline.source_prepare
+    container_source_root = pipeline.arguments["container_source_root"]
     assert [call[2] for call in calls] == [
         diagnostics.MAX_RECEIPT_BYTES,
         1024,
@@ -493,7 +513,7 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         diagnostics.MAX_RECEIPT_BYTES,
         diagnostics.MAX_RECEIPT_BYTES,
     ]
-    assert [phase for phase, _name in fenced] == [
+    assert [phase for phase, _name, _owner in fenced] == [
         "before", "after", "before", "after", "before", "after",
     ]
     assert "WATCHER_SCOPE_GLOB=accepted/**/*.md" in source_prepare
@@ -501,6 +521,20 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         item for item in source_prepare if item.startswith("type=bind,")
     )
     assert source_prepare[-1] == container_source_root
+
+    assert [(name, owner) for phase, name, owner in fenced if phase == "after"] == [
+        (f"pkm-source-id-{stage}-{REVISION[:12]}", pipeline.owner_token)
+        for stage in ("prepare", "witness", "finalize")
+    ]
+    assert pipeline.note.read_bytes() == pipeline.original
+
+
+def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
+    coordinate_pipeline: SimpleNamespace,
+) -> None:
+    pipeline = coordinate_pipeline
+    assert diagnostics.run_production_diagnostic(**pipeline.arguments) == pipeline.final
+    _assert_complete_coordinate_pipeline(pipeline)
 
 
 def test_production_diagnostic_uses_configured_witness_image_before_container_creation(
@@ -730,55 +764,49 @@ def test_bounded_child_timeout_starts_before_stdin_is_consumed() -> None:
     assert time.monotonic() - started < 2.0
 
 
-def test_worker_main_coordinate_calls_concrete_production_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_coordinate_entrypoint_uses_real_pipeline_for_both_channels(
+    coordinate_pipeline: SimpleNamespace,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    source_image = "sha256:" + "e" * 64
-    captured: dict[str, Any] = {}
-    receipt = {
-        "contract": diagnostics.SOURCE_RECEIPT_CONTRACT,
-        "channel": "dev",
-        "revision": REVISION,
-        "terminal_state": "observed",
-        "reason": None,
-        "registry_selected_count": 1,
-        "registry_persisted_count": 0,
-        "registry_missing_count": 0,
-        "registry_invalid_count": 1,
-        "registry_ambiguous_count": 0,
-        "authority_candidate_count": 1,
-        "protected_authority_candidate_count": 0,
-        "source_observation_unknown_count": 0,
-        "selected_count": 1,
-        "product_filesystem_complete_count": 0,
-        "product_absent_count": 1,
-        "product_conflict_count": 0,
-        "locator_or_body_mismatch_count": 0,
-        "duplicate_or_foreign_claim_count": 0,
-    }
-
-    def run(**kwargs: Any) -> dict[str, Any]:
-        captured.update(kwargs)
-        return receipt
-
-    monkeypatch.setattr(diagnostics, "run_production_diagnostic", run)
+    pipeline = coordinate_pipeline
+    args = pipeline.arguments
     assert diagnostics.worker_main([
-        "coordinate", "dev", REVISION, source_image, str(tmp_path),
-        "/accepted-vault",
+        "coordinate", args["channel"], REVISION, args["source_image"],
+        str(args["source_root"]), args["container_source_root"],
     ]) == 0
-    assert captured == {
-        "source_image": source_image,
-        "source_root": tmp_path,
-        "container_source_root": "/accepted-vault",
-        "compose_prefix": (
-            "docker", "compose", "--profile", "native-source-diagnostics",
-        ),
-        "channel": "dev",
-        "revision": REVISION,
-    }
-    assert json.loads(capsys.readouterr().out) == receipt
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert len(captured.out.encode()) <= diagnostics.MAX_RECEIPT_BYTES
+    receipt = json.loads(captured.out)
+    assert diagnostics.validate_source_receipt(receipt) == pipeline.final
+    _assert_complete_coordinate_pipeline(pipeline)
+    assert "synthetic-private-body" not in captured.out
+    assert str(pipeline.note) not in captured.out
+
+
+def test_coordinate_entrypoint_refusal_is_content_free(
+    coordinate_pipeline: SimpleNamespace,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pipeline = coordinate_pipeline
+    pipeline.state.refuse_witness = True
+    args = pipeline.arguments
+    assert diagnostics.worker_main([
+        "coordinate", args["channel"], REVISION, args["source_image"],
+        str(args["source_root"]), args["container_source_root"],
+    ]) == 78
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+    # Invalid witness output is refused after prepare, with cleanup restricted
+    # to the two actors actually started under this invocation's owner token.
+    assert pipeline.fenced == [
+        item
+        for stage in ("prepare", "witness")
+        for item in (("before", f"pkm-source-id-{stage}-{REVISION[:12]}", None),
+                     ("after", f"pkm-source-id-{stage}-{REVISION[:12]}", pipeline.owner_token))
+    ]
+    assert len(pipeline.calls) == 6
+    assert pipeline.note.read_bytes() == pipeline.original
 
 
 def test_database_witness_refuses_unreachable_or_nonreadonly_route(
