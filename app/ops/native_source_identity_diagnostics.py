@@ -955,8 +955,22 @@ def _prove_same_witness_image(
         input_bytes=b"",
         max_output_bytes=1024,
     ).strip()
+    configured = child_runner(
+        (*compose_prefix, "config", "--format", "json", DATABASE_WITNESS_SERVICE),
+        input_bytes=b"",
+        max_output_bytes=MAX_PRIVATE_FRAME_BYTES,
+    )
+    try:
+        configured_model = json.loads(configured, object_pairs_hook=_unique_json_object)
+        services = configured_model["services"]
+        witness_service = services[DATABASE_WITNESS_SERVICE]
+        witness_image = witness_service["image"]
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError):
+        raise SourceIdentityDiagnosticRefusal("database_witness_refused") from None
+    if not isinstance(witness_image, str) or not _immutable_image_reference(witness_image):
+        raise SourceIdentityDiagnosticRefusal("database_witness_refused")
     witness_id = child_runner(
-        (*compose_prefix, "images", "--quiet", DATABASE_WITNESS_SERVICE),
+        ("docker", "image", "inspect", "--format", "{{.Id}}", witness_image),
         input_bytes=b"",
         max_output_bytes=1024,
     ).strip()
@@ -967,6 +981,15 @@ def _prove_same_witness_image(
         or _SHA256.fullmatch(source_id[7:].decode("ascii", errors="ignore")) is None
     ):
         raise SourceIdentityDiagnosticRefusal("database_witness_refused")
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
 
 
 def run_production_diagnostic(

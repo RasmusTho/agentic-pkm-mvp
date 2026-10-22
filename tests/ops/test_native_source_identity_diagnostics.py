@@ -439,12 +439,21 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         argv: tuple[str, ...], *, input_bytes: bytes, max_output_bytes: int,
     ) -> bytes:
         calls.append((argv, input_bytes, max_output_bytes))
+        witness_image = "ghcr.io/rasmustho/pkm-app@" + source_image
         if argv[:4] == ("docker", "image", "inspect", "--format"):
             if argv[4] == "{{json .Config.Env}}":
                 return b'["PATH=/usr/bin"]'
             return source_image.encode("ascii")
-        if "images" in argv:
-            return source_image.encode("ascii")
+        if argv == (
+            "docker", "compose", "config", "--format", "json",
+            diagnostics.DATABASE_WITNESS_SERVICE,
+        ):
+            return json.dumps({
+                "services": {
+                    "db": {"image": "postgres:16"},
+                    diagnostics.DATABASE_WITNESS_SERVICE: {"image": witness_image},
+                },
+            }).encode("utf-8")
         if argv == source_prepare:
             return json.dumps(prepare).encode("utf-8")
         if argv == diagnostics.database_witness_compose_argv(
@@ -478,6 +487,7 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
     assert [call[2] for call in calls] == [
         diagnostics.MAX_RECEIPT_BYTES,
         1024,
+        diagnostics.MAX_PRIVATE_FRAME_BYTES,
         1024,
         diagnostics.MAX_PRIVATE_FRAME_BYTES,
         diagnostics.MAX_RECEIPT_BYTES,
@@ -491,6 +501,134 @@ def test_production_coordinator_invokes_dual_actor_path_and_bounds_frames(
         item for item in source_prepare if item.startswith("type=bind,")
     )
     assert source_prepare[-1] == container_source_root
+
+
+def test_production_diagnostic_uses_configured_witness_image_before_container_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_image = "sha256:" + "d" * 64
+    witness_image = "ghcr.io/rasmustho/pkm-app@" + source_image
+    image_id = b"sha256:" + b"a" * 64
+    calls: list[tuple[str, ...]] = []
+
+    class PreparedReached(RuntimeError):
+        pass
+
+    def runner(
+        argv: tuple[str, ...], *, input_bytes: bytes, max_output_bytes: int,
+    ) -> bytes:
+        del input_bytes, max_output_bytes
+        calls.append(argv)
+        if argv[4:5] == ("{{json .Config.Env}}",):
+            return b"[]"
+        if argv == (
+            "docker", "image", "inspect", "--format", "{{.Id}}", source_image,
+        ):
+            return image_id
+        if argv == (
+            "docker", "compose", "config", "--format", "json",
+            diagnostics.DATABASE_WITNESS_SERVICE,
+        ):
+            return json.dumps({
+                "services": {
+                    "db": {"image": "postgres:16"},
+                    diagnostics.DATABASE_WITNESS_SERVICE: {"image": witness_image},
+                },
+            }).encode("utf-8")
+        if argv == (
+            "docker", "image", "inspect", "--format", "{{.Id}}", witness_image,
+        ):
+            return image_id
+        raise PreparedReached
+
+    monkeypatch.setattr(diagnostics.secrets, "token_hex", lambda _size: "f" * 32)
+    with pytest.raises(PreparedReached):
+        diagnostics.run_production_diagnostic(
+            source_image=source_image,
+            source_root=tmp_path,
+            container_source_root="/vault",
+            compose_prefix=("docker", "compose"),
+            channel="dev",
+            revision=REVISION,
+            child_runner=runner,
+            container_absence=lambda _name: None,
+            container_cleanup=lambda _name, _owner: None,
+        )
+    assert calls[:4] == [
+        ("docker", "image", "inspect", "--format", "{{json .Config.Env}}", source_image),
+        ("docker", "image", "inspect", "--format", "{{.Id}}", source_image),
+        (
+            "docker", "compose", "config", "--format", "json",
+            diagnostics.DATABASE_WITNESS_SERVICE,
+        ),
+        ("docker", "image", "inspect", "--format", "{{.Id}}", witness_image),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("configured", "witness_id"),
+    [
+        (b"", b"sha256:" + b"a" * 64),
+        (b"{}", b"sha256:" + b"a" * 64),
+        (b'{"services":{}}', b"sha256:" + b"a" * 64),
+        (b'{"services":{"source-identity-db-witness":{}}}', b"sha256:" + b"a" * 64),
+        (b'{"services":{"source-identity-db-witness":{"image":"latest"}}}', b"sha256:" + b"a" * 64),
+        (b'{"services":{"source-identity-db-witness":{"image":false}}}', b"sha256:" + b"a" * 64),
+        (b'{"services":{},"services":{}}', b"sha256:" + b"a" * 64),
+        (b"\xff\n", b"sha256:" + b"a" * 64),
+        (
+            b'{"services":{"source-identity-db-witness":{"image":"sha256:'
+            + b"e" * 64 + b'"}}}', b"",
+        ),
+        (
+            b'{"services":{"source-identity-db-witness":{"image":"sha256:'
+            + b"e" * 64 + b'"}}}', b"sha256:" + b"b" * 64,
+        ),
+    ],
+)
+def test_production_diagnostic_refuses_invalid_configured_witness_image_evidence(
+    tmp_path: Path,
+    configured: bytes,
+    witness_id: bytes,
+) -> None:
+    source_image = "sha256:" + "d" * 64
+    source_id = b"sha256:" + b"a" * 64
+    calls: list[tuple[str, ...]] = []
+    absence_calls: list[str] = []
+
+    def runner(
+        argv: tuple[str, ...], *, input_bytes: bytes, max_output_bytes: int,
+    ) -> bytes:
+        del input_bytes, max_output_bytes
+        calls.append(argv)
+        if argv[4:5] == ("{{json .Config.Env}}",):
+            return b"[]"
+        if argv == (
+            "docker", "image", "inspect", "--format", "{{.Id}}", source_image,
+        ):
+            return source_id
+        if argv == (
+            "docker", "compose", "config", "--format", "json",
+            diagnostics.DATABASE_WITNESS_SERVICE,
+        ):
+            return configured
+        return witness_id
+
+    with pytest.raises(diagnostics.SourceIdentityDiagnosticRefusal):
+        diagnostics.run_production_diagnostic(
+            source_image=source_image,
+            source_root=tmp_path,
+            container_source_root="/vault",
+            compose_prefix=("docker", "compose"),
+            channel="dev",
+            revision=REVISION,
+            child_runner=runner,
+            container_absence=absence_calls.append,
+            container_cleanup=lambda _name, _owner: None,
+        )
+    assert absence_calls == []
+    assert all("run" not in argv for argv in calls)
 
 
 def test_cleanup_never_removes_a_container_with_foreign_ownership(
