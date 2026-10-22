@@ -522,7 +522,10 @@ def main() -> int:
         # Never echo untrusted API bodies, inputs, credentials or child errors.
         key = 'channel_ref' if args.advance_ref else 'channel_bug'
         reason = str(error) if isinstance(error, AlertRefused) else 'consumer_failed'
-        print(json.dumps({key: 'refused', 'reason': reason}))
+        failure = {key: 'refused'}
+        if args.advance_ref:
+            failure['reason'] = reason
+        print(json.dumps(failure))
         return 1
 
 
