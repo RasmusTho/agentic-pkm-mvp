@@ -106,6 +106,42 @@ def _python_heredoc(script: str) -> str:
     return match.group("body")
 
 
+@pytest.mark.parametrize("ffmpeg_present,rg_present,install_exit", [
+    (True, True, 0), (True, False, 0), (False, True, 0), (False, False, 0), (False, False, 17),
+])
+def test_smoke_system_tools_reuse_or_install_with_failure_propagation(
+    tmp_path: Path, ffmpeg_present: bool, rg_present: bool, install_exit: int,
+) -> None:
+    job = yaml.safe_load(_smoke_text())["jobs"]["smoke"]
+    step = next(s for s in job["steps"] if s.get("name") == "Install system deps (ffmpeg, ripgrep)")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sources = {
+        "sudo": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$APT_CALLS"\nexit "$INSTALL_EXIT"\n',
+    }
+    for name, present in (("ffmpeg", ffmpeg_present), ("rg", rg_present)):
+        if present:
+            sources[name] = "#!/bin/sh\nexit 0\n"
+    for name, source in sources.items():
+        tool = bin_dir / name
+        tool.write_text(source, encoding="utf-8")
+        tool.chmod(0o755)
+    calls = tmp_path / "apt-calls"
+    result = subprocess.run(
+        ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c", step["run"]],
+        env={**os.environ, "PATH": str(bin_dir), "APT_CALLS": str(calls), "INSTALL_EXIT": str(install_exit)},
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+
+    assert result.returncode == install_exit, result.stdout + result.stderr
+    if ffmpeg_present and rg_present:
+        assert not calls.exists()
+        assert "reusing runner tools" in result.stdout
+    else:
+        expected = ["apt-get update"] if install_exit else ["apt-get update", "apt-get install -y ffmpeg ripgrep"]
+        assert calls.read_text().splitlines() == expected
+
+
 CI_FITNESS_CALLERS = (
     (CI_SMOKE_WORKFLOW, "smoke", "Fitness report (QAS-003/QAS-010)", "Verify CI summary lines"),
     (INTEGRATION_NIGHTLY_WORKFLOW, "full-suite", "Fitness report", "Verify CI gates"),

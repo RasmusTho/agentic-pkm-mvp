@@ -30,9 +30,9 @@
 #   7  required check contexts absent from the head — absence is NOT success (merge-gating mode)
 set -uo pipefail
 
-INITIAL_WAIT=180     # sleep before first check (~ CI p50; the `not pg` gate is the long pole)
+INITIAL_WAIT=180     # bounded initial pause; selected CI workloads have different durations
 INTERVAL=90          # backoff between checks on the tail (floored to 60)
-TIMEOUT=1800         # give up after this many seconds of total polling
+TIMEOUT=5400         # 75-minute unit step plus setup/queue margin; --timeout overrides
 CHECK_CODEX=0
 PR=""
 SHA=""
@@ -136,7 +136,7 @@ if [ "$SHA_FROM_PR" -eq 1 ]; then
   echo "required checks ($REQUIRED_SOURCE): $(printf '%s\n' "$REQUIRED_CHECKS" | paste -sd ',' - | sed 's/,/, /g')"
 fi
 
-echo "waiting ${INITIAL_WAIT}s before first check (CI runs ~4-5 min; not polling through it)..."
+echo "waiting ${INITIAL_WAIT}s before first check (total wait budget ${TIMEOUT}s; REST backoff ${INTERVAL}s)..."
 sleep "$INITIAL_WAIT"
 
 # Dedupe rule (see CI_WAIT_CONTRACT.md): GitHub keeps every check-run record for a head SHA, so a
@@ -233,6 +233,7 @@ while :; do
       exit 7
     fi
     echo "TIMEOUT after ${TIMEOUT}s; checks not confirmed complete (last pending: ${pending:-unknown})" >&2
+    echo "Inspect the current job's progress and diagnostics before recovery; elapsed time alone does not justify a rerun." >&2
     exit 2
   fi
   sleep "$INTERVAL"

@@ -332,6 +332,8 @@ def test_product_vault_markdown_is_not_repository_documentation(tmp_path: Path) 
             "docs/development/TEST_STRATEGY_HOT_PATH.md",
             id="select_pr_tests-paired-doc",
         ),
+        pytest.param("scripts/await_pr_checks.sh", "docs/development/TEST_STRATEGY_HOT_PATH.md", id="ci-wait-paired-doc"),
+        pytest.param("scripts/ci_stall_classifier.py", "docs/development/TEST_STRATEGY_HOT_PATH.md", id="ci-stall-paired-doc"),
         pytest.param("app/builderops/publication.py", "docs/development/PR_HOT_PATH.md", id="publication-paired-doc"),
         pytest.param("scripts/build_verification_dispatch_request.py", "docs/development/PR_HOT_PATH.md", id="dispatch-request-paired-doc"),
         pytest.param("scripts/pr_body_generator.py", "docs/development/PR_HOT_PATH.md", id="body-generator-paired-doc"),
@@ -422,9 +424,12 @@ def test_empty_base_ref_falls_back_to_origin_main_instead_of_an_empty_diff(
     assert "app/** changed but no docs" in result.stdout
 
 
-def test_select_pr_tests_requires_its_specific_paired_doc(tmp_path: Path) -> None:
+@pytest.mark.parametrize("script_path", (
+    "scripts/select_pr_tests.py", "scripts/await_pr_checks.sh", "scripts/ci_stall_classifier.py",
+))
+def test_ci_inspection_requires_its_specific_paired_doc(tmp_path: Path, script_path: str) -> None:
     repo = _guard_repo(tmp_path)
-    (repo / "scripts/select_pr_tests.py").write_text("# governance\n", encoding="utf-8")
+    (repo / script_path).write_text("# governance\n", encoding="utf-8")
     (repo / "docs/development/UNRELATED.md").write_text("unrelated\n", encoding="utf-8")
     _run(["git", "add", "."], repo)
     _run(["git", "commit", "-m", "governance"], repo)

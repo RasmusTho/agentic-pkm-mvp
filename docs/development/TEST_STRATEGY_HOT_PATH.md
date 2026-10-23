@@ -5,7 +5,7 @@ Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
-Last reviewed: 2026-10-21 UTC (reasoning_expansion UAT selector routing, #6293)
+Last reviewed: 2026-10-23 UTC (CI wait budgets and bounded routine-feature evaluation)
 Last verified against: `scripts/dev_delivery_liveness.py`, `tests/governance/test_dev_delivery_liveness_workflow.py`, `tests/scripts/test_select_pr_tests.py::test_liveness_checker_source_selects_its_contract_tests`, `.github/workflows/ci-smoke.yaml`, `.github/workflows/import-linter.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py`, `tests/governance/test_governed_vault_profile_contract.py`, `tests/governance/test_governed_vault_profile_proposals.py`, `tests/agents/test_reviewer.py`, `tests/agents/test_reviewer_single_note.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`, `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`, Issue #5820 / PR #5838 candidate selector coverage and `tests/scripts/test_select_pr_tests.py::test_product_embedding_adapters_select_their_regression_coverage`
 Last verified against (reasoning_expansion UAT selector): Issue #6293, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py::test_expansion_uat_paths_are_owned`, and the scoped Expansion runner suite; selector routing verified, live TEST remains opt-in and separate.
 
@@ -31,6 +31,49 @@ and private-controller `dev` → `test` support; #5932 adds isolated PostgreSQL 
 verification phase. #5675 transfers the retained PG PR coverage only after actual equivalent native
 execution passes in both channels. [`FAST_PR_TO_DEV_TEST_AUTOMATION`](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md)
 records activation and ten-candidate measurement; measurement does not gate ordinary candidates.
+
+## CI wait budgets
+
+`scripts/await_pr_checks.sh` allows 90 minutes by default around the existing 75-minute unit-step
+ceiling, with the existing 180-second initial pause and 90-second REST cadence. Callers may select a
+shorter `--timeout` for a known workload. The read-only stall classifier uses 90 minutes for a running
+`Unit tests (not pg)` check and 30 minutes for queued/other checks, unless the caller overrides the
+budget. An elapsed budget or missing timestamp calls for inspecting progress and diagnostics;
+neither establishes a hang or justifies a rerun. This fixes waiting guidance and does not speed up
+test execution. `tests/scripts/test_await_pr_checks.py` exercises a long-running job through the real
+shell helper with a fake clock; `tests/scripts/test_ci_stall_classifier.py` covers the budgets,
+overrides, missing timing and terminal failures. The shared procedure remains
+`.codex/skills/_shared/CI_WAIT_CONTRACT.md`.
+
+Diffs limited to the read-only CI wait helpers (`scripts/await_pr_checks.sh` and
+`scripts/ci_stall_classifier.py`) plus their exact CI contract tests and existing governance/docs
+surfaces use the existing governance contract selection, including their real shell/REST fixtures
+in `tests/scripts`. Selector source/tests share this exact contract ownership. These changes
+avoid unrelated host-global operations coverage. Co-changed runtime/operational sources still
+select their normal coverage; migration and shared configuration changes still select the broad
+suite. `tests/scripts/test_select_pr_tests.py` covers both the narrow selection and protected unions.
+The exact CI-workflow contract test shares this ownership; unrelated ops tests retain their owners.
+Smoke reuses `ffmpeg` and `ripgrep` when both runner tools are already available, avoiding an
+unnecessary package-server dependency. If either is missing, the existing package installation runs
+and any failure stays red. The actual YAML command is exercised with present/missing tools and an
+installation failure in `tests/ops/test_ci_workflow.py`.
+
+## Routine feature evaluation
+
+For the next five eligible Product deliveries, evaluate the existing focused selector against a
+target of at most ten minutes of required feedback. This is a target, not a timeout or a measured
+result. Start with one missing user journey and follow it through usable acceptance. Use existing
+PR/job timestamps and session evidence to compare required-check time, time to usable functionality,
+owner interventions, reruns and escaped-defect recovery. Do not create another tracker or claim that
+five deliveries establish a rare-defect rate.
+
+An eligible change is bounded and recoverable; migrations, destructive writes, source-data integrity,
+credentials, writer concurrency and deployment-state transitions retain relevant deeper proof before
+merge. Ordinary Product paths already select focused suites. Change an overbroad mapping only when
+the selected feature demonstrates it, with direct regression coverage for the narrowed ownership.
+Broad regression coverage remains available in the existing nightly/manual workflow. Shared-host
+isolation and current-head merge checks remain applicable. Evaluate whether usable delivery and owner
+effort improved before adopting further changes.
 
 ## Current Protection Surface
 
