@@ -38,12 +38,15 @@ def test_ci_wait_with_selector_contract_changes_avoids_unrelated_ops_suite() -> 
     assert "tests/ops" not in selection.targets
 
 
-def test_ci_wait_with_unrelated_script_test_preserves_its_broad_owner() -> None:
+@pytest.mark.parametrize("test_path", (
+    "tests/scripts/test_dev_bootstrap.py", "tests/ops/test_host_global_lease.py",
+))
+def test_ci_wait_with_unrelated_operational_test_preserves_its_broad_owner(test_path: str) -> None:
     selection = select_tests([
-        "scripts/await_pr_checks.sh", "tests/scripts/test_dev_bootstrap.py",
+        "scripts/await_pr_checks.sh", test_path,
     ])
 
-    assert "ops_deploy" in selection.subsystems
+    assert {"ops_deploy", "ops"} & set(selection.subsystems)
     assert "tests/ops" in selection.targets
 
 
@@ -1310,19 +1313,16 @@ def test_skill_contract_file_with_unmapped_test_still_gets_docs_authoring_covera
 
 
 def test_governance_target_exact_file_entry_is_tolerated() -> None:
-    # GOVERNANCE_TARGETS' one non-directory entry (tests/ops/test_ci_workflow.py)
-    # must be matched by _within_target_dirs' exact-equality branch, not just
-    # its directory-prefix branch -- it still selects the governance lane's
-    # full target set. tests/ops/test_ci_workflow.py is also ops's own scope
-    # signal (ops's real target is the whole tests/ops directory, wider than
-    # this one exact file), so #4336 unions ops in too instead of silently
-    # narrowing to the two exact tests/ops files GOVERNANCE_TARGETS lists.
+    # The workflow contract is already selected exactly by GOVERNANCE_TARGETS.
+    # Its tests/ops location does not require unrelated host-global tests for
+    # an otherwise pure governance diff; unrelated ops tests retain their owner.
     selection = select_tests([".codex/skills/x/SKILL.md", "tests/ops/test_ci_workflow.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("governance", "ops")
+    assert selection.subsystems == ("governance",)
     assert "tests/architecture" in selection.targets
-    assert "tests/ops" in selection.targets
+    assert "tests/ops/test_ci_workflow.py" in selection.targets
+    assert "tests/ops" not in selection.targets
 
 
 def test_mixed_docs_authoring_and_architecture_test_keeps_builder_targets() -> None:

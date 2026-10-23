@@ -152,10 +152,13 @@ CI_GOVERNANCE_CONTRACT_PATHS = frozenset({
     "scripts/select_pr_tests.py",
     "scripts/await_pr_checks.sh",
     "scripts/ci_stall_classifier.py",
+    "scripts/docs_guard_logic.py",
     "tests/scripts/test_select_pr_tests.py",
     "tests/scripts/test_await_pr_checks.py",
     "tests/scripts/test_await_pr_checks_dedupe.py",
     "tests/scripts/test_ci_stall_classifier.py",
+    "tests/scripts/test_docs_guard.py",
+    "tests/ops/test_ci_workflow.py",
 })
 
 # Every app/ file indexed by a (file, line)-keyed census registry in
@@ -1457,7 +1460,7 @@ def _foreign_subsystem_matches(
         if any(
             _subsystem_owns_path(path, name, prefixes)
             and not (
-                name == "ops_deploy"
+                name in {"ops", "ops_deploy"}
                 and tolerated_targets == GOVERNANCE_TARGETS
                 and ci_contract_only
                 and path in CI_GOVERNANCE_CONTRACT_PATHS

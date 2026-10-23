@@ -97,8 +97,12 @@ jobs:
       - name: Install system deps (ffmpeg, ripgrep)
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg ripgrep
+          if command -v ffmpeg >/dev/null 2>&1 && command -v rg >/dev/null 2>&1; then
+            echo "ffmpeg and ripgrep already available; reusing runner tools"
+          else
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg ripgrep
+          fi
 
       - name: Install Python deps
         run: |

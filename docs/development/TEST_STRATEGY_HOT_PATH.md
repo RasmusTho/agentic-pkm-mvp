@@ -52,6 +52,11 @@ in `tests/scripts`. Selector source/tests share this exact contract ownership. T
 avoid unrelated host-global operations coverage. Co-changed runtime/operational sources still
 select their normal coverage; migration and shared configuration changes still select the broad
 suite. `tests/scripts/test_select_pr_tests.py` covers both the narrow selection and protected unions.
+The exact CI-workflow contract test shares this ownership; unrelated ops tests retain their owners.
+Smoke reuses `ffmpeg` and `ripgrep` when both runner tools are already available, avoiding an
+unnecessary package-server dependency. If either is missing, the existing package installation runs
+and any failure stays red. The actual YAML command is exercised with present/missing tools and an
+installation failure in `tests/ops/test_ci_workflow.py`.
 
 ## Routine feature evaluation
 
