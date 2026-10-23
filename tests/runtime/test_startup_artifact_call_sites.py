@@ -1762,14 +1762,16 @@ def _promotion_migration_git_delta(
         cwd=repo,
         check=True,
     )
+    # The pinned synthetic baseline is independent of live promotion refs.
+    # Keep canonical origin identity while seeding its immutable fixture object.
     subprocess.run(
         [
             "git",
             "fetch",
             "-q",
             "--no-tags",
-            "origin",
-            "refs/heads/stable",
+            str(ROOT),
+            PROMOTION_BASELINE_SHA,
         ],
         cwd=repo,
         check=True,
