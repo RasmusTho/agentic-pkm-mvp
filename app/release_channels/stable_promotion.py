@@ -270,6 +270,7 @@ def resolve_migration_baseline(plan: Path, *, expected_digest: str, expected_rec
     # Neither caller refs/config nor a substituted GitHub client can invent S/C/M.
     from app.release_channels.promotion_receipt import _verified_commit
 
+    _verified_commit(source_repo, binding["stable_baseline"])
     merge_tree, parents = _verified_commit(source_repo, expected_stable)
     source_tree, _ = _verified_commit(source_repo, binding["candidate"]["sha"])
     if parents != (binding["stable_baseline"], binding["candidate"]["sha"]) or merge_tree != source_tree:

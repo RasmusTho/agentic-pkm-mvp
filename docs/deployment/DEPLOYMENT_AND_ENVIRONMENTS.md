@@ -1877,7 +1877,8 @@ the verified local S/C/M objects; its trust, signature, freshness and revocation
 `scripts/deploy_channel.sh deploy prod <C> --image-digest <D> --promotion-plan <absolute-plan>` and
 `make deploy-prod SHA=<C> IMAGE_DIGEST=<D> PROMOTION_PLAN=<absolute-plan>` use that admission.
 The native host CLI forwards the target-host absolute plan handle in its existing DeployPlan;
-the Linux preflight admits it before selecting or reading secrets, and activation forwards the
+supervised preparation (including first-init bootstrap) and Linux preflight admit it before
+selecting or reading secrets, and activation forwards the
 same C/D/plan to the script. The host must retain the approved plan and signed receipt inputs.
 Normal checkout promotion refuses before the stable PR because generated M is unqualified;
 actual pinned-image cutover evidence remains required. Ordinary restart and governed previous-good

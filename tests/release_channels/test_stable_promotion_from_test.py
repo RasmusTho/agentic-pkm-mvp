@@ -81,7 +81,10 @@ def admitted(tmp_path, monkeypatch):
     migrations = repo / 'app/alembic/versions'
     migrations.mkdir(parents=True)
     (migrations / '__init__.py').write_text('')
-    _git(repo, 'add', 'code', 'app/alembic/versions/__init__.py')
+    protocol = repo / 'app/config/database.py'
+    protocol.parent.mkdir()
+    protocol.write_text('DATABASE_FILE_CREDENTIAL_PROTOCOL = 1\n')
+    _git(repo, 'add', 'code', 'app/alembic/versions/__init__.py', 'app/config/database.py')
     _git(repo, 'commit', '-qm', 'baseline')
     baseline = _git(repo, 'rev-parse', 'HEAD')
     (repo / 'code').write_text('new')
@@ -382,11 +385,13 @@ def test_valid_signed_receipt_cannot_substitute_foreign_source_or_another_approv
         a['authorize']('deploy')
 
 
+@pytest.mark.parametrize('object_name', ['baseline', 'sha', 'merged'])
 @pytest.mark.parametrize('fault', ['missing', 'corrupt'])
-def test_protected_api_merge_cannot_replace_verified_local_git_identity(admitted, fault):
+def test_protected_api_merge_cannot_replace_verified_local_git_identity(admitted, fault, object_name):
     a = admitted
     a['execute']()
-    object_path = a['repo'] / '.git/objects' / a['merged'][:2] / a['merged'][2:]
+    object_id = a[object_name]
+    object_path = a['repo'] / '.git/objects' / object_id[:2] / object_id[2:]
     assert object_path.is_file()
     if fault == 'missing':
         object_path.unlink()
@@ -431,6 +436,94 @@ def test_native_preflight_runs_real_admission_before_any_secret_read(admitted, m
     with pytest.raises(RuntimeError, match='synthetic secret boundary reached'):
         effects.preflight(plan)
     assert reads == ['reader']
+
+
+
+@pytest.mark.parametrize('fault', ['missing_plan', 'stale_test', 'revoked', None])
+def test_supervised_bootstrap_admits_before_secrets_or_ready(admitted, monkeypatch, fault):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import load_host_secret_contract
+    from app.ops.postgres_deploy import DATABASE_CONSUMERS, DeployJournal, DeployPlan, PostgresDeployError
+
+    a = admitted
+    a['execute']()
+    events = []
+    contract = load_host_secret_contract()
+    synthetic = {
+        contract.bws_identity(channel='prod', consumer='heimdal-api-ingress', secret=secret): value
+        for secret, value in [('heimdal.raw-store-key', 'a' * 64),
+                              ('github.token', 'synthetic-bootstrap-token')]
+    }
+
+    class Reader:
+        def lookup(self, project, identity):
+            events.append('lookup')
+            return synthetic[(project, identity)]
+
+    def reader():
+        events.append('reader')
+        return Reader()
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    class BeforeActivation(Exception):
+        pass
+
+    class ActivationBoundary:
+        def wait(self):
+            # Stop at the existing host bootstrap/activation boundary. The
+            # real supervisor orchestration, journal and result remain real.
+            raise BeforeActivation()
+
+    monkeypatch.setattr(promotion, 'datetime', Clock)
+    for key in ('DATABASE_URL', 'DB_DSN', 'POSTGRES_PASSWORD', 'PGPASSWORD',
+                'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE'):
+        monkeypatch.delenv(key, raising=False)
+    # External host discovery is isolated; source protocol validation and the
+    # promotion/signed/green/consumer readers run through their real paths.
+    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _cfg: False)
+    monkeypatch.setattr(linux, '_raw_representation_migration_pending', lambda *_a, **_kw: False)
+    journal = DeployJournal(a['tmp_path'] / 'journal', 'prod')
+    config = SimpleNamespace(root=a['repo'], channel='prod', journal=journal, reader=reader)
+    effects = linux.LinuxEffects(config)
+
+    def initialized():
+        events.append('initialized')
+        return False
+
+    monkeypatch.setattr(effects, 'initialized', initialized)
+    plan = DeployPlan('prod', a['sha'], tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'),
+                      image_digest=a['candidate'].digest, promotion_plan=str(a['plan']))
+    if fault == 'missing_plan':
+        plan = replace(plan, promotion_plan=None)
+    elif fault == 'stale_test':
+        a['github'].refs['test'] = a['baseline']
+    elif fault == 'revoked':
+        path = Path(a['evidence']['functional_evidence']['registry'])
+        registry = json.loads(path.read_text())
+        registry['entries'][a['receipt']['receipt_id']]['status'] = 'revoked'
+        path.write_text(json.dumps(registry))
+    operation = linux.SupervisedOperation(effects, str(uuid4()), plan, bootstrap=True)
+    operation.activation = ActivationBoundary()
+    if fault:
+        with pytest.raises((promotion.PromotionRefused, PostgresDeployError)):
+            operation._run_locked()
+        assert events == []
+        assert not operation.ready.is_set() and operation.empty is False
+        assert journal.read().stage == 'aborted'
+    else:
+        with pytest.raises(BeforeActivation):
+            operation._run_locked()
+        assert events == ['reader', 'lookup', 'lookup', 'initialized']
+        assert operation.result() == {'pending': True, 'empty': True, 'ready': True}
+        assert journal.read().stage == 'prepared'
 
 
 def test_missing_plan_refuses_actual_prod_script_and_make_before_effects(tmp_path):
