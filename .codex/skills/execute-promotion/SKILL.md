@@ -1,190 +1,112 @@
 ---
 name: execute-promotion
-description: "Execute a reviewed promotion plan: in checkout mode move the stable ref, apply migrations, and restart from the updated checkout; in pinned-image mode run scripts/deploy_channel.sh deploy for the authorized SHA. Requires a complete, operator-acknowledged promotion plan from prepare-promotion."
+description: "Execute an explicitly approved current-TEST promotion plan through a protected stable PR and the existing immutable-image deploy path; verify the result and preserve migration gates."
 ---
 
 # Execute Promotion
 
-> **Status: describes the TARGET gated-`stable` model (deferred promotion hardening).** Prod
-> currently tracks `main` directly per `docs/RELEASE_CHANNELS/README.md §Promotion model` and
-> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
-> **dormant** and is not an ancestor of `origin/main`. Do not run this skill against the current
-> baseline without explicit operator direction — see README §Current direction and §Promotion
-> model before invoking.
->
-> **Target flow (ADR-0068, owner-directed 2026-10-18):** delivery becomes `main` → `dev` → `test`
-> (UAT) → `stable` (prod), and this gated-`stable` model is the target again. `stable` advances only
-> from a `test`-passed candidate. Enactment is tracked under #6207; until the prod-promotion slice
-> lands, the status above governs. See [ADR-0068](../../../docs/adr/ADR-0068-continuous-dev-delivery-flow.md).
+> **Status: current source promotion policy (ADR-0068 D4, Issue #6228).**
+> `stable` is the production promotion authority. Normal advancement requires the exact current
+> `test` candidate C, trusted green TEST evidence, a durable functional PASS, and explicit approval
+> of the concrete plan. Protected merge M records stable authority; it does not qualify a new
+> source version or image. Production deploys the tested source C and immutable digest D.
+> Repository support does not establish a running-prod observation or physical cutover. Current
+> infrastructure observations belong to `RasmusTho/yggdrasil-infra/CURRENT_STATUS.md`.
 
-Use this skill only after `prepare-promotion` has produced a complete plan and the operator has reviewed and ticked all acknowledgment checkboxes.
+Use this skill only with execution authority and a complete, explicitly human-approved plan from
+`prepare-promotion`. Read `docs/RELEASE_CHANNELS/README.md :: Promotion contract`,
+`DEFINE_PROMOTION_PLAN_CONTRACT.md`, and `DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md` in that
+same directory. This is Builder System boundary work: the plan and receipts govern effects on the
+Product/Runtime channel. They do not constitute running-prod observations.
 
-Do not use this skill to:
-- produce the promotion plan (use `prepare-promotion`)
-- verify that prod is healthy after execution (use `verify-promotion`)
-- roll back a failed promotion (use `rollback-promotion`)
+## Admission before any stable or host effect
 
-## Capability boundary
-
-Read `docs/RELEASE_CHANNELS/README.md` (Promotion contract) and `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md` before running. The plan is the contract. If the plan is incomplete or has un-ticked acknowledgment checkboxes, abort.
-
-Executing a promotion is Builder System boundary work: the governed PR, migration run, and receipts
-are Builder System governance artifacts, while the code and schema changes they apply may be
-Product/Runtime changes. Use `docs/architecture/SBS_OPERATING_MODEL.md` to route SBS impact,
-owner-doc writeback, transition debt, and fitness-rule evidence without treating the promotion
-receipt itself as runtime memory or Product truth.
-
-## Stable-branch protection and PR-based advancement
-
-This section applies to checkout / gated-`stable` execution only. Pinned-image mode does not advance
-`stable`; it uses the ADR-0040-authorized SHA and `scripts/deploy_channel.sh deploy` after the
-deployment-model switch below resolves to pinned-image.
-
-`origin/stable` is a **protected branch** (`enforce_admins: true`; required status checks: `smoke`, `smoke-docker`, `pr-contract`; PR required). Direct pushes and refs-API updates to `stable` are rejected by GitHub.
-
-Every stable-ref advancement therefore proceeds through a **governed PR targeting `stable`**, not a direct push or annotated-tag force-push:
-
-1. Create a PR from the candidate commit branch (or a release-integration branch) targeting `stable`.
-2. The PR must pass all three required status checks: `smoke`, `smoke-docker`, `pr-contract`.
-3. An operator reviews and merges the PR. The merge commit becomes the new `stable` HEAD.
-4. After merge, record the new `stable` SHA in the promotion receipt as the executed ref.
-
-Never introduce a direct protected-branch ref mutation as the normal promotion path.
-
-## Ancestry preflight (fail-closed)
-
-This preflight is checkout / gated-`stable` only. Pinned-image mode does not fail on dormant
-`origin/stable` ancestry while ADR-0040 authorizes prod from the current promotion ref.
-
-Before any stable-ref movement, verify that the current `stable` is an ancestor of the promotion candidate:
+Run the existing read-only admission entrypoint from the authoritative source checkout:
 
 ```bash
-git fetch origin
-git merge-base --is-ancestor origin/stable <candidate-sha>
+python -m app.release_channels.stable_promotion --plan <plan> --phase promotion
 ```
 
-- **If the check passes (exit 0):** proceed with the promotion PR.
-- **If the check fails (exit non-zero):** abort immediately. Report:
+It checks the complete reviewed plan and human approval; exact current `test` C; trusted green DEV
+and TEST artifacts; the build-once C/D image provenance; durable signed functional PASS and report;
+the existing STARTUP trust registry, freshness, revocation, immutable source and migration checks;
+stable protection; current baseline S; and S ancestry of C. A missing, stale or unavailable input is
+a refusal. Do not turn a local flag, same-tree comparison, smoke verdict or check result into
+human approval. Keep forward-only migration acknowledgments and vault/channel preflight mandatory.
 
-  ```
-  ABORT: origin/stable is not an ancestor of <candidate-sha>.
-  stable/main divergence detected. A reconciliation PR is required before promotion can proceed.
-  Steps:
-    1. Open a PR from stable into main (or an integration branch) to reconcile the divergence.
-    2. Have that PR reviewed, checked, and merged.
-    3. Re-run execute-promotion after the reconciliation PR has merged.
-  Do not proceed until git merge-base --is-ancestor origin/stable origin/main returns exit 0.
-  ```
+Resolve the physical model from `ops/deployments/prod-latest.json`. An existing prod
+`fleet_model_fitness.v1` PASS for `model=pinned-image` is required by this normal forward path. A checkout
+would run GitHub's new merge SHA M rather than TEST source C; it is refused **before opening the
+stable PR**. Do not deploy untested M, weaken stable protection, or infer that a physical model
+transition occurred. Existing restart/recovery procedures are not new promotion authority.
 
-This preflight is **fail-closed**: if stable is not an ancestor of the candidate, no part of execute-promotion continues. The reconciliation PR must be merged and the ancestry check must pass before promotion resumes.
+If S is not an ancestor of C, stop before effects. A separately reviewed reconciliation must land
+in `main` and pass the complete DEV/TEST route before that new current TEST candidate is eligible.
+Never force stable, guess a baseline, or qualify an integration commit merely by matching trees.
 
-## Deployment model
+## Protected stable advancement
 
-Before any physical deploy step, resolve the target channel's deployment model:
+Every normal stable advancement uses a governed PR targeting `stable`; pinned-image mode has the
+same requirement. Read back protection: enforce admins, PR required, strict `smoke`, `smoke-docker`
+and `pr-contract`, force pushes disabled, deletion disabled. Never write stable directly.
 
-- **Checkout model (interim / no-dead-window):** the channel remains on the checkout model until a
-  cutover receipt exists for that channel: a fleet-model fitness PASS recorded in
-  `ops/deployments/<channel>-latest.json`. In this mode, execute the existing checkout procedure:
-  governed PR to `stable`, update the prod checkout, apply migrations from the checkout, and restart
-  with `make prod-start-full`.
-- **Pinned-image model (post-cutover):** once that channel's cutover receipt exists, do not treat a
-  checkout update as physical deployment. Keep `docs/RELEASE_CHANNELS/README.md` and ADR-0040 as the
-  authority for which SHA may be promoted, then execute the physical deploy through:
+1. Preserve S and the previous-good C/D pin in the approved plan before effects.
+2. Run the channel-isolation guard against the prod checkout's own full compose path:
+   `python -m app.release_channels.channel_isolation_preflight <prod-checkout>/docker-compose.prod.yml prod`.
+   Verify project `pkm-prod`, environment `prod`, DB `app`/15432, initialized real vault and the
+   reviewed migration/config delta. Do not use a dev/test checkout or vault.
+3. With the exact current C as PR head, open the governed PR to stable. Wait for all required checks
+   per `_shared/CI_WAIT_CONTRACT.md`. Re-run promotion admission and verify exact PR head C after
+   the wait, immediately before the operator-authorized expected-head merge. A changed TEST/S, stale
+   receipt, changed plan or PR head requires refusal and fresh preparation. The operator merges
+   under existing stable protection; plan preparation alone does not grant merge approval.
+4. Read back the merged PR and current stable M. Require the same repository, base `stable`, head C,
+   merge SHA M, M parents exactly `[S, C]`, and tree M equal to tree C. Record only the independently
+   verified PR number and M in the existing plan's `execution` fields. Those output fields cannot
+   change the approved C, D, S, migration narrative or model. Squash, rebase, additional merge edits,
+   a changed current TEST, or a changed stable frontier fail closed.
 
-  ```bash
-  scripts/deploy_channel.sh deploy prod <authorized-sha> --ack-forward-only
-  ```
+M establishes protected stable authority only. C remains the source/runtime version and D remains
+its TEST-qualified immutable image. Do not build, retag or silently qualify a new M artifact.
 
-  The script owns the pin bump, migration gate, API/worker/watcher/heimdal-capture-watch/gateway
-  recreate, liveness/readiness gate, live UI smoke, and deploy receipt per
-  `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md §Deploy procedure`. Use the forward-only ack flag
-  only when the acknowledged plan requires it.
+## Physical execution
 
-## What this skill does
+Revalidate immediately before deployment:
 
-1. Reads the promotion plan at the path provided by the operator (output of `prepare-promotion`).
-2. Validates the plan: every required section from the promotion plan contract present, all operator acknowledgment checkboxes ticked. Abort if validation fails.
-3. Resolves the deployment model for `prod` using the rule above and records it in the execution receipt.
-
-**Checkout model (interim / no-dead-window):**
-
-4. **Ancestry preflight**: runs `git merge-base --is-ancestor origin/stable <candidate-sha>`. Aborts with reconciliation-PR instruction if it fails.
-5. Records the current `stable` ref as `stable-prev` (pointer file in `ops/promotions/`) before moving anything.
-6. **Channel isolation preflight.** Before any stack mutation — including opening the governed PR below — invoke the shipped read-only guard against the prod checkout's own compose file (never a dev-tree copy — pass the full path, do not rely on cwd):
-   ```bash
-   python -m app.release_channels.channel_isolation_preflight <prod-checkout>/docker-compose.prod.yml prod
-   ```
-   This fail-closes when the compose overlay's effective env bindings (`PKM_ENVIRONMENT`, `DATABASE_URL`, `DB_DSN`) do not resolve to the prod channel (`docs/RELEASE_CHANNELS/README.md §Compose/env binding invariant`). Abort if the guard fails — do not open the PR in step 7 until it passes.
-7. Opens a governed PR targeting `stable` from the candidate branch. Waits for required status checks (`smoke`, `smoke-docker`, `pr-contract`) to pass per `_shared/CI_WAIT_CONTRACT.md`, then waits for the operator to merge. Records the merged PR URL in the promotion receipt.
-8. Updates the prod checkout's HEAD to the new `stable` (`git -C <prod-checkout> fetch && git -C <prod-checkout> checkout stable`).
-9. Applies reversible migrations to the prod DB (port 15432) in forward order. Applies forward-only migrations only after confirming the operator acknowledged them in the plan. Stops and calls for rollback if any migration fails.
-10. Restarts the prod process with `make prod-start-full` — the canonical prod startup that enforces all four prod runtime-binding elements (compose overlay, `pkm-prod` project namespace, `PKM_ENVIRONMENT=prod`, and the `.env.prod.local`-resolved vault root) per `docs/RELEASE_CHANNELS/README.md §Prod runtime binding`. Do not use separate down/up Make targets — a bare up target alone does not enforce the full binding.
-
-**Pinned-image model (post-cutover):**
-
-11. Confirms the plan names the authorized SHA and that the matching image tag is available.
-12. Runs `scripts/deploy_channel.sh deploy prod <authorized-sha>` with the required forward-only migration acknowledgment flag when the plan contains acknowledged forward-only migrations. This script is the only physical deploy step in pinned-image mode.
-13. Reads and records the deploy receipt at `ops/deployments/prod-latest.json`, including the deployed SHA and health/smoke outcome.
-
-14. Appends the promotion execution receipt to the plan file: timestamp, operator, deployment model, merged PR URL or deploy receipt path, which ref/SHA was authorized, which migrations applied, and process recreate/restart confirmation.
-15. Invokes `verify-promotion` with the plan, then reports the verified acceptance or governed recovery result.
-
-## Pre-conditions
-
-- A complete promotion plan produced by `prepare-promotion` exists and all operator acknowledgments are ticked.
-- The prod Postgres container is running (`make prod-up` healthy).
-- The active deployment model has been resolved before execution.
-
-**Checkout model only:**
-
-- `git merge-base --is-ancestor origin/stable <candidate-sha>` passes (ancestry preflight; see above).
-- The prod checkout (separate worktree, per `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`) is available.
-- `origin/stable` resolves to the current prod commit.
-
-**Pinned-image model only:**
-
-- The plan names the ADR-0040-authorized SHA for the current promotion ref.
-- The matching pinned image tag is available to `scripts/deploy_channel.sh deploy`.
-
-## Operator steps
-
-The `execute-promotion ...` and `verify-promotion` commands below are skill invocations, not installed shell binaries — they name the skills' entry contracts and arguments.
-
-```
-# After reviewing and ticking all checkboxes in the plan:
-execute-promotion --plan ops/promotions/YYYY-MM-DD-<short-sha>.md
-
-# Then verify:
-verify-promotion
+```bash
+python -m app.release_channels.stable_promotion --plan <plan> --phase deploy --candidate <C> --image-digest <D>
+scripts/deploy_channel.sh deploy prod <C> --image-digest <D> --promotion-plan <absolute-plan-path>
 ```
 
-## Failure handling
+Pass `--ack-forward-only` only for the explicitly acknowledged migrations in the plan. The deploy
+script and native host adapter enforce admission before secret materialization or stack effects.
+For the native host path, pass the same **target-host** absolute plan path through
+`app.ops.postgres_deploy_host --promotion-plan`; a control-host path is not portable evidence.
+The target must have the approved plan, retained P2 render/ChannelManifest, signed receipt/report/context
+and existing trusted registry. The immutable S/C/M Git objects must be present in the authoritative
+operations checkout for the existing sanitized reader; missing objects cause refusal. Any fetch
+belongs to explicitly authorized preparation, never to this read-only admission guard.
 
-- If plan validation fails: abort, report the missing section or un-ticked checkbox. Do not open the stable PR.
-- If ancestry preflight fails: abort with the reconciliation-PR instruction. Do not open the stable PR.
-- If `stable-prev` recording fails: abort. Moving `stable` before recording the previous ref makes rollback ambiguous.
-- If the stable PR cannot be opened or its required checks fail: report the check status. Do not proceed to migration or restart.
-- If a migration fails: stop immediately, do not apply subsequent migrations. Report which migration failed. Call `rollback-promotion`.
-- If process restart fails: the ref has moved and some migrations may be applied. Report the partial state explicitly. Call `rollback-promotion` — the operator must decide whether rollback is safe given any forward-only migrations already applied.
+The existing script owns migration classification, pin bump, service recreation, readiness, smoke
+and `ops/deployments/prod-latest.json`. Do not replace it with checkout restart, apply unlisted
+migrations, reverse a forward-only migration, or bypass its immutable-image gates. Its receipt must
+retain the C/D, S/M, approval digest and functional receipt identity returned by admission.
 
-## Key constraints
+STARTUP-04 keeps its signed v2 receipt and trust rules. Before the stable PR its migration baseline
+is freshly read canonical S. After the PR, the same approved plan must independently prove the
+current protected S→M transition for C/D before STARTUP may reuse S; no caller-selected baseline.
 
-- Never execute without a complete, operator-acknowledged plan.
-- Always run the ancestry preflight (`git merge-base --is-ancestor`) before any stable movement. Fail closed if it does not pass.
-- Always record `stable-prev` before opening the stable PR. This is the rollback anchor.
-- Never skip a migration that the plan lists. Never apply a migration the plan does not list.
-- Never use the dev checkout for prod operations — separate worktrees per `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`.
-- Never directly push or force-push to `stable`. The governed PR is the only permitted path for advancing the protected branch.
-- In pinned-image mode, never substitute `git checkout`, `git pull`, or `make prod-start-full` for
-  `scripts/deploy_channel.sh`; checkout updates no longer change the running channel after cutover.
+## Verification and recovery
 
-## Authority order for decisions
+Append observed execution/verification receipts after `<!-- promotion-outcomes -->` in the retained
+plan. This output area grants no admission authority; modifying any reviewed inputs or narrative
+still invalidates approval. Invoke `verify-promotion --plan <plan>` and retain ownership through its
+acceptance receipt or governed recovery.
 
-1. The promotion plan produced by `prepare-promotion` — the immediate contract
-2. `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md` — plan shape
-3. `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md` — failure and rollback posture
-4. `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md` — migration safety
-5. `docs/RELEASE_CHANNELS/README.md` — invariants
+A refused plan, ancestry or PR check before effects requires diagnosis and repair. It does not
+permit rollback. If effects are unknown, reconcile the actual stable, pin, migrations and process
+state first. Only observed effects needing recovery and existing rollback authority permit
+`rollback-promotion`; retain irreversible migration limits and verify the recovered channel.
 
 ## Routing
 
@@ -204,3 +126,7 @@ If the effect is unknown, reconcile observed state before choosing recovery; do 
 roll back. Invoke `rollback-promotion` only after evidence establishes a deployment effect requiring
 recovery and its existing rollback authority and migration gates hold. Never leave successful
 execution unverified.
+
+Missing concrete-plan approval, protected merge authorization, physical cutover evidence, or a
+migration acknowledgment remains a genuine operator gate. Source implementation and local tests
+do not satisfy any of those live gates.

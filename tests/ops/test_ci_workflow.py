@@ -266,11 +266,15 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
     assert "tests/eval/test_classification_golden.py" in job
 
 
-def _run_full_suite_workflow(tmp_path: Path, *, failing_shard: str = "", mode: str = "success"):
+def _run_full_suite_workflow(
+    tmp_path: Path, *, failing_shard: str = "", mode: str = "success", deferred_targets: str = "",
+):
     """Execute the checked-in shell with a fake pytest, including nested tests."""
     files = (
         "tests/alpha/test_root.py", "tests/alpha/nested/test_child.py",
         "tests/beta/deep/test_only_child.py", "tests/test_standalone.py",
+        "tests/deploy/test_deploy_channel_script.py", "tests/deploy/test_short.py",
+        "tests/deploy/nested/test_child.py", "tests/deploy/nested/child_test.py",
         "tests/ops/test_host.py", "tests/ops/nested/test_host_child.py",
         "tests/invariants/test_vault_multiwriter.py", "tests/invariants/test_other.py",
         "tests/e2e/test_deferred.py", "tests/e2e/nested/test_also_deferred.py",
@@ -293,6 +297,11 @@ args = sys.argv[1:]
 targets = [arg for arg in args if arg.startswith("tests/")]
 ignored = {arg.split("=", 1)[1] for arg in args if arg.startswith("--ignore=")}
 assert os.environ["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+assert args[:2] == ["-m", "pytest"]
+assert args[args.index("-m", 2) + 1] == (
+    "not pg and not alpha_llm and not alpha_llm_live and not panel_llm_e2e and not eval "
+    "and not browser_runtime and not human_uat and not uat_integrated_runtime"
+)
 active = Path("active")
 active.mkdir(exist_ok=True)
 token = active / str(os.getpid())
@@ -301,9 +310,17 @@ if targets[0] == "tests/ops":
 else:
     token.touch()
     time.sleep(0.05)
+if os.environ.get("MODE") == "deploy-deselected" and targets[0] == "tests/deploy/nested/child_test.py":
+    print("1 deselected")
+    token.unlink()
+    sys.exit(5)
 for target in targets:
     path = Path(target)
-    files = sorted(path.rglob("test_*.py")) if path.is_dir() else [path]
+    if path.is_dir():
+        files = sorted(file for file in path.rglob("*.py")
+                       if file.name.startswith("test_") or file.name.endswith("_test.py"))
+    else:
+        files = [path]
     for file in files:
         if str(file) not in ignored:
             print(f"EXECUTED {file}")
@@ -329,24 +346,49 @@ print("1 passed")
         ["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
         env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
              **step["env"], "GITHUB_SHA": "fixture-sha", "MODE": mode,
+             "DEFERRED_TARGETS": deferred_targets,
              "RUNNER_TEMP": str(tmp_path / "runner"), "FAILING_SHARD": failing_shard},
         timeout=30,
     )
     return result, files, job
 
 
-def test_full_suite_shards_cover_test_files_once(tmp_path: Path) -> None:
-    result, files, _job = _run_full_suite_workflow(tmp_path)
+@pytest.mark.parametrize("deferred_targets", ["", "tests/deploy"])
+def test_full_suite_shards_cover_test_files_once(tmp_path: Path, deferred_targets: str) -> None:
+    result, files, _job = _run_full_suite_workflow(tmp_path, deferred_targets=deferred_targets)
     assert result.returncode == 0, result.stdout + result.stderr
     log = (tmp_path / "pytest-not-pg.log").read_text()
     executed = re.findall(r"^EXECUTED (.+)$", log, re.MULTILINE)
-    expected = [name for name in files if not name.startswith("tests/e2e/")]
+    expected = [name for name in files if not name.startswith("tests/e2e/")
+                and not (deferred_targets and name.startswith(deferred_targets + "/"))]
     assert sorted(executed) == sorted(expected)
+    shards = (tmp_path / "runner/pytest-not-pg-shards/shards").read_text().splitlines()
+    expected_shards = {name if name.startswith("tests/deploy/") or name.count("/") == 1
+                       else "/".join(name.split("/")[:2])
+                       for name in expected if not name.startswith("tests/ops/")}
+    assert set(shards) == expected_shards and len(shards) == len(expected_shards)
+    assert "tests/deploy" not in shards
+    if deferred_targets:
+        assert not any(shard.startswith("tests/deploy/") for shard in shards)
+        assert shards == sorted(shards)
+        assert "SHARD DEFERRED to post-merge heavy tests: tests/deploy/" in result.stderr
+    else:
+        assert shards[0] == "tests/deploy/test_deploy_channel_script.py"
+        assert shards[1:] == sorted(set(shards[1:]))
     assert "SHARD FINISHED (0): tests/alpha in " in result.stdout
     # The host-sensitive tests run after parallel shards and are never duplicated.
     assert executed[-3:] == ["tests/ops/nested/test_host_child.py",
                              "tests/ops/test_host.py",
                              "tests/invariants/test_vault_multiwriter.py"]
+
+
+def test_full_suite_records_fully_deselected_deploy_module(tmp_path: Path) -> None:
+    result, _files, _job = _run_full_suite_workflow(tmp_path, mode="deploy-deselected")
+    assert result.returncode == 0, result.stdout + result.stderr
+    shard_root = tmp_path / "runner/pytest-not-pg-shards"
+    assert "0 tests/deploy/nested/child_test.py" in (shard_root / "status").read_text().splitlines()
+    log = (shard_root / "logs/tests_deploy_nested_child_test.py.log").read_text()
+    assert "1 deselected" in log and "EXECUTED" not in log
 
 
 def test_required_unit_full_suite_phase_budget_preserves_complete_coverage(tmp_path: Path) -> None:
@@ -1069,9 +1111,13 @@ if "tests/ops" in args:
     assert "synthetic serial failure" in aggregate
 
 
-@pytest.mark.parametrize("mode", ["shard-failure", "incomplete", "serial-failure"])
-def test_full_suite_shards_retain_failure_logs(tmp_path: Path, mode: str) -> None:
-    failing_shard = "tests/ops" if mode == "serial-failure" else "tests/alpha"
+@pytest.mark.parametrize(
+    ("mode", "failing_shard"),
+    [("shard-failure", "tests/alpha"),
+     ("deploy-shard-failure", "tests/deploy/test_short.py"),
+     ("incomplete", "tests/alpha"), ("serial-failure", "tests/ops")],
+)
+def test_full_suite_shards_retain_failure_logs(tmp_path: Path, mode: str, failing_shard: str) -> None:
     result, _files, job = _run_full_suite_workflow(tmp_path, failing_shard=failing_shard, mode=mode)
     assert result.returncode == 1
     shard_root = tmp_path / "runner" / "pytest-not-pg-shards"
@@ -1082,10 +1128,11 @@ def test_full_suite_shards_retain_failure_logs(tmp_path: Path, mode: str) -> Non
         assert "Process-shard runner incomplete" in result.stderr
         assert "PARTIAL synthetic regression" in (shard_root / "logs/tests_alpha.log").read_text()
         assert "tests/alpha" not in (shard_root / "status").read_text()
-    elif mode == "shard-failure":
-        assert "SHARD FAILED (1): tests/alpha" in result.stderr
-        assert "FAILED synthetic regression" in (shard_root / "logs/tests_alpha.log").read_text()
-        assert "1 tests/alpha" in (shard_root / "status").read_text()
+    elif mode in {"shard-failure", "deploy-shard-failure"}:
+        assert f"SHARD FAILED (1): {failing_shard}" in result.stderr
+        log_name = failing_shard.replace("/", "_") + ".log"
+        assert "FAILED synthetic regression" in (shard_root / "logs" / log_name).read_text()
+        assert f"1 {failing_shard}" in (shard_root / "status").read_text()
         assert "FAILED synthetic regression" in (tmp_path / "pytest-not-pg.log").read_text()
     else:
         assert receipt["phase"] == "serial"

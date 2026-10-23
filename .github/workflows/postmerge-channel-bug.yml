@@ -13,10 +13,11 @@ on:
         required: true
         type: string
 
-# Queue every verdict under the channel's sole writer. Candidate ancestry and
-# retained receipt checks also reject delayed runs; queue order is not authority.
+# One trusted-main writer serializes both channels. Scheduling can reorder or
+# cancel requests: test requires the retained exact dev-green receipt, never
+# queue order. Non-force updates also fence delayed/external ref movement.
 concurrency:
-  group: postmerge-channel-bug-${{ inputs.channel }}
+  group: postmerge-channel-verdict
   cancel-in-progress: false
   queue: max
 
@@ -42,3 +43,35 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           EVIDENCE: ${{ inputs.evidence }}
         run: python3 scripts/postmerge_channel_bug.py --channel "$CHANNEL" --evidence "$EVIDENCE"
+
+  record-channel-ref:
+    needs: reconcile
+    if: >-
+      github.repository == 'RasmusTho/agentic-pkm-mvp' &&
+      github.ref == 'refs/heads/main' && github.actor == 'RasmusTho' &&
+      fromJSON(inputs.evidence).verdict == 'passed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Record exact green channel ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+          EVIDENCE: ${{ inputs.evidence }}
+        run: >-
+          python3 scripts/postmerge_channel_bug.py --advance-ref --channel "$CHANNEL"
+          --evidence "$EVIDENCE" --receipt-file channel-verdict.json
+      - name: Publish exact green verdict receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: postmerge-green-${{ inputs.channel }}-${{ fromJSON(inputs.evidence).candidate.run_id }}-${{ fromJSON(inputs.evidence).candidate.run_attempt }}-attempt-${{ github.run_attempt }}
+          path: channel-verdict.json
+          if-no-files-found: error

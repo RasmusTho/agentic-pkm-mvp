@@ -7,10 +7,9 @@ uncommitted state acting as durable truth (the #2527 finding: prod ran a dirty
 ``main`` checkout with 11 modified tracked files that existed nowhere in git).
 
 Promotion-model authority: ``docs/RELEASE_CHANNELS/README.md`` §"Promotion
-model" and ``docs/adr/ADR-0040-prod-promotion-ref-main-interim.md``. Prod
-currently tracks ``main`` as an interim baseline; the gated ``stable`` promotion
-ref is deferred future hardening. This guard flags when the prod checkout
-diverges from the configured promotion ref or runs a dirty tree.
+model" and ADR-0068 D4. The default authority is protected ``stable``. This
+checkout reproducibility guard grants no promotion or image qualification and
+does not establish the running production model.
 
 Design constraints (mirror ``channel_isolation_preflight``):
 - Read-only: this module NEVER mutates the inspected checkout.
@@ -31,10 +30,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-#: The agreed prod promotion ref. Prod tracks ``main`` as the interim baseline
-#: until a gated ``stable`` ref is restored as future promotion hardening
-#: (ADR-0040). Keep this in sync with docs/RELEASE_CHANNELS/README.md.
-DEFAULT_PROMOTION_REF = "main"
+#: The adopted production authority; physical observations are recorded separately.
+DEFAULT_PROMOTION_REF = "stable"
 
 #: Sentinel branch name git reports for a detached HEAD.
 _DETACHED = "HEAD"
@@ -225,7 +222,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--compare-to-ref",
         default=None,
         help=(
-            "Optional already-known ref (e.g. origin/main) HEAD must equal. "
+            "Optional already-known ref (e.g. origin/stable) HEAD must equal. "
             "No fetch is performed; compare against what is already local."
         ),
     )

@@ -17,7 +17,7 @@ import re
 import stat
 import subprocess
 import sys
-from typing import Any
+from typing import Any, cast
 
 REPOSITORY = 'RasmusTho/agentic-pkm-mvp'
 ROOT = Path(__file__).resolve().parents[1]
@@ -154,7 +154,9 @@ def copy_runtime_dependencies(vendor: Path) -> None:
             if (any(part.endswith('.dist-info') for part in relative.parts)
                 and relative.name not in {'METADATA', 'WHEEL', 'RECORD', 'LICENSE', 'LICENSE.txt'}):
                 continue
-            source = Path(distribution.locate_file(relative))
+            # Keep the existing filesystem constructor and RECORD checks;
+            # metadata's stub also permits non-filesystem SimplePath objects.
+            source = Path(cast(os.PathLike[str], distribution.locate_file(relative)))
             if source.is_symlink() or not source.is_file():
                 raise ValueError('tooling_dependency_file_refused')
             data = source.read_bytes()
@@ -219,7 +221,9 @@ def report_startup_failure(directory: Path) -> None:
     # an allocated activity sequence; the time floor also preserves the status
     # pagination proof after clock correction and delayed writer admission.
     with checkpoint_lock(directory, existing_only=True):
-        checkpoint = read_checkpoint_document(directory / 'postmerge-dev-test.json')
+        # Type-only narrowing: absent state must still fail at the existing
+        # membership check before transport; never synthesize an empty frontier.
+        checkpoint = cast(dict[str, Any], read_checkpoint_document(directory / 'postmerge-dev-test.json'))
         observation = validate_observation(checkpoint['observation']) if 'observation' in checkpoint else None
         sequence = observation['sequence'] if observation else 0
         observed = datetime.now(timezone.utc)

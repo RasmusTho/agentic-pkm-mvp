@@ -6,7 +6,7 @@ Authority: Canonical deployment + environment-separation contract. `docs/ENVIRON
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
 Infrastructure reference review: 2026-10-21 (status ownership and stale October 3 paragraph only)
-Last reviewed: 2026-10-17 (TEST dormant preparation context/admission continuity; BWS secret-provisioning review remains 2026-10-15; other deployment sections were not re-audited)
+Last reviewed: 2026-10-23 (#6228 promotion admission and recovery binding, repository-only; existing TEST preparation, native acquisition and credential gates retained; other sections were not re-audited)
 Last live runtime verification: 2026-10-11 UTC (accepted native DEV/TEST activation, health/version/UI and isolated PostgreSQL verification under #5675; the earlier read-only route checks remain separate, and `prod` was not queried)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903); Issue #5868 and the existing-secret deployment Verify targets, which establish repository behavior only.
 Verification update (2026-10-10): repository support includes post-merge image admission and private-host dev/test orchestration under #5922. Deterministic verification establishes the orchestration, digest and migration boundaries; live activation and functional channel acceptance are recorded separately under #5675.
@@ -787,7 +787,7 @@ retained fields fail reporting without transmission. The main-only workflow uses
 `GITHUB_TOKEN` for Issue writes; it never receives deployment credentials or runs candidate code.
 
 The workflow validates main ancestry, the exact successful admitted workflow attempt and receipt identity,
-serializes each channel, and opens or comments on one bot-owned, channel-marked rolling bug. Later
+serializes its consumers across both channels, and opens or comments on one bot-owned, channel-marked rolling bug. Later
 green evidence comments and closes that Issue; a later failure reopens the same Issue. Candidate ordering and successful
 workflow receipts reject delayed red/green events. A terminal-evidence fingerprint in workflow
 metadata also rejects conflicting replays after a first green before any bug exists. Successful
@@ -797,6 +797,54 @@ Human-authored or other-channel Issues are not mutation targets. Generated bugs 
 readiness requires a bounded repair contract. Actions failures remain visible in their workflow run
 and never gate main merges or replay deployment. This is repository support; live activation and
 qualification retain #6170 and #3347's operator gates.
+
+Channel-ref repository support (#6226) reuses that trusted-main workflow, with a separate
+`record-channel-ref` job. The Issue job retains Contents read; only the ref job has Contents write,
+alongside Actions read and Issues read. The ref consumer admits only the repository owner's
+main-branch dispatch and reads back its exact workflow identity. It reuses the source loader to
+authenticate the candidate's successful historical build attempt, selected image job, digest and
+artifact. Candidate code, deployment credentials and a host Contents-write permission do not enter
+this boundary. The host client's approved scope remains Actions read/write, Contents read and
+Metadata read.
+
+A green dev verdict creates an absent `dev` ref or advances it with `force: false`. A green native
+test deployment may do the same for `test` only with a retained, digest-checked artifact containing
+that exact candidate's green dev receipt from a successful workflow attempt. The current dev
+acceptance validator applies to that receipt, including its heavy-test evidence. The single Actions
+concurrency group prevents simultaneous consumer effects, but does not promise dispatch order:
+reordered, cancelled or replaced requests cannot substitute for the artifact. Successful earlier
+attempts remain valid after later reporting reruns. A stale candidate, non-fast-forward move,
+foreign receipt, missing/expired evidence or incomplete history refuses the affected operation.
+`main` and `stable` are never mutation targets.
+
+For a deliberate dev-ref hold, the repository owner opens a linked Issue whose body starts with
+this exact marker and the current full `dev` SHA, followed by the technical reason:
+
+````text
+<!-- postmerge-dev-hold:v1 -->
+```json
+{"sha":"<current 40-character dev SHA>"}
+```
+Technical reason and release condition.
+````
+
+The request becomes active when a ref job reports `channel_ref: held`, the matching SHA and the
+Issue URL. If an earlier ref move wins during activation, the mismatched pin fails loudly; reconcile
+the Issue's documented pin against the actual ref before relying on the hold. An absent dev ref,
+malformed or ambiguous hold, failed Issue read or incomplete listing also refuses advancement.
+While the acknowledged hold Issue remains open, later candidates and their verdict artifacts are
+still recorded and deployments continue; this is distinct from the expiring machinery pause.
+Close the linked Issue to release the hold. The next green dev request, or a rerun of the latest
+held dev workflow, can advance the ref by fast-forward.
+
+Every ref effect requires exact readback. If a ref write succeeds before its response or receipt
+upload is lost, rerun that same Actions workflow: the exact SHA is idempotent and its green artifact
+can be published without a native deployment replay. If test ran before dev evidence was published,
+rerun the corresponding test workflow after the dev workflow succeeds. These failures remain visible
+in Actions and never gate main merges or stop newer candidates. The canonical tests execute the
+real poller, dispatch argv, CLI consumers and historical image/receipt loaders over fake GitHub/native
+transports; they establish repository support, not live ref movement or host activation. Existing
+#6170/#3347 activation and release gates remain.
 
 After a candidate's `dev` deployment commits, the repository controller runs the fixed post-merge
 heavy-test profile once: `qualify-heavy dev <operation-id>` through the same
@@ -1353,6 +1401,23 @@ grammar, including multiline values, without a parallel dotenv parser; project-e
 are never retained or emitted.
 Assigned-only snapshots and retained cleanup do not acquire this unset-specific lookup dependency.
 
+Canonical source-identity helper acquisition retains a finite `image_pull_failure` on
+`PostgresDeployError` only when its Compose `pull api` child completes nonzero. The outward refusal
+text stays generic. Complete supported public daemon/registry errors map to `registry_unauthorized`,
+`registry_denied`, `registry_manifest_unknown` or `registry_rate_limited`; these are observed error
+classes, not proved authentication, configuration or host causes. The vocabulary follows the
+[OCI Distribution error contract](https://specs.opencontainers.org/distribution-spec/?v=v1.1.0).
+Classification accepts only the exact fixed message and optional matching API pull-progress lines,
+empty stdout, and at most 16 KiB of combined captured text. Extra/private lines, conflicting or
+duplicate errors, unknown messages, malformed text and oversized evidence yield `unclassified`.
+No child data, command arguments, endpoint, path, value, identifier, numeric exit status or exception
+text is retained in the diagnostic field or emitted. Other commands and source-projection diagnostics
+keep their existing contracts. Timeout and pre-pull/qualification refusals remain generic.
+Failed pulls stop before image qualification or writer work; success still requires the exact
+revision/digest and installed-unset checks. These labels do not change cleanup precedence, diagnose
+the previous live failure, authorize a retry/new effect, or establish DEV/TEST acceptance. Live host
+diagnosis and subsequent acquisition remain separately governed by the parent operation contract.
+
 The installed-writer fingerprint treats Docker's `Mounts` collection as an unordered set of
 complete supported bind/volume records. Partial records and unsupported mount types refuse. Future
 requests sort the full serialized records before hashing; no mount field
@@ -1802,13 +1867,40 @@ checkout mode versus pinned-image mode and, after a channel's cutover receipt ex
 execution through `scripts/deploy_channel.sh` so this document remains the owner of pin bump,
 migration gate, recreate, health gate, UI smoke, and deploy/rollback receipt semantics.
 
+Normal production advancement (#6228) requires exact current green TEST source C and immutable
+image D, a durable signed functional PASS, and explicit approval of the concrete plan. Protected
+stable merge M records only the approved transition from S: its PR head is C, parents are `[S, C]`
+and tree equals C. It does not qualify a new image or runtime version. The existing STARTUP v2
+validator may retain signed baseline S after merge only by reauthenticating that transition and
+the verified local S/C/M objects; its trust, signature, freshness and revocation rules are unchanged.
+
+`scripts/deploy_channel.sh deploy prod <C> --image-digest <D> --promotion-plan <absolute-plan>` and
+`make deploy-prod SHA=<C> IMAGE_DIGEST=<D> PROMOTION_PLAN=<absolute-plan>` use that admission.
+The native host CLI forwards the target-host absolute plan handle in its existing DeployPlan;
+supervised preparation (including first-init bootstrap) and Linux preflight admit it before
+selecting or reading secrets, and activation forwards the
+same C/D/plan to the script. The host must retain the approved plan and signed receipt inputs.
+Normal checkout promotion refuses before the stable PR because generated M is unqualified;
+actual pinned-image cutover evidence remains required. Ordinary restart and governed previous-good
+rollback keep their existing contracts and do not borrow normal forward eligibility.
+
+Admission reads GitHub through the existing operator production `gh` context: Contents read for
+refs/ancestry/commit objects, Actions read for exact build and green evidence, full branch-protection
+Administration read, and PR read (or the endpoint's supported Contents-read permission). Missing
+tools, denied metadata or incomplete required protection refuse before secrets/effects. The
+controller's existing Actions-write/Contents-read/Metadata-read client is not assumed to provide
+production approval or Administration read. No client is provisioned or broadened by source adoption.
+The native runtime manifest includes the signed validator's complete dependencies from existing
+application pins; installation probes those actual imports before launcher publication. Existing
+pinned-tooling manifest, exact distribution versions and SDK RECORD qualification remain required.
+
 ## Rollback procedure
 
 Rollback reuses the deploy mechanism in reverse, against the previous known-good pin.
 
-1. **Resolve previous-good pin.** Identify the channel's previous known-good image tag (the prior deploy-pin value; for `prod`, the previous `stable` SHA per `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).
+1. **Resolve previous-good pin.** Identify the recorded previous-good source/image digest from the prior deploy pin or approved plan. For prod, retain `stable-prev` as the separate ref-restoration anchor per `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`; a generated rollback merge is not a qualified image.
 2. **Migration reversal (reversible only).** Reverse only migrations classified reversible. **Forward-only migrations are not auto-reversed** — if the failed deploy applied a forward-only migration, rollback of code can still proceed, but the schema state and any data implications are an operator decision (this is exactly why step 2 of the deploy gates on forward-only ack). Vault content is immutable across rollback.
-3. **Recreate against the previous pin.** Bump the channel pin back to the previous tag and recreate API + gateway (same mechanism as deploy step 3). No rebuild — the previous image already exists in the registry.
+3. **Recreate against the previous pin.** Use `scripts/deploy_channel.sh rollback prod <previous-good-sha>` (or `make rollback-prod SHA=<previous-good-sha>`) for prod. It restores the recorded previous pin/digest and recreates API + gateway. No rebuild — the previous image already exists in the registry. Forward-promotion admission is not recovery authority; existing migration and runtime-floor gates still apply.
 4. **Health gate + record.** Re-run the §Deploy liveness/readiness gate, confirm `/readyz` passes and `/api/health.required_ok` is `true`, and confirm `/version` now reports the rolled-back SHA. Record the rollback receipt.
 
 Rollback is a tag-bump + recreate because images are immutable and retained in the registry — the same property that makes promotion cheap makes rollback cheap.
@@ -2008,7 +2100,7 @@ inside-container peer-loopback inference enters that exception.
 ## What this supersedes
 
 - **`docs/ENVIRONMENTS.md` §Deployment.** That document remains the SoT for environment *selection* and *path scoping*; its deployment subsection now points here for *how a deploy happens*. The current-reality matrix and the ad-hoc startup wrappers described there are superseded by the build-once/promote + managed-units model in this document.
-- **The narrow scope of #2527.** #2527 ("prod runs dirty `main`, not `stable`") is the *symptom-level* reconciliation: it records the promotion-ref decision and flags a dirty/diverged prod tree. This spec is the *systemic* fix it pointed at — the bind-mounted-checkout model (the reason a "dirty prod tree" was even possible) is replaced by pinned images, so prod stops running an editable, divergent working tree. #2527's promotion-ref decision is consumed by the §Deploy step-1 pin and by `docs/RELEASE_CHANNELS/README.md`; this document does not re-decide it.
+- **The narrow scope of #2527.** Its dirty/diverged checkout finding remains the reproducibility constraint. #6228 adopts protected stable source authority through `docs/RELEASE_CHANNELS/README.md`, superseding ADR-0040 §1–§2. After actual pinned-image cutover, this document supplies the physical mechanism for the approved C/D, rather than an editable checkout. It does not independently select promotion authority or establish running-prod state.
 - **The `nohup` gateway launch** in `scripts/lib/companion_ui_startup.sh` is superseded by §Gateways as managed units.
 
 This document does **not** supersede `docs/RELEASE_CHANNELS/README.md` (channel identity, per-channel DB, promotion-plan/rollback/migration-classification contracts) — it implements the physical deploy beneath those contracts and references them rather than restating them.

@@ -8,6 +8,7 @@ import json
 import os
 import plistlib
 import shutil
+import shlex
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -1447,7 +1448,7 @@ def test_channel_bug_authority_failures_have_no_writes(fault):
 def test_channel_bug_workflow_keeps_writes_on_trusted_main():
     workflow = yaml.safe_load((ROOT / '.github/workflows/postmerge-channel-bug.yml').read_text())
     assert set(workflow.get('on', workflow.get(True))) == {'workflow_dispatch'}
-    assert workflow['concurrency'] == {'group': 'postmerge-channel-bug-${{ inputs.channel }}',
+    assert workflow['concurrency'] == {'group': 'postmerge-channel-verdict',
                                         'cancel-in-progress': False, 'queue': 'max'}
     assert workflow['run-name'].endswith('/${{ fromJSON(inputs.evidence).receipt_fingerprint }}')
     job = workflow['jobs']['reconcile']
@@ -2047,6 +2048,18 @@ def test_startup_signal_refuses_non_failure_values(monkeypatch, value):
         liveness.record_signal('heartbeat', json.dumps(payload), repo=driver.REPOSITORY,
                                event='workflow_dispatch', ref='refs/heads/main', actor='RasmusTho',
                                triggering_actor='RasmusTho', run_url=f'https://github.com/{driver.REPOSITORY}/actions/runs/999')
+
+
+def test_native_host_command_preserves_interpreter_alias(tmp_path, monkeypatch):
+    interpreter = tmp_path / 'runtime' / 'bin' / 'python3'
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(sys.executable)
+    assert str(interpreter.resolve()) != str(interpreter)
+    monkeypatch.setattr(driver.sys, 'executable', str(interpreter))
+    command = driver._native_host_command()
+    assert command[0] == str(interpreter)
+    assert command[1:4] == ['-I', '-S', '-c']
+    assert command[5] == str(ROOT)
 
 
 def test_native_absence_child_uses_same_isolated_tooling_command(monkeypatch):
@@ -2973,3 +2986,610 @@ def test_healthy_installed_bootstrap_forwards_authoritative_state(installed_cont
     payload = json.loads(pin.signals.read_text())
     assert payload['sequence'] == after['observation']['sequence'] == before['observation']['sequence'] + 1
     assert 'after_sequence' not in payload and 'startup' not in payload
+
+
+class _RefGithub(_ChannelGithub):
+    """Fake GitHub transport; real producer argv, CLI consumers and loaders."""
+
+    def __init__(self, monkeypatch, directory):
+        super().__init__()
+        self.monkeypatch, self.directory = monkeypatch, directory
+        self.refs, self.uploads, self.archives, self.own_runs = {}, {}, {}, {}
+        self.own_attempts = {}
+        self.queue_only, self.pending, self.next_run_id = False, [], 1000
+        self.ref_results = []
+        self.fail_after_write = False
+        self.before_write = None
+        self.artifact_fault = None
+        self.image_attempts = {}
+
+    def _run(self, run_id=900, candidate=None):
+        sha = self.candidates[-1].sha if candidate is None else candidate.sha
+        return {'id': run_id, 'run_attempt': 1, 'event': 'workflow_dispatch', 'head_branch': 'main',
+                'head_sha': sha, 'path': '.github/workflows/postmerge-channel-bug.yml',
+                'repository': {'full_name': driver.REPOSITORY},
+                'head_repository': {'full_name': driver.REPOSITORY}, 'actor': {'login': 'RasmusTho'},
+                'status': 'in_progress', 'conclusion': None}
+
+    def _image(self, candidate):
+        _, proof = _build()
+        attempt = self.image_attempts.get(candidate.run_id, candidate.run_attempt)
+        proof.update(candidate_sha=candidate.sha, image=driver.IMAGE_REPOSITORY + ':' + candidate.sha,
+                     image_ref=driver.IMAGE_REPOSITORY + '@' + candidate.digest,
+                     image_index_digest=candidate.digest, run_id=candidate.run_id, run_attempt=attempt)
+        metadata, raw = _artifact(proof)
+        metadata.update(id=candidate.artifact_id,
+                        name=f'app-image-tts-engine-proof-{candidate.sha}-attempt-{attempt}')
+        if self.artifact_fault == 'digest':
+            metadata['digest'] = 'sha256:' + '0' * 64
+        self.archives[candidate.artifact_id] = raw
+        return metadata
+
+    def api(self, method, path, data=None):
+        prefix = f'repos/{driver.REPOSITORY}'
+        if '/git/matching-refs/heads/' in path:
+            self.reads.append(path)
+            channel = path.rsplit('/', 1)[-1]
+            return ([{'ref': 'refs/heads/' + channel, 'object': {'type': 'commit', 'sha': self.refs[channel]}}]
+                    if channel in self.refs else [])
+        if '/git/refs' in path:
+            if self.before_write is not None:
+                callback, self.before_write = self.before_write, None
+                callback()
+            channel = data['ref'].rsplit('/', 1)[-1] if method == 'POST' else path.rsplit('/', 1)[-1]
+            assert channel in {'dev', 'test'}
+            if method == 'POST':
+                if channel in self.refs:
+                    raise channel_bug.AlertRefused('github_request_failed')
+            else:
+                assert data['force'] is False
+                if self.api('GET', prefix + f'/compare/{self.refs[channel]}...{data["sha"]}')['status'] != 'ahead':
+                    raise channel_bug.AlertRefused('github_request_failed')
+            self.effects.append((method, path, data))
+            self.refs[channel] = data['sha']
+            if self.fail_after_write:
+                self.fail_after_write = False
+                raise channel_bug.AlertRefused('github_request_failed')
+            return {'ref': 'refs/heads/' + channel, 'object': {'type': 'commit', 'sha': data['sha']}}
+        if path == prefix + '/issues?state=open&creator=RasmusTho&per_page=100&page=1':
+            self.reads.append(path)
+            return [row for row in self.issues if row.get('state') == 'open'
+                    and row.get('user', {}).get('login') == 'RasmusTho']
+        if path.startswith(prefix + '/issues/') and '/comments' not in path and method == 'GET':
+            self.reads.append(path)
+            return next(row for row in self.issues if row['number'] == int(path.rsplit('/', 1)[-1]))
+        if '/actions/runs/' in path:
+            parts = path.split('/actions/runs/')[1].split('/')
+            run_id = int(parts[0])
+            if parts[1:] == ['artifacts?per_page=100']:
+                self.reads.append(path)
+                rows = self.uploads.get(run_id)
+                if rows is None:
+                    candidate = next(c for c in self.candidates if c.run_id == run_id)
+                    rows = [self._image(candidate)]
+                return {'total_count': len(rows), 'artifacts': rows}
+            if parts[1:] == ['jobs?filter=all&per_page=100']:
+                self.reads.append(path)
+                candidate = next(c for c in self.candidates if c.run_id == run_id)
+                attempt = self.image_attempts.get(run_id, candidate.run_attempt)
+                jobs = [{'name': driver.BUILD_JOB, 'run_id': run_id, 'run_attempt': attempt,
+                         'status': 'completed', 'conclusion': 'success'}]
+                # A later failed build must not invalidate a retained successful attempt.
+                jobs.append({**jobs[0], 'run_attempt': candidate.run_attempt + 1, 'conclusion': 'failure'})
+                return {'total_count': len(jobs), 'jobs': jobs}
+            if run_id == 900 or run_id in self.own_runs:
+                self.reads.append(path)
+                if len(parts) == 3:
+                    prior = self.own_attempts.get((run_id, int(parts[2])))
+                    if prior is not None:
+                        return prior
+                return self.own_runs.get(run_id, self._run())
+        return super().api(method, path, data)
+
+    def archive(self, path):
+        self.reads.append(path)
+        return self.archives[int(path.split('/artifacts/')[1].split('/')[0])]
+
+    def advance(self, evidence, **overrides):
+        options = {'channel': evidence['channel'], 'event': 'workflow_dispatch', 'ref': 'refs/heads/main',
+                   'repository': driver.REPOSITORY, 'actor': 'RasmusTho', 'run_id': 900, 'run_attempt': 1,
+                   'workflow_sha': self.candidates[-1].sha, 'api': self.api, 'archive': self.archive}
+        return channel_bug.advance_channel_ref(evidence, **{**options, **overrides})
+
+    def transport(self, argv, **kwargs):
+        assert argv[:8] == ['gh', 'workflow', 'run', 'postmerge-channel-bug.yml', '--repo',
+                            driver.REPOSITORY, '--ref', 'main']
+        fields = dict(argv[i + 1].split('=', 1) for i, arg in enumerate(argv) if arg == '-f')
+        self.deliveries.append(json.loads(fields['evidence']))
+        run_id = self.next_run_id
+        self.next_run_id += 1
+        if self.queue_only:
+            self.pending.append((fields, run_id))
+        else:
+            self.consume(fields, run_id)
+        # Dispatch acceptance precedes asynchronous Actions consumption.
+        return SimpleNamespace(returncode=0)
+
+    def consume(self, fields, run_id, attempt=1):
+        evidence = json.loads(fields['evidence'])
+        row = self._run(run_id)
+        row['run_attempt'] = attempt
+        row['display_title'] = (f"channel-bug/{evidence['channel']}/{evidence['verdict']}/"
+                                f"{evidence['candidate']['sha']}/{evidence['candidate']['run_id']}/"
+                                f"{evidence['candidate']['run_attempt']}/{evidence['receipt_fingerprint']}")
+        self.own_runs[run_id] = row
+        workflow = yaml.safe_load((ROOT / '.github/workflows/postmerge-channel-bug.yml').read_text())
+        job = workflow['jobs']['record-channel-ref']
+        run_directory = self.directory / f'run-{run_id}-{attempt}'
+        run_directory.mkdir()
+        receipt_file = run_directory / job['steps'][2]['with']['path']
+
+        def arguments(command):
+            tokens = shlex.split(command)
+            assert tokens[:2] == ['python3', 'scripts/postmerge_channel_bug.py']
+            return [token.replace('$CHANNEL', fields['channel']).replace('$EVIDENCE', fields['evidence'])
+                    for token in tokens[1:]]
+
+        with self.monkeypatch.context() as patch:
+            patch.setattr(channel_bug, '_api', self.api)
+            patch.setattr(channel_bug, '_github', self.archive)
+            for key, value in {'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REF': 'refs/heads/main',
+                               'GITHUB_REPOSITORY': driver.REPOSITORY, 'GITHUB_RUN_ID': str(run_id),
+                               'GITHUB_RUN_ATTEMPT': str(attempt), 'GITHUB_SHA': row['head_sha'], 'GITHUB_ACTOR': 'RasmusTho'}.items():
+                patch.setenv(key, value)
+            patch.chdir(run_directory)
+            patch.setattr(sys, 'argv', arguments(workflow['jobs']['reconcile']['steps'][1]['run']))
+            status = channel_bug.main()
+            if status == 0 and evidence['verdict'] == 'passed':
+                patch.setattr(sys, 'argv', arguments(job['steps'][1]['run']))
+                status = channel_bug.main()
+        if receipt_file.exists():
+            content = io.BytesIO()
+            with ZipFile(content, 'w') as zipped:
+                zipped.writestr('channel-verdict.json', receipt_file.read_bytes())
+            raw = content.getvalue()
+            artifact_id = 5000 + 100 * run_id + attempt
+            artifact_name = job['steps'][2]['with']['name']
+            for expression, value in {'inputs.channel': evidence['channel'],
+                                       'fromJSON(inputs.evidence).candidate.run_id': evidence['candidate']['run_id'],
+                                       'fromJSON(inputs.evidence).candidate.run_attempt': evidence['candidate']['run_attempt'],
+                                       'github.run_attempt': attempt}.items():
+                artifact_name = artifact_name.replace('${{ ' + expression + ' }}', str(value))
+            assert '${{' not in artifact_name
+            self.uploads.setdefault(run_id, []).extend([{'id': artifact_id, 'expired': False, 'size_in_bytes': len(raw),
+                                     'digest': 'sha256:' + hashlib.sha256(raw).hexdigest(),
+                                     'name': artifact_name}])
+            self.archives[artifact_id] = raw
+        else:
+            self.uploads.setdefault(run_id, [])
+        row.update(status='completed', conclusion='success' if status == 0 else 'failure')
+        self.runs[:] = [item for item in self.runs if item['id'] != run_id]
+        self.runs.append(row)
+        self.own_attempts[(run_id, attempt)] = dict(row)
+        self.ref_results.append(status)
+        return status
+
+
+def _ref_evidence(candidate, **kwargs):
+    evidence = _channel_evidence(candidate, verdict='passed', **kwargs)
+    if evidence['channel'] == 'dev':
+        evidence['gate'] = 'heavy_acceptance'
+        evidence['receipt']['heavy_acceptance'] = dict(HEAVY_PASSED)
+        evidence['receipt_fingerprint'] = driver.channel_verdict_fingerprint(evidence)
+    return evidence
+
+
+def _poll_ref_channel(directory, candidate, **kwargs):
+    # Real timer ticks first finish any retained prior candidate's reporting.
+    result = _poll_channel(directory, candidate, **kwargs)
+    if json.loads((directory / 'postmerge-dev-test.json').read_text())['candidate'] != asdict(candidate):
+        result = _poll_channel(directory, candidate, **kwargs)
+    return result
+
+
+@pytest.fixture
+def ref_github(monkeypatch, tmp_path):
+    github = _RefGithub(monkeypatch, tmp_path)
+    monkeypatch.setattr(driver, 'dispatch_channel_verdict', REAL_CHANNEL_DISPATCH)
+    monkeypatch.setattr(driver.subprocess, 'run', github.transport)
+    return github
+
+
+def test_channel_refs_advance_only_on_green_verdicts(tmp_path, ref_github):
+    github = ref_github
+    first = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    assert _poll_ref_channel(tmp_path, first) == 0
+    assert github.refs == {'dev': SHA, 'test': SHA}
+    assert github.ref_results == [0, 0]
+    red = github.add(replace(first, sha='c' * 40, run_id=124, artifact_id=457))
+    assert _poll_ref_channel(tmp_path, red, red='dev') == 78
+    assert github.refs == {'dev': SHA, 'test': SHA}
+    dev_green = github.add(replace(first, sha='d' * 40, run_id=125, artifact_id=458))
+    assert _poll_ref_channel(tmp_path, dev_green, red='test') == 78
+    assert github.refs == {'dev': dev_green.sha, 'test': SHA}
+    green = github.add(replace(first, sha='e' * 40, run_id=126, artifact_id=459))
+    assert _poll_ref_channel(tmp_path, green) == 0
+    assert github.refs == {'dev': green.sha, 'test': green.sha}
+    ref_writes = [row for row in github.effects if '/git/refs' in row[1]]
+    assert len(ref_writes) == 5
+    assert all(row[2].get('force') is False for row in ref_writes if row[0] == 'PATCH')
+    assert all('/main' not in row[1] and row[2].get('ref') != 'refs/heads/main' for row in ref_writes)
+
+
+def _hold_issue(sha, number=6226):
+    return {'number': number, 'state': 'open', 'user': {'login': 'RasmusTho', 'type': 'User'},
+            'author_association': 'OWNER', 'labels': [],
+            'body': channel_bug.HOLD_MARKER + '\n```json\n' + json.dumps({'sha': sha}) + '\n```\nTechnical hold.'}
+
+
+def test_dev_hold_pins_ref_and_records_candidates(tmp_path, ref_github):
+    github = ref_github
+    first = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    assert _poll_ref_channel(tmp_path, first) == 0
+    hold = _hold_issue(SHA)
+    github.issues.append(hold)
+    later = github.add(replace(first, sha='c' * 40, run_id=124, artifact_id=457))
+    assert _poll_ref_channel(tmp_path, later) == 0
+    stored = json.loads((tmp_path / 'postmerge-dev-test.json').read_text())
+    assert stored['candidate'] == asdict(later) and stored['last_green'] == {'dev': later.sha, 'test': later.sha}
+    assert github.refs == {'dev': SHA, 'test': later.sha}
+    assert all(row['conclusion'] == 'success' for row in github.runs)
+    held = github.advance(_ref_evidence(later))
+    assert held == {'channel_ref': 'held', 'channel': 'dev', 'sha': SHA,
+                    'hold_issue': f'https://github.com/{driver.REPOSITORY}/issues/6226'}
+    hold['state'] = 'closed'
+    assert github.advance(_ref_evidence(later))['channel_ref'] == 'advanced'
+    assert github.refs['dev'] == later.sha
+
+
+@pytest.mark.parametrize('fault', ['missing_dev', 'red_dev', 'foreign_digest', 'missing_artifact',
+                                  'corrupt_artifact', 'foreign_receipt', 'failed_attempt', 'expired_artifact', 'native_only_dev'])
+def test_test_ref_requires_exact_successful_dev_receipt(tmp_path, ref_github, fault):
+    github = ref_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    if fault not in {'missing_dev', 'red_dev'}:
+        assert _poll_ref_channel(tmp_path, candidate) == 0
+        github.refs.pop('test')
+        row = github.runs[0]
+        artifact = github.uploads[row['id']][0]
+        if fault == 'foreign_digest':
+            candidate = replace(candidate, digest='sha256:' + 'c' * 64)
+        elif fault == 'missing_artifact':
+            github.uploads[row['id']] = []
+        elif fault == 'corrupt_artifact':
+            github.archives[artifact['id']] += b'drift'
+        elif fault == 'expired_artifact':
+            artifact['expired'] = True
+        elif fault == 'foreign_receipt':
+            artifact['name'] = artifact['name'].replace('-123-', '-999-')
+        elif fault == 'failed_attempt':
+            row['conclusion'] = 'failure'
+        elif fault == 'native_only_dev':
+            native = _channel_evidence(candidate, verdict='passed')
+            raw = io.BytesIO()
+            with ZipFile(raw, 'w') as zipped:
+                zipped.writestr('channel-verdict.json', json.dumps(native))
+            github.archives[artifact['id']] = raw.getvalue()
+            artifact['digest'] = 'sha256:' + hashlib.sha256(raw.getvalue()).hexdigest()
+            artifact['size_in_bytes'] = len(raw.getvalue())
+            row['display_title'] = row['display_title'].rsplit('/', 1)[0] + '/' + native['receipt_fingerprint']
+            github.own_attempts[(row['id'], 1)]['display_title'] = row['display_title']
+    elif fault == 'red_dev':
+        assert _poll_ref_channel(tmp_path, candidate, red='dev') == 78
+    before = list(github.effects)
+    with pytest.raises(channel_bug.AlertRefused):
+        github.advance(_ref_evidence(candidate, channel='test'))
+    assert github.effects == before and 'test' not in github.refs
+
+
+@pytest.mark.parametrize('fault', ['actor', 'ref', 'repository', 'workflow_sha', 'own_run', 'artifact',
+                                  'candidate_identity', 'receipt', 'channel', 'stale', 'diverged'])
+def test_ref_authority_and_stale_requests_have_no_writes(tmp_path, ref_github, fault):
+    github = ref_github
+    previous = github.add(driver.Candidate('1' * 40, DIGEST, 122, 1, 455))
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    evidence, options = _ref_evidence(candidate), {}
+    if fault in {'actor', 'ref', 'repository', 'workflow_sha'}:
+        options[fault] = {'actor': 'outsider', 'ref': 'refs/heads/feature', 'repository': 'foreign/repo',
+                          'workflow_sha': 'bad'}[fault]
+    elif fault == 'own_run':
+        github.own_runs[900] = {**github._run(), 'path': '.github/workflows/foreign.yml'}
+    elif fault == 'artifact':
+        github.artifact_fault = 'digest'
+    elif fault == 'candidate_identity':
+        evidence = _ref_evidence(replace(candidate, artifact_id=789))
+    elif fault == 'receipt':
+        evidence['receipt']['operation_id'] = previous.operation_id('dev')
+    elif fault == 'channel':
+        options['channel'] = 'main'
+    elif fault == 'stale':
+        github.refs['dev'] = candidate.sha
+        evidence = _ref_evidence(previous)
+    elif fault == 'diverged':
+        github.refs['dev'] = previous.sha
+        options['api'] = lambda method, path, data=None: ({'status': 'diverged'} if path.endswith(
+            f'{previous.sha}...{candidate.sha}') else github.api(method, path, data))
+    with pytest.raises(channel_bug.AlertRefused):
+        github.advance(evidence, **options)
+    assert not github.effects
+
+
+@pytest.mark.parametrize('fault', ['pin_mismatch', 'malformed', 'ambiguous', 'unavailable', 'bootstrap'])
+def test_dev_hold_activation_refuses_unknown_or_mismatched_state(ref_github, fault):
+    github = ref_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    github.refs['dev'] = SHA
+    issue = _hold_issue(SHA)
+    github.issues.append(issue)
+    if fault == 'pin_mismatch':
+        issue['body'] = issue['body'].replace(SHA, 'c' * 40)
+    elif fault == 'malformed':
+        issue['body'] = channel_bug.HOLD_MARKER + '\nprivate garbage'
+    elif fault == 'ambiguous':
+        github.issues.append(_hold_issue(SHA, 6227))
+    elif fault == 'bootstrap':
+        github.refs.clear()
+    api = github.api
+    if fault == 'unavailable':
+        api = lambda method, path, data=None: ((_ for _ in ()).throw(RuntimeError('unavailable'))
+                                               if '/issues?' in path else github.api(method, path, data))
+    with pytest.raises((channel_bug.AlertRefused, RuntimeError)):
+        github.advance(_ref_evidence(candidate), api=api)
+    assert not github.effects
+
+
+@pytest.mark.parametrize('bootstrap', [True, False])
+def test_ref_write_crash_replay_and_concurrent_candidate_order(ref_github, bootstrap):
+    github = ref_github
+    previous = github.add(driver.Candidate('1' * 40, DIGEST, 122, 1, 455))
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    newer = github.add(replace(candidate, sha='c' * 40, run_id=124, artifact_id=457))
+    if not bootstrap:
+        github.refs['dev'] = previous.sha
+    github.fail_after_write = True
+    with pytest.raises(channel_bug.AlertRefused, match='github_request_failed'):
+        github.advance(_ref_evidence(candidate))
+    assert github.refs['dev'] == candidate.sha
+    before = list(github.effects)
+    assert github.advance(_ref_evidence(candidate))['channel_ref'] == 'unchanged'
+    assert github.effects == before
+    github.before_write = lambda: github.refs.update(dev=newer.sha)
+    with pytest.raises(channel_bug.AlertRefused, match='github_request_failed'):
+        github.advance(_ref_evidence(newer))
+    assert github.refs['dev'] == newer.sha and github.effects == before
+    with pytest.raises(channel_bug.AlertRefused, match='channel_ref_not_fast_forward'):
+        github.advance(_ref_evidence(candidate))
+    assert github.refs['dev'] == newer.sha
+
+
+def test_ref_readback_failure_and_delayed_bootstrap_never_claim_success(tmp_path, ref_github):
+    github = ref_github
+    older = github.add(driver.Candidate('1' * 40, DIGEST, 122, 1, 455))
+    newer = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    assert _poll_ref_channel(tmp_path, newer) == 0
+    github.refs.clear()
+    before = list(github.effects)
+    assert github.advance(_ref_evidence(older))['channel_ref'] == 'stale'
+    assert github.effects == before and not github.refs
+    ref_reads = 0
+
+    def readback(method, path, data=None):
+        nonlocal ref_reads
+        if '/git/matching-refs/' in path:
+            ref_reads += 1
+            if ref_reads > 1:
+                return []
+        return github.api(method, path, data)
+
+    with pytest.raises(channel_bug.AlertRefused, match='channel_ref_readback_refused'):
+        github.advance(_ref_evidence(newer), api=readback)
+    assert github.refs['dev'] == newer.sha
+    assert github.advance(_ref_evidence(newer))['channel_ref'] == 'unchanged'
+
+
+def test_channel_ref_workflow_permissions_and_real_cli_are_narrow():
+    workflow = yaml.safe_load((ROOT / '.github/workflows/postmerge-channel-bug.yml').read_text())
+    assert workflow['concurrency'] == {'group': 'postmerge-channel-verdict', 'cancel-in-progress': False, 'queue': 'max'}
+    job = workflow['jobs']['record-channel-ref']
+    assert job['needs'] == 'reconcile'
+    assert all(part in job['if'] for part in ("github.ref == 'refs/heads/main'", "github.actor == 'RasmusTho'"))
+    assert job['permissions'] == {'contents': 'write', 'actions': 'read', 'issues': 'read'}
+    assert job['steps'][0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': False}
+    assert '--advance-ref' in job['steps'][1]['run'] and '--receipt-file channel-verdict.json' in job['steps'][1]['run']
+    assert '${{' not in job['steps'][1]['run']
+    assert job['steps'][2]['with']['path'] == 'channel-verdict.json'
+    assert workflow['jobs']['reconcile']['permissions']['contents'] == 'read'
+    assert not any('secret' in str(step).lower() for step in job['steps'])
+
+
+@pytest.mark.parametrize('latest', [('completed', 'failure'), ('in_progress', None)])
+def test_exact_green_dev_artifact_survives_a_later_reporting_rerun(tmp_path, ref_github, latest):
+    github = ref_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    assert _poll_ref_channel(tmp_path, candidate) == 0
+    dev = github.runs[0]
+    dev.update(run_attempt=2, status=latest[0], conclusion=latest[1])
+    github.refs.pop('test')
+    assert github.advance(_ref_evidence(candidate, channel='test'))['channel_ref'] == 'advanced'
+    assert github.refs['test'] == SHA
+    assert f'repos/{driver.REPOSITORY}/actions/runs/1000/attempts/1' in github.reads
+
+
+def test_ref_consumer_reuses_exact_source_attempt_and_earlier_image_job(tmp_path, ref_github):
+    github = ref_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 2, 456))
+    github.image_attempts[123] = 1
+    assert _poll_ref_channel(tmp_path, candidate) == 0
+    assert github.refs == {'dev': SHA, 'test': SHA}
+    assert github.ref_results == [0, 0]
+    assert f'repos/{driver.REPOSITORY}/actions/runs/123/attempts/2' in github.reads
+    assert f'repos/{driver.REPOSITORY}/actions/runs/123' not in github.reads
+
+
+def test_dev_hold_authority_and_activation_race_are_explicit(ref_github):
+    github = ref_github
+    previous = github.add(driver.Candidate('1' * 40, DIGEST, 122, 1, 455))
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    github.refs['dev'] = previous.sha
+    foreign = _hold_issue(previous.sha)
+    foreign['user']['login'] = 'outsider'
+    closed = {**_hold_issue(previous.sha, 6227), 'state': 'closed'}
+    github.issues.extend((foreign, closed))
+    requested = _hold_issue(previous.sha, 6228)
+    # Opening the Issue is intent. Only a successful held receipt activates it.
+    # If a previously admitted ref move wins, the pin mismatch refuses loudly.
+    github.before_write = lambda: github.issues.append(requested)
+    assert github.advance(_ref_evidence(candidate))['channel_ref'] == 'advanced'
+    before = list(github.effects)
+    with pytest.raises(channel_bug.AlertRefused, match='dev_hold_pin_mismatch'):
+        github.advance(_ref_evidence(candidate))
+    assert github.refs['dev'] == candidate.sha and github.effects == before
+    requested['body'] = requested['body'].replace(previous.sha, candidate.sha)
+    assert github.advance(_ref_evidence(candidate))['channel_ref'] == 'held'
+    assert github.effects == before
+
+
+@pytest.mark.parametrize('fault', ['actor', 'repository', 'head_repository', 'run_attempt', 'path'])
+def test_ref_consumer_refuses_foreign_own_workflow_provenance(ref_github, fault):
+    github = ref_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    row = github._run()
+    row[fault] = ({'login': 'outsider'} if fault == 'actor' else {'full_name': 'foreign/repo'}
+                  if fault in {'repository', 'head_repository'} else 2 if fault == 'run_attempt'
+                  else '.github/workflows/foreign.yml')
+    github.own_runs[900] = row
+    with pytest.raises(channel_bug.AlertRefused, match='workflow_authority_refused'):
+        github.advance(_ref_evidence(candidate))
+    assert not github.effects
+
+
+@pytest.mark.parametrize('fault', ['ref_read', 'hold_readback', 'hold_listing', 'hold_pagination'])
+def test_channel_ref_unavailable_and_incomplete_reads_refuse_before_effect(ref_github, fault):
+    github = ref_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    github.refs['dev'] = SHA
+    if fault == 'hold_readback':
+        github.issues.append(_hold_issue(SHA))
+
+    def api(method, path, data=None):
+        if fault == 'ref_read' and '/git/matching-refs/' in path:
+            return None
+        if fault == 'hold_readback' and '/issues/6226' in path:
+            raise RuntimeError('private readback failure')
+        if fault == 'hold_listing' and '/issues?' in path:
+            return {'items': []}
+        if fault == 'hold_pagination' and '/issues?' in path:
+            return [{'number': i, 'body': 'ordinary owner Issue'} for i in range(100)]
+        return github.api(method, path, data)
+
+    with pytest.raises((channel_bug.AlertRefused, RuntimeError)):
+        github.advance(_ref_evidence(candidate), api=api)
+    assert github.refs['dev'] == SHA and not github.effects
+
+
+@pytest.mark.parametrize('dev_delivery', ['reordered', 'cancelled', 'lost_response'])
+def test_reordered_or_replaced_requests_recover_by_exact_workflow_rerun(tmp_path, ref_github, dev_delivery):
+    github = ref_github
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    github.queue_only = True
+    assert _poll_ref_channel(tmp_path, candidate) == 0
+    dev, test = github.pending
+    assert len(github.deliveries) == 2
+    # Actions accepts both dispatches, but its concurrency group promises no
+    # dispatch order. A test request can execute before any dev receipt exists.
+    assert github.consume(*test) == 1
+    assert not github.refs
+    if dev_delivery == 'cancelled':
+        fields, run_id = dev
+        evidence = json.loads(fields['evidence'])
+        row = github._run(run_id)
+        row.update(status='completed', conclusion='cancelled',
+                   display_title=f"channel-bug/dev/passed/{SHA}/123/1/{evidence['receipt_fingerprint']}")
+        github.own_runs[run_id] = row
+        github.own_attempts[(run_id, 1)] = dict(row)
+        github.runs.append(row)
+        assert github.consume(*test, attempt=2) == 1
+        assert not github.refs
+        assert github.consume(*dev, attempt=2) == 0
+    elif dev_delivery == 'lost_response':
+        github.fail_after_write = True
+        assert github.consume(*dev) == 1
+        assert github.refs == {'dev': SHA}
+        assert not github.uploads[dev[1]]
+        assert github.consume(*dev, attempt=2) == 0
+    else:
+        assert github.consume(*dev) == 0
+    assert github.consume(*test, attempt=3) == 0
+    assert github.refs == {'dev': SHA, 'test': SHA}
+    assert len(github.deliveries) == 2  # no host resend or native deployment replay
+    writes = [effect for effect in github.effects if '/git/refs' in effect[1]]
+    assert len(writes) == 2 and all(effect[0] == 'POST' for effect in writes)
+
+
+def test_newer_red_or_skipped_workflow_cannot_replace_green_ref_authority(tmp_path, ref_github):
+    github = ref_github
+    good = github.add(driver.Candidate('1' * 40, DIGEST, 122, 1, 455))
+    github.queue_only = True
+    assert _poll_ref_channel(tmp_path, good) == 0
+    bad = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    assert _poll_ref_channel(tmp_path, bad, red='dev') == 78
+    dev, test, red = github.pending
+    assert github.consume(*red) == 0 and not github.refs
+    # The delayed prior green remains the channel's latest actual green even
+    # after a newer red verdict has successfully updated its rolling bug.
+    assert github.consume(*dev) == 0
+    assert github.refs['dev'] == good.sha
+    assert github.issues[0]['state'] == 'open'
+    assert github.consume(*test) == 0
+    assert github.refs['test'] == good.sha
+    # Overall success with a skipped ref job has no green artifact authority.
+    skipped = github._run(1500)
+    skipped.update(status='completed', conclusion='success',
+                   display_title=f"channel-bug/dev/passed/{SHA}/123/1/{'0' * 64}")
+    github.own_runs[1500] = skipped
+    github.runs.append(skipped)
+    github.uploads[1500] = []
+    github.refs.clear()
+    assert github.advance(_ref_evidence(good))['channel_ref'] == 'advanced'
+    assert github.refs['dev'] == good.sha
+
+
+@pytest.mark.parametrize('fault', ['changed', 'unavailable', 'malformed'])
+def test_dev_hold_confirmation_requires_final_ref_readback(ref_github, fault):
+    github = ref_github
+    previous = github.add(driver.Candidate('1' * 40, DIGEST, 122, 1, 455))
+    candidate = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    github.refs['dev'] = previous.sha
+    github.issues.append(_hold_issue(previous.sha))
+    reads = 0
+
+    def api(method, path, data=None):
+        nonlocal reads
+        if '/git/matching-refs/heads/dev' in path:
+            reads += 1
+            if reads == 2:
+                if fault == 'changed':
+                    github.refs['dev'] = candidate.sha
+                elif fault == 'unavailable':
+                    raise RuntimeError('private readback error')
+                else:
+                    return {'incomplete': True}
+        return github.api(method, path, data)
+
+    with pytest.raises((channel_bug.AlertRefused, RuntimeError)):
+        github.advance(_ref_evidence(candidate), api=api)
+    assert reads == 2 and not github.effects
+
+
+def test_ref_authority_requires_current_heavy_dev_verdict(tmp_path, ref_github):
+    github = ref_github
+    first = github.add(driver.Candidate(SHA, DIGEST, 123, 1, 456))
+    native = _channel_evidence(first, verdict='passed')
+    assert github.consume({'channel': 'dev', 'evidence': json.dumps(native)}, 2000) == 1
+    assert not github.effects and not github.refs
+    assert _poll_ref_channel(tmp_path, first, heavy=lambda _: dict(HEAVY_PASSED, result='failed', failed=1)) == 78
+    assert not github.refs and len(github.deliveries) == 1
+    assert github.deliveries[0]['gate'] == 'heavy_acceptance' and github.deliveries[0]['verdict'] == 'failed'
+    later = github.add(replace(first, sha='c' * 40, run_id=124, artifact_id=457))
+    assert _poll_ref_channel(tmp_path, later) == 0
+    assert github.refs == {'dev': later.sha, 'test': later.sha}

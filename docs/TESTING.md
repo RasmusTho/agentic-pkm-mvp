@@ -514,6 +514,26 @@ Docker socket, or external network route. Profile/result identity persists in th
 journal and controller checkpoint, so smoke-only recovery cannot advance a candidate.
 Actions admission alone does not prove deployment or functional testing, and deterministic runner
 tests do not establish live equivalent coverage.
+
+Channel-ref proof (#6226) lives in `tests/deploy/test_postmerge_dev_test.py`, including
+`test_channel_refs_advance_only_on_green_verdicts` and `test_dev_hold_pins_ref_and_records_candidates`.
+Its transport doubles exercise the real controller, dispatch argv, trusted-main CLI, source/image
+loader and exact green artifact consumer. The matrix includes absent refs, non-force refusal,
+foreign/stale inputs, hold activation and read failures, reordered or cancelled Actions requests,
+retained successful attempts and recovery by rerunning the same workflow after a partial ref write.
+Test eligibility depends on the exact dev-green artifact, never Actions dispatch order. This proof
+does not move live refs; the [deployment owner](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1)
+owns hold and recovery procedure and the existing activation gates.
+
+Production promotion proof (#6228) lives in
+`tests/release_channels/test_stable_promotion_from_test.py`. It exercises the real green-ref
+producer, signed STARTUP receipt/report validator, immutable Git reader and native pre-secret
+admission, substituting only external transports. Refusal cases cover stale or mismatched C/D/S/M,
+approval/narrative changes, protection or API denial, foreign PRs, invalid local merge objects,
+signed source/receipt substitution and changed frontiers. Actual shell/Make and native CLI tests
+cover argument forwarding and refusal; the deploy harness also proves previous-good immutable
+rollback remains available under its separate contract. These fixtures establish repository
+behavior, not a live functional PASS, production promotion or parent #6207 red-to-green acceptance.
 [FAST_PR_TO_DEV_TEST_AUTOMATION](plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) sequences live activation,
 functional/isolated-PG coverage handoff and ten-candidate measurement under #5675. The PG PR job is
 retired after actual equivalent dev/test execution passes; non-PG PR checks and the bounded nightly
