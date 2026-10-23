@@ -446,32 +446,36 @@ def _admit_registry_selection(root: Path, observations: tuple[RegistryIngestObse
     from app.knowledge.write_ops import read_recovery_snapshot_relative
     from app.rebuildability.product_total_loss import parse_bounded_frontmatter
     from app.services.note_uuid import is_read_only_derived_artifact
-    from app.workers.outbox_worker import _normalize_uuid_value
+    from app.workers.outbox_worker import _validate_strict_registry_source_identity
 
-    inventory = registry_identity_inventory(root, observations)
-    if inventory.invalid_count or inventory.ambiguous_count:
-        raise SourceIdentityPersistenceRefusal('source_identity_ineligible')
     claims: set[str] = set()
     for observation in observations:
         relative = observation.path.relative_to(root).as_posix()
         raw, _identity = read_recovery_snapshot_relative(relative, vault_root=root)
-        metadata, _body, error = parse_bounded_frontmatter(raw)
+        metadata, body, error = parse_bounded_frontmatter(raw)
         declared = metadata.get('uuid')
         alternate = metadata.get('id')
-        normalized = _normalize_uuid_value(declared)
         if (error is not None or is_profile_note_source_read_only(root, relative, _canonical_uuid(declared))
             or is_read_only_derived_artifact(metadata)):
             raise SourceIdentityPersistenceRefusal('source_identity_ineligible')
-        if (declared not in (None, '') and (
-                not normalized or _canonical_uuid(normalized) != normalized
-            )
-            or alternate not in (None, '', declared)):
+        if alternate not in (None, '', declared):
             raise SourceIdentityPersistenceRefusal('source_identity_ineligible')
+        try:
+            _validate_strict_registry_source_identity(
+                observation.path, vault_root=root, source_text=raw, frontmatter=metadata, body=body,
+            )
+        except Exception:
+            raise SourceIdentityPersistenceRefusal('source_identity_ineligible') from None
         if declared not in (None, ''):
             identity = _canonical_uuid(declared)
             if identity in claims:
                 raise SourceIdentityPersistenceRefusal('source_identity_ambiguous')
             claims.add(str(identity))
+    # Pure producer guards must precede the inventory's permissive companion
+    # reader: an unsafe existing inode must never be read as if it were absent.
+    inventory = registry_identity_inventory(root, observations)
+    if inventory.invalid_count or inventory.ambiguous_count:
+        raise SourceIdentityPersistenceRefusal('source_identity_ineligible')
 
 
 def run_ordinary_persistence(

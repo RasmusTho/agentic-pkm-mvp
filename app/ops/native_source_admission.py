@@ -105,9 +105,21 @@ def require_terminal_deployment(effects: LinuxEffects) -> None:
         raise PostgresDeployError()
     # Authenticate the terminal against its existing immutable request; a lone
     # terminal marker is not proof that the supervisor's old operation is over.
+    # bound_plan validates the stored bootstrap flag, including a completed
+    # first initialization; this reader grants no new bootstrap authority.
     plan = effects.config.journal.bound_plan(receipt.operation_id)
-    effects.config.journal.bind_request(receipt.operation_id, plan, False)
     receipt.require_profile(plan)
+
+
+def require_unretired_source_attempt(effects: LinuxEffects, operation_id: str) -> None:
+    """Absence retirement consumes an ID; it is not a diagnostic/producer attempt."""
+    from app.ops.postgres_deploy_linux import _private_json
+    directory, channel = effects.config.journal.directory, effects.config.channel
+    for name in (f'{channel}-source-diagnostic-{operation_id}.attempt.json',
+                 f'{channel}-source-identity-{operation_id}.producer.attempt.json'):
+        path = directory / name
+        if os.path.lexists(path) and _private_json(path).get('contract') == 'native-source-identity-absence.v1':
+            raise PostgresDeployError()
 
 
 def runtime_matches(current: SourceIdentityRuntimeSnapshot, request: dict[str, Any]) -> bool:
@@ -132,6 +144,7 @@ def run_diagnostic(
         or type(cleanup_only) is not bool):
         raise PostgresDeployError()
     selected.validate()
+    require_unretired_source_attempt(effects, operation_id)
     base = {'operation_id': operation_id, 'channel': cfg.channel, 'revision': revision,
             'image_digest': image_digest, 'source_mode': 'current-state',
             'kind': 'source-identity-diagnostic',

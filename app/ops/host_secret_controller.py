@@ -14,6 +14,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import stat
 from uuid import UUID, uuid4
 
@@ -73,6 +74,7 @@ class HostSecretOperation:
         completed_source: str | None = None,
         producer_kind: str | None = None,
         source_mode: str | None = None,
+        source_request_fingerprint: str | None = None,
     ) -> None:
         self._journal_fd = journal_fd
         self.operation_id = operation_id
@@ -89,6 +91,7 @@ class HostSecretOperation:
         self._completed_source = completed_source
         self.producer_kind = producer_kind
         self.source_mode = source_mode
+        self.source_request_fingerprint = source_request_fingerprint
 
     def _record(self, stage: str, source: str | None = None) -> None:
         if not self._active or self._finished or self._completed_result is not None:
@@ -110,6 +113,7 @@ class HostSecretOperation:
             record["producer_kind"] = self.producer_kind
         if self.source_mode is not None:
             record["source_mode"] = self.source_mode
+            record["source_request_fingerprint"] = self.source_request_fingerprint
         raw = (json.dumps(record, sort_keys=True) + "\n").encode()
         # A partial write or failed fsync leaves a poison/pending journal, never admission.
         if os.write(self._journal_fd, raw) != len(raw):
@@ -168,7 +172,7 @@ class HostSecretOperation:
         ):
             valid_source = True
         if (
-            self.kind == "source-persistence"
+            self.kind in {"source-persistence", "source-diagnostic"}
             and evidence.result == "failed"
             and evidence.source == _SOURCE_PERSISTENCE_ABSENCE_SOURCE
             and (
@@ -352,13 +356,15 @@ class HostSecretController:
                     base_fields = {"operation_id", "kind", "target", "stage", "source"}
                     if frozenset(record) not in {
                         frozenset(base_fields), frozenset(base_fields | {"producer_kind"}),
-                        frozenset(base_fields | {"producer_kind", "source_mode"}),
-                        frozenset(base_fields | {"source_mode"}),
+                        frozenset(base_fields | {"producer_kind", "source_mode", "source_request_fingerprint"}),
+                        frozenset(base_fields | {"source_mode", "source_request_fingerprint"}),
                     } or (
                         "producer_kind" in record and record["producer_kind"] != "registry"
                     ) or (
                         "source_mode" in record and (
                             record["source_mode"] != "current-state"
+                            or not isinstance(record['source_request_fingerprint'], str)
+                            or re.fullmatch(r'[0-9a-f]{64}', record['source_request_fingerprint']) is None
                             or record["target"] not in {"dev", "test"}
                             or (record["kind"] == "source-persistence"
                                 and record.get("producer_kind") != "registry")
@@ -402,7 +408,8 @@ class HostSecretController:
                     if (
                         record["kind"] in {"source-persistence", "source-diagnostic"}
                         and (record.get("producer_kind") != pending.get("producer_kind")
-                             or record.get("source_mode") != pending.get("source_mode"))
+                             or record.get("source_mode") != pending.get("source_mode")
+                             or record.get('source_request_fingerprint') != pending.get('source_request_fingerprint'))
                     ):
                         raise HostSecretAdmissionError()
                     if record["stage"] == "failed" and (
@@ -440,7 +447,7 @@ class HostSecretController:
                                 and record["source"] == _OPERATOR_UNKNOWN_CLEANUP_SOURCE
                             )
                             or (
-                                record["kind"] == "source-persistence"
+                                record["kind"] in {"source-persistence", "source-diagnostic"}
                                 and record["stage"] == "failed"
                                 and pending["stage"] == "sent"
                                 and record["source"] == _SOURCE_PERSISTENCE_ABSENCE_SOURCE
@@ -643,22 +650,25 @@ class HostSecretController:
         self, target: str, *, operation_id: str,
         producer_kind: str = "vault-alpha",
         current_state: bool = False,
+        request_fingerprint: str | None = None,
     ) -> Iterator[tuple[HostSecretOperation, bool]]:
         """Admit one DEV/TEST ordinary-producer operation under the host lock."""
         with self._source_operation(
             target, operation_id=operation_id, producer_kind=producer_kind,
             current_state=current_state, diagnostic=False,
+            request_fingerprint=request_fingerprint,
         ) as result:
             yield result
 
     @contextmanager
     def source_diagnostic_operation(
-        self, target: str, *, operation_id: str,
+        self, target: str, *, operation_id: str, request_fingerprint: str | None = None,
     ) -> Iterator[tuple[HostSecretOperation, bool]]:
         """Serialize a distinct read-only diagnostic, never a source producer."""
         with self._source_operation(
             target, operation_id=operation_id, producer_kind="vault-alpha",
             current_state=True, diagnostic=True,
+            request_fingerprint=request_fingerprint,
         ) as result:
             yield result
 
@@ -666,12 +676,16 @@ class HostSecretController:
     def _source_operation(
         self, target: str, *, operation_id: str, producer_kind: str,
         current_state: bool, diagnostic: bool,
+        request_fingerprint: str | None,
     ) -> Iterator[tuple[HostSecretOperation, bool]]:
         if target not in {"dev", "test"}:
             raise HostSecretAdmissionError()
         if (producer_kind not in {"vault-alpha", "registry"}
             or type(current_state) is not bool
-            or (current_state and not diagnostic and producer_kind != "registry")):
+            or (current_state and not diagnostic and producer_kind != "registry")
+            or (current_state and (not isinstance(request_fingerprint, str)
+                                  or re.fullmatch(r'[0-9a-f]{64}', request_fingerprint) is None))
+            or (not current_state and request_fingerprint is not None)):
             raise HostSecretAdmissionError()
         kind = "source-diagnostic" if diagnostic else "source-persistence"
         mode = "current-state" if current_state else None
@@ -689,6 +703,7 @@ class HostSecretController:
                 or pending.get("producer_kind")
                 != ("registry" if producer_kind == "registry" else None)
                 or pending.get("source_mode") != mode
+                or pending.get('source_request_fingerprint') != request_fingerprint
             ):
                 raise HostSecretAdmissionError()
             completed = None
@@ -712,6 +727,7 @@ class HostSecretController:
                         or last.get("producer_kind")
                         != ("registry" if producer_kind == "registry" else None)
                         or last.get("source_mode") != mode
+                        or last.get('source_request_fingerprint') != request_fingerprint
                     ):
                         raise HostSecretAdmissionError()
                     completed = str(last["stage"])
@@ -724,6 +740,7 @@ class HostSecretController:
                 completed_source=completed_source,
                 producer_kind=("registry" if producer_kind == "registry" else None),
                 source_mode=mode,
+                source_request_fingerprint=request_fingerprint,
             )
             resumed = pending is not None or completed is not None
             if not resumed:

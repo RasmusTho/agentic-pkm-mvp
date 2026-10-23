@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout
 import copy
+import hashlib
 import io
 import json
 import os
@@ -185,6 +186,8 @@ def composed(tmp_path, monkeypatch, request):
         if argv[0] == 'ssh':
             payload = json.loads(kwargs['input'])
             state.rpc.append(payload)
+            if state.fail == 'pre-dispatch':
+                return subprocess.CompletedProcess(argv, 255, '', 'suppressed transport error')
             try:
                 result = supervisor.request(payload)
                 if state.fail == 'transport':
@@ -217,7 +220,13 @@ def composed(tmp_path, monkeypatch, request):
             if state.after is not None:
                 callback, state.after = state.after, None
                 callback()
-            return '\n'.join(row['Id'] for row in rows)
+            matched = rows
+            for item in argv:
+                if item.startswith('label='):
+                    key, separator, value = item.removeprefix('label=').partition('=')
+                    matched = [row for row in matched if key in row['Config']['Labels']
+                               and (not separator or row['Config']['Labels'][key] == value)]
+            return '\n'.join(row['Id'] for row in matched)
         if argv[:3] == ['docker', 'inspect', '--type']:
             return json.dumps(rows)
         if argv[:3] == ['docker', 'inspect', '--format']:
@@ -642,6 +651,234 @@ def test_new_admission_cannot_authorize_other_operations(composed):
         linux.SshDeployRemote('ygg-prod').diagnose_source_identity(str(uuid4()), REVISION, DIGEST, composed.selected)
 
 
+@pytest.mark.parametrize('persist', [False, True])
+@pytest.mark.parametrize('failure', ['pre-dispatch', 'authority', 'census'])
+def test_never_admitted_source_operation_retires_only_by_bound_absence(composed, persist, failure):
+    if persist:
+        composed.note.write_text('source\n')
+    operation_id = str(uuid4())
+    rows = copy.deepcopy(composed.state.rows)
+    authority = composed.runtime.registry.path.read_bytes()
+    source = composed.note.read_bytes()
+    if failure == 'authority':
+        composed.runtime.registry.path.write_text('malformed synthetic authority\n')
+    elif failure == 'census':
+        composed.state.rows[-1]['State']['Status'] = 'created'
+    else:
+        composed.state.fail = failure
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    assert composed.controller.source_persistence_preflight(composed.cfg.channel)['ready'] is False
+    composed.state.fail = None
+    composed.runtime.registry.path.write_bytes(authority)
+    composed.state.rows[:] = rows
+    # A normal retry remains cleanup-only and must not turn absence into a
+    # fresh attempt. Only the explicit existing absence-proof route retires it.
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    assert not composed.state.workers and composed.state.producer_calls == 0
+    assert composed.invoke(persist=not persist, operation_id=operation_id,
+                           extra=('--prove-source-operation-never-admitted',))[0] == 78
+    legacy = [composed.cfg.channel, REVISION, '--automatic', '--existing-secrets-only',
+              '--operation-id', operation_id, '--prove-source-persistence-never-admitted']
+    if persist:
+        legacy += ['--source-producer-kind', 'registry']
+    with redirect_stdout(io.StringIO()):
+        assert host.main(legacy) == 78  # current-state authority cannot become legacy authority
+    if failure == 'pre-dispatch':
+        composed.state.fail = 'transport'
+        assert composed.invoke(persist=persist, operation_id=operation_id,
+                               extra=('--prove-source-operation-never-admitted',))[0] == 78
+        assert composed.controller.source_persistence_preflight(composed.cfg.channel)['ready'] is False
+        composed.state.fail = None
+    code, output = composed.invoke(persist=persist, operation_id=operation_id,
+                                   extra=('--prove-source-operation-never-admitted',))
+    assert code == 0, (output, composed.state.errors)
+    proof = json.loads(output)
+    assert proof['source_kind'] == ('source-persistence' if persist else 'source-diagnostic')
+    assert proof['source_mode'] == 'current-state' and proof['host_operation_retired'] is True
+    assert proof['native_attempt_retired'] is True
+    assert 'request_fingerprint' not in proof and str(composed.note.parent) not in output
+    native_original = copy.deepcopy(composed.state.rpc[0])
+    attempt = composed.cfg.journal.directory / (
+        f'{composed.cfg.channel}-source-identity-{operation_id}.producer.attempt.json' if persist
+        else f'{composed.cfg.channel}-source-diagnostic-{operation_id}.attempt.json'
+    )
+    sealed = attempt.read_bytes()
+    assert attempt.stat().st_mode & 0o777 == 0o600
+    assert json.loads(sealed)['source_request']['source_mode'] == 'current-state'
+    # The late original is not a host retry. Both the current daemon and a
+    # restarted daemon must reject its original cleanup_only=false request.
+    for supervisor in (composed.supervisor, linux.DeploymentSupervisor(composed.cfg)):
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(native_original)
+        swapped = {**native_original, 'action': 'source-identity-diagnose' if persist else 'source-identity-persist'}
+        if persist:
+            swapped.pop('producer_kind')
+        else:
+            swapped['producer_kind'] = 'registry'
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(swapped)
+    with pytest.raises(PostgresDeployError):
+        linux.LinuxEffects(composed.cfg).persist_source_identity(
+            operation_id, REVISION, DIGEST, composed.selected, 'registry',
+        )
+    assert composed.invoke(persist=persist, operation_id=operation_id,
+                           extra=('--prove-source-operation-never-admitted',))[0] == 0
+    assert attempt.read_bytes() == sealed
+    assert composed.controller.source_persistence_preflight(composed.cfg.channel)['ready'] is True
+    assert composed.state.rows == rows and composed.note.read_bytes() == source
+    assert not composed.state.events and not composed.state.workers
+    count = len(composed.state.rpc)
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    assert len(composed.state.rpc) == count  # the consumed ID never dispatches
+    assert composed.invoke(persist=persist)[0] == 0
+
+
+@pytest.mark.parametrize('persist', [False, True])
+@pytest.mark.parametrize('conflict', ['request', 'attempt', 'producer', 'terminal', 'foreign-kind',
+                                     'worker', 'diagnostic-worker', 'lock', 'supervisor', 'live-thread',
+                                     'foreign-supervisor', 'malformed-lineage', 'pending-lineage'])
+def test_never_admitted_proof_refuses_any_existing_native_authority(composed, persist, conflict):
+    operation_id = str(uuid4())
+    composed.state.fail = 'pre-dispatch'
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    composed.state.fail = None
+    prefix = f'{composed.cfg.channel}-source-identity-{operation_id}'
+    suffix = {'request': '.request.json', 'attempt': '.producer.attempt.json',
+              'producer': '.producer.json', 'terminal': '.json'}.get(conflict)
+    if suffix is not None:
+        linux._atomic_private_json(composed.cfg.journal.directory / (prefix + suffix), {})
+    elif conflict == 'foreign-kind':
+        linux._atomic_private_json(composed.cfg.journal.directory /
+            f'{composed.cfg.channel}-source-diagnostic-{operation_id}.attempt.json', {})
+    elif conflict in {'worker', 'diagnostic-worker'}:
+        label = 'yggdrasil.native.operation' if conflict == 'worker' else diagnostic.OWNER_LABEL
+        composed.state.rows[-1]['Config']['Labels'][label] = operation_id if conflict == 'worker' else 'a' * 32
+    elif conflict == 'lock':
+        lock = composed.cfg.root / 'config/deploy' / f'{composed.cfg.channel}.env.lock'
+        lock.mkdir(mode=0o700)
+        (lock / 'foreign').write_text('foreign')
+    elif conflict == 'malformed-lineage':
+        linux._atomic_private_json(composed.cfg.journal.directory / (composed.cfg.channel + '.request.json'), {})
+    elif conflict == 'pending-lineage':
+        composed.cfg.journal.write(str(uuid4()), 'prepared')
+    else:
+        finished = threading.Event()
+        if conflict in {'live-thread', 'foreign-supervisor'}:
+            finished.set()
+        composed.supervisor.operation = SimpleNamespace(
+            finished=finished, thread=SimpleNamespace(is_alive=lambda: conflict != 'foreign-supervisor'),
+            operation_id=str(uuid4()),
+        )
+    before = copy.deepcopy(composed.state.rows)
+    assert composed.invoke(persist=persist, operation_id=operation_id,
+                           extra=('--prove-source-operation-never-admitted',))[0] == 78
+    assert composed.controller.source_persistence_preflight(composed.cfg.channel)['ready'] is False
+    assert not composed.state.events and not composed.state.workers and composed.state.producer_calls == 0
+    assert composed.state.rows == before
+
+
+@pytest.mark.parametrize('persist', [False, True])
+@pytest.mark.parametrize('field', ['operation_id', 'channel', 'source_kind', 'source_mode',
+                                  'native_worker_absent', 'native_attempt_retired', 'request_fingerprint'])
+def test_current_absence_proof_cannot_retire_a_different_host_binding(composed, persist, field):
+    operation_id = str(uuid4())
+    composed.state.fail = 'pre-dispatch'
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    composed.state.fail = None
+    carrier = subprocess.run
+    def altered(argv, **kwargs):
+        result = carrier(argv, **kwargs)
+        if argv[0] == 'ssh' and json.loads(kwargs['input'])['action'] == 'source-identity-prove-absence':
+            response = json.loads(result.stdout)
+            response['source_identity_absence'][field] = False if field.startswith('native_') else 'foreign'
+            return subprocess.CompletedProcess(argv, 0, json.dumps(response), '')
+        return result
+    composed.monkeypatch.setattr(subprocess, 'run', altered)
+    assert composed.invoke(persist=persist, operation_id=operation_id,
+                           extra=('--prove-source-operation-never-admitted',))[0] == 78
+    assert composed.controller.source_persistence_preflight(composed.cfg.channel)['ready'] is False
+    assert not composed.state.events and not composed.state.workers
+
+
+@pytest.mark.parametrize('persist', [False, True])
+@pytest.mark.parametrize('interruption', ['before-write', 'after-write', 'mismatched-write'])
+def test_absence_retirement_requires_durable_exact_readback(composed, persist, interruption):
+    operation_id = str(uuid4())
+    composed.state.fail = 'pre-dispatch'
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    composed.state.fail = None
+    atomic = linux._atomic_private_json
+    def interrupted(path, payload):
+        if payload.get('contract') != 'native-source-identity-absence.v1':
+            return atomic(path, payload)
+        if interruption == 'before-write':
+            raise OSError('synthetic write interruption')
+        if interruption == 'mismatched-write':
+            payload = {**payload, 'source_request': {**payload['source_request'], 'image_digest': 'sha256:' + 'a' * 64}}
+        atomic(path, payload)
+        if interruption == 'after-write':
+            raise OSError('synthetic acknowledgement interruption')
+    composed.monkeypatch.setattr(linux, '_atomic_private_json', interrupted)
+    assert composed.invoke(persist=persist, operation_id=operation_id,
+                           extra=('--prove-source-operation-never-admitted',))[0] == 78
+    assert composed.controller.source_persistence_preflight(composed.cfg.channel)['ready'] is False
+    assert not composed.state.events and not composed.state.workers
+    composed.monkeypatch.setattr(linux, '_atomic_private_json', atomic)
+    result = composed.invoke(persist=persist, operation_id=operation_id,
+                             extra=('--prove-source-operation-never-admitted',))[0]
+    assert result == (78 if interruption == 'mismatched-write' else 0)
+    assert not composed.state.events and not composed.state.workers and composed.state.metadata_calls == 0
+
+
+@pytest.mark.parametrize('persist', [False, True])
+@pytest.mark.parametrize('proof', [False, True])
+@pytest.mark.parametrize('option,value', [('--image-digest', 'sha256:' + 'a' * 64),
+                                        ('--authority-cutover-binding', 'binding-foreign'),
+                                        ('--authority-cutover-root', '/synthetic-other-root'),
+                                        ('--authority-cutover-ownership-root', '/synthetic-other-owner')])
+def test_host_current_request_is_bound_before_native_admission(composed, persist, proof, option, value):
+    operation_id = str(uuid4())
+    composed.state.fail = 'pre-dispatch'
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    composed.state.fail = None
+    journal = composed.controller.directory / 'operations.jsonl'
+    before = journal.read_bytes()
+    count = len(composed.state.rpc)
+    extra = (option, value, *(('--prove-source-operation-never-admitted',) if proof else ()))
+    assert composed.invoke(persist=persist, operation_id=operation_id, extra=extra)[0] == 78
+    assert journal.read_bytes() == before and len(composed.state.rpc) == count
+    assert not composed.state.workers and not composed.state.events
+
+
+@pytest.mark.parametrize('persist', [False, True])
+@pytest.mark.parametrize('history', ['committed', 'aborted', 'pending', 'malformed'])
+def test_current_admission_preserves_recorded_bootstrap_lineage(composed, persist, history):
+    if persist:
+        composed.note.write_text('source\n')
+    journal = composed.cfg.journal
+    old = journal.read()
+    plan = journal.bound_plan(old.operation_id)
+    operation_id = str(uuid4())
+    journal.bind_request(operation_id, plan, True, create=True)
+    journal.write(operation_id, 'prepared')
+    if history == 'committed':
+        for stage in ('preflighted', 'materialized', 'activating', 'committed'):
+            journal.write(operation_id, stage)
+    elif history != 'pending':
+        journal.write(operation_id, 'aborted')
+    request = journal.directory / (composed.cfg.channel + '.request.json')
+    if history == 'malformed':
+        payload = json.loads(request.read_text())
+        payload['bootstrap'] = 'true'
+        linux._atomic_private_json(request, payload)
+    before = request.read_bytes()
+    code, output = composed.invoke(persist=persist)
+    assert code == (0 if history in {'committed', 'aborted'} else 78), (output, composed.state.errors)
+    assert request.read_bytes() == before
+    if history in {'pending', 'malformed'}:
+        assert not composed.state.workers and not composed.state.events
+
+
 @pytest.mark.parametrize('fault', ['extra', 'channel', 'digest', 'empty', 'oversized', 'duplicate',
                                   'password-env', 'not-tmpfs', 'target-drift'])
 def test_real_witness_cli_refuses_credential_envelope_without_connect(composed, fault):
@@ -764,6 +1001,83 @@ def test_registry_noncanonical_late_uuid_refuses_before_earlier_writable_source(
     assert code == 78 and json.loads(output)['eligible'] is False
     assert composed.state.metadata_calls == 0
     assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize('evidence', ['malformed', 'legacy-malformed', 'symlink', 'directory', 'fifo',
+                                     'duplicate', 'wrong-uuid', 'wrong-source', 'legacy-stale',
+                                     'parent-alias', 'parent-file'])
+def test_registry_companion_refusal_precedes_every_metadata_effect(composed, evidence):
+    from app.services.companion_note import companion_path
+    identity = str(uuid4())
+    later = composed.note.with_name('z.md')
+    composed.note.rename(later)
+    later.write_text(f'---\nuuid: {identity}\n---\nlater source\n')
+    later.with_name('a.md').write_text('earlier writable source without UUID\n')
+    root = later.parent
+    canonical = root / companion_path(identity, root)
+    legacy = root / '_system' / 'companions' / f'{identity}.md'
+    assert canonical != legacy
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {'uuid': identity, 'source_ref': 'z.md',
+                'content_hash': hashlib.sha256(b'later source\n').hexdigest()}
+    if evidence == 'wrong-uuid':
+        metadata['uuid'] = str(uuid4())
+    if evidence == 'wrong-source':
+        metadata['source_ref'] = 'different.md'
+    if evidence == 'legacy-stale':
+        metadata['content_hash'] = '0' * 64
+    valid = '---\n' + yaml.safe_dump(metadata) + '---\n'
+    if evidence == 'malformed':
+        canonical.write_text('malformed companion\n')
+    elif evidence.startswith('legacy-'):
+        legacy.write_text('malformed companion\n' if evidence == 'legacy-malformed' else valid)
+    elif evidence == 'symlink':
+        canonical.symlink_to(later)
+    elif evidence == 'directory':
+        canonical.mkdir()
+    elif evidence == 'fifo':
+        os.mkfifo(canonical)
+    elif evidence in {'parent-alias', 'parent-file'}:
+        canonical.parent.rmdir()
+        if evidence == 'parent-alias':
+            canonical.parent.symlink_to(legacy.parent, target_is_directory=True)
+        else:
+            canonical.parent.write_text('not a directory\n')
+    else:
+        canonical.write_text(valid)
+        if evidence == 'duplicate':
+            legacy.write_text(valid)
+    before = {path: path.read_bytes() for path in root.glob('*.md')}
+    # Snapshot regular evidence only; never read the synthetic FIFO/alias.
+    regular = {path: path.read_bytes() for path in (canonical, legacy)
+               if path.is_file() and not path.is_symlink()}
+    code, output = composed.invoke(persist=True)
+    assert code == 78 and json.loads(output)['eligible'] is False
+    assert composed.state.metadata_calls == 0
+    assert {path: path.read_bytes() for path in before} == before
+    assert all(path.read_bytes() == value for path, value in regular.items())
+
+
+@pytest.mark.parametrize('location', ['canonical', 'legacy'])
+def test_shared_strict_guard_preserves_valid_companion_without_rewrite(composed, location):
+    from app.rebuildability import canonical_product_body_text
+    from app.services.companion_note import companion_path
+    identity = str(uuid4())
+    composed.note.write_text(f'---\nuuid: {identity}\n---\nsource\n')
+    root = composed.note.parent
+    relative = companion_path(identity, root) if location == 'canonical' else Path('_system/companions') / f'{identity}.md'
+    companion = root / relative
+    companion.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {'uuid': identity, 'source_ref': composed.note.name,
+                'content_hash': hashlib.sha256(canonical_product_body_text('source\n').encode()).hexdigest()}
+    companion.write_text('---\n' + yaml.safe_dump(metadata) + '---\n')
+    before = (composed.note.read_bytes(), companion.read_bytes())
+    code, output = composed.invoke(persist=True)
+    assert code == 0, (output, composed.state.errors)
+    receipt = json.loads(output)
+    assert receipt['eligible'] is True and composed.state.metadata_calls == receipt['selected_count']
+    assert (composed.note.read_bytes(), companion.read_bytes()) == before
 
 
 @pytest.mark.parametrize('presentation', ['whitespace', 'wikilink'])

@@ -42,6 +42,14 @@ This is a source-supported repair of the former volume-free witness's missing au
 file-delivery seam, not retrospective live evidence. Source admission never authorizes deployment:
 the separately authorized current-state registry invocation rechecks the complete source policy,
 uses only the existing ordinary UUID/companion producer and restores only its prior running set.
+Its full-selection preflight and producer share the strict pure input/evidence guards; a malformed
+existing companion cannot be treated as permission to create a missing one. Transport loss before
+native admission uses only the explicit kind/mode-bound existing absence proof to retire the host
+operation as failed, never to replay it. Its existing native attempt file records a distinct durable
+absence retirement, bound to the exact request, before the host can retire; delayed original RPCs
+remain denied after restart. This bookkeeping is not an actual producer attempt or source admission.
+A predecessor's stored bootstrap lineage is authenticated,
+not rewritten or reused as permission for source-operation bootstrap.
 Full eligible readback and the delivery classifier precede separately authorized normal deployment.
 The exited watcher is activated only by that deployment's normal preparation/migration/projection/
 recreation flow. #3347/#6300 live qualification and consumed historical operation boundaries remain

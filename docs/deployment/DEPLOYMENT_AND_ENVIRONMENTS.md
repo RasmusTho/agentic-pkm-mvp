@@ -1389,6 +1389,8 @@ start-capable one-shots, and exact image/configuration/mount/user/population dri
 roles, actually running writers, and retained stopped identities are recorded separately and
 revalidated at the worker boundary. The result is the existing aggregate diagnostic, not a
 transferable admission boolean.
+The predecessor's canonical bound-request reader preserves its stored bootstrap flag: a completed
+first initialization may supply terminal lineage, but source admission never performs bootstrap.
 
 Source prepare/finalize actors remain read-only and network-none without database credentials.
 The separate volume-free witness reads only the verified existing channel password source through
@@ -1419,8 +1421,10 @@ remain refused. Attempted or uncertain same-ID continuation is cleanup-only, nev
 For a retained own one-shot, cleanup authenticates the immutable request, exact channel fence,
 candidate image and operation/token before removal, then repeats the complete authority/census
 postproof before restoring writers. Foreign resources cannot borrow this cleanup ordering.
-Complete source admission requires the same exact UUID spelling as the strict producer before the
-first selected source can be changed.
+Complete source admission reuses the strict producer's pure input guards before the first selected
+source can be changed: UUID spelling, protected source, companion storage and existing companion
+type/parse/identity/overwrite rules. Missing companions are distinct from malformed existing files;
+the producer repeats its evidence guard immediately before writing.
 
 The continuation is diagnostic and #6300 remediation, then freshly admitted ordinary registry
 persistence, exact cleanup plus eligible readback, delivery-classifier reapplication, and a
@@ -1500,6 +1504,19 @@ any partial, terminal, locked, owned-container, malformed, foreign, or ambiguous
 refuses. This recovery never runs the producer, retargets the operation, deploys a candidate, or
 continues automatically. A corrected channel requires a fresh operation UUID and all ordinary
 source-persistence admission checks.
+For current-state diagnostic or registry operations, retain the exact current-state/kind flags and
+normal candidate/selection arguments and add `--prove-source-operation-never-admitted` (an alias of
+the existing proof flag). Its closed RPC proof binds that kind, mode and exact candidate/selection
+request, checks both source-operation artifact namespaces, and refuses actual attempts, retained
+workers or a channel fence under the existing host lock and supervisor mutex. Before returning, it
+requires the request fingerprint recorded by the host before its first dispatch, then
+durably writes and reads back a typed absence-retirement record in that kind's existing attempt file.
+This consumes the ID even for a delayed original RPC after supervisor restart; it is neither an
+actual diagnostic/producer attempt nor a success receipt. Only the byte-equivalent typed retirement
+may be reconciled again. Ambiguous writes/transport remain pending; request drift refuses.
+It retires only an already-sent host operation as failed; it cannot adopt another request or turn
+an admission refusal into source authority.
+A fresh-ID invocation must independently satisfy every ordinary current-state gate.
 
 Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
 History dependencies, candidate/staging or untrusted material, changed sources,

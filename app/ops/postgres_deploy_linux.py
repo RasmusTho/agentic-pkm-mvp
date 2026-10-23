@@ -493,6 +493,49 @@ def _private_json(path: Path) -> dict[str, Any]:
         return result
 
 
+def _source_absence_binding(source_request: dict[str, Any] | None) -> dict[str, Any]:
+    """Closed optional extension of the existing source absence protocol."""
+    if source_request is None:
+        return {}
+    if not isinstance(source_request, dict):
+        raise PostgresDeployError()
+    kind = source_request.get('source_kind')
+    if kind not in {'source-diagnostic', 'source-persistence'}:
+        raise PostgresDeployError()
+    fields = {'source_kind', 'source_mode', 'revision', 'image_digest', 'authority_cutover'}
+    if kind == 'source-persistence':
+        fields.add('producer_kind')
+    if (set(source_request) != fields or source_request['source_mode'] != 'current-state'
+        or (kind == 'source-persistence' and source_request['producer_kind'] != 'registry')
+        or not isinstance(source_request['revision'], str)
+        or re.fullmatch(r'[0-9a-f]{40}', source_request['revision']) is None
+        or not isinstance(source_request['image_digest'], str)
+        or re.fullmatch(r'sha256:[0-9a-f]{64}', source_request['image_digest']) is None):
+        raise PostgresDeployError()
+    AuthorityCutover(**source_request['authority_cutover']).validate()
+    return json.loads(json.dumps(source_request))
+
+
+def _source_absence_retirement(operation_id: str, channel: str, binding: dict[str, Any]) -> dict[str, Any]:
+    return {'contract': 'native-source-identity-absence.v1', 'operation_id': operation_id,
+            'channel': channel, 'source_request': binding}
+
+
+def source_identity_request_fingerprint(source_request: dict[str, Any] | None) -> str:
+    binding = _source_absence_binding(source_request)
+    if not binding:
+        raise PostgresDeployError()
+    return hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
+
+
+def _source_absence_proof_binding(retirement: dict[str, Any]) -> dict[str, Any]:
+    binding = retirement['source_request']
+    return {key: binding[key] for key in ('source_kind', 'source_mode', 'producer_kind') if key in binding} | {
+        'native_attempt_retired': True,
+        'request_fingerprint': source_identity_request_fingerprint(binding),
+    }
+
+
 def _atomic_private_json(path: Path, payload: dict[str, Any]) -> None:
     """Write one root-private durable JSON receipt with atomic replacement."""
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1434,6 +1477,8 @@ class LinuxEffects:
         except (ValueError, TypeError, AttributeError):
             raise PostgresDeployError() from None
         selected.validate()
+        from app.ops.native_source_admission import require_unretired_source_attempt
+        require_unretired_source_attempt(self, operation_id)
         if not current_state:
             source_plan = self.qualify_source_identity_authority(
                 revision, image_digest, selected,
@@ -1906,7 +1951,9 @@ class LinuxEffects:
             selected=selected,
         )
 
-    def prove_source_identity_absence(self, operation_id: str) -> dict[str, Any]:
+    def prove_source_identity_absence(
+        self, operation_id: str, *, source_request: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Prove one source-persistence ID never crossed native admission."""
         try:
             if (
@@ -1916,6 +1963,7 @@ class LinuxEffects:
                 raise PostgresDeployError()
         except (ValueError, TypeError, AttributeError):
             raise PostgresDeployError() from None
+        binding = _source_absence_binding(source_request)
         current = self.config.journal.read()
         if (
             current is None
@@ -1924,11 +1972,32 @@ class LinuxEffects:
         ):
             raise PostgresDeployError()
         directory = self.config.journal.directory
-        paths = (
+        paths: tuple[Path, ...] = (
             directory / f"{self.config.channel}-source-identity-{operation_id}.request.json",
             directory / f"{self.config.channel}-source-identity-{operation_id}.producer.json",
             directory / f"{self.config.channel}-source-identity-{operation_id}.json",
         )
+        attempt_path = None
+        retirement = None
+        if binding:
+            from app.ops.native_source_admission import require_terminal_deployment
+            require_terminal_deployment(self)
+            # Both source kinds are checked: a foreign-kind artifact cannot
+            # lend absence authority. Include durable attempt markers too.
+            paths += (
+                directory / f'{self.config.channel}-source-identity-{operation_id}.producer.attempt.json',
+                *(directory / f'{self.config.channel}-source-diagnostic-{operation_id}{suffix}'
+                  for suffix in ('.request.json', '.attempt.json', '.json')),
+            )
+            attempt_path = directory / (
+                f'{self.config.channel}-source-diagnostic-{operation_id}.attempt.json'
+                if binding['source_kind'] == 'source-diagnostic'
+                else f'{self.config.channel}-source-identity-{operation_id}.producer.attempt.json'
+            )
+            paths = tuple(path for path in paths if path != attempt_path)
+            retirement = _source_absence_retirement(operation_id, self.config.channel, binding)
+            if os.path.lexists(attempt_path) and _private_json(attempt_path) != retirement:
+                raise PostgresDeployError()
         if any(os.path.lexists(path) for path in paths) or self.channel_lock_owner() is not None:
             raise PostgresDeployError()
         ids = _command([
@@ -1938,6 +2007,30 @@ class LinuxEffects:
         ]).splitlines()
         if ids:
             raise PostgresDeployError()
+        if binding:
+            from app.ops.native_source_identity_diagnostics import OWNER_LABEL
+            # Diagnostic tokens are stored only in their request. With no
+            # request, any retained diagnostic worker is ambiguous, not ours.
+            if _command([
+                'docker', 'ps', '--all', '--no-trunc', '--filter', 'label=' + OWNER_LABEL,
+                '--format', '{{.ID}}',
+            ]).splitlines():
+                raise PostgresDeployError()
+            require_terminal_deployment(self)
+            if (type(self.config).load(self.config.channel) != self.config
+                or self.config.journal.read() != current
+                or any(os.path.lexists(path) for path in paths)
+                or self.channel_lock_owner() is not None):
+                raise PostgresDeployError()
+            if attempt_path is None or retirement is None:
+                raise PostgresDeployError()
+            # Consume this exact ID before returning proof. The existing attempt
+            # namespace is already read by source admission; no late original
+            # RPC may become a fresh operation after the host retires it.
+            if not os.path.lexists(attempt_path):
+                _atomic_private_json(attempt_path, retirement)
+            if _private_json(attempt_path) != retirement:
+                raise PostgresDeployError()
         return {
             "contract": "native-source-identity-absence.v1",
             "operation_id": operation_id,
@@ -1947,6 +2040,7 @@ class LinuxEffects:
             "native_terminal_receipt_absent": True,
             "native_worker_absent": True,
             "native_lock_absent": True,
+            **(_source_absence_proof_binding(retirement) if retirement is not None else {}),
         }
 
     def reconcile_source_identity_cleanup(
@@ -4537,7 +4631,8 @@ class DeploymentSupervisor:
                 )
                 return {'operator_identity_restoration_reconciliation': receipt}
         if data.get('action') == 'source-identity-prove-absence':
-            if set(data) != {'action', 'operation_id'}:
+            binding = _source_absence_binding(data.get('source_request'))
+            if set(data) != {'action', 'operation_id', *({'source_request'} if binding else set())}:
                 raise PostgresDeployError()
             try:
                 operation_id = str(data['operation_id'])
@@ -4547,9 +4642,21 @@ class DeploymentSupervisor:
                 raise PostgresDeployError() from None
             with self.mutex:
                 self._require_current_config()
-                if self.operation is not None and not self.operation.finished.is_set():
+                if self.operation is not None and (
+                    not self.operation.finished.is_set()
+                    or (binding and (self.operation.thread.is_alive()
+                                     or self.operation.operation_id == operation_id))
+                ):
                     raise PostgresDeployError()
-                proof = LinuxEffects(self.config).prove_source_identity_absence(operation_id)
+                if binding and self.operation is not None:
+                    prior = self.config.journal.read()
+                    if (prior is None or prior.operation_id != self.operation.operation_id
+                        or prior.terminal_result not in {'committed', 'aborted', 'failed'}
+                        or self.config.journal.bound_plan(prior.operation_id) != self.operation.plan):
+                        raise PostgresDeployError()
+                proof = LinuxEffects(self.config).prove_source_identity_absence(
+                    operation_id, **({'source_request': binding} if binding else {}),
+                )
                 return {'source_identity_absence': proof}
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
@@ -4914,7 +5021,9 @@ class SshDeployRemote:
         except Exception:
             raise PostgresDeployError() from None
 
-    def prove_source_identity_absence(self, operation_id: str) -> dict[str, Any]:
+    def prove_source_identity_absence(
+        self, operation_id: str, *, source_request: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Read one fixed proof that a source operation never reached native admission."""
         try:
             if str(UUID(operation_id)) != operation_id:
@@ -4924,7 +5033,9 @@ class SshDeployRemote:
         channel = self.host.removeprefix('ygg-')
         if channel not in {'dev', 'test'}:
             raise PostgresDeployError()
-        payload = {'action': 'source-identity-prove-absence', 'operation_id': operation_id}
+        binding = _source_absence_binding(source_request)
+        payload = {'action': 'source-identity-prove-absence', 'operation_id': operation_id,
+                   **({'source_request': binding} if binding else {})}
         result = subprocess.run(
             ['ssh', '-o', 'BatchMode=yes', '--', self.host, 'sudo', '-n',
              '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', channel],
@@ -4941,6 +5052,8 @@ class SshDeployRemote:
             'native_terminal_receipt_absent': True,
             'native_worker_absent': True,
             'native_lock_absent': True,
+            **(_source_absence_proof_binding(_source_absence_retirement(operation_id, channel, binding))
+               if binding else {}),
         }
         try:
             response = json.loads(result.stdout)
