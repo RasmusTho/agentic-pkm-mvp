@@ -1522,7 +1522,9 @@ class LinuxEffects:
         expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
         owns_lock = False
         terminal_receipt: dict[str, Any] | None = None
-        if receipt_path.exists():
+        # A dangling entry is retained evidence too. Let the canonical no-follow
+        # reader refuse it rather than replacing it as a fresh operation.
+        if os.path.lexists(receipt_path):
             terminal_receipt = validate_receipt(_private_json(receipt_path))
             if (
                 terminal_receipt['operation_id'] != operation_id
@@ -1546,7 +1548,7 @@ class LinuxEffects:
             from app.ops.native_source_admission import require_terminal_deployment, runtime_matches
 
             require_terminal_deployment(self)
-        if request_path.exists():
+        if os.path.lexists(request_path):
             owns_lock = self.channel_lock_owner() == expected_owner
             legacy_cleanup_allowed = _legacy_mount_cleanup_allowed(
                 terminal_receipt,

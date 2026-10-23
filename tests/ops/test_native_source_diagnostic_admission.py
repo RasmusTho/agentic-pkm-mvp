@@ -628,6 +628,50 @@ def test_composed_current_state_registry_persistence_and_exact_cleanup(composed,
     assert linux.LinuxEffects(composed.cfg).channel_lock_owner() is None
 
 
+@pytest.mark.parametrize('persist,artifact', [
+    (False, 'request'), (False, 'attempt'), (False, 'terminal'),
+    (True, 'request'), (True, 'attempt'), (True, 'producer'), (True, 'terminal'),
+])
+@pytest.mark.parametrize('entry', ['dangling-symlink', 'symlink', 'directory', 'fifo'])
+def test_malformed_retained_source_entry_refuses_without_effects(composed, persist, artifact, entry):
+    operation_id = str(uuid4())
+    composed.note.write_text('writable public source without identity\n')
+    directory = composed.cfg.journal.directory
+    kind = 'source-identity' if persist else 'source-diagnostic'
+    suffix = {'request': '.request.json', 'terminal': '.json', 'producer': '.producer.json',
+              'attempt': '.producer.attempt.json' if persist else '.attempt.json'}[artifact]
+    path = directory / f'{composed.cfg.channel}-{kind}-{operation_id}{suffix}'
+    target = directory.parent / 'retained-source-target.json'
+    if entry == 'symlink':
+        linux._atomic_private_json(target, {'retained': 'public synthetic evidence'})
+    if entry in {'dangling-symlink', 'symlink'}:
+        path.symlink_to(target)
+    elif entry == 'directory':
+        path.mkdir(mode=0o700)
+    else:
+        os.mkfifo(path, 0o600)
+
+    def retained_entries():
+        return {item.name: (item.lstat().st_ino, item.lstat().st_mode,
+                           item.readlink() if item.is_symlink() else
+                           item.read_bytes() if item.is_file() else None)
+                for item in directory.iterdir()}
+
+    before = retained_entries()
+    rows, source = copy.deepcopy(composed.state.rows), composed.note.read_bytes()
+    target_before = target.read_bytes() if target.exists() else None
+    # Fresh admission, same-ID cleanup and explicit absence retirement must all
+    # preserve malformed evidence. None may reinterpret it as a missing entry.
+    for extra in ((), (), ('--prove-source-operation-never-admitted',)):
+        assert composed.invoke(persist=persist, operation_id=operation_id, extra=extra)[0] == 78
+        assert retained_entries() == before
+        assert composed.state.rows == rows and composed.note.read_bytes() == source
+        assert not composed.state.events and not composed.state.workers
+        assert composed.state.producer_calls == composed.state.metadata_calls == 0
+        assert linux.LinuxEffects(composed.cfg).channel_lock_owner() is None
+        assert (target.read_bytes() if target.exists() else None) == target_before
+
+
 @pytest.mark.parametrize('fault', ['producer', 'restore', 'transport'])
 def test_composed_registry_continuation_refuses_replay_and_reaches_normal_deploy_boundary(composed, fault):
     composed.note.write_text('public synthetic body\n')
