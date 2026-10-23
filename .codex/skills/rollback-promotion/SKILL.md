@@ -5,16 +5,13 @@ description: "Roll prod back: in checkout mode merge the governed rollback PR, u
 
 # Rollback Promotion
 
-> **Status: describes the TARGET gated-`stable` model (deferred promotion hardening).** Prod
-> currently tracks `main` directly per `docs/RELEASE_CHANNELS/README.md §Promotion model` and
-> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
-> **dormant** and is not an ancestor of `origin/main`. A revert PR against dormant `stable` is not
-> meaningful under the current baseline — confirm with the operator before invoking.
->
-> **Target flow (ADR-0068, owner-directed 2026-10-18):** delivery becomes `main` → `dev` → `test`
-> (UAT) → `stable` (prod), and this gated-`stable` model is the target again. `stable` advances only
-> from a `test`-passed candidate. Enactment is tracked under #6207; until the prod-promotion slice
-> lands, the status above governs. See [ADR-0068](../../../docs/adr/ADR-0068-continuous-dev-delivery-flow.md).
+> **Status: current source promotion policy (ADR-0068 D4, Issue #6228).**
+> `stable` is the production promotion authority. Normal advancement requires the exact current
+> `test` candidate C, trusted green TEST evidence, a durable functional PASS, and explicit approval
+> of the concrete plan. Protected merge M records stable authority; it does not qualify a new
+> source version or image. Production deploys the tested source C and immutable digest D.
+> Repository support does not establish a running-prod observation or physical cutover. Current
+> infrastructure observations belong to `RasmusTho/yggdrasil-infra/CURRENT_STATUS.md`.
 
 Use this skill when a promotion has produced an observed deployment effect requiring recovery,
 including failed post-promotion verification. A failed prepare/execute preflight alone is not a
@@ -61,6 +58,13 @@ Rolling back therefore follows the same governed-PR path as a promotion:
 
 **This skill never directly writes to the protected `stable` branch.** A direct push or force-push to `stable` is not permitted and is not the rollback path.
 
+A rollback merge also has a new Git identity. Do not infer that its image or checkout was TEST
+qualified merely because its tree matches the previous version. The source forward-promotion
+admission is not recovery authority and does not requalify a previous-good pin as current TEST.
+Use the recorded previous-good immutable artifact under the existing recovery contract. If a
+checkout recovery cannot establish a qualified runtime identity, stop for bounded operator triage
+before that effect. Preserve protected-PR and irreversible-migration gates.
+
 ## Deployment model
 
 Before rollback, resolve the prod channel's deployment model:
@@ -75,10 +79,10 @@ Before rollback, resolve the prod channel's deployment model:
   recorded in the promotion plan or deploy receipt and run:
 
   ```bash
-  scripts/deploy_channel.sh prod <previous-good-sha>
+  scripts/deploy_channel.sh rollback prod <previous-good-sha>
   ```
 
-  The script owns the pin bump, recreate, health gates, UI smoke, and rollback/deploy receipt per
+  The existing rollback command owns pin restoration, recreate, health gates, UI smoke, and the recovery receipt per
   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md §Rollback procedure`. No rebuild is performed.
   Forward-only migration caveats remain unchanged and must stay visible to the operator.
 
@@ -109,10 +113,10 @@ Before rollback, resolve the prod channel's deployment model:
 
 9. Confirms the previous-good SHA/tag from the promotion plan or deploy receipt is resolvable and is different from the failed deployed SHA.
 10. Applies only reversible migration reversal that the rollback contract allows; forward-only migrations remain an explicit operator caveat.
-11. Runs `scripts/deploy_channel.sh prod <previous-good-sha>` to bump the prod pin back and recreate the channel. This script is the only physical rollback deploy step in pinned-image mode.
+11. Runs `scripts/deploy_channel.sh rollback prod <previous-good-sha>` to bump the prod pin back and recreate the channel. This script is the only physical rollback deploy step in pinned-image mode.
 12. Reads and records the resulting receipt at `ops/deployments/prod-latest.json`.
 
-13. Appends the rollback receipt to the promotion plan file: timestamp, deployment model, revert PR
+13. Appends the observed rollback receipt after `<!-- promotion-outcomes -->` in the retained plan: timestamp, deployment model, revert PR
    URL, `stable-prev` rollback target, failed promotion checkout used for migration
    reversal when applicable, merged `origin/stable` rollback commit or deploy receipt path, which migrations were reversed,
    which were skipped (forward-only), process restart confirmation.

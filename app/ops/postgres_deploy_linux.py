@@ -2440,9 +2440,18 @@ class LinuxEffects:
         self.capture_watch_configured = capture
         self.raw_migration_pending = migration
         return DeployPlan(plan.channel, plan.revision, plan.services, candidate, plan.ack_forward_only,
-                          plan.image_digest, plan.automatic, plan.authority_cutover)
+                          plan.image_digest, plan.automatic, plan.authority_cutover, plan.promotion_plan)
 
     def preflight(self, plan: DeployPlan) -> str:
+        if plan.channel == 'prod':
+            # Admission precedes consumer selection, credential reads and materialization.
+            from app.release_channels.stable_promotion import authorize_promotion
+
+            plan.validate()
+            if plan.promotion_plan is None or plan.image_digest is None:
+                raise PostgresDeployError()
+            authorize_promotion(Path(plan.promotion_plan), phase='deploy', source_repo=self.config.root,
+                                candidate_sha=plan.revision, image_digest=plan.image_digest)
         selected_plan = self.select_active_plan(plan)
         values = vm_selected_values(selected_plan, self.config.reader())
         passwords = {value['postgres.password'] for consumer, value in values.items() if consumer in DATABASE_CONSUMERS}
@@ -2743,6 +2752,8 @@ class LinuxEffects:
                 argv.append('--ack-forward-only')
             if plan.image_digest:
                 argv += ['--image-digest', plan.image_digest]
+            if plan.promotion_plan:
+                argv += ['--promotion-plan', plan.promotion_plan]
             if plan.automatic:
                 argv.append('--automatic')
             _command(argv, cwd=self.config.root, env=env, pass_fds=(self.lock_fd,),

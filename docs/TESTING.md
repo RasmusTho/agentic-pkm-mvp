@@ -524,6 +524,16 @@ retained successful attempts and recovery by rerunning the same workflow after a
 Test eligibility depends on the exact dev-green artifact, never Actions dispatch order. This proof
 does not move live refs; the [deployment owner](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1)
 owns hold and recovery procedure and the existing activation gates.
+
+Production promotion proof (#6228) lives in
+`tests/release_channels/test_stable_promotion_from_test.py`. It exercises the real green-ref
+producer, signed STARTUP receipt/report validator, immutable Git reader and native pre-secret
+admission, substituting only external transports. Refusal cases cover stale or mismatched C/D/S/M,
+approval/narrative changes, protection or API denial, foreign PRs, invalid local merge objects,
+signed source/receipt substitution and changed frontiers. Actual shell/Make and native CLI tests
+cover argument forwarding and refusal; the deploy harness also proves previous-good immutable
+rollback remains available under its separate contract. These fixtures establish repository
+behavior, not a live functional PASS, production promotion or parent #6207 red-to-green acceptance.
 [FAST_PR_TO_DEV_TEST_AUTOMATION](plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) sequences live activation,
 functional/isolated-PG coverage handoff and ten-candidate measurement under #5675. The PG PR job is
 retired after actual equivalent dev/test execution passes; non-PG PR checks and the bounded nightly

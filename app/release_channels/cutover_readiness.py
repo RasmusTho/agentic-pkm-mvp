@@ -677,7 +677,7 @@ def check_cutover_readiness(
     db_revision: str | Sequence[str] | None = None,
     ack_forward_only: bool = False,
     image_repository: str = DEFAULT_IMAGE_REPOSITORY,
-    promotion_ref: str = DEFAULT_PROMOTION_REF,
+    promotion_ref: str | None = None,
     environ: Mapping[str, str] | None = None,
     runner: CommandRunner = _default_runner,
     check_image: bool = True,
@@ -689,7 +689,8 @@ def check_cutover_readiness(
     model = _load_compose_model(root_path, CHANNEL_COMPOSE_OVERLAYS[channel])
 
     checks: list[ReadinessCheck] = []
-    checks.append(_check_pin_sanity(root_path, channel, target_sha, promotion_ref, runner))
+    selected_ref = promotion_ref or ("origin/stable" if channel == "prod" else DEFAULT_PROMOTION_REF)
+    checks.append(_check_pin_sanity(root_path, channel, target_sha, selected_ref, runner))
     if check_image:
         checks.append(_check_image_availability(root_path, image_repository, target_sha, runner))
     checks.append(_check_env_completeness(root_path, model, channel, env))
@@ -722,7 +723,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db-revision")
     parser.add_argument("--ack-forward-only", action="store_true")
     parser.add_argument("--image-repository", default=DEFAULT_IMAGE_REPOSITORY)
-    parser.add_argument("--promotion-ref", default=DEFAULT_PROMOTION_REF)
+    parser.add_argument("--promotion-ref", help="Existing comparison ref (default: origin/stable for prod, origin/main otherwise)")
     parser.add_argument(
         "--skip-image-check",
         action="store_true",

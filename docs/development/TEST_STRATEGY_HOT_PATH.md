@@ -417,7 +417,14 @@ Owner decision (verbal, 2026-10-16, recorded in #6154): heavy test sets do not r
 - Verdict back to GitHub: the controller dispatches `.github/workflows/post-merge-heavy-tests.yml` once per dev candidate with bounded inputs (SHA, `passed`/`failed`/`refused`, operation ID, counts, refusal reason, up to 20 failing node IDs). The existing host client uses Actions read/write, Contents read and Metadata read only; no additional scope is required. Failing node IDs are masked to the input grammar, and the dispatch is retried twice before it is recorded as failed. Verdict runs are grouped per SHA, so one never displaces another commit's pending verdict. `scripts/post_merge_heavy_tests_verdict.py` validates the inputs and that the SHA is on `main`; the run records the `post-merge-heavy-tests/ygg` commit status and is red unless the verdict passed. A malformed or off-`main` verdict is red too.
 - Missing-verdict watchdog: the workflow runs hourly. When no `main` commit at or after the newest commit older than 6 hours carries a ygg status (or an earlier fallback status), it is red with reason "no ygg verdict" and runs the GitHub-hosted heavy job for that SHA as fallback, recorded as `post-merge-heavy-tests/fallback`. The fallback is red even when its tests pass, because the VM path is broken; a fallback never grants controller test-promotion eligibility. A `workflow_dispatch` without a verdict runs the GitHub-hosted job on demand. The per-push GitHub-hosted run is retired.
 - Crash/restart: a durable intent precedes both the heavy run and its dispatch. An interrupted run becomes a refused verdict instead of rerunning; an uncertain dispatch is not sent again after restart. A terminal native dev deployment failure persists a one-time `refused` verdict with reason `dev_deploy_failed`. Legacy terminal test-VM checkpoints remain readable and are not replayed.
+
 - Red routing: every red run opens one rolling `type:bug` + `prio:high` + `agent:ready` alert Issue titled "bug: dev verification is red on main", rendered by `scripts/post_merge_heavy_tests_alert.py` (an open alert with the legacy heavy-tests title is reused), or comments on the open one, naming the SHA and reason. The alert job also exits red. The next green verdict comments and closes the alert. The workflow is not a required PR check; a green `Unit tests (not pg)` does not prove the deferred heavy targets.
+
+Production remains a separate operator gate. #6228 requires the exact current green TEST candidate,
+its immutable image and a durable signed functional PASS plus concrete-plan approval. A green
+heavy, native PG or TEST deploy result alone is not production eligibility, and no production gate
+delays or reverts merges to `main`. The [release owner](../RELEASE_CHANNELS/README.md#promotion-model)
+owns the policy and generated protected-merge identity limits.
 
 ## Historical selector replay
 

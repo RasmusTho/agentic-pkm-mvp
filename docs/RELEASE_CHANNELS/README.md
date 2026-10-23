@@ -18,7 +18,7 @@ Doc role: Core SoT for the release-channels capability
 Owner: `docs/ROADMAP.md`
 Temporal class: strategic
 Review cadence: biweekly
-Last reviewed: 2026-10-21 (current-status routing only; channel requirements unchanged)
+Last reviewed: 2026-10-23 (#6228 gated stable source-policy adoption; running-prod observations remain separately scoped)
 Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; dated acceptance receipts remain separately scoped.
 Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/DB_SCHEMA.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, config/platform/product_tars_channel_topology.v1.schema.json, app/ops/product_tars_channel_topology.py, app/release_channels/promotion_receipt.py, docs/adr/ADR-0040-prod-promotion-ref-main-interim.md; live read-only checks and MARR acceptance state in [Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903)
 
@@ -58,9 +58,11 @@ This directory specifies the capability that lets a **stable build run in prod a
 
 This is the capability that turns the existing `dev` / `test` / `prod` environment model into something the operator can actually *use* day-to-day. [ENVIRONMENTS.md](../ENVIRONMENTS.md) today defines environment selection and artifact path scoping, but it explicitly leaves deployment automation, schema separation between long-lived environments, and cross-channel safety out of scope. That gap is what blocks running a stable operator-facing system while active development continues — and therefore what this capability closes.
 
-## Current direction: prod baseline before promotion hardening
+## Current direction: safe prod and gated promotion
 
-The immediate operator priority is **establishing a stable prod baseline**, not completing the full promotion-governance workflow. These are sequential concerns, not parallel ones.
+Safe production binding and explicit promotion authority are both required. Issue #6228 adopts the
+gated `stable` source policy from ADR-0068 D4 and supersedes ADR-0040 §1–§2. Repository adoption
+does not move a live ref, perform a physical cutover, or establish what prod currently runs.
 
 Before promotion workflows can be trusted, the prod runtime must be running safely: correct compose overlay (`docker-compose.prod.yml`), explicit project namespace (`pkm-prod`), explicit `PKM_ENVIRONMENT=prod`, and the operator-configured `.env.prod.local` default pointing at the Midgård prod vault. This binding is not optional, but it is configured once per machine rather than restated on every startup.
 
@@ -74,26 +76,18 @@ A correctly bound prod startup requires all four elements to be explicit and ope
 
 Use `make prod-start-full` for the canonical prod startup that enforces all four. See `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md §Startup command semantics`.
 
-### Future promotion hardening
+### Repository promotion support and live acceptance
 
-Once the prod baseline is stable, the promotion workflow (prepare → execute → verify → rollback) will be hardened as a separate governance layer. The test channel (`pkm-test`) is a deliberate intermediate stage in that path. What belongs to future promotion hardening and not to the current baseline:
-- the `promote-to-test` and `promote-test-to-prod` staged workflows
-- automated enforcement of migration reversibility classification in the gated promotion-plan
-  workflow (the current production-startup gate is enforced now)
-- durable promotion-plan acknowledgement receipts for forward-only migrations
-- CI/UAT-as-test for the test channel: `.github/workflows/harness-selfverify.yml` still runs the
-  harness (IR-v1 UAT, channel preflight, bootstrap smoke, fault injection) and writes **no**
-  promotion-test receipt. STARTUP-04 now provides the repository writer and prod admission
-  validator. The writer binds a validated immutable candidate, runner check report, and exact
-  migration set before producing durable local output under the ignored `ops/test-promotions/`
-  store when invoked,
-  but no live test-channel run or receipt is fabricated by that implementation. The current
-  test-channel gate is therefore still **harness self-verification only**; CI/UAT cannot substitute
-  for a live test run until an authorized runner invokes the writer for the exact candidate and
-  check suite (see `.codex/skills/promote-to-test/SKILL.md` §"CI/UAT as substitute for a live test
-  run").
+The staged skills and actual production entrypoints require exact current TEST source C, its
+qualified immutable image D, trusted green TEST evidence, a durable signed functional PASS, and
+explicit human approval of the concrete promotion plan. Existing migration classification and
+forward-only acknowledgement gates remain binding.
 
-The absence of these does not block establishing a prod baseline. Operators should not wait for promotion hardening to run prod.
+`.github/workflows/harness-selfverify.yml` runs its harness and writes no promotion-test receipt.
+STARTUP-04 supplies the signed receipt writer and admission validator; an authorized runner must
+provide actual isolated functional observations for C/D. Fixtures, CI green, native PG/smoke and a
+Markdown PASS do not establish that live receipt. See `promote-to-test` for its producer contract.
+Physical model qualification, production effects and feature acceptance remain separate gates.
 
 ## Human need this serves
 
@@ -140,7 +134,7 @@ DB isolation is two-layer: a **container layer** (shipped, PR #596) provides phy
 
 | Channel | Environment | Compose target | Postgres port | Code ref | Vault | Runtime artifacts |
 | --- | --- | --- | --- | --- | --- | --- |
-| **stable** | `prod` | `make prod-up` | 15432 | `main` (interim baseline — gated `stable` deferred; see [Promotion model](#promotion-model)) | real operator vault | `tmp/` |
+| **stable** | `prod` | `make prod-up` | 15432 | protected `stable` authority; approved TEST source C/image D (see [Promotion model](#promotion-model)) | real operator vault | `tmp/` |
 | **dev** | `dev` | `make dev-up` | 15433 | `main` or feature branch | `vault-dev/` | `tmp-dev/` |
 | **test** | `test` (workflow-driven) | `make test-up` | 15434 | current worktree | `vault-test/` | `tmp-test/` |
 
@@ -203,7 +197,7 @@ These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Enviro
 1. **DB-per-channel.** Each channel runs against a separate logical Postgres database in a single local cluster. The outbox, event log, and any schema-carrying table lives in the channel's own DB. No cross-channel writes. No cross-channel consumers.
 2. **Vault-per-channel.** No channel ever writes to another channel's vault root. The prod vault is never targeted by dev or test processes, including during migration, reset, or experimentation.
 3. **Runtime-artifacts-per-channel.** Watcher state, heartbeats, incident logs, event logs, and all other runtime artifacts stay under the channel's runtime-artifact directory. Already partially true via [ENVIRONMENTS.md §Stores and Persistence](../ENVIRONMENTS.md); this capability extends the same rule to the DB.
-4. **Code-ref-per-channel.** The prod process runs code authorized by the agreed **promotion ref**. In the interim checkout model, that means a checkout pinned to the promotion ref, and the prod runtime must match it exactly with a clean working tree — no machine-local uncommitted state acting as durable truth (Issue #2527). After pinned-image cutover, that means the channel's deploy pin names an image tag built from the authorized promotion ref/SHA, and the running `/version` evidence plus deploy receipt must match that SHA. The promotion ref is currently `main` (interim baseline); a gated `stable` ref is the deferred target (see [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md)). Divergence from the checkout promotion ref or a dirty prod tree is flagged by the read-only fitness guard `app/release_channels/prod_ref_fitness.py`; pinned-image drift is detected by the deployment receipt/version checks owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`. Dev work must not be able to swap code under a running prod process. On a single-user machine this is satisfied before cutover by separate checkouts (git worktrees are the recommended shape), and after cutover by the absence of a live repo bind-mount plus per-channel image pins.
+4. **Code-ref-per-channel.** Protected `stable` authorizes the exact TEST-qualified source C and immutable image D recorded in the approved plan. A generated stable merge M is authority evidence, not a tested source version or image. Normal forward execution deploys C/D, with `/version` and the receipt matching C and the running image matching D. A legacy checkout remains reproducible from a clean, committed tree (Issue #2527); `prod_ref_fitness.py` checks that property against `stable` but does not grant promotion authority. A checkout that would execute unqualified M is refused before the stable PR. Dev work cannot swap code under a running prod process: existing checkouts stay separate, and pinned-image channels have no live repo bind-mount. The [deployment owner](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md) owns physical identity and receipt checks.
 5. **Promotion is explicit and recorded.** No implicit promotion. Every stable-ref movement is an intentional operator act with a resolvable receipt (git tag annotation, log entry, or equivalent).
 6. **Rollback is always available.** The previous stable ref is always resolvable and the migration reversal path is always specified at promotion time. If a migration is not reversibly specified, the promotion is rejected.
 7. **Same contracts everywhere.** Channel separation does not change the event envelope, artifact identity, provenance, receipt semantics, or write-safety rules. A channel is an operational boundary, not a different product.
@@ -257,16 +251,27 @@ Independent of the DSN/`PKM_ENVIRONMENT` isolation guard above, a service's comp
 
 ## Promotion model
 
-This section records the **current** prod promotion model and how it relates to the **target** gated model below. It is the authoritative reconciliation of the channel table and Invariant 4 with what prod actually runs (Issue #2527; [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md)).
+This section owns the repository's current production promotion policy. It separates authorization
+from physical running-prod observations, which remain in the infrastructure current-status view.
 
-### Current: prod tracks `main` (interim baseline)
+### Current: protected `stable` authority
 
-Prod's promotion ref is **`main`**. The prod process runs from a checkout pinned to `main` with a clean working tree; there is no gated `stable` indirection in force today. This is the interim baseline established while the UI and docs capabilities stabilize in dev — establishing a trustworthy prod runtime comes before promotion-governance hardening (see [Current direction](#current-direction-prod-baseline-before-promotion-hardening)).
+Issue #6228 adopts `main` → `dev` → `test` → `stable` from ADR-0068 D4. Normal production
+advancement requires candidate C to equal the **exact current `test` ref**, trusted green TEST
+evidence and retained DEV acceptance, build-once image digest D, a fresh durable signed functional
+PASS from `promote-to-test`, and explicit human approval of the complete plan. An older PASS
+candidate, arbitrary `main` HEAD, smoke-only result or matching source tree is insufficient.
+
+The operator advances protected stable through a PR whose head is C. GitHub's generated merge M
+must have parents exactly `[S, C]` and the same tree as C, where S is the approved stable baseline.
+M records the protected transition; it never qualifies a new M image or runtime version. Physical
+deployment uses the exact tested C/D. The existing plan carries these inputs and independently
+checked PR output; its contract and STARTUP-04 v2 receipt define the binding without a new registry.
 
 #### Current migration reversibility applicability
 
-The migration-reversibility classification is already an operator-safety policy for the current
-`main`-tracking production path. Before a migration is run against the active `app` DB under
+Migration-reversibility classification remains an operator-safety policy for production.
+Before a migration is run against the active `app` DB under
 compose project `pkm-prod`, it must be classified as reversible or forward-only. An
 unclassified migration blocks the current prod migration operation. A forward-only migration
 requires an explicit operator decision before it runs.
@@ -285,42 +290,45 @@ classification metadata for an already-applied migration. When the probe finds p
 forward-only migrations, the operator acknowledgment and the matching target-bound token are both
 required before writer stop.
 
-The current baseline does not yet create a durable target promotion-plan acknowledgement receipt.
-That receipt and the surrounding gated-`stable` promotion workflow remain deferred promotion
-hardening; they make the existing active applicability auditable across a promotion plan rather
-than changing which production database the startup gate protects.
+The approved plan records its full migration delta and acknowledgements, bound by the reviewed
+plan digest. The deploy receipt retains that approval and functional receipt identity. This makes
+the existing migration policy auditable; it does not replace the live target-bound decision token
+or change which production database the startup gate protects.
 
 The read-only `cutover_readiness` preflight is local/CI evidence only, not a deployment or migration
 receipt. When Alembic reports more than one current head, it treats the union of their ancestor
 sets as already applied; only revisions outside that union are pending. It therefore does not
 misclassify an already-applied merge parent as pending.
 
-`origin/stable` (`e2892b18`) is **dormant** and does **not** reflect what prod runs: as of 2026-06-29 it is not an ancestor of `origin/main` (hundreds of commits of divergence under squash-merge history). It must not be treated as the prod source-of-truth until it is restored as a gated ref. The promotion **skills** (`prepare-promotion`, `execute-promotion`, `verify-promotion`, `promote-test-to-prod`) describe the target gated model and remain valid for that future; they do not describe the current `main`-tracking baseline.
+Source adoption supersedes ADR-0040 §1–§2. It does not move an existing ref, reconcile ancestry,
+install tooling, produce a functional receipt or claim a physical cutover. Fresh live readback and
+the operator gates below remain necessary for any actual promotion.
 
-**Reproducibility invariant.** Prod must be reconstructible from git alone. The prod runtime HEAD must equal the promotion ref and the working tree must be clean — no uncommitted, machine-local state as durable truth (the Issue #2527 finding was a prod checkout dirty with tracked modifications that existed nowhere in git). The read-only guard `app/release_channels/prod_ref_fitness.py` (Issue #2527 AC3) flags a prod checkout that diverges from the promotion ref or runs a dirty tree; the operator runs it on the prod host to produce the clean-tree receipt:
+**Reproducibility invariant.** A checkout must remain reconstructible from committed Git state,
+with a clean working tree. `prod_ref_fitness.py` retains that read-only guard, now defaulting to
+`stable`. This checkout fitness result does not qualify generated M or replace pinned C/D evidence:
 
 ```
-python -m app.release_channels.prod_ref_fitness /Users/rasmus/workspace --promotion-ref main
+python -m app.release_channels.prod_ref_fitness <prod-checkout> --promotion-ref stable
 ```
 
-### Deployment model switch: checkout now, pinned image after cutover
+### Deployment model switch and identity limits
 
 The promotion authority above decides **which SHA** prod may run; the deployment model decides **how**
 that SHA becomes live. Until a channel's cutover receipt exists (fleet-model fitness PASS recorded in
-`ops/deployments/<channel>-latest.json`), that channel stays in the checkout model and the checkout
-procedure remains the executable interim path. After the receipt exists, the channel is in the
-pinned-image model: the authorized SHA is applied by bumping the channel image pin and recreating via
-`scripts/deploy_channel.sh`, with the deploy receipt and live `/version` evidence proving the running
-code. This switch does not move ADR-0040 authority: prod's interim promotion ref remains `main` until
-a later ADR restores gated `stable`.
+`ops/deployments/<channel>-latest.json`), its observed model remains checkout. Existing ordinary
+restart and governed recovery keep their own contracts. Normal forward promotion refuses checkout
+mode before the stable PR, because running generated M would not preserve tested source C.
+After an actual prod pinned-image cutover receipt exists, deployment bumps the exact C/D image pin
+and recreates through `scripts/deploy_channel.sh`. A plan cannot declare that cutover into existence.
 
-### Target: gated `stable` promotion (deferred hardening)
+### Green channel refs and production eligibility
 
 [ADR-0068](../adr/ADR-0068-continuous-dev-delivery-flow.md) (owner-directed 2026-10-18, parent #6207) sets
-the target chain as `main` → `dev` → `test` → `stable`. `dev` and `test` are refs the post-merge controller
+the chain as `main` → `dev` → `test` → `stable`. `dev` and `test` are refs the post-merge controller
 advances on green verdicts. `test` is the UAT stage. `stable` advances only from a `test`-passed candidate
-through the human-approved promotion below. Once enacted, this supersedes ADR-0040 §1–§2; until then the
-current `main`-tracking baseline above governs.
+through the human-approved promotion below. Repository adoption in #6228 supersedes ADR-0040 §1–§2;
+physical activation and observed acceptance remain separate.
 
 Repository support for the `dev`/`test` part is implemented in #6226. The existing trusted-main
 verdict workflow owns the narrow ref writer: exact green dev acceptance advances `dev`, and a green
@@ -329,10 +337,16 @@ are created from that proof; existing refs move only by non-force fast-forward. 
 Issue can pin `dev` while later candidates and deployments continue. The
 [deployment owner](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1)
 defines hold activation/readback and replay recovery. Repository proof does not establish live
-ref activation, alter production authority or restore `stable`; #6170/#3347 and the remaining
-#6207 production slice retain their gates.
+ref activation or grant the controller production authority. #6170/#3347 retain their activation
+and release gates.
 
-The four-phase gated model in [Promotion contract](#promotion-contract) — prepare → execute → verify → rollback, advancing a protected `stable` ref — is the **target**, deferred to promotion hardening (see [Future promotion hardening](#future-promotion-hardening)). Restoring `stable` as a gated promotion ref, and switching prod from `main`-tracking to `stable`-tracking, is future work that descends from Issue #2527; until then the current baseline above governs.
+`app.release_channels.stable_promotion` validates the approved existing plan before a protected PR
+and again for deployment. `scripts/deploy_channel.sh deploy prod`, `make deploy-prod` and the
+native host adapter require that plan and exact C/D before secret access or activation. The
+operator's production read context must supply the required protected-branch and Actions metadata;
+the controller's Actions-write/Contents-read client is not inferred to grant that authority.
+Denied or unavailable evidence refuses admission. No credential provisioning or live effect is
+performed by the read-only validator.
 
 ## Promotion contract
 
@@ -354,19 +368,31 @@ production eligibility or replace the functional promotion-test receipt. The sep
 policy is not an approval gate for ordinary automatic dev/test candidates. Physical mechanics are owned by
 [Deployment and Environments](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#build-once--promote-model).
 
-> **The production phases below describe the _target_ gated model — deferred promotion hardening.** The current prod baseline tracks `main` directly; see [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md).
+The production phases below are the current repository policy. Live execution still requires
+their actual evidence and operator authority; a source merge is not a promotion receipt.
 
-Promotion is the operation that turns an accepted commit on `main` into the running `stable` build in prod. It has four explicit phases:
+Promotion turns the exact current green TEST candidate into the authorized production version.
+It has four explicit phases:
 
-1. **Prepare.** Diff `main` against the current `stable` ref. Enumerate:
+1. **Prepare.** Diff exact current TEST source C against current protected stable baseline S. Bind
+   image D, trusted green TEST evidence and the signed functional PASS. Enumerate:
    - code delta (commits/PRs included);
    - migration delta (schema changes to apply to the current `app` DB under compose project `pkm-prod`);
    - config / settings delta;
    - risk notes (flags, known regressions, acceptance-criteria status of included PRs).
-   The prepare phase produces a **promotion plan** the operator can review before executing.
-2. **Execute.** Advance the `stable` ref via a governed PR targeting `stable`. Apply migrations to the current `app` DB under compose project `pkm-prod`. Restart the prod process from the updated `stable` checkout. Promotion is a single operator-triggered step, not a background automation.
-3. **Verify.** Post-promotion health, status, and smoke checks against the running prod. Health must be green against [HEALTH.md](../HEALTH.md) contracts before the promotion is considered accepted.
-4. **Rollback (conditional).** If verification fails, return `stable` through a governed rollback PR, update prod to the merged `origin/stable` rollback commit, reverse any reversible migrations, and restart. Non-reversible migrations must be flagged during prepare so the operator chooses knowingly.
+   The prepare phase produces a complete **promotion plan** for explicit human approval. Its
+   digest binds the reviewed narrative and inputs, including every migration acknowledgement.
+2. **Execute.** Revalidate eligibility and approval, advance `stable` through the protected PR with
+   head C, and record verified M. Deploy exact C/D through the existing script/native adapter,
+   applying only reviewed migrations to `pkm-prod/app`. M never substitutes for tested C/D.
+   Promotion is operator-triggered, not background automation.
+3. **Verify.** Confirm live source C/image D, retained S/M admission, health, status, smoke and
+   functional outcomes. Health must be green against [HEALTH.md](../HEALTH.md) before acceptance.
+4. **Rollback (conditional).** Only an observed effect needing recovery invokes the existing
+   governed rollback contract. The protected rollback PR must merge and its result be fetched and
+   recorded before reversible downgrades; retain the failed-promotion source for those files, then
+   update the checkout before restart. Pinned-image recovery uses the recorded previous-good
+   artifact. Forward-only migrations retain their operator caveats and uncertain-commit gates.
 
 Production promotion trigger is **manual, single-user**. The operator decides when to promote to production; a PR merge or CI result does not trigger it.
 
@@ -394,7 +420,7 @@ Every stable-ref movement — whether forward (promotion) or backward (rollback)
 
 ### Ancestry preflight invariant
 
-Before any stable-ref movement, `execute-promotion` verifies:
+Before normal forward stable advancement, `execute-promotion` verifies:
 
 ```bash
 git merge-base --is-ancestor origin/stable <candidate-sha>
@@ -402,12 +428,16 @@ git merge-base --is-ancestor origin/stable <candidate-sha>
 
 If this check fails, promotion aborts fail-closed with a reconciliation-PR instruction. Promotion cannot proceed until `stable` is an ancestor of the candidate.
 
-**Current state (2026-06-29, Issue #2527):** `git merge-base --is-ancestor origin/stable origin/main` returns **non-zero** — `origin/stable` (`e2892b18`) is **not** an ancestor of `origin/main` (hundreds of commits of divergence under squash-merge history; an earlier 2026-06-06 reconciliation has since drifted). This is the dormant-`stable` drift recorded in [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md). It does **not** block the current baseline — prod tracks `main` directly — but the gated `stable` promotion path above cannot run until `stable` is restored as an ancestor of the candidate.
+Read refs and ancestry freshly. Source adoption does not repair missing or divergent stable
+history. Reconciliation must be separately reviewed into `main` and complete the DEV/TEST path
+before the resulting exact current TEST candidate is eligible; no force update or tree-only
+qualification is allowed.
 
 ## Rollback posture
 
 - The previous stable ref is always resolvable (recorded as `stable-prev` pointer file in `ops/promotions/` before any stable movement).
-- Rollback proceeds via a **governed revert PR targeting `stable`**, not a direct ref write. The revert PR must pass the same required status checks as a promotion PR. After merge, prod is updated to the merged `origin/stable` rollback commit before reversible migrations are reversed; `stable-prev` remains the rollback target/anchor.
+- Rollback proceeds via a **governed revert PR targeting `stable`**, not a direct ref write. The revert PR must pass the same required status checks as a promotion PR. Merge, fetch and record its result before reversible downgrades, retain the failed-promotion source while those migration files are needed, then update to the merged rollback checkout before restart. This preserves the accepted [PR #1721 correction](https://github.com/RasmusTho/agentic-pkm-mvp/pull/1721); `stable-prev` remains the ref-restoration anchor.
+- Pinned-image recovery uses the recorded previous-good source/image digest under its existing operator, migration and runtime-floor gates. A new rollback merge is not an implicitly qualified image, and normal current-TEST eligibility is not borrowed as recovery authority.
 - Migrations are classified at promotion time as **reversible** or **forward-only**. Forward-only migrations are allowed but require the operator to acknowledge that rollback cannot restore DB shape.
 
 Physical previous-good recreation in `scripts/deploy_channel.sh` uses the same Model Access

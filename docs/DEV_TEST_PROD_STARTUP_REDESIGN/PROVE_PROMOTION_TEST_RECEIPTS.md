@@ -38,7 +38,7 @@ validate-prod-activation ...` accepts only a current, unrevoked PASS whose
 artifact/config/test/vault/schema identities match. It requires the exact check report and compares
 its canonical digest, migration-set identity, and migration baseline to the signed v2 receipt; the
 baseline must match the fixed canonical repository's authoritative current promotion ref
-(`refs/heads/main`, exposed locally as `origin/main` in the current interim model) and the
+(`refs/heads/stable` under ADR-0068 D4 and #6228) and the
 independently supplied prod-admission context. The second command only returns admission
 evidence with state `validated_not_activated`; it performs no activation. P5 owns the future
 side-effecting caller and must invoke this boundary immediately before activation.
@@ -50,12 +50,18 @@ delta, check report, and current canonical prod baseline, and a revoked receipt 
 re-issued by a racing writer.
 
 - Baseline authority is fetched fresh for every binding from the fixed repository URL and
-  `refs/heads/main`. Git is invoked through a root-owned absolute system executable with a fixed
+  `refs/heads/stable`. Git is invoked through a root-owned absolute system executable with a fixed
   system `PATH` and verified root-owned non-repository `/` working directory. The child receives a
   minimal allowlisted environment, excluding caller Git/temp/certificate/dynamic-loader settings,
   replace refs, object overlays, and interactive transport. The source repository supplies only
   immutable candidate objects;
   its refs and local Git config cannot select or rewrite the baseline authority.
+- Protected PR output M differs from TEST input C. The existing approved promotion plan may bridge
+  the signed pre-merge baseline S only after fresh canonical stable=M and independent proof of
+  protected PR head C, M parents `[S, C]`, unchanged tree, exact current green TEST C and digest D.
+  Immutable local Git objects are rehash-verified too. This optional post-merge admission preserves
+  the v2 receipt shape and trust/signature/revocation/freshness rules; no caller-selected baseline
+  or tree-only M artifact qualification is allowed. Normal deployment still executes tested C/D.
 - Every changed migration path must resolve in the candidate tree to one regular Git blob with mode
   `100644` or `100755`. Symlinks, deletions, renames, and other tree modes fail closed. Candidate
   ancestry plus every commit/tree/blob object used for the delta is rehash-verified against its

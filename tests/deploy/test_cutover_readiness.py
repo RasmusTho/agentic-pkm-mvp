@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 from app.release_channels.cutover_readiness import (
     _resolve_db_revision,
     check_cutover_readiness,
@@ -101,6 +102,22 @@ def _runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     if args[:3] == ["alembic", "-c", "alembic.ini"]:
         return subprocess.CompletedProcess(args, 0, "001 (head)\n", "")
     raise AssertionError(f"unexpected command: {command}")
+
+
+@pytest.mark.parametrize('channel, expected_ref', [('prod', 'origin/stable'),
+                                                  ('dev', 'origin/main'), ('test', 'origin/main')])
+def test_default_ref_keeps_prod_authority_separate_from_build_source(tmp_path, channel, expected_ref):
+    _write_base_fixture(tmp_path)
+    (tmp_path / f'config/deploy/{channel}.env').write_text(f'APP_IMAGE_TAG={TARGET_SHA}\n')
+    (tmp_path / f'docker-compose.{channel}.yml').write_text('services: {}\n')
+    calls = []
+
+    def runner(args, cwd):
+        calls.append(args)
+        return _runner(args, cwd)
+
+    check_cutover_readiness(channel, TARGET_SHA, root=tmp_path, db_revision='001', runner=runner)
+    assert ['git', 'merge-base', '--is-ancestor', TARGET_SHA, expected_ref] in calls
 
 
 def test_missing_required_env_named_in_failure(tmp_path: Path) -> None:

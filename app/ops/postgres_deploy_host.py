@@ -368,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
     parser.add_argument('revision')
     parser.add_argument('--image-digest', help='immutable published sha256 image-index digest')
+    parser.add_argument('--promotion-plan', help='absolute reviewed promotion-plan path on the target host (PROD only)')
     parser.add_argument('--automatic', action='store_true', help='non-production existing-secret delivery')
     parser.add_argument('--operation-id', help='stable automatic candidate/channel operation UUID')
     parser.add_argument('--authority-cutover-binding', help='already-qualified nonprod binding')
@@ -433,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
+        if args.promotion_plan is not None and (args.channel != 'prod' or args.automatic):
+            raise PostgresDeployError()
         cutover = None
         recovery_authority = None
         if any(value is not None for value in (args.authority_cutover_binding, args.authority_cutover_root,
@@ -704,7 +707,7 @@ def main(argv: list[str] | None = None) -> int:
         # binding. VM-only consumers are selected from VM runtime/migration state.
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),
                           (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only,
-                          args.image_digest, args.automatic, cutover)
+                          args.image_digest, args.automatic, cutover, args.promotion_plan)
         recovery_request = None
         if args.recover_test_source or args.reconstruct_missing_instance_state:
             failed_operation_id = args.failed_operation_id

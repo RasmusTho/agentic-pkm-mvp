@@ -51,7 +51,7 @@ fi
 usage() {
   cat >&2 <<'EOF'
 usage:
-  scripts/deploy_channel.sh deploy <dev|test|prod> <sha> [--dry-run] [--ack-forward-only] [--ack-embedding-rebuild-required] [--image-digest sha256:...] [--automatic]
+  scripts/deploy_channel.sh deploy <dev|test|prod> <sha> [--promotion-plan path] [--dry-run] [--ack-forward-only] [--ack-embedding-rebuild-required] [--image-digest sha256:...] [--automatic]
   scripts/deploy_channel.sh rollback <dev|test|prod> [sha] [--dry-run]
 
 Environment:
@@ -102,12 +102,19 @@ ack_forward_only="${DEPLOY_ACK_FORWARD_ONLY:-0}"
 ack_embedding_rebuild_required="${DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED:-0}"
 automatic=0
 image_digest=""
+promotion_plan=""
+promotion_admission_json="{}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) dry_run=1 ;;
     --ack-forward-only) ack_forward_only=1 ;;
     --ack-embedding-rebuild-required) ack_embedding_rebuild_required=1 ;;
     --automatic) automatic=1 ;;
+    --promotion-plan)
+      [ "$#" -ge 2 ] || { usage; exit 2; }
+      promotion_plan="$2"
+      shift
+      ;;
     --image-digest)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       image_digest="$2"
@@ -148,6 +155,23 @@ case "${channel}" in
     ;;
   *) usage; exit 2 ;;
 esac
+
+# Normal production advancement is admitted before temporary state, locks,
+# credential access, Docker, pin writes, migration probes or writer stop.
+# Rollback and ordinary restart retain their existing separate contracts.
+if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ] && [ "${dry_run}" != "1" ]; then
+  if [ -z "${promotion_plan}" ] || [ -z "${image_digest}" ]; then
+    echo "production deploy requires an approved promotion plan and the TEST-qualified image digest" >&2
+    exit 78
+  fi
+  promotion_admission_json="$(
+    cd "${ROOT}"
+    PYTHONPATH="${ROOT}" "${PYTHON}" -m app.release_channels.stable_promotion \
+      --plan "${promotion_plan}" --phase deploy --candidate "${target_sha}" --image-digest "${image_digest}"
+  )" || exit $?
+fi
+DEPLOY_PROMOTION_ADMISSION_JSON="${promotion_admission_json}"
+export DEPLOY_PROMOTION_ADMISSION_JSON
 
 # Linux BWS deployment can enter only through the supervised host-admitted worker.
 # Check before temporary state, pin directories or any Docker command.
@@ -1975,6 +1999,8 @@ payload = {
         os.environ.get("DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK", "0") == "1"
     ),
 }
+if payload["channel"] == "prod" and payload["action"] == "deploy":
+    payload["stable_promotion"] = json.loads(os.environ["DEPLOY_PROMOTION_ADMISSION_JSON"])
 Path(sys.argv[1]).write_text(
     json.dumps(payload, indent=2, sort_keys=True) + "\\n",
     encoding="utf-8",
