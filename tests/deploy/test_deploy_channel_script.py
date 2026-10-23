@@ -2448,6 +2448,10 @@ class _BwsVmEffects:
     def select_active_plan(self, plan):
         return plan
 
+    def require_promotion_admission(self, plan):
+        # This fake represents only TEST; production admission uses real effects.
+        assert plan.channel == 'test'
+
     def preflight(self, plan):
         self.events.append('preflight:' + plan.channel)
         return 'fake-postgres-canary'

@@ -370,7 +370,7 @@ fi
 case "$*" in
   *"run --rm --no-deps -T -e MIGRATION_GATE_TOKEN_ONLY=1 migrate"*)
     probe_selector=1
-    printf 'migration-token-image=%s:%s\\n' "${{APP_IMAGE_REPOSITORY:-unset}}" "${{APP_IMAGE_TAG:-unset}}" >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
+    printf 'migration-token-image=%s:%s%s\\n' "${{APP_IMAGE_REPOSITORY:-unset}}" "${{APP_IMAGE_TAG:-unset}}" "${{APP_IMAGE_DIGEST_SUFFIX:-}}" >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
     printf 'migration-token-probe selector=%s ack=%s\\n' \
       "${{probe_selector}}" \
       "${{PROD_MIGRATION_FORWARD_ONLY_ACK:-}}" \
@@ -521,6 +521,20 @@ exec {real_mv!s} "$@"
         python_wrapper,
         f"""#!/usr/bin/env bash
 set -eu
+if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "app.release_channels.stable_promotion" ]; then
+  # These fixtures start at the admitted deploy boundary. The real plan,
+  # controller evidence and signed validator are exercised together in
+  # tests/release_channels/test_stable_promotion_from_test.py.
+  if [ -n "${{FAKE_PROMOTION_ARGS_FILE:-}}" ]; then
+    printf '%s\\n' "$@" >"${{FAKE_PROMOTION_ARGS_FILE}}"
+  fi
+  if [ "${{FAKE_PROMOTION_ADMISSION:-pass}}" = "fail" ]; then
+    echo 'ABORT: stable promotion admission refused: fixture_denied' >&2
+    exit 78
+  fi
+  printf '%s\\n' '{{"fixture":"admitted-prod-promotion"}}'
+  exit 0
+fi
 if [ "${{1:-}}" = "-c" ] && [[ "${{2:-}}" == *sync_playwright* ]]; then
   if [ "${{FAKE_PLAYWRIGHT_PREFLIGHT:-pass}}" = "fail" ]; then
     echo 'playwright chromium unavailable' >&2
@@ -607,8 +621,15 @@ exec {sys.executable!s} "$@"
 def _run_deploy(
     root: Path, env: dict[str, str], sha: str, *extra: str, channel: str = "dev"
 ) -> subprocess.CompletedProcess[str]:
+    # Existing migration/rollback scenarios own the post-admission boundary.
+    # Keep the production precondition explicit in every assembled invocation.
+    admission = []
+    if channel == "prod":
+        admission = ["--promotion-plan", str(root / "approved-promotion.md")]
+        if "--image-digest" not in extra:
+            admission += ["--image-digest", "sha256:" + "b" * 64]
     return subprocess.run(
-        ["bash", "scripts/deploy_channel.sh", "deploy", channel, sha, *extra],
+        ["bash", "scripts/deploy_channel.sh", "deploy", channel, sha, *admission, *extra],
         cwd=root,
         env=env,
         check=False,
@@ -756,6 +777,54 @@ def test_archive_preflight_blocks_deploy_but_never_gates_rollback(tmp_path: Path
     rollback = _run_rollback(root, env, sha)
     assert rollback.returncode == 0, rollback.stdout + rollback.stderr
     assert not any(event.startswith("archive-preflight") for event in _deploy_events(env))
+
+
+@pytest.mark.parametrize("entrypoint", ["shell", "make"])
+def test_prod_previous_good_rollback_preserves_immutable_pin_without_forward_admission(
+    tmp_path: Path, entrypoint: str
+) -> None:
+    root, env, previous_good_sha = _deploy_harness(tmp_path)
+    (root / "failed_candidate.py").write_text("# Failed runtime candidate.\n", encoding="utf-8")
+    subprocess.run(["git", "add", "failed_candidate.py"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "failed runtime candidate"], cwd=root, check=True)
+    failed_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    previous_digest = "sha256:" + "d" * 64
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={failed_sha}\nAPP_IMAGE_DIGEST_SUFFIX=@sha256:{'c' * 64}\n",
+        encoding="utf-8",
+    )
+    (root / "config/deploy/prod.previous.env").write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_good_sha}\nAPP_IMAGE_DIGEST_SUFFIX=@{previous_digest}\n",
+        encoding="utf-8",
+    )
+    admission_args = tmp_path / "forward-admission-args"
+    env.update({"FAKE_SHA": previous_good_sha, "FAKE_PROMOTION_ADMISSION": "fail",
+                "FAKE_PROMOTION_ARGS_FILE": str(admission_args)})
+    refused = _run_deploy(root, env, previous_good_sha, channel="prod")
+    assert refused.returncode == 78
+    assert "fixture_denied" in refused.stderr
+    assert not Path(env["FAKE_DEPLOY_EVENT_LOG"]).exists()
+    admission_args.unlink()
+
+    command = ["bash", "scripts/deploy_channel.sh", "rollback", "prod", previous_good_sha]
+    if entrypoint == "make":
+        command = ["make", "--no-print-directory", "-f", str(REPO_ROOT / "Makefile"),
+                   "rollback-prod", f"SHA={previous_good_sha}"]
+    recovered = subprocess.run(command, cwd=root, env=env, text=True, capture_output=True)
+
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert not admission_args.exists()
+    deployment = json.loads((root / "ops/deployments/prod-latest.json").read_text(encoding="utf-8"))
+    assert deployment["action"] == "rollback"
+    assert deployment["sha"] == previous_good_sha
+    assert deployment["image_digest"] == previous_digest
+    assert deployment["image"].endswith(f":{previous_good_sha}@{previous_digest}")
+    assert "stable_promotion" not in deployment
+    assert f"APP_IMAGE_DIGEST_SUFFIX=@{previous_digest}" in pin_path.read_text(encoding="utf-8")
+    assert not any(event.startswith("migration-full ") for event in _deploy_events(env))
 
 
 def test_pending_settings_rebind_floor_blocks_older_rollback_before_compose(
@@ -2206,7 +2275,9 @@ def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
     full_index = next(index for index, event in enumerate(events) if event.startswith("migration-full "))
     assert probe_index < stop_index < full_index
     assert "selector=1 ack=" in events[probe_index]
-    assert events[probe_index - 1] == f"migration-token-image=example.invalid/pkm-app:{target_sha}"
+    assert events[probe_index - 1] == (
+        f"migration-token-image=example.invalid/pkm-app:{target_sha}@sha256:" + "b" * 64
+    )
     assert events[full_index] == f"migration-full ack={token}"
 
 
@@ -2329,7 +2400,7 @@ def test_prod_forward_only_requires_ack_before_writer_stop_when_pending(
     assert "--ack-forward-only is required before writer stop" in result.stderr
     events = _deploy_events(env)
     assert any(event.startswith("migration-token-probe ") for event in events)
-    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{target_sha}" in events
+    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{target_sha}@sha256:" + "b" * 64 in events
     assert not any(" stop api worker watcher" in event for event in events)
     assert not (root / "config/deploy/prod.migration-pending.env").exists()
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
@@ -2375,7 +2446,7 @@ def test_prod_pending_forward_only_requires_ack_even_when_changed_migrations_are
     assert "--ack-forward-only is required before writer stop" in result.stderr
     events = _deploy_events(env)
     assert any(event.startswith("migration-token-probe ") for event in events)
-    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{target_sha}" in events
+    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{target_sha}@sha256:" + "b" * 64 in events
     assert not any(" stop api worker watcher" in event for event in events)
     assert not (root / "config/deploy/prod.migration-pending.env").exists()
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
@@ -2405,7 +2476,7 @@ def test_prod_empty_migration_delta_still_requires_ack_for_live_pending_forward_
     assert "--ack-forward-only is required before writer stop" in result.stderr
     events = _deploy_events(env)
     assert "migration gate ok: 0 migration(s), forward_only=0" in result.stdout
-    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{current_sha}" in events
+    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{current_sha}@sha256:" + "b" * 64 in events
     assert any(event.startswith("migration-token-probe ") for event in events)
     assert not any(" stop api worker watcher" in event for event in events)
     assert not (root / "config/deploy/prod.migration-pending.env").exists()
@@ -2457,7 +2528,7 @@ def test_prod_empty_delta_forward_only_failure_retries_through_durable_marker(
     assert f"TARGET_SHA={target_sha}" in marker
     assert "ACK_FORWARD_ONLY=1" in marker
     assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
-    assert f"migration-token-image=example.invalid/pkm-app:{target_sha}" in _deploy_events(env)
+    assert f"migration-token-image=example.invalid/pkm-app:{target_sha}@sha256:" + "b" * 64 in _deploy_events(env)
 
     env.pop("FAKE_DOCKER_FAIL_MATCH")
     env["FAKE_MIGRATION_GATE_RESULT"] = "prod-migration-no-forward-only-pending.v1"
@@ -2519,9 +2590,11 @@ def test_prod_metadata_only_forward_marker_delta_needs_no_ack_when_none_pending(
     full_index = next(index for index, event in enumerate(events) if event.startswith("migration-full "))
     assert probe_index < stop_index < full_index
     assert events[full_index] == "migration-full ack="
-    receipt = json.loads(
+    deployment = json.loads(
         (root / "ops/deployments/prod-latest.json").read_text(encoding="utf-8")
-    )["migration_receipt"]
+    )
+    assert deployment["stable_promotion"] == {"fixture": "admitted-prod-promotion"}
+    receipt = deployment["migration_receipt"]
     assert receipt["forward_only"] == ["forward_only_marker_update.py"]
     assert receipt["ack_forward_only"] is False
 
@@ -3845,6 +3918,9 @@ def test_bws_supervisor_launcher_uses_declared_runtime_dependencies():
         'annotated-types==0.7.0',
         'typing-inspection==0.4.2',
         'python-dotenv==1.2.2',
+        'cryptography==49.0.0',
+        'cffi==2.0.0',
+        'pycparser==3.0',
     ]
     assert launcher.splitlines()[0] == f'#!{runtime_python}'
     assert 'ExecStart=/usr/local/libexec/yggdrasil-bws-deploy serve %i' in unit
@@ -3962,12 +4038,14 @@ def test_bws_supervisor_runtime_setup_is_idempotent_and_preserves_credentials(tm
     assert 'LoadCredentialEncrypted=bws-machine-account-token:/var/lib/yggdrasil/bws-tokens/%i/current' in original_unit.decode()
 
 
-@pytest.mark.parametrize('missing_import', [None, 'yaml', 'bitwarden_sdk', 'psycopg'])
+@pytest.mark.parametrize('missing_import', [None, 'yaml', 'bitwarden_sdk', 'psycopg', 'cryptography'])
 def test_bws_runtime_declares_and_probes_yaml_for_child_guard(tmp_path, missing_import):
     application_manifest = (REPO_ROOT / 'requirements.txt').read_text(encoding='utf-8').splitlines()
     runtime_manifest = (REPO_ROOT / 'requirements-bws-deploy.txt').read_text(encoding='utf-8').splitlines()
     yaml_pin = next(line for line in application_manifest if line.startswith('PyYAML=='))
     assert yaml_pin in runtime_manifest
+    for package in ('cryptography', 'cffi', 'pycparser'):
+        assert next(line for line in application_manifest if line.startswith(package + '==')) in runtime_manifest
 
     fake_bin = tmp_path / 'fake-bin'
     _write_fake_bws_runtime_python(fake_bin)

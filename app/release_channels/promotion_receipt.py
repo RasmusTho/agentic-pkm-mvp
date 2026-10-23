@@ -50,7 +50,7 @@ ATTEMPT_VERSION = "promotion-test-attempt.v1"
 RESERVATION_VERSION = "promotion-test-reservation.v1"
 REPORT_VERSION = "promotion-test-check-report.v1"
 PROD_REPOSITORY_URL = "https://github.com/RasmusTho/agentic-pkm-mvp.git"
-PROD_PROMOTION_REF = "refs/heads/main"
+PROD_PROMOTION_REF = "refs/heads/stable"
 REQUIRED_CHECKS = ("migration", "readiness", "schema", "smoke", "ui", "version")
 _OBSERVED_CHECKS = REQUIRED_CHECKS[1:]
 _RECEIPT_FIELDS = {
@@ -1371,6 +1371,7 @@ def _validate_receipt(
     source_repo: Path,
     *,
     now: datetime,
+    promotion_plan: Path | None = None,
 ) -> dict[str, object]:
     if receipt is None:
         raise PromotionReceiptError("receipt_missing")
@@ -1378,6 +1379,21 @@ def _validate_receipt(
     registry_mapping = _mapping(registry, code="registry_missing")
     identity, requested_baseline_sha = _validate_admission_context(expected_identity)
     migration_baseline_sha = _resolve_authoritative_prod_baseline(source_repo)
+    if promotion_plan is not None:
+        from app.release_channels.stable_promotion import resolve_migration_baseline
+
+        # The executed protected PR can advance stable before physical deployment.
+        # Preserve the signed S -> C migration delta only after authenticating the
+        # exact current S -> M transition and its approved TEST-qualified C/D input.
+        try:
+            migration_baseline_sha = resolve_migration_baseline(
+                promotion_plan, expected_digest=identity["artifact_digest"],
+                expected_receipt_id=receipt_mapping.get("receipt_id"),
+                expected_stable=migration_baseline_sha, source_repo=source_repo,
+            )
+        except Exception:
+            # Keep the existing public validator's bounded diagnostic boundary.
+            raise PromotionReceiptError("protected_transition_invalid") from None
     if requested_baseline_sha != migration_baseline_sha:
         raise PromotionReceiptError("migration_baseline_mismatch")
     if set(receipt_mapping) != _RECEIPT_FIELDS:
@@ -1500,6 +1516,7 @@ def authorize_prod_activation(
     check_report: object,
     source_repo: Path,
     now: datetime,
+    promotion_plan: Path | None = None,
 ) -> dict[str, object]:
     """Return admission evidence only after exact prod receipt validation.
 
@@ -1513,6 +1530,7 @@ def authorize_prod_activation(
         check_report,
         source_repo,
         now=now,
+        promotion_plan=promotion_plan,
     )
     return {
         "activation_permitted": True,
@@ -1528,6 +1546,7 @@ def prepare_prod_activation(
     check_report: object,
     source_repo: Path,
     now: datetime,
+    promotion_plan: Path | None = None,
 ) -> dict[str, object]:
     """Production pre-activation boundary, intentionally without side effects.
 
@@ -1543,6 +1562,7 @@ def prepare_prod_activation(
         check_report=check_report,
         source_repo=source_repo,
         now=now,
+        promotion_plan=promotion_plan,
     )
     return {
         **authorization,
@@ -1633,6 +1653,7 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--admission-context", type=Path, required=True)
     validate.add_argument("--check-report", type=Path, required=True)
     validate.add_argument("--now", required=True)
+    validate.add_argument("--promotion-plan", type=Path)
     return parser
 
 
@@ -1676,6 +1697,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 source_repo=repo_root,
                 now=_parse_timestamp(args.now, code="validation_time_invalid"),
+                promotion_plan=args.promotion_plan,
             )
     except PromotionReceiptError as exc:
         print(json.dumps(exc.as_dict(), sort_keys=True), file=sys.stderr)

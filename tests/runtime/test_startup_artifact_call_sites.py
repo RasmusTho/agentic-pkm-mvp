@@ -1527,7 +1527,7 @@ def test_authoritative_baseline_fetch_is_fresh_and_ignores_git_config(
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout=(baselines[len(calls) - 1] + "\trefs/heads/main\n").encode(),
+            stdout=(baselines[len(calls) - 1] + "\trefs/heads/stable\n").encode(),
             stderr=b"",
         )
 
@@ -1591,7 +1591,7 @@ def test_authoritative_baseline_ignores_caller_repo_and_tmpdir_url_rewrites(
         ).strip()
         subprocess.run(["git", "clone", "-q", "--bare", str(work), str(remote)], check=True)
         subprocess.run(
-            ["git", "update-ref", "refs/heads/main", source_sha],
+            ["git", "update-ref", "refs/heads/stable", source_sha],
             cwd=remote,
             check=True,
         )
@@ -1762,14 +1762,16 @@ def _promotion_migration_git_delta(
         cwd=repo,
         check=True,
     )
+    # The pinned synthetic baseline is independent of live promotion refs.
+    # Keep canonical origin identity while seeding its immutable fixture object.
     subprocess.run(
         [
             "git",
             "fetch",
             "-q",
             "--no-tags",
-            "origin",
-            "refs/heads/main",
+            str(ROOT),
+            PROMOTION_BASELINE_SHA,
         ],
         cwd=repo,
         check=True,

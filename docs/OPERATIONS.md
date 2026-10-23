@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-22 (#6226 green channel-ref and linked-Issue hold repository support; prior 2026-10-19 #6269 fixed content-free native source-persistence failure stages, repository-only; #6227 dev-heavy qualification, #6225 pinned tooling and startup/liveness support and #6224 expiring controller-pause entry, repository-only; #6222 liveness support and #6223 rolling channel-bug entries, repository-only; prior 2026-10-16 TEST dormant-ownership boundary for #5937, repository-only; prior 2026-10-15 Companion collection-preflight output classification for #6079; prior 2026-10-14 VOICE-04 session/transcript guidance, native MVR-01C entry for #6056, native BWS embedding preflight for #6069, and fixed native TEST journaling entry for #6050, repository-only; prior #5969 web qualification, #5993 placement and other section reviews retained; no new live host or service verification)
+Last reviewed: 2026-10-23 (#6228 gated production source policy and caller admission; #6226 and prior repository support retained; no new live host or service verification)
 Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; this is not a new deployment, release or functional-acceptance receipt.
 Infrastructure reference review: 2026-10-21; other sections retain their individual verification dates.
 BWS child-runtime repository evidence: requirements-bws-deploy.txt; scripts/install_bws_deploy_runtime.sh; tests/deploy/test_deploy_channel.py::test_bws_runtime_setup_covers_mandatory_browser_smoke and tests/deploy/test_deploy_channel_script.py::test_managed_deploy_child_uses_declared_supervisor_interpreter; Issue #5905 / PR #5906 (repository validation only; no live host installation or channel acceptance).
@@ -143,6 +143,15 @@ See `docs/EPISODE_RESOLUTION_ENGINE/README.md` for the owner contract.
   (preflight, smoke test, soak, rollback rehearsal, and receipt), use
   `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`. Treat release channels as an operator-governed
   capability with outstanding feature acceptance, not as a fully accepted baseline workflow.
+
+  Normal production promotion uses protected `stable` authority (#6228): the exact current green
+  TEST source C and immutable image D, a signed functional PASS, and explicit approval of the
+  concrete plan. `make deploy-prod SHA=<C> IMAGE_DIGEST=<D> PROMOTION_PLAN=<absolute-path>` and the
+  native host adapter enforce admission before effects. Protected merge M is authority evidence;
+  the running version remains C/D. The operator's read context must supply full required stable
+  protection and Actions evidence on the execution host; controller credentials do not imply
+  those production permissions. Ordinary restart and governed previous-good rollback retain their
+  contracts. Repository support establishes no running-prod or cutover observation.
 
 ### Read-only ordinary-boot doctor (STARTUP-03)
 

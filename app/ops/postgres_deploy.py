@@ -77,12 +77,15 @@ class DeployPlan:
     image_digest: str | None = None
     automatic: bool = False
     authority_cutover: AuthorityCutover | None = None
+    promotion_plan: str | None = None
 
     def payload(self) -> dict[str, Any]:
         """Keep retained manual request bindings compatible with older workers."""
         payload = asdict(self)
         if self.authority_cutover is None:
             del payload['authority_cutover']
+        if self.promotion_plan is None:
+            del payload['promotion_plan']
         if self.image_digest is None and not self.automatic:
             del payload['image_digest']
             del payload['automatic']
@@ -95,7 +98,7 @@ class DeployPlan:
         legacy = {'channel', 'revision', 'services', 'consumers', 'ack_forward_only'}
         if not isinstance(raw, dict):
             raise PostgresDeployError()
-        keys = set(raw) - {'authority_cutover'}
+        keys = set(raw) - {'authority_cutover', 'promotion_plan'}
         if keys not in (legacy, legacy | {'image_digest', 'automatic'},
                         legacy | {'image_digest', 'automatic', 'verification_profile'}):
             raise PostgresDeployError()
@@ -106,7 +109,8 @@ class DeployPlan:
                 raise PostgresDeployError()
             cutover = AuthorityCutover(**selected)
         plan = cls(raw['channel'], raw['revision'], tuple(raw['services']), tuple(raw['consumers']),
-                   raw['ack_forward_only'], raw.get('image_digest'), raw.get('automatic', False), cutover)
+                   raw['ack_forward_only'], raw.get('image_digest'), raw.get('automatic', False), cutover,
+                   raw.get('promotion_plan'))
         plan.validate()
         if (plan.automatic and raw != json.loads(json.dumps(plan.payload()))
             or not plan.automatic and 'verification_profile' in raw):
@@ -114,6 +118,13 @@ class DeployPlan:
         return plan
 
     def validate(self) -> None:
+        if self.promotion_plan is not None and (
+            self.channel != 'prod' or self.automatic
+            or not isinstance(self.promotion_plan, str)
+            or not Path(self.promotion_plan).is_absolute()
+            or len(self.promotion_plan) > 4096 or '\0' in self.promotion_plan
+        ):
+            raise PostgresDeployError()
         if self.authority_cutover is not None:
             if (not isinstance(self.authority_cutover, AuthorityCutover)
                 or self.channel not in {'dev', 'test'} or self.automatic):

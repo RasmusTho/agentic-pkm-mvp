@@ -1,26 +1,17 @@
 ---
 name: prepare-promotion
-description: "Produce a promotion plan that diffs main against stable, enumerates code delta, migration delta, config delta, and risk notes, and surfaces every forward-only migration for operator acknowledgment before execution."
+description: "Produce a promotion plan that diffs the current TEST-qualified candidate against stable, enumerates code delta, migration delta, config delta, and risk notes, and surfaces every forward-only migration for operator acknowledgment before execution."
 ---
 
 # Prepare Promotion
 
-> **Status: describes the TARGET gated-`stable` model (deferred promotion hardening).** Prod
-> currently tracks `main` directly per `docs/RELEASE_CHANNELS/README.md §Promotion model` and
-> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
-> **dormant** and is not an ancestor of `origin/main`. Do not run this skill against the current
-> baseline without explicit operator direction — see README §Current direction and §Promotion
-> model before invoking.
->
-> The target workflow uses the same active production applicability boundary as the current
-> `main`-tracking path: migrations against the `app` DB under compose project `pkm-prod` must be
-> classified before they run. The current baseline applies that policy manually; this skill's
-> marker enforcement and durable plan acknowledgements remain deferred hardening.
->
-> **Target flow (ADR-0068, owner-directed 2026-10-18):** delivery becomes `main` → `dev` → `test`
-> (UAT) → `stable` (prod), and this gated-`stable` model is the target again. `stable` advances only
-> from a `test`-passed candidate. Enactment is tracked under #6207; until the prod-promotion slice
-> lands, the status above governs. See [ADR-0068](../../../docs/adr/ADR-0068-continuous-dev-delivery-flow.md).
+> **Status: current source promotion policy (ADR-0068 D4, Issue #6228).**
+> `stable` is the production promotion authority. Normal advancement requires the exact current
+> `test` candidate C, trusted green TEST evidence, a durable functional PASS, and explicit approval
+> of the concrete plan. Protected merge M records stable authority; it does not qualify a new
+> source version or image. Production deploys the tested source C and immutable digest D.
+> Repository support does not establish a running-prod observation or physical cutover. Current
+> infrastructure observations belong to `RasmusTho/yggdrasil-infra/CURRENT_STATUS.md`.
 
 Use this skill before any `execute-promotion` run. Its sole job is to produce a reviewable promotion plan. It does not move any ref, apply any migration, or restart any process.
 
@@ -46,19 +37,20 @@ Before planning, resolve the target channel's deployment model:
   cutover receipt exists for that channel: a fleet-model fitness PASS recorded in
   `ops/deployments/<channel>-latest.json`. In this mode, keep the existing promotion-plan diff:
   current promotion ref / `stable` baseline, target commit, migration delta, config delta, rollback
-  path, and operator acknowledgments. The downstream checkout-mode execution in
-  `execute-promotion` remains the live path.
+  path, and operator acknowledgments. Normal forward execution refuses the generated merge SHA
+  before a stable PR because checkout M is not the TEST-qualified source C. A physical model
+  transition requires its own authority and observed receipt.
 - **Pinned-image model (post-cutover):** once that channel's cutover receipt exists, the plan still
   uses `docs/RELEASE_CHANNELS/README.md` to decide which SHA is authorized, but physical deployment
-  will be executed by `scripts/deploy_channel.sh <channel> <authorized-sha>` per
+  will be executed by `scripts/deploy_channel.sh deploy <channel> <tested-sha> --image-digest <digest> --promotion-plan <path>` per
   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`. The plan must record the deployment model,
   channel, authorized SHA, image-tag availability check, migration-gate posture, previous-good pin
   for rollback, and the expected deploy receipt path `ops/deployments/<channel>-latest.json`.
 
 ## What this skill does
 
-1. Resolves the current `stable` ref (the commit prod is running from).
-2. Resolves the target `main` commit the operator wants to promote to.
+1. Resolves the current protected `stable` baseline S; reads running-prod identity separately.
+2. Resolves the exact current `test` candidate C and its trusted green TEST and build-once image D evidence. An older test-passed candidate or arbitrary `main` HEAD is ineligible.
 3. Diffs the two refs and enumerates every PR merged since `stable`.
 4. For each included PR: extracts title, link, and any associated GitHub Issue; checks whether ACs are marked satisfied on the Issue; notes any open verification gaps.
 5. Enumerates migration files committed since `stable` that have not yet been applied to the prod DB (`app` DB, compose project `pkm-prod`, port 15432). For each migration: reads its reversibility marker (per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`) and flags forward-only ones explicitly.
@@ -83,15 +75,23 @@ Per `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`:
 6. **Rollback path** — previous `stable` ref and migration reversal sequence.
 7. **Operator acknowledgments** — checkboxes for forward-only migrations and any AC gaps.
 
-Pinned-image plans add a deployment-model note to the same plan, including the deploy-script command
-that `execute-promotion` will run and the previous-good image tag that `rollback-promotion` will use.
+The same plan adds `Test evidence` using the closed evidence shape in the plan contract: C/D and
+its CI provenance, S, the deployment model, signed functional receipt/report/context/registry paths,
+and the receipt identity. Preserve the previous-good pin and all migration risks. The renderer does
+not perform the code/migration/config investigation or grant approval.
+
+Compute the reviewed plan digest with `python -m app.release_channels.stable_promotion --plan <path>
+--approval-digest`. The human records their identity and this digest in `approval`, and ticks every
+acknowledgment. Editing the reviewed narrative or inputs invalidates approval. Execution output
+records the independently verified protected PR and M; it cannot change C/D or S.
 
 ## Pre-conditions
 
 - `docs/RELEASE_CHANNELS/` is present on `main` (docs capability PR merged; originally PR #602). If those docs are not on `main`, do not run this skill.
 - `make prod-up` is running and the prod Postgres container is healthy on port 15432.
 - The protected `origin/stable` ref resolves without ambiguity (`git rev-parse origin/stable` succeeds).
-- The operator has specified the target commit (defaults to `HEAD` on `main` if not provided).
+- The target is the exact current green `test` candidate; no default to `main` or `HEAD`.
+- A signed functional PASS from `promote-to-test`, its check report and trust registry, and a production admission context bind C/D to S. PG smoke or a green deployment verdict alone is insufficient.
 - The selected prod vault is initialized for the vault-settings foundation (`python -m app.cli vault preflight --path <prod vault>` reports `initialized`). If it reports `uninitialized`, the plan must carry a `python -m app.cli vault init --path <prod vault>` step before execute (idempotent; reviews the scaffolded `paths.md`/`companion-ui.md` against the real vault).
 
 ## Operator steps
@@ -118,8 +118,8 @@ A single markdown file at `ops/promotions/YYYY-MM-DD-<short-sha>.md` satisfying 
 - Never restart any process.
 - If the `stable` ref is ambiguous or missing, abort and report — do not guess.
 - If a migration lacks a reversibility marker, flag it as a blocking risk in the plan and do not classify it silently.
-- Never let the deployment-model switch move promotion authority: ADR-0040 and
-  `docs/RELEASE_CHANNELS/README.md §Promotion model` decide the authorized ref/SHA; the deployment
+- Never let the deployment-model switch move promotion authority: ADR-0068 D4 and
+  `docs/RELEASE_CHANNELS/README.md §Promotion model` decide the authorized C/D and stable authority; the deployment
   model only decides whether physical execution is checkout update/restart or
   `scripts/deploy_channel.sh`.
 
@@ -172,5 +172,4 @@ runtime precondition, add it to that gate's coverage too.
 Follow `.codex/skills/README.md :: Workflow continuation`. Once the plan is complete and the
 required operator acknowledgments and execution authority already exist, invoke `execute-promotion`
 with that plan. Preparation-only scope returns the reviewable plan. Missing acknowledgments remain
-an explicit gate; continuation does not enable a dormant promotion model or authorize production
-changes.
+an explicit gate; continuation does not authorize a production effect or physical model transition.

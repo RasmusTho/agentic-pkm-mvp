@@ -1,6 +1,6 @@
 State: Accepted target-state decision, owner-directed 2026-10-18. Enactment is tracked by the parent Issue named below; until each slice lands, the current mechanics in the owner documents still apply.
 Doc role: Decision record (ADR)
-Authority: Sets the delivery flow from merge to production. Supersedes ADR-0040 §1–§2 once its prod-promotion slice is enacted; until then prod keeps tracking `main` under ADR-0040. Deployment mechanics stay owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, promotion authority by `docs/RELEASE_CHANNELS/README.md`, and test gates by `docs/TESTING.md`.
+Authority: Sets the delivery flow from merge to production. Issue #6228 adopts its production source policy and supersedes ADR-0040 §1–§2. This does not assert a physical cutover or running-prod state. Deployment mechanics stay owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, promotion authority by `docs/RELEASE_CHANNELS/README.md`, and test gates by `docs/TESTING.md`.
 Owner: Builder System / CES boundary (delivery pipeline) with Release Channels
 Temporal class: Durable architecture decision; supersede through a later ADR.
 Source of truth: This ADR. Shipped behavior remains owned by the documents named above and by runtime receipts.
@@ -67,7 +67,9 @@ contract (`docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).
   verdict.
 - `stable` — production. It advances only from a candidate that passed `test` UAT, through the
   human-approved promotion path. This restores the gated `stable` ref of `docs/RELEASE_CHANNELS/README.md`
-  and replaces ADR-0040's `main`-tracking prod once enacted.
+  and supersedes ADR-0040's `main`-tracking source policy through #6228. The protected merge records
+  authority; production still executes the exact TEST-qualified source and immutable image from
+  the approved plan. Repository adoption and live production acceptance remain separate.
 
 A green dev verdict means the existing dev gates (health/version, fleet/UI smoke, isolated PG
 profile) plus the deferred heavy tests (`docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`) run on `dev`

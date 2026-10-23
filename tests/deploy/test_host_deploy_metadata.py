@@ -124,6 +124,32 @@ def invoke(channel='test'):
     return host.main([channel, 'a' * 40, '--existing-secrets-only', '--ack-forward-only'])
 
 
+def test_prod_cli_forwards_target_host_plan_without_reading_it_on_control_host(entrypoint, capsys):
+    target_plan = '/target-host-only/approved-promotion.md'
+    digest = 'sha256:' + 'b' * 64
+    assert host.main(['prod', 'a' * 40, '--existing-secrets-only', '--image-digest', digest,
+                      '--promotion-plan', target_plan]) == 0
+    assert len(entrypoint.admissions) == 1
+    _, _, plan, allow_bootstrap = entrypoint.admissions[0]
+    assert plan.promotion_plan == target_plan
+    assert plan.image_digest == digest and plan.revision == 'a' * 40
+    assert not allow_bootstrap
+    output = capsys.readouterr()
+    assert SECRET_CANARY not in output.out + output.err
+
+
+@pytest.mark.parametrize('channel, extra', [
+    ('dev', []),
+    ('test', ['--preflight-source-persistence-admission', '--automatic', '--existing-secrets-only']),
+    ('prod', ['--automatic', '--existing-secrets-only']),
+])
+def test_promotion_plan_refuses_non_manual_prod_routes_before_metadata(entrypoint, capsys, channel, extra):
+    assert host.main([channel, 'a' * 40, '--image-digest', 'sha256:' + 'b' * 64,
+                      '--promotion-plan', '/target-host-only/approved-promotion.md', *extra]) == 78
+    assert entrypoint.calls == [] and entrypoint.events == []
+    assert_refusal(entrypoint, capsys)
+
+
 def assert_refusal(entrypoint, capsys):
     output = capsys.readouterr()
     assert output.out == ''

@@ -6,7 +6,7 @@ Authority: Canonical deployment + environment-separation contract. `docs/ENVIRON
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
 Infrastructure reference review: 2026-10-21 (status ownership and stale October 3 paragraph only)
-Last reviewed: 2026-10-17 (TEST dormant preparation context/admission continuity; BWS secret-provisioning review remains 2026-10-15; other deployment sections were not re-audited)
+Last reviewed: 2026-10-23 (#6228 promotion admission and recovery binding, repository-only; existing TEST preparation, native acquisition and credential gates retained; other sections were not re-audited)
 Last live runtime verification: 2026-10-11 UTC (accepted native DEV/TEST activation, health/version/UI and isolated PostgreSQL verification under #5675; the earlier read-only route checks remain separate, and `prod` was not queried)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903); Issue #5868 and the existing-secret deployment Verify targets, which establish repository behavior only.
 Verification update (2026-10-10): repository support includes post-merge image admission and private-host dev/test orchestration under #5922. Deterministic verification establishes the orchestration, digest and migration boundaries; live activation and functional channel acceptance are recorded separately under #5675.
@@ -1867,13 +1867,40 @@ checkout mode versus pinned-image mode and, after a channel's cutover receipt ex
 execution through `scripts/deploy_channel.sh` so this document remains the owner of pin bump,
 migration gate, recreate, health gate, UI smoke, and deploy/rollback receipt semantics.
 
+Normal production advancement (#6228) requires exact current green TEST source C and immutable
+image D, a durable signed functional PASS, and explicit approval of the concrete plan. Protected
+stable merge M records only the approved transition from S: its PR head is C, parents are `[S, C]`
+and tree equals C. It does not qualify a new image or runtime version. The existing STARTUP v2
+validator may retain signed baseline S after merge only by reauthenticating that transition and
+the verified local S/C/M objects; its trust, signature, freshness and revocation rules are unchanged.
+
+`scripts/deploy_channel.sh deploy prod <C> --image-digest <D> --promotion-plan <absolute-plan>` and
+`make deploy-prod SHA=<C> IMAGE_DIGEST=<D> PROMOTION_PLAN=<absolute-plan>` use that admission.
+The native host CLI forwards the target-host absolute plan handle in its existing DeployPlan;
+supervised preparation (including first-init bootstrap) and Linux preflight admit it before
+selecting or reading secrets, and activation forwards the
+same C/D/plan to the script. The host must retain the approved plan and signed receipt inputs.
+Normal checkout promotion refuses before the stable PR because generated M is unqualified;
+actual pinned-image cutover evidence remains required. Ordinary restart and governed previous-good
+rollback keep their existing contracts and do not borrow normal forward eligibility.
+
+Admission reads GitHub through the existing operator production `gh` context: Contents read for
+refs/ancestry/commit objects, Actions read for exact build and green evidence, full branch-protection
+Administration read, and PR read (or the endpoint's supported Contents-read permission). Missing
+tools, denied metadata or incomplete required protection refuse before secrets/effects. The
+controller's existing Actions-write/Contents-read/Metadata-read client is not assumed to provide
+production approval or Administration read. No client is provisioned or broadened by source adoption.
+The native runtime manifest includes the signed validator's complete dependencies from existing
+application pins; installation probes those actual imports before launcher publication. Existing
+pinned-tooling manifest, exact distribution versions and SDK RECORD qualification remain required.
+
 ## Rollback procedure
 
 Rollback reuses the deploy mechanism in reverse, against the previous known-good pin.
 
-1. **Resolve previous-good pin.** Identify the channel's previous known-good image tag (the prior deploy-pin value; for `prod`, the previous `stable` SHA per `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).
+1. **Resolve previous-good pin.** Identify the recorded previous-good source/image digest from the prior deploy pin or approved plan. For prod, retain `stable-prev` as the separate ref-restoration anchor per `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`; a generated rollback merge is not a qualified image.
 2. **Migration reversal (reversible only).** Reverse only migrations classified reversible. **Forward-only migrations are not auto-reversed** — if the failed deploy applied a forward-only migration, rollback of code can still proceed, but the schema state and any data implications are an operator decision (this is exactly why step 2 of the deploy gates on forward-only ack). Vault content is immutable across rollback.
-3. **Recreate against the previous pin.** Bump the channel pin back to the previous tag and recreate API + gateway (same mechanism as deploy step 3). No rebuild — the previous image already exists in the registry.
+3. **Recreate against the previous pin.** Use `scripts/deploy_channel.sh rollback prod <previous-good-sha>` (or `make rollback-prod SHA=<previous-good-sha>`) for prod. It restores the recorded previous pin/digest and recreates API + gateway. No rebuild — the previous image already exists in the registry. Forward-promotion admission is not recovery authority; existing migration and runtime-floor gates still apply.
 4. **Health gate + record.** Re-run the §Deploy liveness/readiness gate, confirm `/readyz` passes and `/api/health.required_ok` is `true`, and confirm `/version` now reports the rolled-back SHA. Record the rollback receipt.
 
 Rollback is a tag-bump + recreate because images are immutable and retained in the registry — the same property that makes promotion cheap makes rollback cheap.
@@ -2073,7 +2100,7 @@ inside-container peer-loopback inference enters that exception.
 ## What this supersedes
 
 - **`docs/ENVIRONMENTS.md` §Deployment.** That document remains the SoT for environment *selection* and *path scoping*; its deployment subsection now points here for *how a deploy happens*. The current-reality matrix and the ad-hoc startup wrappers described there are superseded by the build-once/promote + managed-units model in this document.
-- **The narrow scope of #2527.** #2527 ("prod runs dirty `main`, not `stable`") is the *symptom-level* reconciliation: it records the promotion-ref decision and flags a dirty/diverged prod tree. This spec is the *systemic* fix it pointed at — the bind-mounted-checkout model (the reason a "dirty prod tree" was even possible) is replaced by pinned images, so prod stops running an editable, divergent working tree. #2527's promotion-ref decision is consumed by the §Deploy step-1 pin and by `docs/RELEASE_CHANNELS/README.md`; this document does not re-decide it.
+- **The narrow scope of #2527.** Its dirty/diverged checkout finding remains the reproducibility constraint. #6228 adopts protected stable source authority through `docs/RELEASE_CHANNELS/README.md`, superseding ADR-0040 §1–§2. After actual pinned-image cutover, this document supplies the physical mechanism for the approved C/D, rather than an editable checkout. It does not independently select promotion authority or establish running-prod state.
 - **The `nohup` gateway launch** in `scripts/lib/companion_ui_startup.sh` is superseded by §Gateways as managed units.
 
 This document does **not** supersede `docs/RELEASE_CHANNELS/README.md` (channel identity, per-channel DB, promotion-plan/rollback/migration-classification contracts) — it implements the physical deploy beneath those contracts and references them rather than restating them.
