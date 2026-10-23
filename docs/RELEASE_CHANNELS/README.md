@@ -322,6 +322,16 @@ advances on green verdicts. `test` is the UAT stage. `stable` advances only from
 through the human-approved promotion below. Once enacted, this supersedes ADR-0040 §1–§2; until then the
 current `main`-tracking baseline above governs.
 
+Repository support for the `dev`/`test` part is implemented in #6226. The existing trusted-main
+verdict workflow owns the narrow ref writer: exact green dev acceptance advances `dev`, and a green
+test deployment with the same candidate's retained dev-green receipt advances `test`. Missing refs
+are created from that proof; existing refs move only by non-force fast-forward. A documented owner
+Issue can pin `dev` while later candidates and deployments continue. The
+[deployment owner](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1)
+defines hold activation/readback and replay recovery. Repository proof does not establish live
+ref activation, alter production authority or restore `stable`; #6170/#3347 and the remaining
+#6207 production slice retain their gates.
+
 The four-phase gated model in [Promotion contract](#promotion-contract) — prepare → execute → verify → rollback, advancing a protected `stable` ref — is the **target**, deferred to promotion hardening (see [Future promotion hardening](#future-promotion-hardening)). Restoring `stable` as a gated promotion ref, and switching prod from `main`-tracking to `stable`-tracking, is future work that descends from Issue #2527; until then the current baseline above governs.
 
 ## Promotion contract

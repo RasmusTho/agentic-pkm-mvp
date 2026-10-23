@@ -827,7 +827,9 @@ jobs:
         # Workflow/test configuration changes select this full-suite lane.
         # Current-head run 39100438771 completed every parallel shard, including
         # tests/deploy in 45m51s, before the serial boundary hit the 60m ceiling.
-        # Retain finite margin for both phases, not a wall-clock speedup claim.
+        # Run 39865892884 then passed all 131 parallel shards but exhausted
+        # this 75m bound during serial coverage; its deploy group took 51m18s.
+        # Reuse nightly's deploy-module scheduling instead of adding margin.
         # The 120-second per-test timeout still catches individual hangs.
         timeout-minutes: 75
         env:
@@ -843,8 +845,8 @@ jobs:
           # xdist workers are separate pytest processes, but this suite also
           # contains tests that inspect host-wide process state and tests whose
           # fixtures intentionally retain process-global state. Run each
-          # directory (or root-level test module) in its own serial process,
-          # with bounded concurrency, then run the host/Fd-sensitive boundary
+          # deploy module, other directory, or root-level module in its own
+          # serial process with bounded concurrency, then run the host/FD boundary
           # tests after every shard has exited.
           marker='not pg and not alpha_llm and not alpha_llm_live and not panel_llm_e2e and not eval and not browser_runtime and not human_uat and not uat_integrated_runtime'
           # Keep partial logs outside a temporary directory with an EXIT cleanup:
@@ -877,6 +879,7 @@ jobs:
           find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print |
             while IFS= read -r path; do
               case "$path" in
+                tests/deploy/*) printf '%s\n' "$path" ;;
                 tests/*/*)
                   # pytest recurses, so a nested directory cannot also be a shard.
                   relative="${path#tests/}"
@@ -890,12 +893,30 @@ jobs:
               case "$shard" in
                 tests/ops|tests/e2e|tests/e2e/*) continue ;;
               esac
-              if [[ " ${DEFERRED_TARGETS:-} " == *" $shard "* ]]; then
+              # Directory deferral still covers every discovered deploy file.
+              deferred=0
+              for deferred_target in ${DEFERRED_TARGETS:-}; do
+                if [[ "$shard" == "$deferred_target" || "$shard" == "$deferred_target/"* ]]; then
+                  deferred=1
+                  break
+                fi
+              done
+              if (( deferred )); then
                 echo "SHARD DEFERRED to post-merge heavy tests: $shard" >&2
                 continue
               fi
               printf '%s\n' "$shard"
-            done > "$shard_list"
+            done |
+            # Start the measured long deploy module with the first workers,
+            # retaining every other discovered path in deterministic order.
+            awk '
+              $0 == "tests/deploy/test_deploy_channel_script.py" { first = $0; next }
+              { remaining[++count] = $0 }
+              END {
+                if (first != "") print first
+                for (i = 1; i <= count; i++) print remaining[i]
+              }
+            ' > "$shard_list"
 
           expected_shards="$(wc -l < "$shard_list")"
           if (( expected_shards == 0 )); then

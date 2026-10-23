@@ -107,8 +107,13 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   passed all four parallel partitions in 40m57s, then reached that ceiling after 372 of 984 serial
   cases passed, without a reported assertion failure. Its 75-minute bound now matches the full
   lane's finite envelope; neither the failed run nor that larger ceiling proves completion.
-  Neither change alters four-process concurrency
-  or starting host-sensitive tests until all parallel processes exit. This is execution margin,
+  [#6311 run 39865892884](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39865892884/job/120127869151)
+  then passed all 131 parallel shards in 57m46s, including the deploy group's 1,473 passing cases
+  in 51m18s, but again exhausted 75 minutes during serial coverage. The bounded scheduling replan
+  reuses nightly's deploy-module grouping and starts the measured long deploy module first;
+  it retains the consumed margin history and every watchdog rather than increasing the ceiling.
+  Four-process concurrency remains unchanged; host-sensitive tests still start only after all
+  parallel processes exit. The earlier changes supply execution margin,
   not a speedup or a completed-run duration measurement. The `required-unit-phase-margin.v1`
   receipt (`pytest-not-pg-shards/phase-margin.json`) records exact checkout SHA, budget, watchdog,
   phase durations and exit status. Only `phase=complete` with `exit_status=0` describes success;
@@ -169,13 +174,16 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 - Governance PR contract checks live in `.github/workflows/issue-pr-governance.yml`.
 - The import-boundary contract runs once on the PR path in `.github/workflows/import-linter.yaml`; CI Smoke retains the same blocking command for non-PR pushes/tags and owns the remaining contract-validation checks.
 - The hot-path and direct-repair invariants are covered by `tests/architecture/test_pr_hot_path_governance.py`, selected through the Unit tests (not pg) lane for governance changes rather than run as a second CI Smoke step.
-- PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Changes to `.github/workflows/ci-smoke.yaml` select the governance workflow and selector contract tests instead of recursively requiring the whole product suite merely to validate the test runner itself. Co-changed deploy-source paths still select the complete bounded `ops_deploy` partitions. Other shared test/runtime configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; the `Unit tests (not pg)` job runs each collectible top-level test directory (or root-level test module) as a serial process with bounded parallelism, then runs host/process-global and exact-FD-count compatibility tests after those processes exit. This keeps the shared runtime bounded without asking xdist workers to share process-global or host-wide assumptions. E2E coverage is deferred to post-merge and nightly validation. This document is `scripts/select_pr_tests.py`'s `docs/development/` contract for the `scripts/docs_guard_logic.py :: GOVERNANCE_TEMPORAL_ENFORCEMENT` temporal-owner-doc exemption, and the check enforces that pairing specifically: update this doc, not `docs/STATUS.md`/`docs/ROADMAP.md`/etc., when the selection script's behavior changes.
+- PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Changes to `.github/workflows/ci-smoke.yaml` select the governance workflow and selector contract tests instead of recursively requiring the whole product suite merely to validate the test runner itself. Co-changed deploy-source paths still select the complete bounded `ops_deploy` partitions. Other shared test/runtime configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; the `Unit tests (not pg)` job runs each collectible deploy test module, other top-level test directory, or root-level test module as a serial process with bounded parallelism, then runs host/process-global and exact-FD-count compatibility tests after those processes exit. This keeps the shared runtime bounded without asking xdist workers to share process-global or host-wide assumptions. E2E coverage is deferred to post-merge and nightly validation. This document is `scripts/select_pr_tests.py`'s `docs/development/` contract for the `scripts/docs_guard_logic.py :: GOVERNANCE_TEMPORAL_ENFORCEMENT` temporal-owner-doc exemption, and the check enforces that pairing specifically: update this doc, not `docs/STATUS.md`/`docs/ROADMAP.md`/etc., when the selection script's behavior changes.
 - The `reasoning_expansion` selector owns `tests/uat/test_expansion_connect_create_accept_test_channel.py` and the companion UAT runbook; these paths select `tests/reasoning`, `tests/expansion`, and `tests/invariants` plus the runner's direct contract test. The runner's technical and synthetic TEST phases remain explicitly opt-in and never become live-channel proof merely by appearing in PR selection.
 - Pinned controller startup changes (`scripts/postmerge_controller.py`, #6225) select the deploy
   suite and the liveness workflow contract tests. The deploy-fixture census retains source-trigger
   completeness, while the selector CLI test proves these production targets remain on the PR path.
-- Shared-suite shard discovery collapses nested directories into their top-level owner because
-  pytest already recurses. Eligible test files therefore run once across parallel shards and the
+- Shared-suite shard discovery keeps each `tests/deploy` test file as a separate shard, including
+  nested `test_*.py` and `*_test.py` modules. It starts `test_deploy_channel_script.py` first and
+  keeps the remaining discovered paths sorted. Other nested directories collapse into their
+  top-level owner because pytest already recurses. Directory-level heavy deferral still excludes
+  every module under that owner. Eligible test files therefore run once across parallel shards and the
   serial host-sensitive boundary. Each shard prints its completion status and elapsed seconds;
   its log contains the slowest 20 tests, as does the scoped unit invocation. Partial shard logs and the status file live under the
   runner temporary directory and are uploaded even when a later shard fails or the test step is
