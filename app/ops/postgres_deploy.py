@@ -31,9 +31,23 @@ if TYPE_CHECKING:
     from app.ops.karakeep_deploy import KarakeepPlan
 
 
+_IMAGE_PULL_FAILURE_CLASSES = frozenset({
+    'registry_unauthorized', 'registry_denied', 'registry_manifest_unknown',
+    'registry_rate_limited', 'unclassified',
+})
+
+
 class PostgresDeployError(RuntimeError):
-    def __init__(self) -> None:
+    image_pull_failure: str | None = None
+
+    def __init__(self, *, image_pull_failure: str | None = None) -> None:
         super().__init__('database deployment refused; matching terminal evidence required')
+        if image_pull_failure is not None:
+            self.image_pull_failure = (
+                image_pull_failure
+                if type(image_pull_failure) is str and image_pull_failure in _IMAGE_PULL_FAILURE_CLASSES
+                else 'unclassified'
+            )
 
 
 @dataclass(frozen=True)

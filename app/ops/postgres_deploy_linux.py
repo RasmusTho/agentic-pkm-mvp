@@ -211,18 +211,48 @@ def _guard_failure_boundary() -> Iterator[dict[str, str]]:
         raise
 
 
+def _helper_image_pull_failure(stdout: object, stderr: object) -> str:
+    """Classify only complete public Docker/Compose shapes, never host causes.
+
+    Captured child data stays private. Unknown lines (including private details),
+    conflicting/duplicate errors, malformed text and oversized evidence refuse
+    classification instead of searching for a suggestive substring.
+    """
+    if (type(stdout) is not str or type(stderr) is not str
+        or len(stdout) + len(stderr) > 16384 or stdout or not stderr.isascii()):
+        return 'unclassified'
+    messages = {
+        'unauthorized: authentication required': 'registry_unauthorized',
+        'denied: requested access to the resource is denied': 'registry_denied',
+        'manifest unknown: manifest unknown': 'registry_manifest_unknown',
+        'toomanyrequests: too many requests': 'registry_rate_limited',
+    }
+    lines = stderr.removesuffix('\n').split('\n')
+    prefix = 'Error response from daemon: '
+    if not lines[-1].startswith(prefix):
+        return 'unclassified'
+    message = lines[-1].removeprefix(prefix)
+    classification = messages.get(message)
+    progress = [' api Pulling', ' api Error ' + message]
+    if classification is None or lines[:-1] not in ([], progress[:1], progress[1:], progress):
+        return 'unclassified'
+    return classification
+
+
 def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
              pass_fds: tuple[int, ...] = (), deploy_diagnostics: bool = False,
              timeout: int | None = None,
              retain_source_failure: Callable[[str], None] | None = None,
-             input_text: str | None = None) -> str:
+             input_text: str | None = None, helper_image_pull: bool = False) -> str:
     try:
         result = subprocess.run(argv, cwd=cwd, env=env, pass_fds=pass_fds, capture_output=True,
-                                text=True, errors='replace' if deploy_diagnostics else 'strict',
+                                text=True, errors='replace' if deploy_diagnostics or helper_image_pull else 'strict',
                                 check=False, timeout=timeout, input=input_text)
     except subprocess.TimeoutExpired:
         raise PostgresDeployError() from None
     if result.returncode:
+        if helper_image_pull:
+            raise PostgresDeployError(image_pull_failure=_helper_image_pull_failure(result.stdout, result.stderr))
         if deploy_diagnostics:
             stage = _deploy_failure_stage(result.stderr)
             reason = _deploy_failure_reason(result.stderr, stage)
@@ -1283,6 +1313,7 @@ class LinuxEffects:
         source_snapshot: SourceIdentityRuntimeSnapshot | None = None,
         input_text: str | None = None,
         stdin_compose_file: bool = False,
+        helper_image_pull: bool = False,
     ) -> str:
         cfg = self.config
         # Recovery Compose must inherit the authenticated ownership source from
@@ -1324,7 +1355,7 @@ class LinuxEffects:
         return _command(['docker', 'compose', '--env-file', str(cfg.root / 'config/deploy' / (cfg.channel + '.env')),
             '-f', str(cfg.root / 'docker-compose.yaml'), '-f', str(cfg.root / ('docker-compose.' + cfg.channel + '.yml')),
             *overlays, '-p', 'pkm-' + cfg.channel, *args], cwd=cfg.root, env=env,
-            timeout=timeout, input_text=input_text)
+            timeout=timeout, input_text=input_text, helper_image_pull=helper_image_pull)
 
     def validate_plan(self, plan: DeployPlan) -> None:
         plan.validate()
@@ -1880,7 +1911,7 @@ class LinuxEffects:
         if acquire:
             self.compose(
                 'pull', 'api', cutover=selected, candidate=plan, timeout=1800,
-                source_snapshot=source_snapshot,
+                source_snapshot=source_snapshot, helper_image_pull=True,
             )
         image_ref = IMAGE_REPOSITORY + '@' + plan.image_digest
         try:
