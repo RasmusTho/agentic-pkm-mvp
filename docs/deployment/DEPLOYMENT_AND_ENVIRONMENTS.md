@@ -1401,6 +1401,23 @@ grammar, including multiline values, without a parallel dotenv parser; project-e
 are never retained or emitted.
 Assigned-only snapshots and retained cleanup do not acquire this unset-specific lookup dependency.
 
+Canonical source-identity helper acquisition retains a finite `image_pull_failure` on
+`PostgresDeployError` only when its Compose `pull api` child completes nonzero. The outward refusal
+text stays generic. Complete supported public daemon/registry errors map to `registry_unauthorized`,
+`registry_denied`, `registry_manifest_unknown` or `registry_rate_limited`; these are observed error
+classes, not proved authentication, configuration or host causes. The vocabulary follows the
+[OCI Distribution error contract](https://specs.opencontainers.org/distribution-spec/?v=v1.1.0).
+Classification accepts only the exact fixed message and optional matching API pull-progress lines,
+empty stdout, and at most 16 KiB of combined captured text. Extra/private lines, conflicting or
+duplicate errors, unknown messages, malformed text and oversized evidence yield `unclassified`.
+No child data, command arguments, endpoint, path, value, identifier, numeric exit status or exception
+text is retained in the diagnostic field or emitted. Other commands and source-projection diagnostics
+keep their existing contracts. Timeout and pre-pull/qualification refusals remain generic.
+Failed pulls stop before image qualification or writer work; success still requires the exact
+revision/digest and installed-unset checks. These labels do not change cleanup precedence, diagnose
+the previous live failure, authorize a retry/new effect, or establish DEV/TEST acceptance. Live host
+diagnosis and subsequent acquisition remain separately governed by the parent operation contract.
+
 The installed-writer fingerprint treats Docker's `Mounts` collection as an unordered set of
 complete supported bind/volume records. Partial records and unsupported mount types refuse. Future
 requests sort the full serialized records before hashing; no mount field
