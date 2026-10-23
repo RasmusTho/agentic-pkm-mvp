@@ -1402,6 +1402,9 @@ produce success or replay. No password is placed in environment values, command 
 rendered Compose, receipts or persistent plaintext storage; there are no additional mounts.
 This closes a source-verified credential-delivery gap, not a claim that an earlier live diagnostic
 had authenticated successfully.
+The witness overrides both DSN aliases with the admitted application's credential-free target,
+clears inherited password carriers, and verifies its effective target against the private envelope
+before connecting. A channel pin cannot silently leave the witness on a stale runtime-file target.
 
 After concrete source remediation, a separately authorized invocation selects
 `--current-state-source --persist-source-identity --source-producer-kind registry` with a fresh UUID
@@ -1413,6 +1416,11 @@ set only (empty sets issue no stop/start), preserves every retained stopped iden
 and requires full eligible persisted readback. The actual channel lock accepts exactly the legacy
 source marker or its registry variant with `producer_kind=registry`; unknown fields/discriminators
 remain refused. Attempted or uncertain same-ID continuation is cleanup-only, never producer replay.
+For a retained own one-shot, cleanup authenticates the immutable request, exact channel fence,
+candidate image and operation/token before removal, then repeats the complete authority/census
+postproof before restoring writers. Foreign resources cannot borrow this cleanup ordering.
+Complete source admission requires the same exact UUID spelling as the strict producer before the
+first selected source can be changed.
 
 The continuation is diagnostic and #6300 remediation, then freshly admitted ordinary registry
 persistence, exact cleanup plus eligible readback, delivery-classifier reapplication, and a

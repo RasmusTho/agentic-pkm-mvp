@@ -161,7 +161,19 @@ def composed(tmp_path, monkeypatch, request):
     state = SimpleNamespace(events=[], rows=rows, commands=[], workers=[], fail=None, rpc=[],
                             connection=FakeConnection(), after=None, producer_calls=0, errors=[],
                             credential_paths=[], metadata_calls=0, witness_fault=None,
-                            retained_witness=None, removed_witnesses=[])
+                            retained_witness=None, removed_witnesses=[], connected_fields=[])
+    def one_shot(name, service, labels, identifier, process_environment):
+        row = copy.deepcopy(rows[0])
+        row.update(Id=identifier * 64, Name='/' + name)
+        row['Config'].update(Image='ghcr.io/rasmustho/pkm-app:' + process_environment['APP_IMAGE_TAG']
+                            + process_environment['APP_IMAGE_DIGEST_SUFFIX'], Labels={
+            'com.docker.compose.project': 'pkm-' + channel,
+            'com.docker.compose.service': service, 'com.docker.compose.oneoff': 'True', **labels,
+        })
+        row['State'].update(Status='running', Running=True, Pid=20)
+        row['HostConfig']['RestartPolicy']['Name'] = 'no'
+        rows.append(row)
+        return row
     from app.workers import outbox_worker
     metadata_producer = outbox_worker.persist_registry_source_identity
     def measured_producer(*args, **kwargs):
@@ -200,13 +212,34 @@ def composed(tmp_path, monkeypatch, request):
             return (REPO / 'app/config/database.py').read_text()
         if argv[:2] == ['docker', 'ps']:
             if any(item.startswith('name=') for item in argv):
-                return ''
+                name = next(item.removeprefix('name=^/').removesuffix('$') for item in argv if item.startswith('name='))
+                return '\n'.join(row['Id'] for row in rows if row.get('Name') == '/' + name)
             if state.after is not None:
                 callback, state.after = state.after, None
                 callback()
             return '\n'.join(row['Id'] for row in rows)
         if argv[:3] == ['docker', 'inspect', '--type']:
             return json.dumps(rows)
+        if argv[:3] == ['docker', 'inspect', '--format']:
+            row = next(row for row in rows if row['Id'] == argv[-1])
+            if argv[3] == '{{.Config.Image}}':
+                return row['Config']['Image']
+            labels = row['Config']['Labels']
+            return ' '.join((row['Name'], labels['com.docker.compose.project'], labels['com.docker.compose.service'],
+                             labels['com.docker.compose.oneoff'], labels['yggdrasil.native.operation'],
+                             labels['yggdrasil.native.revision'], str(row['State']['Running']).lower()))
+        if argv[:2] == ['docker', 'stop']:
+            if state.fail == 'retain-producer':
+                raise OSError('synthetic lost stop')
+            row = next(row for row in rows if row['Id'] == argv[-1])
+            row['State'].update(Status='exited', Running=False, Pid=0)
+            state.events.append(('worker-stop', [row['Id']]))
+            return ''
+        if argv[:2] == ['docker', 'rm']:
+            row = next(row for row in rows if row['Id'] == argv[-1])
+            rows.remove(row)
+            state.events.append(('worker-remove', [row['Id']]))
+            return ''
         if argv[:3] == ['docker', 'volume', 'inspect']:
             return json.dumps([{'Mountpoint': str(runtime.registry.path.parent.parent)}])
         if argv[:3] == ['docker', 'image', 'inspect']:
@@ -236,7 +269,9 @@ def composed(tmp_path, monkeypatch, request):
                 return ''
             if action == 'run':
                 state.producer_calls += 1
-                if state.fail == 'producer':
+                labels = dict(args[index + 1].split('=', 1) for index, value in enumerate(args) if value == '--label')
+                one_shot(args[args.index('--name') + 1], 'api', labels, 'e', kwargs['env'])
+                if state.fail in {'producer', 'retain-producer'}:
                     raise PostgresDeployError()
                 offset = args.index('app.ops.native_source_identity_persistence') + 1
                 with monkeypatch.context() as context:
@@ -292,6 +327,8 @@ def composed(tmp_path, monkeypatch, request):
                     return (1,)
             return Ping()
         assert credential.stat().st_mode & 0o777 == 0o600
+        from psycopg.conninfo import conninfo_to_dict
+        state.connected_fields.append({key: value for key, value in conninfo_to_dict(dsn).items() if key != 'password'})
         state.credential_paths.append(credential)
         return state.connection
     monkeypatch.setattr('psycopg.connect', connect)
@@ -302,12 +339,17 @@ def composed(tmp_path, monkeypatch, request):
         if 'config' in argv:
             return 0, json.dumps({'services': {diagnostic.DATABASE_WITNESS_SERVICE: {
                 **compose['services'][diagnostic.DATABASE_WITNESS_SERVICE],
-                'image': 'ghcr.io/rasmustho/pkm-app@' + DIGEST}}}).encode()
+                'image': 'ghcr.io/rasmustho/pkm-app:' + kwargs['environment']['APP_IMAGE_TAG']
+                + kwargs['environment']['APP_IMAGE_DIGEST_SUFFIX']}}}).encode()
         if argv[:3] == ('docker', 'container', 'inspect'):
-            if state.fail == 'cleanup':
+            if state.fail == 'cleanup' or (state.fail == 'retain-witness' and state.retained_witness is not None):
                 return 2, b''
             if state.retained_witness is not None and argv[-1] == state.retained_witness[0]:
-                return 0, (('f' * 64) + '\t' + state.retained_witness[1]).encode()
+                row = next(row for row in rows if row['Id'] == 'f' * 64)
+                fields = [row['Id'], row['Config']['Labels'][diagnostic.OWNER_LABEL]]
+                if '{{.Config.Image}}' in argv[4]:
+                    fields.append(row['Config']['Image'])
+                return 0, '\t'.join(fields).encode()
             return 1, b''
         if argv[:3] == ('docker', 'container', 'ls'):
             return 0, b''
@@ -316,6 +358,7 @@ def composed(tmp_path, monkeypatch, request):
             assert state.retained_witness is not None
             state.removed_witnesses.append(state.retained_witness)
             state.retained_witness = None
+            rows.remove(next(row for row in rows if row['Id'] == 'f' * 64))
             for credential in witness_tmpfs.iterdir():
                 real_unlink(credential)
             return 0, b''
@@ -326,11 +369,25 @@ def composed(tmp_path, monkeypatch, request):
         if state.fail in {'malformed', 'private', 'oversized'} and phase == 'witness':
             return 0, {'malformed': b'not-json', 'private': b'{"private":"synthetic-witness-secret"}',
                        'oversized': b' ' * (max_output_bytes + 1)}[state.fail]
-        child_environment = (
-            dict(argv[index + 1].split('=', 1) for index, value in enumerate(argv) if value == '--env')
-            if argv[:2] == ('docker', 'run')
-            else {**environment, 'PGOPTIONS': '-c default_transaction_read_only=on'}
-        )
+        if phase == 'witness':
+            # Model the real service env-file precedence and only the actual
+            # Compose run overrides. Do not inject the admitted API environment.
+            child_environment = {}
+            for source in (root / 'config/runtime.defaults.env', runtime_file):
+                child_environment.update(line.split('=', 1) for line in source.read_text().splitlines()
+                                         if line and not line.startswith('#') and '=' in line)
+            child_environment.update(compose['services'][diagnostic.DATABASE_WITNESS_SERVICE]['environment'])
+            for index, value in enumerate(argv):
+                if value == '-e':
+                    key, separator, selected_value = argv[index + 1].partition('=')
+                    child_environment[key] = selected_value if separator else kwargs['environment'][key]
+            name, token = argv[argv.index('--name') + 1], argv[argv.index('--label') + 1].split('=', 1)[1]
+            one_shot(name, diagnostic.DATABASE_WITNESS_SERVICE, {diagnostic.OWNER_LABEL: token}, 'f', kwargs['environment'])
+            if state.fail == 'retain-witness':
+                state.retained_witness = (name, token)
+                raise diagnostic.SourceIdentityDiagnosticRefusal('database_witness_refused')
+        else:
+            child_environment = dict(argv[index + 1].split('=', 1) for index, value in enumerate(argv) if value == '--env')
         if phase == 'witness' and state.witness_fault in {'extra', 'channel', 'digest', 'empty', 'oversized', 'duplicate'}:
             envelope = json.loads(input_bytes)
             if state.witness_fault == 'extra':
@@ -348,6 +405,8 @@ def composed(tmp_path, monkeypatch, request):
                 input_bytes = b'{"password":"different",' + input_bytes[1:]
         if phase == 'witness' and state.witness_fault == 'password-env':
             child_environment['PGPASSWORD'] = 'synthetic-witness-secret'
+        if phase == 'witness' and state.witness_fault == 'target-drift':
+            child_environment['DATABASE_URL'] = child_environment['DB_DSN'].replace('host=db', 'host=foreign-db')
         with monkeypatch.context() as context, patch.dict(os.environ, child_environment, clear=True):
             # Model only the isolated container's tmpfs/mount namespace. The
             # real CLI, private file lifecycle and canonical resolver remain.
@@ -376,6 +435,8 @@ def composed(tmp_path, monkeypatch, request):
                 status = diagnostic.worker_main(worker_args)
             if status:
                 state.errors.append((worker_args[0], output.getvalue()))
+            if phase == 'witness' and state.retained_witness is None:
+                rows.remove(next(row for row in rows if row['Id'] == 'f' * 64))
             return status, output.getvalue().encode()
     monkeypatch.setattr(diagnostic, '_run_bounded_status', bounded)
     def invoke(*, persist=False, operation_id=None, extra=()):
@@ -582,7 +643,7 @@ def test_new_admission_cannot_authorize_other_operations(composed):
 
 
 @pytest.mark.parametrize('fault', ['extra', 'channel', 'digest', 'empty', 'oversized', 'duplicate',
-                                  'password-env', 'not-tmpfs'])
+                                  'password-env', 'not-tmpfs', 'target-drift'])
 def test_real_witness_cli_refuses_credential_envelope_without_connect(composed, fault):
     composed.state.witness_fault = fault
     code, output = composed.invoke()
@@ -590,6 +651,20 @@ def test_real_witness_cli_refuses_credential_envelope_without_connect(composed, 
     assert not composed.state.credential_paths and not composed.state.connection.queries
     assert 'synthetic-witness-secret' not in output and str(composed.note) not in output
     assert json.loads(output)['terminal_state'] == 'refused'
+
+
+def test_witness_uses_admitted_pin_target_not_runtime_env_file(composed):
+    runtime_file = composed.cfg.root / 'runtime.env'
+    runtime_file.write_text(runtime_file.read_text().replace('host=db', 'host=old-runtime-db'))
+    pin = composed.cfg.root / 'config/deploy' / (composed.cfg.channel + '.env')
+    target = f'postgresql+psycopg:///?host=db&port=5432&dbname=app_{composed.cfg.channel}&user=app'
+    pin.write_text(pin.read_text() + f'DATABASE_URL={target}\n')
+    code, output = composed.invoke()
+    assert code == 0, output
+    assert composed.state.connected_fields == [{
+        'host': 'db', 'port': '5432', 'dbname': 'app_' + composed.cfg.channel, 'user': 'app',
+    }]
+    assert 'old-runtime-db' not in output
 
 
 def test_witness_unlink_interruption_is_failed_and_token_cleanup_retires_tmpfs(composed):
@@ -605,6 +680,101 @@ def test_witness_unlink_interruption_is_failed_and_token_cleanup_retires_tmpfs(c
     composed.state.witness_fault = None
     assert composed.invoke(operation_id=operation_id)[0] == 78
     assert len(composed.state.workers) == count
+
+
+@pytest.mark.parametrize('persist', [False, True])
+def test_retained_owned_one_shot_cleanup_precedes_complete_census(composed, persist):
+    if persist:
+        composed.note.write_text('source\n')
+    before = copy.deepcopy(composed.state.rows)
+    operation_id = str(uuid4())
+    composed.state.fail = 'retain-producer' if persist else 'retain-witness'
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    assert len(composed.state.rows) == 4
+    assert linux.LinuxEffects(composed.cfg).channel_lock_owner() is not None
+    count = (composed.state.producer_calls, len(composed.state.workers))
+    composed.state.fail = None
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    assert (composed.state.producer_calls, len(composed.state.workers)) == count
+    assert len(composed.state.rows) == 3
+    assert [row['State']['Running'] for row in composed.state.rows] == [row['State']['Running'] for row in before]
+    assert composed.state.rows[-1] == before[-1]
+    assert linux.LinuxEffects(composed.cfg).channel_lock_owner() is None
+
+
+@pytest.mark.parametrize('persist', [False, True])
+@pytest.mark.parametrize('fault', ['image', 'owner-label', 'candidate'])
+def test_retained_one_shot_cleanup_cannot_borrow_foreign_binding(composed, persist, fault):
+    if persist:
+        composed.note.write_text('source\n')
+    operation_id = str(uuid4())
+    composed.state.fail = 'retain-producer' if persist else 'retain-witness'
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    owned = composed.state.rows[-1]
+    composed.state.fail = None
+    if fault == 'image':
+        owned['Config']['Image'] = 'ghcr.io/rasmustho/pkm-app@sha256:' + 'a' * 64
+    elif fault == 'owner-label':
+        key = 'yggdrasil.native.operation' if persist else diagnostic.OWNER_LABEL
+        owned['Config']['Labels'][key] = 'foreign'
+    before = copy.deepcopy(composed.state.rows)
+    events = len(composed.state.events)
+    if fault == 'candidate':
+        payload = {**composed.state.rpc[-1], 'cleanup_only': True, 'image_digest': 'sha256:' + 'a' * 64}
+        with pytest.raises(PostgresDeployError):
+            composed.supervisor.request(payload)
+    else:
+        assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    assert composed.state.rows == before and len(composed.state.events) == events
+    assert linux.LinuxEffects(composed.cfg).channel_lock_owner() is not None
+
+
+@pytest.mark.parametrize('persist', [False, True])
+@pytest.mark.parametrize('drift', ['census', 'authority'])
+def test_owned_one_shot_cleanup_does_not_bypass_failed_postproof(composed, persist, drift):
+    if persist:
+        composed.note.write_text('source\n')
+    operation_id = str(uuid4())
+    composed.state.fail = 'retain-producer' if persist else 'retain-witness'
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    if drift == 'census':
+        composed.state.rows[2]['Config']['User'] = '0:0'
+    else:
+        composed.runtime.registry.path.write_text('malformed synthetic authority\n')
+    composed.state.fail = None
+    count = (composed.state.producer_calls, len(composed.state.workers))
+    event_count = len(composed.state.events)
+    assert composed.invoke(persist=persist, operation_id=operation_id)[0] == 78
+    assert len(composed.state.rows) == 3
+    assert (composed.state.producer_calls, len(composed.state.workers)) == count
+    assert not any(action == 'start' for action, _ in composed.state.events[event_count:])
+    assert linux.LinuxEffects(composed.cfg).channel_lock_owner() is not None
+
+
+@pytest.mark.parametrize('spelling', ['uppercase', 'hex'])
+def test_registry_noncanonical_late_uuid_refuses_before_earlier_writable_source(composed, spelling):
+    identity = str(uuid4())
+    declared = identity.upper() if spelling == 'uppercase' else identity.replace('-', '')
+    later = composed.note.with_name('z.md')
+    composed.note.rename(later)
+    later.write_text(f'---\nuuid: "{declared}"\n---\nlater source\n')
+    later.with_name('a.md').write_text('earlier writable source without UUID\n')
+    before = {path: path.read_bytes() for path in later.parent.glob('*.md')}
+    code, output = composed.invoke(persist=True)
+    assert code == 78 and json.loads(output)['eligible'] is False
+    assert composed.state.metadata_calls == 0
+    assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize('presentation', ['whitespace', 'wikilink'])
+def test_registry_preserves_strict_producer_supported_uuid_presentation(composed, presentation):
+    identity = str(uuid4())
+    declared = ' ' + identity + ' ' if presentation == 'whitespace' else '[[' + identity + ']]'
+    composed.note.write_text(f'---\nuuid: "{declared}"\n---\nsource\n')
+    before = composed.note.read_bytes()
+    code, output = composed.invoke(persist=True)
+    assert code == 0, output
+    assert json.loads(output)['eligible'] is True and composed.note.read_bytes() == before
 
 
 @pytest.mark.parametrize('fault', ['invalid', 'duplicate', 'conflicting-id', 'protected', 'policy-drift'])

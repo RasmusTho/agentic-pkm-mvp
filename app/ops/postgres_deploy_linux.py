@@ -1417,6 +1417,7 @@ class LinuxEffects:
             PRODUCER_KINDS, REFUSAL_REASONS, RECEIPT_CONTRACT,
             REGISTRY_RECEIPT_CONTRACT, validate_receipt,
         )
+        from app.ops.pg_acceptance import IMAGE_REPOSITORY
 
         try:
             if (
@@ -1433,9 +1434,10 @@ class LinuxEffects:
         except (ValueError, TypeError, AttributeError):
             raise PostgresDeployError() from None
         selected.validate()
-        source_plan = self.qualify_source_identity_authority(
-            revision, image_digest, selected,
-        )
+        if not current_state:
+            source_plan = self.qualify_source_identity_authority(
+                revision, image_digest, selected,
+            )
         receipt_path = self.config.journal.directory / (
             f"{self.config.channel}-source-identity-{operation_id}.json"
         )
@@ -1517,7 +1519,7 @@ class LinuxEffects:
                 or any(
                     not isinstance(request_payload.get(key), str)
                     or re.fullmatch(r'[0-9a-f]{64}', request_payload[key]) is None
-                    for key in ('installed_fingerprint', 'execution_fingerprint')
+                    for key in ('installed_fingerprint', 'execution_fingerprint', *current_fields)
                 )
                 or not isinstance(request_payload.get('writers'), list)
                 or any(service not in {
@@ -1531,6 +1533,35 @@ class LinuxEffects:
             ):
                 raise PostgresDeployError()
             writers = list(request_payload['writers'])
+            if current_state:
+                # A retained request is cleanup-only, including direct RPC
+                # retries. Authenticate it and its attempt before any cleanup;
+                # its own surviving API one-shot cannot enter the ordinary
+                # installed-service authority census until it is quiesced.
+                if os.path.lexists(attempt_path) and _private_json(attempt_path) != request_payload:
+                    raise PostgresDeployError()
+                retained = terminal_receipt
+                if retained is None and producer_entry_exists:
+                    retained = validate_receipt(_private_json(producer_path))
+                    if (retained['operation_id'] != operation_id
+                        or retained['channel'] != self.config.channel
+                        or retained['revision'] != revision
+                        or retained.get('producer_kind') != 'registry'):
+                        raise PostgresDeployError()
+                if retained is None:
+                    from app.ops.native_source_identity_persistence import _receipt, IdentityInventory
+                    retained = _receipt(
+                        operation_id, self.config.channel, revision, IdentityInventory(0, 0, 0, 0, 0),
+                        producer_kind='registry', producer_error_count=1, reason='source_worker_transport_failed',
+                    )
+                self.reconcile_source_identity_cleanup(
+                    operation_id, revision, image_digest, selected, owner, writers,
+                    request_payload['installed_fingerprint'], request_payload['container_root'],
+                    request_payload['vault_overlay'], current_request=request_payload,
+                )
+                if terminal_receipt is None:
+                    _atomic_private_json(receipt_path, retained)
+                return retained
             runtime = self.source_identity_runtime_snapshot(
                 selected, require_running_capture=not owns_lock and not current_state,
                 allow_legacy_mount_order=legacy_cleanup_allowed,
@@ -1555,8 +1586,13 @@ class LinuxEffects:
             ):
                 raise PostgresDeployError()
         else:
-            if current_state and (cleanup_only or self.channel_lock_owner() is not None):
+            if current_state and (
+                cleanup_only or self.channel_lock_owner() is not None
+                or terminal_receipt is not None or producer_entry_exists or os.path.lexists(attempt_path)
+            ):
                 raise PostgresDeployError()
+            if current_state:
+                source_plan = self.qualify_source_identity_authority(revision, image_digest, selected)
             runtime = self.source_identity_runtime_snapshot(
                 selected, require_running_capture=not current_state,
                 **dict[str, Any]({'current_state': True} if current_state else {}),
@@ -1613,21 +1649,6 @@ class LinuxEffects:
             )
             _atomic_private_json(receipt_path, retained)
             return retained
-        if current_state and (cleanup_only or os.path.lexists(attempt_path)):
-            # An attempted/uncertain producer is consumed even if no producer
-            # receipt survived. Only exact cleanup may continue this ID.
-            if os.path.lexists(attempt_path) and _private_json(attempt_path) != request_payload:
-                raise PostgresDeployError()
-            self.reconcile_source_identity_cleanup(
-                operation_id, revision, image_digest, selected, owner, writers,
-                request_payload['installed_fingerprint'], request_payload['container_root'],
-                request_payload['vault_overlay'], current_request=request_payload,
-            )
-            from app.ops.native_source_identity_persistence import _receipt, IdentityInventory
-            failed = _receipt(operation_id, self.config.channel, revision, IdentityInventory(0, 0, 0, 0, 0),
-                              producer_kind='registry', producer_error_count=1, reason='source_worker_transport_failed')
-            _atomic_private_json(receipt_path, failed)
-            return failed
         self.require_source_identity_candidate(
             source_plan, selected, acquire=True, source_snapshot=runtime,
         )
@@ -1748,6 +1769,7 @@ class LinuxEffects:
                 failure_reason = "source_worker_quiesce_failed"
                 worker_quiesced = quiesce_owned_container(
                     self.config.channel, name, operation_id, revision,
+                    **dict[str, Any]({'expected_image': IMAGE_REPOSITORY + ':' + revision + '@' + image_digest} if current_state else {}),
                 )
                 if not worker_quiesced:
                     raise PostgresDeployError()
@@ -1800,6 +1822,7 @@ class LinuxEffects:
                     name = f"pkm-{self.config.channel}-source-bootstrap-{operation_id}"
                     worker_quiesced = quiesce_owned_container(
                         self.config.channel, name, operation_id, revision,
+                        **dict[str, Any]({'expected_image': IMAGE_REPOSITORY + ':' + revision + '@' + image_digest} if current_state else {}),
                     )
                 except Exception:
                     worker_quiesced = False
@@ -1942,6 +1965,8 @@ class LinuxEffects:
         current_request: dict[str, Any] | None = None,
     ) -> None:
         """Finish only this operation's retained cleanup; never rerun its producer."""
+        from app.ops.pg_acceptance import IMAGE_REPOSITORY
+
         expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
         if self.channel_lock_owner() != expected_owner:
             if current_request is not None:
@@ -1950,6 +1975,19 @@ class LinuxEffects:
                 self.require_current_source_state(selected, current_request, running=tuple(writers))
             return
         with self.failed_reconciliation_lock(expected_owner=owner) as handle:
+            from app.ops.native_source_bootstrap import quiesce_owned_container
+
+            name = f"pkm-{self.config.channel}-source-bootstrap-{operation_id}"
+            if current_request is not None:
+                # The exact private current request and matching fence own this
+                # one-shot only. Remove it before the full installed census;
+                # authority and retained stopped identities must then re-prove
+                # before any prior writer may be restored.
+                if not quiesce_owned_container(
+                    self.config.channel, name, operation_id, revision,
+                    expected_image=IMAGE_REPOSITORY + ':' + revision + '@' + image_digest,
+                ):
+                    raise PostgresDeployError()
             self.qualify_source_identity_authority(revision, image_digest, selected)
             current = self.source_identity_runtime_snapshot(
                 selected, require_running_capture=False,
@@ -1964,10 +2002,7 @@ class LinuxEffects:
                 or set(current.running_writers) - set(writers)
             ):
                 raise PostgresDeployError()
-            from app.ops.native_source_bootstrap import quiesce_owned_container
-
-            name = f"pkm-{self.config.channel}-source-bootstrap-{operation_id}"
-            if not quiesce_owned_container(
+            if current_request is None and not quiesce_owned_container(
                 self.config.channel, name, operation_id, revision,
             ):
                 raise PostgresDeployError()

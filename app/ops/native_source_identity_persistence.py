@@ -446,6 +446,7 @@ def _admit_registry_selection(root: Path, observations: tuple[RegistryIngestObse
     from app.knowledge.write_ops import read_recovery_snapshot_relative
     from app.rebuildability.product_total_loss import parse_bounded_frontmatter
     from app.services.note_uuid import is_read_only_derived_artifact
+    from app.workers.outbox_worker import _normalize_uuid_value
 
     inventory = registry_identity_inventory(root, observations)
     if inventory.invalid_count or inventory.ambiguous_count:
@@ -457,10 +458,13 @@ def _admit_registry_selection(root: Path, observations: tuple[RegistryIngestObse
         metadata, _body, error = parse_bounded_frontmatter(raw)
         declared = metadata.get('uuid')
         alternate = metadata.get('id')
+        normalized = _normalize_uuid_value(declared)
         if (error is not None or is_profile_note_source_read_only(root, relative, _canonical_uuid(declared))
             or is_read_only_derived_artifact(metadata)):
             raise SourceIdentityPersistenceRefusal('source_identity_ineligible')
-        if (declared not in (None, '') and _canonical_uuid(declared) is None
+        if (declared not in (None, '') and (
+                not normalized or _canonical_uuid(normalized) != normalized
+            )
             or alternate not in (None, '', declared)):
             raise SourceIdentityPersistenceRefusal('source_identity_ineligible')
         if declared not in (None, ''):

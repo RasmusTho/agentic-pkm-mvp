@@ -33,6 +33,10 @@ The password is never an environment value, URI input, command argument, log, re
 plaintext file. Read-only PGOPTIONS and positive `SHOW default_transaction_read_only` remain
 mandatory. Unlink on every exit and token-owned container cleanup retire the transient file/tmpfs;
 an interrupted or ambiguous cleanup remains failed/pending, not successful or replayable.
+The assembled witness overrides both DSN aliases with the admitted application's target and clears
+inherited password carriers; its CLI compares effective credential-free connection fields with the
+private envelope before opening the network connection. Runtime env-file defaults cannot select a
+different database from a qualified channel pin.
 
 This is a source-supported repair of the former volume-free witness's missing authenticated
 file-delivery seam, not retrospective live evidence. Source admission never authorizes deployment:

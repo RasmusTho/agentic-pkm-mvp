@@ -143,47 +143,62 @@ def run_diagnostic(
     )
     owner = {key: str(base[key]) for key in ('kind', 'channel', 'operation_id')}
     expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
+    image = IMAGE_REPOSITORY + '@' + image_digest
     require_terminal_deployment(effects)
-    plan = effects.qualify_source_identity_authority(revision, image_digest, selected)
-    runtime = effects.source_identity_runtime_snapshot(
-        selected, require_running_capture=False, current_state=True,
-    )
-    request = {**base, **{key: getattr(runtime, key) for key in (
+    fingerprint_fields = (
         'installed_fingerprint', 'execution_fingerprint', 'census_fingerprint',
-        'retained_state_fingerprint', 'container_root', 'vault_overlay',
-    )}}
+        'retained_state_fingerprint',
+    )
+    runtime_fields = (*fingerprint_fields, 'container_root', 'vault_overlay')
     retained_request = os.path.lexists(request_path)
     if retained_request:
         retained = _private_json(request_path)
-        if set(retained) != {*request, 'owner_token'} or any(retained[k] != v for k, v in request.items()):
+        if (set(retained) != {*base, *runtime_fields, 'owner_token'}
+            or any(retained[k] != value for k, value in base.items())
+            or any(not isinstance(retained[key], str)
+                   or re.fullmatch(r'[0-9a-f]{64}', retained[key]) is None for key in fingerprint_fields)
+            or retained['container_root'] not in {selected.root, '/app/vault'}
+            or retained['vault_overlay'] not in {'docker-compose.full-host-vault.yml', 'docker-compose.legacy-vault.yml'}):
             raise PostgresDeployError()
         token = retained['owner_token']
         if not isinstance(token, str) or re.fullmatch(r'[0-9a-f]{32}', token) is None:
             raise PostgresDeployError()
+        request = {key: value for key, value in retained.items() if key != 'owner_token'}
     else:
         if cleanup_only or any(os.path.lexists(path) for path in (attempt_path, terminal_path)):
             raise PostgresDeployError()
         if effects.channel_lock_owner() is not None:
             raise PostgresDeployError()
+        plan = effects.qualify_source_identity_authority(revision, image_digest, selected)
+        runtime = effects.source_identity_runtime_snapshot(
+            selected, require_running_capture=False, current_state=True,
+        )
+        request = {**base, **{key: getattr(runtime, key) for key in runtime_fields}}
         token = secrets.token_hex(16)
         _atomic_private_json(request_path, {**request, 'owner_token': token})
 
-    def guard(*, candidate: bool = True) -> None:
+    def guard(*, candidate: bool = True, owner_required: bool = True) -> None:
         if type(cfg).load(cfg.channel) != cfg:
             raise PostgresDeployError()
         require_terminal_deployment(effects)
-        effects.qualify_source_identity_authority(revision, image_digest, selected)
+        current_plan = effects.qualify_source_identity_authority(revision, image_digest, selected)
         current = effects.source_identity_runtime_snapshot(
             selected, require_running_capture=False, current_state=True,
         )
-        if not runtime_matches(current, request) or effects.channel_lock_owner() != expected_owner:
+        if (not runtime_matches(current, request)
+            or effects.channel_lock_owner() != (expected_owner if owner_required else None)):
             raise PostgresDeployError()
         if candidate:
-            effects.require_source_identity_candidate(plan, selected, acquire=False, source_snapshot=current)
+            effects.require_source_identity_candidate(current_plan, selected, acquire=False, source_snapshot=current)
+
+    def cleanup_container(name: str, token: str) -> None:
+        expected_image = (IMAGE_REPOSITORY + ':' + revision + '@' + image_digest
+                          if name == f'pkm-source-id-witness-{revision[:12]}' else image)
+        diagnostic._cleanup_owned_container(name, token, expected_image=expected_image)
 
     def cleanup() -> None:
         for phase in ('prepare', 'witness', 'finalize'):
-            diagnostic._cleanup_owned_container(f'pkm-source-id-{phase}-{revision[:12]}', token)
+            cleanup_container(f'pkm-source-id-{phase}-{revision[:12]}', token)
 
     refused = diagnostic.validate_source_receipt({
         'contract': diagnostic.SOURCE_RECEIPT_CONTRACT, 'channel': cfg.channel, 'revision': revision,
@@ -199,6 +214,9 @@ def run_diagnostic(
             raise PostgresDeployError()
         if effects.channel_lock_owner() is not None:
             with effects.failed_reconciliation_lock(expected_owner=owner) as handle:
+                # Only the authenticated request/fence/token/image may retire
+                # its own one-shot before the complete census. A surviving
+                # witness is not an ordinary installed service or authority.
                 cleanup()
                 guard(candidate=False)
                 _atomic_private_json(terminal_path, result)
@@ -213,6 +231,8 @@ def run_diagnostic(
             with effects.failed_reconciliation_lock(expected_owner=owner) as handle:
                 guard(candidate=False)
                 effects.retire_reconciled_channel_lock(handle, expected_owner=owner)
+        else:
+            guard(candidate=False, owner_required=False)
         return result
     result = refused
     with effects.channel_lock(journal=cfg.journal, owner_marker=owner, retire_terminal=False):
@@ -226,11 +246,13 @@ def run_diagnostic(
         _atomic_private_json(attempt_path, request)
         try:
             result = diagnostic.run_production_diagnostic(
-                source_image=IMAGE_REPOSITORY + '@' + image_digest,
+                source_image=image,
                 source_root=Path(selected.root), container_source_root=runtime.container_root,
                 compose_prefix=tuple(argv), channel=cfg.channel, revision=revision,
                 source_environment=dict(runtime.child_environment), effect_guard=guard, owner_token=token,
                 witness_password=password,
+                witness_database_url=environment['DATABASE_URL'],
+                container_cleanup=cleanup_container,
                 child_runner=partial(diagnostic._run_bounded_child, environment=environment, cwd=cfg.root),
             )
         except Exception:
