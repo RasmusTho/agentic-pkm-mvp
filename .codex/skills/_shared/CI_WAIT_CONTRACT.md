@@ -22,8 +22,11 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
 ## Rules
 
 1. **Never tight-poll, and never poll GraphQL for check state.** Use REST (`gh api`) only.
-2. **Wait the bulk first, then check.** CI on this repo runs ~4–5 min wall-clock (the `not pg` test
-   gate is the long pole). Sleep most of that *before* the first check instead of polling through it.
+2. **Use a bounded initial pause, then inspect with backoff.** Selected workloads have different
+   durations. The default initial pause is 180 seconds; the required unit step can run for 75 minutes,
+   so the helper allows 90 minutes total for tests, setup and queue margin. A caller with a known
+   shorter workload may set `--timeout` explicitly. A wait deadline is an observation limit, not
+   proof of a hung job: inspect job progress and diagnostics before any recovery or rerun.
 3. **Back off ≥ 60–120s** between checks on the tail. One PR's wait must not starve the shared bucket.
 4. **Preflight the free endpoint.** `gh api rate_limit` is **exempt** (does not count) — read it before
    assuming exhaustion, and compare `.graphql.remaining` vs `.core.remaining`.
@@ -82,7 +85,7 @@ it for the merge-gating default, where the head is auto-resolved and re-checked 
 
 It auto-detects the repo from the git remote, resolves the PR head SHA via REST, sleeps `--initial-wait`
 (default 180s) before the first check, then polls the REST **check-runs and classic commit-status**
-endpoints every `--interval` (default 90s, floor 60s) until all complete or `--timeout` (default 1800s),
+endpoints every `--interval` (default 90s, floor 60s) until all complete or `--timeout` (default 5400s),
 failing **closed** on any fetch error (an unverifiable state never reports success). Exit codes:
 
 - `0` — CI passed (with `--codex`, Codex also passed)
@@ -93,6 +96,14 @@ failing **closed** on any fetch error (an unverifiable state never reports succe
 - `5` — the PR head moved during the wait (when SHA is auto-resolved) — verified checks are stale; re-run
 - `6` — the PR is `mergeable_state=dirty`, so pull_request workflows will not schedule (merge-gating mode) — fix conflicts and re-run
 - `7` — expected required check contexts are absent from the head (merge-gating mode) — absence is not success; see Rule 8
+
+The read-only `scripts/ci_stall_classifier.py` keeps a 30-minute default for queued and unrelated
+checks, and allows 90 minutes for an in-progress `Unit tests (not pg)` check. An explicit
+`--stall-threshold-seconds` overrides both defaults. Each pending check reports its applied
+`wait_budget_seconds`; `threshold_seconds` reports the generic default or caller override.
+Crossing a budget, or lacking a timestamp, recommends `inspect_check_progress`. The legacy
+`stalled` classification is a diagnosis prompt, not evidence of no progress or rerun authority.
+Completed failures retain their separate repair/advisory-rerun classifications.
 
 **The exit code is the gate — never let a pipeline eat it.** Do not run the script as `await_pr_checks.sh <PR> 2>&1 | tail -2` (or any `| grep`/`| tee` composition) when its exit code gates a merge: a pipeline's status is the *last* command's, so a failed check exits 0 through `tail` and an `&& gh pr merge` chain merges on red (seen: PR #2759). Run the script bare and capture `rc=$?` before any formatting, and key the merge on `$rc`. The same holds in background shells: the gate is the captured rc, never the visible output.
 

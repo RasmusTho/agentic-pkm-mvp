@@ -19,6 +19,7 @@ RERUN_CANDIDATE_CONCLUSIONS = frozenset({
     "timed_out",
 })
 DEFAULT_STALL_THRESHOLD_SECONDS = 30 * 60
+RUNNING_UNIT_WAIT_SECONDS = 90 * 60
 
 
 class CiStallClassifierError(ValueError):
@@ -56,7 +57,7 @@ def classify_ci_state(
     payload: Any,
     *,
     now: datetime | str | None = None,
-    stall_threshold_seconds: int = DEFAULT_STALL_THRESHOLD_SECONDS,
+    stall_threshold_seconds: int | None = None,
     expected_checks: Sequence[str] = (),
 ) -> CiStallClassification:
     """Classify check-runs into wait/stall/failure guidance.
@@ -66,7 +67,7 @@ def classify_ci_state(
     classified, matching `scripts/await_pr_checks.sh`.
     """
 
-    if stall_threshold_seconds <= 0:
+    if stall_threshold_seconds is not None and stall_threshold_seconds <= 0:
         raise CiStallClassifierError("stall_threshold_seconds must be positive")
     current = _normalize_now(now)
     checks = _latest_by_name(_extract_checks(payload))
@@ -116,13 +117,13 @@ def classify_ci_state(
         stalled = [
             check for check in pending
             if _check_age_seconds(check, current) is None
-            or _check_age_seconds(check, current) > stall_threshold_seconds
+            or _check_age_seconds(check, current) > _wait_budget_seconds(check, stall_threshold_seconds)
         ]
         if stalled:
             return _classification(
                 "stalled",
-                "handoff_as_ci_pending_or_rerun_candidate",
-                "queued or in-progress checks exceeded the bounded wait threshold",
+                "inspect_check_progress",
+                "wait budget exceeded or timing unavailable; inspect job progress and diagnostics before recovery",
                 checks,
                 pending,
                 failed,
@@ -199,7 +200,7 @@ def _classification(
     pending: list[CheckRun],
     failed: list[CheckRun],
     missing: list[str],
-    threshold: int,
+    threshold: int | None,
     now: datetime,
     *,
     failure: bool,
@@ -213,10 +214,13 @@ def _classification(
         pending=bool(pending),
         summary=summary,
         checks_considered=[asdict(check) for check in checks],
-        pending_checks=[_check_summary(check, now) for check in pending],
+        pending_checks=[
+            {**_check_summary(check, now), "wait_budget_seconds": _wait_budget_seconds(check, threshold)}
+            for check in pending
+        ],
         failed_checks=[_check_summary(check, now) for check in failed],
         missing_checks=list(missing),
-        threshold_seconds=threshold,
+        threshold_seconds=threshold if threshold is not None else DEFAULT_STALL_THRESHOLD_SECONDS,
         now=_format_utc(now),
     )
 
@@ -225,6 +229,16 @@ def _check_summary(check: CheckRun, now: datetime) -> dict[str, Any]:
     summary = asdict(check)
     summary["age_seconds"] = _check_age_seconds(check, now)
     return summary
+
+
+def _wait_budget_seconds(check: CheckRun, override: int | None) -> int:
+    if override is not None:
+        return override
+    if check.status == "in_progress" and check.name == "Unit tests (not pg)":
+        # The test step alone permits 75 minutes. Queue age and unrelated checks
+        # keep their shorter allowance; an explicit caller budget wins everywhere.
+        return RUNNING_UNIT_WAIT_SECONDS
+    return DEFAULT_STALL_THRESHOLD_SECONDS
 
 
 def _extract_checks(payload: Any) -> list[CheckRun]:
@@ -377,7 +391,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stall-threshold-seconds",
         type=int,
-        default=DEFAULT_STALL_THRESHOLD_SECONDS,
+        default=None,
+        help="Override every check's wait budget; defaults: running unit gate 90m, queued/other checks 30m.",
     )
     parser.add_argument(
         "--expected-check",

@@ -146,6 +146,18 @@ GOVERNANCE_TARGETS = (
     "tests/ops/test_review_before_ci_gate.py",
 )
 
+# Read-only CI inspection/selection contracts already covered by GOVERNANCE_TARGETS.
+# Keep this exact: unrelated scripts, fixtures and operational co-changes retain their owners.
+CI_GOVERNANCE_CONTRACT_PATHS = frozenset({
+    "scripts/select_pr_tests.py",
+    "scripts/await_pr_checks.sh",
+    "scripts/ci_stall_classifier.py",
+    "tests/scripts/test_select_pr_tests.py",
+    "tests/scripts/test_await_pr_checks.py",
+    "tests/scripts/test_await_pr_checks_dedupe.py",
+    "tests/scripts/test_ci_stall_classifier.py",
+})
+
 # Every app/ file indexed by a (file, line)-keyed census registry in
 # tests/properties/_machinery.py (REGISTERED_MIRRORS, WRITE_FRONTMATTER_SITE_CLASSIFICATION,
 # WRITE_MISSING_SITE_CLASSIFICATION, WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION,
@@ -1405,7 +1417,11 @@ def _is_governance_only(paths: tuple[str, ...]) -> bool:
     governance_prefixes = (".github/", "docs/development/", "AGENTS.md", "CLAUDE.md", ".codex/")
     non_test = _non_test_signal(paths, GOVERNANCE_TARGETS)
     return bool(non_test) and all(
-        path.startswith(governance_prefixes) or path == "scripts/select_pr_tests.py"
+        path.startswith(governance_prefixes)
+        # These read-only CI helpers are covered by tests/scripts and the
+        # existing governance contracts, without unrelated host/deploy tests.
+        # Any co-changed runtime/operational source still disqualifies this lane.
+        or path in CI_GOVERNANCE_CONTRACT_PATHS
         for path in non_test
     )
 
@@ -1429,10 +1445,25 @@ def _foreign_subsystem_matches(
     # GOVERNANCE_TARGETS, so it never appears here) so the caller can union
     # that subsystem's real targets into the selection instead of it being
     # silently dropped.
+    ci_contract_only = all(
+        path in CI_GOVERNANCE_CONTRACT_PATHS
+        or path.startswith((".github/", "docs/development/", ".codex/"))
+        or path in {"AGENTS.md", "CLAUDE.md"}
+        for path in paths
+    )
     return [
         (name, subsystem_targets)
         for name, prefixes, subsystem_targets in SUBSYSTEMS
-        if any(_subsystem_owns_path(path, name, prefixes) for path in paths)
+        if any(
+            _subsystem_owns_path(path, name, prefixes)
+            and not (
+                name == "ops_deploy"
+                and tolerated_targets == GOVERNANCE_TARGETS
+                and ci_contract_only
+                and path in CI_GOVERNANCE_CONTRACT_PATHS
+            )
+            for path in paths
+        )
         and any(target not in tolerated_targets for target in subsystem_targets)
     ]
 

@@ -71,13 +71,59 @@ def test_long_running_checks_classify_stalled() -> None:
     )
 
     assert result.classification == "stalled"
-    assert result.recommended_next_action == "handoff_as_ci_pending_or_rerun_candidate"
+    assert result.recommended_next_action == "inspect_check_progress"
     assert result.failure is False
     assert result.stalled is True
     assert [item["name"] for item in result.pending_checks] == [
         "Unit tests (not pg)",
         "smoke",
     ]
+
+
+def test_running_required_unit_gate_keeps_waiting_through_its_75_minute_step() -> None:
+    for observed_at in ("2026-07-09T21:00:00Z", "2026-07-09T21:15:00Z"):
+        result = classify_ci_state(
+            [_check("Unit tests (not pg)", status="in_progress")],
+            now=observed_at,
+        )
+
+        assert result.classification == "wait"
+        assert result.pending_checks[0]["wait_budget_seconds"] == 5400
+        assert result.failure is False
+
+
+def test_over_budget_unit_gate_requires_progress_inspection_without_rerun_advice() -> None:
+    result = classify_ci_state(
+        [_check("Unit tests (not pg)", status="in_progress")],
+        now="2026-07-09T21:30:01Z",
+    )
+
+    assert result.classification == "stalled"
+    assert result.recommended_next_action == "inspect_check_progress"
+    assert result.failure is False
+    assert result.pending_checks[0]["wait_budget_seconds"] == 5400
+
+
+def test_queued_unit_and_unrelated_checks_keep_the_shorter_wait_budget() -> None:
+    for name, status in (("Unit tests (not pg)", "queued"), ("smoke", "in_progress")):
+        result = classify_ci_state(
+            [_check(name, status=status)],
+            now="2026-07-09T20:30:01Z",
+        )
+
+        assert result.classification == "stalled"
+        assert result.recommended_next_action == "inspect_check_progress"
+        assert result.pending_checks[0]["wait_budget_seconds"] == 1800
+
+
+def test_pending_check_without_timestamp_requires_inspection() -> None:
+    check = _check("Unit tests (not pg)", status="in_progress")
+    check.pop("started_at")
+    result = classify_ci_state([check], now="2026-07-09T20:10:00Z")
+
+    assert result.classification == "stalled"
+    assert result.recommended_next_action == "inspect_check_progress"
+    assert result.pending_checks[0]["age_seconds"] is None
 
 
 def test_failed_check_classifies_actionable_failure() -> None:

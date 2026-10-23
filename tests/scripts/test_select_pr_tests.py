@@ -14,6 +14,54 @@ from scripts.select_pr_tests import select_tests
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize("path", ("scripts/await_pr_checks.sh", "scripts/ci_stall_classifier.py"))
+def test_read_only_ci_wait_helpers_select_covering_governance_contracts(path: str) -> None:
+    selection = select_tests([
+        path,
+        "tests/scripts/test_ci_stall_classifier.py",
+        ".codex/skills/_shared/CI_WAIT_CONTRACT.md",
+    ])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("governance",)
+    assert set(selector.GOVERNANCE_TARGETS) <= set(selection.targets)
+    assert "tests/scripts/test_ci_stall_classifier.py" in selection.targets
+    assert "tests/ops" not in selection.targets
+    assert "tests/deploy" not in selection.targets
+
+
+def test_ci_wait_with_selector_contract_changes_avoids_unrelated_ops_suite() -> None:
+    selection = select_tests(list(selector.CI_GOVERNANCE_CONTRACT_PATHS))
+
+    assert selection.subsystems == ("governance",)
+    assert set(selector.GOVERNANCE_TARGETS) <= set(selection.targets)
+    assert "tests/ops" not in selection.targets
+
+
+def test_ci_wait_with_unrelated_script_test_preserves_its_broad_owner() -> None:
+    selection = select_tests([
+        "scripts/await_pr_checks.sh", "tests/scripts/test_dev_bootstrap.py",
+    ])
+
+    assert "ops_deploy" in selection.subsystems
+    assert "tests/ops" in selection.targets
+
+
+@pytest.mark.parametrize("protected_path", (
+    "scripts/deploy_channel.sh", "app/ops/postgres_deploy_linux.py",
+    "app/alembic/versions/example.py", "requirements.txt",
+))
+def test_ci_wait_helper_does_not_narrow_cochanged_protected_source(protected_path: str) -> None:
+    selection = select_tests(["scripts/await_pr_checks.sh", protected_path])
+
+    if protected_path in {"app/alembic/versions/example.py", "requirements.txt"}:
+        assert selection.full_suite is True
+    else:
+        assert selection.full_suite is False
+        assert "tests/ops" in selection.targets
+        assert "tests/deploy" in selection.targets
+
+
 def test_companion_note_helper_selects_source_boundary_coverage() -> None:
     selection = select_tests(["app/services/companion_note.py"])
 
@@ -1832,19 +1880,24 @@ POST_MERGE_HEAVY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "post-merge-he
     ["scripts/validate_issue_readiness.py", ".github/workflows/issue-pr-governance.yml"],
     ["tests/scripts/test_select_pr_tests.py"],
 ])
-def test_selector_change_defers_heavy_deploy_suite(paths: list[str]) -> None:
+def test_selector_change_keeps_heavy_deploy_off_pr_path(paths: list[str]) -> None:
     selection = select_tests(paths)
 
     assert selection.full_suite is False
     assert not any(t == "tests/deploy" or t.startswith("tests/deploy/") for t in selection.targets)
-    assert selection.deferred_targets == ("tests/deploy",)
+    if "scripts/select_pr_tests.py" in paths:
+        assert selection.subsystems == ("governance",)
+        assert "tests/ops" not in selection.targets
+        assert selection.deferred_targets == ()
+    else:
+        assert selection.deferred_targets == ("tests/deploy",)
     assert "tests/ops" in selection.targets or "tests/scripts" in selection.targets
 
 
 def test_selector_reports_deferred_targets_to_github_output(tmp_path: Path) -> None:
     output = tmp_path / "output"
     result = subprocess.run([
-        sys.executable, "scripts/select_pr_tests.py", "--changed-file", "scripts/select_pr_tests.py",
+        sys.executable, "scripts/select_pr_tests.py", "--changed-file", "scripts/validate_issue_readiness.py",
         "--github-output", str(output),
     ], cwd=REPO_ROOT, capture_output=True, text=True)
 

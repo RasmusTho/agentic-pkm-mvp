@@ -66,6 +66,9 @@ case "$path" in
     ;;
   *check-runs*)
     emit "$(cat "$FAKE_CHECK_RUNS_JSON")"
+    if [ -n "${FAKE_AFTER_FIRST_CHECKS_JSON:-}" ]; then
+      cp "$FAKE_AFTER_FIRST_CHECKS_JSON" "$FAKE_CHECK_RUNS_JSON"
+    fi
     ;;
   */status)
     emit '{"state":"pending","total_count":0,"statuses":[]}'
@@ -147,6 +150,44 @@ def test_dirty_pr_state_fails_before_false_green(tmp_path: Path) -> None:
     assert "dirty" in result.stderr
     assert "will not schedule" in result.stderr
     assert "all required checks passed" not in result.stdout
+
+
+def test_default_wait_allows_long_unit_job_to_complete_without_real_sleep(tmp_path: Path) -> None:
+    fake_bin = _make_fake_gh(tmp_path)
+    # First date call creates the deadline. The next observes 45 elapsed minutes:
+    # the old 30-minute default exited before observing the successful next poll.
+    for name, source in {
+        "date": '#!/usr/bin/env bash\nif [ -f "$FAKE_CLOCK_USED" ]; then echo 2700; else touch "$FAKE_CLOCK_USED"; echo 0; fi\n',
+        "sleep": "#!/usr/bin/env bash\nexit 0\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(source, encoding="utf-8")
+        path.chmod(0o755)
+    checks = tmp_path / "checks.json"
+    checks.write_text(
+        (FIXTURES_DIR / "required_running_then_skipped_duplicate.json").read_text(),
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        "FAKE_CLOCK_USED": str(tmp_path / "clock-used"),
+        "FAKE_SHA": FAKE_SHA,
+        "FAKE_CHECK_RUNS_JSON": str(checks),
+        "FAKE_AFTER_FIRST_CHECKS_JSON": str(FIXTURES_DIR / "head_required_present_green.json"),
+        "FAKE_MERGEABLE_STATE": "clean",
+        "FAKE_BASE_REF": "main",
+        "FAKE_PROTECTION_JSON": "",
+        "GH_REPO": "RasmusTho/agentic-pkm-mvp",
+    }
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "4321", "--initial-wait", "0"],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=10, check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "still running: Unit tests (not pg)" in result.stdout
+    assert f"all required checks passed on {FAKE_SHA}" in result.stdout
 
 
 def test_missing_required_check_names_fail_closed(tmp_path: Path) -> None:
