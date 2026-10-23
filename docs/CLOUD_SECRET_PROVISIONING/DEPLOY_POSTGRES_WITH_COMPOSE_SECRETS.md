@@ -20,7 +20,28 @@ For a Product rollout authorized to use existing secrets without administering B
 
 ## What This Task Does
 
-The host secret contract declares required, channel-scoped `postgres.password` as `delivery=file` with non-secret service paths `POSTGRES_PASSWORD_FILE` for Compose `db` and `DATABASE_PASSWORD_FILE` for the five application/migration services; it creates no password environment binding. Its exact database-consumer-to-Compose map is `postgres-db` -> `db`, `postgres-migrate` -> `migrate`, `postgres-api` -> `api`, `postgres-worker` -> `worker`, `postgres-watcher` -> `watcher`, and `postgres-capture-watch` -> `heimdal-capture-watch`, for dev, test, and prod. No other service is authorized for this file. The agent-host deployment controller takes the shared BWS operation lock before checking selected shared identities and database credentials, and holds it through the VM project-scoped recheck, source materialization, and matching durable remote terminal receipt. It never sends its admin credential to a VM. The VM reader rechecks the selected consumer set before local deployment-state mutation and again before Compose. A missing/unreadable password blocks every normal deploy before remote deployment-state mutation. The sole missing-password exception is BWS-04 first initialization defined below.
+The host secret contract declares required, channel-scoped `postgres.password` as `delivery=file` with non-secret service paths `POSTGRES_PASSWORD_FILE` for Compose `db` and `DATABASE_PASSWORD_FILE` for the five application/migration services; it creates no password environment binding. Its exact deployment-consumer-to-Compose map is `postgres-db` -> `db`, `postgres-migrate` -> `migrate`, `postgres-api` -> `api`, `postgres-worker` -> `worker`, `postgres-watcher` -> `watcher`, and `postgres-capture-watch` -> `heimdal-capture-watch`, for dev, test, and prod. The separate DEV/TEST-only `postgres-source-witness` -> `source-identity-db-witness` file consumer is governed below; it is not a deployment service or a secret mount recipient. No other service is authorized for this file. The agent-host deployment controller takes the shared BWS operation lock before checking selected shared identities and database credentials, and holds it through the VM project-scoped recheck, source materialization, and matching durable remote terminal receipt. It never sends its admin credential to a VM. The VM reader rechecks the selected consumer set before local deployment-state mutation and again before Compose. A missing/unreadable password blocks every normal deploy before remote deployment-state mutation. The sole missing-password exception is BWS-04 first initialization defined below.
+
+The explicit current-state diagnostic in #6316 reads only an already verified existing channel
+`PasswordSource`, after canonical file-consumer admission and while holding the existing
+host/supervisor/channel ownership chain. It cannot fetch/create a new BWS value, materialize a
+missing source, bootstrap, rotate, or lend credentials to source observers. The witness remains
+volume-free: its channel/revision/candidate-bound schema- and size-closed private stdin envelope
+is separate from source prepare/finalize frames. Inside the witness's existing `/tmp` tmpfs only,
+a private mode-0600 file supplies `DATABASE_PASSWORD_FILE` to the canonical no-follow resolver.
+The password is never an environment value, URI input, command argument, log, receipt or persistent
+plaintext file. Read-only PGOPTIONS and positive `SHOW default_transaction_read_only` remain
+mandatory. Unlink on every exit and token-owned container cleanup retire the transient file/tmpfs;
+an interrupted or ambiguous cleanup remains failed/pending, not successful or replayable.
+
+This is a source-supported repair of the former volume-free witness's missing authenticated
+file-delivery seam, not retrospective live evidence. Source admission never authorizes deployment:
+the separately authorized current-state registry invocation rechecks the complete source policy,
+uses only the existing ordinary UUID/companion producer and restores only its prior running set.
+Full eligible readback and the delivery classifier precede separately authorized normal deployment.
+The exited watcher is activated only by that deployment's normal preparation/migration/projection/
+recreation flow. #3347/#6300 live qualification and consumed historical operation boundaries remain
+unchanged; see `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deploy procedure`.
 
 The BWS Compose overlay replaces the database image entrypoint with `scripts/postgres_entrypoint.sh`, so it explicitly sets the `db` command to `postgres`. Compose drops the image's default `CMD` when the entrypoint is overridden; without this command, the wrapper exits without starting the database server.
 
@@ -52,10 +73,11 @@ Rendered Compose is commonly inspected and retained in deploy output, and enviro
   - Verify: `tests/deploy/test_deploy_channel_script.py::test_inactive_optional_model_credentials_do_not_block_deploy`
 - [ ] PostgreSQL and application Compose services use file-backed secret paths with no inlined password in rendered configuration.
   - Verify: `tests/deploy/test_deploy_channel.py::test_rendered_compose_uses_postgres_secret_file_without_value`
-- [ ] The host contract declares required channel-scoped `postgres.password` as file-only and maps exactly `postgres-db`/`db`, `postgres-migrate`/`migrate`, `postgres-api`/`api`, `postgres-worker`/`worker`, `postgres-watcher`/`watcher`, and `postgres-capture-watch`/`heimdal-capture-watch`; no other consumer or service receives the credential.
+- [ ] The host contract declares required channel-scoped `postgres.password` as file-only and maps exactly `postgres-db`/`db`, `postgres-migrate`/`migrate`, `postgres-api`/`api`, `postgres-worker`/`worker`, `postgres-watcher`/`watcher`, and `postgres-capture-watch`/`heimdal-capture-watch` for deployment mounts; the separate DEV/TEST-only `postgres-source-witness` uses the volume-free private file-delivery path above, never a new mount or deployment start set. No undeclared consumer or service receives the credential.
   - Verify: `tests/ops/test_host_secret_contract.py::test_postgres_password_contract_is_file_only_and_consumer_set_is_closed`
   - Verify: `tests/deploy/test_deploy_channel.py::test_database_services_map_to_declared_password_consumers`
   - Verify: `tests/deploy/test_deploy_channel.py::test_postgres_secret_mount_is_limited_to_database_clients`
+  - Verify: `tests/ops/test_native_source_diagnostic_admission.py::test_real_witness_cli_refuses_credential_envelope_without_connect`
 - [ ] A normal database-bearing plan requires `postgres.password` before remote deployment-state mutation, then rechecks it on the VM before local deployment-state mutation and Compose; missing/unreadable values leave deploy state unchanged.
   - Verify: `tests/deploy/test_deploy_channel_script.py::test_postgres_password_preflight_precedes_remote_and_vm_mutation`
 - [ ] An initialized-role candidate passes real password authentication before new/recreated migration or application clients start. A stopped database may be started only by the journaled, supervised DB-only probe after both secret preflights; wrong-password rollback stops only a database started by this operation, preserves a pre-existing running database, and stays pending unless quiescence is proved.

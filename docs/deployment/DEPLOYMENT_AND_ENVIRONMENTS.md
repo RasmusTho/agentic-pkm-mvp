@@ -1373,6 +1373,55 @@ and otherwise retain the same content-free counters/reasons, exact same-ID clean
 mandatory delivery-classifier reapplication. Omitting the flag preserves the existing
 `vault-alpha` request and v1 receipt byte shape.
 
+Issue #6316 adds a separate, explicit current-state source-operation route for DEV/TEST when
+protected MVR authority is intact but an installed watcher is exited and no prior deployment
+channel owner remains. This is repository support, not evidence of live #3347/#6300 completion.
+It does not reconstruct a departed operation, adopt historical cleanup, initialize ownership,
+or start the watcher. The default persistence entry still requires all core writers running.
+
+The read-only invocation is `postgres_deploy_host <dev|test> <reviewed-helper-sha> --automatic
+--existing-secrets-only --current-state-source --diagnose-source-identity --operation-id <uuid>
+--image-digest <sha256:digest>`, with the existing selected binding/root/ownership arguments.
+The host-operation lock, supervisor mutex and channel lock enclose the canonical retained-authority
+reader and complete effective Compose census. Registry/ledger/key/lock corruption, pending
+authority work, unknown/duplicate services, created/paused/restarting containers, active or
+start-capable one-shots, and exact image/configuration/mount/user/population drift refuse. Installed
+roles, actually running writers, and retained stopped identities are recorded separately and
+revalidated at the worker boundary. The result is the existing aggregate diagnostic, not a
+transferable admission boolean.
+
+Source prepare/finalize actors remain read-only and network-none without database credentials.
+The separate volume-free witness reads only the verified existing channel password source through
+the explicitly declared `postgres-source-witness` consumer. A bounded channel/revision/digest-bound
+private stdin envelope delivers it only to that actor. Its existing `/tmp` tmpfs holds a mode-0600
+file used by the canonical no-follow resolver; read-only PGOPTIONS and positive
+`SHOW default_transaction_read_only` are both required. Every exit unlinks the file; token-owned
+container removal retires remaining tmpfs after interruption. Missing source, conflicting credential
+carriers, malformed/oversized frames, unlink/transport ambiguity or incomplete cleanup cannot
+produce success or replay. No password is placed in environment values, command arguments,
+rendered Compose, receipts or persistent plaintext storage; there are no additional mounts.
+This closes a source-verified credential-delivery gap, not a claim that an earlier live diagnostic
+had authenticated successfully.
+
+After concrete source remediation, a separately authorized invocation selects
+`--current-state-source --persist-source-identity --source-producer-kind registry` with a fresh UUID
+and the same normal authority/candidate inputs. It rechecks the complete fixed source selection and
+policy under the existing current-binding effect fence before any ordinary metadata producer call.
+Invalid, ambiguous, conflicting, protected or drifting input refuses; missing UUID/companion data
+uses only the existing strict ordinary creation contract. It stops/restores the proved prior running
+set only (empty sets issue no stop/start), preserves every retained stopped identity and provider/model,
+and requires full eligible persisted readback. The actual channel lock accepts exactly the legacy
+source marker or its registry variant with `producer_kind=registry`; unknown fields/discriminators
+remain refused. Attempted or uncertain same-ID continuation is cleanup-only, never producer replay.
+
+The continuation is diagnostic and #6300 remediation, then freshly admitted ordinary registry
+persistence, exact cleanup plus eligible readback, delivery-classifier reapplication, and a
+**separately authorized ordinary deployment**. Neither source result allocates or starts a deploy.
+Only that deployment's existing instance preparation, migration, source projection and service
+recreation chain activates the qualified watcher. Live host convergence and same-candidate DEV/TEST
+acceptance remain parent-owned, with separate effect clearance; consumed historical operations and
+the full RSC-06/MVR-06 recovery boundaries are unchanged.
+
 Supervision failures retain only a closed content-free stage reason. A worker context/preflight
 refusal returns a validated failed receipt rather than disappearing behind a transport exit, while
 unexpected worker failure remains a fixed generic worker reason. The native supervisor separately

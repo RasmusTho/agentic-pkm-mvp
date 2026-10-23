@@ -628,6 +628,8 @@ class SourceIdentityRuntimeSnapshot:
     unset_environment: tuple[str, ...] = ()
     observed_installed_fingerprint: str | None = None
     legacy_installed_fingerprints: frozenset[str] = frozenset()
+    census_fingerprint: str = ''
+    retained_state_fingerprint: str = ''
 
 
 _MAX_LEGACY_MOUNT_ORDER_CANDIDATES = 4096
@@ -1129,6 +1131,17 @@ class PasswordSource:
         self.verify()
 
     def verify(self) -> None:
+        self._read_verified()
+
+    def read_for_source_witness(self) -> str:
+        from app.ops.host_secret_contract import load_host_secret_contract, SOURCE_WITNESS_CONSUMER
+
+        contract = load_host_secret_contract(self.config.root / 'config/secrets/host_secret_contract.json')
+        contract.file_binding(channel=self.config.channel, consumer=SOURCE_WITNESS_CONSUMER,
+                              secret='postgres.password')
+        return self._read_verified()
+
+    def _read_verified(self) -> str:
         cfg = self.config
         descriptor = os.open(cfg.password_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         try:
@@ -1146,6 +1159,13 @@ class PasswordSource:
                 pass_fds=(descriptor,), user=cfg.uid, group=cfg.gid, extra_groups=[], capture_output=True, check=False)
             if result.returncode:
                 raise PostgresDeployError()
+            raw = os.read(descriptor, 65537)
+            value = raw.decode('utf-8', errors='strict')
+            if not raw or len(raw) > 65536 or not all(char.isprintable() for char in value):
+                raise PostgresDeployError()
+            return value
+        except Exception:
+            raise PostgresDeployError() from None
         finally:
             os.close(descriptor)
 
@@ -1315,6 +1335,22 @@ class LinuxEffects:
         stdin_compose_file: bool = False,
         helper_image_pull: bool = False,
     ) -> str:
+        argv, env = self.source_compose_invocation(
+            cutover=cutover, candidate=candidate, source_snapshot=source_snapshot,
+        )
+        if stdin_compose_file:
+            if input_text is None:
+                raise PostgresDeployError()
+            argv += ['-f', '-']
+        return _command([*argv, *args], cwd=self.config.root, env=env,
+                        timeout=timeout, input_text=input_text, helper_image_pull=helper_image_pull)
+
+    def source_compose_invocation(
+        self, *, cutover: AuthorityCutover | None = None,
+        candidate: DeployPlan | None = None,
+        source_snapshot: SourceIdentityRuntimeSnapshot | None = None,
+    ) -> tuple[list[str], dict[str, str]]:
+        """Resolve the existing Compose invocation without executing a child."""
         cfg = self.config
         # Recovery Compose must inherit the authenticated ownership source from
         # the request.  Falling back to the supervisor's ambient/default root
@@ -1348,14 +1384,9 @@ class LinuxEffects:
             overlays += ['-f', str(cfg.root / 'docker-compose.full-host-vault.yml')]
             if cfg.channel == 'test':
                 overlays += ['-f', str(cfg.root / 'docker-compose.test-vault.yml')]
-        if stdin_compose_file:
-            if input_text is None:
-                raise PostgresDeployError()
-            overlays += ['-f', '-']
-        return _command(['docker', 'compose', '--env-file', str(cfg.root / 'config/deploy' / (cfg.channel + '.env')),
+        return (['docker', 'compose', '--env-file', str(cfg.root / 'config/deploy' / (cfg.channel + '.env')),
             '-f', str(cfg.root / 'docker-compose.yaml'), '-f', str(cfg.root / ('docker-compose.' + cfg.channel + '.yml')),
-            *overlays, '-p', 'pkm-' + cfg.channel, *args], cwd=cfg.root, env=env,
-            timeout=timeout, input_text=input_text, helper_image_pull=helper_image_pull)
+            *overlays, '-p', 'pkm-' + cfg.channel], env)
 
     def validate_plan(self, plan: DeployPlan) -> None:
         plan.validate()
@@ -1373,6 +1404,7 @@ class LinuxEffects:
     def persist_source_identity(
         self, operation_id: str, revision: str, image_digest: str,
         selected: AuthorityCutover, producer_kind: str = "vault-alpha",
+        *, current_state: bool = False, cleanup_only: bool = False,
     ) -> dict[str, Any]:
         """Run one fenced ordinary-producer persistence operation.
 
@@ -1393,6 +1425,9 @@ class LinuxEffects:
                 or re.fullmatch(r"[0-9a-f]{40}", revision) is None
                 or re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is None
                 or producer_kind not in PRODUCER_KINDS
+                or type(current_state) is not bool or type(cleanup_only) is not bool
+                or (current_state and producer_kind != 'registry')
+                or (cleanup_only and not current_state)
             ):
                 raise PostgresDeployError()
         except (ValueError, TypeError, AttributeError):
@@ -1428,6 +1463,8 @@ class LinuxEffects:
         }
         if producer_kind == 'registry':
             request_base['producer_kind'] = producer_kind
+        if current_state:
+            request_base['source_mode'] = 'current-state'
         owner = {
             "kind": "source-identity-persistence",
             "channel": self.config.channel,
@@ -1456,6 +1493,12 @@ class LinuxEffects:
                 raise PostgresDeployError()
         legacy_cleanup_allowed = False
         producer_entry_exists = os.path.lexists(producer_path)
+        attempt_path = producer_path.with_suffix('.attempt.json')
+        current_fields = {'census_fingerprint', 'retained_state_fingerprint'} if current_state else set()
+        if current_state:
+            from app.ops.native_source_admission import require_terminal_deployment, runtime_matches
+
+            require_terminal_deployment(self)
         if request_path.exists():
             owns_lock = self.channel_lock_owner() == expected_owner
             legacy_cleanup_allowed = _legacy_mount_cleanup_allowed(
@@ -1468,6 +1511,7 @@ class LinuxEffects:
                 set(request_payload) != {
                     *request_base, 'installed_fingerprint', 'execution_fingerprint',
                     'writers', 'container_root', 'vault_overlay',
+                    *current_fields,
                 }
                 or any(request_payload.get(key) != value for key, value in request_base.items())
                 or any(
@@ -1488,13 +1532,15 @@ class LinuxEffects:
                 raise PostgresDeployError()
             writers = list(request_payload['writers'])
             runtime = self.source_identity_runtime_snapshot(
-                selected, require_running_capture=not owns_lock,
+                selected, require_running_capture=not owns_lock and not current_state,
                 allow_legacy_mount_order=legacy_cleanup_allowed,
+                **dict[str, Any]({'current_state': True, 'transitioning_writers': tuple(writers)} if current_state else {}),
             )
             if (
                 not _installed_fingerprint_matches(
                     runtime, request_payload['installed_fingerprint'],
                 )
+                or (current_state and not runtime_matches(runtime, request_payload))
                 or runtime.container_root != request_payload['container_root']
                 or runtime.vault_overlay != request_payload['vault_overlay']
                 or not set(writers) <= set(runtime.existing_writers)
@@ -1509,12 +1555,20 @@ class LinuxEffects:
             ):
                 raise PostgresDeployError()
         else:
+            if current_state and (cleanup_only or self.channel_lock_owner() is not None):
+                raise PostgresDeployError()
             runtime = self.source_identity_runtime_snapshot(
-                selected, require_running_capture=True,
+                selected, require_running_capture=not current_state,
+                **dict[str, Any]({'current_state': True} if current_state else {}),
             )
             writers = list(runtime.running_writers)
-            if not {'api', 'worker', 'watcher'} <= set(writers):
+            if not current_state and not {'api', 'worker', 'watcher'} <= set(writers):
                 raise PostgresDeployError()
+            if current_state:
+                runtime = self.source_identity_runtime_snapshot(
+                    selected, require_running_capture=False, current_state=True,
+                    transitioning_writers=tuple(writers),
+                )
             request_payload = {
                 **request_base,
                 'installed_fingerprint': runtime.installed_fingerprint,
@@ -1522,6 +1576,7 @@ class LinuxEffects:
                 'writers': writers,
                 'container_root': runtime.container_root,
                 'vault_overlay': runtime.vault_overlay,
+                **{key: getattr(runtime, key) for key in current_fields},
             }
             _atomic_private_json(request_path, request_payload)
         if terminal_receipt is not None:
@@ -1530,6 +1585,7 @@ class LinuxEffects:
                 request_payload['installed_fingerprint'],
                 request_payload['container_root'], request_payload['vault_overlay'],
                 allow_legacy_mount_order=legacy_cleanup_allowed,
+                **({'current_request': request_payload} if current_state else {}),
             )
             return terminal_receipt
         if producer_entry_exists:
@@ -1553,9 +1609,25 @@ class LinuxEffects:
                 request_payload['installed_fingerprint'],
                 request_payload['container_root'], request_payload['vault_overlay'],
                 allow_legacy_mount_order=False,
+                **({'current_request': request_payload} if current_state else {}),
             )
             _atomic_private_json(receipt_path, retained)
             return retained
+        if current_state and (cleanup_only or os.path.lexists(attempt_path)):
+            # An attempted/uncertain producer is consumed even if no producer
+            # receipt survived. Only exact cleanup may continue this ID.
+            if os.path.lexists(attempt_path) and _private_json(attempt_path) != request_payload:
+                raise PostgresDeployError()
+            self.reconcile_source_identity_cleanup(
+                operation_id, revision, image_digest, selected, owner, writers,
+                request_payload['installed_fingerprint'], request_payload['container_root'],
+                request_payload['vault_overlay'], current_request=request_payload,
+            )
+            from app.ops.native_source_identity_persistence import _receipt, IdentityInventory
+            failed = _receipt(operation_id, self.config.channel, revision, IdentityInventory(0, 0, 0, 0, 0),
+                              producer_kind='registry', producer_error_count=1, reason='source_worker_transport_failed')
+            _atomic_private_json(receipt_path, failed)
+            return failed
         self.require_source_identity_candidate(
             source_plan, selected, acquire=True, source_snapshot=runtime,
         )
@@ -1608,12 +1680,14 @@ class LinuxEffects:
                     revision, image_digest, selected,
                 )
                 locked_runtime = self.source_identity_runtime_snapshot(
-                    selected, require_running_capture=True,
+                    selected, require_running_capture=not current_state,
+                    **dict[str, Any]({'current_state': True, 'transitioning_writers': tuple(writers)} if current_state else {}),
                 )
                 if (
                     not _installed_fingerprint_matches(
                         locked_runtime, request_payload['installed_fingerprint'],
                     )
+                    or (current_state and not runtime_matches(locked_runtime, request_payload))
                     or locked_runtime.execution_fingerprint
                     != request_payload['execution_fingerprint']
                     or locked_runtime.container_root != request_payload['container_root']
@@ -1632,11 +1706,16 @@ class LinuxEffects:
                     raise PostgresDeployError()
                 writer_stop_attempted = True
                 failure_reason = "source_writer_stop_failed"
-                self.compose(
-                    "stop", *writers, cutover=selected, timeout=120,
-                    source_snapshot=locked_runtime,
-                )
+                if writers:
+                    self.compose(
+                        "stop", *writers, cutover=selected, timeout=120,
+                        source_snapshot=locked_runtime,
+                    )
+                if current_state:
+                    self.require_current_source_state(selected, request_payload, running=())
                 name = f"pkm-{self.config.channel}-source-bootstrap-{operation_id}"
+                if current_state:
+                    _atomic_private_json(attempt_path, request_payload)
                 worker_attempted = True
                 worker_quiesced = False
                 failure_reason = "source_worker_transport_failed"
@@ -1660,6 +1739,7 @@ class LinuxEffects:
                     "app.ops.native_source_identity_persistence",
                     operation_id, self.config.channel, revision, locked_runtime.container_root,
                     *([producer_kind] if producer_kind == "registry" else []),
+                    *(['current-state'] if current_state else []),
                     cutover=selected, candidate=source_plan, timeout=7200,
                     source_snapshot=locked_runtime,
                 )
@@ -1699,10 +1779,15 @@ class LinuxEffects:
                 failure_reason = "source_producer_receipt_write_failed"
                 _atomic_private_json(producer_path, payload)
                 failure_reason = "source_writer_restore_failed"
-                self.compose(
-                    "start", *writers, cutover=selected, timeout=120,
-                    source_snapshot=locked_runtime,
-                )
+                if current_state:
+                    self.require_current_source_state(selected, request_payload, running=())
+                if writers:
+                    self.compose(
+                        "start", *writers, cutover=selected, timeout=120,
+                        source_snapshot=locked_runtime,
+                    )
+                if current_state:
+                    self.require_current_source_state(selected, request_payload, running=tuple(writers))
                 writers_restored = True
         except Exception:
             # Best-effort restoration is allowed only for the exact stopped
@@ -1720,10 +1805,15 @@ class LinuxEffects:
                     worker_quiesced = False
             if lock_acquired and writer_stop_attempted and worker_quiesced:
                 try:
-                    self.compose(
-                        "start", *writers, cutover=selected, timeout=120,
-                        source_snapshot=locked_runtime,
-                    )
+                    if current_state:
+                        self.require_current_source_state(selected, request_payload, running=None)
+                    if writers:
+                        self.compose(
+                            "start", *writers, cutover=selected, timeout=120,
+                            source_snapshot=locked_runtime,
+                        )
+                    if current_state:
+                        self.require_current_source_state(selected, request_payload, running=tuple(writers))
                     writers_restored = True
                 except Exception:
                     writers_restored = False
@@ -1849,16 +1939,22 @@ class LinuxEffects:
         vault_overlay: str,
         *,
         allow_legacy_mount_order: bool = False,
+        current_request: dict[str, Any] | None = None,
     ) -> None:
         """Finish only this operation's retained cleanup; never rerun its producer."""
         expected_owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
         if self.channel_lock_owner() != expected_owner:
+            if current_request is not None:
+                if self.channel_lock_owner() is not None:
+                    raise PostgresDeployError()
+                self.require_current_source_state(selected, current_request, running=tuple(writers))
             return
         with self.failed_reconciliation_lock(expected_owner=owner) as handle:
             self.qualify_source_identity_authority(revision, image_digest, selected)
             current = self.source_identity_runtime_snapshot(
                 selected, require_running_capture=False,
                 allow_legacy_mount_order=allow_legacy_mount_order,
+                **dict[str, Any]({'current_state': True, 'transitioning_writers': tuple(writers)} if current_request is not None else {}),
             )
             if (
                 not _installed_fingerprint_matches(current, installed_fingerprint)
@@ -1875,11 +1971,43 @@ class LinuxEffects:
                 self.config.channel, name, operation_id, revision,
             ):
                 raise PostgresDeployError()
-            self.compose(
-                "start", *writers, cutover=selected, timeout=120,
-                source_snapshot=current,
-            )
+            if current_request is not None:
+                self.require_current_source_state(selected, current_request, running=None)
+            if writers:
+                self.compose(
+                    "start", *writers, cutover=selected, timeout=120,
+                    source_snapshot=current,
+                )
+            if current_request is not None:
+                self.require_current_source_state(selected, current_request, running=tuple(writers))
             self.retire_reconciled_channel_lock(handle, expected_owner=owner)
+
+    def require_current_source_state(
+        self, selected: AuthorityCutover, request: dict[str, Any], *, running: tuple[str, ...] | None,
+    ) -> None:
+        from app.ops.native_source_admission import require_terminal_deployment, runtime_matches
+
+        if type(self.config).load(self.config.channel) != self.config:
+            raise PostgresDeployError()
+        require_terminal_deployment(self)
+        self.qualify_source_identity_authority(request['revision'], request['image_digest'], selected)
+        current = self.source_identity_runtime_snapshot(
+            selected, require_running_capture=False, current_state=True,
+            transitioning_writers=tuple(request['writers']),
+        )
+        if (not runtime_matches(current, request)
+            or not set(current.running_writers) <= set(request['writers'])
+            or (running is not None and current.running_writers != tuple(sorted(running)))):
+            raise PostgresDeployError()
+
+    def diagnose_source_identity(
+        self, operation_id: str, revision: str, image_digest: str,
+        selected: AuthorityCutover, *, cleanup_only: bool,
+    ) -> dict[str, Any]:
+        from app.ops.native_source_admission import run_diagnostic
+
+        return run_diagnostic(self, operation_id, revision, image_digest, selected,
+                              cleanup_only=cleanup_only)
 
     def qualify_source_identity_authority(
         self, revision: str, image_digest: str, selected: AuthorityCutover,
@@ -1952,6 +2080,8 @@ class LinuxEffects:
         *,
         require_running_capture: bool,
         allow_legacy_mount_order: bool = False,
+        current_state: bool = False,
+        transitioning_writers: tuple[str, ...] = (),
     ) -> SourceIdentityRuntimeSnapshot:
         """Bind installed writers and the exact candidate-child configuration."""
         cfg = self.config
@@ -2224,6 +2354,21 @@ class LinuxEffects:
             vault_overlay=vault_overlay,
             unset_environment=api_unset_environment,
         )
+        census_fingerprint = retained_state_fingerprint = ''
+        if current_state:
+            from app.ops.native_source_admission import strict_census
+
+            census_fingerprint, retained_state_fingerprint = strict_census(
+                rows, ids=ids, compose=compose_payload, channel=cfg.channel,
+                transitioning_writers=transitioning_writers,
+            )
+            repeated = _command([
+                'docker', 'ps', '--all', '--no-trunc', '--filter',
+                'label=com.docker.compose.project=pkm-' + cfg.channel,
+                '--format', '{{.ID}}',
+            ]).splitlines()
+            if sorted(repeated) != sorted(ids):
+                raise PostgresDeployError()
         return SourceIdentityRuntimeSnapshot(
             installed_fingerprint=_installed_payload_fingerprint(installed_payload),
             execution_fingerprint=hashlib.sha256(json.dumps(
@@ -2237,6 +2382,8 @@ class LinuxEffects:
             unset_environment=api_unset_environment,
             observed_installed_fingerprint=observed_installed_fingerprint,
             legacy_installed_fingerprints=legacy_installed_fingerprints,
+            census_fingerprint=census_fingerprint,
+            retained_state_fingerprint=retained_state_fingerprint,
         )
 
     def channel_lock_owner(self) -> bytes | None:
@@ -3779,8 +3926,14 @@ class LinuxEffects:
             karakeep = (set(owner_marker) == {'kind', 'channel', 'operation_id'}
                 and owner_marker.get('kind') in {'karakeep-deploy', 'karakeep-boot'})
             source_persistence = (
-                set(owner_marker) == {'kind', 'channel', 'operation_id'}
+                (set(owner_marker) == {'kind', 'channel', 'operation_id'}
+                 or (set(owner_marker) == {'kind', 'channel', 'operation_id', 'producer_kind'}
+                     and owner_marker.get('producer_kind') == 'registry'))
                 and owner_marker.get('kind') == 'source-identity-persistence'
+            )
+            source_diagnostic = (
+                set(owner_marker) == {'kind', 'channel', 'operation_id'}
+                and owner_marker.get('kind') == 'source-identity-diagnostic'
             )
             operator_identity_restoration = (
                 set(owner_marker) == {'kind', 'channel', 'operation_id'}
@@ -3790,7 +3943,7 @@ class LinuxEffects:
             if (journal is None or journal.channel != self.config.channel
                 or self.config.channel not in {'dev', 'test'}
                 or not (
-                    qualification or karakeep or source_persistence
+                    qualification or karakeep or source_persistence or source_diagnostic
                     or operator_identity_restoration
                 )
                 or owner_marker['channel'] != self.config.channel
@@ -4225,12 +4378,16 @@ class DeploymentSupervisor:
         if data.get('action') == 'test-recovery-release-instance-state':
             with self.mutex:
                 return self._test_recovery_release_instance_state(data)
-        if data.get('action') == 'source-identity-persist':
+        if data.get('action') in {'source-identity-persist', 'source-identity-diagnose'}:
+            diagnostic = data['action'] == 'source-identity-diagnose'
+            current_state = data.get('source_mode') == 'current-state'
             source_keys = {
                 'action', 'operation_id', 'revision', 'image_digest', 'authority_cutover',
             }
             if frozenset(data) not in {
                 frozenset(source_keys), frozenset(source_keys | {'producer_kind'}),
+                frozenset(source_keys | {'source_mode', 'cleanup_only'}),
+                frozenset(source_keys | {'producer_kind', 'source_mode', 'cleanup_only'}),
             }:
                 raise PostgresDeployError()
             try:
@@ -4244,18 +4401,38 @@ class DeploymentSupervisor:
                     or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
                     or producer_kind not in {'vault-alpha', 'registry'}
                     or (producer_kind == 'vault-alpha' and 'producer_kind' in data)
+                    or ('source_mode' in data and not current_state)
+                    or ('cleanup_only' in data and type(data['cleanup_only']) is not bool)
+                    or (diagnostic and (not current_state or 'producer_kind' in data))
+                    or (current_state and not diagnostic and producer_kind != 'registry')
                 ):
                     raise PostgresDeployError()
             except (ValueError, TypeError, AttributeError):
                 raise PostgresDeployError() from None
             with self.mutex:
                 self._require_current_config()
-                if self.operation is not None and not self.operation.finished.is_set():
+                if self.operation is not None and (
+                    not self.operation.finished.is_set()
+                    or (current_state and self.operation.thread.is_alive())
+                ):
                     raise PostgresDeployError()
+                if current_state and self.operation is not None:
+                    prior = self.config.journal.read()
+                    if (prior is None or prior.operation_id != self.operation.operation_id
+                        or prior.terminal_result not in {'committed', 'aborted', 'failed'}
+                        or self.config.journal.bound_plan(prior.operation_id) != self.operation.plan):
+                        raise PostgresDeployError()
                 effects = LinuxEffects(self.config)
+                if diagnostic:
+                    return {'source_identity_diagnostic': effects.diagnose_source_identity(
+                        operation_id, revision, image_digest, selected,
+                        cleanup_only=data['cleanup_only'],
+                    )}
                 receipt = (
                     effects.persist_source_identity(
                         operation_id, revision, image_digest, selected, producer_kind,
+                        **({'current_state': True, 'cleanup_only': data['cleanup_only']}
+                           if current_state else {}),
                     )
                     if producer_kind == 'registry'
                     else effects.persist_source_identity(
@@ -4445,6 +4622,7 @@ def rpc(channel: str, request: dict[str, Any]) -> dict[str, Any]:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(
             7260 if request.get('action') == 'source-identity-persist'
+            else 600 if request.get('action') == 'source-identity-diagnose'
             else 170 if request.get('action') in {'karakeep-acquire', 'karakeep-project'}
             else 35
         )
@@ -4598,6 +4776,7 @@ class SshDeployRemote:
     def persist_source_identity(
         self, operation_id: str, revision: str, image_digest: str,
         selected: AuthorityCutover, producer_kind: str = 'vault-alpha',
+        *, current_state: bool = False, cleanup_only: bool = False,
     ) -> dict[str, Any]:
         """Invoke the fixed DEV/TEST source-persistence RPC."""
         from app.ops.native_source_identity_persistence import validate_receipt
@@ -4609,6 +4788,9 @@ class SshDeployRemote:
                 or re.fullmatch(r'[0-9a-f]{40}', revision) is None
                 or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
                 or producer_kind not in {'vault-alpha', 'registry'}
+                or type(current_state) is not bool or type(cleanup_only) is not bool
+                or (current_state and producer_kind != 'registry')
+                or (cleanup_only and not current_state)
             ):
                 raise PostgresDeployError()
         except (ValueError, TypeError, AttributeError):
@@ -4616,7 +4798,7 @@ class SshDeployRemote:
         channel = self.host.removeprefix('ygg-')
         if channel not in {'dev', 'test'}:
             raise PostgresDeployError()
-        payload = {
+        payload: dict[str, Any] = {
             'action': 'source-identity-persist',
             'operation_id': operation_id,
             'revision': revision,
@@ -4629,6 +4811,8 @@ class SshDeployRemote:
         }
         if producer_kind == 'registry':
             payload['producer_kind'] = producer_kind
+        if current_state:
+            payload.update(source_mode='current-state', cleanup_only=cleanup_only)
         result = subprocess.run(
             ['ssh', '-o', 'BatchMode=yes', '--', self.host, 'sudo', '-n',
              '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', channel],
@@ -4652,6 +4836,44 @@ class SshDeployRemote:
                     and 'producer_kind' in receipt
                 )
             ):
+                raise PostgresDeployError()
+            return receipt
+        except Exception:
+            raise PostgresDeployError() from None
+
+    def diagnose_source_identity(
+        self, operation_id: str, revision: str, image_digest: str,
+        selected: AuthorityCutover, *, cleanup_only: bool = False,
+    ) -> dict[str, Any]:
+        from app.ops.native_source_identity_diagnostics import validate_source_receipt
+
+        try:
+            selected.validate()
+            channel = self.host.removeprefix('ygg-')
+            if (channel not in {'dev', 'test'} or str(UUID(operation_id)) != operation_id
+                or re.fullmatch(r'[0-9a-f]{40}', revision) is None
+                or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
+                or type(cleanup_only) is not bool):
+                raise PostgresDeployError()
+            payload = {
+                'action': 'source-identity-diagnose', 'operation_id': operation_id,
+                'revision': revision, 'image_digest': image_digest,
+                'source_mode': 'current-state', 'cleanup_only': cleanup_only,
+                'authority_cutover': {'binding_id': selected.binding_id, 'root': selected.root,
+                                      'ownership_root': selected.ownership_root},
+            }
+            result = subprocess.run(
+                ['ssh', '-o', 'BatchMode=yes', '--', self.host, 'sudo', '-n',
+                 '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', channel],
+                input=json.dumps(payload) + '\n', text=True, capture_output=True, check=False,
+            )
+            if result.returncode or len(result.stdout) > 16384:
+                raise PostgresDeployError()
+            response = json.loads(result.stdout)
+            if set(response) != {'source_identity_diagnostic'}:
+                raise PostgresDeployError()
+            receipt = validate_source_receipt(response['source_identity_diagnostic'])
+            if receipt['channel'] != channel or receipt['revision'] != revision:
                 raise PostgresDeployError()
             return receipt
         except Exception:

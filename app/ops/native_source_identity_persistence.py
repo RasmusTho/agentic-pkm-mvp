@@ -345,6 +345,7 @@ def _receipt(
 
 def run_registry_persistence(
     *, operation_id: str, channel: str, revision: str, vault_root: Path,
+    current_state: bool = False,
 ) -> dict[str, Any]:
     """Run the exact ordinary-registry metadata phase under live authority."""
     from app.events.topic_schema_registry import validate_topic_payload
@@ -376,6 +377,14 @@ def run_registry_persistence(
                 for observation in observations
             )
             admitted_content = _registry_semantic_fingerprints(root, observations)
+            if current_state:
+                _admit_registry_selection(root, observations)
+                # Full selection and policy, not a prior diagnostic's counts,
+                # authorizes the ordinary producer at its actual effect fence.
+                fresh_policy, fresh_observations = _registry_plan(root)
+                if before_policy != fresh_policy or observations != fresh_observations:
+                    raise SourceIdentityPersistenceRefusal('source_operation_conflict')
+                _admit_registry_selection(root, fresh_observations)
             for observation in observations:
                 payload = ingest_vault_changed_payload(
                     vault_root=root,
@@ -429,6 +438,36 @@ def run_registry_persistence(
         operation_id, channel, revision, inventory,
         producer_kind="registry", reason=reason,
     )
+
+
+def _admit_registry_selection(root: Path, observations: tuple[RegistryIngestObservation, ...]) -> None:
+    """Read the whole fixed selection before any ordinary metadata effect."""
+    from app.knowledge.profile_authority_store import is_profile_note_source_read_only
+    from app.knowledge.write_ops import read_recovery_snapshot_relative
+    from app.rebuildability.product_total_loss import parse_bounded_frontmatter
+    from app.services.note_uuid import is_read_only_derived_artifact
+
+    inventory = registry_identity_inventory(root, observations)
+    if inventory.invalid_count or inventory.ambiguous_count:
+        raise SourceIdentityPersistenceRefusal('source_identity_ineligible')
+    claims: set[str] = set()
+    for observation in observations:
+        relative = observation.path.relative_to(root).as_posix()
+        raw, _identity = read_recovery_snapshot_relative(relative, vault_root=root)
+        metadata, _body, error = parse_bounded_frontmatter(raw)
+        declared = metadata.get('uuid')
+        alternate = metadata.get('id')
+        if (error is not None or is_profile_note_source_read_only(root, relative, _canonical_uuid(declared))
+            or is_read_only_derived_artifact(metadata)):
+            raise SourceIdentityPersistenceRefusal('source_identity_ineligible')
+        if (declared not in (None, '') and _canonical_uuid(declared) is None
+            or alternate not in (None, '', declared)):
+            raise SourceIdentityPersistenceRefusal('source_identity_ineligible')
+        if declared not in (None, ''):
+            identity = _canonical_uuid(declared)
+            if identity in claims:
+                raise SourceIdentityPersistenceRefusal('source_identity_ambiguous')
+            claims.add(str(identity))
 
 
 def run_ordinary_persistence(
@@ -515,16 +554,18 @@ def run_ordinary_persistence(
 
 def worker_main(argv: list[str]) -> int:
     """Private container entrypoint; stdout is one validated fixed receipt."""
-    if len(argv) not in {4, 5}:
+    if len(argv) not in {4, 5, 6}:
         return 78
     operation_id, channel, revision, root_value, *kind_value = argv
     producer_kind = kind_value[0] if kind_value else "vault-alpha"
+    current_state = len(kind_value) == 2 and kind_value[1] == 'current-state'
     try:
         if (
             str(UUID(operation_id)) != operation_id
             or channel not in {"dev", "test"}
             or re.fullmatch(r"[0-9a-f]{40}", revision) is None
             or producer_kind not in PRODUCER_KINDS
+            or (len(kind_value) == 2 and (not current_state or producer_kind != 'registry'))
         ):
             return 78
     except (ValueError, TypeError, AttributeError):
@@ -553,6 +594,7 @@ def worker_main(argv: list[str]) -> int:
                     run_registry_persistence(
                         operation_id=operation_id, channel=channel,
                         revision=revision, vault_root=root,
+                        **({'current_state': True} if current_state else {}),
                     )
                     if producer_kind == "registry"
                     else run_ordinary_persistence(
