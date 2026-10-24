@@ -778,12 +778,38 @@ class CoreFlow:
                     and response.request.method == "GET"
                 ),
                 timeout=self.d["request_ms"],
-            ):
+            ) as query_response:
                 search.fill(phrase)
+            response = query_response.value
+            if not response.ok:
+                raise AssertionError("filtered_query_response_failed")
+            try:
+                query_payload = response.json()
+            except (TypeError, ValueError) as exc:
+                raise AssertionError("filtered_query_response_invalid") from exc
+            if not isinstance(query_payload, dict):
+                raise AssertionError("filtered_query_response_invalid")
+            returned_notes = [
+                note for note in query_payload.get("notes", []) if isinstance(note, dict)
+            ]
+            returned_paths = {
+                str(note.get("note_path") or note.get("path") or "")
+                for note in returned_notes
+            }
+            if expected_path not in returned_paths:
+                raise AssertionError("body_phrase_not_found_in_query_response")
+            query_note = next(
+                note
+                for note in returned_notes
+                if str(note.get("note_path") or note.get("path") or "") == expected_path
+            )
             item = page.locator(
                 '[data-testid="vault-browser-list"] li[data-note-path]'
             ).filter(has_text=expected_path).first
             item.wait_for(state="visible")
+            query_title = str(query_note.get("title") or "").strip()
+            if query_title and query_title not in item.inner_text():
+                raise AssertionError("filtered_query_result_not_rendered")
             if phrase.casefold() in item.inner_text().casefold():
                 raise AssertionError("search_phrase_is_not_body_only")
             # selectNote() submits the existing note_path form, which is also

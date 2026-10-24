@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -1139,7 +1140,10 @@ def test_search_and_open_note_uses_visible_browser_admission_and_tree_expansion(
     os.environ.get("COMPANION_UI_BROWSER_TESTS") != "1",
     reason="Set COMPANION_UI_BROWSER_TESTS=1 for the offline actual-UI navigation proof.",
 )
-def test_narrow_search_waits_for_query_response_before_opening_result(tmp_path: Path) -> None:
+@pytest.mark.parametrize("filtered_status", [200, 503])
+def test_narrow_search_waits_for_successful_query_response_before_opening_result(
+    tmp_path: Path, filtered_status: int,
+) -> None:
     from playwright.sync_api import sync_playwright
     from companion_ui.workspace.serve_dev_page import render_index_html, vendor_static_assets
     from tests.companion_ui.browser_runtime_harness import install_offline_esm_routes
@@ -1150,11 +1154,14 @@ def test_narrow_search_waits_for_query_response_before_opening_result(tmp_path: 
     note_path = "Inbox/captured-note.md"
     note_uuid = "22222222-2222-4222-8222-222222222222"
     d["capture_note_uuid"] = note_uuid
-    note = {"path": note_path, "title": "Unrelated title"}
+    note = {"path": note_path, "title": "Body-only result"}
+    initial_note = {
+        "note_path": note_path,
+        "title": "Unrelated title",
+        "uuid": note_uuid,
+    }
     fields = _workspace_fields() | {
-        "vault_browser_notes": [
-            {"note_path": note_path, "title": note["title"], "uuid": note_uuid}
-        ],
+        "vault_browser_notes": [initial_note],
         "vault_browser_identity_available": True,
         "vault_browser_total_notes": 1,
         "vault_browser_filtered_notes": 1,
@@ -1169,7 +1176,7 @@ def test_narrow_search_waits_for_query_response_before_opening_result(tmp_path: 
         fields=fields | {"body": f"# Note\n\n{phrase}"},
     )
     admissions: list[bool] = []
-    observed_requests: list[tuple[str, str, str]] = []
+    observed_requests: list[dict[str, str]] = []
     assets = vendor_static_assets()
 
     with sync_playwright() as playwright:
@@ -1182,7 +1189,15 @@ def test_narrow_search_waits_for_query_response_before_opening_result(tmp_path: 
             def intercepted(route: Any) -> None:
                 request = route.request
                 target = urlparse(request.url)
-                observed_requests.append((request.method, target.netloc, target.path))
+                observed_requests.append(
+                    {
+                        "method": request.method,
+                        "url": request.url,
+                        "origin": f"{target.scheme}://{target.netloc}",
+                        "path": target.path,
+                        "query": target.query,
+                    }
+                )
                 if request.method != "GET":
                     route.abort()
                 elif target.scheme == "http":
@@ -1198,7 +1213,15 @@ def test_narrow_search_waits_for_query_response_before_opening_result(tmp_path: 
                         body = json.dumps({"notes": [note], "vault_identity": {}})
                     else:
                         content_type, body = "application/json", "{}"
-                    route.fulfill(status=200, content_type=content_type, body=body)
+                    response_status = (
+                        filtered_status
+                        if target.path == "/api/companion/vault/notes"
+                        and parse_qs(target.query).get("q") == [phrase]
+                        else 200
+                    )
+                    if response_status in {200, 503} and target.path == "/api/companion/vault/notes":
+                        time.sleep(0.05)
+                    route.fulfill(status=response_status, content_type=content_type, body=body)
                 else:
                     route.fallback()
 
@@ -1212,16 +1235,47 @@ def test_narrow_search_waits_for_query_response_before_opening_result(tmp_path: 
                 "artifact": {"artifact_id": note_uuid}
             }
             runner._admit_navigation = lambda: admissions.append(True) or {}
-            runner._search_and_open_note(page, phrase, note_path)
-            assert parse_qs(urlparse(page.url).query)["note_path"] == [note_path]
-            assert page.get_by_test_id("workspace-note-rendered").is_visible()
-            assert len(admissions) == 2
+            if filtered_status == 200:
+                runner._search_and_open_note(page, phrase, note_path)
+                assert parse_qs(urlparse(page.url).query)["note_path"] == [note_path]
+                assert page.get_by_test_id("workspace-note-rendered").is_visible()
+                assert len(admissions) == 2
+            else:
+                with pytest.raises(AssertionError, match="filtered_query_response_failed"):
+                    runner._search_and_open_note(page, phrase, note_path)
+                assert len(admissions) == 1
             assert observed_requests
             assert {
-                netloc
-                for _method, netloc, _path in observed_requests
-                if netloc
-            } <= {"127.0.0.1:8111", "127.0.0.1:18001"}
+                request["origin"]
+                for request in observed_requests
+                if request["origin"]
+            } <= {"http://127.0.0.1:8111", "http://127.0.0.1:18001"}
+            observation_path = os.environ.get("COMPANION_UI_NETWORK_OBSERVATION_PATH")
+            if observation_path and filtered_status == 200:
+                Path(observation_path).write_text(
+                    json.dumps(
+                        {
+                            "schema": "issue-6321.browser-network-observation.v2",
+                            "observed_at": datetime.now(timezone.utc).isoformat().replace(
+                                "+00:00", "Z"
+                            ),
+                            "capture": {
+                                "test": (
+                                    "tests/companion_ui/test_live_core_flow_contract.py::"
+                                    "test_narrow_search_waits_for_successful_query_response_before_opening_result[200]"
+                                ),
+                                "viewport_css_px": [700, 900],
+                                "response_delay_ms": 50,
+                            },
+                            "allowed_origins": ["http://127.0.0.1:8111"],
+                            "cross_origin_request_count": 0,
+                            "observed_requests": observed_requests,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
         finally:
             browser.close()
 
