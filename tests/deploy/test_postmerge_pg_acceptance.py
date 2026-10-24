@@ -330,7 +330,9 @@ def test_candidate_resources_and_imports_match_admitted_image(tmp_path, monkeypa
         'operation-id',
     ],
 )
-def test_recovery_cannot_reuse_smoke_only_or_foreign_profile_evidence(tmp_path, field, value):
+def test_recovery_cannot_reuse_smoke_only_or_foreign_profile_evidence(tmp_path, field, value, monkeypatch):
+    dispatches = []
+    monkeypatch.setattr(driver, 'dispatch_verdict', lambda *_args: pytest.fail('unmocked GitHub dispatch'))
     sha, operation_id = 'a' * 40, str(uuid4())
     plan = DeployPlan('dev', sha, ('db', 'api'), ('postgres-db', 'postgres-api'), image_digest=DIGEST, automatic=True)
     smoke = DeployReceipt(operation_id, 'dev', 'deploy', 'committed', 'committed')
@@ -356,8 +358,12 @@ def test_recovery_cannot_reuse_smoke_only_or_foreign_profile_evidence(tmp_path, 
     driver._save_outcome(state / 'postmerge-dev-test.json', candidate, outcome)
     assert driver.poll(state, build=lambda: 123, load=lambda _run: candidate,
                        deploy=lambda *_args: pytest.fail('foreign PG result advanced test'),
+                       dispatch=lambda sent_candidate, evidence: dispatches.append((sent_candidate, dict(evidence))),
                        alert=lambda _evidence: None) == 0
-    assert json.loads((state / 'postmerge-dev-test.json').read_text())['phase'] == 'failed'
+    assert dispatches == [(candidate, {'result': 'refused', 'reason': 'dev_deploy_failed', 'dispatch': 'started'})]
+    checkpoint = json.loads((state / 'postmerge-dev-test.json').read_text())
+    assert checkpoint['phase'] == 'failed'
+    assert checkpoint['heavy'] == {'result': 'refused', 'reason': 'dev_deploy_failed', 'dispatch': 'sent'}
 
 
 def test_interrupted_cleanup_preserves_other_channel_resources(tmp_path, monkeypatch):
