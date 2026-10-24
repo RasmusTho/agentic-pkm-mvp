@@ -633,7 +633,9 @@ def test_test_preparation_producer_holds_window_until_explicit_initializer(tmp_p
     for name in ('.gitignore', 'docker-compose.yaml', 'pyproject.toml'):
         shutil.copyfile(source / name, candidate / name)
     git_env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-    git_env |= {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
+    git_env |= {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'}
+    # Repeated real CLI processes can reuse this candidate's ignored bytecode.
+    git_env.pop('PYTHONDONTWRITEBYTECODE', None)
     for arguments in (['init', '-q'], ['add', '.'], ['-c', 'user.name=Fixture', '-c',
         'user.email=fixture@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'isolated candidate']):
         subprocess.run(['git', *arguments], cwd=candidate, env=git_env, check=True, capture_output=True)
