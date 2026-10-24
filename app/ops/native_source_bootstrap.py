@@ -178,10 +178,14 @@ def wait_for_owned_child(argv: list[str], *, timeout: float) -> int:
 
 def quiesce_owned_container(channel: str, name: str, operation: str, revision: str, *,
                             observe_terminal: Callable[[int, bool], None] | None = None,
-                            docker_command: Callable[..., str] | None = None) -> bool:
+                            docker_command: Callable[..., str] | None = None,
+                            expected_image: str | None = None) -> bool:
     """Prove absence/stoppage of only this operation's Docker API one-shot."""
     if (
-        channel not in {'dev', 'test', 'prod'}
+        (expected_image is not None and re.fullmatch(
+            r'ghcr\.io/rasmustho/pkm-app:[0-9a-f]{40}@sha256:[0-9a-f]{64}', expected_image,
+        ) is None)
+        or channel not in {'dev', 'test', 'prod'}
         or re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', operation) is None
         or re.fullmatch(r'[0-9a-f]{40}', revision) is None
         or name not in {
@@ -224,6 +228,8 @@ def quiesce_owned_container(channel: str, name: str, operation: str, revision: s
             '/' + name, 'pkm-' + channel, 'api', 'True', operation, revision,
         ]:
             raise ValueError('source ownership invalid')
+        if expected_image is not None and docker('inspect', '--format', '{{.Config.Image}}', cid) != expected_image:
+            raise ValueError('source image ownership invalid')
         return fields[6]
 
     try:

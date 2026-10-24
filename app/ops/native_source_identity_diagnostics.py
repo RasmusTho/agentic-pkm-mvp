@@ -7,7 +7,7 @@ only public output is a fixed aggregate receipt.
 """
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
@@ -19,8 +19,9 @@ import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 REQUEST_CONTRACT = "native-source-identity-database-witness-request.v1"
@@ -33,6 +34,8 @@ MAX_REQUEST_BYTES = 64 * 1024
 MAX_PRIVATE_FRAME_BYTES = 128 * 1024
 MAX_RECEIPT_BYTES = 16 * 1024
 MAX_OBSERVATIONS = 4096
+WITNESS_FILE_CONTRACT = "native-source-identity-witness-file.v1"
+MAX_WITNESS_FRAME_BYTES = 512 * 1024
 COUNT_FIELDS = (
     "selected_count",
     "product_filesystem_complete_count",
@@ -659,6 +662,16 @@ def validate_source_receipt(payload: Any) -> dict[str, Any]:
         *SOURCE_COUNT_FIELDS, *COUNT_FIELDS,
     }
     if (
+        isinstance(payload, dict) and set(payload) == required
+        and payload.get('contract') == SOURCE_RECEIPT_CONTRACT
+        and _valid_channel_revision(payload.get('channel'), payload.get('revision'))
+        and payload.get('terminal_state') == 'refused'
+        and payload.get('reason') == 'database_witness_refused'
+        and all(type(payload[key]) is int and payload[key] == 0
+                for key in (*SOURCE_COUNT_FIELDS, *COUNT_FIELDS))
+    ):
+        return payload
+    if (
         not isinstance(payload, dict)
         or set(payload) != required
         or payload.get("contract") != SOURCE_RECEIPT_CONTRACT
@@ -701,6 +714,8 @@ def _run_bounded_status(
     input_bytes: bytes,
     max_output_bytes: int,
     timeout_seconds: float = 120.0,
+    environment: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> tuple[int, bytes]:
     """Run one child while retaining at most the explicit stdout bound."""
     process = subprocess.Popen(
@@ -709,6 +724,8 @@ def _run_bounded_status(
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
+        env=environment,
+        cwd=cwd,
     )
     output = bytearray()
     exceeded = threading.Event()
@@ -768,14 +785,18 @@ def _run_bounded_child(
     input_bytes: bytes,
     max_output_bytes: int,
     timeout_seconds: float = 120.0,
+    environment: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> bytes:
     returncode, output = _run_bounded_status(
         argv,
         input_bytes=input_bytes,
         max_output_bytes=max_output_bytes,
         timeout_seconds=timeout_seconds,
+        environment=environment,
+        cwd=cwd,
     )
-    if returncode != 0:
+    if returncode != 0 or len(output) > max_output_bytes:
         raise SourceIdentityDiagnosticRefusal("database_witness_refused")
     return output
 
@@ -794,12 +815,16 @@ def _assert_owned_container_absent(name: str) -> None:
         raise SourceIdentityDiagnosticRefusal("database_witness_refused")
 
 
-def _cleanup_owned_container(name: str, owner_token: str) -> None:
+def _cleanup_owned_container(name: str, owner_token: str, *, expected_image: str | None = None) -> None:
     if re.fullmatch(r"[0-9a-f]{32}", owner_token) is None:
         raise SourceIdentityDiagnosticRefusal("database_witness_refused")
     inspect_format = (
         f'{{{{.Id}}}}\t{{{{ index .Config.Labels "{OWNER_LABEL}" }}}}'
     )
+    if expected_image is not None:
+        if not _immutable_image_reference(expected_image):
+            raise SourceIdentityDiagnosticRefusal("database_witness_refused")
+        inspect_format += '\t{{.Config.Image}}'
     returncode, ownership = _run_bounded_status(
         (
             "docker", "container", "inspect", "--format",
@@ -813,7 +838,10 @@ def _cleanup_owned_container(name: str, owner_token: str) -> None:
         _assert_owned_container_absent(name)
         return
     try:
-        container_id_raw, observed_owner = ownership.strip().split(b"\t", 1)
+        fields = ownership.strip().split(b"\t")
+        if len(fields) != (3 if expected_image is not None else 2):
+            raise ValueError
+        container_id_raw, observed_owner = fields[:2]
         container_id = container_id_raw.decode("ascii")
     except Exception:
         raise SourceIdentityDiagnosticRefusal("database_witness_refused") from None
@@ -821,6 +849,7 @@ def _cleanup_owned_container(name: str, owner_token: str) -> None:
         returncode != 0
         or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
         or observed_owner != owner_token.encode("ascii")
+        or (expected_image is not None and fields[2] != expected_image.encode('ascii'))
     ):
         raise SourceIdentityDiagnosticRefusal("database_witness_refused")
     remove_returncode, _output = _run_bounded_status(
@@ -949,6 +978,8 @@ def _prove_same_witness_image(
     compose_prefix: tuple[str, ...],
     *,
     child_runner: Callable[..., bytes],
+    require_file_delivery: bool = False,
+    expected_witness_image: str | None = None,
 ) -> None:
     source_id = child_runner(
         ("docker", "image", "inspect", "--format", "{{.Id}}", source_image),
@@ -969,6 +1000,19 @@ def _prove_same_witness_image(
         raise SourceIdentityDiagnosticRefusal("database_witness_refused") from None
     if not isinstance(witness_image, str) or not _immutable_image_reference(witness_image):
         raise SourceIdentityDiagnosticRefusal("database_witness_refused")
+    if require_file_delivery and (
+        witness_image != expected_witness_image
+        or witness_service.get('read_only') is not True
+        or witness_service.get('tmpfs') != ['/tmp:size=16m,mode=1777']
+        or witness_service.get('cap_drop') != ['ALL']
+        or witness_service.get('security_opt') != ['no-new-privileges:true']
+        or witness_service.get('restart', 'no') not in {'', 'no'}
+        or any(witness_service.get(key) for key in (
+            'volumes', 'secrets', 'configs', 'devices', 'privileged',
+            'network_mode', 'pid', 'ipc', 'cap_add',
+        ))
+    ):
+        raise SourceIdentityDiagnosticRefusal('database_witness_refused')
     witness_id = child_runner(
         ("docker", "image", "inspect", "--format", "{{.Id}}", witness_image),
         input_bytes=b"",
@@ -1003,6 +1047,11 @@ def run_production_diagnostic(
     child_runner: Callable[..., bytes] = _run_bounded_child,
     container_absence: Callable[[str], None] = _assert_owned_container_absent,
     container_cleanup: Callable[[str, str], None] = _cleanup_owned_container,
+    source_environment: dict[str, str] | None = None,
+    effect_guard: Callable[[], None] | None = None,
+    owner_token: str | None = None,
+    witness_password: str | None = None,
+    witness_database_url: str | None = None,
 ) -> dict[str, Any]:
     """Coordinate source prepare, DB witness, and exact source re-fence."""
     if (
@@ -1015,22 +1064,26 @@ def run_production_diagnostic(
     )
     _prove_same_witness_image(
         source_image, compose_prefix, child_runner=child_runner,
+        require_file_delivery=witness_password is not None,
+        expected_witness_image=(source_image.rsplit('@', 1)[0] + ':' + revision + '@' + source_image.rsplit('@', 1)[-1]
+                                if witness_password is not None else None),
     )
     names = {
         "prepare": f"pkm-source-id-prepare-{revision[:12]}",
         "witness": f"pkm-source-id-witness-{revision[:12]}",
         "finalize": f"pkm-source-id-finalize-{revision[:12]}",
     }
-    owner_token = secrets.token_hex(16)
-    source_environment = _closed_source_environment(
-        dict(os.environ), container_source_root=container_source_root,
+    owner_token = owner_token or secrets.token_hex(16)
+    closed_source_environment = _closed_source_environment(
+        dict(os.environ) if source_environment is None else source_environment,
+        container_source_root=container_source_root,
     )
     source_prepare_argv = source_observation_run_argv(
         mode="source-prepare",
         source_image=source_image,
         source_root=source_root,
         container_source_root=container_source_root,
-        source_environment=source_environment,
+        source_environment=closed_source_environment,
         channel=channel,
         revision=revision,
         container_name=names["prepare"],
@@ -1041,7 +1094,7 @@ def run_production_diagnostic(
         source_image=source_image,
         source_root=source_root,
         container_source_root=container_source_root,
-        source_environment=source_environment,
+        source_environment=closed_source_environment,
         channel=channel,
         revision=revision,
         container_name=names["finalize"],
@@ -1053,6 +1106,8 @@ def run_production_diagnostic(
         )
     container_absence(names["prepare"])
     try:
+        if effect_guard is not None:
+            effect_guard()
         prepare_raw = child_runner(
             source_prepare_argv,
             input_bytes=b"",
@@ -1062,7 +1117,7 @@ def run_production_diagnostic(
         container_cleanup(names["prepare"], owner_token)
     try:
         prepare = _validate_source_prepare(
-            json.loads(prepare_raw), channel=channel, revision=revision,
+            json.loads(prepare_raw, object_pairs_hook=_unique_json_object), channel=channel, revision=revision,
         )
         request_raw = json.dumps(
             prepare["request"], sort_keys=True, separators=(",", ":"),
@@ -1073,19 +1128,29 @@ def run_production_diagnostic(
         raise SourceIdentityDiagnosticRefusal("database_witness_refused") from None
     container_absence(names["witness"])
     try:
+        if effect_guard is not None:
+            effect_guard()
+        witness_argv = database_witness_compose_argv(
+            compose_prefix, container_name=names["witness"], owner_token=owner_token,
+            bind_database=witness_password is not None,
+        )
+        if witness_password is not None:
+            image_digest = source_image.rsplit('@', 1)[-1]
+            request_raw = _witness_file_frame(
+                prepare['request'], witness_password, channel=channel,
+                revision=revision, image_digest=image_digest, database_url=witness_database_url,
+            )
+            witness_argv += ('python', '-m', 'app.ops.native_source_identity_diagnostics',
+                             'database-witness-file', channel, revision, image_digest)
         database_raw = child_runner(
-            database_witness_compose_argv(
-                compose_prefix,
-                container_name=names["witness"],
-                owner_token=owner_token,
-            ),
+            witness_argv,
             input_bytes=request_raw,
             max_output_bytes=MAX_RECEIPT_BYTES,
         )
     finally:
         container_cleanup(names["witness"], owner_token)
     try:
-        database_receipt = validate_receipt(json.loads(database_raw))
+        database_receipt = validate_receipt(json.loads(database_raw, object_pairs_hook=_unique_json_object))
         finalize_input = json.dumps(
             {"prepare": prepare, "database_receipt": database_receipt},
             sort_keys=True,
@@ -1097,6 +1162,8 @@ def run_production_diagnostic(
         raise SourceIdentityDiagnosticRefusal("database_witness_refused") from None
     container_absence(names["finalize"])
     try:
+        if effect_guard is not None:
+            effect_guard()
         final_raw = child_runner(
             source_finalize_argv,
             input_bytes=finalize_input,
@@ -1105,7 +1172,7 @@ def run_production_diagnostic(
     finally:
         container_cleanup(names["finalize"], owner_token)
     try:
-        return validate_source_receipt(json.loads(final_raw))
+        return validate_source_receipt(json.loads(final_raw, object_pairs_hook=_unique_json_object))
     except Exception:
         raise SourceIdentityDiagnosticRefusal("database_witness_refused") from None
 
@@ -1115,10 +1182,12 @@ def database_witness_compose_argv(
     *,
     container_name: str | None = None,
     owner_token: str | None = None,
+    bind_database: bool = False,
 ) -> tuple[str, ...]:
     """Build the only supported ephemeral database-witness invocation."""
     if (
-        len(compose_prefix) < 2
+        type(bind_database) is not bool
+        or len(compose_prefix) < 2
         or compose_prefix[:2] != ("docker", "compose")
         or (
             container_name is not None
@@ -1140,11 +1209,117 @@ def database_witness_compose_argv(
         "-T",
         *(("--name", container_name) if container_name is not None else ()),
         *(("--label", f"{OWNER_LABEL}={owner_token}") if owner_token is not None else ()),
+        *(("-e", "DATABASE_URL", "-e", "DB_DSN") if bind_database else ()),
+        *(tuple(item for key in ('POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE')
+                for item in ('-e', key + '=')) if bind_database else ()),
         DATABASE_WITNESS_SERVICE,
     )
 
 
+def _witness_file_frame(request: Any, password: str, *, channel: str,
+                        revision: str, image_digest: str, database_url: str | None) -> bytes:
+    from app.config.database import credential_free_database_fields
+
+    _validate_request(request, channel=channel, revision=revision)
+    if not isinstance(database_url, str) or not database_url:
+        raise SourceIdentityDiagnosticRefusal('database_witness_refused')
+    database_fields = credential_free_database_fields(database_url)
+    if not all(database_fields.get(key) for key in ('host', 'port', 'dbname', 'user')):
+        raise SourceIdentityDiagnosticRefusal('database_witness_refused')
+    if (not _valid_channel_revision(channel, revision)
+            or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
+            or not isinstance(password, str) or not password
+            or len(password.encode('utf-8')) > 65536
+            or not all(char.isprintable() for char in password)):
+        raise SourceIdentityDiagnosticRefusal('database_witness_refused')
+    raw = json.dumps({'contract': WITNESS_FILE_CONTRACT, 'channel': channel,
+                      'revision': revision, 'image_digest': image_digest,
+                      'request': request, 'password': password, 'database_url': database_url},
+                     sort_keys=True, separators=(',', ':')).encode('utf-8')
+    if len(raw) > MAX_WITNESS_FRAME_BYTES:
+        raise SourceIdentityDiagnosticRefusal('database_witness_refused')
+    return raw
+
+
+@contextmanager
+def _witness_password_file(password: str) -> Iterator[None]:
+    """The already-declared witness tmpfs is the only credential file carrier."""
+    # Do not silently fall back to the image filesystem or a host mount.
+    mounts = [line.split() for line in Path('/proc/self/mountinfo').read_text().splitlines()]
+    if not any(len(row) > 7 and row[4] == '/tmp'
+               and row[row.index('-') + 1] == 'tmpfs' for row in mounts):
+        raise SourceIdentityDiagnosticRefusal('database_witness_refused')
+    directory = os.open('/tmp', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    path: str | None = None
+    try:
+        descriptor, path = tempfile.mkstemp(prefix='source-witness-', dir='/tmp')
+        try:
+            os.fchmod(descriptor, 0o600)
+            raw = password.encode('utf-8')
+            if os.write(descriptor, raw) != len(raw):
+                raise SourceIdentityDiagnosticRefusal('database_witness_refused')
+        finally:
+            os.close(descriptor)
+        os.environ['DATABASE_PASSWORD_FILE'] = path
+        yield
+    finally:
+        os.environ.pop('DATABASE_PASSWORD_FILE', None)
+        try:
+            if path is not None:
+                os.unlink(path)
+        finally:
+            os.close(directory)
+
+
+def _file_witness_main(channel: str, revision: str, image_digest: str) -> int:
+    receipt = _receipt(channel=channel, revision=revision, reason='database_witness_refused')
+    try:
+        # Refuse conflicting credential carriers before the closed environment
+        # drops them; a runtime password-file selector is replaced, never read.
+        if any(os.environ.get(key) for key in (
+            'PGPASSWORD', 'POSTGRES_PASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE',
+        )):
+            raise SourceIdentityDiagnosticRefusal('database_witness_refused')
+        from app.config.database import credential_free_database_fields
+        for key in ('DATABASE_URL', 'DB_DSN'):
+            if os.environ.get(key):
+                credential_free_database_fields(os.environ[key])
+        closed = closed_witness_environment(dict(os.environ))
+        os.environ.clear()
+        os.environ.update(closed)
+        os.environ['PKM_ENVIRONMENT'] = channel
+        raw = sys.stdin.buffer.read(MAX_WITNESS_FRAME_BYTES + 1)
+        if len(raw) > MAX_WITNESS_FRAME_BYTES:
+            raise SourceIdentityDiagnosticRefusal('database_witness_refused')
+        payload = json.loads(raw, object_pairs_hook=_unique_json_object)
+        if (not isinstance(payload, dict)
+                or set(payload) != {'contract', 'channel', 'revision', 'image_digest', 'request', 'password', 'database_url'}
+                or payload['contract'] != WITNESS_FILE_CONTRACT
+                or payload['channel'] != channel or payload['revision'] != revision
+                or payload['image_digest'] != image_digest):
+            raise SourceIdentityDiagnosticRefusal('database_witness_refused')
+        _witness_file_frame(payload['request'], payload['password'], channel=channel,
+                            revision=revision, image_digest=image_digest, database_url=payload['database_url'])
+        # Compose run must override both env-file aliases with the admitted
+        # snapshot. Validate the actual child environment before connecting;
+        # the envelope does not silently repair a wrong effective target.
+        expected_fields = credential_free_database_fields(payload['database_url'])
+        if any(not os.environ.get(key) or credential_free_database_fields(os.environ[key]) != expected_fields
+               for key in ('DATABASE_URL', 'DB_DSN')):
+            raise SourceIdentityDiagnosticRefusal('database_witness_refused')
+        with _witness_password_file(payload['password']):
+            receipt = run_database_witness(payload['request'], channel=channel, revision=revision)
+    except Exception:
+        receipt = _receipt(channel=channel, revision=revision, reason='database_witness_refused')
+    print(json.dumps(receipt, sort_keys=True, separators=(',', ':')))
+    return 0 if receipt['terminal_state'] == 'observed' else 78
+
+
 def worker_main(argv: list[str]) -> int:
+    if (len(argv) == 4 and argv[0] == 'database-witness-file'
+            and _valid_channel_revision(argv[1], argv[2])
+            and re.fullmatch(r'sha256:[0-9a-f]{64}', argv[3]) is not None):
+        return _file_witness_main(*argv[1:])
     if (
         len(argv) == 6
         and argv[0] == "coordinate"

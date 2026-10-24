@@ -560,6 +560,12 @@ def test_postgres_password_contract_is_file_only_and_consumer_set_is_closed() ->
         contract.binding_for("postgres.password")
     with pytest.raises(UndeclaredSecretConsumerError):
         contract.file_binding(channel="dev", consumer="postgres-other", secret="postgres.password")
+    for channel in ('dev', 'test'):
+        assert contract.file_binding(channel=channel, consumer='postgres-source-witness',
+                                     secret='postgres.password') == (
+            'source-identity-db-witness', 'DATABASE_PASSWORD_FILE')
+    with pytest.raises(UndeclaredSecretConsumerError):
+        contract.file_binding(channel='prod', consumer='postgres-source-witness', secret='postgres.password')
 
 
 @pytest.mark.parametrize(
