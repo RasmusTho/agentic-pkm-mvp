@@ -372,10 +372,39 @@ colima_guest_log_containerd_identity() {
   printf 'yggdrasil-colima-restore containerd-pid-%s=%s\n' "$phase" "$pid"
 }
 
+colima_guest_set_docker_socket_access() {
+  local access="$1" socket="${COLIMA_DOCKER_SOCKET_PATH:-/var/run/docker.sock}"
+  case "$access" in closed|open) ;; *) _colima_runtime_fail docker-socket-access-mode-invalid; return 1;; esac
+  if ! python3 - "$socket" "$access" <<'PY'
+import os
+import stat
+import sys
+
+path, access = sys.argv[1:]
+if not os.path.exists(path):
+    # A stopped socket has no API surface to restrict.
+    sys.exit(0 if access == "closed" else "Docker socket is missing")
+if not stat.S_ISSOCK(os.stat(path).st_mode):
+    sys.exit("Docker socket path is not a Unix socket")
+mode = 0o600 if access == "closed" else 0o660
+os.chmod(path, mode)
+if stat.S_IMODE(os.stat(path).st_mode) != mode:
+    sys.exit("Docker socket permission transition did not persist")
+PY
+  then
+    _colima_runtime_fail docker-socket-access-mode-failed
+    return 1
+  fi
+}
+
 colima_guest_post_start() {
+  # A previous successful run may have left docker.socket open. Restrict it
+  # before any readiness probe so clients cannot observe a partial restore.
+  colima_guest_set_docker_socket_access closed || return 1
   colima_guest_readiness_gate || return 1
   colima_runtime_assert_inventory || return 1
-  colima_guest_log_containerd_identity after
+  colima_guest_log_containerd_identity after || return 1
+  colima_guest_set_docker_socket_access open
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
@@ -396,11 +425,14 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     --substrate) colima_guest_check_persistent_substrate || _colima_runtime_fail persistent-substrate-not-ready;;
     --guest) colima_guest_readiness_gate;;
     --docker-preflight)
+      colima_guest_set_docker_socket_access closed
       colima_guest_readiness_gate
       colima_guest_log_containerd_identity before
       ;;
+    --docker-api-close) colima_guest_set_docker_socket_access closed;;
     --post-start)
       if ! colima_guest_post_start; then
+        colima_guest_set_docker_socket_access closed || true
         systemctl --no-block stop docker.socket
         exit 1
       fi

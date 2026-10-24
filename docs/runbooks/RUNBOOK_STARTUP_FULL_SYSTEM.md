@@ -254,7 +254,10 @@ before interrupting the VM, including any BuilderOps control-plane services.
    `COLIMA_COLD_START_AUTHORIZED=1`, and `COLIMA_RUNTIME_APPLY=1`. The installer checks inactive
    units, persistently masks Docker/socket/containerd before atomically installing artifacts, verifies
    installed hashes and the new boundary units, and requests no restart. Masks survive interruption
-   and reboot. Its failure leaves the stopped services stopped. Keep Docker off until the
+   and reboot. Its failure leaves the stopped services stopped. The socket drop-in keeps Docker
+   group clients out at mode `0600` while dockerd restores containers and the helper compares exact
+   inventory. Only after exact ID equality passes does the helper open group access at `0660`; a
+   mismatch leaves the socket restricted and stops socket activation. Keep Docker off until the
    complete installed manifest has been verified. A partial installation is not an activation.
 5. Repeat the complete installer pass with `COLIMA_RUNTIME_ACTIVATE=1` to verify the manifest,
    unmask the three units, and verify the effective daemon units (failure remasks them). No service

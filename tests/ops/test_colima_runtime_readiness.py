@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
+import stat
 import subprocess
 import sys
 
@@ -185,12 +187,16 @@ def test_installed_units_fail_closed_until_exact_persistent_substrate_is_ready(
         SYSTEMD / "containerd.service.d/20-yggdrasil-persistent-substrate.conf"
     ).read_text()
     docker = (SYSTEMD / "docker.service.d/20-yggdrasil-containerd-readiness.conf").read_text()
+    docker_socket = (SYSTEMD / "docker.socket.d/20-yggdrasil-readiness.conf").read_text()
     assert "Requires=yggdrasil-colima-persistent-substrate.service" in containerd
     assert "ExecStartPre=" in containerd and "--substrate" in containerd
     assert "Requires=containerd.service" in docker
     assert (
-        "--docker-preflight" in docker and "ExecStartPost=" in docker and "--post-start" in docker
+        "--docker-api-close" in docker and "--docker-preflight" in docker
+        and "ExecStartPost=" in docker and "--post-start" in docker
+        and "ExecStopPost=" in docker
     )
+    assert "SocketMode=0600" in docker_socket and "SocketGroup=docker" in docker_socket
     assert "Restart=no" in containerd and "Restart=no" in docker
     assert "EnvironmentFile=/etc/yggdrasil/colima-runtime.env" in docker
 
@@ -338,17 +344,61 @@ def test_installer_streams_checked_in_units_only_after_host_gates(
 
 
 def test_post_start_failure_stops_socket_and_returns_failure(runtime: dict[str, str]) -> None:
+    socket_path = Path(runtime["TEST_CALLS"]).parent / "docker.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.close()
+    socket_path.chmod(0o660)
     result = subprocess.run(
         ["bash", str(HELPER), "--post-start"],
-        env={**runtime, "TEST_MODE": "truncated"},
+        env={**runtime, "TEST_MODE": "truncated", "COLIMA_DOCKER_SOCKET_PATH": str(socket_path)},
         capture_output=True,
         text=True,
         timeout=15,
         check=False,
     )
     assert result.returncode != 0
+    assert stat.S_IMODE(socket_path.stat().st_mode) == 0o600
     assert ["systemctl", "--no-block", "stop", "docker.socket"] in calls(runtime)
     assert not any("prune" in c or "rm" in c or "recreate" in c for c in calls(runtime))
+
+
+def test_post_start_opens_socket_only_after_exact_inventory_passes(runtime: dict[str, str]) -> None:
+    socket_path = Path(runtime["TEST_CALLS"]).parent / "docker.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.close()
+    socket_path.chmod(0o660)
+    result = subprocess.run(
+        ["bash", str(HELPER), "--post-start"],
+        env={**runtime, "COLIMA_DOCKER_SOCKET_PATH": str(socket_path)},
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(socket_path.stat().st_mode) == 0o660
+
+
+def test_docker_preflight_closes_a_previously_open_socket_before_containerd_probe(
+    runtime: dict[str, str],
+) -> None:
+    socket_path = Path(runtime["TEST_CALLS"]).parent / "docker.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.close()
+    socket_path.chmod(0o660)
+    result = subprocess.run(
+        ["bash", str(HELPER), "--docker-preflight"],
+        env={**runtime, "TEST_MODE": "ctr-down", "COLIMA_DOCKER_SOCKET_PATH": str(socket_path)},
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert stat.S_IMODE(socket_path.stat().st_mode) == 0o600
 
 
 def test_missing_explicit_resource_profile_refuses(runtime: dict[str, str], tmp_path: Path) -> None:

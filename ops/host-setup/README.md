@@ -129,8 +129,13 @@ established by that runbook; they are not evidence or permission by themselves.
 
 The guest image must already provide Python 3.9 or newer for the read-only inventory parser; the installer verifies it before writing or unmasking units and refuses an unsupported image. The guest resolves the data filesystem by UUID/LABEL/PARTUUID and verifies its filesystem type,
 read-write status, and exact `/docker` and `/containerd` bind roots. It never repairs or edits
-container metadata. Review resource allocation and usernet timeout with the actual host profile;
-do not apply example values as host authority. Required inventory includes stopped durable identities; terminal AutoRemove residue is separately accounted for only under the strict lifecycle and named-volume proof in the runbook. Malformed records refuse readiness. Reconcile the expected required persisted inventory when an
+container metadata. The `docker.socket` drop-in keeps the API socket root-only during startup; the
+helper opens Docker-group access only after the post-start check matches every required persisted ID
+with the daemon inventory. A mismatch leaves the socket restricted and stops socket activation.
+Review resource allocation and usernet timeout with the actual host profile; do not apply example
+values as host authority. Required inventory includes stopped durable identities; terminal AutoRemove
+residue is separately accounted for only under the strict lifecycle and named-volume proof in the
+runbook. Malformed records refuse readiness. Reconcile the expected required persisted inventory when an
 intentional container creation/removal changes it, before another cold start.
 
 The target storage is a persistent ext4 data filesystem backed directly by native host APFS

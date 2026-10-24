@@ -19,7 +19,7 @@ if ! command -v "$COLIMA_BIN" >/dev/null 2>&1; then
 fi
 
 echo "Colima readiness install plan: profile=${PROFILE} context=${COLIMA_DOCKER_CONTEXT:-colima}"
-echo "Artifacts: helper, mount producer, mount boundary, substrate unit, containerd drop-in, docker drop-in"
+echo "Artifacts: helper, mount producer, mount boundary, substrate unit, containerd drop-in, docker drop-in, docker socket drop-in"
 if [ "${COLIMA_RUNTIME_APPLY:-0}" = "1" ]; then
   echo "Mutation: enabled"
 else
@@ -118,6 +118,8 @@ install_guest_file_atomic "$HERE/systemd/containerd.service.d/20-yggdrasil-persi
   "$GUEST_SYSTEMD/containerd.service.d/20-yggdrasil-persistent-substrate.conf" 0644
 install_guest_file_atomic "$HERE/systemd/docker.service.d/20-yggdrasil-containerd-readiness.conf" \
   "$GUEST_SYSTEMD/docker.service.d/20-yggdrasil-containerd-readiness.conf" 0644
+install_guest_file_atomic "$HERE/systemd/docker.socket.d/20-yggdrasil-readiness.conf" \
+  "$GUEST_SYSTEMD/docker.socket.d/20-yggdrasil-readiness.conf" 0644
 install_guest_file_atomic "$RUNTIME_ENV_FILE" "$GUEST_CONFIG/colima-runtime.env" 0644
 
 _colima_runtime_bounded "${COLIMA_INSTALL_SSH_TIMEOUT_SECONDS:-30}" "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo systemctl daemon-reload
@@ -125,7 +127,7 @@ _colima_runtime_bounded "${COLIMA_INSTALL_SSH_TIMEOUT_SECONDS:-30}" "$COLIMA_BIN
 _colima_runtime_bounded 30 "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo systemd-analyze verify colima-data-mount.service yggdrasil-colima-persistent-substrate.service
 if [ "${COLIMA_RUNTIME_ACTIVATE:-0}" = 1 ]; then
   _colima_runtime_bounded 30 "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo systemctl unmask docker.service docker.socket containerd.service
-  if ! _colima_runtime_bounded 30 "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo systemd-analyze verify docker.service containerd.service; then
+  if ! _colima_runtime_bounded 30 "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo systemd-analyze verify docker.service docker.socket containerd.service; then
     _colima_runtime_bounded 30 "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo systemctl mask docker.service docker.socket containerd.service
     exit 1
   fi

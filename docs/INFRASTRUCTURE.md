@@ -225,12 +225,14 @@ policy.
 ### Colima persistent substrate readiness
 
 The checked-in installer at `ops/host-setup/mac-mini/install_colima_runtime_readiness.sh`
-installs the mount boundary, substrate gate, containerd dependency/time limits, and Docker
-pre-start and post-start gates. It defaults to a dry-run and never restarts a service. Installation
+installs the mount boundary, substrate gate, containerd dependency/time limits, Docker
+pre-start and post-start gates, and a restricted API socket. It defaults to a dry-run and never restarts a service. Installation
 requires inactive Docker/socket/containerd units; default-profile installation additionally requires
 an accepted isolated proof. Systemd refuses startup when configuration, mount identity, free
-blocks/inodes, containerd metadata, or inventory checks fail. Post-start failure stops socket
-activation and fails the Docker unit; containerd and the data mounts remain available for diagnosis.
+blocks/inodes, containerd metadata, or inventory checks fail. The Docker socket is root-only during
+restore and the exact inventory check; Docker-group access opens only after the IDs match. Post-start
+failure leaves the socket restricted, stops socket activation, and fails the Docker unit; containerd
+and the data mounts remain available for diagnosis.
 
 This mechanism concerns the Mac's local helper/development Docker engine. It does not qualify or
 operate Product channels on TARS. Follow the isolated proof and activation procedure in
