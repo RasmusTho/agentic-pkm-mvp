@@ -44,7 +44,7 @@ Changes to that validator require this exact owner document; an Issue-contract
 summary or unrelated governance document alone cannot satisfy the pairing.
 Mixed runtime/config changes still require the normal temporal owner writeback.
 
-The read-only CI selector, wait helper and stall classifier are paired with
+The CI selector, selection replay, scoped-test runner, wait helper and stall classifier are paired with
 `docs/development/TEST_STRATEGY_HOT_PATH.md`. Their changes describe Builder verification behavior;
 they do not require a Product status or roadmap edit. Each source still requires that exact paired
 document, and co-changed runtime/config sources retain their normal temporal writeback.

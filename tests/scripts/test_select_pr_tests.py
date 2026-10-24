@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import importlib.util
 import json
 import subprocess
 import sys
@@ -24,7 +26,9 @@ def test_read_only_ci_wait_helpers_select_covering_governance_contracts(path: st
 
     assert selection.full_suite is False
     assert selection.subsystems == ("governance",)
-    assert set(selector.GOVERNANCE_TARGETS) <= set(selection.targets)
+    assert set(selector.CI_CONTRACT_TARGETS) <= set(selection.targets)
+    assert "tests/architecture" not in selection.targets
+    assert "tests/scripts" not in selection.targets
     assert "tests/scripts/test_ci_stall_classifier.py" in selection.targets
     assert "tests/ops" not in selection.targets
     assert "tests/deploy" not in selection.targets
@@ -34,7 +38,7 @@ def test_ci_wait_with_selector_contract_changes_avoids_unrelated_ops_suite() -> 
     selection = select_tests(list(selector.CI_GOVERNANCE_CONTRACT_PATHS))
 
     assert selection.subsystems == ("governance",)
-    assert set(selector.GOVERNANCE_TARGETS) <= set(selection.targets)
+    assert set(selector.CI_CONTRACT_TARGETS) <= set(selection.targets)
     assert "tests/ops" not in selection.targets
 
 
@@ -369,10 +373,10 @@ def test_ci_smoke_workflow_change_selects_governance_contract_tests() -> None:
 
     assert selection.full_suite is False
     assert selection.subsystems == ("governance",)
-    assert selection.reason == "governance-only PR"
+    assert selection.reason == "CI contract-only PR"
     assert selection.unowned_paths == ()
     assert "tests/ops/test_ci_workflow.py" in selection.targets
-    assert "tests/scripts" in selection.targets
+    assert "tests/scripts/test_select_pr_tests.py" in selection.targets
     assert "tests/deploy" not in selection.targets
 
 
@@ -389,11 +393,10 @@ def test_scoped_deploy_ci_repair_shape_avoids_full_suite_self_validation() -> No
     )
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("ops", "ops_deploy")
+    assert selection.subsystems == ("governance",)
     assert selection.unowned_paths == ()
-    assert "tests/deploy" in selection.targets
-    assert "tests/ops" in selection.targets
-    assert "tests/scripts" in selection.targets
+    assert set(selector.CI_CONTRACT_TARGETS) <= set(selection.targets)
+    assert not {"tests/deploy", "tests/ops", "tests/scripts"} & set(selection.targets)
 
 
 def test_contract_selection_remains_conservative_after_deduplication() -> None:
@@ -425,8 +428,8 @@ def test_contract_selection_remains_conservative_after_deduplication() -> None:
     selector_owner = select_tests(["scripts/select_pr_tests.py"])
     assert "governance" in selector_owner.subsystems
     assert selector_owner.unowned_paths == ()
-    assert "tests/scripts" in selector_owner.targets
-    assert "tests/architecture" in selector_owner.targets
+    assert "tests/scripts/test_select_pr_tests.py" in selector_owner.targets
+    assert "tests/architecture/test_pr_test_selection.py" in selector_owner.targets
 
     builder_owner = select_tests(["app/builderops/publication.py"])
     assert builder_owner.subsystems == ("builder_system",)
@@ -1051,6 +1054,24 @@ def test_static_selector_targets_are_collectable() -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
 
+    isolated_modules = {path.removesuffix(".py").replace("/", ".") for path in selector.ISOLATED_TEST_MODULES}
+    for test_file in (REPO_ROOT / "tests").rglob("*.py"):
+        module = test_file.relative_to(REPO_ROOT).with_suffix("").as_posix().replace("/", ".")
+        if module in isolated_modules:
+            continue
+        imports: set[str] = set()
+        for node in ast.walk(ast.parse(test_file.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                name = "." * node.level + (node.module or "")
+                base = importlib.util.resolve_name(name, module.rsplit(".", 1)[0]) if node.level else name
+                imports.add(base)
+                imports.update(f"{base}.{alias.name}" for alias in node.names)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                imports.add(node.value)  # also catch literal importlib imports
+        assert not imports & isolated_modules, f"{test_file} consumes an isolated test module"
+
 
 def test_app_change_to_censused_file_selects_properties_subsystem() -> None:
     """A change to an app/ file indexed by a tests/properties/_machinery.py line-keyed
@@ -1345,12 +1366,9 @@ def test_mixed_docs_authoring_and_architecture_test_keeps_builder_targets() -> N
     assert "tests/ops/test_review_before_ci_gate.py" in selection.targets
 
 
-def test_mixed_ops_deploy_and_architecture_test_keeps_ops_targets() -> None:
-    # #4336: scripts/select_pr_tests.py is explicitly tolerated as governance
-    # signal, but it is also ops_deploy's own scripts/-rooted scope signal.
-    # Combined with the builder_system-carved-out architecture test, the diff
-    # must resolve to real ops_deploy/builder_system coverage, not collapse
-    # to governance-only.
+def test_mixed_ci_and_architecture_test_keeps_its_real_owner() -> None:
+    # The BuilderOps test retains its owner; the CI helper contributes CI proof,
+    # without inventing an operational co-change from its scripts/ location.
     selection = select_tests(
         ["scripts/select_pr_tests.py", "tests/architecture/test_builderops_store_boundary.py"]
     )
@@ -1359,23 +1377,19 @@ def test_mixed_ops_deploy_and_architecture_test_keeps_ops_targets() -> None:
     assert selection.subsystems != ("governance",)
     assert "tests/builderops" in selection.targets
     assert "tests/dispatcher" in selection.targets
-    assert "tests/ops" in selection.targets
-    # The heavy deploy suite is deferred to the post-merge heavy-tests
-    # workflow: the selector is not a deploy-channel source (#6154).
+    assert set(selector.CI_CONTRACT_TARGETS) <= set(selection.targets)
+    assert "tests/ops" not in selection.targets
     assert "tests/deploy" not in selection.targets
-    assert selection.deferred_targets == ("tests/deploy",)
+    assert selection.deferred_targets == ()
 
 
-def test_mixed_docs_and_review_gate_test_keeps_ops_targets() -> None:
-    # #4336: tests/ops/test_review_before_ci_gate.py is tolerated as both
-    # governance and docs signal, but it also lives under ops's own
-    # tests/ops/ prefix. A docs-only change combined with this file must
-    # still pick up the rest of tests/ops, not collapse to docs-only.
+def test_mixed_docs_and_review_gate_test_keeps_ci_contracts() -> None:
     selection = select_tests(["docs/STATUS.md", "tests/ops/test_review_before_ci_gate.py"])
 
     assert selection.full_suite is False
     assert selection.subsystems != ("docs",)
-    assert "tests/ops" in selection.targets
+    assert set(selector.CI_CONTRACT_TARGETS) <= set(selection.targets)
+    assert "tests/ops" not in selection.targets
 
 
 def test_docs_plus_architecture_still_stays_governance_only_when_no_foreign_owner() -> None:
@@ -1851,10 +1865,108 @@ def test_text_only_changes_keep_contract_tests_without_product_gates(paths: list
 @pytest.mark.parametrize("paths", [
     [], ["docs/TESTING.md", "app/cli.py"], ["docs/eval/classification_golden.yaml"],
     [".codex/helper.py"], ["tests/test_example.py"], ["vault/note.md"],
-    ["requirements.txt"], [".github/workflows/ci-smoke.yaml"],
+    ["requirements.txt"], [".github/workflows/integration-nightly.yaml"],
 ])
 def test_runtime_gate_selection_is_conservative(paths: list[str]) -> None:
     assert selector.requires_runtime_checks(paths) is True
+
+
+def test_ci_contract_helpers_have_an_eligible_paired_owner_doc() -> None:
+    from scripts.docs_guard_logic import GOVERNANCE_TEMPORAL_ENFORCEMENT, requires_temporal_owner_doc
+
+    for helper in selector.CI_CONTRACT_PATHS:
+        if not helper.startswith("scripts/"):
+            continue
+        owner_doc = GOVERNANCE_TEMPORAL_ENFORCEMENT.get(helper)
+        assert owner_doc in selector.CI_CONTRACT_PATHS, helper
+        assert not requires_temporal_owner_doc([helper, owner_doc])
+        assert requires_temporal_owner_doc([helper])
+
+
+@pytest.mark.parametrize("path", (
+    ".github/workflows/ci-smoke.yaml", "scripts/select_pr_tests.py",
+    "scripts/await_pr_checks.sh", "scripts/ci_stall_classifier.py",
+    "tests/scripts/test_select_pr_tests.py", "docs/development/DEV_WORKFLOW.md",
+))
+def test_exact_ci_contracts_execute_focused_proof_without_product_gates(path: str) -> None:
+    selection = select_tests([path])
+
+    assert selector.requires_runtime_checks([path]) is False
+    assert selection.reason == "CI contract-only PR"
+    assert "tests/governance" in selection.targets
+    assert "tests/ops/test_ci_workflow.py" in selection.targets
+    assert selector.STATIC_TARGET_COLLECTABILITY_FITNESS in selection.targets
+    assert not {"tests/architecture", "tests/scripts", "tests/ops"} & set(selection.targets)
+    assert not set(selector.ALWAYS_TARGETS[2:]) & set(selection.targets)
+    if path.startswith("tests/"):
+        assert path in selection.targets
+
+
+@pytest.mark.parametrize("path", (
+    "app/briefing/compose.py", "app/ops/postgres_deploy_linux.py",
+    "app/alembic/versions/example.py", "requirements.txt", "tests/conftest.py",
+    "scripts/deploy_channel.sh", "scripts/ci_stall_classifier_extra.py",
+    "tests/ops/test_host_global_lease.py", "tests/fixtures/await_pr_checks/new.json",
+    ".github/workflows/integration-nightly.yaml", "app/unknown_ci_helper.py",
+))
+def test_ci_contract_mixed_changes_retain_normal_runtime_coverage(path: str) -> None:
+    paths = ["scripts/select_pr_tests.py", path]
+    selection = select_tests(paths)
+
+    assert selector.requires_runtime_checks(paths) is True
+    assert selection.reason != "CI contract-only PR"
+    if selection.full_suite:
+        assert selection.pytest_args.startswith('-q -m "')
+    elif selection.unowned_paths:
+        assert path in selection.unowned_paths
+    else:
+        assert set(selector.ALWAYS_TARGETS) <= set(selection.targets)
+
+
+def test_product_and_selector_changes_combine_their_real_owners_without_ops() -> None:
+    product_paths = ["app/agents/panel_agent/runtime.py", "app/curation/proposal_writer.py", "app/expansion/accept.py"]
+    product = select_tests(product_paths)
+    combined = select_tests([*product_paths, "scripts/select_pr_tests.py"])
+
+    assert set(product.targets) <= set(combined.targets)
+    assert set(selector.CI_CONTRACT_TARGETS) <= set(combined.targets)
+    assert "tests/ops" not in combined.targets
+    assert "tests/deploy" not in combined.targets
+    assert selector.requires_runtime_checks([*product_paths, "scripts/select_pr_tests.py"]) is True
+
+
+@pytest.mark.parametrize("path", ("app/ops/postgres_deploy_linux.py", "app/tts/config.py"))
+def test_ci_helpers_preserve_deploy_proof_without_widening_source_only_prs(path: str) -> None:
+    selection = select_tests([path])
+
+    assert "tests/deploy" not in selection.targets
+    selection = select_tests([path, "scripts/await_pr_checks.sh"])
+    assert "tests/deploy" in selection.targets
+    assert "tests/scripts" not in selection.targets
+    assert selection.deferred_targets == ()
+    assert "tests/deploy" not in select_tests([path, ".github/workflows/ci-smoke.yaml"]).targets
+
+
+@pytest.mark.parametrize("path", sorted(selector.ISOLATED_TEST_MODULES))
+def test_only_modules_execute_the_changed_tests_and_shared_integrity_checks(path: str) -> None:
+    selection = select_tests([path])
+
+    assert selection.reason == "isolated test-only PR"
+    assert set(selection.targets) == {*selector.CI_INTEGRITY_TARGETS, path}
+    assert selector.requires_runtime_checks([path]) is True  # preserve the test environment
+
+
+@pytest.mark.parametrize("shared_path", (
+    "tests/conftest.py", "tests/ops/conftest.py", "tests/helpers/test_runtime_support.py",
+    "tests/fixtures/test_case.py", "app/ops/native_source_admission.py",
+    "tests/integration/test_watcher_cross_process_rebind.py",
+    "tests/deploy/test_postmerge_pg_acceptance.py",
+))
+def test_shared_fixture_and_product_changes_are_not_test_only(shared_path: str) -> None:
+    selection = select_tests(["tests/ops/test_dormant_ownership_initialization.py", shared_path])
+
+    assert selection.reason != "isolated test-only PR"
+    assert selector.requires_runtime_checks([shared_path]) is True
 
 
 def test_github_output_exposes_text_only_runtime_gate_decision(tmp_path: Path) -> None:
@@ -1874,24 +1986,27 @@ def test_github_output_exposes_text_only_runtime_gate_decision(tmp_path: Path) -
 POST_MERGE_HEAVY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "post-merge-heavy-tests.yml"
 
 
-@pytest.mark.parametrize("paths", [
-    ["scripts/select_pr_tests.py"],
-    ["scripts/select_pr_tests.py", "docs/development/PR_HOT_PATH.md", "AGENTS.md"],
-    ["scripts/validate_issue_readiness.py", ".github/workflows/issue-pr-governance.yml"],
-    ["tests/scripts/test_select_pr_tests.py"],
+@pytest.mark.parametrize("paths,deferred", [
+    (["scripts/select_pr_tests.py"], ()),
+    (["scripts/select_pr_tests.py", "docs/development/PR_HOT_PATH.md", "AGENTS.md"], ()),
+    (["scripts/validate_issue_readiness.py", ".github/workflows/issue-pr-governance.yml"], ("tests/deploy",)),
+    (["tests/scripts/test_select_pr_tests.py"], ()),
 ])
-def test_selector_change_keeps_heavy_deploy_off_pr_path(paths: list[str]) -> None:
+def test_selector_change_keeps_heavy_deploy_off_pr_path(paths: list[str], deferred: tuple[str, ...]) -> None:
     selection = select_tests(paths)
 
     assert selection.full_suite is False
-    assert not any(t == "tests/deploy" or t.startswith("tests/deploy/") for t in selection.targets)
+    assert "tests/deploy" not in selection.targets
+    assert all(
+        not target.startswith("tests/deploy/")
+        or target == "tests/deploy/test_dockerfile_python_alignment.py"
+        for target in selection.targets
+    )
     if "scripts/select_pr_tests.py" in paths:
         assert selection.subsystems == ("governance",)
         assert "tests/ops" not in selection.targets
-        assert selection.deferred_targets == ()
-    else:
-        assert selection.deferred_targets == ("tests/deploy",)
-    assert "tests/ops" in selection.targets or "tests/scripts" in selection.targets
+    assert selection.deferred_targets == deferred
+    assert "tests/scripts" in selection.targets or "tests/scripts/test_select_pr_tests.py" in selection.targets
 
 
 def test_selector_reports_deferred_targets_to_github_output(tmp_path: Path) -> None:
