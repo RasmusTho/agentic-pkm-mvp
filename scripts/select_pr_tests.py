@@ -206,6 +206,57 @@ CI_CONTRACT_PATHS = CI_GOVERNANCE_CONTRACT_PATHS | frozenset({
     if target.split("::", 1)[0].endswith(".py")
 )
 
+# Exact PR-intake/publication contract sources have many direct readers across
+# BuilderOps, dispatcher, scripts, governance docs and the publication workflow.
+# Keep this scope explicit: a changed source selects its complete direct-reader
+# set, while an unrelated BuilderOps/dispatcher/script co-change keeps normal
+# subsystem routing. The architecture doc is only a tolerated co-change here;
+# its own edits continue through the ordinary docs lane.
+PR_INTAKE_CONTRACT_SOURCE_PATHS = frozenset({
+    ".github/workflows/issue-pr-governance.yml",
+    "app/builderops/publication.py",
+    "app/dispatcher/verification_contract.py",
+    "scripts/pr_body_generator.py",
+    "scripts/review_before_ci_gate.py",
+})
+PR_INTAKE_RUNTIME_SOURCE_PATHS = PR_INTAKE_CONTRACT_SOURCE_PATHS - {
+    ".github/workflows/issue-pr-governance.yml",
+}
+PR_INTAKE_CONTRACT_READER_PATHS = frozenset({
+    "docs/ARCHITECTURE.md",
+    "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md",
+    "docs/development/PR_HOT_PATH.md",
+    "tests/architecture/test_agent_skill_entrypoints.py",
+    "tests/architecture/test_pr_hot_path_governance.py",
+    "tests/governance/test_autonomous_escalation_contract.py",
+    "tests/governance/test_epic_pr_batching_policy.py",
+    "tests/governance/test_issue_pr_governance.py",
+    "tests/governance/test_project_pickup_deprecation.py",
+    "tests/governance/test_skills_consistency_lint.py",
+    "tests/governance/test_verification_dispatch_request.py",
+    "tests/governance/test_verification_dispatch_workflow.py",
+    "tests/governance/test_pr_evidence_pack_workflow.py",
+    "tests/ops/test_builderops_package_smoke.py",
+    "tests/ops/test_review_before_ci_gate.py",
+    "tests/scripts/test_build_pr_evidence_pack.py",
+    "tests/scripts/test_closure.py",
+    "tests/scripts/test_pr_body_generator.py",
+    "tests/scripts/test_publication.py",
+    "tests/dispatcher/test_verification_dispatch.py",
+    "tests/dispatcher/test_verified_merge.py",
+})
+PR_INTAKE_CONTRACT_TARGETS = (
+    # Direct imports/consumers not already covered by CI_CONTRACT_TARGETS' full
+    # governance suite and exact review/architecture readers.
+    "tests/dispatcher/test_verification_dispatch.py",
+    "tests/dispatcher/test_verified_merge.py",
+    "tests/ops/test_builderops_package_smoke.py",
+    "tests/scripts/test_build_pr_evidence_pack.py",
+    "tests/scripts/test_closure.py",
+    "tests/scripts/test_pr_body_generator.py",
+    "tests/scripts/test_publication.py",
+)
+
 # Test-only edits to these unconsumed modules need representative harness proof.
 # Product/shared-fixture co-changes and nightly retain their complete matrices.
 ISOLATED_TEST_MODULES = {
@@ -1497,6 +1548,24 @@ def _is_ci_contract_only(paths: tuple[str, ...]) -> bool:
     return bool(paths) and all(path in CI_CONTRACT_PATHS for path in paths)
 
 
+def _is_pr_intake_contract_only(paths: tuple[str, ...]) -> bool:
+    # Existing exact CI-contract edits may accompany this source contract, for
+    # example when selector coverage is updated with its owner documentation.
+    # One of the seven added direct-reader targets also qualifies a test-only
+    # contract change. General governance/doc readers are tolerated co-changes,
+    # not anchors; every other co-change falls back to its owner.
+    allowed_paths = CI_CONTRACT_PATHS | PR_INTAKE_CONTRACT_SOURCE_PATHS | PR_INTAKE_CONTRACT_READER_PATHS
+    direct_reader_tests = frozenset(PR_INTAKE_CONTRACT_TARGETS)
+    return (
+        bool(paths)
+        and any(
+            path in PR_INTAKE_CONTRACT_SOURCE_PATHS or path in direct_reader_tests
+            for path in paths
+        )
+        and all(path in allowed_paths for path in paths)
+    )
+
+
 def _is_test_only(paths: tuple[str, ...]) -> bool:
     return bool(paths) and all(path in ISOLATED_TEST_MODULES for path in paths)
 
@@ -1782,6 +1851,7 @@ def select_tests(changed_files: list[str]) -> Selection:
         )
 
     ci_contract_only = _is_ci_contract_only(paths)
+    pr_intake_contract_only = _is_pr_intake_contract_only(paths)
     test_only = _is_test_only(paths)
     changed_tests = (
         tuple(target for path in paths for target in ISOLATED_TEST_MODULES[path])
@@ -1789,6 +1859,7 @@ def select_tests(changed_files: list[str]) -> Selection:
     )
     targets = list(
         CI_CONTRACT_TARGETS if ci_contract_only
+        else (*CI_CONTRACT_TARGETS, *PR_INTAKE_CONTRACT_TARGETS) if pr_intake_contract_only
         else CI_INTEGRITY_TARGETS if test_only
         else ALWAYS_TARGETS
     )
@@ -1817,6 +1888,8 @@ def select_tests(changed_files: list[str]) -> Selection:
 
     if ci_contract_only:
         subsystems, reason = ("governance",), "CI contract-only PR"
+    elif pr_intake_contract_only:
+        subsystems, reason = ("governance", "builder_system"), "PR intake/publication contract PR"
     elif test_only:
         subsystems, reason = ("tests",), "isolated test-only smoke; exhaustive matrix deferred"
     elif governance_only or docs_only:
@@ -1886,6 +1959,17 @@ def requires_runtime_checks(changed_files: list[str]) -> bool:
     and mixed changes stay conservative. A Markdown suffix alone is insufficient.
     """
     paths = tuple(_normalize(path) for path in changed_files if _normalize(path))
+    if _is_pr_intake_contract_only(paths) and any(
+        path in PR_INTAKE_RUNTIME_SOURCE_PATHS for path in paths
+    ):
+        # App and executable publication/review helpers still receive the
+        # mandatory Product type/runtime gates, even though pytest is scoped to
+        # the exact contracts that read them.
+        return True
+    if _is_pr_intake_contract_only(paths):
+        # The GitHub workflow contract has its direct governance readers and
+        # does not change the Python application type surface.
+        return False
     if _is_ci_contract_only(paths) or _is_test_only(paths):
         return False
     return not paths or not all(
