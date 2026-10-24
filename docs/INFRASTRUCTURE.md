@@ -209,7 +209,7 @@ policy.
 - Outbox: Backed by the `outbox` table in Postgres; worker polls it continuously. JSONL (`INDEX_OUTBOX_PATH`) remains audit-only.
 
 ## Startup Flow
-1. Ensure Colima/Docker is running.
+1. For a managed local Colima profile, use the shared `scripts/lib/colima_runtime_readiness.sh` helper through the startup entrypoints. Its reviewed profile lives at `~/.config/yggdrasil/colima-runtime.env` (or `COLIMA_RESOURCE_PROFILE_FILE`). Readiness requires the exact writable persistent filesystem and Docker/containerd bind roots, containerd RPC/metadata, the intended Docker context/socket, and exact required persisted/API identity coverage (including stopped durable containers), with separately proven volume-safe terminal AutoRemove accounting. A successful Colima CLI exit alone is insufficient. Other Docker providers retain their existing binding.
 2. `make start` is the supported local startup path. It writes `tmp/runtime.env` for the default/prod local stack, brings up the core services, auto-selects a Docker-reachable Ollama endpoint when needed, and verifies the live runtime from inside the `api` container before exiting `0`. The `pkm-test` Compose/bootstrap lane writes `tmp-test/runtime.env` instead.
 3. `docker compose up -d` remains available for low-level debugging, but it skips the startup wrapper's endpoint repair, vault probes, and authoritative runtime verification.
 3. `scripts/start_api.sh` (container entrypoint):
@@ -221,6 +221,28 @@ policy.
 4. Worker bootstrap:
    - Uses an autocommit psycopg connection to create the `outbox` table/indexes and `pgcrypto` if needed.
    - Polls the outbox and triggers the indexer for ingest events.
+
+### Colima persistent substrate readiness
+
+The checked-in installer at `ops/host-setup/mac-mini/install_colima_runtime_readiness.sh`
+installs the mount boundary, substrate gate, containerd dependency/time limits, and Docker
+pre-start and post-start gates. It defaults to a dry-run and never restarts a service. Installation
+requires inactive Docker/socket/containerd units; default-profile installation additionally requires
+an accepted isolated proof. Systemd refuses startup when configuration, mount identity, free
+blocks/inodes, containerd metadata, or inventory checks fail. Post-start failure stops socket
+activation and fails the Docker unit; containerd and the data mounts remain available for diagnosis.
+
+This mechanism concerns the Mac's local helper/development Docker engine. It does not qualify or
+operate Product channels on TARS. Follow the isolated proof and activation procedure in
+`docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md :: Colima persistent substrate readiness` before
+using it on an existing profile. Repository tests do not establish live activation.
+
+The storage target is a Colima persistent ext4 filesystem backed by storage directly on a native
+host APFS filesystem, avoiding an APFS image nested on an interchange filesystem such as exFAT.
+Live Docker/containerd metadata must not depend on that nested storage path. Moving existing data
+is a separate capacity-proven, cold-copy migration. Until that migration is complete, serialize
+Git/common-dir bulk I/O and worktree checkout with Colima cold start/restore; a quiet process
+snapshot alone does not prevent another session from starting I/O.
 
 ### Runtime verification
 - `make verify-runtime` is the recommended operator check once the stack is up.
