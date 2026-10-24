@@ -7,6 +7,8 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
 
 import pytest
 
@@ -14,6 +16,20 @@ ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / "scripts/lib/colima_runtime_readiness.sh"
 SYSTEMD = ROOT / "ops/host-setup/mac-mini/systemd"
 INSTALLER = ROOT / "ops/host-setup/mac-mini/install_colima_runtime_readiness.sh"
+
+
+@pytest.fixture
+def docker_socket_path() -> Iterator[Path]:
+    # macOS limits AF_UNIX pathname length; pytest's nested tmp_path is too long.
+    with tempfile.TemporaryDirectory(prefix="d", dir="/tmp") as directory:
+        yield Path(directory) / "s"
+
+
+def create_docker_socket(path: Path) -> None:
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.close()
+    path.chmod(0o660)
 
 
 @pytest.fixture
@@ -194,7 +210,8 @@ def test_installed_units_fail_closed_until_exact_persistent_substrate_is_ready(
     assert (
         "--docker-api-close" in docker and "--docker-preflight" in docker
         and "ExecStartPost=" in docker and "--post-start" in docker
-        and "ExecStopPost=" in docker
+        and "Sockets=docker.socket" in docker
+        and "ExecStopPost=" in docker and "--docker-api-stop" in docker
     )
     assert "SocketMode=0600" in docker_socket and "SocketGroup=docker" in docker_socket
     assert "Restart=no" in containerd and "Restart=no" in docker
@@ -343,12 +360,11 @@ def test_installer_streams_checked_in_units_only_after_host_gates(
     assert install(env).returncode != 0
 
 
-def test_post_start_failure_stops_socket_and_returns_failure(runtime: dict[str, str]) -> None:
-    socket_path = Path(runtime["TEST_CALLS"]).parent / "docker.sock"
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(str(socket_path))
-    listener.close()
-    socket_path.chmod(0o660)
+def test_post_start_failure_stops_socket_and_returns_failure(
+    runtime: dict[str, str], docker_socket_path: Path
+) -> None:
+    socket_path = docker_socket_path
+    create_docker_socket(socket_path)
     result = subprocess.run(
         ["bash", str(HELPER), "--post-start"],
         env={**runtime, "TEST_MODE": "truncated", "COLIMA_DOCKER_SOCKET_PATH": str(socket_path)},
@@ -363,12 +379,28 @@ def test_post_start_failure_stops_socket_and_returns_failure(runtime: dict[str, 
     assert not any("prune" in c or "rm" in c or "recreate" in c for c in calls(runtime))
 
 
-def test_post_start_opens_socket_only_after_exact_inventory_passes(runtime: dict[str, str]) -> None:
-    socket_path = Path(runtime["TEST_CALLS"]).parent / "docker.sock"
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(str(socket_path))
-    listener.close()
-    socket_path.chmod(0o660)
+def test_service_stop_closes_socket_and_stops_socket_activation(
+    runtime: dict[str, str], docker_socket_path: Path
+) -> None:
+    create_docker_socket(docker_socket_path)
+    result = subprocess.run(
+        ["bash", str(HELPER), "--docker-api-stop"],
+        env={**runtime, "COLIMA_DOCKER_SOCKET_PATH": str(docker_socket_path)},
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(docker_socket_path.stat().st_mode) == 0o600
+    assert ["systemctl", "--no-block", "stop", "docker.socket"] in calls(runtime)
+
+
+def test_post_start_opens_socket_only_after_exact_inventory_passes(
+    runtime: dict[str, str], docker_socket_path: Path
+) -> None:
+    socket_path = docker_socket_path
+    create_docker_socket(socket_path)
     result = subprocess.run(
         ["bash", str(HELPER), "--post-start"],
         env={**runtime, "COLIMA_DOCKER_SOCKET_PATH": str(socket_path)},
@@ -382,13 +414,10 @@ def test_post_start_opens_socket_only_after_exact_inventory_passes(runtime: dict
 
 
 def test_docker_preflight_closes_a_previously_open_socket_before_containerd_probe(
-    runtime: dict[str, str],
+    runtime: dict[str, str], docker_socket_path: Path,
 ) -> None:
-    socket_path = Path(runtime["TEST_CALLS"]).parent / "docker.sock"
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(str(socket_path))
-    listener.close()
-    socket_path.chmod(0o660)
+    socket_path = docker_socket_path
+    create_docker_socket(socket_path)
     result = subprocess.run(
         ["bash", str(HELPER), "--docker-preflight"],
         env={**runtime, "TEST_MODE": "ctr-down", "COLIMA_DOCKER_SOCKET_PATH": str(socket_path)},
@@ -459,12 +488,14 @@ def test_mount_producer_preserves_data_and_resumes_partial_mounts(
 
 
 def test_docker_prestart_and_poststart_emit_invocation_bound_containerd_pid(
-    runtime: dict[str, str],
+    runtime: dict[str, str], docker_socket_path: Path,
 ) -> None:
+    create_docker_socket(docker_socket_path)
+    env = {**runtime, "COLIMA_DOCKER_SOCKET_PATH": str(docker_socket_path)}
     for selector, phase in (("--docker-preflight", "before"), ("--post-start", "after")):
         result = subprocess.run(
             ["bash", str(HELPER), selector],
-            env=runtime,
+            env=env,
             capture_output=True,
             text=True,
             timeout=15,

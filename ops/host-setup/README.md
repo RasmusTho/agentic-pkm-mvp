@@ -131,7 +131,9 @@ The guest image must already provide Python 3.9 or newer for the read-only inven
 read-write status, and exact `/docker` and `/containerd` bind roots. It never repairs or edits
 container metadata. The `docker.socket` drop-in keeps the API socket root-only during startup; the
 helper opens Docker-group access only after the post-start check matches every required persisted ID
-with the daemon inventory. A mismatch leaves the socket restricted and stops socket activation.
+with the daemon inventory and records the post-restore containerd PID. A mismatch or service stop
+leaves the socket root-only and queues socket activation to stop; a service start pulls the socket
+unit in again.
 Review resource allocation and usernet timeout with the actual host profile; do not apply example
 values as host authority. Required inventory includes stopped durable identities; terminal AutoRemove
 residue is separately accounted for only under the strict lifecycle and named-volume proof in the
