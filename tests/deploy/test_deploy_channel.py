@@ -3796,7 +3796,13 @@ def _password_source_fixture(tmp_path, monkeypatch):
         return info
     def non_root_probe(argv, **kwargs):
         events.append(('probe', kwargs))
-        assert os.read(kwargs['pass_fds'][0], 65537) == b'fake-file-canary'
+        # Production opens /proc/self/fd independently in the service-UID child.
+        # Model its private offset, not a read that consumes the parent's fd.
+        assert 'os.open("/proc/self/fd/"' in argv[2]
+        descriptor = kwargs['pass_fds'][0]
+        before = os.lseek(descriptor, 0, os.SEEK_CUR)
+        assert os.pread(descriptor, 65537, 0) == b'fake-file-canary'
+        assert os.lseek(descriptor, 0, os.SEEK_CUR) == before
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(linux, '_root_directory', root_directory)
     monkeypatch.setattr(linux, '_command', command)

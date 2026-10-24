@@ -78,10 +78,13 @@ class DeployPlan:
     automatic: bool = False
     authority_cutover: AuthorityCutover | None = None
     promotion_plan: str | None = None
+    principal_cutover: bool = False
 
     def payload(self) -> dict[str, Any]:
         """Keep retained manual request bindings compatible with older workers."""
         payload = asdict(self)
+        if not self.principal_cutover:
+            del payload['principal_cutover']
         if self.authority_cutover is None:
             del payload['authority_cutover']
         if self.promotion_plan is None:
@@ -98,7 +101,7 @@ class DeployPlan:
         legacy = {'channel', 'revision', 'services', 'consumers', 'ack_forward_only'}
         if not isinstance(raw, dict):
             raise PostgresDeployError()
-        keys = set(raw) - {'authority_cutover', 'promotion_plan'}
+        keys = set(raw) - {'authority_cutover', 'promotion_plan', 'principal_cutover'}
         if keys not in (legacy, legacy | {'image_digest', 'automatic'},
                         legacy | {'image_digest', 'automatic', 'verification_profile'}):
             raise PostgresDeployError()
@@ -110,14 +113,22 @@ class DeployPlan:
             cutover = AuthorityCutover(**selected)
         plan = cls(raw['channel'], raw['revision'], tuple(raw['services']), tuple(raw['consumers']),
                    raw['ack_forward_only'], raw.get('image_digest'), raw.get('automatic', False), cutover,
-                   raw.get('promotion_plan'))
+                   raw.get('promotion_plan'), raw.get('principal_cutover', False))
         plan.validate()
-        if (plan.automatic and raw != json.loads(json.dumps(plan.payload()))
+        canonical_raw = dict(raw)
+        if canonical_raw.get('principal_cutover') is False:
+            del canonical_raw['principal_cutover']
+        if (plan.automatic and canonical_raw != json.loads(json.dumps(plan.payload()))
             or not plan.automatic and 'verification_profile' in raw):
             raise PostgresDeployError()
         return plan
 
     def validate(self) -> None:
+        if type(self.principal_cutover) is not bool or (self.principal_cutover and (
+            self.channel not in {'dev', 'test'} or self.image_digest is None
+            or self.authority_cutover is not None or self.promotion_plan is not None
+        )):
+            raise PostgresDeployError()
         if self.promotion_plan is not None and (
             self.channel != 'prod' or self.automatic
             or not isinstance(self.promotion_plan, str)
@@ -194,6 +205,7 @@ class TestRecoveryRequest:
             or self.plan.channel != 'test'
             or not self.plan.automatic
             or self.plan.authority_cutover is not None
+            or self.plan.principal_cutover
             or self.plan.image_digest is None
             or (self.source_operation_id is None) != (self.source_plan is None)):
             raise PostgresDeployError()
@@ -236,6 +248,7 @@ class TestRecoveryRequest:
         if (failed_plan.channel != 'test'
             or not failed_plan.automatic
             or failed_plan.authority_cutover is not None
+            or failed_plan.principal_cutover
             or failed_plan.image_digest is None):
             raise PostgresDeployError()
         for field in ('channel', 'services', 'consumers'):
@@ -250,6 +263,7 @@ class TestRecoveryRequest:
         if (source_plan.channel != 'test'
             or not source_plan.automatic
             or source_plan.authority_cutover is not None
+            or source_plan.principal_cutover
             or source_plan.image_digest is None):
             raise PostgresDeployError()
         for field in ('channel', 'services', 'consumers'):
@@ -401,7 +415,7 @@ class DeployJournal:
         plan.validate()
         if type(bootstrap) is not bool:
             raise PostgresDeployError()
-        if isinstance(plan, DeployPlan) and plan.authority_cutover is not None and bootstrap:
+        if isinstance(plan, DeployPlan) and (plan.authority_cutover is not None or plan.principal_cutover) and bootstrap:
             raise PostgresDeployError()
         DeployReceipt(operation_id, self.channel, 'deploy', 'prepared', None).validate()
         expected = {'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': bootstrap}
@@ -627,7 +641,7 @@ class DeployWorker:
 
     def run(self, operation_id: str, plan: DeployPlan) -> DeployReceipt:
         plan.validate()
-        if plan.authority_cutover is not None:
+        if plan.authority_cutover is not None or plan.principal_cutover:
             self.journal.bind_request(operation_id, plan, False)
         previous = self.journal.read()
         if previous and previous.operation_id == operation_id:
@@ -755,7 +769,9 @@ def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
     """Hold the shared controller lock through matching remote terminal evidence."""
     if (type(allow_bootstrap) is not bool or (plan.automatic and allow_bootstrap)
         or (plan.authority_cutover is not None and allow_bootstrap)
-        or (operation_id is not None and not (plan.automatic or plan.authority_cutover is not None))):
+        or (plan.principal_cutover and allow_bootstrap)
+        or (operation_id is not None and not (plan.automatic or plan.authority_cutover is not None
+                                             or plan.principal_cutover))):
         raise PostgresDeployError()
     plan.validate()
     try:

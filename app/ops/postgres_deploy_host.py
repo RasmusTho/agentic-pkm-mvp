@@ -370,6 +370,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--image-digest', help='immutable published sha256 image-index digest')
     parser.add_argument('--promotion-plan', help='absolute reviewed promotion-plan path on the target host (PROD only)')
     parser.add_argument('--automatic', action='store_true', help='non-production existing-secret delivery')
+    parser.add_argument('--principal-cutover', action='store_true',
+                        help='explicit DEV/TEST MVR-03 cutover for this exact SHA/digest request')
     parser.add_argument('--operation-id', help='stable automatic candidate/channel operation UUID')
     parser.add_argument('--authority-cutover-binding', help='already-qualified nonprod binding')
     parser.add_argument('--authority-cutover-root', help='exact existing selected host root')
@@ -439,6 +441,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
+        if args.principal_cutover and (
+            args.channel not in {'dev', 'test'} or not args.existing_secrets_only
+            or args.image_digest is None or re.fullmatch(r'sha256:[0-9a-f]{64}', args.image_digest) is None
+            or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None or args.promotion_plan is not None
+            or any(value is not None for value in (args.authority_cutover_binding, args.authority_cutover_root,
+                                                   args.authority_cutover_ownership_root))
+            or args.prove_never_admitted or args.persist_source_identity or args.diagnose_source_identity
+            or args.current_state_source or args.preflight_source_persistence_admission
+            or args.restore_operator_source_identity or args.resume_unattempted_operator_restoration
+            or args.reconcile_operator_unknown_cleanup or args.prove_source_persistence_never_admitted
+            or args.recover_test_source or args.reconstruct_missing_instance_state
+            or args.failed_operation_id is not None or args.source_producer_kind != 'vault-alpha'
+        ):
+            raise PostgresDeployError()
         if args.promotion_plan is not None and (args.channel != 'prod' or args.automatic):
             raise PostgresDeployError()
         cutover = None
@@ -491,7 +507,8 @@ def main(argv: list[str] | None = None) -> int:
         ):
             raise PostgresDeployError()
         if args.operation_id is not None and (
-            not (args.automatic or cutover is not None) or str(UUID(args.operation_id)) != args.operation_id
+            not (args.automatic or cutover is not None or args.principal_cutover)
+            or str(UUID(args.operation_id)) != args.operation_id
         ):
             raise PostgresDeployError()
         current_source_request = None
@@ -779,7 +796,7 @@ def main(argv: list[str] | None = None) -> int:
         # binding. VM-only consumers are selected from VM runtime/migration state.
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),
                           (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only,
-                          args.image_digest, args.automatic, cutover, args.promotion_plan)
+                          args.image_digest, args.automatic, cutover, args.promotion_plan, args.principal_cutover)
         recovery_request = None
         if args.recover_test_source or args.reconstruct_missing_instance_state:
             failed_operation_id = args.failed_operation_id
