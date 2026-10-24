@@ -95,7 +95,7 @@ the rolling Known Defects registry Issue #4172; P3 is informational. `bug-to-iss
   provider layers, or enterprise patterns require explicit demand and must replace something or have
   a review date.
 - Use at most two CI-repair rounds per failure mechanism, then shrink/replan or escalate capability; does not cap the separate P0/P1 review-repair loop. Evidence-based convergence and fresh independent re-review govern it.
-- Delivery flow ([ADR-0068](docs/adr/ADR-0068-continuous-dev-delivery-flow.md)): merge on risk. Post-merge `dev`/`test` problems become bug Issues and never gate a merge. Never unload or stop the post-merge controller to protect your own work; file or update the channel bug instead. A deployer-safety stop needs an Issue, an expiry and, until ADR-0068 D5 lands, the owner's OK. The target promotion chain is `main` → `dev` → `test` → `stable`; until #6207 enacts it, prod tracks `main` per `docs/RELEASE_CHANNELS/README.md`.
+- Delivery flow ([ADR-0068](docs/adr/ADR-0068-continuous-dev-delivery-flow.md)): merge on risk. Post-merge `dev`/`test` problems become bug Issues and never gate a merge. Never unload or stop the post-merge controller to protect your own work; file or update the channel bug instead. A deployer-safety stop needs an Issue, an expiry and, until ADR-0068 D5 lands, the owner's OK. The target promotion chain is `main` → `dev` → `test` → `stable`; for current channel and PROD authority, consult `docs/RELEASE_CHANNELS/README.md`.
 
 Exact tiers, supersession, and evidence-reuse mechanics live in `docs/development/GOVERNANCE_PROPORTIONALITY.md` and the delivery skills.
 
