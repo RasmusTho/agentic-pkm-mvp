@@ -130,14 +130,22 @@ the pilot does not make Product/Builder runtime TypeSafe acceptance claims.
 The live core-flow suite is `tests/companion_ui/test_companion_ui_live_core_flow.py`. It uses the
 same installed pytest/Playwright runtime and runs one serial journey per explicit private
 dev/test manifest. Its eight results cover channel/build/health, note navigation, one governed
-capture, a fresh-context readback, exact object/vector freshness and retrieval, one grounded ASK,
-and two browser-local failure cases. Required model-health failure does not hide independent
+capture, visible literal-body search and click-open in the current and a fresh browser context,
+exact object/vector freshness and direct retrieval diagnostics, one grounded ASK, and two
+browser-local failure cases. The visible search/click-open result is the human-facing proof;
+native admission, capture acknowledgement, direct API/index checks, and object/vector freshness
+remain supporting diagnostics. Required model-health failure does not hide independent
 navigation or capture results after channel, build and fixture checks succeed. Dependent steps
 report `blocked` when their prerequisite could not be proved; their pytest assertions are nonzero.
 Navigation uses the entry page's actionable browse control and scopes folder/note selection to
 the visible browser, excluding its hidden responsive copy. Offline renderer-backed navigation
 proofs in `test_live_core_flow_contract.py` run with `COMPANION_UI_BROWSER_TESTS=1` for both
-cold-start and document entry pages, without reaching a real application endpoint.
+cold-start and document entry pages, without reaching a real application endpoint. Opt-in
+DEV/TEST execution remains separate, current-candidate, non-closing technical acceptance
+evidence; a blocked or skipped live run is not a PASS and does not close the governing lifecycle.
+The constrained-reuse browser proof also records observed request origins: Companion pages serve
+the existing token roles with the shipped local-system font fallback, remove remote font imports at
+the static-token serving boundary, and fail the proof if an unexpected external origin is observed.
 
 ```sh
 COMPANION_UI_LIVE_CORE_FLOW=1 \
@@ -155,7 +163,12 @@ channel ports (8111/18001 or 8112/18002), using exactly `127.0.0.1` on the selec
 diagnostic and HTTP requests reach the same host. A writing journey additionally supplies `vault_id`,
 `vault_path`, `known_note_path`, `known_note_uuid`, `known_excerpt`, `capture_note_path`,
 `capture_note_uuid`, `vault_binding_id`, and `embedding_identity`, with explicit boolean
-`allow_capture` and `allow_ask`. Operator-qualified non-production fixtures are distinct per
+`allow_capture` and `allow_ask`. A capture-only journey may additionally set `capture_only: true`,
+which requires `allow_capture: true` and `allow_ask: false`; its bounded four-step selection ends
+after visible body-phrase discovery/click-open in the current and fresh browser contexts, so it
+does not require semantic-index freshness or ASK/model success. Run that mode explicitly with
+`tests/companion_ui/test_companion_ui_live_core_flow.py::test_04_capture_survives_new_browser_context`.
+Operator-qualified non-production fixtures are distinct per
 channel. Before HTTP admission, native Docker reads bind the loopback gateway's running image,
 published port, exact startup configuration and resolved upstream address to the selected API
 container. The passive probe checks existing last-active restore inputs and complete vault/local
