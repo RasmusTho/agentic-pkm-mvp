@@ -820,6 +820,11 @@ class CoreFlow:
         item = self.page.locator('[data-capture-state="written"]').filter(has_text=self.marker)
         if item.get_attribute("data-ack-trace-id") != self.ack["trace_id"]:
             raise AssertionError("capture_trace_not_rendered")
+        if self.ack.get("ingest_warning"):
+            warning = self.page.get_by_test_id("capture-ingest-warning")
+            warning.wait_for(state="visible")
+            if str(self.ack["ingest_warning"]) not in warning.inner_text():
+                raise AssertionError("capture_ingest_warning_not_rendered")
         self._binding()
         if not self.probe(self.d, self.marker).get("source_has_marker"):
             raise AssertionError("capture_not_in_approved_source")
