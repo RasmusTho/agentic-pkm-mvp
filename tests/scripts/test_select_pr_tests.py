@@ -213,10 +213,10 @@ def test_append_plan_regressions_select_orchestration_targets() -> None:
     selection = select_tests(changed)
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("orchestration",)
+    assert selection.subsystems == ("tests",)
     assert selection.unowned_paths == ()
     assert set(changed) <= set(selection.targets)
-    assert "tests/orchestrator" in selection.targets
+    assert "tests/orchestrator" not in selection.targets
 
 
 @pytest.mark.parametrize(
@@ -233,12 +233,14 @@ def test_governed_effect_spine_paths_select_orchestration_targets(
     selection = select_tests([effect_spine_path])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("orchestration",)
     assert selection.unowned_paths == ()
     if effect_spine_path.startswith("tests/"):
+        assert selection.subsystems == ("tests",)
         assert effect_spine_path in selection.targets
+    else:
+        assert selection.subsystems == ("orchestration",)
+        assert "tests/governance/test_governed_write.py" in selection.targets
     assert "tests/invariants/test_governed_effect_spine.py" in selection.targets
-    assert "tests/governance/test_governed_write.py" in selection.targets
 
 
 def test_static_web_surface_is_owned_by_builder_system_and_companion_ui() -> None:
@@ -313,10 +315,10 @@ def test_mvr05_authority_recovery_architecture_test_has_vault_ci_owner() -> None
     selection = select_tests([path])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("vault",)
+    assert selection.subsystems == ("tests",)
     assert selection.unowned_paths == ()
     assert path in selection.targets
-    assert "tests/ops/test_instance_state_volume_contract.py" in selection.targets
+    assert "tests/ops" not in selection.targets
 
 
 def test_knowledge_runtime_modules_select_vault_knowledge_and_port_coverage() -> None:
@@ -522,7 +524,7 @@ def test_builder_system_architecture_fitness_test_has_ci_owner() -> None:
     selection = select_tests([path])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("builder_system",)
+    assert selection.subsystems == ("tests",)
     assert selection.unowned_paths == ()
     assert path in selection.targets
 
@@ -533,9 +535,9 @@ def test_quality_wave_tests_have_ci_owner() -> None:
     selection = select_tests([path])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("quality_wave",)
+    assert selection.subsystems == ("tests",)
     assert selection.unowned_paths == ()
-    assert "tests/quality_wave" in selection.targets
+    assert "tests/quality_wave" not in selection.targets
     assert path in selection.targets
 
 
@@ -1516,7 +1518,7 @@ def test_top_level_panel_agent_regression_change_selects_its_owned_coverage() ->
     selection = select_tests(["tests/agents/test_panel_pipeline_integration.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("promotion_panel",)
+    assert selection.subsystems == ("tests",)
     assert "tests/agents/test_panel_pipeline_integration.py" in selection.targets
 
 
@@ -1627,10 +1629,14 @@ def test_cross_scope_flow_contract_surface_selects_episodes_coverage(path: str) 
     selection = select_tests([path])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("episodes",)
     assert selection.unowned_paths == ()
-    assert "tests/episodes" in selection.targets
-    assert "tests/invariants" in selection.targets
+    if path.startswith("tests/"):
+        assert selection.subsystems == ("tests",)
+        assert "tests/episodes" not in selection.targets
+    else:
+        assert selection.subsystems == ("episodes",)
+        assert "tests/episodes" in selection.targets
+        assert "tests/invariants" in selection.targets
     assert "tests/architecture/test_cross_scope_flow_schema.py" in selection.targets
 
 
@@ -1761,7 +1767,7 @@ def test_governance_test_change_is_owned_by_builder_system() -> None:
     selection = select_tests(["tests/governance/test_project_pickup_deprecation.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("builder_system",)
+    assert selection.subsystems == ("tests",)
     assert selection.unowned_paths == ()
     assert "tests/governance/test_project_pickup_deprecation.py" in selection.targets
 
@@ -2110,11 +2116,133 @@ def test_isolated_smoke_does_not_change_normal_whole_module_collection() -> None
     assert path + "::test_test_preparation_producer_holds_window_until_explicit_initializer[post_stop_interpreter]" in nodes
 
 
+@pytest.fixture
+def test_module_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def create(files: dict[str, str]) -> Path:
+        for relative, content in files.items():
+            path = tmp_path / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True, capture_output=True)
+        monkeypatch.setattr(selector, "REPO_ROOT", tmp_path)
+        return tmp_path
+    return create
+
+
+def test_deploy_test_only_change_keeps_real_consumers_without_sibling_suites() -> None:
+    paths = ["tests/deploy/test_postmerge_pg_acceptance.py", "tests/deploy/test_postmerge_dev_test.py"]
+    selection = select_tests(paths)
+
+    assert selection.reason == "test modules and their static consumers"
+    assert set(paths) | set(selector.CI_INTEGRITY_TARGETS) | {
+        "tests/release_channels/test_pr_candidate_verification_workflow.py",
+        "tests/release_channels/test_stable_promotion_from_test.py",
+        "tests/ops/test_native_web_lock_lifecycle.py",
+        "tests/ops/test_native_journaling_acceptance.py",
+        "tests/ops/test_native_web_acceptance.py",
+    } <= set(selection.targets)
+    assert not {"tests/ops", "tests/scripts", "tests/deploy", *selector.ALWAYS_TARGETS[2:]} & set(selection.targets)
+    assert selector.requires_runtime_checks(paths) is True
+
+
+@pytest.mark.parametrize("statement", [
+    "from tests.deploy.test_seed import shared",
+    "from .test_seed import shared",
+    "from test_seed import shared",
+    "import importlib\nshared = importlib.import_module('tests.deploy.test_seed')",
+    "import importlib\nshared = importlib.import_module('.test_seed', package='tests.deploy')",
+])
+def test_test_module_consumers_follow_absolute_relative_bare_and_literal_imports(
+    test_module_repository, statement: str,
+) -> None:
+    test_module_repository({
+        "tests/deploy/test_seed.py": "shared = 1\ndef test_seed(): pass\n",
+        "tests/deploy/test_consumer.py": statement + "\ndef test_consumer(): pass\n",
+        "tests/deploy/test_unrelated.py": "def test_unrelated(): pass\n",
+    })
+    selection = select_tests(["tests/deploy/test_seed.py"])
+    assert set(selection.targets) == {*selector.CI_INTEGRITY_TARGETS,
+                                      "tests/deploy/test_seed.py", "tests/deploy/test_consumer.py"}
+
+
+def test_test_module_consumers_follow_helpers_transitively_and_terminate_cycles(test_module_repository) -> None:
+    test_module_repository({
+        "tests/deploy/test_seed.py": "from tests.ops.test_consumer import marker\ndef test_seed(): pass\n",
+        "tests/ops/helper.py": "from tests.deploy.test_seed import test_seed\n",
+        "tests/ops/test_consumer.py": "from .helper import test_seed\nmarker = 1\ndef test_consumer(): pass\n",
+    })
+    selection = select_tests(["tests/deploy/test_seed.py"])
+    assert set(selection.targets) == {*selector.CI_INTEGRITY_TARGETS,
+                                      "tests/deploy/test_seed.py", "tests/ops/test_consumer.py"}
+
+
+@pytest.mark.parametrize("consumer,content", [
+    ("app/consumer.py", "from tests.deploy.test_seed import shared\n"),
+    ("tests/conftest.py", "from tests.deploy.test_seed import shared\n"),
+    ("tests/ops/__init__.py", "from tests.deploy.test_seed import shared\n"),
+    ("tests/ops/test_consumer.py", "from tests.deploy.test_seed import shared\npytest_plugins = []\n"),
+    ("tests/ops/test_consumer.py", "from tests.deploy.test_seed import shared\ndef pytest_configure(config): pass\n"),
+    ("tests/ops/test_consumer.py", "from tests.deploy.test_seed import shared\nimport importlib\nimportlib.import_module(name)\n"),
+])
+def test_test_module_shared_or_unclear_consumers_keep_broad_ownership(
+    test_module_repository, consumer: str, content: str,
+) -> None:
+    test_module_repository({"tests/deploy/test_seed.py": "shared = 1\ndef test_seed(): pass\n", consumer: content})
+    selection = select_tests(["tests/deploy/test_seed.py"])
+    assert selection.reason == "matched subsystem SoI"
+    assert {"tests/ops", "tests/scripts"} <= set(selection.targets)
+
+
+@pytest.mark.parametrize("content", [
+    "import importlib\nimportlib.import_module(module_name)\ndef test_seed(): pass\n",
+    "from unknown import *\ndef test_seed(): pass\n",
+    "exec('import generated_helper')\ndef test_seed(): pass\n",
+    "def test_seed(:\n",
+    "shared = 1\n",  # A helper does not become a test module through its filename.
+])
+def test_test_module_opaque_changed_code_keeps_broad_ownership(test_module_repository, content: str) -> None:
+    test_module_repository({"tests/deploy/test_seed.py": content})
+    assert select_tests(["tests/deploy/test_seed.py"]).reason == "matched subsystem SoI"
+
+
+@pytest.mark.parametrize("extra", [
+    "tests/ops/conftest.py", "tests/helpers/test_support.py", "tests/fixtures/test_data.py",
+    "tests/ops/support.py", "requirements.txt", ".github/workflows/ci-smoke.yaml",
+    "app/ops/postgres_deploy_linux.py", "tests/unknown_area/test_unknown.py",
+])
+def test_test_module_shared_configuration_mixed_and_unknown_paths_keep_existing_routes(
+    test_module_repository, extra: str,
+) -> None:
+    test_module_repository({"tests/deploy/test_seed.py": "def test_seed(): pass\n", extra: ""})
+    assert select_tests(["tests/deploy/test_seed.py", extra]).reason != "test modules and their static consumers"
+
+
+def test_test_module_deleted_and_renamed_paths_keep_broad_ownership(
+    test_module_repository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = test_module_repository({"tests/deploy/test_old.py": "def test_old(): pass\n"})
+    monkeypatch.chdir(root)
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                        "-c", "commit.gpgsign=false", *args], check=True, capture_output=True)
+    git("commit", "-qm", "initial")
+    git("mv", "tests/deploy/test_old.py", "tests/deploy/test_new.py")
+    git("commit", "-qm", "rename")
+
+    paths = selector.changed_files_from_git("HEAD^", "HEAD")
+    assert set(paths) == {"tests/deploy/test_old.py", "tests/deploy/test_new.py"}
+    selection = select_tests(paths)
+    assert selection.reason == "matched subsystem SoI"
+    assert {"tests/ops", "tests/scripts"} <= set(selection.targets)
+    assert "tests/deploy/test_old.py" not in selector._existing_test_targets(selection.targets)
+    assert "tests/deploy/test_new.py" in selector._existing_test_targets(selection.targets)
+
+
 @pytest.mark.parametrize("shared_path", (
     "tests/conftest.py", "tests/ops/conftest.py", "tests/helpers/test_runtime_support.py",
     "tests/fixtures/test_case.py", "app/ops/native_source_admission.py",
     "tests/integration/test_watcher_cross_process_rebind.py",
-    "tests/deploy/test_postmerge_pg_acceptance.py",
 ))
 def test_shared_fixture_and_product_changes_are_not_test_only(shared_path: str) -> None:
     paths = ["tests/ops/test_dormant_ownership_initialization.py", shared_path]
