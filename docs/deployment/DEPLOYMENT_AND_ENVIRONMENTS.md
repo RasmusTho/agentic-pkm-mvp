@@ -1196,7 +1196,7 @@ python -m app.ops.postgres_deploy_host dev <exact-40-character-sha> \
   --operation-id <fresh-operation-uuid> --principal-cutover --automatic
 ```
 
-`--automatic` is optional here: it runs the existing PG/heavy verification profile for this
+`--automatic` is optional here: it runs the PG profile, not the separate required controller heavy gate after the committed DEV receipt. Both verification stages use this
 same activation, SHA, digest and operation, without requesting a second activation. It does
 not authorize unattended principal migration: the postmerge producer remains unchanged and
 does not supply `--principal-cutover`. Neither DEV nor TEST inherits PROD's forward-only
