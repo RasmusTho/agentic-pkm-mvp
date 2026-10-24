@@ -4857,6 +4857,7 @@ def _render_vault_note_row(note: dict, filename: str, path: str, note_path: str)
     badges_html = kind_badge + review_badge + trust_badge + health_badge
 
     kind_safe = _e(str(kind_val)) if kind_val else ""
+    artifact_uuid = _e(str(note.get("uuid") or ""))
     is_companion = kind_val in _COMPANION_KINDS
     row_extra_class = " vault-browser-row--companion" if is_companion else ""
     row_kind_attr = f' data-kind="{kind_safe}"' if kind_safe else ""
@@ -4870,10 +4871,12 @@ def _render_vault_note_row(note: dict, filename: str, path: str, note_path: str)
     # raw metadata stay in hidden elements (data-* preserved for tests).
     return (
         f'<li class="vault-browser-row{row_extra_class}" '
-        f'data-testid="workspace-vault-browser-note-row" data-active="{active}"'
+        f'data-testid="workspace-vault-browser-note-row" data-note-path="{_e(path)}" '
+        f'data-artifact-uuid="{artifact_uuid}" data-active="{active}"'
         f'{row_kind_attr}{row_companion_attr}{row_nav_attr}{row_hidden_attr}>'
         f'<a href="{href}" class="vault-browser-row-title" '
-        f'data-testid="workspace-vault-browser-note-link" title="{title}">{_e(stem)}</a>'
+        f'data-testid="workspace-vault-browser-note-link" data-note-path="{_e(path)}" '
+        f'data-artifact-uuid="{artifact_uuid}" title="{title}">{_e(stem)}</a>'
         f'<code class="vault-browser-row-path" data-testid="workspace-vault-browser-note-path" '
         f'title="{_e(path)}" hidden>{_e(filename)}</code>'
         f'<span data-testid="workspace-vault-browser-note-zone" '
@@ -5099,6 +5102,28 @@ def _render_vault_browser(
         active_filters=active_filters or {},
         pagination=pagination or {},
     )
+    search_fields: list[str] = []
+    if note_path:
+        search_fields.append(
+            f'<input type="hidden" name="note_path" value="{_e(note_path)}">'
+        )
+    for field, values in (active_filters or {}).items():
+        for value in values:
+            search_fields.append(
+                f'<input type="hidden" name="{_e(str(field))}" value="{_e(str(value))}">'
+            )
+    search_html = (
+        '<form class="vault-browser-search-form" method="get" '
+        'data-testid="workspace-vault-browser-search-form" '
+        'aria-label="Search vault notes">'
+        + "".join(search_fields)
+        + f'<input type="search" class="vault-browser-search" '
+        f'id="workspace-vault-browser-search" '
+        f'data-testid="workspace-vault-browser-search" name="q" '
+        f'value="{query_text}" placeholder="Search by title, path, or note text…" '
+        'autocomplete="off" aria-label="Search vault notes">'
+        "</form>"
+    )
     selected_note = next((n for n in notes if str(n.get("note_path") or "").strip() == note_path), None)
     # #1427 — keep the inspector out of the default browse view. The tree is the
     # surface; the inspector metadata/actions sit behind a collapsed disclosure
@@ -5137,6 +5162,7 @@ def _render_vault_browser(
                   data-testid="workspace-vault-browser-provenance"
                   data-raw-provenance="{_e(vault_provenance)}">{_e(calm_provenance)}</span>
           </div>
+          {search_html}
           {hidden_html}
           {filters_html}
           {state_html}
@@ -11167,6 +11193,40 @@ CODEMIRROR_MODULE_URL = "/static/vendor/codemirror-6.0.1.mjs"
 _VENDOR_STATIC_CACHE: dict[str, tuple[str, bytes]] | None = None
 
 
+def _local_system_tokens_sheet(source: bytes) -> bytes:
+    """Serve the shipped token sheet with the admitted local-font fallback.
+
+    The generated token source retains its design-system provenance, while the
+    Companion gateway's self-contained page removes its remote font import and
+    keeps the accepted system fallbacks. This is the constrained-reuse
+    no-egress normalization; it adds no token or visual language.
+    """
+    text = source.decode("utf-8")
+    text = re.sub(
+        r"^@import url\('https://fonts\.googleapis\.com/[^\n]+\);\n\n",
+        "",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    for original, normalized in (
+        (
+            "--font-display: 'EB Garamond', Georgia, serif;",
+            '--font-display: Georgia, "Times New Roman", serif;',
+        ),
+        (
+            "--font-ui: 'Space Grotesk', system-ui, sans-serif;",
+            '--font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;',
+        ),
+        (
+            "--font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;",
+            "--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;",
+        ),
+    ):
+        text = text.replace(original, normalized)
+    return text.encode("utf-8")
+
+
 def vendor_static_assets() -> dict[str, tuple[str, bytes]]:
     """Preloaded ``request-path -> (Content-Type, bytes)`` map for vendored ESM.
 
@@ -11190,7 +11250,10 @@ def vendor_static_assets() -> dict[str, tuple[str, bytes]]:
         # must stop startup instead of serving unstyled pages.
         try:
             with open(_YGGDRASIL_TOKENS_PATH, "rb") as fh:
-                cache[YGGDRASIL_TOKENS_URL] = ("text/css; charset=utf-8", fh.read())
+                cache[YGGDRASIL_TOKENS_URL] = (
+                    "text/css; charset=utf-8",
+                    _local_system_tokens_sheet(fh.read()),
+                )
         except OSError as exc:
             raise RuntimeError(
                 f"Yggdrasil tokens sheet missing at {_YGGDRASIL_TOKENS_PATH}; "
@@ -11748,9 +11811,6 @@ def render_index_html(
   <meta name="pkm-runtime-channel" content="{_e(runtime_channel)}">
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Real-Note Workspace [{title_suffix}]</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
   {production_static_link}
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
   <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
@@ -11764,7 +11824,7 @@ def render_index_html(
       --au-receipt:    #b98be0;
       --au-local:      #6b7a90;
       --au-blocked:    var(--destructive);
-      --font-mono:     'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      --font-mono:     ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }}
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     /* Global reset: the `hidden` attribute must always win. Several elements
@@ -15701,7 +15761,7 @@ def render_index_html(
       {guidance_callout_markup('vault')}
       <input type="text" class="vault-browser-search" id="vault-browser-search"
              data-testid="vault-browser-search"
-             placeholder="Search by title or path…"
+             placeholder="Search by title, path, or note text…"
              autocomplete="off">
       <ul class="vault-browser-list" id="vault-browser-list"
           data-testid="vault-browser-list"></ul>
@@ -16411,6 +16471,7 @@ def handle_get(
         state = page.load(
             NoteLoadIntent(
                 note_path=note_path,
+                vault_browser_query=params.get("q", [""])[0].strip(),
                 active_filters=active_filters,
                 vault_browser_cursor=cursor,
                 vault_browser_limit=browser_limit,

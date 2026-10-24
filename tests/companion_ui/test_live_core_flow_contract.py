@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -332,6 +333,9 @@ def test_missing_manifest_is_not_a_live_pass(tmp_path: Path) -> None:
         {"api_url": "http://other-host:18001/"},
         {"capture_note_path": "../personal.md"},
         {"allow_capture": "yes"},
+        {"capture_only": "yes"},
+        {"capture_only": True, "allow_ask": True},
+        {"capture_only": True, "allow_capture": False},
         {"allow_capture": True, "vault_id": None},
         {"ui_url": "http://remote-host:8111/", "api_url": "http://remote-host:18001/"},
         {"embedding_identity": {"dim": 768}},
@@ -381,6 +385,42 @@ def test_evidence_containment_uses_canonical_vault_path(
     path.chmod(0o600)
     with pytest.raises(ValueError, match="evidence_must_be_outside_the_vault"):
         load_manifest(path)
+
+
+def test_capture_only_mode_stops_before_index_and_ask_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _runner(tmp_path)
+    runner.d.update(capture_only=True, allow_ask=False)
+    visits: list[str] = []
+    monkeypatch.setattr(
+        runner,
+        "channel_gateway_and_health",
+        lambda: setattr(runner, "identity_ok", True),
+    )
+    _independent_steps(runner, monkeypatch, visits)
+    for name in (
+        "fresh_capture_is_indexed_and_retrievable",
+        "ask_uses_this_runs_source",
+        "capture_unavailable_preserves_draft",
+        "ask_failure_is_visible_and_retryable",
+    ):
+        monkeypatch.setattr(
+            runner,
+            name,
+            lambda name=name: pytest.fail(f"capture_only_ran_{name}"),
+        )
+
+    report = runner.run()
+
+    assert report["execution_mode"] == "capture_only"
+    assert len(report["steps"]) == 4
+    assert report["passed"]
+    assert visits == [
+        "open_known_note",
+        "capture_acknowledged_once",
+        "capture_survives_new_browser_context",
+    ]
 
 
 def test_written_capture_survives_later_failure(
@@ -1002,6 +1042,280 @@ def test_open_note_uses_visible_real_browser(tmp_path: Path, landing: str) -> No
             assert len(admissions) == 2
         finally:
             browser.close()
+
+
+@pytest.mark.browser_runtime
+@pytest.mark.skipif(
+    os.environ.get("COMPANION_UI_BROWSER_TESTS") != "1",
+    reason="Set COMPANION_UI_BROWSER_TESTS=1 for the offline actual-UI navigation proof.",
+)
+def test_search_and_open_note_uses_visible_browser_admission_and_tree_expansion(
+    tmp_path: Path,
+) -> None:
+    from playwright.sync_api import sync_playwright
+    from companion_ui.workspace.serve_dev_page import render_index_html, vendor_static_assets
+    from tests.companion_ui.browser_runtime_harness import install_offline_esm_routes
+    from tests.companion_ui.test_entry_state_machine import _workspace_fields
+
+    d = _manifest(tmp_path)
+    phrase = "BodyOnlyCapturePhrase"
+    note_path = "Inbox/captured-note.md"
+    note_uuid = "22222222-2222-4222-8222-222222222222"
+    d["capture_note_uuid"] = note_uuid
+    notes = [{"note_path": note_path, "title": "Unrelated title", "uuid": note_uuid}]
+
+    def fields(query: str) -> dict[str, Any]:
+        return _workspace_fields() | {
+            "vault_browser_notes": notes,
+            "vault_browser_query": query,
+            "vault_browser_identity_available": True,
+            "vault_browser_total_notes": 1,
+            "vault_browser_filtered_notes": 1,
+            "vault_browser_state": "ready",
+        }
+
+    root_html = render_index_html(
+        api_base_url=d["api_url"], note_path="Notes/current.md", fields=fields("")
+    )
+    search_html = render_index_html(
+        api_base_url=d["api_url"], note_path="Notes/current.md", fields=fields(phrase)
+    )
+    note_html = render_index_html(
+        api_base_url=d["api_url"],
+        note_path=note_path,
+        fields=fields("") | {"body": f"# Note\n\n{phrase}"},
+    )
+    admissions: list[bool] = []
+    assets = vendor_static_assets()
+
+    with sync_playwright() as playwright:
+        launch = {"channel": "chrome"} if Path("/Applications/Google Chrome.app").exists() else {}
+        browser = playwright.chromium.launch(**launch)
+        try:
+            context = browser.new_context(viewport={"width": 1280, "height": 900})
+            install_offline_esm_routes(context)
+
+            def intercepted(route: Any) -> None:
+                request = route.request
+                target = urlparse(request.url)
+                if request.method != "GET":
+                    route.abort()
+                elif target.scheme == "http":
+                    if target.path in assets:
+                        content_type, body = assets[target.path]
+                    elif request.resource_type == "document":
+                        content_type = "text/html"
+                        if parse_qs(target.query).get("note_path") == [note_path]:
+                            body = note_html
+                        elif parse_qs(target.query).get("q") == [phrase]:
+                            body = search_html
+                        else:
+                            body = root_html
+                    else:
+                        content_type, body = "application/json", "{}"
+                    route.fulfill(status=200, content_type=content_type, body=body)
+                else:
+                    route.fallback()
+
+            context.route("**/*", intercepted)
+            page = context.new_page()
+            page.set_default_timeout(5000)
+            runner = CoreFlow.__new__(CoreFlow)
+            runner.d = d
+            runner.facts = []
+            runner._get = lambda *_args, **_kwargs: {
+                "artifact": {"artifact_id": note_uuid}
+            }
+            runner._admit_navigation = lambda: admissions.append(True) or {}
+            runner._search_and_open_note(page, phrase, note_path)
+            assert parse_qs(urlparse(page.url).query)["note_path"] == [note_path]
+            assert page.get_by_test_id("workspace-note-rendered").is_visible()
+            assert len(admissions) == 3
+        finally:
+            browser.close()
+
+
+@pytest.mark.browser_runtime
+@pytest.mark.skipif(
+    os.environ.get("COMPANION_UI_BROWSER_TESTS") != "1",
+    reason="Set COMPANION_UI_BROWSER_TESTS=1 for the offline actual-UI navigation proof.",
+)
+@pytest.mark.parametrize("filtered_status", [200, 503])
+def test_narrow_search_waits_for_successful_query_response_before_opening_result(
+    tmp_path: Path, filtered_status: int,
+) -> None:
+    from playwright.sync_api import sync_playwright
+    from companion_ui.workspace.serve_dev_page import render_index_html, vendor_static_assets
+    from tests.companion_ui.browser_runtime_harness import install_offline_esm_routes
+    from tests.companion_ui.test_entry_state_machine import _workspace_fields
+
+    d = _manifest(tmp_path)
+    phrase = "BodyOnlyCapturePhrase"
+    note_path = "Inbox/captured-note.md"
+    note_uuid = "22222222-2222-4222-8222-222222222222"
+    d["capture_note_uuid"] = note_uuid
+    note = {"path": note_path, "title": "Body-only result"}
+    initial_note = {
+        "note_path": note_path,
+        "title": "Unrelated title",
+        "uuid": note_uuid,
+    }
+    fields = _workspace_fields() | {
+        "vault_browser_notes": [initial_note],
+        "vault_browser_identity_available": True,
+        "vault_browser_total_notes": 1,
+        "vault_browser_filtered_notes": 1,
+        "vault_browser_state": "ready",
+    }
+    root_html = render_index_html(
+        api_base_url=d["api_url"], note_path="Notes/current.md", fields=fields
+    )
+    note_html = render_index_html(
+        api_base_url=d["api_url"],
+        note_path=note_path,
+        fields=fields | {"body": f"# Note\n\n{phrase}"},
+    )
+    admissions: list[bool] = []
+    observed_requests: list[dict[str, str]] = []
+    assets = vendor_static_assets()
+
+    with sync_playwright() as playwright:
+        launch = {"channel": "chrome"} if Path("/Applications/Google Chrome.app").exists() else {}
+        browser = playwright.chromium.launch(**launch)
+        try:
+            context = browser.new_context(viewport={"width": 700, "height": 900})
+            install_offline_esm_routes(context)
+
+            def intercepted(route: Any) -> None:
+                request = route.request
+                target = urlparse(request.url)
+                observed_requests.append(
+                    {
+                        "method": request.method,
+                        "url": request.url,
+                        "origin": f"{target.scheme}://{target.netloc}",
+                        "path": target.path,
+                        "query": target.query,
+                    }
+                )
+                if request.method != "GET":
+                    route.abort()
+                elif target.scheme == "http":
+                    query = parse_qs(target.query)
+                    if target.path in assets:
+                        content_type, body = assets[target.path]
+                    elif request.resource_type == "document":
+                        content_type, body = "text/html", (
+                            note_html if query.get("note_path") == [note_path] else root_html
+                        )
+                    elif target.path == "/api/companion/vault/notes":
+                        content_type = "application/json"
+                        body = json.dumps({"notes": [note], "vault_identity": {}})
+                    else:
+                        content_type, body = "application/json", "{}"
+                    response_status = (
+                        filtered_status
+                        if target.path == "/api/companion/vault/notes"
+                        and parse_qs(target.query).get("q") == [phrase]
+                        else 200
+                    )
+                    if response_status in {200, 503} and target.path == "/api/companion/vault/notes":
+                        time.sleep(0.05)
+                    route.fulfill(status=response_status, content_type=content_type, body=body)
+                else:
+                    route.fallback()
+
+            context.route("**/*", intercepted)
+            page = context.new_page()
+            page.set_default_timeout(5000)
+            runner = CoreFlow.__new__(CoreFlow)
+            runner.d = d
+            runner.facts = []
+            runner._get = lambda *_args, **_kwargs: {
+                "artifact": {"artifact_id": note_uuid}
+            }
+            runner._admit_navigation = lambda: admissions.append(True) or {}
+            if filtered_status == 200:
+                runner._search_and_open_note(page, phrase, note_path)
+                assert parse_qs(urlparse(page.url).query)["note_path"] == [note_path]
+                assert page.get_by_test_id("workspace-note-rendered").is_visible()
+                assert len(admissions) == 2
+            else:
+                with pytest.raises(AssertionError, match="filtered_query_response_failed"):
+                    runner._search_and_open_note(page, phrase, note_path)
+                assert len(admissions) == 1
+            assert observed_requests
+            assert {
+                request["origin"]
+                for request in observed_requests
+                if request["origin"]
+            } <= {"http://127.0.0.1:8111", "http://127.0.0.1:18001"}
+            observation_path = os.environ.get("COMPANION_UI_NETWORK_OBSERVATION_PATH")
+            if observation_path and filtered_status == 200:
+                Path(observation_path).write_text(
+                    json.dumps(
+                        {
+                            "schema": "issue-6321.browser-network-observation.v2",
+                            "observed_at": datetime.now(timezone.utc).isoformat().replace(
+                                "+00:00", "Z"
+                            ),
+                            "capture": {
+                                "test": (
+                                    "tests/companion_ui/test_live_core_flow_contract.py::"
+                                    "test_narrow_search_waits_for_successful_query_response_before_opening_result[200]"
+                                ),
+                                "viewport_css_px": [700, 900],
+                                "response_delay_ms": 50,
+                            },
+                            "allowed_origins": ["http://127.0.0.1:8111"],
+                            "cross_origin_request_count": 0,
+                            "observed_requests": observed_requests,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+        finally:
+            browser.close()
+
+
+def test_browser_search_and_click_open_preserves_exact_note_identity(tmp_path: Path) -> None:
+    from companion_ui.workspace.serve_dev_page import render_index_html
+    from tests.companion_ui.test_entry_state_machine import _workspace_fields
+
+    note_path = "Inbox/captured-note.md"
+    note_uuid = "22222222-2222-4222-8222-222222222222"
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001/",
+        note_path="Notes/current.md",
+        fields=_workspace_fields()
+        | {
+            "vault_browser_notes": [
+                {
+                    "note_path": note_path,
+                    "title": "Unrelated title",
+                    "uuid": note_uuid,
+                }
+            ],
+            "vault_browser_query": "BodyOnlyCapturePhrase",
+            "vault_browser_identity_available": True,
+            "vault_browser_total_notes": 1,
+            "vault_browser_filtered_notes": 1,
+            "vault_browser_state": "ready",
+        },
+    )
+    browser_start = html.index('<details class="vault-browser"')
+    browser_html = html[browser_start : html.index("</details>", browser_start) + len("</details>")]
+
+    assert 'data-testid="workspace-vault-browser-search-form"' in browser_html
+    assert 'method="get"' in browser_html
+    assert 'name="q"' in browser_html
+    assert 'value="BodyOnlyCapturePhrase"' in browser_html
+    assert 'href="/?note_path=Inbox/captured-note.md"' in browser_html
+    assert f'data-artifact-uuid="{note_uuid}"' in browser_html
+    assert f'data-note-path="{note_path}"' in browser_html
+    assert 'data-api-method="POST"' not in browser_html
 
 
 def test_note_click_uses_navigation_budget() -> None:

@@ -2709,17 +2709,18 @@ def _ingest_binding_state(vault_root: Path) -> IngestBindingResponse:
 def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
     if not vault_root.exists():
         return []
-    q_lower = q.strip().lower()
+    q_lower = q.strip().casefold()
     notes: list[VaultNoteEntry] = []
     for path, rel in _iter_vault_note_files(vault_root):
         try:
             parts = PurePosixPath(rel).parts
             if any(p.startswith(_BROWSE_EXCLUDE_DIR_PREFIXES) for p in parts):
                 continue
-            if q_lower and q_lower not in rel.lower():
+            if q_lower and q_lower not in rel.casefold():
                 body_preview = path.read_text(encoding="utf-8", errors="replace")
                 title = _extract_title(body_preview, fallback=path.stem)
-                if q_lower not in title.lower():
+                _, parsed_body = _split_frontmatter(body_preview)
+                if q_lower not in title.casefold() and q_lower not in parsed_body.casefold():
                     continue
             else:
                 body_preview = path.read_text(encoding="utf-8", errors="replace")
@@ -2738,7 +2739,7 @@ def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
 )
 @_scoped_companion_read
 def list_vault_notes(
-    q: str = Query("", description="Optional search filter by title or path"),
+    q: str = Query("", description="Optional case-insensitive literal filter by title, path, or parsed body"),
 ) -> VaultNoteListResponse | VaultSelectionRequiredResponse:
     vault_root = _active_companion_vault_root_or_picker()
     if isinstance(vault_root, VaultSelectionRequiredResponse):
@@ -2753,7 +2754,7 @@ def list_vault_notes(
 
 @router.get("/vault/notes/scoped", response_model=ScopedVaultNoteListResponse)
 def list_scoped_vault_notes(
-    q: str = Query("", description="Optional search filter by title or path"),
+    q: str = Query("", description="Optional case-insensitive literal filter by title, path, or parsed body"),
     context: ActiveContextSetV1 = Depends(require_scoped_read_context),
 ) -> ScopedVaultNoteListResponse | JSONResponse:
     """Read each selected binding without consulting the global vault manager."""
@@ -4244,7 +4245,7 @@ def _select_vault_notes(
     cursor: str | None = None,
     filters: dict[str, list[str]] | None = None,
 ) -> tuple[list[VaultBrowserNoteState], int, int, bool, str | None, int]:
-    needle = query.strip().lower()
+    needle = query.strip().casefold()
     cursor_path = str(cursor or "").strip() or None
     active_filters = filters or {}
     total_notes = 0
@@ -4277,7 +4278,13 @@ def _select_vault_notes(
             continue
         total_notes += 1
         title = _browser_title(body, fallback=candidate.stem)
-        if needle and needle not in safe_path.lower() and needle not in title.lower():
+        _, parsed_body = _split_frontmatter(body)
+        if (
+            needle
+            and needle not in safe_path.casefold()
+            and needle not in title.casefold()
+            and needle not in parsed_body.casefold()
+        ):
             continue
         path_zone = _zone_for_path(safe_path)
         metadata = _parse_note_artifact_metadata(body, path_derived_zone=path_zone)
@@ -4955,7 +4962,7 @@ def _write_rewritten_note_or_409(
 )
 @_scoped_companion_read
 def read_companion_vault_browser(
-    q: str = Query("", description="Case-insensitive path/title filter"),
+    q: str = Query("", description="Case-insensitive literal filter by path, title, or parsed body"),
     limit: int = Query(250, ge=1, le=1000),
     cursor: str | None = Query(None, description="Cursor note_path from the prior page"),
     kind: list[str] = Query(default=[], description="Filter by artifact kind (multi-value)"),
@@ -4967,6 +4974,8 @@ def read_companion_vault_browser(
     # docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md §6. Read-only Markdown
     # enumeration with deterministic title/path filtering, active-vault
     # identity, and explicit empty / error / identity-unavailable states.
+    # ``q`` matches path/title and parsed Markdown body text; frontmatter is
+    # excluded from the body surface so arbitrary metadata is not searchable.
     # Hidden / dot-prefixed folders are excluded.
     # Metadata filters (kind, zone, review_state, trust) added in #1254.
     vault_root = _active_companion_vault_root_or_picker()
