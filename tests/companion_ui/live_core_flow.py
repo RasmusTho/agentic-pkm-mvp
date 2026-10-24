@@ -548,9 +548,12 @@ class CoreFlow:
         else:
             route.abort("blockedbyclient")
 
-    def _get(self, url: str) -> dict[str, Any]:
+    def _get(self, url: str, *, page: Any | None = None) -> dict[str, Any]:
         try:
-            response = self.page.request.get(url, timeout=self.d["request_ms"], max_redirects=0)
+            request_page = page or self.page
+            response = request_page.request.get(
+                url, timeout=self.d["request_ms"], max_redirects=0
+            )
         except Exception as exc:
             raise Blocked("endpoint_unreachable") from exc
         if not response.ok:
@@ -682,6 +685,89 @@ class CoreFlow:
                 return
         raise AssertionError("approved_note_not_reachable_in_browser")
 
+    def _search_and_open_note(self, page: Any, phrase: str, expected_path: str) -> None:
+        """Discover a note through the visible Vault Browser q surface, then open it."""
+        self._admit_navigation()
+        if phrase.casefold() in expected_path.casefold():
+            raise AssertionError("search_phrase_is_not_body_only")
+        page.goto(self.d["ui_url"], wait_until="domcontentloaded")
+
+        pane = page.locator('[data-testid="workspace-vault-browser"]:visible').first
+        if not pane.count():
+            opened = False
+            for selector in (
+                '[data-testid="workspace-vault-chip"]',
+                '[data-intent="vault.open"]',
+                '[data-testid="vault-browse-button"]',
+            ):
+                controls = page.locator(selector)
+                for n in range(controls.count()):
+                    item = controls.nth(n)
+                    if item.is_visible():
+                        item.click()
+                        opened = True
+                        break
+                if opened:
+                    break
+            if not opened:
+                raise AssertionError("vault_browse_control_missing")
+            pane = page.locator('[data-testid="workspace-vault-browser"]:visible').first
+
+        persistent_search = page.locator(
+            '[data-testid="workspace-vault-browser-search"]:visible'
+        ).first
+        if persistent_search.count():
+            persistent_search.fill(phrase)
+            persistent_search.press("Enter")
+            page.wait_for_load_state("domcontentloaded")
+            pane = page.locator('[data-testid="workspace-vault-browser"]:visible').first
+            pane.wait_for(state="visible")
+            links = pane.get_by_test_id("workspace-vault-browser-note-link")
+            for n in range(links.count()):
+                link = links.nth(n)
+                href = link.get_attribute("href") or ""
+                if parse_qs(urlparse(href).query).get("note_path") != [expected_path]:
+                    continue
+                title = link.get_attribute("title") or ""
+                if phrase.casefold() in title.casefold():
+                    raise AssertionError("search_phrase_is_not_body_only")
+                self._admit_navigation()
+                link.click(timeout=self.d["navigation_ms"])
+                break
+            else:
+                raise AssertionError("body_phrase_not_found_in_visible_browser")
+        else:
+            # The narrow overlay is the existing client-search reference. Its
+            # response carries only the exact read-only path/title identity.
+            search = page.locator('[data-testid="vault-browser-search"]:visible').first
+            if not search.count():
+                self._admit_navigation()
+                page.evaluate("window.vaultBrowser.open()")
+                search = page.locator('[data-testid="vault-browser-search"]:visible').first
+            search.fill(phrase)
+            item = page.locator(
+                '[data-testid="vault-browser-list"] li[data-note-path]'
+            ).filter(has_text=expected_path).first
+            item.wait_for(state="visible")
+            if phrase.casefold() in item.inner_text().casefold():
+                raise AssertionError("search_phrase_is_not_body_only")
+            item.click()
+
+        page.get_by_test_id("workspace-note-rendered").wait_for(state="visible")
+        if parse_qs(urlparse(page.url).query).get("note_path") != [expected_path]:
+            raise AssertionError("visible_search_opened_wrong_note")
+        note = self._get(
+            urljoin(self.d["api_url"], "/api/companion/workspace")
+            + "?note_path="
+            + quote(expected_path),
+            page=page,
+        )
+        if note.get("artifact", {}).get("artifact_id") != self.d["capture_note_uuid"]:
+            raise AssertionError("visible_search_note_identity_mismatch")
+        body = page.get_by_test_id("workspace-note-rendered").inner_text()
+        if phrase not in body or not all(fact in body for fact in self.facts):
+            raise AssertionError("visible_search_note_body_mismatch")
+
     def open_known_note(self) -> None:
         self._need_identity()
         self._open_note(self.page, self.d["known_note_path"])
@@ -738,12 +824,13 @@ class CoreFlow:
         self._need_identity()
         if not self.capture_verified:
             raise Blocked("no_verified_capture")
+        self._search_and_open_note(self.page, self.text, self.d["capture_note_path"])
         context = self.browser.new_context()
         try:
             page = context.new_page()
             page.set_default_navigation_timeout(self.d["navigation_ms"])
             page.set_default_timeout(10000)
-            self._open_note(page, self.d["capture_note_path"])
+            self._search_and_open_note(page, self.text, self.d["capture_note_path"])
             text = page.get_by_test_id("workspace-note-rendered").inner_text()
             if text.count(self.marker) != 1 or not all(x in text for x in self.facts):
                 raise AssertionError("fresh_context_did_not_read_capture")

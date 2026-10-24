@@ -131,7 +131,7 @@ Supported filter dimensions (capability map; subset shipped per MLP):
 - relation type
 - receipt state
 
-Ranking, when used, must be **explicit and observable**: the browser must be able to show which signals contributed to a result's position. Implicit semantic ranking without surfaced signals is out of scope. Deterministic filters (text, path, title) are preferred and required as the default.
+Ranking, when used, must be **explicit and observable**: the browser must be able to show which signals contributed to a result's position. Implicit semantic ranking without surfaced signals is out of scope. Deterministic filters (text, path, title, and parsed body text) are preferred and required as the default.
 
 Artifact-scoped Find may rank related artifacts only when the response surfaces the contributing
 signals and their weights/provenance. Current deterministic signals include vault wikilinks,
@@ -391,7 +391,7 @@ Vault Browser MLP v0 provides:
     API-key gated like the other vault-mutation-adjacent routes.
 - a `read_only: true` invariant on the browser endpoint
 - active vault/channel identity in the response payload (`vault_identity`, `identity_available`)
-- deterministic case-insensitive path/title filtering via a single `q` parameter
+- deterministic case-insensitive literal path/title/parsed-body filtering via a single `q` parameter; body matching excludes the parsed frontmatter block so arbitrary metadata is not a hidden search surface
 - selecting a note loads it into the Companion workspace (read path only)
 - exclusion of files outside the vault root
 - explicit empty / error / identity-unavailable UI states with stable test IDs
@@ -402,7 +402,7 @@ Vault Browser MLP v0 provides:
 
 Vault Browser MLP v0 explicitly does **not** provide:
 
-- metadata-aware filters beyond text/path/title
+- metadata-aware filters beyond text/path/title/parsed-body text
 - artifact inspector
 - relation, activity, health, or receipt projections
 - semantic / vector ranking
@@ -473,7 +473,7 @@ The browser surface must make degradation legible. Silent degradation is a contr
 For future implementation issues, this contract requires:
 
 - The server/runtime owns vault enumeration and metadata normalization. Clients render server-declared state and server-declared action modes.
-- Deterministic filters (text/path/title) are the default. Any added ranking must surface its signals.
+- Deterministic filters (text/path/title/parsed body text) are the default. Any added ranking must surface its signals.
 - Topology-derived ordering, overlays, or filters require surfaced source, authority role, provenance, degradation state, and ranking/filter signals. Until those fields exist, topology-derived zones are explanatory metadata only.
 - The browser endpoint must remain read-only in the HTTP sense at the MLP v0 boundary (no mutating verbs accepted on the browser route).
 - UI states (`empty`, `error`, `identity-unavailable`, future `degraded`/`blocked`) must have stable test IDs / data attributes so contract tests can assert them.

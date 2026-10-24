@@ -1004,6 +1004,44 @@ def test_open_note_uses_visible_real_browser(tmp_path: Path, landing: str) -> No
             browser.close()
 
 
+def test_browser_search_and_click_open_preserves_exact_note_identity(tmp_path: Path) -> None:
+    from companion_ui.workspace.serve_dev_page import render_index_html
+    from tests.companion_ui.test_entry_state_machine import _workspace_fields
+
+    note_path = "Inbox/captured-note.md"
+    note_uuid = "22222222-2222-4222-8222-222222222222"
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001/",
+        note_path="Notes/current.md",
+        fields=_workspace_fields()
+        | {
+            "vault_browser_notes": [
+                {
+                    "note_path": note_path,
+                    "title": "Unrelated title",
+                    "uuid": note_uuid,
+                }
+            ],
+            "vault_browser_query": "BodyOnlyCapturePhrase",
+            "vault_browser_identity_available": True,
+            "vault_browser_total_notes": 1,
+            "vault_browser_filtered_notes": 1,
+            "vault_browser_state": "ready",
+        },
+    )
+    browser_start = html.index('<details class="vault-browser"')
+    browser_html = html[browser_start : html.index("</details>", browser_start) + len("</details>")]
+
+    assert 'data-testid="workspace-vault-browser-search-form"' in browser_html
+    assert 'method="get"' in browser_html
+    assert 'name="q"' in browser_html
+    assert 'value="BodyOnlyCapturePhrase"' in browser_html
+    assert 'href="/?note_path=Inbox/captured-note.md"' in browser_html
+    assert f'data-artifact-uuid="{note_uuid}"' in browser_html
+    assert f'data-note-path="{note_path}"' in browser_html
+    assert 'data-api-method="POST"' not in browser_html
+
+
 def test_note_click_uses_navigation_budget() -> None:
     observed = []
     link = SimpleNamespace(

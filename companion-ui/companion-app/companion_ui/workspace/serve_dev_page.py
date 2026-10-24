@@ -4857,6 +4857,7 @@ def _render_vault_note_row(note: dict, filename: str, path: str, note_path: str)
     badges_html = kind_badge + review_badge + trust_badge + health_badge
 
     kind_safe = _e(str(kind_val)) if kind_val else ""
+    artifact_uuid = _e(str(note.get("uuid") or ""))
     is_companion = kind_val in _COMPANION_KINDS
     row_extra_class = " vault-browser-row--companion" if is_companion else ""
     row_kind_attr = f' data-kind="{kind_safe}"' if kind_safe else ""
@@ -4870,10 +4871,12 @@ def _render_vault_note_row(note: dict, filename: str, path: str, note_path: str)
     # raw metadata stay in hidden elements (data-* preserved for tests).
     return (
         f'<li class="vault-browser-row{row_extra_class}" '
-        f'data-testid="workspace-vault-browser-note-row" data-active="{active}"'
+        f'data-testid="workspace-vault-browser-note-row" data-note-path="{_e(path)}" '
+        f'data-artifact-uuid="{artifact_uuid}" data-active="{active}"'
         f'{row_kind_attr}{row_companion_attr}{row_nav_attr}{row_hidden_attr}>'
         f'<a href="{href}" class="vault-browser-row-title" '
-        f'data-testid="workspace-vault-browser-note-link" title="{title}">{_e(stem)}</a>'
+        f'data-testid="workspace-vault-browser-note-link" data-note-path="{_e(path)}" '
+        f'data-artifact-uuid="{artifact_uuid}" title="{title}">{_e(stem)}</a>'
         f'<code class="vault-browser-row-path" data-testid="workspace-vault-browser-note-path" '
         f'title="{_e(path)}" hidden>{_e(filename)}</code>'
         f'<span data-testid="workspace-vault-browser-note-zone" '
@@ -5099,6 +5102,28 @@ def _render_vault_browser(
         active_filters=active_filters or {},
         pagination=pagination or {},
     )
+    search_fields: list[str] = []
+    if note_path:
+        search_fields.append(
+            f'<input type="hidden" name="note_path" value="{_e(note_path)}">'
+        )
+    for field, values in (active_filters or {}).items():
+        for value in values:
+            search_fields.append(
+                f'<input type="hidden" name="{_e(str(field))}" value="{_e(str(value))}">'
+            )
+    search_html = (
+        '<form class="vault-browser-search-form" method="get" '
+        'data-testid="workspace-vault-browser-search-form" '
+        'aria-label="Search vault notes">'
+        + "".join(search_fields)
+        + f'<input type="search" class="vault-browser-search" '
+        f'id="workspace-vault-browser-search" '
+        f'data-testid="workspace-vault-browser-search" name="q" '
+        f'value="{query_text}" placeholder="Search by title, path, or note text…" '
+        'autocomplete="off" aria-label="Search vault notes">'
+        "</form>"
+    )
     selected_note = next((n for n in notes if str(n.get("note_path") or "").strip() == note_path), None)
     # #1427 — keep the inspector out of the default browse view. The tree is the
     # surface; the inspector metadata/actions sit behind a collapsed disclosure
@@ -5137,6 +5162,7 @@ def _render_vault_browser(
                   data-testid="workspace-vault-browser-provenance"
                   data-raw-provenance="{_e(vault_provenance)}">{_e(calm_provenance)}</span>
           </div>
+          {search_html}
           {hidden_html}
           {filters_html}
           {state_html}
@@ -15701,7 +15727,7 @@ def render_index_html(
       {guidance_callout_markup('vault')}
       <input type="text" class="vault-browser-search" id="vault-browser-search"
              data-testid="vault-browser-search"
-             placeholder="Search by title or path…"
+             placeholder="Search by title, path, or note text…"
              autocomplete="off">
       <ul class="vault-browser-list" id="vault-browser-list"
           data-testid="vault-browser-list"></ul>
@@ -16411,6 +16437,7 @@ def handle_get(
         state = page.load(
             NoteLoadIntent(
                 note_path=note_path,
+                vault_browser_query=params.get("q", [""])[0].strip(),
                 active_filters=active_filters,
                 vault_browser_cursor=cursor,
                 vault_browser_limit=browser_limit,

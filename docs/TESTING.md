@@ -130,14 +130,19 @@ the pilot does not make Product/Builder runtime TypeSafe acceptance claims.
 The live core-flow suite is `tests/companion_ui/test_companion_ui_live_core_flow.py`. It uses the
 same installed pytest/Playwright runtime and runs one serial journey per explicit private
 dev/test manifest. Its eight results cover channel/build/health, note navigation, one governed
-capture, a fresh-context readback, exact object/vector freshness and retrieval, one grounded ASK,
-and two browser-local failure cases. Required model-health failure does not hide independent
+capture, visible literal-body search and click-open in the current and a fresh browser context,
+exact object/vector freshness and direct retrieval diagnostics, one grounded ASK, and two
+browser-local failure cases. The visible search/click-open result is the human-facing proof;
+native admission, capture acknowledgement, direct API/index checks, and object/vector freshness
+remain supporting diagnostics. Required model-health failure does not hide independent
 navigation or capture results after channel, build and fixture checks succeed. Dependent steps
 report `blocked` when their prerequisite could not be proved; their pytest assertions are nonzero.
 Navigation uses the entry page's actionable browse control and scopes folder/note selection to
 the visible browser, excluding its hidden responsive copy. Offline renderer-backed navigation
 proofs in `test_live_core_flow_contract.py` run with `COMPANION_UI_BROWSER_TESTS=1` for both
-cold-start and document entry pages, without reaching a real application endpoint.
+cold-start and document entry pages, without reaching a real application endpoint. Opt-in
+DEV/TEST execution remains separate, current-candidate, non-closing technical acceptance
+evidence; a blocked or skipped live run is not a PASS and does not close the governing lifecycle.
 
 ```sh
 COMPANION_UI_LIVE_CORE_FLOW=1 \
