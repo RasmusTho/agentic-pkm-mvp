@@ -291,9 +291,16 @@ class IssueAuthority:
     supporting_issues: tuple[int, ...]
 
 
+def has_issue_lifecycle_marker(pr_body: object) -> bool:
+    """Recognize even malformed native lifecycle declarations; never closure authority."""
+    return isinstance(pr_body, str) and re.search(
+        r"(?im)^[ \t]*Issue-Lifecycle\b", pr_body
+    ) is not None
+
+
 def resolve_issue_authority(pr_body: object) -> IssueAuthority | None:
     """Resolve governing, closing, and evidence-only issue identities."""
-    if not isinstance(pr_body, str):
+    if not isinstance(pr_body, str) or has_issue_lifecycle_marker(pr_body):
         return None
     # GitHub bodies can arrive with CRLF at API boundaries. Canonicalize that
     # transport representation, but reject lone CR and JavaScript-only Unicode
@@ -412,7 +419,7 @@ def has_neutralized_closing_marker(pr_body: object) -> bool:
 
 def resolve_neutralized_issue_authority(pr_body: object) -> IssueAuthority | None:
     """Resolve the bounded non-closing authority used only during exact-head merge."""
-    if not isinstance(pr_body, str) or re.search(r"\r(?!\n)|[\u2028\u2029]", pr_body):
+    if not isinstance(pr_body, str) or has_issue_lifecycle_marker(pr_body) or re.search(r"\r(?!\n)|[\u2028\u2029]", pr_body):
         return None
     canonical_body = pr_body.replace("\r\n", "\n")
     governing_lines = GOVERNING_ISSUE_LINE_PATTERN.findall(canonical_body)

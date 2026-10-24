@@ -11,6 +11,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.dispatcher.verification_contract import (
+    GOVERNING_ISSUE_LINE_PATTERN,
+    GOVERNING_ISSUE_PATTERN,
+    SUPPORTING_ISSUE_PATTERN,
+    IssueAuthority,
+    has_closing_issue_attempt,
+    has_issue_lifecycle_marker,
+    resolve_issue_authority,
+)
 
 LANES = frozenset({"implementation", "docs-authoring", "governance", "direct-repair"})
 DIRECT_REPAIR_TYPES = frozenset({"docs", "governance", "code"})
@@ -61,6 +73,7 @@ class PRBodyInputs:
     owner_doc_followup_issue: str | None = None
     closing_issues: tuple[int, ...] | None = None
     pickup_receipt: str | None = None
+    non_closing: bool = False
 
 
 def generate_pr_body(inputs: PRBodyInputs) -> str:
@@ -73,7 +86,7 @@ def generate_pr_body(inputs: PRBodyInputs) -> str:
     sections.extend([
         _change_lane_section(inputs.lane, inputs.final_review_rounds),
         _linked_issue_section(
-            inputs.issue_number, inputs.closing_issues, inputs.pickup_receipt
+            inputs.issue_number, inputs.closing_issues, inputs.pickup_receipt, inputs.non_closing
         ),
         _sbs_impact_section(inputs.sbs_impact),
         _owner_doc_section(inputs),
@@ -81,7 +94,10 @@ def generate_pr_body(inputs: PRBodyInputs) -> str:
         _builderops_section(inputs),
         f"## Notes\n{inputs.notes.strip()}",
     ])
-    return "\n\n".join(sections).rstrip() + "\n"
+    body = "\n\n".join(sections).rstrip() + "\n"
+    if inputs.non_closing and resolve_native_issue_authority(body) is None:
+        raise PRBodyGeneratorError("non-closing body contains malformed or mixed Issue authority")
+    return body
 
 
 def generate_pr_body_from_mapping(data: Mapping[str, Any]) -> str:
@@ -114,6 +130,7 @@ def _inputs_from_mapping(data: Mapping[str, Any]) -> PRBodyInputs:
         direct_repair_reason=_optional_text(data.get("direct_repair_reason")),
         direct_repair_validation=_optional_text(data.get("direct_repair_validation")),
         pickup_receipt=_optional_text(data.get("pickup_receipt")),
+        non_closing=data.get("non_closing", False),
     )
 
 
@@ -122,7 +139,13 @@ def _validate_inputs(inputs: PRBodyInputs) -> None:
         raise PRBodyGeneratorError(f"lane must be one of: {', '.join(sorted(LANES))}")
     if inputs.issue_number is not None and inputs.issue_number <= 0:
         raise PRBodyGeneratorError("issue_number must be positive")
-    if inputs.closing_issues is not None and (
+    if type(inputs.non_closing) is not bool:
+        raise PRBodyGeneratorError("non_closing must be an explicit boolean")
+    if inputs.non_closing and (
+        inputs.issue_number is None or inputs.closing_issues != ()
+    ):
+        raise PRBodyGeneratorError("non_closing requires a governing Issue and explicit empty closing_issues")
+    if not inputs.non_closing and inputs.closing_issues is not None and (
         inputs.issue_number is None or not inputs.closing_issues
         or len(inputs.closing_issues) > 10
         or any(type(n) is not int or n <= 0 for n in inputs.closing_issues)
@@ -184,6 +207,7 @@ def _linked_issue_section(
     issue_number: int | None,
     closing_issues: tuple[int, ...] | None,
     pickup_receipt: str | None,
+    non_closing: bool = False,
 ) -> str:
     if issue_number is None:
         return "## Linked Issue\n"
@@ -192,8 +216,38 @@ def _linked_issue_section(
         f"Governing-Issue: #{issue_number}\n\n"
         "## Linked Issue\n"
         f"Pickup-Receipt: {pickup_receipt}\n"
-        + "\n".join(f"Closes #{number}" for number in sorted(closing))
+        + ("Issue-Lifecycle: non-closing" if non_closing else
+           "\n".join(f"Closes #{number}" for number in sorted(closing)))
     )
+
+
+def resolve_native_issue_authority(pr_body: object) -> IssueAuthority | None:
+    """Resolve native intake only; executor closure authority stays nonempty."""
+    if not has_issue_lifecycle_marker(pr_body):
+        return resolve_issue_authority(pr_body)
+    if not isinstance(pr_body, str) or re.search(r"\r(?!\n)|[\u2028\u2029]", pr_body):
+        return None
+    body = pr_body.replace("\r\n", "\n")
+    governing = GOVERNING_ISSUE_PATTERN.findall(body)
+    receipts = re.findall(r"(?m)^Pickup-Receipt:[ \t]*(.*)$", body)
+    if (
+        len(GOVERNING_ISSUE_LINE_PATTERN.findall(body)) != 1 or len(governing) != 1
+        or len(re.findall(r"(?im)^[ \t]*Issue-Lifecycle\b.*$", body)) != 1
+        or len(re.findall(r"(?m)^Issue-Lifecycle: non-closing[ \t]*$", body)) != 1
+        or has_closing_issue_attempt(body)
+        or re.search(r"(?im)^[ \t]*Verified-Closing-Issues\b", body)
+        or len(re.findall(r"(?im)^[ \t]*Pickup-Receipt\b.*$", body)) != 1
+        or len(receipts) != 1
+    ):
+        return None
+    number = int(governing[0])
+    try:
+        _validate_pickup_receipt(receipts[0], number, ())
+    except PRBodyGeneratorError:
+        return None
+    supporting = tuple(sorted({int(n) for n in SUPPORTING_ISSUE_PATTERN.findall(body)
+                               if int(n) != number}))
+    return IssueAuthority(number, (), supporting)
 
 
 def _sbs_impact_section(values: Mapping[str, str]) -> str:
@@ -349,7 +403,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-json", type=Path, help="JSON object with PR body inputs.")
     parser.add_argument("--lane", choices=sorted(LANES))
     parser.add_argument("--issue-number", type=int)
-    parser.add_argument("--closing-issue", type=int, action="append")
+    closing = parser.add_mutually_exclusive_group()
+    closing.add_argument("--closing-issue", type=int, action="append")
+    closing.add_argument("--non-closing", action="count", default=0)
     parser.add_argument("--summary", action="append", default=[])
     parser.add_argument("--sbs", action="append", default=[], help="SBS field as key=value.")
     parser.add_argument("--owner-doc-resolution", choices=sorted(OWNER_DOC_RESOLUTIONS))
@@ -368,7 +424,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.non_closing > 1 or (args.input_json and args.non_closing):
+        parser.error("declare --non-closing once in argument mode, or use non_closing in JSON input")
     try:
         if args.input_json:
             body = generate_pr_body_from_mapping(
@@ -378,7 +437,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             body = generate_pr_body(PRBodyInputs(
                 lane=args.lane or "",
                 issue_number=args.issue_number,
-                closing_issues=tuple(args.closing_issue) if args.closing_issue is not None else None,
+                closing_issues=tuple(args.closing_issue) if args.closing_issue is not None else (() if args.non_closing else None),
+                non_closing=bool(args.non_closing),
                 summary=tuple(args.summary),
                 sbs_impact=_parse_sbs(args.sbs),
                 owner_doc_resolution=args.owner_doc_resolution or "",

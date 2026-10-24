@@ -431,10 +431,13 @@ Distinct trusted receipts for the same PR/candidate/Issue identity are conflicti
 closed; byte-identical duplicates are idempotent.
 The executable gate
 fetches the current PR, complete paginated review summaries, inline review comments, PR conversation,
-and, for issue-backed work, the governing Issue itself. Issue-free docs, governance, and direct-repair
+and, for issue-backed work, the governing Issue itself. Native scope binding also accepts the
+explicit non-closing intake shape owned by `PR_HOT_PATH.md :: PR Body Preparation`: the governing
+Issue and its exact pickup receipt still bind the contract, while the closing set stays empty.
+This intake shape supplies no dispatched/fenced closure authority. Issue-free docs, governance, and direct-repair
 PRs instead authenticate one complete lane/direct-repair contract in the live PR body, require its
 canonical classification to match the publication invocation lane, and reject ordinary or
-neutralized Issue authority plus unsupported line separators and indented lane markers. A Direct
+neutralized Issue authority or lifecycle declarations plus unsupported line separators and indented lane markers. A Direct
 Repair contract has exactly one unindented `## Direct Repair` heading and exactly one canonical
 full-line occurrence of each required field; malformed, duplicate, or conflicting blocks and fields
 fail closed. Lane and Direct Repair classification use the explicit ECMAScript whitespace set: Python-only C0/U+0085

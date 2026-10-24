@@ -82,6 +82,15 @@ opens or updates a PR. Required lane inputs must be concrete:
 
 - implementation lane requires a governing issue; an explicit `closing_issues` list may name up to
   ten unique positive IDs independently of that governing parent; the generator does not infer a set;
+- native issue-backed intake may explicitly keep its governing Issue open for post-merge proof:
+  supply `non_closing: true` and `closing_issues: []` in body input, and `--non-closing` to
+  `publication.py plan` (or the standalone generator). The body carries exactly one
+  `Issue-Lifecycle: non-closing` declaration, one governing Issue and its exact pickup receipt,
+  with no closing keywords or `Verified-Closing-Issues` authority. An empty set without this
+  opt-in, a missing/foreign receipt, or mixed lifecycle declarations fails closed. Ordinary
+  omitted closing input still closes the governing Issue; explicit batches retain the one-to-ten
+  limit. This native intake shape does not authorize dispatched/fenced verification or final Issue
+  closure; the governing Issue stays open until its remaining acceptance is proved;
 - closing authority must be declared only on a dedicated `Fixes #<id>`, `Closes #<id>`, or
   `Resolves #<id>` line; narrative prose must never place a closing keyword directly adjacent to
   `#<id>`;

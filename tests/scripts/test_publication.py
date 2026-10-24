@@ -526,6 +526,58 @@ class RealBodyExecutor(FakeExecutor):
         return super().run(argv, cwd=cwd, input_text=input_text)
 
 
+@pytest.mark.parametrize("existing", [False, True])
+def test_explicit_nonclosing_publication_preserves_empty_set_through_real_constructor_and_apply(tmp_path: Path, existing: bool) -> None:
+    (tmp_path / "feature.txt").write_text("new\n", encoding="utf-8")
+    inputs = {**BODY_INPUTS, "non_closing": True, "closing_issues": []}
+    request = replace(_request(tmp_path), pr_body_inputs=inputs, closing_issues=())
+    executor = RealBodyExecutor(tmp_path)
+    if existing:
+        executor.head_sha = "b" * 40
+        executor.remote_head = executor.head_sha
+        executor.pr_body = generate_pr_body_from_mapping(inputs)
+        pr = executor._exact_pr()
+        pr["body"] = generate_pr_body_from_mapping({**inputs, "notes": "Earlier publication metadata."})
+        pr["head"]["sha"] = executor.head_sha
+        executor.prs = [pr]
+        request = replace(request, existing_pr_number=6000)
+    plan = build_publication_plan(request, executor=executor)
+    assert plan["closing_issues"] == []
+    assert plan["governing_issue"]["number"] == 5230
+    assert "Issue-Lifecycle: non-closing" in plan["pr"]["body"]
+    assert "Closes #" not in plan["pr"]["body"]
+    assert any("--non-closing" in call for call in executor.calls)
+    receipt = apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=executor)
+    assert receipt["outcome"] == "success"
+    assert executor.prs[0]["body"] == plan["pr"]["body"]
+
+
+@pytest.mark.parametrize("changes", [
+    {"closing_issues": None}, {"closing_issues": (5230,)},
+    {"pr_body_inputs": {**BODY_INPUTS, "closing_issues": []}},
+    {"pr_body_inputs": {**BODY_INPUTS, "non_closing": True}},
+    {"pr_body_inputs": {**BODY_INPUTS, "non_closing": True, "closing_issues": [5230]}},
+    {"governing_issue": None},
+])
+def test_nonclosing_publication_refuses_ambiguous_scope_before_effects(tmp_path: Path, changes: dict) -> None:
+    (tmp_path / "feature.txt").write_text("new\n", encoding="utf-8")
+    inputs = {**BODY_INPUTS, "non_closing": True, "closing_issues": []}
+    request = replace(_request(tmp_path), pr_body_inputs=inputs, closing_issues=())
+    executor = RealBodyExecutor(tmp_path)
+    with pytest.raises(PublicationRefusal):
+        build_publication_plan(replace(request, **changes), executor=executor)
+    assert not any(call[:2] in (("git", "add"), ("git", "push"), ("git", "commit")) for call in executor.calls)
+
+
+def test_nonclosing_publication_requires_governing_issue_active_claim(tmp_path: Path) -> None:
+    (tmp_path / "feature.txt").write_text("new\n", encoding="utf-8")
+    inputs = {**BODY_INPUTS, "non_closing": True, "closing_issues": []}
+    executor = RealBodyExecutor(tmp_path)
+    executor.issue["labels"] = []
+    with pytest.raises(PublicationRefusal, match="actively claimed"):
+        build_publication_plan(replace(_request(tmp_path), pr_body_inputs=inputs, closing_issues=()), executor=executor)
+
+
 @pytest.mark.parametrize("mode", ["dispatcher-backed", "github-label-only-fallback"])
 def test_first_publication_carries_pickup_receipt_before_any_effect(tmp_path: Path, mode: str) -> None:
     (tmp_path / "feature.txt").write_text("new\n", encoding="utf-8")
