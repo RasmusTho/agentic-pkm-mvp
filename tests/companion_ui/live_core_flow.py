@@ -85,6 +85,7 @@ def validate_manifest(d: dict[str, Any]) -> dict[str, Any]:
         "embedding_identity",
         "allow_capture",
         "allow_ask",
+        "capture_only",
         "navigation_ms",
         "index_seconds",
         "request_ms",
@@ -141,6 +142,11 @@ def validate_manifest(d: dict[str, Any]) -> dict[str, Any]:
         if type(d.get(key, False)) is not bool:
             raise ValueError("effect_permission_invalid")
         d.setdefault(key, False)
+    if type(d.get("capture_only", False)) is not bool:
+        raise ValueError("capture_only_mode_invalid")
+    d.setdefault("capture_only", False)
+    if d["capture_only"] and (not d["allow_capture"] or d["allow_ask"]):
+        raise ValueError("capture_only_requires_capture_without_ask")
     for key in ("known_note_path", "capture_note_path"):
         if d.get(key) and not _relative(d[key]):
             raise ValueError("fixture_path_invalid")
@@ -478,7 +484,7 @@ def validate_capture_ack(ack: dict[str, Any], expected_path: str, posts: int) ->
 
 
 class CoreFlow:
-    """One bounded journey, with independent status for its eight steps."""
+    """One bounded journey, with independent status for full or capture-only steps."""
 
     def __init__(
         self,
@@ -960,6 +966,12 @@ class CoreFlow:
             self.capture_unavailable_preserves_draft,
             self.ask_failure_is_visible_and_retryable,
         ]
+        capture_only = bool(self.d.get("capture_only", False))
+        if capture_only:
+            # A capture-only admission intentionally stops after the visible
+            # current/fresh-context discovery proof. It does not require the
+            # semantic index freshness diagnostic or any ASK/model outcome.
+            actions = actions[:4]
         try:
             for number, action in enumerate(actions, 1):
                 start = time.monotonic()
@@ -1011,7 +1023,10 @@ class CoreFlow:
             "capture_acknowledgement": self.ack,
             "capture_write_observed": self.capture_written,
             "capture_verified": self.capture_verified,
-            "passed": len(self.results) == 8 and all(x["status"] == "passed" for x in self.results),
+            "execution_mode": "capture_only" if self.d.get("capture_only", False) else "full_core_flow",
+            "passed": bool(self.results)
+            and len(self.results) == (4 if self.d.get("capture_only", False) else 8)
+            and all(x["status"] == "passed" for x in self.results),
         }
         path = self.output / "report.json"
         temporary = self.output / "report.json.next"

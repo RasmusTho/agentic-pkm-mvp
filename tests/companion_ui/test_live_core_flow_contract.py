@@ -332,6 +332,9 @@ def test_missing_manifest_is_not_a_live_pass(tmp_path: Path) -> None:
         {"api_url": "http://other-host:18001/"},
         {"capture_note_path": "../personal.md"},
         {"allow_capture": "yes"},
+        {"capture_only": "yes"},
+        {"capture_only": True, "allow_ask": True},
+        {"capture_only": True, "allow_capture": False},
         {"allow_capture": True, "vault_id": None},
         {"ui_url": "http://remote-host:8111/", "api_url": "http://remote-host:18001/"},
         {"embedding_identity": {"dim": 768}},
@@ -381,6 +384,42 @@ def test_evidence_containment_uses_canonical_vault_path(
     path.chmod(0o600)
     with pytest.raises(ValueError, match="evidence_must_be_outside_the_vault"):
         load_manifest(path)
+
+
+def test_capture_only_mode_stops_before_index_and_ask_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _runner(tmp_path)
+    runner.d.update(capture_only=True, allow_ask=False)
+    visits: list[str] = []
+    monkeypatch.setattr(
+        runner,
+        "channel_gateway_and_health",
+        lambda: setattr(runner, "identity_ok", True),
+    )
+    _independent_steps(runner, monkeypatch, visits)
+    for name in (
+        "fresh_capture_is_indexed_and_retrievable",
+        "ask_uses_this_runs_source",
+        "capture_unavailable_preserves_draft",
+        "ask_failure_is_visible_and_retryable",
+    ):
+        monkeypatch.setattr(
+            runner,
+            name,
+            lambda name=name: pytest.fail(f"capture_only_ran_{name}"),
+        )
+
+    report = runner.run()
+
+    assert report["execution_mode"] == "capture_only"
+    assert len(report["steps"]) == 4
+    assert report["passed"]
+    assert visits == [
+        "open_known_note",
+        "capture_acknowledged_once",
+        "capture_survives_new_browser_context",
+    ]
 
 
 def test_written_capture_survives_later_failure(
