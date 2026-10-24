@@ -404,6 +404,17 @@ colima_guest_stop_docker_socket() {
   systemctl --no-block stop docker.socket
 }
 
+colima_guest_docker_api_cleanup() {
+  colima_guest_set_docker_socket_access closed || true
+  # Normal stop/restart is propagated to docker.socket by PartOf=. Failed
+  # starts and unexpected exits need an explicit stop because no stop job for
+  # the socket is otherwise guaranteed to be in the systemd transaction.
+  case "${SERVICE_RESULT:-success}" in
+    success) return 0 ;;
+    *) colima_guest_stop_docker_socket ;;
+  esac
+}
+
 colima_guest_post_start() {
   # A previous successful run may have left docker.socket open. Restrict it
   # before any readiness probe so clients cannot observe a partial restore.
@@ -437,7 +448,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
       colima_guest_log_containerd_identity before
       ;;
     --docker-api-close) colima_guest_set_docker_socket_access closed;;
-    --docker-api-stop) colima_guest_stop_docker_socket;;
+    --docker-api-cleanup) colima_guest_docker_api_cleanup;;
     --post-start)
       if ! colima_guest_post_start; then
         colima_guest_stop_docker_socket || true

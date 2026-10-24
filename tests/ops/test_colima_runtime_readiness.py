@@ -211,8 +211,9 @@ def test_installed_units_fail_closed_until_exact_persistent_substrate_is_ready(
         "--docker-api-close" in docker and "--docker-preflight" in docker
         and "ExecStartPost=" in docker and "--post-start" in docker
         and "Sockets=docker.socket" in docker
-        and "ExecStopPost=" in docker and "--docker-api-stop" in docker
+        and "ExecStopPost=" in docker and "--docker-api-cleanup" in docker
     )
+    assert "PartOf=docker.service" in docker_socket
     assert "SocketMode=0600" in docker_socket and "SocketGroup=docker" in docker_socket
     assert "Restart=no" in containerd and "Restart=no" in docker
     assert "EnvironmentFile=/etc/yggdrasil/colima-runtime.env" in docker
@@ -379,13 +380,32 @@ def test_post_start_failure_stops_socket_and_returns_failure(
     assert not any("prune" in c or "rm" in c or "recreate" in c for c in calls(runtime))
 
 
-def test_service_stop_closes_socket_and_stops_socket_activation(
+def test_service_cleanup_closes_socket_and_only_failed_start_queues_activation_stop(
     runtime: dict[str, str], docker_socket_path: Path
 ) -> None:
     create_docker_socket(docker_socket_path)
     result = subprocess.run(
-        ["bash", str(HELPER), "--docker-api-stop"],
+        ["bash", str(HELPER), "--docker-api-cleanup"],
         env={**runtime, "COLIMA_DOCKER_SOCKET_PATH": str(docker_socket_path)},
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(docker_socket_path.stat().st_mode) == 0o600
+
+    # Normal stop/restart propagates through the socket unit's PartOf= edge.
+    assert ["systemctl", "--no-block", "stop", "docker.socket"] not in calls(runtime)
+
+    docker_socket_path.chmod(0o660)
+    result = subprocess.run(
+        ["bash", str(HELPER), "--docker-api-cleanup"],
+        env={
+            **runtime,
+            "COLIMA_DOCKER_SOCKET_PATH": str(docker_socket_path),
+            "SERVICE_RESULT": "exit-code",
+        },
         capture_output=True,
         text=True,
         timeout=15,

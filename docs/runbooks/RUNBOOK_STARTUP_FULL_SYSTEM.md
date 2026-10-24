@@ -258,8 +258,9 @@ before interrupting the VM, including any BuilderOps control-plane services.
    group clients out at mode `0600` while dockerd restores containers and the helper compares exact
    inventory. Only after exact ID equality and the post-restore containerd PID check pass does the
    helper open group access at `0660`; a mismatch leaves the socket restricted and stops socket
-   activation. Normal stops also close the socket and queue its activation unit to stop; starting
-   Docker pulls the socket back in through the service dependency. Keep Docker off until the
+   activation. Failed service starts queue the activation unit to stop; normal stops and restarts
+   propagate to it through the socket unit. Starting Docker pulls the socket back in through the
+   service dependency. Keep Docker off until the
    complete installed manifest has been verified. A partial installation is not an activation.
 5. Repeat the complete installer pass with `COLIMA_RUNTIME_ACTIVATE=1` to verify the manifest,
    unmask the three units, and verify the effective daemon units (failure remasks them). No service
