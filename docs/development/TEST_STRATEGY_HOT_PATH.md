@@ -5,7 +5,7 @@ Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
-Last reviewed: 2026-10-23 UTC (CI wait budgets and bounded routine-feature evaluation)
+Last reviewed: 2026-10-24 UTC (strict CI contract scope and PR latency evaluation)
 Last verified against: `scripts/dev_delivery_liveness.py`, `tests/governance/test_dev_delivery_liveness_workflow.py`, `tests/scripts/test_select_pr_tests.py::test_liveness_checker_source_selects_its_contract_tests`, `.github/workflows/ci-smoke.yaml`, `.github/workflows/import-linter.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py`, `tests/governance/test_governed_vault_profile_contract.py`, `tests/governance/test_governed_vault_profile_proposals.py`, `tests/agents/test_reviewer.py`, `tests/agents/test_reviewer_single_note.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`, `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`, Issue #5820 / PR #5838 candidate selector coverage and `tests/scripts/test_select_pr_tests.py::test_product_embedding_adapters_select_their_regression_coverage`
 Last verified against (reasoning_expansion UAT selector): Issue #6293, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py::test_expansion_uat_paths_are_owned`, and the scoped Expansion runner suite; selector routing verified, live TEST remains opt-in and separate.
 
@@ -21,16 +21,62 @@ The selector's `requires_runtime_checks` classifies diffs limited to root contri
 contract tests and documentation guards. The PR unit job skips repo-wide mypy, the product intent
 classification golden gate and Linux ACL provisioning for those diffs. Sidecar dependencies remain
 installed for conservative contract/collection compatibility.
-Unknown paths, executable files, fixtures, mixed changes and runtime configuration remain
-conservative and enable those gates. This classification does not turn a required check into a
-bare skipped success or remove exact AC coverage. Broad contract target sets remain until a narrower
-owner mapping is demonstrated; a Markdown suffix outside these roots is not documentation proof.
+Executable files outside the exact CI contract scope below, fixtures, mixed changes and runtime
+configuration remain conservative and enable those gates. This classification does not turn a
+required check into a bare skipped success or remove exact AC coverage. A Markdown suffix outside
+these roots is not documentation proof.
 
 The merge path stays distinct from post-merge runtime feedback. #5922 supplies exact-image admission
 and private-controller `dev` → `test` support; #5932 adds isolated PostgreSQL acceptance to its native
 verification phase. #5675 transfers the retained PG PR coverage only after actual equivalent native
 execution passes in both channels. [`FAST_PR_TO_DEV_TEST_AUTOMATION`](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md)
 records activation and ten-candidate measurement; measurement does not gate ordinary candidates.
+
+## Exact CI contract scope
+
+`scripts/select_pr_tests.py :: CI_CONTRACT_PATHS` is the closed set of CI inspection/selection
+sources, direct test modules and named development owner documents eligible for focused CI proof.
+Every changed path must belong to that set. `CI_CONTRACT_TARGETS` retains common CI checks, the
+complete governance suite, helper and replay regressions, actual workflow-command tests and direct
+architecture consumers. It avoids unrelated script suites and Product source/DDL/projection scans
+when no Product source can have changed. The static-target collectability check remains explicit.
+
+Both selected tests and `runtime_checks=false` derive from this same predicate. The required
+`Unit tests (not pg)` check still executes its substantive pytest command, markers, watchdog and
+failure handling. It omits unrelated `mypy app`, classification replay and ACL provisioning for this
+scope. Smoke consumes the real Git diff through the same selector and omits runtime smoke and
+full-tree collection for contract-only PRs, while retaining lint, docs and other cheap checks.
+Non-PR smoke and nightly execution retain broad discovery. Missing scope output does not waive
+runtime work; a failed classifier keeps the job red. The exact CI sources still require their paired
+development owner documents through the docs guard.
+
+Product/operational code, migrations, dependencies, shared fixtures, foreign test modules, other
+workflows and unknown paths disqualify the strict scope and retain their normal selection and
+runtime checks. In mixed changes the exact CI files contribute CI contract tests, rather than
+acquiring unrelated Ops/deploy ownership from their `scripts/` or `tests/ops/` location. Actual
+operational paths retain their owners. The existing heavy-target trigger inventory also selects
+deploy proof for directly exercised sources, including `app/ops/postgres_deploy_linux.py`, without
+adding unrelated Ops/script sibling suites.
+`tests/scripts/test_select_pr_tests.py` covers these mixed-change boundaries and
+changed-test inclusion. `tests/governance/test_ci_smoke_docs_only_gate.py` executes the actual YAML
+classification command against real finite Git diffs and checks its consumers. Workflow failure,
+timeout, coverage and process-cleanup proofs stay in `tests/ops/test_ci_workflow.py`.
+
+## Test-only scope
+
+When every changed path belongs to the explicit `ISOLATED_TEST_MODULES` opt-in set, run those
+changed modules and `CI_INTEGRITY_TARGETS`, rather than their entire sibling subsystem suites.
+The initial entry is the self-contained dormant-ownership fixture module. Product code has not
+changed, so sibling execution primarily repeats baseline evidence. Normal runtime gates and the
+test environment remain enabled. Other test modules, shared fixtures, helpers, configuration and
+mixed source changes retain their normal scope. A test filename alone never qualifies: existing
+test modules also export shared helpers. The static-selector integrity check rejects imports of
+an opted-in module from other tests, including literal dynamic imports.
+
+This accepts delayed discovery of an unusual cross-module test dependency until the existing
+nightly/manual broad run. Keep reusable fixtures and support code in their shared locations so
+changes to them retain broader coverage. There is no timeout shortcut and no success without
+executing the selected tests.
 
 ## CI wait budgets
 
@@ -58,19 +104,20 @@ unnecessary package-server dependency. If either is missing, the existing packag
 and any failure stays red. The actual YAML command is exercised with present/missing tools and an
 installation failure in `tests/ops/test_ci_workflow.py`.
 
-## Routine feature evaluation
+## PR latency evaluation
 
-For the next five eligible Product deliveries, evaluate the existing focused selector against a
-target of at most ten minutes of required feedback. This is a target, not a timeout or a measured
-result. Start with one missing user journey and follow it through usable acceptance. Use existing
-PR/job timestamps and session evidence to compare required-check time, time to usable functionality,
-owner interventions, reruns and escaped-defect recovery. Do not create another tracker or claim that
-five deliveries establish a rare-defect rate.
+For the next five eligible ordinary PRs, evaluate required feedback and the complete relevant CI
+critical path against a target below ten minutes. Prioritize test/CI improvements during this
+evaluation. This is a target, not a timeout or a measured result. Use existing PR/job timestamps and
+session evidence to compare selected scope, setup/type-check/test time, owner interventions, reruns
+and escaped-defect recovery. Separate protected heavy changes from ordinary changes rather than
+hiding them in one average. Do not create another tracker or claim that five deliveries establish a
+rare-defect rate.
 
 An eligible change is bounded and recoverable; migrations, destructive writes, source-data integrity,
 credentials, writer concurrency and deployment-state transitions retain relevant deeper proof before
-merge. Ordinary Product paths already select focused suites. Change an overbroad mapping only when
-the selected feature demonstrates it, with direct regression coverage for the narrowed ownership.
+merge. Ordinary Product paths already select focused suites. Narrow an overbroad mapping only with
+named behavioral coverage for the affected artifact and direct regression proof for mixed changes.
 Broad regression coverage remains available in the existing nightly/manual workflow. Shared-host
 isolation and current-head merge checks remain applicable. Evaluate whether usable delivery and owner
 effort improved before adopting further changes.
