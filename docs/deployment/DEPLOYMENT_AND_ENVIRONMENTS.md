@@ -1252,6 +1252,8 @@ Any existing bundle name refuses reuse; incomplete/published bundles and histori
 retained. A partial install compensates only exact inodes written by that invocation, restoring
 actual before bytes/modes or removing its own newly created target. Foreign/drifted targets and
 missing, malformed or substituted backup material refuse compensation without overwrite.
+Explicit compensation raises a typed refusal with its live handle and per-target outcomes on
+any failure; invalid backup material refuses even when every target was already matching.
 The invocation-local handle exposes refusal/compensation outcomes and must be closed to release
 descriptors; it is not a persisted restart authority. Explicit compensation is one-shot, and
 there is no retry/adoption/replay loader, CLI, automatic post-merge hook or live-success receipt.

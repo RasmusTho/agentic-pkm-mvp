@@ -137,6 +137,9 @@ def _path(value: str, *, absolute: bool = False) -> tuple[str, ...]:
 
 def _manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
               payloads: Mapping[tuple[str, str], bytes], backup: Root) -> None:
+    if any(not isinstance(c, Change) or not isinstance(c.root, str)
+           or not isinstance(c.path, str) for c in changes):
+        _refuse("manifest_refused")
     if not changes or len(changes) > 128 or set(roots) != {c.root for c in changes}:
         _refuse("manifest_refused")
     if not set(roots) <= {"application", "control", "launcher"}:
@@ -146,6 +149,9 @@ def _manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
         _refuse("manifest_refused")
     paths = []
     for root in (*roots.values(), backup):
+        if not isinstance(root, Root) or any(type(value) is not int for value in (
+                root.device, root.inode, root.uid, root.gid, root.mode)):
+            _refuse("root_refused")
         _path(root.path, absolute=True)
         if root.mode not in {0o700, 0o755} or root.uid != os.geteuid():
             _refuse("root_refused")
@@ -165,9 +171,10 @@ def _manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
         before_ok = ((change.before_sha256 is None and change.before_mode is None)
                      or (isinstance(change.before_sha256, str)
                          and re.fullmatch(r"[0-9a-f]{64}", change.before_sha256)
+                         and type(change.before_mode) is int
                          and change.before_mode in {0o600, 0o644, 0o700, 0o755}))
         data = payloads[(change.root, change.path)]
-        if (not allowed or change.mode != mode or not before_ok
+        if (not allowed or type(change.mode) is not int or change.mode != mode or not before_ok
                 or not isinstance(change.after_sha256, str)
                 or re.fullmatch(r"[0-9a-f]{64}", change.after_sha256) is None
                 or not isinstance(data, bytes) or len(data) > 8 * 1024 * 1024
@@ -350,12 +357,13 @@ def _exists(parent: int, name: str) -> bool:
         return False
 
 
-def _compensate(handle: Installation) -> None:
+def _compensate(handle: Installation) -> bool:
     try:
         _backup_valid(handle)
     except (OSError, InstallationRefused):
         handle.compensation.extend((t.change.path, "refused") for t in handle._targets if t.written is not None)
-        return
+        return False
+    complete = True
     for target in reversed(handle._targets):
         if target.written is None:
             continue
@@ -378,6 +386,9 @@ def _compensate(handle: Installation) -> None:
         except (OSError, InstallationRefused):
             pass
         handle.compensation.append((target.change.path, outcome))
+        if outcome == "refused":
+            complete = False
+    return complete
 
 
 def install_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ...],
@@ -444,10 +455,16 @@ def install_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ..
 
 
 def compensate_public_files(handle: Installation) -> tuple[tuple[str, str], ...]:
-    """Restore only this live invocation's exact installed inodes, once."""
+    """Restore exact installed inodes once; any refusal raises with the live handle.
+
+    The whole backup must remain valid even when no target needed replacement.
+    Per-target outcomes remain available on the handle when compensation refuses.
+    """
     if handle.state != "installed":
         raise InstallationRefused("compensation_state_refused", handle)
     handle.state = "compensating"
-    _compensate(handle)
-    handle.state = "compensation_refused" if any(status == "refused" for _, status in handle.compensation) else "compensated"
+    if not _compensate(handle):
+        handle.state = "compensation_refused"
+        raise InstallationRefused("compensation_refused", handle)
+    handle.state = "compensated"
     return tuple(handle.compensation)

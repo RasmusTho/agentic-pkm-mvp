@@ -358,7 +358,9 @@ def test_uncertain_or_foreign_recovery_refuses(case, fault):
         with pytest.raises(module.InstallationRefused, match="compensation_state_refused"):
             module.compensate_public_files(handle)
     else:
-        outcomes = module.compensate_public_files(handle)
+        with pytest.raises(module.InstallationRefused, match="compensation_refused"):
+            module.compensate_public_files(handle)
+        outcomes = handle.compensation
         assert outcomes and all(outcome == "refused" for _, outcome in outcomes)
         assert handle.state == "compensation_refused"
     assert snapshot(paths) == before
@@ -370,6 +372,11 @@ def test_component_has_no_native_execution_entrypoint(case):
     module, paths, args = case
     # Re-import executes the module with the denied process/socket/Product ports.
     module = importlib.reload(module)
+    # Reload produces new dataclass types; build the public typed inputs from
+    # those imported definitions rather than retaining pre-reload instances.
+    args["changes"] = tuple(module.Change(**vars(change)) for change in args["changes"])
+    args["roots"] = {name: module.Root(**vars(root)) for name, root in args["roots"].items()}
+    args["backup_root"] = module.Root(**vars(args["backup_root"]))
     assert not hasattr(module, "main") and not hasattr(module, "run")
     tree = ast.parse(Path(module.__file__).read_text())
     imports = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
@@ -426,8 +433,83 @@ def test_compensation_never_removes_foreign_same_byte_new_target(case):
         foreign.chmod(0o644)
         os.replace(foreign, created)
         foreign_inode = created.stat().st_ino
-        outcomes = dict(module.compensate_public_files(handle))
+        with pytest.raises(module.InstallationRefused, match="compensation_refused"):
+            module.compensate_public_files(handle)
+        outcomes = dict(handle.compensation)
         assert outcomes["app/ops/created.py"] == "refused"
         assert created.stat().st_ino == foreign_inode
         assert created.read_bytes() == b"new module\n"
         assert outcomes["yggdrasil-bws-deploy"] == "restored"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("mode", float(0o644)), ("mode", True), ("mode", "0644"),
+    ("before_mode", float(0o600)), ("before_mode", False), ("before_mode", "0600"),
+])
+def test_mode_types_refuse_before_any_backup_or_target_write(case, field, value):
+    module, paths, args = case
+    # This is the second target: the old implementation installed the launcher
+    # before float(0644) reached fchmod and escaped its compensation exception path.
+    bad = replace(args["changes"][1], **{field: value})
+    args["changes"] = (args["changes"][0], bad, *args["changes"][2:])
+    before = snapshot(paths)
+    refused(module, args)
+    assert snapshot(paths) == before
+    assert not list(paths["backups"].iterdir())
+
+
+@pytest.mark.parametrize("field", ["device", "inode", "uid", "gid", "mode"])
+def test_root_identity_types_refuse_before_backup(case, field):
+    module, paths, args = case
+    root = args["roots"]["application"]
+    args["roots"]["application"] = replace(root, **{field: float(getattr(root, field))})
+    before = snapshot(paths)
+    assert refused(module, args).reason == "root_refused"
+    assert snapshot(paths) == before
+    assert not list(paths["backups"].iterdir())
+
+
+@pytest.mark.parametrize("fault", ["valid", "missing_manifest", "missing_saved", "malformed", "foreign_manifest", "foreign_bundle", "extra_file"])
+def test_all_matching_invalid_backup_is_transaction_refusal(case, fault):
+    module, paths, args = case
+    changes, payloads = [], {}
+    for change in args["changes"]:
+        if change.before_sha256 is None:
+            continue
+        path = paths[change.root] / change.path
+        path.chmod(change.mode)
+        raw = path.read_bytes()
+        changes.append(replace(change, before_mode=change.mode, after_sha256=digest(raw)))
+        payloads[(change.root, change.path)] = raw
+    args.update(changes=tuple(changes), payloads=payloads)
+    before = snapshot(paths)
+    with module.install_public_files(**args) as handle:
+        assert all(target.written is None for target in handle._targets)
+        bundle = Path(handle.bundle_path)
+        manifest = bundle / "manifest.json"
+        if fault == "missing_manifest":
+            manifest.unlink()
+        elif fault == "missing_saved":
+            (bundle / "0000.before").unlink()
+        elif fault == "malformed":
+            manifest.write_bytes(b"{}")
+        elif fault == "foreign_manifest":
+            raw = manifest.read_bytes()
+            manifest.unlink()
+            manifest.write_bytes(raw)
+            manifest.chmod(0o600)
+        elif fault == "foreign_bundle":
+            bundle.rename(bundle.with_name("owned-retained"))
+            shutil.copytree(bundle.with_name("owned-retained"), bundle)
+        elif fault == "extra_file":
+            (bundle / "foreign").write_bytes(b"extra")
+        if fault == "valid":
+            assert module.compensate_public_files(handle) == ()
+            assert handle.state == "compensated"
+        else:
+            with pytest.raises(module.InstallationRefused, match="compensation_refused"):
+                module.compensate_public_files(handle)
+            assert handle.state == "compensation_refused"
+        assert handle.compensation == []  # No per-target row can carry this failure.
+        assert snapshot(paths) == before
+        assert bundle.exists()
