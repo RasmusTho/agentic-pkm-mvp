@@ -1780,13 +1780,18 @@ def select_tests(changed_files: list[str]) -> Selection:
         else CI_INTEGRITY_TARGETS if test_only
         else ALWAYS_TARGETS
     )
-    if not test_only and any(
+    if any(
+        path in CI_CONTRACT_PATHS and path.startswith(("scripts/", "tests/scripts/"))
+        for path in paths
+    ) and any(
         path not in CI_CONTRACT_PATHS and _heavy_target_triggered(
             "tests/deploy", HEAVY_PR_DEFERRED_TARGETS["tests/deploy"], (path,)
         )
         for path in paths
     ):
-        # Direct deploy inputs need deploy proof, not every ops_deploy sibling.
+        # Preserve deploy proof formerly selected by a CI helper's scripts/
+        # ownership when it accompanies a real deploy input. The retention
+        # inventory is a filter, not new source-only subsystem ownership.
         targets.append("tests/deploy")
 
     if any(path in ARO03_ROUTE_CONTRACT_PATHS for path in paths):

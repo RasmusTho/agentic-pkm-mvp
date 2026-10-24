@@ -1924,12 +1924,15 @@ def test_product_and_selector_changes_combine_their_real_owners_without_ops() ->
 
 
 @pytest.mark.parametrize("path", ("app/ops/postgres_deploy_linux.py", "app/tts/config.py"))
-def test_direct_deploy_inputs_select_deploy_without_unrelated_script_siblings(path: str) -> None:
+def test_ci_helpers_preserve_deploy_proof_without_widening_source_only_prs(path: str) -> None:
     selection = select_tests([path])
 
+    assert "tests/deploy" not in selection.targets
+    selection = select_tests([path, "scripts/await_pr_checks.sh"])
     assert "tests/deploy" in selection.targets
     assert "tests/scripts" not in selection.targets
     assert selection.deferred_targets == ()
+    assert "tests/deploy" not in select_tests([path, ".github/workflows/ci-smoke.yaml"]).targets
 
 
 @pytest.mark.parametrize("path", sorted(selector.ISOLATED_TEST_MODULES))
