@@ -803,9 +803,21 @@ class CoreFlow:
                 for note in returned_notes
                 if str(note.get("note_path") or note.get("path") or "") == expected_path
             )
-            item = page.locator(
+            page.wait_for_function(
+                "query => document.getElementById('vault-browser-list')"
+                ".getAttribute('data-query') === query",
+                arg=phrase,
+                timeout=self.d["request_ms"],
+            )
+            items = page.locator(
                 '[data-testid="vault-browser-list"] li[data-note-path]'
-            ).filter(has_text=expected_path).first
+            )
+            for index in range(items.count()):
+                item = items.nth(index)
+                if item.get_attribute("data-note-path") == expected_path:
+                    break
+            else:
+                raise AssertionError("body_phrase_not_found_in_visible_browser")
             item.wait_for(state="visible")
             query_title = str(query_note.get("title") or "").strip()
             if query_title and query_title not in item.inner_text():

@@ -15796,6 +15796,7 @@ def render_index_html(
     var search  = document.getElementById('vault-browser-search');
     var identity = document.getElementById('vault-browser-identity');
     var debounceTimer = null;
+    var queryGeneration = 0;
 
     function setStatus(msg) {{ status.textContent = msg; }}
 
@@ -15832,8 +15833,10 @@ def render_index_html(
     }}
 
     function fetchNotes(q) {{
+      var generation = ++queryGeneration;
       setStatus('Loading…');
       list.innerHTML = '';
+      list.removeAttribute('data-query');
       var url = '/api/companion/vault/notes' + (q ? '?q=' + encodeURIComponent(q) : '');
       fetch(url)
         .then(function(r) {{
@@ -15841,9 +15844,12 @@ def render_index_html(
           return r.json();
         }})
         .then(function(data) {{
+          if (generation !== queryGeneration) return;
           renderNotes(data.notes, data.vault_identity);
+          list.setAttribute('data-query', q);
         }})
         .catch(function(err) {{
+          if (generation !== queryGeneration) return;
           // D3 (CUIDR-01): a live fetch failure must not surface the raw
           // transport error ("Error: Failed to fetch"). Reuse the single calm
           // grammar template (the same string the server-rendered error path
@@ -15898,6 +15904,8 @@ def render_index_html(
         search.focus();
       }},
       close: function() {{
+        ++queryGeneration;
+        clearTimeout(debounceTimer);
         overlay.classList.remove('open');
       }},
       selectNote: function(path) {{
@@ -15908,6 +15916,11 @@ def render_index_html(
     }};
 
     search.addEventListener('input', function() {{
+      // Invalidate an in-flight response immediately, including during the
+      // debounce interval before the replacement request starts.
+      ++queryGeneration;
+      list.innerHTML = '';
+      list.removeAttribute('data-query');
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(function() {{
         fetchNotes(search.value.trim());
