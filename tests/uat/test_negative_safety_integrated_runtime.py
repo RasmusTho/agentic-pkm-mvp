@@ -374,12 +374,15 @@ def test_missing_vault_fails_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_docker = fake_bin / "docker"
-    fake_docker.write_text("#!/usr/bin/env bash\necho fake docker should not run >&2\nexit 99\n", encoding="utf-8")
+    fake_docker.write_text("#!/usr/bin/env bash\nif [ \"${1:-}\" = info ]; then exit 0; fi\necho fake docker effect refused >&2\nexit 99\n", encoding="utf-8")
     fake_docker.chmod(0o755)
 
     env = {
         "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
         "HOME": str(Path.home()),
+        # This fixture models an unmanaged Docker engine, independently of host Colima.
+        "COLIMA_RESOURCE_PROFILE_FILE": os.devnull,
+        "DOCKER_CONTEXT": "default",
         "VAULT_ROOT": str(missing_vault),
         "PKM_ENVIRONMENT": "test",
     }

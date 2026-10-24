@@ -5,15 +5,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "${ROOT}/scripts/lib/instance_ownership_host_state.sh"
 prepare_instance_ownership_host_state_dir
 
-docker info >/dev/null 2>&1 || true
-if ! docker info >/dev/null 2>&1; then
-  if command -v colima >/dev/null 2>&1; then
-    colima start
-  fi
-fi
-
-if ! docker info >/dev/null 2>&1; then
-  echo "Docker daemon is not available. Start Docker/Colima and retry."
+source "${ROOT}/scripts/lib/colima_runtime_readiness.sh"
+colima_runtime_bind_and_ready "$ROOT"
+if ! _colima_runtime_bounded 15 docker info >/dev/null 2>&1; then
+  echo "Docker daemon is not available. Start the selected runtime and retry." >&2
   exit 1
 fi
 
