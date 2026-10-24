@@ -98,6 +98,21 @@ disqualifies the scope and restores normal owner routing.
 
 ## Test-only scope
 
+Ordinary changes confined to existing test modules run those complete modules, their transitive
+static import consumers, and `CI_INTEGRITY_TARGETS`. Imports of shared helpers exported by a test
+module therefore retain their actual consumers without selecting entire sibling test directories.
+The selector also retains test readers that name another test file literally. Its source parsing
+is cached only in the current process, keyed by file metadata; there is no stored dependency graph.
+This general route keeps `runtime_checks=true` and the usual dependencies, ACL provisioning,
+markers and watchdog. It does not change Product-source selection or the exact CI contract route.
+
+Shared fixture/helper/support files, conftest, pytest hooks/plugins, configuration, dependencies,
+Product or mixed changes, deleted/renamed or unknown paths keep their normal broader scope.
+Known consumers with computed imports or file loaders also disqualify the narrow route. Static
+analysis cannot prove the absence of every dynamic dependency or collection-order coupling;
+the existing broad nightly/manual execution remains the backstop. This trades delayed discovery
+of those test-harness defects for shorter ordinary PR feedback, without weakening runtime guards.
+
 When every changed path belongs to `ISOLATED_TEST_MODULES`, run its named representative tests and
 `CI_INTEGRITY_TARGETS`. This mapping replaces the previous whole-module opt-in; it is not a generic
 filename shortcut. The initial entry is the self-contained dormant-ownership fixture module:
@@ -107,8 +122,9 @@ no-consumer boundary remain mandatory. The test environment, dependencies, marke
 remain enabled. `runtime_checks=false` omits
 unrelated `mypy app`, Product classification replay, ACL provisioning, runtime smoke and full-tree
 collection. The admitted module and common CI tests need no ACL command-line tools; their real
-filesystem tests use POSIX operations. Other test modules, shared fixtures, helpers, configuration and
-mixed source changes retain their normal scope. A test filename alone never qualifies: existing
+filesystem tests use POSIX operations. This opt-in smoke takes priority over the general test-module
+route. Shared fixtures, helpers, configuration and mixed source changes retain their normal scope. A
+test filename alone never qualifies for this smoke: existing
 test modules also export shared helpers. The static-selector integrity check rejects imports of
 an opted-in module from other tests, including literal dynamic imports.
 
