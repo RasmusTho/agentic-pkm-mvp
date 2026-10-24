@@ -140,9 +140,11 @@ ambiguous. Review remains responsible for those cases.
   - Product-wide type/model/ACL gates are unnecessary when the closed CI predicate admits no
     Product, dependency, runtime-configuration or shared-fixture change
 - Isolated test-module-only changes (`TEST_STRATEGY_HOT_PATH.md :: Test-only scope`):
-  - run the changed modules and common CI integrity checks; sibling suites add no Product-change proof
-  - retain the normal test environment and runtime gates; shared fixtures, helpers, configuration and
-    mixed Product changes use their normal broader scope
+  - run the explicit representative targets and common CI integrity checks; exhaustive fault matrices
+    run in the existing nightly/manual lane, and explicit full-matrix contracts still need full proof
+  - retain the normal test environment and dependencies; unrelated
+    Product type/model/ACL/smoke gates add no evidence for this exact no-consumer test-only scope
+  - shared fixtures, helpers, configuration and mixed Product changes use their normal broader scope
 - Product/runtime code-affecting changes:
   - `ruff check app tests companion-ui/companion-app`
   - `mypy app`
