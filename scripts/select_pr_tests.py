@@ -1868,13 +1868,13 @@ def _existing_test_targets(targets: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def requires_runtime_checks(changed_files: list[str]) -> bool:
-    """Text and exact CI-only changes run contracts without unrelated Product gates.
+    """Text, CI-only and isolated-test changes omit unrelated Product gates.
 
     Executable paths outside the exact CI contract set, fixtures, configuration
     and mixed changes stay conservative. A Markdown suffix alone is insufficient.
     """
     paths = tuple(_normalize(path) for path in changed_files if _normalize(path))
-    if _is_ci_contract_only(paths):
+    if _is_ci_contract_only(paths) or _is_test_only(paths):
         return False
     return not paths or not all(
         path in {"README.md", "CHANGELOG.md", "AGENTS.md", "CLAUDE.md"}

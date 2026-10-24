@@ -69,8 +69,11 @@ timeout, coverage and process-cleanup proofs stay in `tests/ops/test_ci_workflow
 When every changed path belongs to the explicit `ISOLATED_TEST_MODULES` opt-in set, run those
 changed modules and `CI_INTEGRITY_TARGETS`, rather than their entire sibling subsystem suites.
 The initial entry is the self-contained dormant-ownership fixture module. Product code has not
-changed, so sibling execution primarily repeats baseline evidence. Normal runtime gates and the
-test environment remain enabled. Other test modules, shared fixtures, helpers, configuration and
+changed, so sibling execution primarily repeats baseline evidence. The test environment,
+dependencies, complete module, markers and watchdog remain enabled. `runtime_checks=false` omits
+unrelated `mypy app`, Product classification replay, ACL provisioning, runtime smoke and full-tree
+collection. The admitted module and common CI tests need no ACL command-line tools; their real
+filesystem tests use POSIX operations. Other test modules, shared fixtures, helpers, configuration and
 mixed source changes retain their normal scope. A test filename alone never qualifies: existing
 test modules also export shared helpers. The static-selector integrity check rejects imports of
 an opted-in module from other tests, including literal dynamic imports.

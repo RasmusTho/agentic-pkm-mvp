@@ -1953,7 +1953,7 @@ def test_only_modules_execute_the_changed_tests_and_shared_integrity_checks(path
 
     assert selection.reason == "isolated test-only PR"
     assert set(selection.targets) == {*selector.CI_INTEGRITY_TARGETS, path}
-    assert selector.requires_runtime_checks([path]) is True  # preserve the test environment
+    assert selector.requires_runtime_checks([path]) is False
 
 
 @pytest.mark.parametrize("shared_path", (
@@ -1963,10 +1963,12 @@ def test_only_modules_execute_the_changed_tests_and_shared_integrity_checks(path
     "tests/deploy/test_postmerge_pg_acceptance.py",
 ))
 def test_shared_fixture_and_product_changes_are_not_test_only(shared_path: str) -> None:
-    selection = select_tests(["tests/ops/test_dormant_ownership_initialization.py", shared_path])
+    paths = ["tests/ops/test_dormant_ownership_initialization.py", shared_path]
+    selection = select_tests(paths)
 
     assert selection.reason != "isolated test-only PR"
     assert selector.requires_runtime_checks([shared_path]) is True
+    assert selector.requires_runtime_checks(paths) is True
 
 
 def test_github_output_exposes_text_only_runtime_gate_decision(tmp_path: Path) -> None:

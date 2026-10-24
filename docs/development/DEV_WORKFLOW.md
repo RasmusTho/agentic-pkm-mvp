@@ -141,8 +141,9 @@ ambiguous. Review remains responsible for those cases.
     Product, dependency, runtime-configuration or shared-fixture change
 - Isolated test-module-only changes (`TEST_STRATEGY_HOT_PATH.md :: Test-only scope`):
   - run the changed modules and common CI integrity checks; sibling suites add no Product-change proof
-  - retain the normal test environment and runtime gates; shared fixtures, helpers, configuration and
-    mixed Product changes use their normal broader scope
+  - retain the normal test environment, dependencies and complete selected modules; unrelated
+    Product type/model/ACL/smoke gates add no evidence for this exact no-consumer test-only scope
+  - shared fixtures, helpers, configuration and mixed Product changes use their normal broader scope
 - Product/runtime code-affecting changes:
   - `ruff check app tests companion-ui/companion-app`
   - `mypy app`
