@@ -1043,7 +1043,9 @@ def test_static_selector_targets_are_collectable() -> None:
         for _, _, subsystem_targets in selector.SUBSYSTEMS
         for target in subsystem_targets
         if target.split("::", 1)[0].endswith(".py")
-    ) + selector.STATIC_SELECTOR_NODE_ID_TARGETS
+    ) + selector.STATIC_SELECTOR_NODE_ID_TARGETS + tuple(
+        target for smoke_targets in selector.ISOLATED_TEST_MODULES.values() for target in smoke_targets
+    )
 
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", *targets],
@@ -1948,12 +1950,25 @@ def test_ci_helpers_preserve_deploy_proof_without_widening_source_only_prs(path:
 
 
 @pytest.mark.parametrize("path", sorted(selector.ISOLATED_TEST_MODULES))
-def test_only_modules_execute_the_changed_tests_and_shared_integrity_checks(path: str) -> None:
+def test_only_modules_execute_named_smoke_and_shared_integrity_checks(path: str) -> None:
     selection = select_tests([path])
 
-    assert selection.reason == "isolated test-only PR"
-    assert set(selection.targets) == {*selector.CI_INTEGRITY_TARGETS, path}
+    assert selection.reason == "isolated test-only smoke; exhaustive matrix deferred"
+    assert set(selection.targets) == {*selector.CI_INTEGRITY_TARGETS, *selector.ISOLATED_TEST_MODULES[path]}
+    assert path not in selection.targets
     assert selector.requires_runtime_checks([path]) is False
+
+
+def test_isolated_smoke_does_not_change_normal_whole_module_collection() -> None:
+    path = "tests/ops/test_dormant_ownership_initialization.py"
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", selector.PR_MARKER_EXPRESSION, path],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    nodes = {line for line in result.stdout.splitlines() if line.startswith(path + "::")}
+    assert set(selector.ISOLATED_TEST_MODULES[path]) < nodes
+    assert path + "::test_test_preparation_producer_holds_window_until_explicit_initializer[post_stop_interpreter]" in nodes
 
 
 @pytest.mark.parametrize("shared_path", (
@@ -1966,7 +1981,8 @@ def test_shared_fixture_and_product_changes_are_not_test_only(shared_path: str) 
     paths = ["tests/ops/test_dormant_ownership_initialization.py", shared_path]
     selection = select_tests(paths)
 
-    assert selection.reason != "isolated test-only PR"
+    assert selection.subsystems != ("tests",)
+    assert "tests/ops" in selection.targets or selection.full_suite
     assert selector.requires_runtime_checks([shared_path]) is True
     assert selector.requires_runtime_checks(paths) is True
 

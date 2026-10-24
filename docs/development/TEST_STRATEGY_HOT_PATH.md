@@ -66,11 +66,13 @@ timeout, coverage and process-cleanup proofs stay in `tests/ops/test_ci_workflow
 
 ## Test-only scope
 
-When every changed path belongs to the explicit `ISOLATED_TEST_MODULES` opt-in set, run those
-changed modules and `CI_INTEGRITY_TARGETS`, rather than their entire sibling subsystem suites.
-The initial entry is the self-contained dormant-ownership fixture module. Product code has not
-changed, so sibling execution primarily repeats baseline evidence. The test environment,
-dependencies, complete module, markers and watchdog remain enabled. `runtime_checks=false` omits
+When every changed path belongs to `ISOLATED_TEST_MODULES`, run its named representative tests and
+`CI_INTEGRITY_TARGETS`. This mapping replaces the previous whole-module opt-in; it is not a generic
+filename shortcut. The initial entry is the self-contained dormant-ownership fixture module:
+eight cases cover admission, refusal, concurrency, real native success, foreign ownership,
+source tampering, cleanup retry and durability failure. Named-node collectability and the
+no-consumer boundary remain mandatory. The test environment, dependencies, markers and watchdog
+remain enabled. `runtime_checks=false` omits
 unrelated `mypy app`, Product classification replay, ACL provisioning, runtime smoke and full-tree
 collection. The admitted module and common CI tests need no ACL command-line tools; their real
 filesystem tests use POSIX operations. Other test modules, shared fixtures, helpers, configuration and
@@ -78,10 +80,12 @@ mixed source changes retain their normal scope. A test filename alone never qual
 test modules also export shared helpers. The static-selector integrity check rejects imports of
 an opted-in module from other tests, including literal dynamic imports.
 
-This accepts delayed discovery of an unusual cross-module test dependency until the existing
-nightly/manual broad run. Keep reusable fixtures and support code in their shared locations so
-changes to them retain broader coverage. There is no timeout shortcut and no success without
-executing the selected tests.
+This accepts delayed discovery of test/harness defects in the remaining fault matrix. The existing
+nightly/manual broad run still executes all 118 cases; Product/native source or shared-fixture
+co-changes retain full pre-merge coverage. Smoke success is not exhaustive verification. Explicit
+contract requirements for the full matrix still require that evidence. Keep reusable support in
+shared locations so changes to it retain broader coverage. There is no timeout shortcut and no
+success without executing the selected tests.
 
 ## CI wait budgets
 

@@ -206,11 +206,20 @@ CI_CONTRACT_PATHS = CI_GOVERNANCE_CONTRACT_PATHS | frozenset({
     if target.split("::", 1)[0].endswith(".py")
 )
 
-# Opt in only self-contained modules with no consumers in other tests. Many
-# test_*.py files also export shared fixtures; a filename alone is insufficient.
-ISOLATED_TEST_MODULES = frozenset({
-    "tests/ops/test_dormant_ownership_initialization.py",
-})
+# Test-only edits to these unconsumed modules need representative harness proof.
+# Product/shared-fixture co-changes and nightly retain their complete matrices.
+ISOLATED_TEST_MODULES = {
+    "tests/ops/test_dormant_ownership_initialization.py": (
+        "tests/ops/test_dormant_ownership_initialization.py::test_exact_admission_preserves_source_and_registry_and_produces_one_authenticated_lease",
+        "tests/ops/test_dormant_ownership_initialization.py::test_refusal_matrix_is_before_effects[receipt]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_concurrency_and_stale_proof_recheck_all_locks",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[exact]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[foreign_owner]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[post_bind_source]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[cleanup_retry_exact]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[native_error_prove_barrier]",
+    ),
+}
 
 # Every app/ file indexed by a (file, line)-keyed census registry in
 # tests/properties/_machinery.py (REGISTERED_MIRRORS, WRITE_FRONTMATTER_SITE_CLASSIFICATION,
@@ -1772,9 +1781,12 @@ def select_tests(changed_files: list[str]) -> Selection:
             unowned_runtime_code,
         )
 
-    changed_tests = _changed_test_targets(paths)
     ci_contract_only = _is_ci_contract_only(paths)
     test_only = _is_test_only(paths)
+    changed_tests = (
+        tuple(target for path in paths for target in ISOLATED_TEST_MODULES[path])
+        if test_only else _changed_test_targets(paths)
+    )
     targets = list(
         CI_CONTRACT_TARGETS if ci_contract_only
         else CI_INTEGRITY_TARGETS if test_only
@@ -1806,7 +1818,7 @@ def select_tests(changed_files: list[str]) -> Selection:
     if ci_contract_only:
         subsystems, reason = ("governance",), "CI contract-only PR"
     elif test_only:
-        subsystems, reason = ("tests",), "isolated test-only PR"
+        subsystems, reason = ("tests",), "isolated test-only smoke; exhaustive matrix deferred"
     elif governance_only or docs_only:
         tolerated_targets = GOVERNANCE_TARGETS if governance_only else DOCS_TARGETS
         targets.extend(tolerated_targets)
@@ -1836,8 +1848,8 @@ def select_tests(changed_files: list[str]) -> Selection:
             return Selection(False, ("unowned",), (), FULL_SUITE_REASONS[2], paths)
         subsystems, reason = _dedupe(matched), "matched subsystem SoI"
 
-    # Every scoped branch funnels through this single return, so a changed
-    # tests/** file is always unioned in exactly once — no per-branch splice
+    # Every scoped branch funnels through this single return, so changed
+    # test coverage (or the explicit isolated smoke) is unioned once — no splice
     # to forget if a future branch is added here (the #3383 failure mode).
     return _defer_heavy(
         Selection(False, subsystems, _pr_targets([*targets, *changed_tests]), reason), paths
