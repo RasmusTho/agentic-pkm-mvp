@@ -64,6 +64,38 @@ changed-test inclusion. `tests/governance/test_ci_smoke_docs_only_gate.py` execu
 classification command against real finite Git diffs and checks its consumers. Workflow failure,
 timeout, coverage and process-cleanup proofs stay in `tests/ops/test_ci_workflow.py`.
 
+### Exact PR intake and publication source scope
+
+The bounded route is available only when a change includes one of these exact source paths or one
+of the seven additional direct-reader target modules named below, and every co-change belongs to
+the explicit reader/owner-doc list or the existing exact CI contract paths:
+
+- `.github/workflows/issue-pr-governance.yml`
+- `app/builderops/publication.py`
+- `app/dispatcher/verification_contract.py`
+- `scripts/pr_body_generator.py`
+- `scripts/review_before_ci_gate.py`
+
+The exact direct-reader tests and owner documents are listed in `scripts/select_pr_tests.py`.
+`docs/ARCHITECTURE.md` is admitted only alongside one of those sources or one of those seven direct
+reader modules; an architecture-only or other docs-only PR keeps its existing route. For this exact scope,
+the selector unions direct publication and fenced-dispatch readers (`tests/scripts/test_publication.py`,
+`test_closure.py`, `test_pr_body_generator.py`, `test_build_pr_evidence_pack.py`,
+`tests/dispatcher/test_verification_dispatch.py`, `test_verified_merge.py`, and
+`tests/ops/test_builderops_package_smoke.py`) with the base `CI_CONTRACT_TARGETS`. Ordinary CI-helper
+PRs do not pay for these additional modules. Existing governance, review-gate, architecture,
+workflow, lint and static-target collectability proof stays in the selection. Non-closing intake
+remains covered by the actual generator/publication and governance readers, and fenced merge
+authority remains covered by the dispatcher merge tests.
+
+Executable app and publication/review script sources in this scope keep `runtime_checks=true`,
+including when a PR changes only one of those scripts. This preserves the mandatory `mypy app`
+gate and the existing runtime checks while pytest uses the narrower direct-reader set. A workflow-only
+or direct-reader-test-only change has no app type-check requirement. Any unrelated Product/native
+source, other BuilderOps, dispatcher or script source, dependency, shared fixture, deploy input,
+workflow, test outside both the explicit reader list and existing CI contract paths, or unknown path
+disqualifies the scope and restores normal owner routing.
+
 ## Test-only scope
 
 When every changed path belongs to `ISOLATED_TEST_MODULES`, run its named representative tests and

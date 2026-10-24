@@ -432,9 +432,11 @@ def test_contract_selection_remains_conservative_after_deduplication() -> None:
     assert "tests/architecture/test_pr_test_selection.py" in selector_owner.targets
 
     builder_owner = select_tests(["app/builderops/publication.py"])
-    assert builder_owner.subsystems == ("builder_system",)
+    assert builder_owner.subsystems == ("governance", "builder_system")
     assert builder_owner.unowned_paths == ()
-    assert "tests/builderops" in builder_owner.targets
+    assert builder_owner.reason == "PR intake/publication contract PR"
+    assert "tests/scripts/test_publication.py" in builder_owner.targets
+    assert "tests/dispatcher/test_verified_merge.py" in builder_owner.targets
     assert "tests/architecture/test_pr_hot_path_governance.py" in builder_owner.targets
 
 
@@ -1042,6 +1044,10 @@ def test_static_selector_targets_are_collectable() -> None:
         target
         for _, _, subsystem_targets in selector.SUBSYSTEMS
         for target in subsystem_targets
+        if target.split("::", 1)[0].endswith(".py")
+    ) + tuple(
+        target
+        for target in selector.PR_INTAKE_CONTRACT_TARGETS
         if target.split("::", 1)[0].endswith(".py")
     ) + selector.STATIC_SELECTOR_NODE_ID_TARGETS + tuple(
         target for smoke_targets in selector.ISOLATED_TEST_MODULES.values() for target in smoke_targets
@@ -1902,6 +1908,139 @@ def test_exact_ci_contracts_execute_focused_proof_without_product_gates(path: st
     assert not set(selector.ALWAYS_TARGETS[2:]) & set(selection.targets)
     if path.startswith("tests/"):
         assert path in selection.targets
+
+
+@pytest.mark.parametrize("path", sorted(selector.PR_INTAKE_CONTRACT_SOURCE_PATHS))
+def test_pr_intake_publication_sources_select_their_direct_readers(path: str) -> None:
+    selection = select_tests([path])
+
+    assert selection.full_suite is False
+    assert selection.reason == "PR intake/publication contract PR"
+    assert selector.STATIC_TARGET_COLLECTABILITY_FITNESS in selection.targets
+    assert set(selector.CI_CONTRACT_TARGETS) <= set(selection.targets)
+    assert set(selector.PR_INTAKE_CONTRACT_TARGETS) <= set(selection.targets)
+    assert not {"tests/builderops", "tests/dispatcher", "tests/scripts", "tests/ops"} & set(selection.targets)
+    assert "tests/deploy" not in selection.targets
+    assert selector.requires_runtime_checks([path]) is (
+        path in selector.PR_INTAKE_RUNTIME_SOURCE_PATHS
+    )
+
+
+def test_exact_pr_intake_publication_change_keeps_nonclosing_and_fenced_merge_proof() -> None:
+    paths = [
+        ".github/workflows/issue-pr-governance.yml",
+        "app/builderops/publication.py",
+        "app/dispatcher/verification_contract.py",
+        "docs/ARCHITECTURE.md",
+        "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md",
+        "docs/development/PR_HOT_PATH.md",
+        "scripts/pr_body_generator.py",
+        "scripts/review_before_ci_gate.py",
+        "tests/governance/test_issue_pr_governance.py",
+        "tests/ops/test_review_before_ci_gate.py",
+        "tests/scripts/test_pr_body_generator.py",
+        "tests/scripts/test_publication.py",
+    ]
+    selection = select_tests(paths)
+
+    assert selection.full_suite is False
+    assert selection.reason == "PR intake/publication contract PR"
+    assert selector.requires_runtime_checks(paths) is True
+    assert set(selector.PR_INTAKE_CONTRACT_TARGETS) <= set(selection.targets)
+    assert "tests/governance" in selection.targets
+    assert "tests/ops/test_review_before_ci_gate.py" in selection.targets
+    assert "tests/architecture/test_pr_hot_path_governance.py" in selection.targets
+    assert "tests/architecture/test_agent_skill_entrypoints.py" in selection.targets
+    # These direct readers cover explicit non-closing intake, publication
+    # writeback and the verified-merge/fenced authority path.
+    assert "tests/scripts/test_pr_body_generator.py" in selection.targets
+    assert "tests/scripts/test_publication.py" in selection.targets
+    assert "tests/dispatcher/test_verified_merge.py" in selection.targets
+    assert "tests/dispatcher/test_verification_dispatch.py" in selection.targets
+    assert not {"tests/builderops", "tests/dispatcher", "tests/scripts", "tests/ops"} & set(selection.targets)
+    assert "tests/deploy" not in selection.targets
+
+
+@pytest.mark.parametrize("path", (
+    "scripts/pr_body_generator.py",
+    "scripts/review_before_ci_gate.py",
+    "app/builderops/publication.py",
+    "app/dispatcher/verification_contract.py",
+))
+def test_pr_intake_executable_sources_keep_runtime_and_type_gates(path: str) -> None:
+    assert selector.requires_runtime_checks([path]) is True
+
+
+@pytest.mark.parametrize("path", (
+    "scripts/select_pr_tests.py",
+    "tests/ops/test_review_before_ci_gate.py",
+))
+def test_generic_ci_contract_does_not_pay_for_intake_publication_readers(path: str) -> None:
+    selection = select_tests([path])
+
+    assert selection.reason == "CI contract-only PR"
+    assert selector.requires_runtime_checks([path]) is False
+    assert not set(selector.PR_INTAKE_CONTRACT_TARGETS) & set(selection.targets)
+
+
+@pytest.mark.parametrize("path", selector.PR_INTAKE_CONTRACT_TARGETS)
+def test_direct_publication_reader_test_alone_uses_its_contract_scope(path: str) -> None:
+    selection = select_tests([path])
+
+    assert selection.reason == "PR intake/publication contract PR"
+    assert selector.requires_runtime_checks([path]) is False
+    assert set(selector.PR_INTAKE_CONTRACT_TARGETS) <= set(selection.targets)
+    assert not {"tests/builderops", "tests/dispatcher", "tests/scripts", "tests/ops"} & set(selection.targets)
+
+
+def test_architecture_doc_only_change_keeps_the_existing_docs_route() -> None:
+    path = "docs/ARCHITECTURE.md"
+    selection = select_tests([path])
+
+    assert selection.reason == "docs-only PR"
+    assert selector.requires_runtime_checks([path]) is False
+    assert selection.subsystems == ("docs",)
+    assert "tests/architecture" in selection.targets
+
+
+@pytest.mark.parametrize("foreign_path", (
+    "app/builderops/cli.py",
+    "app/dispatcher/verification_dispatch.py",
+    "app/agents/panel_agent/runtime.py",
+    "app/ops/postgres_deploy_linux.py",
+    "scripts/post_merge_heavy_tests_verdict.py",
+    "scripts/deploy_channel.sh",
+    "requirements.txt",
+    "tests/conftest.py",
+    "tests/ops/conftest.py",
+    ".github/workflows/integration-nightly.yaml",
+    "app/unknown_ci_helper.py",
+))
+def test_pr_intake_source_with_foreign_cochange_retains_normal_owner(foreign_path: str) -> None:
+    paths = ["app/dispatcher/verification_contract.py", foreign_path]
+    selection = select_tests(paths)
+
+    assert selection.reason != "PR intake/publication contract PR"
+    assert selector.requires_runtime_checks(paths) is True
+    if foreign_path == "app/unknown_ci_helper.py":
+        assert selection.subsystems == ("unowned",)
+        assert foreign_path in selection.unowned_paths
+    elif foreign_path in {"requirements.txt", "tests/conftest.py"}:
+        assert selection.full_suite is True
+    elif foreign_path == "app/builderops/cli.py":
+        assert "tests/builderops" in selection.targets
+        assert "tests/dispatcher" in selection.targets
+    elif foreign_path == "app/dispatcher/verification_dispatch.py":
+        assert "tests/dispatcher" in selection.targets
+    elif foreign_path == "app/agents/panel_agent/runtime.py":
+        assert any(target.startswith("tests/agents/panel_agent") for target in selection.targets)
+    elif foreign_path == "app/ops/postgres_deploy_linux.py":
+        assert "tests/ops" in selection.targets
+    elif foreign_path == "scripts/deploy_channel.sh":
+        assert "tests/deploy" in selection.targets
+        assert "tests/deploy" not in selection.deferred_targets
+    else:
+        assert selection.full_suite or selection.targets
 
 
 @pytest.mark.parametrize("path", (
