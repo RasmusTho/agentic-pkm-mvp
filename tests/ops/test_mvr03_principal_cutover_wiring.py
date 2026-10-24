@@ -227,17 +227,19 @@ def _wrapper_run(
     return result, event_log.read_text(encoding="utf-8").splitlines()
 
 
-def test_wrapper_runs_the_cutover_inside_the_stopped_window(tmp_path: Path) -> None:
+@pytest.mark.parametrize("directory", ["wrapper", "principal-cutover"])
+def test_wrapper_runs_the_cutover_inside_the_stopped_window(tmp_path: Path, directory: str) -> None:
     """Opt-in, ordering, arguments, and every shell failure edge are pinned."""
 
+    tmp_path = tmp_path / directory
     disabled, disabled_events = _wrapper_run(tmp_path / "disabled", cutover=False)
     assert disabled.returncode == 0, disabled.stderr
-    assert not any("principal-cutover" in event for event in disabled_events)
+    assert not any("principal-cutover" in event.split() for event in disabled_events)
 
     success, events = _wrapper_run(tmp_path / "success", cutover=True)
     assert success.returncode == 0, success.stderr
     prove = next(i for i, event in enumerate(events) if "deployment-prove" in event)
-    cutover = next(i for i, event in enumerate(events) if "principal-cutover" in event)
+    cutover = next(i for i, event in enumerate(events) if "principal-cutover" in event.split())
     finish = next(i for i, event in enumerate(events) if "deployment-finish" in event)
     assert prove < cutover < finish
     assert "--native-producer-root /run/principal-fence-native-producers" in events[cutover]
@@ -250,7 +252,7 @@ def test_wrapper_runs_the_cutover_inside_the_stopped_window(tmp_path: Path) -> N
     assert all(
         "--loopback-listener" in event
         for event in loopback_events
-        if "principal-cutover" in event
+        if "principal-cutover" in event.split()
     )
 
     cutover_failure, failure_events = _wrapper_run(
