@@ -407,6 +407,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "app/__init__.py",
         "app/alembic/versions/e7b4c9d2a6f1_heimdal_raw_representation.py",
         "app/cli.py",
+        "app/config/database.py",
         "app/instance/mvr05_cutover.py",
         "app/instance/runtime.py",
         "app/instance/settings_rebind.py",
