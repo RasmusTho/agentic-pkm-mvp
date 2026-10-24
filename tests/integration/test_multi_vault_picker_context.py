@@ -1074,27 +1074,25 @@ def test_first_vault_initialize_bootstrap_is_single_use_and_failure_atomic(
     )
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
     selection_routes.reset_selection_store_for_tests()
-    client = TestClient(app, raise_server_exceptions=False)
     target = tmp_path / "atomic-failure"
-    issued = client.post(
-        "/api/companion/vault/initialize/bootstrap",
-        json={"path": str(target), "confirm": True},
-    )
-    assert issued.status_code == 200, issued.text
-
     def fail_before_effect(*_args, **_kwargs):
         raise RuntimeError("injected pre-effect failure")
 
     monkeypatch.setattr(manager, "initialize_vault", fail_before_effect)
-    failed = client.post(
-        "/api/companion/vault/initialize",
-        json={
-            "path": str(target),
-            "confirm": True,
-            "bootstrap_token": issued.json()["bootstrap_token"],
-        },
-    )
-    assert failed.status_code == 500
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f"""
+var options={{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{path:{json.dumps(str(target))},confirm:true}})}};
+var failed=await fetch('/api/companion/vault/initialize',options);
+var retry=await fetch('/api/companion/vault/initialize',options);
+console.log(JSON.stringify({{failed:failed.status,retry:retry.status,cookie}}));
+""")
+    assert result['failed'] == 500
+    assert result['retry'] == 409
+    assert result['cookie'] == ''
+    assert sum(path.endswith('/initialize/bootstrap') for _method,path,_headers,_body in calls) == 1
     snapshot = runtime.registry.load()
     assert snapshot.registrations == {}
     assert snapshot.default_vault_binding_id is None
@@ -1121,22 +1119,23 @@ def test_fresh_vault_initialize_returns_usable_scoped_context(
     selection_routes.reset_selection_store_for_tests()
     client = TestClient(app)
     target = tmp_path / "fresh-scoped"
-    bootstrap = client.post(
-        "/api/companion/vault/initialize/bootstrap",
-        json={"path": str(target), "confirm": True},
-    )
-    assert bootstrap.status_code == 200, bootstrap.text
-    initialized = client.post(
-        "/api/companion/vault/initialize",
-        json={
-            "path": str(target),
-            "confirm": True,
-            "bootstrap_token": bootstrap.json()["bootstrap_token"],
-        },
-    )
-    assert initialized.status_code == 200, initialized.text
-    selection_id = initialized.json()["context_selection_id"]
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f"""
+await initialize({json.dumps(str(target))});
+var scoped=await fetch('/api/companion/vault/notes/scoped');
+console.log(JSON.stringify({{status:scoped.status,data:await scoped.json(),cookie,handoffs}}));
+""")
+    assert result['status'] == 200
+    assert len(result['handoffs']) == 1
+    assert 'context_selection_id' not in result['handoffs'][0]['body']
+    assert 'context_selection_id' not in result['handoffs'][0]['body']['context']
+    selection_id = result['cookie'].split('=', 1)[1]
     assert selection_id
+    assert calls[-1][2]['X-Active-Context-Session'] == selection_id
+    assert sum(path.endswith('/initialize/bootstrap') for _method,path,_headers,_body in calls) == 1
     binding_id = runtime.registry.load().default_vault_binding_id
     scoped = client.get(
         "/api/companion/active-context/selection",
@@ -1152,3 +1151,206 @@ def test_fresh_vault_initialize_returns_usable_scoped_context(
     # The scoped selection is the immediate read authority; the registry's
     # interaction-history field is deliberately not consulted or materialized.
     assert runtime.registry.load().last_active_vault_ref is None
+
+
+def _activated_picker_runtime(tmp_path, monkeypatch):
+    from tests._mvr03_principal_harness import provisioned_instance
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    runtime, first, extra, _principal = provisioned_instance(tmp_path, extra_roots=("two",))
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+    roots = [Path(runtime.registry.load().registrations[item.vault_binding_id].path) for item in (first, extra[0])]
+    for index, root in enumerate(roots):
+        initialize_test_vault(root)
+        (root / f"only-{index}.md").write_text(f"vault {index}\n", encoding="utf-8")
+    _install_dormant_settings_rebind_for_test(runtime, first.vault_binding_id)
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+    monkeypatch.setattr("app.settings.ingestion.ingest_settings", _record_reload([]))
+    selection_routes.reset_selection_store_for_tests()
+    return runtime, roots, first.vault_binding_id, extra[0].vault_binding_id
+
+
+def test_existing_picker_drives_scoped_request_context(tmp_path, monkeypatch, caplog):
+    """The shipped click controller crosses UI HTTP and real API scope/read/write gates."""
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f'''
+await choose({json.dumps(str(roots[0]))});
+var a=await (await fetch('/api/companion/vault/notes/scoped')).json();
+await choose({json.dumps(str(roots[1]))});
+var b=await (await fetch('/api/companion/vault/notes/scoped')).json();
+var write=await fetch('/api/companion/note/save',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{note_path:'only-1.md',new_body:'updated by explicit edit\\n'}})}});
+console.log(JSON.stringify({{a,b,write:write.status,cookie,reloads,handoffs}}));
+''')
+        isolated = run("var r=await fetch('/api/companion/vault/notes/scoped');console.log(JSON.stringify({status:r.status}));")
+    assert isolated['status'] == 401
+    assert {note["vault_binding_id"] for note in result["a"]["notes"]} == {binding_a}
+    assert {note["vault_binding_id"] for note in result["b"]["notes"]} == {binding_b}
+    assert result["write"] == 200
+    assert len(result['handoffs']) == 2
+    for handoff in result['handoffs']:
+        assert 'HttpOnly' in handoff['headers']
+        assert 'SameSite=Strict' in handoff['headers']
+        assert 'Max-Age' not in handoff['headers']
+        assert 'context_selection_id' not in handoff['body']
+        assert handoff['headers'].split(';')[0].split('=', 1)[1] not in caplog.text
+    assert (roots[1] / "only-1.md").read_text().endswith("updated by explicit edit\n")
+    assert (roots[0] / "only-0.md").read_text() == "vault 0\n"
+    assert result["reloads"] == 2
+    selections = [call for call in calls if call[1] == "/api/companion/vault/select"]
+    assert all(call[3]["scoped_selection"] is True for call in selections)
+    reads = [call for call in calls if call[1].endswith('/notes/scoped')]
+    assert reads[0][2]["X-Active-Context-Session"] != reads[1][2]["X-Active-Context-Session"]
+    write = next(call for call in calls if call[1].endswith('/save/compatibility'))
+    assert "X-Compatibility-Write-Precondition" in write[2]
+    assert "X-Active-Context-Session" not in write[2]
+    assert not any(call[1] == '/api/companion/note/save' for call in calls)
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id == binding_b
+
+
+@pytest.mark.parametrize("bindings", ["zero", "sole-default", "many", "ambiguous", "default-mismatched"])
+def test_stale_selection_restart_requires_visible_reselection(tmp_path, monkeypatch, bindings, caplog):
+    from tests._mvr05b_picker_browser import picker_browser
+    from companion_ui.workspace.scoped_session import session_cookie
+
+    runtime, _roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    client = TestClient(app)
+    created = client.post('/api/companion/active-context/selection', json={"vault_binding_ids": [binding_a]})
+    assert created.status_code == 201, created.text
+    bearer = created.json()['context_selection_id']
+    # Restart destroys all evidence of the old selection's intended binding.
+    selection_routes.reset_selection_store_for_tests()
+    defaults = InstanceDefaultVaultService(runtime.registry, capability=STORAGE_MUTATION_CAPABILITY)
+    if bindings == 'zero':
+        empty_root = tmp_path / 'empty-restart'
+        empty_root.mkdir()
+        runtime, _principal = fresh_no_vault_instance(empty_root)
+        monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
+        monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+        assert runtime.registry.load().registrations == {}
+    elif bindings == 'default-mismatched':
+        defaults.set(binding_b)
+    elif bindings == 'sole-default':
+        runtime.registry.remove_registration(binding_b, _capability=STORAGE_MUTATION_CAPABILITY)
+        defaults.set(binding_a)
+        assert len(runtime.registry.load().registrations) == 1
+    elif bindings == 'ambiguous':
+        defaults.clear()
+    else:
+        defaults.set(binding_a)
+    with picker_browser(monkeypatch, cookie=session_cookie(bearer).split(';')[0]) as (run, calls):
+        result = run('''
+var read=await fetch('/api/companion/vault/notes/scoped');
+var write=await fetch('/api/companion/note/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note_path:'only-0.md',new_body:'must not write'})});
+var page=await (await nativeFetch(location.origin+'/workspace',{headers:{Cookie:cookie}})).text();
+console.log(JSON.stringify({status:read.status,write:write.status,visible:!visible.hidden,page,cookie,reloads}));
+''')
+    assert result['status'] == result['write'] == 401
+    assert result['visible'] is True
+    assert 'Choose a vault again to continue.' in result['page']
+    assert 'data-testid="vault-picker"' in result['page']
+    assert result['reloads'] == 0
+    assert bearer in result['cookie']
+    assert bearer not in result['page']
+    assert bearer not in caplog.text
+    assert len([call for call in calls if call[1].endswith('/notes/scoped')]) == 1
+    assert not any(method != 'GET' for method, _path, _headers, _body in calls)
+    assert all(headers.get('X-Active-Context-Session') == bearer for _method, _path, headers, _body in calls)
+
+
+def test_activated_picker_receipts_direct_write_between_scan_and_commit(tmp_path, monkeypatch):
+    import json
+    from app.instance.settings_rebind import SettingsRebindStore
+    from tests._mvr05b_picker_browser import picker_browser
+    from tests.integration.test_watcher_cross_process_rebind import (
+        _configure_watcher, _seed_daily_briefing_sentinel,
+    )
+
+    runtime, roots, _binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    for root in roots:
+        _seed_daily_briefing_sentinel(root)
+    config = _configure_watcher(monkeypatch, root=tmp_path, runtime=runtime, vault_a=roots[0])
+    monkeypatch.setenv('PKM_ENVIRONMENT', runtime.layout.channel_id)
+    monkeypatch.setenv('SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS', '10')
+    watcher_registry.run_registry_once(config)
+    between = roots[0] / 'direct-during-picker-commit.md'
+    original = SettingsRebindStore.commit_selection
+
+    def write_after_scan(self, **kwargs):
+        # The independent watcher has acknowledged the pre-commit scan. An
+        # external filesystem writer now arrives before the picker's commit.
+        between.write_text('external human write\n', encoding='utf-8')
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(SettingsRebindStore, 'commit_selection', write_after_scan)
+    with _running_watcher(config) as watcher_errors:
+        with picker_browser(monkeypatch) as (run, _calls):
+            result = run(f'''
+await choose({json.dumps(str(roots[1]))});
+var read=await (await fetch('/api/companion/vault/notes/scoped')).json();
+console.log(JSON.stringify({{read}}));
+''')
+    assert not watcher_errors
+    assert {item['vault_binding_id'] for item in result['read']['notes']} == {binding_b}
+    receipt = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
+    assert receipt.stage == 'completed'
+    assert any(item.relative_path == between.name for item in receipt.buffer)
+    assert any(path == str(between) for path in _event_paths(tmp_path))
+
+
+def test_picker_bootstrap_explicit_retry_recovers_only_committed_handoff(tmp_path, monkeypatch):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, _principal = fresh_no_vault_instance(tmp_path)
+    monkeypatch.setenv('INSTANCE_VAULT_REGISTRY_PATH', str(runtime.registry.path))
+    monkeypatch.setenv('INSTANCE_OWNERSHIP_ROOT', str(runtime.ledger.root))
+    monkeypatch.setenv('PKM_ENVIRONMENT', 'prod')
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / 'app-local.md'))
+    monkeypatch.setattr(companion_module, 'get_vault_manager', lambda: manager)
+    selection_routes.reset_selection_store_for_tests()
+    target = tmp_path / 'committed-handoff'
+    create = companion_module._create_initialized_scoped_selection
+    initialize = manager.initialize_vault
+    effects = []
+    handoffs = []
+
+    def one_effect(*args, **kwargs):
+        effects.append(True)
+        return initialize(*args, **kwargs)
+
+    def lost_handoff(**kwargs):
+        handoffs.append(True)
+        if len(handoffs) == 1:
+            raise RuntimeError('response handoff unavailable after commit')
+        return create(**kwargs)
+
+    monkeypatch.setattr(manager, 'initialize_vault', one_effect)
+    monkeypatch.setattr(companion_module, '_create_initialized_scoped_selection', lost_handoff)
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f'''
+var options={{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{path:{json.dumps(str(target))},confirm:true}})}};
+var failed=await fetch('/api/companion/vault/initialize',options);
+var recovered=await fetch('/api/companion/vault/initialize',options);
+var read=await fetch('/api/companion/vault/notes/scoped');
+console.log(JSON.stringify({{failed:failed.status,recovered:recovered.status,read:read.status,cookie}}));
+''')
+    assert result['failed'] == 500
+    assert result['recovered'] == result['read'] == 200
+    assert result['cookie']
+    assert len(effects) == 1
+    assert len(handoffs) == 2
+    issued = [call for call in calls if call[1].endswith('/initialize/bootstrap')]
+    assert len(issued) == 1
+    executions = [body for _method,path,_headers,body in calls if path.endswith('/initialize') and body.get('bootstrap_token')]
+    assert len(executions) == 2
+    assert executions[0]['bootstrap_token'] == executions[1]['bootstrap_token']
+    assert FirstVaultPreconditionStore(runtime.registry.path).load().state == 'consumed'

@@ -338,11 +338,13 @@ class VaultContextResponse(BaseModel):
     validation_error: str | None = None
     permissions: dict[str, bool] = Field(default_factory=dict)
     active_context: dict[str, Any] | None = None
+    context_selection_id: str | None = None
 
 
 class VaultSelectRequest(BaseModel):
     path: str = Field(..., min_length=1)
     remember: bool = True
+    scoped_selection: bool = False
 
 
 class VaultInitializeRequest(BaseModel):
@@ -358,6 +360,7 @@ class VaultInitializeRequest(BaseModel):
     # Fresh no-vault initialization carries the authenticated single-use
     # precondition minted by ``/vault/initialize/bootstrap``.
     bootstrap_token: str | None = None
+    scoped_selection: bool = False
 
 
 class VaultInitializeResponse(BaseModel):
@@ -1259,9 +1262,36 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
     dependencies=[Depends(require_loopback_or_api_key)],
 )
 @compatibility_selector_bridge
-def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
-    context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
-    return _vault_context_response(context)
+def select_companion_vault(
+    req: VaultSelectRequest,
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
+) -> VaultContextResponse:
+    # Only the explicit picker command may create a new scoped handoff. A read
+    # (including a stale session) never reaches this branch or remints intent.
+    registry_path = None
+    if req.scoped_selection:
+        _runtime, registry_path = _first_vault_runtime()
+        _authenticated_principal_id(request, api_key, registry_path)
+    manager = get_vault_manager()
+    with manager.selection_window():
+        context = manager.select_vault(Path(req.path), remember=req.remember)
+        response = _vault_context_response(context)
+        if registry_path is not None:
+            from app.instance.filesystem_identity import resolve_filesystem_root_identity, same_filesystem_root
+
+            target = resolve_filesystem_root_identity(Path(req.path))
+            matches = [
+                item.vault_binding_id
+                for item in VaultRegistryStore(registry_path).load().registrations.values()
+                if same_filesystem_root(resolve_filesystem_root_identity(item.path), target)
+            ]
+            if context.status != "selected" or len(matches) != 1:
+                raise HTTPException(status_code=409, detail="reselection_required: selected binding is not resolvable")
+            response.context_selection_id = _create_initialized_scoped_selection(
+                request=request, api_key=api_key, registry_path=registry_path, binding_id=matches[0]
+            )
+        return response
 
 
 # --- Visual folder browser (#2565) ------------------------------------------
@@ -1696,6 +1726,11 @@ def initialize_companion_vault(
     elif os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip():
         runtime, registry_path = _first_vault_runtime()
 
+    if req.scoped_selection:
+        if registry_path is None:
+            raise HTTPException(status_code=503, detail="instance registry is not bound")
+        _authenticated_principal_id(request, api_key, registry_path)
+
     if runtime is not None and registry_path is not None:
         snapshot = runtime.registry.load()
         if req.bootstrap_token or (
@@ -1785,10 +1820,20 @@ def initialize_companion_vault(
         machine_role=req.machine_role,
         remember=req.remember,
     )
+    selected = (
+        select_companion_vault(
+            VaultSelectRequest(path=req.path, remember=req.remember, scoped_selection=True),
+            request,
+            api_key,
+        )
+        if req.scoped_selection
+        else _vault_context_response(result.context)
+    )
     return VaultInitializeResponse(
-        context=_vault_context_response(result.context),
+        context=selected,
         created_files=list(result.created_files),
         skipped_existing_files=list(result.skipped_existing_files),
+        context_selection_id=selected.context_selection_id,
     )
 
 

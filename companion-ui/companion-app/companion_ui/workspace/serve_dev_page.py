@@ -51,6 +51,11 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 
+from companion_ui.workspace.scoped_session import (
+    COMPATIBILITY_PATHS, SELECTOR_PATHS, scoped_session_script,
+    session_cookie, session_from_cookie,
+)
+
 import httpx
 
 
@@ -9700,6 +9705,7 @@ def _render_orientation_index_html(
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Workspace Orientation [{title_suffix}]</title>
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
+  {scoped_session_script()}
   <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     :root {{
@@ -11813,6 +11819,7 @@ def render_index_html(
   <title>Companion UI — Real-Note Workspace [{title_suffix}]</title>
   {production_static_link}
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
+  {scoped_session_script()}
   <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     /* Page-local tokens. Yggdrasil tokens come from YGGDRASIL_TOKENS_URL (YDS-03, #5629). */
@@ -16564,6 +16571,15 @@ def handle_get(
         elif orientation is None:
             error = orientation_error or orientation_vault_browser_error
 
+    if "reselection_required" in error or "reselection_required" in orientation_error or "reselection_required" in orientation_vault_browser_error:
+        vault_selection_required = {
+            "state": "vault_selection_required", "reason": "reselection_required",
+            "message": "Choose a vault again to continue.",
+        }
+        fields = None
+        orientation = None
+        orientation_vault_browser = None
+        error = ""
     return render_index_html(
         api_base_url=api_base_url,
         note_path=note_path,
@@ -16635,10 +16651,27 @@ def make_handler(
         _devui_enabled = _resolved_devui_enabled
 
         def _send_json(self, status_code: int, payload: object, *, confirmation_header: str | None = None) -> None:
+            handoff = None
+            if status_code < 400 and urlparse(self.path).path in {VAULT_SELECT_ENDPOINT, VAULT_INITIALIZE_ENDPOINT} and isinstance(payload, dict):
+                bearer = payload.get("context_selection_id")
+                if isinstance(bearer, str) and bearer:
+                    # The two explicit picker handoffs move the API credential
+                    # into an HttpOnly cookie. No other body field is rewritten.
+                    handoff = bearer
+                    payload = dict(payload)
+                    payload.pop("context_selection_id", None)
+                    if isinstance(payload.get("context"), dict) and "context_selection_id" in payload["context"]:
+                        payload["context"] = dict(payload["context"])
+                        payload["context"].pop("context_selection_id", None)
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            if handoff is not None:
+                self.send_header("Set-Cookie", session_cookie(handoff))
+            proof = getattr(self._client, "response_headers", {}).get("x-compatibility-write-precondition")
+            if proof:
+                self.send_header(_COMPATIBILITY_PRECONDITION_HEADER, proof)
             if confirmation_header is not None:
                 self.send_header(_PANEL_CONFIRMATION_HEADER, confirmation_header)
             self.end_headers()
@@ -16693,7 +16726,10 @@ def make_handler(
                 self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
                 return
             try:
-                response = httpx.get(self._api_base_url.rstrip("/") + path, timeout=10.0)
+                response = httpx.get(
+                    self._api_base_url.rstrip("/") + path, timeout=10.0,
+                    headers=self._forwarded_client_headers(path),
+                )
             except httpx.RequestError as exc:
                 self._send_json(
                     502,
@@ -16941,6 +16977,7 @@ def make_handler(
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            self._bind_request_context(parsed.path)
             if parsed.path == "/devui" or parsed.path.startswith("/devui/"):
                 self._serve_devui_candidate(parsed)
                 return
@@ -16986,6 +17023,14 @@ def make_handler(
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if parsed.path == "/api/companion/vault/notes/scoped":
+                try:
+                    data = self._client.get(parsed.path, params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
                 return
             if parsed.path == "/api/companion/orientation":
                 try:
@@ -17063,6 +17108,11 @@ def make_handler(
                 # no-vault default — no fabricated vault state.
                 try:
                     data = self._client.get(VAULT_SETTINGS_ENDPOINT, params={})
+                except WorkspaceClientHTTPError as exc:
+                    if "reselection_required" in exc.detail:
+                        self._proxy_error(exc)
+                        return
+                    data = {}
                 except WorkspaceClientError:
                     data = {}
                 # This fragment route is shared by two surfaces (#2485 Codex
@@ -17264,6 +17314,27 @@ def make_handler(
             if parsed.path not in {"/", "/workspace"}:
                 self._send_unknown_document_route()
                 return
+            # Resolve explicit session intent before any page-triggered mutation
+            # or secondary read. A stale bearer is retained, never downgraded.
+            page_headers = self._forwarded_client_headers(parsed.path)
+            if "X-Active-Context-Session" in page_headers and "X-Active-Context-Override" not in page_headers:
+                try:
+                    self._client.get("/api/companion/active-context/selection", params={})
+                except WorkspaceClientHTTPError as exc:
+                    if "reselection_required" in exc.detail:
+                        self._send_html(200, render_index_html(
+                            api_base_url=self._api_base_url,
+                            vault_selection_required={
+                                "state": "vault_selection_required", "reason": "reselection_required",
+                                "message": "Choose a vault again to continue.",
+                            },
+                        ))
+                    else:
+                        self._proxy_error(exc)
+                    return
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
             day_start_briefing = None
             try:
                 first_contact = self._client.post(
@@ -17327,6 +17398,7 @@ def make_handler(
                 "/api/companion/briefing/today",
                 "/api/companion/workspace",
                 "/api/companion/vault/notes",
+                "/api/companion/vault/notes/scoped",
                 "/api/companion/vault/browse",
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/companion/vault-related",
@@ -17364,6 +17436,7 @@ def make_handler(
                 "/api/companion/vault-browser/actions/queue-review",
                 VAULT_SELECT_ENDPOINT,
                 VAULT_INITIALIZE_ENDPOINT,
+                "/api/companion/vault/initialize/bootstrap",
                 VAULT_RELOAD_ENDPOINT,
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/canvas/sessions",
@@ -17376,6 +17449,7 @@ def make_handler(
             {
                 VAULT_SELECT_ENDPOINT,
                 VAULT_INITIALIZE_ENDPOINT,
+                "/api/companion/vault/initialize/bootstrap",
                 # GET /vault/browse is require_loopback_or_api_key-gated and
                 # enumerates folder names; forward the client's auth context so
                 # the runtime authenticates the real client, not the loopback
@@ -17466,25 +17540,40 @@ def make_handler(
                 return None
             return getattr(self, attr_name)
 
+        def _bind_request_context(self, path: str) -> None:
+            # Clone the transport per request; the class-level client is shared
+            # by browsers and must never retain another browser's capability.
+            headers = self._forwarded_client_headers(path)
+            if headers and hasattr(client, "with_context_headers"):
+                self._client = client.with_context_headers(headers)
+
         def _forwarded_client_headers(self, path: str) -> dict[str, str]:
             client_address = getattr(self, "client_address", None)
             client_host = ""
             if isinstance(client_address, tuple) and client_address:
                 client_host = str(client_address[0]).strip()
             headers: dict[str, str] = {}
-            if client_host and path in self._FORWARDED_CLIENT_AUTH_PATHS:
+            has_session = session_from_cookie(self.headers.get("Cookie", "")) is not None or any(
+                self.headers.get(name) is not None for name in _ACTIVE_CONTEXT_HEADERS[:2]
+            )
+            if client_host and (path in self._FORWARDED_CLIENT_AUTH_PATHS or has_session):
                 headers["X-Forwarded-For"] = client_host
             api_key = self.headers.get("X-API-Key")
             if api_key:
                 headers["X-API-Key"] = api_key
             for name in _ACTIVE_CONTEXT_HEADERS:
                 value = self.headers.get(name)
-                if value:
+                if value is not None:
                     headers[name] = value
+            if "X-Active-Context-Session" not in headers and path not in SELECTOR_PATHS | COMPATIBILITY_PATHS:
+                bearer = session_from_cookie(self.headers.get("Cookie", ""))
+                if bearer is not None:
+                    headers["X-Active-Context-Session"] = bearer
             return headers
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
+            self._bind_request_context(parsed.path)
             if not self._post_path_allowed(parsed.path):
                 self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
                 return
@@ -17601,6 +17690,7 @@ def make_handler(
 
         def do_DELETE(self) -> None:
             parsed = urlparse(self.path)
+            self._bind_request_context(parsed.path)
             if not self._delete_path_allowed(parsed.path):
                 self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
                 return

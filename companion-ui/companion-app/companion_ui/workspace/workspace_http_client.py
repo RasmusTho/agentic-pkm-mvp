@@ -95,6 +95,20 @@ class WorkspaceHttpClient:
     def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._context_headers: dict[str, str] = {}
+        self.response_headers: dict[str, str] = {}
+
+    def with_context_headers(self, headers: dict[str, str]) -> WorkspaceHttpClient:
+        """Create a request-local adapter; never put browser state on the shared client."""
+        client = WorkspaceHttpClient(self._base_url, timeout=self._timeout)
+        client._context_headers = dict(headers)
+        return client
+
+    def _headers(self, headers: dict[str, str] | None) -> dict[str, str]:
+        return {**self._context_headers, **(headers or {})}
+
+    def _capture_headers(self, response: httpx.Response) -> None:
+        self.response_headers = dict(response.headers)
 
     def get(
         self,
@@ -115,12 +129,14 @@ class WorkspaceHttpClient:
         # existing httpx.get mocks/side-effects that don't accept a headers kwarg
         # working) and only the auth-forwarded proxy route adds it.
         get_kwargs: dict[str, Any] = {"params": params, "timeout": self._timeout}
+        headers = self._headers(headers)
         if headers:
             get_kwargs["headers"] = headers
         try:
             resp = httpx.get(full_url, **get_kwargs)
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
+        self._capture_headers(resp)
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
@@ -171,11 +187,13 @@ class WorkspaceHttpClient:
                 "json": json,
                 "timeout": timeout if timeout is not None else self._timeout,
             }
-            if headers is not None:
+            headers = self._headers(headers)
+            if headers:
                 request_kwargs["headers"] = headers
             resp = httpx.post(full_url, **request_kwargs)
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
+        self._capture_headers(resp)
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
@@ -199,11 +217,12 @@ class WorkspaceHttpClient:
             resp = httpx.post(
                 full_url,
                 content=content,
-                headers=headers,
+                headers=self._headers(headers),
                 timeout=timeout if timeout is not None else self._timeout,
             )
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
+        self._capture_headers(resp)
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
@@ -219,11 +238,13 @@ class WorkspaceHttpClient:
         full_url = self._base_url + url
         try:
             request_kwargs: dict[str, Any] = {"params": params, "timeout": self._timeout}
+            headers = self._headers(headers)
             if headers:
                 request_kwargs["headers"] = headers
             resp = httpx.delete(full_url, **request_kwargs)
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
+        self._capture_headers(resp)
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
