@@ -6,8 +6,8 @@ bring-up. A *set-but-missing* VAULT_ROOT still fails loud (covered by
 tests/uat/test_negative_safety_integrated_runtime.py::test_missing_vault_fails_loud
 and tests/watcher/test_watcher_idle_without_vault.py).
 
-Hermetic: a fake `docker` that fails loudly proves the script reaches the
-no-vault idle posture before any real Docker interaction — the same fake-docker
+Hermetic: a fake `docker` accepts the readiness probe, then refuses effects
+after the script reaches the no-vault idle posture — the same fake-docker
 pattern used by the negative-safety UAT.
 """
 
@@ -31,7 +31,7 @@ def test_boots_idle_without_vault_root(tmp_path: Path) -> None:
     fake_bin.mkdir()
     fake_docker = fake_bin / "docker"
     fake_docker.write_text(
-        "#!/usr/bin/env bash\necho fake docker should not run >&2\nexit 99\n",
+        "#!/usr/bin/env bash\nif [ \"${1:-}\" = info ]; then exit 0; fi\necho fake docker effect refused >&2\nexit 99\n",
         encoding="utf-8",
     )
     fake_docker.chmod(0o755)
@@ -39,6 +39,9 @@ def test_boots_idle_without_vault_root(tmp_path: Path) -> None:
     env = {
         "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
         "HOME": str(Path.home()),
+        # This fixture models an unmanaged Docker engine, independently of host Colima.
+        "COLIMA_RESOURCE_PROFILE_FILE": os.devnull,
+        "DOCKER_CONTEXT": "default",
         # #4519 — the no-vault idle bring-up exports a minimal runtime env;
         # scope that write to tmp_path so it cannot clobber the repository's
         # real tmp/runtime.env (this hermetic env carries no pytest markers,

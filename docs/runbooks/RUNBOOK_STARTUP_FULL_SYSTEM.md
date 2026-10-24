@@ -219,6 +219,86 @@ Do not use prod targets and do not move the `stable` ref.
    curl -sS http://localhost:18001/healthz
    ```
 
+### Colima persistent substrate readiness
+
+This procedure operates only the explicitly selected local Colima engine on the Mac. Product
+`dev`, `test`, and `prod` placement remains on TARS. Local container names containing those words
+are not evidence that the Mac hosts a Product channel. Inventory the local helper dependencies
+before interrupting the VM, including any BuilderOps control-plane services.
+
+1. Bind the exact host/profile, reviewed candidate SHA and artifact hashes, existing Docker socket,
+   context endpoint, filesystem UUID/LABEL/PARTUUID, ext4 mount target and bind roots, resource
+   allocation, free-block/inode floors, and expected required persisted container count. Compare exact
+   full container IDs with `docker ps -aq --no-trunc` through that explicit socket; discrepancies are incident
+   evidence, never permission to remove configurations. Do not emit config bodies, environment
+   values, vault paths, or credentials in the receipt.
+   Required identities include stopped durable containers. Separately account for terminal AutoRemove
+   records only when dead, never started, not running, and restart-disabled, with no anonymous volume
+   association: every volume mount must have an explicit named `Spec.Source`. Unknown or malformed
+   records refuse readiness. Docker may retain or automatically remove those terminal identities;
+   all required identities must remain present, and no unaccounted API identity is accepted. Record
+   required-ID digest and terminal count, never subtract a fixed number from disk inventory.
+2. Establish a serialized host window with the owners of active Git/worktree and Docker lifecycle
+   operations. Check live operation/lease state and process cwd/parent evidence. Do not interrupt
+   another session or use a process-name snapshot as exclusive ownership. During the window,
+   perform no bulk fetch, checkout, prune, or host-global Docker operation in another session.
+3. Prove an isolated Colima profile first, using its separate socket, data filesystem and context.
+   Preserve any pre-existing candidate profile. Its first unguarded boot is confined to the isolated
+   engine. Inventory it, then stop only that guest's Docker socket/service and containerd units;
+   prepare a literal profile from `ops/host-setup/mac-mini/colima/runtime-profile.env.example`
+   using that candidate's actual stable filesystem identity and mount target. Do not copy the
+   default profile's storage or identity. The existing persistent source/target directories must
+   already exist; the mount producer refuses to hide nonempty target data or create metadata roots.
+4. Run the installer in dry-run mode first. Install into the stopped candidate guest with
+   `COLIMA_PROFILE=<candidate>`, `COLIMA_RUNTIME_ENV_FILE=<reviewed-file>`,
+   `COLIMA_COLD_START_AUTHORIZED=1`, and `COLIMA_RUNTIME_APPLY=1`. The installer checks inactive
+   units, persistently masks Docker/socket/containerd before atomically installing artifacts, verifies
+   installed hashes and the new boundary units, and requests no restart. Masks survive interruption
+   and reboot. Its failure leaves the stopped services stopped. The socket drop-in keeps Docker
+   group clients out at mode `0600` while dockerd restores containers and the helper compares exact
+   inventory. Only after exact ID equality and the post-restore containerd PID check pass does the
+   helper open group access at `0660`; a mismatch leaves the socket restricted and stops socket
+   activation. Failed service starts queue the activation unit to stop; normal stops and restarts
+   propagate to it through the socket unit. Starting Docker pulls the socket back in through the
+   service dependency. Keep Docker off until the
+   complete installed manifest has been verified. A partial installation is not an activation.
+5. Repeat the complete installer pass with `COLIMA_RUNTIME_ACTIVATE=1` to verify the manifest,
+   unmask the three units, and verify the effective daemon units (failure remasks them). No service
+   is started by that pass. Use only canonical `/var/lib/docker`, `/var/lib/containerd`, and
+   `/var/lib/docker/containers` metadata roots; verify the actual daemon configuration uses those
+   roots before activation. Set `LIMA_USERNET_RESOLVE_IP_ADDRESS_TIMEOUT=3` (integer minutes) in
+   the reviewed profile; the old `LIMA_USERNET_TIMEOUT` name is unsupported.
+   Cold-start only the isolated profile in the same serialized window. Use the shared helper with
+   `COLIMA_RESOURCE_PROFILE_FILE=<candidate-file>` and `AUTO_START_COLIMA=1`. Confirm systemd
+   dependency order, stable containerd PID across dockerd restore, containerd version and `moby`
+   metadata probes, socket/context equality and exact persisted/API inventory equality. Exercise
+   rollback by stopping that guest's Docker socket/service; verify Docker remains off while
+   containerd and all persistent mounts remain intact. Retain a redacted
+   `colima-docker-startup-gate.v1` receipt binding the candidate SHA/artifact hashes, isolated
+   daemon/socket identity, counts, observations and rollback result. Fake-command tests are
+   repository evidence only and cannot satisfy this live receipt.
+6. Only after that proof succeeds, inventory default-profile helper dependencies and preserve its
+   existing managed configuration and unit hashes. Stop default guest Docker/socket/containerd
+   through the authorized host procedure in the serialized window. Install the same proved
+   artifacts using the default profile's separately reviewed environment and
+   `COLIMA_ISOLATED_PROOF_ACCEPTED=1`. Place its non-secret host profile at
+   `~/.config/yggdrasil/colima-runtime.env`. The installer must finish and verify every artifact
+   before a separate `COLIMA_RUNTIME_ACTIVATE=1` pass and before starting anything. Never reuse the isolated data identity or socket for default.
+7. Perform one controlled default-profile cold start. Record containerd's PID after its readiness
+   gate and before dockerd restore, then confirm the same PID after restore; record version/metadata
+   success, exact recovered persisted/API inventory equality and context/socket binding. Run the
+   existing test/prod channel-isolation preflight against local configuration without starting or
+   operating TARS channels. Attach a redacted `colima-default-cold-start.v1` receipt with these
+   observations and the exact candidate/artifact identity. Report local helper recovery separately
+   from Product readiness. Do not fabricate PASS for a missing observation.
+
+On any readiness/inventory failure, leave Docker and socket activation stopped. Preserve containerd,
+all data mounts, Docker/containerd metadata, volumes and worktrees. Roll back by retaining the
+refusal/off state and restoring only authenticated managed configuration after diagnosis; do not
+remove gates to make Docker advertise readiness. Restoring ungated startup is not rollback.
+The storage target and interim serialization rule are owned by
+`docs/INFRASTRUCTURE.md :: Colima persistent substrate readiness`.
+
 ### How channel-specific env loading works
 
 When `PKM_ENVIRONMENT` (or `CHANNEL` / `PKM_CHANNEL`) is set, `start_full_system.sh` loads
