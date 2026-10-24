@@ -355,6 +355,40 @@ jobs:
             };
             // builderops-routing:end
             // authority-classifier:start
+            const validNonClosingPickup = (receipt, issue) => {
+              // Match the existing Python wrapper validator's whitespace grammar.
+              const whitespace = "[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]";
+              const token = `[^${whitespace.slice(1, -1)}]`;
+              const strip = value => value.replace(new RegExp(`^${whitespace}+|${whitespace}+$`, "g"), "");
+              const missing = value => !value || !strip(value) || /^(?:tbd|todo|n\/a)$/i.test(strip(value)) || /^<.*>$/.test(strip(value));
+              const prefix = receipt.match(new RegExp(`^pickup-claim-complete issue=([1-9][0-9]*) branch=(${token}*) worktree=(.+)$`));
+              if (!prefix || Number(prefix[1]) !== issue || (prefix[2] && missing(prefix[2]))) return false;
+              const separators = (value, marker) => {
+                const parts = [];
+                for (let end = value.length, index; (index = value.lastIndexOf(marker, end - 1)) >= 0; end = index) {
+                  parts.push([value.slice(0, index), value.slice(index + marker.length)]);
+                  if (index === 0) break;
+                }
+                return parts;
+              };
+              for (const [worktree, tail] of separators(prefix[3], " coordination_mode=")) {
+                if (missing(worktree) || !worktree.startsWith("/")) continue;
+                const dispatcher = tail.match(new RegExp(`^dispatcher-backed fallback_reason=none task_id=(${token}+) lease_id=(${token}+) holder=(.+) evidence=verified-dispatcher-lease$`));
+                if (dispatcher && dispatcher.slice(1).every(value => !missing(value))) {
+                  const taskIssue = dispatcher[1].match(/-issue-([0-9]+)$/);
+                  if (!taskIssue || taskIssue[1] === prefix[1]) return true;
+                }
+                const fallback = tail.match(/^github-label-only-fallback fallback_reason=(.+) evidence=github-comment:[1-9][0-9]*$/);
+                if (fallback) {
+                  for (const [beforeSession, session] of separators(fallback[1], " session=")) {
+                    for (const [reason, agent] of separators(beforeSession, " agent=")) {
+                      if (strip(reason) !== "none" && [reason, agent, session].every(value => !missing(value))) return true;
+                    }
+                  }
+                }
+              }
+              return false;
+            };
             const classifyIssueAuthority = (candidateBody) => {
               const hasUnsupportedLineSeparator = /\r(?!\n)|[\u2028\u2029]/.test(candidateBody);
               const canonicalBody = candidateBody.replace(/\r\n/g, "\n");
@@ -434,9 +468,22 @@ jobs:
                 ...exactGoverningIssueMatches.map((match) => Number(match.match(/#([1-9][0-9]*)/)[1])),
               ]);
               const hasIssueLink = exactIssueLinkMatches.length > 0;
-              const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0 || neutralizedClosingLines.length > 0;
+              const lifecycleLines = canonicalBody.match(/^[ \t]*Issue-Lifecycle\b.*$/gim) || [];
+              const exactNonClosingLines = canonicalBody.match(/^Issue-Lifecycle: non-closing[ \t]*$/gm) || [];
+              const pickupLines = canonicalBody.match(/^[ \t]*Pickup-Receipt\b.*$/gim) || [];
+              const exactPickup = canonicalBody.match(/^Pickup-Receipt:[ \t]*(.*)$/m);
+              const nonClosingValid =
+                !hasUnsupportedLineSeparator &&
+                governingIssueLines.length === 1 && exactGoverningIssueMatches.length === 1 &&
+                lifecycleLines.length === 1 && exactNonClosingLines.length === 1 &&
+                issueLinkMentions.length === 0 &&
+                !/^[ \t]*Verified-Closing-Issues\b/im.test(canonicalBody) &&
+                pickupLines.length === 1 && exactPickup !== null &&
+                validNonClosingPickup(exactPickup[1], governingIssueNumber);
+              const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0 || neutralizedClosingLines.length > 0 || lifecycleLines.length > 0;
               const valid =
                 !hasUnsupportedLineSeparator &&
+                lifecycleLines.length === 0 &&
                 governingIssueLines.length === 1 &&
                 exactGoverningIssueMatches.length === 1 &&
                 hasIssueLink &&
@@ -445,6 +492,7 @@ jobs:
                 neutralizedClosingLines.length === 0;
               const neutralizedValid =
                 !hasUnsupportedLineSeparator &&
+                lifecycleLines.length === 0 &&
                 governingIssueLines.length === 1 &&
                 exactGoverningIssueMatches.length === 1 &&
                 issueLinkMentions.length === 0 &&
@@ -472,6 +520,7 @@ jobs:
                 governingIssue: governingIssueNumber,
                 neutralizedClosingIssues: neutralizedIssueNumbers,
                 neutralizedValid,
+                nonClosingValid,
                 supportingIssues: [...referencedIssueNumbers]
                   .filter(number => number !== governingIssueNumber)
                   .sort((a, b) => a - b),
@@ -645,8 +694,8 @@ jobs:
               return;
             }
             if (hasIssueAuthority) {
-              if (!issueAuthority.valid && !issueAuthority.neutralizedValid) {
-                core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line and between one and ten unique positive closing issues. During verified merge only, a sorted `Verified-Closing-Issues: #<id>[, #<id>]` line with evidence-only Refs may replace closing keywords so GitHub cannot auto-close mutable body authority. The governing issue may differ from closed supporting issues in an approved multi-issue PR; issue-free lanes must omit both authority surfaces.");
+              if (!issueAuthority.valid && !issueAuthority.neutralizedValid && !issueAuthority.nonClosingValid) {
+                core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line and one to ten unique positive closing issues, or explicit `Issue-Lifecycle: non-closing` with its exact governing Pickup-Receipt and zero closing authority. During verified merge only, authenticated `Verified-Closing-Issues: #<id>[, #<id>]` may replace closing keywords. Mixed or malformed lifecycle authority is refused; issue-free lanes omit Issue authority.");
                 return;
               }
               if (issueAuthority.neutralizedValid) {
