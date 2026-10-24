@@ -143,6 +143,9 @@ proofs in `test_live_core_flow_contract.py` run with `COMPANION_UI_BROWSER_TESTS
 cold-start and document entry pages, without reaching a real application endpoint. Opt-in
 DEV/TEST execution remains separate, current-candidate, non-closing technical acceptance
 evidence; a blocked or skipped live run is not a PASS and does not close the governing lifecycle.
+The constrained-reuse browser proof also records observed request origins: Companion pages serve
+the existing token roles with the shipped local-system font fallback, remove remote font imports at
+the static-token serving boundary, and fail the proof if an unexpected external origin is observed.
 
 ```sh
 COMPANION_UI_LIVE_CORE_FLOW=1 \
