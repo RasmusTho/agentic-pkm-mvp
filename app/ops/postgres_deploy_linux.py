@@ -411,6 +411,9 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
             raise PostgresDeployError()
         checkpoint['name'] = 'authority_request_binding'
         bound_plan = cfg.journal.bound_plan(receipt.operation_id)
+        expected_principal = '1' if bound_plan.principal_cutover else None
+        if os.environ.get('MVR03_PRINCIPAL_CUTOVER') != expected_principal:
+            raise PostgresDeployError()
         cutover = bound_plan.authority_cutover
         expected_cutover = (cutover.binding_id, cutover.root) if cutover else ('', '')
         if tuple(os.environ.get(key, '') for key in _CUTOVER_ENV) != expected_cutover:
@@ -426,7 +429,7 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
         if (expected_capture not in {'0', '1'} or expected_migration not in {'0', '1'}
             or not re.fullmatch(r'[0-9a-f]{40}', target_revision)):
             raise PostgresDeployError()
-        if cutover and target_revision != bound_plan.revision:
+        if (cutover or bound_plan.principal_cutover) and target_revision != bound_plan.revision:
             raise PostgresDeployError()
         # The worker selected these consumers before any deployment mutation. Check
         # capture config again for every Compose call. Before the shell runs its
@@ -1287,6 +1290,7 @@ class LinuxEffects:
             env['APP_IMAGE_TAG'] = candidate.revision
             env['APP_IMAGE_DIGEST_SUFFIX'] = '@' + candidate.image_digest
         # Native authority is never inherited from the supervisor or shell.
+        env.pop('MVR03_PRINCIPAL_CUTOVER', None)
         for key in _CUTOVER_ENV:
             env.pop(key, None)
         if cutover is not None:
@@ -1368,6 +1372,8 @@ class LinuxEffects:
         if env['BWS_DATABASE_TARGET'] == 'external':
             # No ambient profile can reintroduce the unrelated local DB/volume.
             env['COMPOSE_PROFILES'] = ''
+        # Installed runtime input is configuration, not request authorization.
+        env.pop('MVR03_PRINCIPAL_CUTOVER', None)
         return env
 
     def compose(
@@ -2718,7 +2724,8 @@ class LinuxEffects:
         self.capture_watch_configured = capture
         self.raw_migration_pending = migration
         return DeployPlan(plan.channel, plan.revision, plan.services, candidate, plan.ack_forward_only,
-                          plan.image_digest, plan.automatic, plan.authority_cutover, plan.promotion_plan)
+                          plan.image_digest, plan.automatic, plan.authority_cutover, plan.promotion_plan,
+                          plan.principal_cutover)
 
     def require_promotion_admission(self, plan: DeployPlan) -> None:
         if plan.channel == 'prod':
@@ -2983,6 +2990,7 @@ class LinuxEffects:
             ).encode('ascii'))
 
     def activate(self, plan: DeployPlan) -> None:
+        plan.validate()
         if (self.lock_fd is None or set(plan.services) != set(DATABASE_CONSUMERS.values())
             or self.active_consumers is None):
             raise PostgresDeployError()
@@ -2994,15 +3002,18 @@ class LinuxEffects:
         env['BWS_DEPLOY_LOCK_FD'] = str(self.lock_fd)
         receipt = self.config.journal.read()
         if (receipt is None or receipt.stage != 'activating'
-            or plan.authority_cutover is not None and receipt.operation_id != self.operation_id):
+            or (plan.authority_cutover is not None or plan.principal_cutover)
+            and receipt.operation_id != self.operation_id):
             raise PostgresDeployError()
-        if plan.authority_cutover is not None:
+        if plan.authority_cutover is not None or plan.principal_cutover:
             self.config.journal.bind_request(receipt.operation_id, plan, False)
         self.qualify_authority_cutover(plan)
         if plan.authority_cutover is not None:
             env.update(zip(_CUTOVER_ENV, (plan.authority_cutover.binding_id, plan.authority_cutover.root)))
         env['BWS_DEPLOY_OPERATION_ID'] = receipt.operation_id
         self._reclaim_image_cache(plan)
+        if plan.principal_cutover:
+            env['MVR03_PRINCIPAL_CUTOVER'] = '1'
         # Only declared consumer bindings are handed to Compose, as private
         # tmpfs env-file handles. No value is copied to this process environment.
         from app.ops.host_secret_contract import load_host_secret_contract
@@ -4261,7 +4272,7 @@ class SupervisedOperation:
             receipt.require_profile(self.plan)
             return {'receipt': receipt.payload()}
         if self.failed:
-            if self.plan.authority_cutover is not None:
+            if self.plan.authority_cutover is not None or self.plan.principal_cutover:
                 return {'pending': True, 'empty': False, 'ready': False}
             raise PostgresDeployError()
         return {'pending': True, 'empty': self.empty, 'ready': self.ready.is_set()}
@@ -4310,7 +4321,7 @@ class DeploymentSupervisor:
                     previous = recovered
                     effects.retire_reconciled_channel_lock(lock)
             return {'receipt': previous.payload()}
-        if plan.authority_cutover is not None:
+        if plan.authority_cutover is not None or plan.principal_cutover:
             # Quiescent services cannot establish the outcome of authority cutover.
             # Preserve the request, journal and admission lock for operator recovery.
             return {'pending': True, 'empty': False, 'ready': False}
@@ -4666,7 +4677,7 @@ class DeploymentSupervisor:
         if str(UUID(operation_id)) != operation_id or type(data['bootstrap']) is not bool:
             raise PostgresDeployError()
         plan = DeployPlan.from_payload(data['plan'])
-        if (plan.automatic or plan.authority_cutover is not None) and data['bootstrap']:
+        if (plan.automatic or plan.authority_cutover is not None or plan.principal_cutover) and data['bootstrap']:
             raise PostgresDeployError()
         if plan.channel != self.config.channel or data['action'] not in {
             'prepare', 'activate', 'join', 'reconcile-failed', 'prove-absence'
@@ -4682,7 +4693,8 @@ class DeploymentSupervisor:
             previous = self.config.journal.read()
             if previous and previous.operation_id == operation_id:
                 self.config.journal.bind_request(operation_id, plan, data['bootstrap'])
-                if (plan.authority_cutover is not None and previous.terminal_result is None
+                if ((plan.authority_cutover is not None or plan.principal_cutover)
+                    and previous.terminal_result is None
                     and self.operation is None):
                     return {'pending': True, 'empty': False, 'ready': False}
             if previous and previous.operation_id == operation_id and previous.terminal_result:
@@ -5196,7 +5208,7 @@ class SshDeployRemote:
         # or host-side timeout turns a pending operation into a terminal result.
         response = self._request(action, operation_id, plan)
         while response.get('pending'):
-            if plan.authority_cutover is not None and response.get('ready') is False:
+            if (plan.authority_cutover is not None or plan.principal_cutover) and response.get('ready') is False:
                 # A lost worker cannot make progress through another join RPC.
                 # Return control with the existing host operation still pending.
                 raise PostgresDeployError()

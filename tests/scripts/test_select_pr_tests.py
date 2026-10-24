@@ -2313,6 +2313,7 @@ def test_selector_reports_deferred_targets_to_github_output(tmp_path: Path) -> N
     "scripts/deploy_channel.sh",
     "scripts/lib/deploy_channel_compose.sh",
     "config/deploy/prod.env",
+    "app/config/database.py",
     "app/release_channels/prepare_promotion.py",
     "ops/scalar-rollback/nginx.conf",
     "tests/deploy/conftest.py",
@@ -2324,6 +2325,8 @@ def test_deploy_trigger_keeps_heavy_deploy_suite_on_pr_path(path: str) -> None:
     selection = select_tests([path])
 
     assert selection.deferred_targets == ()
+    if path in selector.FULL_SUITE_EXACT:
+        assert selection.full_suite is True
     # Full-suite inputs (compose, requirements) run all of tests/ without an
     # --ignore; unowned paths fail selection closed before any deferral.
     assert (

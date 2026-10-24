@@ -1183,6 +1183,57 @@ does not establish a usable answer path.
 
 The deploy procedure is the same shape for every channel; only the pin target and the migration-ack posture differ (`prod` is the strictest). It assumes the build-once/promote model above.
 
+### Explicit native principal cutover (DEV/TEST)
+
+The native BWS host entrypoint accepts `--principal-cutover` for an explicitly initiated
+DEV or TEST deployment with an exact commit SHA, immutable `--image-digest`, and
+`--existing-secrets-only`. For example, after the native owner has separately admitted the
+candidate, installed tooling, selected state and effect window:
+
+```sh
+python -m app.ops.postgres_deploy_host dev <exact-40-character-sha> \
+  --image-digest sha256:<exact-image-index-digest> --existing-secrets-only \
+  --operation-id <fresh-operation-uuid> --principal-cutover --automatic
+```
+
+`--automatic` is optional here: it runs the PG profile, not the separate required controller heavy gate after the committed DEV receipt. Both verification stages use this
+same activation, SHA, digest and operation, without requesting a second activation. It does
+not authorize unattended principal migration: the postmerge producer remains unchanged and
+does not supply `--principal-cutover`. Neither DEV nor TEST inherits PROD's forward-only
+acknowledgement merely because a migration is classified forward-only. The automatic profile
+still rejects that acknowledgement, bootstrap and PROD.
+
+The boolean is default-off and omitted from default/legacy serialized payloads. The host
+controller and native supervisor retain the opt-in in the exact durable deployment request;
+consumer selection cannot drop it, and changing it under the same operation ID refuses.
+Older closed request receivers reject the unsupported field. Upgrade/qualify the receiver
+before admission; do not reinterpret or rewrite an already accepted request.
+The native environment discards ambient `MVR03_PRINCIPAL_CUTOVER`, including installed runtime
+environment input, and sets `1` only on the actual activation child for the bound request.
+The ordinary wrapper still runs `inherited_worker_guard`: the held owner descriptor/inode/flock,
+activating journal, candidate, runtime/secret and consumer bindings remain mandatory. Prefixing
+the supervisor or directly invoking the shell option does not supply this native admission.
+
+The option cannot combine with PROD, bootstrap, MVR-01C authority cutover, promotion or source
+recovery/persistence modes, and adds no principal/credential/root/identity input. It invokes the
+existing [MVR-03 principal cutover](#minimum-runtime-principal-floor-mvr-03-shipped) inside its stopped-consumer lease,
+twice-proved complete writer inventory and Product floor transaction. The channel-pinned
+listener posture and server-derived authentication remain unchanged. Only its authenticated
+clean pre-role failure receipt can compensate a newly advanced floor and release that stopped
+window; ambiguous or post-role failures retain the restart fence. A lost native activation
+result stays pending: process loss or later quiescence is not proof of a clean cutover and
+cannot authorize recovery replay. Terminal requests return retained evidence without repeating
+the effect. Inspect and repair the existing governed state before any fresh operation; never
+delete the lease, rewrite the request or clear the compatibility floor to force a retry.
+
+These are repository-supported request and failure contracts, not proof of installed host
+convergence, live principal/floor mutation, native source/client acceptance or same-image TEST
+acceptance. Those require the native owner's separate exact-candidate review and effect
+admission. The existing MVR-03 rollback/floor authority below, release-channel promotion policy
+and security exposure boundaries remain in force.
+
+### Native source preflight and recovery
+
 For BWS deploys, the target image's native-source embedding dependency is preflighted before the
 migration writer drain. A strict Product embedding route selects the current provider/model; the
 redacted Compose handoff exposes only those two fields. If Ollama is selected, the deploy starts the
