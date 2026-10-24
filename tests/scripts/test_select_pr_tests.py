@@ -1871,6 +1871,18 @@ def test_runtime_gate_selection_is_conservative(paths: list[str]) -> None:
     assert selector.requires_runtime_checks(paths) is True
 
 
+def test_ci_contract_helpers_have_an_eligible_paired_owner_doc() -> None:
+    from scripts.docs_guard_logic import GOVERNANCE_TEMPORAL_ENFORCEMENT, requires_temporal_owner_doc
+
+    for helper in selector.CI_CONTRACT_PATHS:
+        if not helper.startswith("scripts/"):
+            continue
+        owner_doc = GOVERNANCE_TEMPORAL_ENFORCEMENT.get(helper)
+        assert owner_doc in selector.CI_CONTRACT_PATHS, helper
+        assert not requires_temporal_owner_doc([helper, owner_doc])
+        assert requires_temporal_owner_doc([helper])
+
+
 @pytest.mark.parametrize("path", (
     ".github/workflows/ci-smoke.yaml", "scripts/select_pr_tests.py",
     "scripts/await_pr_checks.sh", "scripts/ci_stall_classifier.py",
