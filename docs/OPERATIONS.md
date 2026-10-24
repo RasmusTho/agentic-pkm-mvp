@@ -84,6 +84,31 @@ reconcile only against retained exact hashes. Rollback is permitted only for a v
 member whose current bytes equal its admitted candidate and must run under the same pre/post fence.
 No raw path, UUID, content, or exception text belongs in its public count-only receipt.
 
+### #6300 fixed-selection reconciliation (historical, count-only)
+
+The accepted V7 summary is the fixed selection of 651 items: 12 persisted, 544 missing, 95 invalid,
+0 ambiguous, and 0 producer errors. Its qualified summary SHA-256 is
+`72c7899ef09adb4151a4d78feb014e3bb612abe148f738a5670949d4dfa26360`. This is historical aggregate
+evidence, not a new source read, current eligibility, source/deployment acceptance, or permission to
+replay or broaden the selection. The [V7 receipt history](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6300#issuecomment-6330659322)
+retains the exact receipt lineage. The [#3347 accepted V5 receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3347#issuecomment-6384608390)
+leaves source/deployment eligibility unassessed, admits no DEV candidate, and sets the remaining
+native-observation allowance to zero; this reconciliation does not change that boundary.
+
+| Historical class | Count | Static disposition and bounded route |
+|---|---:|---|
+| Snapshot/parse | 55 | Unsupported unless checked-in code establishes a specific registered parser/owner class. The accepted split is 54 non-title mapping-value cases and 1 `ParserOther`; a title preview proves no semantic rewrite authority. |
+| Malformed explicit UUID | 17 | Unsupported unless source, provenance, or companion identity authority was already established. Product/database identity alone never grants admission. |
+| Companion `source_ref` conflict | 23 | Non-admitted until a separately authorized gate proves unique same-UUID, canonical-body-hash, and source-claim continuity. The inert proposal changes only the companion locator, content hash, and bounded history; source bytes, UUID, and unrelated companion fields remain unchanged. |
+| Read-only-derived artifacts | 26 (25 historical, 1 current Daily Briefing) | Use only the registered composer’s identity-only migration, preserving the stored schema and section order through exact-version compare-and-swap with retained-original recovery. Generic registry repair refuses these; damaged, unreadable, unowned, profile-bound, or stale artifacts remain excluded. |
+| Other missing cases | 518 (504 ordinary no-identity, 14 companion-absent) | Deferred while any unsupported or conflicting class remains; the fixed selection is ineligible. |
+
+The previously exact-hash-reviewed inert proposal receipts remain unchanged: [supportable companion/composer proposals](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6300#issuecomment-6328572614),
+[parser and identity refinement](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6300#issuecomment-6329905079),
+and [static authority partition](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6300#issuecomment-6330819033).
+They are repair design evidence only; no source or host predicate in this table is claimed to have
+passed a live observation.
+
 ### Mimer voice sessions (VOICE-04)
 
 `POST /api/ask/voice` returns a `session_id` when a question turn opens a transcript
