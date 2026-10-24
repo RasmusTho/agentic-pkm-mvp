@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
+import shlex
+import site
 import socket
 import stat
 import subprocess
@@ -11,6 +14,8 @@ import tempfile
 from collections.abc import Iterator
 
 import pytest
+
+from tests.helpers.runtime_start_harness import run_runtime_start
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / "scripts/lib/colima_runtime_readiness.sh"
@@ -147,8 +152,11 @@ elif name not in ('mountpoint', 'systemctl', 'mount'):
                 }
             )
         )
+    home = tmp_path / "runtime-home"
+    home.mkdir()
     return {
-        **{k: os.environ[k] for k in ("HOME", "TMPDIR") if k in os.environ},
+        **{k: os.environ[k] for k in ("TMPDIR",) if k in os.environ},
+        "HOME": str(home),
         "PATH": f"{bins}:{os.environ['PATH']}",
         "TEST_CALLS": str(tmp_path / "calls"),
         "TEST_INSTALLED": str(tmp_path / "installed"),
@@ -188,6 +196,146 @@ def run(command: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 def calls(env: dict[str, str]) -> list[list[str]]:
     p = Path(env["TEST_CALLS"])
     return [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
+
+
+def startup_entrypoint(
+    tmp_path: Path, runtime: dict[str, str], channel: str
+) -> tuple[Path, dict[str, str]]:
+    """Run the real launcher/libraries while replacing external effect ports."""
+    repo = tmp_path / "startup-repo"
+    (repo / "scripts").mkdir(parents=True)
+    shutil.copytree(ROOT / "scripts/lib", repo / "scripts/lib")
+    for name in ("start_full_system.sh", "export_runtime_env.sh"):
+        shutil.copy2(ROOT / "scripts" / name, repo / "scripts" / name)
+    (repo / "config/deploy").mkdir(parents=True)
+    for name in ("runtime.defaults.env", f"deploy/{channel}.env"):
+        shutil.copy2(ROOT / "config" / name, repo / "config" / name)
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        **runtime,
+        "HOME": str(home),
+        "PYTHONPATH": str(ROOT),
+        "PYTHONUSERBASE": site.USER_BASE,
+        "PKM_ENVIRONMENT": channel,
+        "LLM_PROVIDER": "mock",
+        "LLM_MODEL": "mock",
+        "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(tmp_path / "ownership"),
+        "RUNTIME_ENV_PATH": str(tmp_path / "runtime.env"),
+        "STARTUP_DISK_MIN_FREE_MIB": "1",
+        "STARTUP_DISK_WARN_FREE_MIB": "0",
+        "STARTUP_CHECK_OBSIDIAN": "0",
+        "BUILDEROPS_BOOTSTRAP": "1",
+        "START_FLIGHT_RECORDER": "1",
+        "TEST_DOCKER_BINDINGS": str(tmp_path / "docker-bindings"),
+    }
+    profile = tmp_path / "profile.env"
+    profile.write_text(
+        "".join(
+            f"{key}={value}\n"
+            for key, value in runtime.items()
+            if key.startswith("COLIMA_") or key == "LIMA_USERNET_RESOLVE_IP_ADDRESS_TIMEOUT"
+        )
+    )
+    env["COLIMA_RESOURCE_PROFILE_FILE"] = str(profile)
+    # HOME is deliberately isolated; avoid pyenv selecting a different Python
+    # without the test environment's dependencies under that empty home.
+    for name in ("python", "python3"):
+        interpreter = Path(runtime["PATH"].split(os.pathsep)[0]) / name
+        interpreter.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        interpreter.chmod(0o755)
+    docker = Path(runtime["PATH"].split(os.pathsep)[0]) / "docker"
+    fake = docker.resolve()
+    docker.unlink()
+    docker.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "with open(os.environ['TEST_DOCKER_BINDINGS'], 'a') as f:\n"
+        " f.write(json.dumps({'args': args, 'context': os.environ.get('DOCKER_CONTEXT'), 'host': os.environ.get('DOCKER_HOST')}) + '\\n')\n"
+        "if args and args[0] == 'compose':\n"
+        " with open(os.environ['TEST_CALLS'], 'a') as f: f.write(json.dumps(['docker', *args]) + '\\n')\n"
+        " sys.exit(83)  # Stop at the first fully fake Compose boundary.\n"
+        # Preserve argv[0]: the shared fake dispatches by executable name.
+        f"exec(compile(pathlib.Path({str(fake)!r}).read_text(), {str(fake)!r}, 'exec'))\n"
+    )
+    docker.chmod(0o755)
+    for name, event in (
+        ("start_builderops_services.sh", "builderops-bootstrap"),
+        ("flight_recorder.sh", "flight-recorder"),
+    ):
+        auxiliary = repo / "scripts" / name
+        auxiliary.write_text(
+            f"#!{sys.executable}\n"
+            "import json, os, pathlib, sys\n"
+            f"with open(os.environ['TEST_CALLS'], 'a') as f: f.write(json.dumps([{event!r}]) + '\\n')\n"
+            "if '--log-path' in sys.argv: pathlib.Path(sys.argv[sys.argv.index('--log-path')+1]).touch()\n"
+        )
+        auxiliary.chmod(0o755)
+    return repo, env
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("refusal", ["missing-profile", "wrong-socket"])
+def test_real_startup_refuses_before_compose_or_auxiliary_effects(
+    tmp_path: Path, runtime: dict[str, str], channel: str, refusal: str
+) -> None:
+    repo, env = startup_entrypoint(tmp_path, runtime, channel)
+    if refusal == "missing-profile":
+        Path(env["COLIMA_RESOURCE_PROFILE_FILE"]).unlink()
+        reason = "resource profile unreadable"
+    else:
+        env["TEST_MODE"] = "wrong-socket"
+        reason = "docker socket mismatch"
+    result = run_runtime_start(
+        ["bash", "scripts/start_full_system.sh"],
+        cwd=repo, env=env, progress_path=Path(env["TEST_CALLS"]),
+    )
+    assert result.returncode != 0
+    assert reason in result.stderr, result.stdout + result.stderr
+    assert not any(
+        c[0] in {"builderops-bootstrap", "flight-recorder"} or c[:2] == ["docker", "compose"]
+        for c in calls(env)
+    )
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_real_startup_exports_verified_binding_before_compose(
+    tmp_path: Path, runtime: dict[str, str], channel: str
+) -> None:
+    repo, env = startup_entrypoint(tmp_path, runtime, channel)
+    result = run_runtime_start(
+        ["bash", "scripts/start_full_system.sh"],
+        cwd=repo, env=env, progress_path=Path(env["TEST_CALLS"]),
+    )
+    assert result.returncode != 0  # The fake deliberately refuses actual Compose execution.
+    events = calls(env)
+    compose = next(i for i, c in enumerate(events) if c[:2] == ["docker", "compose"])
+    guest = next(i for i, c in enumerate(events) if c[0] == "colima" and c[-1] == "--guest")
+    inventory = next(i for i, c in enumerate(events) if c == ["docker", "ps", "-aq", "--no-trunc"])
+    assert guest < inventory < compose
+    assert all(
+        i > inventory for i, c in enumerate(events)
+        if c[0] in {"builderops-bootstrap", "flight-recorder"}
+    )
+    bindings = [json.loads(x) for x in Path(env["TEST_DOCKER_BINDINGS"]).read_text().splitlines()]
+    actual = next(x for x in bindings if x["args"][0] == "compose")
+    assert actual["context"] == "colima"
+    assert actual["host"] == f"unix://{env['HOME']}/.colima/default/docker.sock"
+
+
+def test_real_startup_preserves_disk_refusal_before_docker(
+    tmp_path: Path, runtime: dict[str, str]
+) -> None:
+    repo, env = startup_entrypoint(tmp_path, runtime, "dev")
+    env["TEST_MODE"] = "full"
+    result = run_runtime_start(
+        ["bash", "scripts/start_full_system.sh"],
+        cwd=repo, env=env, progress_path=Path(env["TEST_CALLS"]),
+    )
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "below STARTUP_DISK_MIN_FREE_MIB" in result.stderr
+    assert not any(c[0] in {"docker", "colima", "builderops-bootstrap", "flight-recorder"} for c in calls(env))
 
 
 @pytest.mark.parametrize("mode", ["wrong-device", "wrong-root", "wrong-uuid", "read-only", "full"])

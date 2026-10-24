@@ -258,6 +258,12 @@ exec {sys.executable!s} "$@"
         {
             "PATH": f"{fake_bin}:{env.get('PATH', '')}",
             "HOME": str(Path.home()),
+            # The fake engine is unmanaged; never load the operator's Colima profile.
+            "COLIMA_RESOURCE_PROFILE_FILE": os.devnull,
+            "COLIMA_RUNTIME_PROVIDER": "external",
+            "COLIMA_READINESS_REQUIRED": "0",
+            "DOCKER_CONTEXT": "default",
+            "DOCKER_HOST": "",
             "XDG_DATA_HOME": str(tmp_path / "xdg"),
             "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(tmp_path / "ownership"),
             # #4519 — this env inherits pytest's markers, so the launcher's

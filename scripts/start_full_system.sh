@@ -876,6 +876,18 @@ done
 
 check_startup_disk_space
 
+source "scripts/lib/colima_runtime_readiness.sh"
+check_docker_daemon() {
+  colima_runtime_bind_and_ready "$ROOT" || exit $?
+  if ! _colima_runtime_bounded 15 docker info >/dev/null 2>&1; then
+    echo "ERROR: Docker daemon is not reachable on the selected binding." >&2
+    exit 1
+  fi
+}
+
+# Bind and verify the engine before helpers or Compose can contact it.
+check_docker_daemon
+
 builderops_bootstrap_environment="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}"
 builderops_bootstrap_environment="$(printf '%s' "${builderops_bootstrap_environment:-}" | tr '[:upper:]' '[:lower:]')"
 if [ "${BUILDEROPS_BOOTSTRAP:-1}" = "1" ]; then
@@ -932,16 +944,6 @@ fi
 
 startup_log_dir="$ROOT/tmp/startup-logs"
 startup_log_path="$startup_log_dir/startup-$(date -u +"%Y%m%dT%H%M%SZ").log"
-
-source "scripts/lib/colima_runtime_readiness.sh"
-check_docker_daemon() {
-  colima_runtime_bind_and_ready "$ROOT" || exit $?
-  if ! _colima_runtime_bounded 15 docker info >/dev/null 2>&1; then
-    echo "ERROR: Docker daemon is not reachable on the selected binding." >&2
-    exit 1
-  fi
-}
-
 
 # Vault binding. Three distinct states (issue #2005 flips the #1991 fail-exit
 # to idle-until-opened, the symmetric reverse of an invariant):
