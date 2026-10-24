@@ -52,7 +52,7 @@ from typing import Optional
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 
 from companion_ui.workspace.scoped_session import (
-    COMPATIBILITY_PATHS, SELECTOR_PATHS, scoped_session_script,
+    COMPATIBILITY_PATHS, PICKER_DISCOVERY_PATHS, SELECTOR_PATHS, scoped_session_script,
     session_cookie, session_from_cookie,
 )
 
@@ -17565,7 +17565,7 @@ def make_handler(
                 value = self.headers.get(name)
                 if value is not None:
                     headers[name] = value
-            if "X-Active-Context-Session" not in headers and path not in SELECTOR_PATHS | COMPATIBILITY_PATHS:
+            if "X-Active-Context-Session" not in headers and path not in SELECTOR_PATHS | COMPATIBILITY_PATHS | PICKER_DISCOVERY_PATHS:
                 bearer = session_from_cookie(self.headers.get("Cookie", ""))
                 if bearer is not None:
                     headers["X-Active-Context-Session"] = bearer

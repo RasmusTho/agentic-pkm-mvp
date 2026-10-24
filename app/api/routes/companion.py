@@ -1273,14 +1273,21 @@ def select_companion_vault(
     if req.scoped_selection:
         _runtime, registry_path = _first_vault_runtime()
         _authenticated_principal_id(request, api_key, registry_path)
+    from app.instance.filesystem_identity import resolve_filesystem_root_identity, same_filesystem_root
+
+    # Freeze the physical target before entering the rebind, which can wait on
+    # the watcher. Re-resolving a user alias after that wait could select A but
+    # mint a bearer for a newly retargeted B.
+    selected_identity = resolve_filesystem_root_identity(Path(req.path)) if req.scoped_selection else None
+    selected_path = Path(selected_identity.canonical_path) if selected_identity is not None else Path(req.path)
     manager = get_vault_manager()
     with manager.selection_window():
-        context = manager.select_vault(Path(req.path), remember=req.remember)
+        context = manager.select_vault(selected_path, remember=req.remember)
         response = _vault_context_response(context)
         if registry_path is not None:
-            from app.instance.filesystem_identity import resolve_filesystem_root_identity, same_filesystem_root
-
-            target = resolve_filesystem_root_identity(Path(req.path))
+            target = resolve_filesystem_root_identity(selected_path)
+            if target != selected_identity:
+                raise HTTPException(status_code=409, detail="reselection_required: selected root identity changed")
             matches = [
                 item.vault_binding_id
                 for item in VaultRegistryStore(registry_path).load().registrations.values()
@@ -1708,7 +1715,7 @@ def initialize_companion_vault(
     request: Request,
     api_key: str | None = Depends(api_key_header),
 ) -> VaultInitializeResponse:
-    target = Path(req.path)
+    target = Path(req.path).expanduser().resolve(strict=False) if req.scoped_selection else Path(req.path)
     # Personal-vault-write guard (#2518): initializing writes the settings
     # scaffold INTO the chosen folder. When that folder is already populated
     # (an existing personal Obsidian vault resolves to ``uninitialized`` and is
@@ -1822,7 +1829,7 @@ def initialize_companion_vault(
     )
     selected = (
         select_companion_vault(
-            VaultSelectRequest(path=req.path, remember=req.remember, scoped_selection=True),
+            VaultSelectRequest(path=str(target), remember=req.remember, scoped_selection=True),
             request,
             api_key,
         )

@@ -26,8 +26,10 @@
 
 ## Single-origin API proxy (#2125)
 - The existing Companion picker opts into a scoped handoff on `POST /api/companion/vault/select`.
-  The API resolves the selected filesystem identity to exactly one registered binding after the
-  compatibility rebind, authenticates the caller, and mints an opaque selection. A successful
+  The API freezes the selected canonical filesystem identity before the compatibility rebind,
+  selects that exact root, revalidates its physical identity, and matches exactly one registered
+  binding before minting an authenticated opaque selection. Retargeting a filesystem alias while
+  rebind waits cannot redirect the handoff to a different binding. A successful
   explicit selection replaces the browser's `companion_context_session` session cookie. It is
   HttpOnly, SameSite=Strict, and has no persistent expiry; it contains no path or principal data.
   On successful explicit `/vault/select` or `/vault/initialize` only, the gateway moves the returned
@@ -35,8 +37,7 @@
   initialization-context copy) from browser-facing JSON. All non-credential payload fields and
   upstream errors retain their runtime meaning. This is a route-specific transport handoff, not
   generic JSON rewriting. The gateway keeps no shared session state. On page navigation, fragments,
-  and browser API reads,
-  it forwards this opaque value as `X-Active-Context-Session` through a request-local HTTP adapter.
+  and browser API reads, it forwards this opaque value as `X-Active-Context-Session` through a request-local HTTP adapter.
   Explicit `X-Active-Context-*` headers retain precedence, including blank carriers, and the API
   authenticates and resolves them. The gateway derives no principal or binding authority.
 - Scoped runtime routes (`/api/search/scoped`, `/api/ask/scoped`, and
@@ -45,8 +46,9 @@
   Missing, stale, or stripped carriers return `reselection_required`; there is no carrier-free
   retry. Other Companion production reads forward the same session to their request-context
   dependency, including server-rendered page and fragment reads. A stale page session is checked
-  before page-triggered work and renders the existing picker. Browser read failures visibly ask
-  for reselection. The old cookie is retained: neither a sole authorized binding, a matching
+  before page-triggered work and renders the existing picker. Browser content-read failures visibly
+  ask for reselection and stop subsequent content requests until explicit picker success. The old
+  cookie is retained: neither a sole authorized binding, a matching
   default, nor API restart can silently mint or choose a replacement. A new browser without stale
   explicit intent may independently use the ordinary default journey.
 - Compatibility mutations use distinct same-origin routes (`/api/companion/capture/compatibility`
@@ -54,8 +56,13 @@
   reads the scoped notes route once and passes its opaque `X-Compatibility-Write-Precondition`
   response header to the compatibility mutation. A failed read or missing precondition stops the
   mutation. The gateway forwards the proof unchanged, and does not translate the session cookie
-  on compatibility mutation or selector-bridge routes; explicitly supplied session headers remain
-  intact and are refused by the pre-05C seal. Other writes keep that seal and WriteGuard.
+  on compatibility mutation or selector-bridge routes. The exact authenticated folder-discovery
+  route `/api/companion/vault/browse` also omits cookie-derived selection: it lists picker folders,
+  never vault content or a selected context. Its existing API authentication and filesystem
+  containment checks still apply. Discovery remains available after stale-session refusal and can
+  browse siblings of a live selected vault; only an explicit picker selection changes the retained
+  session. Explicitly supplied session headers remain intact and are validated/refused by the
+  applicable scoped-read dependency or pre-05C seal. Other writes keep that seal and WriteGuard.
 - First-vault initialization uses the existing in-band confirmation gesture, obtains the
   authenticated single-use `/api/companion/vault/initialize/bootstrap` precondition, and executes
   initialization with that exact token. The successful server-owned scoped handoff sets the same
@@ -69,8 +76,8 @@
   never needs direct access to the runtime origin. The forwarded routes are the
   ones the served page actually calls — orientation, workspace
   (read/body/update), vault (notes/select/initialize/reload/settings),
-  authenticated first-vault initialize/bootstrap and scoped notes, vault-related, capture, note save, TTS (status/plan/synthesize and the audio
-  pattern), the canvas co-author pattern, and the operator status/health/settings/events
+  authenticated first-vault initialize/bootstrap and scoped notes, vault-related, capture, note save,
+  TTS (status/plan/synthesize and the audio pattern), the canvas co-author pattern, and the operator status/health/settings/events
   routes — defined in `_GET_PROXY_PATHS`/`_POST_PROXY_PATHS` (plus a small set of
   `_GET_PROXY_PATTERNS`/`_POST_PROXY_PATTERNS` regexes). A route outside the
   allowlist (e.g. `GET /api/companion/vault-browser`) is **not** proxied. This

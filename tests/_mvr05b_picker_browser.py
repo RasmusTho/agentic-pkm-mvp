@@ -47,10 +47,21 @@ def picker_browser(monkeypatch, *, cookie=""):
 const nativeFetch = globalThis.fetch;
 var cookie = INITIAL_COOKIE, reloads = 0, clickHandler, reloadResolve, handoffs = [];
 var visible = {hidden:true, textContent:''};
-var picker = {querySelector:()=>null, addEventListener:(kind,fn)=>{if(kind==='click')clickHandler=fn;}, getAttribute:()=>null};
+function element() {
+  var attrs={}, children=[];
+  var el={attrs,children,hidden:false,setAttribute:(k,v)=>attrs[k]=v,getAttribute:k=>attrs[k],removeAttribute:k=>delete attrs[k],appendChild:item=>children.push(item),querySelector:()=>null,querySelectorAll:()=>children};
+  Object.defineProperty(el,'innerHTML',{get:()=>el.markup||'',set:value=>{el.markup=value;children.length=0;}});
+  return el;
+}
+var fsMode=element(), fsList=element(), fsError=element(), recentsMode=element();
+fsError.hidden=true;
+fsMode.querySelector=selector=>selector==='[data-testid="vault-picker-fs-list"]'?fsList:selector==='[data-testid="vault-picker-fs-error"]'?fsError:null;
+var picker=element();
+picker.querySelector=selector=>selector==='[data-testid="vault-picker-fs-mode"]'?fsMode:selector==='[data-testid="vault-picker-recents-mode"]'?recentsMode:selector==='[data-testid="vault-picker-select-error"]'?visible:selector==='[data-testid="vault-picker-fs-error"]'?fsError:null;
+picker.addEventListener=(kind,fn)=>{if(kind==='click')clickHandler=fn;};
 globalThis.window = globalThis;
 globalThis.location = {href:ORIGIN+'/', origin:ORIGIN, reload:()=>{reloads++; if(reloadResolve)reloadResolve();}};
-globalThis.document = {querySelector:(selector)=>selector==='[data-testid="vault-picker"]'?picker:selector==='[data-testid="vault-picker-select-error"]'?visible:null};
+globalThis.document = {createElement:element,querySelector:(selector)=>selector==='[data-testid="vault-picker"]'?picker:selector==='[data-testid="vault-picker-select-error"]'?visible:null};
 globalThis.fetch = async function(input, options={}) {
   var headers = new Headers(options.headers||{});
   if(cookie)headers.set('Cookie',cookie);
@@ -65,6 +76,18 @@ async function choose(path) {
   var done=new Promise(resolve=>reloadResolve=resolve);
   clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-row-select"]'?b:null}});
   await Promise.race([done,new Promise((_,reject)=>setTimeout(()=>reject(new Error('picker selection failed: '+JSON.stringify(b.attrs))),4000))]);
+}
+async function browseChoose(path) {
+  var browse=element();
+  clickHandler({preventDefault:()=>{},target:{closest:selector=>selector==='[data-testid="vault-picker-browse"]'?browse:null}});
+  for(var i=0;i<200 && fsMode.attrs['data-loading']==='true';i++)await new Promise(r=>setTimeout(r,10));
+  if(fsMode.hidden || !fsError.hidden)throw new Error('picker discovery failed: '+fsError.textContent);
+  var row=fsList.children.find(item=>item.attrs['data-fs-path']===path);
+  if(!row || row.innerHTML.indexOf('data-testid="vault-picker-fs-open"')===-1)throw new Error('sibling vault action missing: '+path);
+  var open=element();open.attrs['data-fs-path']=row.attrs['data-fs-path'];
+  var done=new Promise(resolve=>reloadResolve=resolve);
+  clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-fs-open"]'?open:null}});
+  await Promise.race([done,new Promise((_,reject)=>setTimeout(()=>reject(new Error('picker discovered selection failed: '+JSON.stringify(open.attrs))),4000))]);
 }
 async function initialize(path) {
   var b=button(path);

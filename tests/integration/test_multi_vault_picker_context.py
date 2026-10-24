@@ -1181,11 +1181,12 @@ def test_existing_picker_drives_scoped_request_context(tmp_path, monkeypatch, ca
     from tests._mvr05b_picker_browser import picker_browser
 
     runtime, roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv('VAULT_BROWSE_ROOT', str(roots[0].parent))
     with picker_browser(monkeypatch) as (run, calls):
         result = run(f'''
 await choose({json.dumps(str(roots[0]))});
 var a=await (await fetch('/api/companion/vault/notes/scoped')).json();
-await choose({json.dumps(str(roots[1]))});
+await browseChoose({json.dumps(str(roots[1]))});
 var b=await (await fetch('/api/companion/vault/notes/scoped')).json();
 var write=await fetch('/api/companion/note/save',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{note_path:'only-1.md',new_body:'updated by explicit edit\\n'}})}});
 console.log(JSON.stringify({{a,b,write:write.status,cookie,reloads,handoffs}}));
@@ -1214,6 +1215,9 @@ console.log(JSON.stringify({{a,b,write:write.status,cookie,reloads,handoffs}}));
     assert "X-Active-Context-Session" not in write[2]
     assert not any(call[1] == '/api/companion/note/save' for call in calls)
     assert runtime.open_settings_rebind_store().read().candidate_binding_id == binding_b
+    discovery = next(call for call in calls if call[1] == '/api/companion/vault/browse')
+    assert 'X-Forwarded-For' in discovery[2]
+    assert 'X-Active-Context-Session' not in discovery[2]
 
 
 @pytest.mark.parametrize("bindings", ["zero", "sole-default", "many", "ambiguous", "default-mismatched"])
@@ -1354,3 +1358,83 @@ console.log(JSON.stringify({{failed:failed.status,recovered:recovered.status,rea
     assert len(executions) == 2
     assert executions[0]['bootstrap_token'] == executions[1]['bootstrap_token']
     assert FirstVaultPreconditionStore(runtime.registry.path).load().state == 'consumed'
+
+
+def test_stale_picker_discovery_reselects_sibling_without_healing_content_intent(tmp_path, monkeypatch):
+    import json
+    from companion_ui.workspace.scoped_session import session_cookie
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv('VAULT_BROWSE_ROOT', str(roots[0].parent))
+    created = TestClient(app).post('/api/companion/active-context/selection', json={'vault_binding_ids':[binding_a]})
+    assert created.status_code == 201, created.text
+    old_bearer = created.json()['context_selection_id']
+    selection_routes.reset_selection_store_for_tests()
+    with picker_browser(monkeypatch, cookie=session_cookie(old_bearer).split(';')[0]) as (run, calls):
+        result = run(f'''
+var failed=await fetch('/api/companion/vault/notes/scoped');
+var oldCookie=cookie;
+var page=await (await nativeFetch(location.origin+'/workspace',{{headers:{{Cookie:cookie}}}})).text();
+await browseChoose({json.dumps(str(roots[1]))});
+var next=await fetch('/api/companion/vault/notes/scoped');
+console.log(JSON.stringify({{failed:failed.status,page,oldCookie,cookie,status:next.status,data:await next.json()}}));
+''')
+    assert result['failed'] == 401
+    assert 'data-testid="vault-picker-browse"' in result['page']
+    assert old_bearer in result['oldCookie']
+    assert result['cookie'] != result['oldCookie']
+    assert result['status'] == 200
+    assert {note['vault_binding_id'] for note in result['data']['notes']} == {binding_b}
+    browse = next(call for call in calls if call[1] == '/api/companion/vault/browse')
+    assert 'X-Active-Context-Session' not in browse[2]
+    assert 'X-Forwarded-For' in browse[2]
+    assert sum(path.endswith('/vault/select') for _method,path,_headers,_body in calls) == 1
+
+
+def test_picker_alias_retarget_after_rebind_cannot_change_scoped_handoff(tmp_path, monkeypatch):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, roots, binding_a, _binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    alias = tmp_path / 'picker-alias'
+    alias.symlink_to(roots[0], target_is_directory=True)
+    manager = companion_module.get_vault_manager()
+    selected = threading.Event()
+    retargeted = threading.Event()
+    select = manager.select_vault
+
+    def barrier(vault_path, **kwargs):
+        context = select(vault_path, **kwargs)
+        selected.set()
+        assert retargeted.wait(timeout=5)
+        return context
+
+    monkeypatch.setattr(manager, 'select_vault', barrier)
+    results = []
+    errors = []
+    with picker_browser(monkeypatch) as (run, _calls):
+        def click():
+            try:
+                results.append(run(f'''
+await choose({json.dumps(str(alias))});
+var read=await fetch('/api/companion/vault/notes/scoped');
+console.log(JSON.stringify({{status:read.status,data:await read.json()}}));
+'''))
+            except BaseException as exc:
+                errors.append(exc)
+
+        browser = threading.Thread(target=click)
+        browser.start()
+        assert selected.wait(timeout=5)
+        alias.unlink()
+        alias.symlink_to(roots[1], target_is_directory=True)
+        retargeted.set()
+        browser.join(timeout=10)
+        assert not browser.is_alive()
+    assert not errors
+    assert len(results) == 1
+    assert results[0]['status'] == 200
+    assert {note['vault_binding_id'] for note in results[0]['data']['notes']} == {binding_a}
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id == binding_a
+    assert alias.resolve() == roots[1]

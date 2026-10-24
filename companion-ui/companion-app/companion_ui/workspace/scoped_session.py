@@ -8,6 +8,10 @@ from __future__ import annotations
 from http.cookies import CookieError, SimpleCookie
 
 SESSION_COOKIE = "companion_context_session"
+# Authenticated discovery lists folder names for explicit picker intent. It
+# never reads vault content or selects a context and must remain usable after
+# a stale content selection, as the existing selector bridge does.
+PICKER_DISCOVERY_PATHS = frozenset({"/api/companion/vault/browse"})
 SELECTOR_PATHS = frozenset({
     "/api/companion/vault/select",
     "/api/companion/vault/initialize",
@@ -115,7 +119,7 @@ def scoped_session_script() -> str:
         });
       }).then(reselection);
     }
-    if (reselectionRequired) {
+    if (reselectionRequired && path !== '/api/companion/vault/browse') {
       return Promise.resolve(new Response(JSON.stringify({detail:'reselection_required'}), {
         status:401, headers:{'Content-Type':'application/json'}
       }));
