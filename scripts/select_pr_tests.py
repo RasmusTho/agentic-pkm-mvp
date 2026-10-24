@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import ast
+from functools import lru_cache
+import importlib.util
 import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 STATIC_TARGET_COLLECTABILITY_FITNESS = (
@@ -1570,6 +1576,108 @@ def _is_test_only(paths: tuple[str, ...]) -> bool:
     return bool(paths) and all(path in ISOLATED_TEST_MODULES for path in paths)
 
 
+@lru_cache(maxsize=4096)
+def _module_dependencies(path: Path, module: str, _mtime: int, _size: int) -> tuple[frozenset[str], bool, bool]:
+    """Cache parsed imports only within this process, keyed by the source stat."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, SyntaxError):
+        return frozenset(), True, False
+    package = module.removesuffix(".__init__") if module.endswith(".__init__") else module.rpartition(".")[0]
+    imports: set[str] = set()
+    has_tests = any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+        or isinstance(node, ast.ClassDef) and (
+            node.name.startswith("Test") or any(
+                isinstance(base, ast.Name) and base.id == "TestCase"
+                or isinstance(base, ast.Attribute) and base.attr == "TestCase"
+                for base in node.bases
+            )
+        ) and any(
+            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name.startswith("test_")
+            for child in node.body
+        )
+        for node in tree.body
+    )
+    opaque = any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("pytest_")
+        or isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+            isinstance(target, ast.Name) and target.id == "pytest_plugins"
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        )
+        for node in tree.body
+    )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            try:
+                base = importlib.util.resolve_name("." * node.level + (node.module or ""), package)
+            except (ImportError, ValueError):
+                return frozenset(), True, has_tests
+            imports.add(base)
+            imports.update(f"{base}.{alias.name}" for alias in node.names)
+            opaque |= any(alias.name == "*" for alias in node.names)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            imports.add(node.value)  # Includes literal importlib module names.
+            if node.value.startswith("."):
+                imports.add(node.value.lstrip("."))  # Relative literal importlib calls.
+            if module.startswith("tests.") and node.value.startswith("tests/"):
+                imports.add(node.value.split("::", 1)[0].removesuffix(".py").replace("/", "."))
+        elif isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else ""
+            if name in {"__import__", "import_module", "spec_from_file_location", "run_module", "run_path", "exec", "eval"}:
+                opaque |= not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str)
+                if name in {"spec_from_file_location", "run_path", "exec", "eval"}:
+                    opaque = True  # File/code loaders do not establish a module import edge.
+    return frozenset(imports), opaque, has_tests
+
+
+def _test_module_targets(paths: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Select test modules and their consumers; shared/unclear boundaries keep normal ownership."""
+    if not paths or not all(
+        path.startswith("tests/") and _is_test_module(path)
+        and not {"..", "helpers", "fixtures", "support", "utils", "_shared"}.intersection(Path(path).parts)
+        and (REPO_ROOT / path).is_file() and not (REPO_ROOT / path).is_symlink()
+        and any(_subsystem_owns_path(path, name, prefixes) for name, prefixes, _ in SUBSYSTEMS)
+        for path in paths
+    ):
+        return None
+    try:
+        inventory = subprocess.run(
+            ["git", "ls-files", "-z", "--", "*.py"], cwd=REPO_ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.split("\0")
+        modules = {path.removesuffix(".py").replace("/", "."): path for path in inventory if path}
+        selected = {path.removesuffix(".py").replace("/", ".") for path in paths}
+        if not selected <= modules.keys():
+            return None
+        dependencies = {}
+        for module, relative in modules.items():
+            file = REPO_ROOT / relative
+            if file.is_symlink():
+                return None
+            stat = file.stat()
+            dependencies[module] = _module_dependencies(file, module, stat.st_mtime_ns, stat.st_size)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    while True:
+        # Pytest's import mode can also expose a sibling by its bare module name.
+        aliases = selected | {module.rsplit(".", 1)[-1] for module in selected}
+        consumers = {module for module, (imports, _, _) in dependencies.items() if imports & aliases}
+        if consumers <= selected:
+            break
+        selected.update(consumers)
+    if any(
+        not modules[module].startswith("tests/")
+        or Path(modules[module]).name in {"__init__.py", "conftest.py"}
+        or dependencies[module][1]
+        for module in selected
+    ) or any(not dependencies[path.removesuffix(".py").replace("/", ".")][2] for path in paths):
+        return None
+    return _dedupe([*paths, *sorted(modules[module] for module in selected if _is_test_module(modules[module]))])
+
+
 def _foreign_subsystem_matches(
     paths: tuple[str, ...], tolerated_targets: tuple[str, ...]
 ) -> list[tuple[str, tuple[str, ...]]]:
@@ -1853,6 +1961,15 @@ def select_tests(changed_files: list[str]) -> Selection:
     ci_contract_only = _is_ci_contract_only(paths)
     pr_intake_contract_only = _is_pr_intake_contract_only(paths)
     test_only = _is_test_only(paths)
+    if not (ci_contract_only or pr_intake_contract_only or test_only):
+        test_modules = _test_module_targets(paths)
+        if test_modules is not None:
+            owners = _dedupe([
+                name for name, prefixes, _ in SUBSYSTEMS
+                if any(_subsystem_owns_path(path, name, prefixes) for path in paths)
+            ])
+            return Selection(False, owners, _pr_targets([*CI_INTEGRITY_TARGETS, *test_modules]),
+                             "test modules and their static consumers")
     changed_tests = (
         tuple(target for path in paths for target in ISOLATED_TEST_MODULES[path])
         if test_only else _changed_test_targets(paths)
@@ -1921,7 +2038,7 @@ def select_tests(changed_files: list[str]) -> Selection:
             return Selection(False, ("unowned",), (), FULL_SUITE_REASONS[2], paths)
         subsystems, reason = _dedupe(matched), "matched subsystem SoI"
 
-    # Every scoped branch funnels through this single return, so changed
+    # Subsystem and docs branches funnel through this return, so changed
     # test coverage (or the explicit isolated smoke) is unioned once — no splice
     # to forget if a future branch is added here (the #3383 failure mode).
     return _defer_heavy(
@@ -1931,7 +2048,9 @@ def select_tests(changed_files: list[str]) -> Selection:
 
 def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_ref}...{head_ref}"],
+        # Keep both old and new paths for renames. The missing old module must
+        # disqualify test-only selection rather than hiding broken import users.
+        ["git", "diff", "--no-renames", "--name-only", f"{base_ref}...{head_ref}"],
         check=True,
         capture_output=True,
         text=True,
