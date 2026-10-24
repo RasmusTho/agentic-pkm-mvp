@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import ast
+from functools import lru_cache
+import importlib.util
 import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 STATIC_TARGET_COLLECTABILITY_FITNESS = (
@@ -206,6 +212,57 @@ CI_CONTRACT_PATHS = CI_GOVERNANCE_CONTRACT_PATHS | frozenset({
     if target.split("::", 1)[0].endswith(".py")
 )
 
+# Exact PR-intake/publication contract sources have many direct readers across
+# BuilderOps, dispatcher, scripts, governance docs and the publication workflow.
+# Keep this scope explicit: a changed source selects its complete direct-reader
+# set, while an unrelated BuilderOps/dispatcher/script co-change keeps normal
+# subsystem routing. The architecture doc is only a tolerated co-change here;
+# its own edits continue through the ordinary docs lane.
+PR_INTAKE_CONTRACT_SOURCE_PATHS = frozenset({
+    ".github/workflows/issue-pr-governance.yml",
+    "app/builderops/publication.py",
+    "app/dispatcher/verification_contract.py",
+    "scripts/pr_body_generator.py",
+    "scripts/review_before_ci_gate.py",
+})
+PR_INTAKE_RUNTIME_SOURCE_PATHS = PR_INTAKE_CONTRACT_SOURCE_PATHS - {
+    ".github/workflows/issue-pr-governance.yml",
+}
+PR_INTAKE_CONTRACT_READER_PATHS = frozenset({
+    "docs/ARCHITECTURE.md",
+    "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md",
+    "docs/development/PR_HOT_PATH.md",
+    "tests/architecture/test_agent_skill_entrypoints.py",
+    "tests/architecture/test_pr_hot_path_governance.py",
+    "tests/governance/test_autonomous_escalation_contract.py",
+    "tests/governance/test_epic_pr_batching_policy.py",
+    "tests/governance/test_issue_pr_governance.py",
+    "tests/governance/test_project_pickup_deprecation.py",
+    "tests/governance/test_skills_consistency_lint.py",
+    "tests/governance/test_verification_dispatch_request.py",
+    "tests/governance/test_verification_dispatch_workflow.py",
+    "tests/governance/test_pr_evidence_pack_workflow.py",
+    "tests/ops/test_builderops_package_smoke.py",
+    "tests/ops/test_review_before_ci_gate.py",
+    "tests/scripts/test_build_pr_evidence_pack.py",
+    "tests/scripts/test_closure.py",
+    "tests/scripts/test_pr_body_generator.py",
+    "tests/scripts/test_publication.py",
+    "tests/dispatcher/test_verification_dispatch.py",
+    "tests/dispatcher/test_verified_merge.py",
+})
+PR_INTAKE_CONTRACT_TARGETS = (
+    # Direct imports/consumers not already covered by CI_CONTRACT_TARGETS' full
+    # governance suite and exact review/architecture readers.
+    "tests/dispatcher/test_verification_dispatch.py",
+    "tests/dispatcher/test_verified_merge.py",
+    "tests/ops/test_builderops_package_smoke.py",
+    "tests/scripts/test_build_pr_evidence_pack.py",
+    "tests/scripts/test_closure.py",
+    "tests/scripts/test_pr_body_generator.py",
+    "tests/scripts/test_publication.py",
+)
+
 # Test-only edits to these unconsumed modules need representative harness proof.
 # Product/shared-fixture co-changes and nightly retain their complete matrices.
 ISOLATED_TEST_MODULES = {
@@ -350,6 +407,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "app/__init__.py",
         "app/alembic/versions/e7b4c9d2a6f1_heimdal_raw_representation.py",
         "app/cli.py",
+        "app/config/database.py",
         "app/instance/mvr05_cutover.py",
         "app/instance/runtime.py",
         "app/instance/settings_rebind.py",
@@ -1497,8 +1555,128 @@ def _is_ci_contract_only(paths: tuple[str, ...]) -> bool:
     return bool(paths) and all(path in CI_CONTRACT_PATHS for path in paths)
 
 
+def _is_pr_intake_contract_only(paths: tuple[str, ...]) -> bool:
+    # Existing exact CI-contract edits may accompany this source contract, for
+    # example when selector coverage is updated with its owner documentation.
+    # One of the seven added direct-reader targets also qualifies a test-only
+    # contract change. General governance/doc readers are tolerated co-changes,
+    # not anchors; every other co-change falls back to its owner.
+    allowed_paths = CI_CONTRACT_PATHS | PR_INTAKE_CONTRACT_SOURCE_PATHS | PR_INTAKE_CONTRACT_READER_PATHS
+    direct_reader_tests = frozenset(PR_INTAKE_CONTRACT_TARGETS)
+    return (
+        bool(paths)
+        and any(
+            path in PR_INTAKE_CONTRACT_SOURCE_PATHS or path in direct_reader_tests
+            for path in paths
+        )
+        and all(path in allowed_paths for path in paths)
+    )
+
+
 def _is_test_only(paths: tuple[str, ...]) -> bool:
     return bool(paths) and all(path in ISOLATED_TEST_MODULES for path in paths)
+
+
+@lru_cache(maxsize=4096)
+def _module_dependencies(path: Path, module: str, _mtime: int, _size: int) -> tuple[frozenset[str], bool, bool]:
+    """Cache parsed imports only within this process, keyed by the source stat."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, SyntaxError):
+        return frozenset(), True, False
+    package = module.removesuffix(".__init__") if module.endswith(".__init__") else module.rpartition(".")[0]
+    imports: set[str] = set()
+    has_tests = any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+        or isinstance(node, ast.ClassDef) and (
+            node.name.startswith("Test") or any(
+                isinstance(base, ast.Name) and base.id == "TestCase"
+                or isinstance(base, ast.Attribute) and base.attr == "TestCase"
+                for base in node.bases
+            )
+        ) and any(
+            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name.startswith("test_")
+            for child in node.body
+        )
+        for node in tree.body
+    )
+    opaque = any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("pytest_")
+        or isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+            isinstance(target, ast.Name) and target.id == "pytest_plugins"
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        )
+        for node in tree.body
+    )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            try:
+                base = importlib.util.resolve_name("." * node.level + (node.module or ""), package)
+            except (ImportError, ValueError):
+                return frozenset(), True, has_tests
+            imports.add(base)
+            imports.update(f"{base}.{alias.name}" for alias in node.names)
+            opaque |= any(alias.name == "*" for alias in node.names)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            imports.add(node.value)  # Includes literal importlib module names.
+            if node.value.startswith("."):
+                imports.add(node.value.lstrip("."))  # Relative literal importlib calls.
+            if module.startswith("tests.") and node.value.startswith("tests/"):
+                imports.add(node.value.split("::", 1)[0].removesuffix(".py").replace("/", "."))
+        elif isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else ""
+            if name in {"__import__", "import_module", "spec_from_file_location", "run_module", "run_path", "exec", "eval"}:
+                opaque |= not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str)
+                if name in {"spec_from_file_location", "run_path", "exec", "eval"}:
+                    opaque = True  # File/code loaders do not establish a module import edge.
+    return frozenset(imports), opaque, has_tests
+
+
+def _test_module_targets(paths: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Select test modules and their consumers; shared/unclear boundaries keep normal ownership."""
+    if not paths or not all(
+        path.startswith("tests/") and _is_test_module(path)
+        and not {"..", "helpers", "fixtures", "support", "utils", "_shared"}.intersection(Path(path).parts)
+        and (REPO_ROOT / path).is_file() and not (REPO_ROOT / path).is_symlink()
+        and any(_subsystem_owns_path(path, name, prefixes) for name, prefixes, _ in SUBSYSTEMS)
+        for path in paths
+    ):
+        return None
+    try:
+        inventory = subprocess.run(
+            ["git", "ls-files", "-z", "--", "*.py"], cwd=REPO_ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.split("\0")
+        modules = {path.removesuffix(".py").replace("/", "."): path for path in inventory if path}
+        selected = {path.removesuffix(".py").replace("/", ".") for path in paths}
+        if not selected <= modules.keys():
+            return None
+        dependencies = {}
+        for module, relative in modules.items():
+            file = REPO_ROOT / relative
+            if file.is_symlink():
+                return None
+            stat = file.stat()
+            dependencies[module] = _module_dependencies(file, module, stat.st_mtime_ns, stat.st_size)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    while True:
+        # Pytest's import mode can also expose a sibling by its bare module name.
+        aliases = selected | {module.rsplit(".", 1)[-1] for module in selected}
+        consumers = {module for module, (imports, _, _) in dependencies.items() if imports & aliases}
+        if consumers <= selected:
+            break
+        selected.update(consumers)
+    if any(
+        not modules[module].startswith("tests/")
+        or Path(modules[module]).name in {"__init__.py", "conftest.py"}
+        or dependencies[module][1]
+        for module in selected
+    ) or any(not dependencies[path.removesuffix(".py").replace("/", ".")][2] for path in paths):
+        return None
+    return _dedupe([*paths, *sorted(modules[module] for module in selected if _is_test_module(modules[module]))])
 
 
 def _foreign_subsystem_matches(
@@ -1782,13 +1960,24 @@ def select_tests(changed_files: list[str]) -> Selection:
         )
 
     ci_contract_only = _is_ci_contract_only(paths)
+    pr_intake_contract_only = _is_pr_intake_contract_only(paths)
     test_only = _is_test_only(paths)
+    if not (ci_contract_only or pr_intake_contract_only or test_only):
+        test_modules = _test_module_targets(paths)
+        if test_modules is not None:
+            owners = _dedupe([
+                name for name, prefixes, _ in SUBSYSTEMS
+                if any(_subsystem_owns_path(path, name, prefixes) for path in paths)
+            ])
+            return Selection(False, owners, _pr_targets([*CI_INTEGRITY_TARGETS, *test_modules]),
+                             "test modules and their static consumers")
     changed_tests = (
         tuple(target for path in paths for target in ISOLATED_TEST_MODULES[path])
         if test_only else _changed_test_targets(paths)
     )
     targets = list(
         CI_CONTRACT_TARGETS if ci_contract_only
+        else (*CI_CONTRACT_TARGETS, *PR_INTAKE_CONTRACT_TARGETS) if pr_intake_contract_only
         else CI_INTEGRITY_TARGETS if test_only
         else ALWAYS_TARGETS
     )
@@ -1817,6 +2006,8 @@ def select_tests(changed_files: list[str]) -> Selection:
 
     if ci_contract_only:
         subsystems, reason = ("governance",), "CI contract-only PR"
+    elif pr_intake_contract_only:
+        subsystems, reason = ("governance", "builder_system"), "PR intake/publication contract PR"
     elif test_only:
         subsystems, reason = ("tests",), "isolated test-only smoke; exhaustive matrix deferred"
     elif governance_only or docs_only:
@@ -1848,7 +2039,7 @@ def select_tests(changed_files: list[str]) -> Selection:
             return Selection(False, ("unowned",), (), FULL_SUITE_REASONS[2], paths)
         subsystems, reason = _dedupe(matched), "matched subsystem SoI"
 
-    # Every scoped branch funnels through this single return, so changed
+    # Subsystem and docs branches funnel through this return, so changed
     # test coverage (or the explicit isolated smoke) is unioned once — no splice
     # to forget if a future branch is added here (the #3383 failure mode).
     return _defer_heavy(
@@ -1858,7 +2049,9 @@ def select_tests(changed_files: list[str]) -> Selection:
 
 def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_ref}...{head_ref}"],
+        # Keep both old and new paths for renames. The missing old module must
+        # disqualify test-only selection rather than hiding broken import users.
+        ["git", "diff", "--no-renames", "--name-only", f"{base_ref}...{head_ref}"],
         check=True,
         capture_output=True,
         text=True,
@@ -1886,6 +2079,17 @@ def requires_runtime_checks(changed_files: list[str]) -> bool:
     and mixed changes stay conservative. A Markdown suffix alone is insufficient.
     """
     paths = tuple(_normalize(path) for path in changed_files if _normalize(path))
+    if _is_pr_intake_contract_only(paths) and any(
+        path in PR_INTAKE_RUNTIME_SOURCE_PATHS for path in paths
+    ):
+        # App and executable publication/review helpers still receive the
+        # mandatory Product type/runtime gates, even though pytest is scoped to
+        # the exact contracts that read them.
+        return True
+    if _is_pr_intake_contract_only(paths):
+        # The GitHub workflow contract has its direct governance readers and
+        # does not change the Python application type surface.
+        return False
     if _is_ci_contract_only(paths) or _is_test_only(paths):
         return False
     return not paths or not all(

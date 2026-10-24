@@ -216,7 +216,7 @@ def test_append_plan_regressions_select_orchestration_targets() -> None:
     assert selection.subsystems == ("orchestration",)
     assert selection.unowned_paths == ()
     assert set(changed) <= set(selection.targets)
-    assert "tests/orchestrator" in selection.targets
+    assert "tests/orchestrator" not in selection.targets
 
 
 @pytest.mark.parametrize(
@@ -233,12 +233,13 @@ def test_governed_effect_spine_paths_select_orchestration_targets(
     selection = select_tests([effect_spine_path])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("orchestration",)
     assert selection.unowned_paths == ()
+    assert selection.subsystems == ("orchestration",)
     if effect_spine_path.startswith("tests/"):
         assert effect_spine_path in selection.targets
+    else:
+        assert "tests/governance/test_governed_write.py" in selection.targets
     assert "tests/invariants/test_governed_effect_spine.py" in selection.targets
-    assert "tests/governance/test_governed_write.py" in selection.targets
 
 
 def test_static_web_surface_is_owned_by_builder_system_and_companion_ui() -> None:
@@ -316,7 +317,7 @@ def test_mvr05_authority_recovery_architecture_test_has_vault_ci_owner() -> None
     assert selection.subsystems == ("vault",)
     assert selection.unowned_paths == ()
     assert path in selection.targets
-    assert "tests/ops/test_instance_state_volume_contract.py" in selection.targets
+    assert "tests/ops" not in selection.targets
 
 
 def test_knowledge_runtime_modules_select_vault_knowledge_and_port_coverage() -> None:
@@ -432,9 +433,11 @@ def test_contract_selection_remains_conservative_after_deduplication() -> None:
     assert "tests/architecture/test_pr_test_selection.py" in selector_owner.targets
 
     builder_owner = select_tests(["app/builderops/publication.py"])
-    assert builder_owner.subsystems == ("builder_system",)
+    assert builder_owner.subsystems == ("governance", "builder_system")
     assert builder_owner.unowned_paths == ()
-    assert "tests/builderops" in builder_owner.targets
+    assert builder_owner.reason == "PR intake/publication contract PR"
+    assert "tests/scripts/test_publication.py" in builder_owner.targets
+    assert "tests/dispatcher/test_verified_merge.py" in builder_owner.targets
     assert "tests/architecture/test_pr_hot_path_governance.py" in builder_owner.targets
 
 
@@ -533,7 +536,7 @@ def test_quality_wave_tests_have_ci_owner() -> None:
     assert selection.full_suite is False
     assert selection.subsystems == ("quality_wave",)
     assert selection.unowned_paths == ()
-    assert "tests/quality_wave" in selection.targets
+    assert "tests/quality_wave" not in selection.targets
     assert path in selection.targets
 
 
@@ -1042,6 +1045,10 @@ def test_static_selector_targets_are_collectable() -> None:
         target
         for _, _, subsystem_targets in selector.SUBSYSTEMS
         for target in subsystem_targets
+        if target.split("::", 1)[0].endswith(".py")
+    ) + tuple(
+        target
+        for target in selector.PR_INTAKE_CONTRACT_TARGETS
         if target.split("::", 1)[0].endswith(".py")
     ) + selector.STATIC_SELECTOR_NODE_ID_TARGETS + tuple(
         target for smoke_targets in selector.ISOLATED_TEST_MODULES.values() for target in smoke_targets
@@ -1623,8 +1630,11 @@ def test_cross_scope_flow_contract_surface_selects_episodes_coverage(path: str) 
     assert selection.full_suite is False
     assert selection.subsystems == ("episodes",)
     assert selection.unowned_paths == ()
-    assert "tests/episodes" in selection.targets
-    assert "tests/invariants" in selection.targets
+    if path.startswith("tests/"):
+        assert "tests/episodes" not in selection.targets
+    else:
+        assert "tests/episodes" in selection.targets
+        assert "tests/invariants" in selection.targets
     assert "tests/architecture/test_cross_scope_flow_schema.py" in selection.targets
 
 
@@ -1904,6 +1914,139 @@ def test_exact_ci_contracts_execute_focused_proof_without_product_gates(path: st
         assert path in selection.targets
 
 
+@pytest.mark.parametrize("path", sorted(selector.PR_INTAKE_CONTRACT_SOURCE_PATHS))
+def test_pr_intake_publication_sources_select_their_direct_readers(path: str) -> None:
+    selection = select_tests([path])
+
+    assert selection.full_suite is False
+    assert selection.reason == "PR intake/publication contract PR"
+    assert selector.STATIC_TARGET_COLLECTABILITY_FITNESS in selection.targets
+    assert set(selector.CI_CONTRACT_TARGETS) <= set(selection.targets)
+    assert set(selector.PR_INTAKE_CONTRACT_TARGETS) <= set(selection.targets)
+    assert not {"tests/builderops", "tests/dispatcher", "tests/scripts", "tests/ops"} & set(selection.targets)
+    assert "tests/deploy" not in selection.targets
+    assert selector.requires_runtime_checks([path]) is (
+        path in selector.PR_INTAKE_RUNTIME_SOURCE_PATHS
+    )
+
+
+def test_exact_pr_intake_publication_change_keeps_nonclosing_and_fenced_merge_proof() -> None:
+    paths = [
+        ".github/workflows/issue-pr-governance.yml",
+        "app/builderops/publication.py",
+        "app/dispatcher/verification_contract.py",
+        "docs/ARCHITECTURE.md",
+        "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md",
+        "docs/development/PR_HOT_PATH.md",
+        "scripts/pr_body_generator.py",
+        "scripts/review_before_ci_gate.py",
+        "tests/governance/test_issue_pr_governance.py",
+        "tests/ops/test_review_before_ci_gate.py",
+        "tests/scripts/test_pr_body_generator.py",
+        "tests/scripts/test_publication.py",
+    ]
+    selection = select_tests(paths)
+
+    assert selection.full_suite is False
+    assert selection.reason == "PR intake/publication contract PR"
+    assert selector.requires_runtime_checks(paths) is True
+    assert set(selector.PR_INTAKE_CONTRACT_TARGETS) <= set(selection.targets)
+    assert "tests/governance" in selection.targets
+    assert "tests/ops/test_review_before_ci_gate.py" in selection.targets
+    assert "tests/architecture/test_pr_hot_path_governance.py" in selection.targets
+    assert "tests/architecture/test_agent_skill_entrypoints.py" in selection.targets
+    # These direct readers cover explicit non-closing intake, publication
+    # writeback and the verified-merge/fenced authority path.
+    assert "tests/scripts/test_pr_body_generator.py" in selection.targets
+    assert "tests/scripts/test_publication.py" in selection.targets
+    assert "tests/dispatcher/test_verified_merge.py" in selection.targets
+    assert "tests/dispatcher/test_verification_dispatch.py" in selection.targets
+    assert not {"tests/builderops", "tests/dispatcher", "tests/scripts", "tests/ops"} & set(selection.targets)
+    assert "tests/deploy" not in selection.targets
+
+
+@pytest.mark.parametrize("path", (
+    "scripts/pr_body_generator.py",
+    "scripts/review_before_ci_gate.py",
+    "app/builderops/publication.py",
+    "app/dispatcher/verification_contract.py",
+))
+def test_pr_intake_executable_sources_keep_runtime_and_type_gates(path: str) -> None:
+    assert selector.requires_runtime_checks([path]) is True
+
+
+@pytest.mark.parametrize("path", (
+    "scripts/select_pr_tests.py",
+    "tests/ops/test_review_before_ci_gate.py",
+))
+def test_generic_ci_contract_does_not_pay_for_intake_publication_readers(path: str) -> None:
+    selection = select_tests([path])
+
+    assert selection.reason == "CI contract-only PR"
+    assert selector.requires_runtime_checks([path]) is False
+    assert not set(selector.PR_INTAKE_CONTRACT_TARGETS) & set(selection.targets)
+
+
+@pytest.mark.parametrize("path", selector.PR_INTAKE_CONTRACT_TARGETS)
+def test_direct_publication_reader_test_alone_uses_its_contract_scope(path: str) -> None:
+    selection = select_tests([path])
+
+    assert selection.reason == "PR intake/publication contract PR"
+    assert selector.requires_runtime_checks([path]) is False
+    assert set(selector.PR_INTAKE_CONTRACT_TARGETS) <= set(selection.targets)
+    assert not {"tests/builderops", "tests/dispatcher", "tests/scripts", "tests/ops"} & set(selection.targets)
+
+
+def test_architecture_doc_only_change_keeps_the_existing_docs_route() -> None:
+    path = "docs/ARCHITECTURE.md"
+    selection = select_tests([path])
+
+    assert selection.reason == "docs-only PR"
+    assert selector.requires_runtime_checks([path]) is False
+    assert selection.subsystems == ("docs",)
+    assert "tests/architecture" in selection.targets
+
+
+@pytest.mark.parametrize("foreign_path", (
+    "app/builderops/cli.py",
+    "app/dispatcher/verification_dispatch.py",
+    "app/agents/panel_agent/runtime.py",
+    "app/ops/postgres_deploy_linux.py",
+    "scripts/post_merge_heavy_tests_verdict.py",
+    "scripts/deploy_channel.sh",
+    "requirements.txt",
+    "tests/conftest.py",
+    "tests/ops/conftest.py",
+    ".github/workflows/integration-nightly.yaml",
+    "app/unknown_ci_helper.py",
+))
+def test_pr_intake_source_with_foreign_cochange_retains_normal_owner(foreign_path: str) -> None:
+    paths = ["app/dispatcher/verification_contract.py", foreign_path]
+    selection = select_tests(paths)
+
+    assert selection.reason != "PR intake/publication contract PR"
+    assert selector.requires_runtime_checks(paths) is True
+    if foreign_path == "app/unknown_ci_helper.py":
+        assert selection.subsystems == ("unowned",)
+        assert foreign_path in selection.unowned_paths
+    elif foreign_path in {"requirements.txt", "tests/conftest.py"}:
+        assert selection.full_suite is True
+    elif foreign_path == "app/builderops/cli.py":
+        assert "tests/builderops" in selection.targets
+        assert "tests/dispatcher" in selection.targets
+    elif foreign_path == "app/dispatcher/verification_dispatch.py":
+        assert "tests/dispatcher" in selection.targets
+    elif foreign_path == "app/agents/panel_agent/runtime.py":
+        assert any(target.startswith("tests/agents/panel_agent") for target in selection.targets)
+    elif foreign_path == "app/ops/postgres_deploy_linux.py":
+        assert "tests/ops" in selection.targets
+    elif foreign_path == "scripts/deploy_channel.sh":
+        assert "tests/deploy" in selection.targets
+        assert "tests/deploy" not in selection.deferred_targets
+    else:
+        assert selection.full_suite or selection.targets
+
+
 @pytest.mark.parametrize("path", (
     "app/briefing/compose.py", "app/ops/postgres_deploy_linux.py",
     "app/alembic/versions/example.py", "requirements.txt", "tests/conftest.py",
@@ -1971,11 +2114,134 @@ def test_isolated_smoke_does_not_change_normal_whole_module_collection() -> None
     assert path + "::test_test_preparation_producer_holds_window_until_explicit_initializer[post_stop_interpreter]" in nodes
 
 
+@pytest.fixture
+def test_module_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def create(files: dict[str, str]) -> Path:
+        for relative, content in files.items():
+            path = tmp_path / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True, capture_output=True)
+        monkeypatch.setattr(selector, "REPO_ROOT", tmp_path)
+        return tmp_path
+    return create
+
+
+def test_deploy_test_only_change_keeps_real_consumers_without_sibling_suites() -> None:
+    paths = ["tests/deploy/test_postmerge_pg_acceptance.py", "tests/deploy/test_postmerge_dev_test.py"]
+    selection = select_tests(paths)
+
+    assert selection.reason == "test modules and their static consumers"
+    assert "ops_deploy" in selection.subsystems
+    assert set(paths) | set(selector.CI_INTEGRITY_TARGETS) | {
+        "tests/release_channels/test_pr_candidate_verification_workflow.py",
+        "tests/release_channels/test_stable_promotion_from_test.py",
+        "tests/ops/test_native_web_lock_lifecycle.py",
+        "tests/ops/test_native_journaling_acceptance.py",
+        "tests/ops/test_native_web_acceptance.py",
+    } <= set(selection.targets)
+    assert not {"tests/ops", "tests/scripts", "tests/deploy", *selector.ALWAYS_TARGETS[2:]} & set(selection.targets)
+    assert selector.requires_runtime_checks(paths) is True
+
+
+@pytest.mark.parametrize("statement", [
+    "from tests.deploy.test_seed import shared",
+    "from .test_seed import shared",
+    "from test_seed import shared",
+    "import importlib\nshared = importlib.import_module('tests.deploy.test_seed')",
+    "import importlib\nshared = importlib.import_module('.test_seed', package='tests.deploy')",
+])
+def test_test_module_consumers_follow_absolute_relative_bare_and_literal_imports(
+    test_module_repository, statement: str,
+) -> None:
+    test_module_repository({
+        "tests/deploy/test_seed.py": "shared = 1\ndef test_seed(): pass\n",
+        "tests/deploy/test_consumer.py": statement + "\ndef test_consumer(): pass\n",
+        "tests/deploy/test_unrelated.py": "def test_unrelated(): pass\n",
+    })
+    selection = select_tests(["tests/deploy/test_seed.py"])
+    assert set(selection.targets) == {*selector.CI_INTEGRITY_TARGETS,
+                                      "tests/deploy/test_seed.py", "tests/deploy/test_consumer.py"}
+
+
+def test_test_module_consumers_follow_helpers_transitively_and_terminate_cycles(test_module_repository) -> None:
+    test_module_repository({
+        "tests/deploy/test_seed.py": "from tests.ops.test_consumer import marker\ndef test_seed(): pass\n",
+        "tests/ops/helper.py": "from tests.deploy.test_seed import test_seed\n",
+        "tests/ops/test_consumer.py": "from .helper import test_seed\nmarker = 1\ndef test_consumer(): pass\n",
+    })
+    selection = select_tests(["tests/deploy/test_seed.py"])
+    assert set(selection.targets) == {*selector.CI_INTEGRITY_TARGETS,
+                                      "tests/deploy/test_seed.py", "tests/ops/test_consumer.py"}
+
+
+@pytest.mark.parametrize("consumer,content", [
+    ("app/consumer.py", "from tests.deploy.test_seed import shared\n"),
+    ("tests/conftest.py", "from tests.deploy.test_seed import shared\n"),
+    ("tests/ops/__init__.py", "from tests.deploy.test_seed import shared\n"),
+    ("tests/ops/test_consumer.py", "from tests.deploy.test_seed import shared\npytest_plugins = []\n"),
+    ("tests/ops/test_consumer.py", "from tests.deploy.test_seed import shared\ndef pytest_configure(config): pass\n"),
+    ("tests/ops/test_consumer.py", "from tests.deploy.test_seed import shared\nimport importlib\nimportlib.import_module(name)\n"),
+])
+def test_test_module_shared_or_unclear_consumers_keep_broad_ownership(
+    test_module_repository, consumer: str, content: str,
+) -> None:
+    test_module_repository({"tests/deploy/test_seed.py": "shared = 1\ndef test_seed(): pass\n", consumer: content})
+    selection = select_tests(["tests/deploy/test_seed.py"])
+    assert selection.reason == "matched subsystem SoI"
+    assert {"tests/ops", "tests/scripts"} <= set(selection.targets)
+
+
+@pytest.mark.parametrize("content", [
+    "import importlib\nimportlib.import_module(module_name)\ndef test_seed(): pass\n",
+    "from unknown import *\ndef test_seed(): pass\n",
+    "exec('import generated_helper')\ndef test_seed(): pass\n",
+    "def test_seed(:\n",
+    "shared = 1\n",  # A helper does not become a test module through its filename.
+])
+def test_test_module_opaque_changed_code_keeps_broad_ownership(test_module_repository, content: str) -> None:
+    test_module_repository({"tests/deploy/test_seed.py": content})
+    assert select_tests(["tests/deploy/test_seed.py"]).reason == "matched subsystem SoI"
+
+
+@pytest.mark.parametrize("extra", [
+    "tests/ops/conftest.py", "tests/helpers/test_support.py", "tests/fixtures/test_data.py",
+    "tests/ops/support.py", "requirements.txt", ".github/workflows/ci-smoke.yaml",
+    "app/ops/postgres_deploy_linux.py", "tests/unknown_area/test_unknown.py",
+])
+def test_test_module_shared_configuration_mixed_and_unknown_paths_keep_existing_routes(
+    test_module_repository, extra: str,
+) -> None:
+    test_module_repository({"tests/deploy/test_seed.py": "def test_seed(): pass\n", extra: ""})
+    assert select_tests(["tests/deploy/test_seed.py", extra]).reason != "test modules and their static consumers"
+
+
+def test_test_module_deleted_and_renamed_paths_keep_broad_ownership(
+    test_module_repository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = test_module_repository({"tests/deploy/test_old.py": "def test_old(): pass\n"})
+    monkeypatch.chdir(root)
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                        "-c", "commit.gpgsign=false", *args], check=True, capture_output=True)
+    git("commit", "-qm", "initial")
+    git("mv", "tests/deploy/test_old.py", "tests/deploy/test_new.py")
+    git("commit", "-qm", "rename")
+
+    paths = selector.changed_files_from_git("HEAD^", "HEAD")
+    assert set(paths) == {"tests/deploy/test_old.py", "tests/deploy/test_new.py"}
+    selection = select_tests(paths)
+    assert selection.reason == "matched subsystem SoI"
+    assert {"tests/ops", "tests/scripts"} <= set(selection.targets)
+    assert "tests/deploy/test_old.py" not in selector._existing_test_targets(selection.targets)
+    assert "tests/deploy/test_new.py" in selector._existing_test_targets(selection.targets)
+
+
 @pytest.mark.parametrize("shared_path", (
     "tests/conftest.py", "tests/ops/conftest.py", "tests/helpers/test_runtime_support.py",
     "tests/fixtures/test_case.py", "app/ops/native_source_admission.py",
     "tests/integration/test_watcher_cross_process_rebind.py",
-    "tests/deploy/test_postmerge_pg_acceptance.py",
 ))
 def test_shared_fixture_and_product_changes_are_not_test_only(shared_path: str) -> None:
     paths = ["tests/ops/test_dormant_ownership_initialization.py", shared_path]
@@ -2047,6 +2313,7 @@ def test_selector_reports_deferred_targets_to_github_output(tmp_path: Path) -> N
     "scripts/deploy_channel.sh",
     "scripts/lib/deploy_channel_compose.sh",
     "config/deploy/prod.env",
+    "app/config/database.py",
     "app/release_channels/prepare_promotion.py",
     "ops/scalar-rollback/nginx.conf",
     "tests/deploy/conftest.py",
@@ -2058,6 +2325,8 @@ def test_deploy_trigger_keeps_heavy_deploy_suite_on_pr_path(path: str) -> None:
     selection = select_tests([path])
 
     assert selection.deferred_targets == ()
+    if path in selector.FULL_SUITE_EXACT:
+        assert selection.full_suite is True
     # Full-suite inputs (compose, requirements) run all of tests/ without an
     # --ignore; unowned paths fail selection closed before any deferral.
     assert (

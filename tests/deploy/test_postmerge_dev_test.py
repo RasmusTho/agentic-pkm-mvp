@@ -1107,6 +1107,32 @@ def test_heavy_verdict_dispatch_payload_is_bounded(monkeypatch):
     assert driver.native_heavy(candidate)['result'] == 'refused'
 
 
+def test_heavy_verdict_dispatch_refuses_after_three_failed_attempts(monkeypatch):
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    monkeypatch.undo()
+    calls = []
+    sleeps = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=1, stdout=b'', stderr=b'')
+
+    monkeypatch.setattr(driver.subprocess, 'run', run)
+    monkeypatch.setattr(driver.time, 'sleep', lambda duration: sleeps.append(duration))
+    heavy = dict(HEAVY_PASSED, result='failed', failed=1,
+                 failures=['tests/deploy/test_sample.py::test_rejected_verdict'])
+
+    with pytest.raises(driver.CandidateRefused, match='heavy_dispatch_failed'):
+        driver.dispatch_verdict(candidate, heavy)
+
+    assert len(calls) == 3
+    assert sleeps == [20, 20]
+    assert all(argv == calls[0][0] for argv, _kwargs in calls)
+    assert all(kwargs == {'capture_output': True, 'timeout': 60, 'check': False} for _argv, kwargs in calls)
+    assert calls[0][0][:8] == ['gh', 'workflow', 'run', driver.HEAVY_WORKFLOW, '--repo', driver.REPOSITORY,
+                                '--ref', 'main']
+
+
 class _ChannelGithub:
     """In-memory transport only; tests execute the real workflow reconciler."""
     bot = {'login': 'github-actions[bot]', 'type': 'Bot'}

@@ -64,7 +64,54 @@ changed-test inclusion. `tests/governance/test_ci_smoke_docs_only_gate.py` execu
 classification command against real finite Git diffs and checks its consumers. Workflow failure,
 timeout, coverage and process-cleanup proofs stay in `tests/ops/test_ci_workflow.py`.
 
+### Exact PR intake and publication source scope
+
+The bounded route is available only when a change includes one of these exact source paths or one
+of the seven additional direct-reader target modules named below, and every co-change belongs to
+the explicit reader/owner-doc list or the existing exact CI contract paths:
+
+- `.github/workflows/issue-pr-governance.yml`
+- `app/builderops/publication.py`
+- `app/dispatcher/verification_contract.py`
+- `scripts/pr_body_generator.py`
+- `scripts/review_before_ci_gate.py`
+
+The exact direct-reader tests and owner documents are listed in `scripts/select_pr_tests.py`.
+`docs/ARCHITECTURE.md` is admitted only alongside one of those sources or one of those seven direct
+reader modules; an architecture-only or other docs-only PR keeps its existing route. For this exact scope,
+the selector unions direct publication and fenced-dispatch readers (`tests/scripts/test_publication.py`,
+`test_closure.py`, `test_pr_body_generator.py`, `test_build_pr_evidence_pack.py`,
+`tests/dispatcher/test_verification_dispatch.py`, `test_verified_merge.py`, and
+`tests/ops/test_builderops_package_smoke.py`) with the base `CI_CONTRACT_TARGETS`. Ordinary CI-helper
+PRs do not pay for these additional modules. Existing governance, review-gate, architecture,
+workflow, lint and static-target collectability proof stays in the selection. Non-closing intake
+remains covered by the actual generator/publication and governance readers, and fenced merge
+authority remains covered by the dispatcher merge tests.
+
+Executable app and publication/review script sources in this scope keep `runtime_checks=true`,
+including when a PR changes only one of those scripts. This preserves the mandatory `mypy app`
+gate and the existing runtime checks while pytest uses the narrower direct-reader set. A workflow-only
+or direct-reader-test-only change has no app type-check requirement. Any unrelated Product/native
+source, other BuilderOps, dispatcher or script source, dependency, shared fixture, deploy input,
+workflow, test outside both the explicit reader list and existing CI contract paths, or unknown path
+disqualifies the scope and restores normal owner routing.
+
 ## Test-only scope
+
+Ordinary changes confined to existing test modules run those complete modules, their transitive
+static import consumers, and `CI_INTEGRITY_TARGETS`. Imports of shared helpers exported by a test
+module therefore retain their actual consumers without selecting entire sibling test directories.
+The selector also retains test readers that name another test file literally. Its source parsing
+is cached only in the current process, keyed by file metadata; there is no stored dependency graph.
+This general route keeps `runtime_checks=true` and the usual dependencies, ACL provisioning,
+markers and watchdog. It does not change Product-source selection or the exact CI contract route.
+
+Shared fixture/helper/support files, conftest, pytest hooks/plugins, configuration, dependencies,
+Product or mixed changes, deleted/renamed or unknown paths keep their normal broader scope.
+Known consumers with computed imports or file loaders also disqualify the narrow route. Static
+analysis cannot prove the absence of every dynamic dependency or collection-order coupling;
+the existing broad nightly/manual execution remains the backstop. This trades delayed discovery
+of those test-harness defects for shorter ordinary PR feedback, without weakening runtime guards.
 
 When every changed path belongs to `ISOLATED_TEST_MODULES`, run its named representative tests and
 `CI_INTEGRITY_TARGETS`. This mapping replaces the previous whole-module opt-in; it is not a generic
@@ -75,8 +122,9 @@ no-consumer boundary remain mandatory. The test environment, dependencies, marke
 remain enabled. `runtime_checks=false` omits
 unrelated `mypy app`, Product classification replay, ACL provisioning, runtime smoke and full-tree
 collection. The admitted module and common CI tests need no ACL command-line tools; their real
-filesystem tests use POSIX operations. Other test modules, shared fixtures, helpers, configuration and
-mixed source changes retain their normal scope. A test filename alone never qualifies: existing
+filesystem tests use POSIX operations. This opt-in smoke takes priority over the general test-module
+route. Shared fixtures, helpers, configuration and mixed source changes retain their normal scope. A
+test filename alone never qualifies for this smoke: existing
 test modules also export shared helpers. The static-selector integrity check rejects imports of
 an opted-in module from other tests, including literal dynamic imports.
 
@@ -509,6 +557,9 @@ effort improved before adopting further changes.
 ## Post-merge heavy tests
 
 Owner decision (verbal, 2026-10-16, recorded in #6154): heavy test sets do not run on the PR path. They run after merge on the ygg verification VM (option B, #6158), with the repository controller now qualifying `dev` before test promotion (#6227); a GitHub-hosted run remains only as the missing-verdict fallback.
+
+The PG acceptance source read of `app/config/database.py` is a deploy retention trigger: changes
+to this shared runtime source keep both full-suite selection and deploy coverage on the PR path.
 
 - `scripts/select_pr_tests.py :: HEAVY_PR_DEFERRED_TARGETS` filters heavy targets already selected by subsystem ownership or the full-suite route. It keeps a selected heavy target only when the PR changes a listed input, or a non-test file inside the target (a `conftest.py` or helper). Otherwise the selector drops it and reports it as `deferred_targets` (stdout and `GITHUB_OUTPUT`). The full-suite lane skips the deferred shard and logs `SHARD DEFERRED`. A changed test module inside a deferred directory still runs as its own changed-file target.
 - The only entry today is `tests/deploy`. Its retention triggers cover repo files it reads directly: deploy scripts and `scripts/lib/**`, compose files, requirements files, `Dockerfile`, `ops/**`, `config/deploy/**`, release-channel code (`app/release_channels/**`), and the `app/` modules it loads by path. These include copied fixture inputs, so the inventory is not an independent dependency-owner map. It took ~1497 s of PR #6134's 2287 s unit step and timed out PR #6152, because `ops_deploy` owns all of `scripts/`. A census test keeps the trigger set covering every existing repo file that `tests/deploy` references (#6155 review). The rolling channel-bug workflow (`.github/workflows/postmerge-channel-bug.yml`) and receiver (`scripts/postmerge_channel_bug.py`) are direct deploy-test inputs; the workflow also has exact `ops_deploy` ownership so a workflow-only edit selects that coverage alongside governance checks. Add a target only with a timing receipt.
