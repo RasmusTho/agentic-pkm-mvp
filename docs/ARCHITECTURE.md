@@ -690,6 +690,12 @@ Historical topology, older runtime surfaces, and superseded architecture detail 
 
 GitHub delivery governance is a Builder System concern, not runtime architecture. `GitHub Issues / PRs / CI` remain durable delivery truth; `Dispatcher SQLite` is the volatile coordination primitive; the external BuilderOps Vault provides advisory material; and Project is an optional projection. `AGENTS.md` and `docs/development/` own the task-contract, claim, PR, CI, and verification workflow; their rules must not be inferred from this document.
 
+Native PR intake can explicitly retain an open governing Issue for post-merge proof; its input and
+receipt contract lives in `docs/development/PR_HOT_PATH.md :: PR Body Preparation`. This intake is
+separate from dispatched/fenced merge authority, whose closure resolvers still require closing Issues.
+Section reviewed 2026-10-24 against the native constructor/publication and production CI regressions
+in `tests/scripts/test_publication.py` and `tests/governance/test_issue_pr_governance.py`.
+
 ## BuilderOps Build Plane
 
 <!-- builderops-build-plane -->

@@ -72,6 +72,9 @@ DATABASE_CONSUMERS = {
     "postgres-watcher": "watcher",
     "postgres-capture-watch": "heimdal-capture-watch",
 }
+# The witness is not a deployment service and must never join a start/stop set.
+SOURCE_WITNESS_CONSUMER = "postgres-source-witness"
+SOURCE_WITNESS_SERVICE = "source-identity-db-witness"
 _ENVIRONMENT_GRANTS = {
     "heimdal-api-ingress": {"heimdal.raw-store-key", "github.token"},
     "heimdal-raw-migrate": {"heimdal.raw-store-key"},
@@ -138,6 +141,9 @@ class HostSecretContract:
         return CHANNEL_PROJECTS[channel], f"{prefix}/{secret}"
 
     def file_binding(self, *, channel: str, consumer: str, secret: str) -> tuple[str, str]:
+        if (channel in {"dev", "test"} and consumer == SOURCE_WITNESS_CONSUMER
+                and secret == "postgres.password"):
+            return SOURCE_WITNESS_SERVICE, "DATABASE_PASSWORD_FILE"
         if (
             channel not in CHANNEL_PROJECTS
             or secret != "postgres.password"
@@ -445,7 +451,12 @@ def _validate_bws_contract(
                     else "DATABASE_PASSWORD_FILE",
                 }
                 for consumer, service in DATABASE_CONSUMERS.items()
-            ],
+            ] + [{
+                "consumer": SOURCE_WITNESS_CONSUMER,
+                "service": SOURCE_WITNESS_SERVICE,
+                "path_binding": "DATABASE_PASSWORD_FILE",
+                "channels": ["dev", "test"],
+            }],
         }
     ]
     file_secrets = payload["file_secrets"]

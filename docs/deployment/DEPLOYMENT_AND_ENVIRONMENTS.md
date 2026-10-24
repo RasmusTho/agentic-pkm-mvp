@@ -1373,6 +1373,67 @@ and otherwise retain the same content-free counters/reasons, exact same-ID clean
 mandatory delivery-classifier reapplication. Omitting the flag preserves the existing
 `vault-alpha` request and v1 receipt byte shape.
 
+Issue #6316 adds a separate, explicit current-state source-operation route for DEV/TEST when
+protected MVR authority is intact but an installed watcher is exited and no prior deployment
+channel owner remains. This is repository support, not evidence of live #3347/#6300 completion.
+It does not reconstruct a departed operation, adopt historical cleanup, initialize ownership,
+or start the watcher. The default persistence entry still requires all core writers running.
+
+The read-only invocation is `postgres_deploy_host <dev|test> <reviewed-helper-sha> --automatic
+--existing-secrets-only --current-state-source --diagnose-source-identity --operation-id <uuid>
+--image-digest <sha256:digest>`, with the existing selected binding/root/ownership arguments.
+The host-operation lock, supervisor mutex and channel lock enclose the canonical retained-authority
+reader and complete effective Compose census. Registry/ledger/key/lock corruption, pending
+authority work, unknown/duplicate services, created/paused/restarting containers, active or
+start-capable one-shots, and exact image/configuration/mount/user/population drift refuse. Installed
+roles, actually running writers, and retained stopped identities are recorded separately and
+revalidated at the worker boundary. The result is the existing aggregate diagnostic, not a
+transferable admission boolean.
+The predecessor's canonical bound-request reader preserves its stored bootstrap flag: a completed
+first initialization may supply terminal lineage, but source admission never performs bootstrap.
+
+Source prepare/finalize actors remain read-only and network-none without database credentials.
+The separate volume-free witness reads only the verified existing channel password source through
+the explicitly declared `postgres-source-witness` consumer. A bounded channel/revision/digest-bound
+private stdin envelope delivers it only to that actor. Its existing `/tmp` tmpfs holds a mode-0600
+file used by the canonical no-follow resolver; read-only PGOPTIONS and positive
+`SHOW default_transaction_read_only` are both required. Every exit unlinks the file; token-owned
+container removal retires remaining tmpfs after interruption. Missing source, conflicting credential
+carriers, malformed/oversized frames, unlink/transport ambiguity or incomplete cleanup cannot
+produce success or replay. No password is placed in environment values, command arguments,
+rendered Compose, receipts or persistent plaintext storage; there are no additional mounts.
+This closes a source-verified credential-delivery gap, not a claim that an earlier live diagnostic
+had authenticated successfully.
+The witness overrides both DSN aliases with the admitted application's credential-free target,
+clears inherited password carriers, and verifies its effective target against the private envelope
+before connecting. A channel pin cannot silently leave the witness on a stale runtime-file target.
+
+After concrete source remediation, a separately authorized invocation selects
+`--current-state-source --persist-source-identity --source-producer-kind registry` with a fresh UUID
+and the same normal authority/candidate inputs. It rechecks the complete fixed source selection and
+policy under the existing current-binding effect fence before any ordinary metadata producer call.
+Invalid, ambiguous, conflicting, protected or drifting input refuses; missing UUID/companion data
+uses only the existing strict ordinary creation contract. It stops/restores the proved prior running
+set only (empty sets issue no stop/start), preserves every retained stopped identity and provider/model,
+and requires full eligible persisted readback. The actual channel lock accepts exactly the legacy
+source marker or its registry variant with `producer_kind=registry`; unknown fields/discriminators
+remain refused. Attempted or uncertain same-ID continuation is cleanup-only, never producer replay.
+For a retained own one-shot, cleanup authenticates the immutable request, exact channel fence,
+candidate image and operation/token before removal, then repeats the complete authority/census
+postproof before restoring writers. Foreign resources cannot borrow this cleanup ordering.
+Complete source admission reuses the strict producer's pure input guards before the first selected
+source can be changed: UUID spelling, protected source, companion storage and existing companion
+type/parse/identity/overwrite rules. Missing companions are distinct from malformed existing files;
+the producer repeats its evidence guard immediately before writing.
+
+The continuation is diagnostic and #6300 remediation, then freshly admitted ordinary registry
+persistence, exact cleanup plus eligible readback, delivery-classifier reapplication, and a
+**separately authorized ordinary deployment**. Neither source result allocates or starts a deploy.
+Only that deployment's existing instance preparation, migration, source projection and service
+recreation chain activates the qualified watcher. Live host convergence and same-candidate DEV/TEST
+acceptance remain parent-owned, with separate effect clearance; consumed historical operations and
+the full RSC-06/MVR-06 recovery boundaries are unchanged.
+
 Supervision failures retain only a closed content-free stage reason. A worker context/preflight
 refusal returns a validated failed receipt rather than disappearing behind a transport exit, while
 unexpected worker failure remains a fixed generic worker reason. The native supervisor separately
@@ -1443,6 +1504,19 @@ any partial, terminal, locked, owned-container, malformed, foreign, or ambiguous
 refuses. This recovery never runs the producer, retargets the operation, deploys a candidate, or
 continues automatically. A corrected channel requires a fresh operation UUID and all ordinary
 source-persistence admission checks.
+For current-state diagnostic or registry operations, retain the exact current-state/kind flags and
+normal candidate/selection arguments and add `--prove-source-operation-never-admitted` (an alias of
+the existing proof flag). Its closed RPC proof binds that kind, mode and exact candidate/selection
+request, checks both source-operation artifact namespaces, and refuses actual attempts, retained
+workers or a channel fence under the existing host lock and supervisor mutex. Before returning, it
+requires the request fingerprint recorded by the host before its first dispatch, then
+durably writes and reads back a typed absence-retirement record in that kind's existing attempt file.
+This consumes the ID even for a delayed original RPC after supervisor restart; it is neither an
+actual diagnostic/producer attempt nor a success receipt. Only the byte-equivalent typed retirement
+may be reconciled again. Ambiguous writes/transport remain pending; request drift refuses.
+It retires only an already-sent host operation as failed; it cannot adopt another request or turn
+an admission refusal into source authority.
+A fresh-ID invocation must independently satisfy every ordinary current-state gate.
 
 Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
 History dependencies, candidate/staging or untrusted material, changed sources,

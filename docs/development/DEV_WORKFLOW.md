@@ -134,7 +134,18 @@ ambiguous. Review remains responsible for those cases.
   - run any repo docs validation command if one exists
   - when `.codex/skills/**` changed, run `python3 scripts/lint_skills_consistency.py` (exit 0, zero output = clean)
   - otherwise run lightweight repo checks that are still appropriate
-- Code-affecting changes:
+- Exact CI-contract-only changes (`TEST_STRATEGY_HOT_PATH.md :: Exact CI contract scope`):
+  - lint the changed tooling and run the selector's covering CI/helper/workflow contract tests
+  - run documentation checks for the paired development owner docs
+  - Product-wide type/model/ACL gates are unnecessary when the closed CI predicate admits no
+    Product, dependency, runtime-configuration or shared-fixture change
+- Isolated test-module-only changes (`TEST_STRATEGY_HOT_PATH.md :: Test-only scope`):
+  - run the explicit representative targets and common CI integrity checks; exhaustive fault matrices
+    run in the existing nightly/manual lane, and explicit full-matrix contracts still need full proof
+  - retain the normal test environment and dependencies; unrelated
+    Product type/model/ACL/smoke gates add no evidence for this exact no-consumer test-only scope
+  - shared fixtures, helpers, configuration and mixed Product changes use their normal broader scope
+- Product/runtime code-affecting changes:
   - `ruff check app tests companion-ui/companion-app`
   - `mypy app`
   - run the governing Issue's `Verify:` targets and the affected subsystem's focused tests

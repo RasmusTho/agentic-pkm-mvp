@@ -11,19 +11,23 @@ STATIC_TARGET_COLLECTABILITY_FITNESS = (
     "tests/scripts/test_select_pr_tests.py::test_static_selector_targets_are_collectable"
 )
 
-ALWAYS_TARGETS = (
+CI_INTEGRITY_TARGETS = (
     "tests/ci",
     # This test must run on every scoped PR: a deleting/renaming PR otherwise
     # filters its missing static target before pytest has a chance to detect it.
     STATIC_TARGET_COLLECTABILITY_FITNESS,
+)
+
+ALWAYS_TARGETS = (
+    *CI_INTEGRITY_TARGETS,
     # The outbox producer gates are repo-wide AST censuses over app/, so the PR
     # that breaks them is by definition a PR that adds or edits a producer —
     # and every producer today lives in an OWNED subsystem (heimdal, watcher,
     # api routes, panel, workers, services, receipts, knowledge_acquisition).
     # A scoped selection therefore excluded exactly the PRs these gates exist
     # to catch, and a new producer defaulting to the dropping path could merge
-    # with a green required check (#4214 D5). They are cheap — pure ast.parse
-    # over app/, no fixtures, seconds — so run them on every scoped PR.
+    # with a green required check (#4214 D5). Keep these on Product/runtime
+    # scoped PRs; the closed CI-only scope cannot change an app/ producer.
     "tests/architecture/test_outbox_producer_durability.py",
     "tests/architecture/test_outbox_producer_idempotency.py",
     # The MVR-05B context-boundary gate is the same kind of cheap AST census,
@@ -145,6 +149,77 @@ GOVERNANCE_TARGETS = (
     "tests/architecture",
     "tests/ops/test_review_before_ci_gate.py",
 )
+
+# Read-only CI inspection/selection contracts already covered by GOVERNANCE_TARGETS.
+# Keep this exact: unrelated scripts, fixtures and operational co-changes retain their owners.
+CI_GOVERNANCE_CONTRACT_PATHS = frozenset({
+    "scripts/select_pr_tests.py",
+    "scripts/replay_pr_test_selection.py",
+    "scripts/run_scoped_test_partitions.py",
+    "scripts/await_pr_checks.sh",
+    "scripts/ci_stall_classifier.py",
+    "scripts/docs_guard_logic.py",
+    "scripts/docs_guard.py",
+    "tests/scripts/test_select_pr_tests.py",
+    "tests/scripts/test_await_pr_checks.py",
+    "tests/scripts/test_await_pr_checks_dedupe.py",
+    "tests/scripts/test_ci_stall_classifier.py",
+    "tests/scripts/test_docs_guard.py",
+    "tests/ops/test_ci_workflow.py",
+})
+
+# A CI-only edit cannot change Product producers, schemas or runtime behavior.
+# Exercise the CI commands and their consumers instead of all script/architecture suites.
+CI_CONTRACT_TARGETS = (
+    *CI_INTEGRITY_TARGETS,
+    "tests/governance",
+    "tests/scripts/test_select_pr_tests.py",
+    "tests/scripts/test_replay_pr_test_selection.py",
+    "tests/scripts/test_await_pr_checks.py",
+    "tests/scripts/test_await_pr_checks_dedupe.py",
+    "tests/scripts/test_ci_stall_classifier.py",
+    "tests/scripts/test_docs_guard.py",
+    "tests/ops/test_ci_workflow.py",
+    "tests/ops/test_ci_smoke_workflow.py",
+    "tests/ops/test_review_before_ci_gate.py",
+    "tests/deploy/test_dockerfile_python_alignment.py",
+    "tests/architecture/test_ci_smoke_contract.py",
+    "tests/architecture/test_companion_ui_sys_path.py",
+    "tests/architecture/test_import_boundary.py",
+    "tests/architecture/test_pr_hot_path_governance.py",
+    "tests/architecture/test_pr_test_selection.py",
+    "tests/architecture/test_requirements_consistency.py",
+    "tests/architecture/test_agent_skill_entrypoints.py",
+    "tests/architecture/test_dispatcher_skill_integration.py",
+)
+CI_CONTRACT_PATHS = CI_GOVERNANCE_CONTRACT_PATHS | frozenset({
+    ".github/workflows/ci-smoke.yaml",
+    ".codex/skills/_shared/CI_WAIT_CONTRACT.md",
+    "docs/development/TEST_STRATEGY_HOT_PATH.md",
+    "docs/development/DEV_WORKFLOW.md",
+    "docs/development/DOCUMENTATION_GUARD.md",
+    "docs/development/PR_HOT_PATH.md",
+    "tests/governance/test_ci_smoke_docs_only_gate.py",
+}) | frozenset(
+    target.split("::", 1)[0]
+    for target in CI_CONTRACT_TARGETS
+    if target.split("::", 1)[0].endswith(".py")
+)
+
+# Test-only edits to these unconsumed modules need representative harness proof.
+# Product/shared-fixture co-changes and nightly retain their complete matrices.
+ISOLATED_TEST_MODULES = {
+    "tests/ops/test_dormant_ownership_initialization.py": (
+        "tests/ops/test_dormant_ownership_initialization.py::test_exact_admission_preserves_source_and_registry_and_produces_one_authenticated_lease",
+        "tests/ops/test_dormant_ownership_initialization.py::test_refusal_matrix_is_before_effects[receipt]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_concurrency_and_stale_proof_recheck_all_locks",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[exact]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[foreign_owner]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[post_bind_source]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[cleanup_retry_exact]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[native_error_prove_barrier]",
+    ),
+}
 
 # Every app/ file indexed by a (file, line)-keyed census registry in
 # tests/properties/_machinery.py (REGISTERED_MIRRORS, WRITE_FRONTMATTER_SITE_CLASSIFICATION,
@@ -340,6 +415,7 @@ SCOPED_DEPLOY_SERIAL_ROOT = "tests/ops"
 SCOPED_EXECUTION_MAX_WORK_UNITS = 4
 
 SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("governance", (), CI_CONTRACT_TARGETS),
     (
         "builder_system",
         (
@@ -1281,6 +1357,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 
 
 EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
+    "governance": CI_CONTRACT_PATHS,
     # The companion/source predicate is shared by watcher traversal, queued
     # workers and Alpha ingestion. A helper-only edit must execute all three
     # existing source-boundary owners without claiming sibling services.
@@ -1348,6 +1425,8 @@ def _dedupe(items: list[str]) -> tuple[str, ...]:
 
 
 def _subsystem_owns_path(path: str, name: str, prefixes: tuple[str, ...]) -> bool:
+    if name in {"ops", "ops_deploy"} and path in CI_CONTRACT_PATHS:
+        return False
     return path in EXACT_SUBSYSTEM_FILES.get(name, frozenset()) or any(
         path.startswith(prefix) for prefix in prefixes
     )
@@ -1405,9 +1484,21 @@ def _is_governance_only(paths: tuple[str, ...]) -> bool:
     governance_prefixes = (".github/", "docs/development/", "AGENTS.md", "CLAUDE.md", ".codex/")
     non_test = _non_test_signal(paths, GOVERNANCE_TARGETS)
     return bool(non_test) and all(
-        path.startswith(governance_prefixes) or path == "scripts/select_pr_tests.py"
+        path.startswith(governance_prefixes)
+        # These read-only CI helpers are covered by tests/scripts and the
+        # existing governance contracts, without unrelated host/deploy tests.
+        # Any co-changed runtime/operational source still disqualifies this lane.
+        or path in CI_GOVERNANCE_CONTRACT_PATHS
         for path in non_test
     )
+
+
+def _is_ci_contract_only(paths: tuple[str, ...]) -> bool:
+    return bool(paths) and all(path in CI_CONTRACT_PATHS for path in paths)
+
+
+def _is_test_only(paths: tuple[str, ...]) -> bool:
+    return bool(paths) and all(path in ISOLATED_TEST_MODULES for path in paths)
 
 
 def _foreign_subsystem_matches(
@@ -1690,8 +1781,30 @@ def select_tests(changed_files: list[str]) -> Selection:
             unowned_runtime_code,
         )
 
-    changed_tests = _changed_test_targets(paths)
-    targets = list(ALWAYS_TARGETS)
+    ci_contract_only = _is_ci_contract_only(paths)
+    test_only = _is_test_only(paths)
+    changed_tests = (
+        tuple(target for path in paths for target in ISOLATED_TEST_MODULES[path])
+        if test_only else _changed_test_targets(paths)
+    )
+    targets = list(
+        CI_CONTRACT_TARGETS if ci_contract_only
+        else CI_INTEGRITY_TARGETS if test_only
+        else ALWAYS_TARGETS
+    )
+    if any(
+        path in CI_CONTRACT_PATHS and path.startswith(("scripts/", "tests/scripts/"))
+        for path in paths
+    ) and any(
+        path not in CI_CONTRACT_PATHS and _heavy_target_triggered(
+            "tests/deploy", HEAVY_PR_DEFERRED_TARGETS["tests/deploy"], (path,)
+        )
+        for path in paths
+    ):
+        # Preserve deploy proof formerly selected by a CI helper's scripts/
+        # ownership when it accompanies a real deploy input. The retention
+        # inventory is a filter, not new source-only subsystem ownership.
+        targets.append("tests/deploy")
 
     if any(path in ARO03_ROUTE_CONTRACT_PATHS for path in paths):
         targets.extend(ARO03_ROUTE_TESTS)
@@ -1702,7 +1815,11 @@ def select_tests(changed_files: list[str]) -> Selection:
     governance_only = _is_governance_only(paths)
     docs_only = _is_docs_only(paths) if not governance_only else False
 
-    if governance_only or docs_only:
+    if ci_contract_only:
+        subsystems, reason = ("governance",), "CI contract-only PR"
+    elif test_only:
+        subsystems, reason = ("tests",), "isolated test-only smoke; exhaustive matrix deferred"
+    elif governance_only or docs_only:
         tolerated_targets = GOVERNANCE_TARGETS if governance_only else DOCS_TARGETS
         targets.extend(tolerated_targets)
         subsystems_list = ["governance" if governance_only else "docs"]
@@ -1731,8 +1848,8 @@ def select_tests(changed_files: list[str]) -> Selection:
             return Selection(False, ("unowned",), (), FULL_SUITE_REASONS[2], paths)
         subsystems, reason = _dedupe(matched), "matched subsystem SoI"
 
-    # Every scoped branch funnels through this single return, so a changed
-    # tests/** file is always unioned in exactly once — no per-branch splice
+    # Every scoped branch funnels through this single return, so changed
+    # test coverage (or the explicit isolated smoke) is unioned once — no splice
     # to forget if a future branch is added here (the #3383 failure mode).
     return _defer_heavy(
         Selection(False, subsystems, _pr_targets([*targets, *changed_tests]), reason), paths
@@ -1763,12 +1880,14 @@ def _existing_test_targets(targets: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def requires_runtime_checks(changed_files: list[str]) -> bool:
-    """Text-only instructions/docs still run contract tests, not product gates.
+    """Text, CI-only and isolated-test changes omit unrelated Product gates.
 
-    Unknown, executable, fixture and configuration paths stay conservative. A
-    Markdown suffix alone does not make a runtime artifact documentation.
+    Executable paths outside the exact CI contract set, fixtures, configuration
+    and mixed changes stay conservative. A Markdown suffix alone is insufficient.
     """
     paths = tuple(_normalize(path) for path in changed_files if _normalize(path))
+    if _is_ci_contract_only(paths) or _is_test_only(paths):
+        return False
     return not paths or not all(
         path in {"README.md", "CHANGELOG.md", "AGENTS.md", "CLAUDE.md"}
         or (path.endswith(".md") and path.startswith(("docs/", ".codex/")))

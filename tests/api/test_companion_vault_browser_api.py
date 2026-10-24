@@ -5,10 +5,10 @@ These tests pin the MLP v0 invariants from
 
 - read-only Markdown enumeration (no mutation path)
 - active vault identity in the response payload
-- deterministic case-insensitive path/title filtering via ``q``
+- deterministic case-insensitive path/title/body filtering via ``q``
 - hidden / dot-prefixed folder exclusion
 
-Future capabilities (metadata filters, inspector, actions, receipts, graph)
+Future capabilities (inspector, actions, receipts, graph)
 are out of scope for this surface; see §7 of the contract.
 """
 
@@ -216,6 +216,46 @@ def test_vault_browser_filters_by_title_or_path(
     assert by_title["notes"][0]["title"] == "Daily Journal"
     assert by_path["filtered_notes"] == 1
     assert by_path["notes"][0]["note_path"] == "projects/plan.md"
+
+
+def test_vault_browser_filters_by_literal_body_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bind_selected_vault(monkeypatch, tmp_path)
+    body_only = tmp_path / "notes" / "captured-note.md"
+    _write_note(
+        body_only,
+        title="Unrelated title",
+        body="The body carries the BodyOnlyCapturePhrase for discovery.\n",
+    )
+    metadata_only = tmp_path / "notes" / "metadata-only.md"
+    metadata_only.write_text(
+        "---\n"
+        "title: Another unrelated title\n"
+        "kind: FrontmatterOnlySearchPhrase\n"
+        "---\n\n"
+        "Ordinary note body.\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    body_match = client.get(
+        "/api/companion/vault-browser", params={"q": "bodyonlycapturephrase"}
+    ).json()
+    assert body_match["filtered_notes"] == 1
+    assert body_match["notes"][0]["note_path"] == "notes/captured-note.md"
+
+    frontmatter_only = client.get(
+        "/api/companion/vault-browser", params={"q": "frontmatteronlysearchphrase"}
+    ).json()
+    assert frontmatter_only["filtered_notes"] == 0
+    assert frontmatter_only["notes"] == []
+
+    overlay_match = client.get(
+        "/api/companion/vault/notes", params={"q": "BODYONLYCAPTUREPHRASE"}
+    ).json()
+    assert overlay_match["total_count"] == 1
+    assert overlay_match["notes"][0]["path"] == "notes/captured-note.md"
 
 
 def test_vault_browser_excludes_hidden_and_system_folders(

@@ -20,7 +20,7 @@ from app.ops.postgres_deploy import (
     AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
     deploy_from_host,
 )
-from app.ops.postgres_deploy_linux import SshDeployRemote
+from app.ops.postgres_deploy_linux import SshDeployRemote, source_identity_request_fingerprint
 from app.ops.secret_admin import SecretAdmin
 
 
@@ -399,6 +399,10 @@ def main(argv: list[str] | None = None) -> int:
         default='vault-alpha',
         help='explicit ordinary producer for --persist-source-identity',
     )
+    parser.add_argument('--diagnose-source-identity', action='store_true',
+                        help='run the existing read-only source diagnostic under current authority')
+    parser.add_argument('--current-state-source', action='store_true',
+                        help='explicit DEV/TEST installed-state source admission; never start stopped writers')
     parser.add_argument(
         '--preflight-source-persistence-admission', action='store_true',
         help='read exact value-free host admission before allocating a source operation ID',
@@ -416,7 +420,8 @@ def main(argv: list[str] | None = None) -> int:
         help='retire one exact host operator operation after qualified native unknown cleanup',
     )
     parser.add_argument(
-        '--prove-source-persistence-never-admitted', action='store_true',
+        '--prove-source-persistence-never-admitted', '--prove-source-operation-never-admitted',
+        dest='prove_source_persistence_never_admitted', action='store_true',
         help='retire one exact host source operation only after fixed native absence proof',
     )
     parser.add_argument(
@@ -461,6 +466,25 @@ def main(argv: list[str] | None = None) -> int:
             raise PostgresDeployError()
         if args.automatic and not args.existing_secrets_only:
             raise PostgresDeployError()
+        if args.current_state_source or args.diagnose_source_identity:
+            if (
+                not args.current_state_source
+                or args.channel not in {'dev', 'test'}
+                or not args.automatic or not args.existing_secrets_only
+                or args.operation_id is None or cutover is None or args.image_digest is None
+                or (args.diagnose_source_identity == args.persist_source_identity)
+                or (args.persist_source_identity and args.source_producer_kind != 'registry')
+                or (args.diagnose_source_identity and args.source_producer_kind != 'vault-alpha')
+                or args.preflight_source_persistence_admission
+                or args.restore_operator_source_identity or args.resume_unattempted_operator_restoration
+                or args.reconcile_operator_unknown_cleanup
+                or args.reconcile_pending or args.prove_never_admitted
+                or args.recover_test_source or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None or args.ack_forward_only
+                or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None
+                or re.fullmatch(r'sha256:[0-9a-f]{64}', args.image_digest) is None
+            ):
+                raise PostgresDeployError()
         if (
             not (args.persist_source_identity or args.prove_source_persistence_never_admitted)
             and args.source_producer_kind != 'vault-alpha'
@@ -470,7 +494,41 @@ def main(argv: list[str] | None = None) -> int:
             not (args.automatic or cutover is not None) or str(UUID(args.operation_id)) != args.operation_id
         ):
             raise PostgresDeployError()
+        current_source_request = None
+        request_fingerprint = None
+        if args.current_state_source and cutover is not None:
+            current_source_request = {
+                'source_kind': 'source-diagnostic' if args.diagnose_source_identity else 'source-persistence',
+                'source_mode': 'current-state', 'revision': args.revision, 'image_digest': args.image_digest,
+                'authority_cutover': {'binding_id': cutover.binding_id, 'root': cutover.root,
+                                      'ownership_root': cutover.ownership_root},
+                **({'producer_kind': 'registry'} if args.persist_source_identity else {}),
+            }
+            request_fingerprint = source_identity_request_fingerprint(current_source_request)
         controller = HostSecretController()
+        if args.diagnose_source_identity and not args.prove_source_persistence_never_admitted:
+            if cutover is None:
+                raise PostgresDeployError()
+            remote = SshDeployRemote('ygg-' + args.channel)
+            with controller.source_diagnostic_operation(
+                args.channel, operation_id=args.operation_id,
+                request_fingerprint=request_fingerprint,
+            ) as (operation, resumed):
+                if operation.completed_source == 'native-absence-proof':
+                    raise PostgresDeployError()
+                if operation.completed_result is None:
+                    operation.prepare_mutation()
+                result = remote.diagnose_source_identity(
+                    operation.operation_id, args.revision, args.image_digest, cutover,
+                    cleanup_only=resumed,
+                )
+                terminal = 'committed' if result['terminal_state'] == 'observed' else 'failed'
+                operation.finish(TerminalEvidence(
+                    operation.operation_id, 'source-diagnostic', args.channel,
+                    terminal, 'remote-terminal',
+                ))
+            print(json.dumps(result, sort_keys=True))
+            return 0 if terminal == 'committed' else 78
         if args.preflight_source_persistence_admission:
             if (
                 args.channel not in {'dev', 'test'}
@@ -551,8 +609,8 @@ def main(argv: list[str] | None = None) -> int:
                 or not args.automatic
                 or not args.existing_secrets_only
                 or args.operation_id is None
-                or cutover is not None
-                or args.persist_source_identity
+                or (cutover is not None and not args.current_state_source)
+                or (args.persist_source_identity and not args.current_state_source)
                 or args.preflight_source_persistence_admission
                 or args.restore_operator_source_identity
                 or args.reconcile_operator_unknown_cleanup
@@ -565,9 +623,14 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise PostgresDeployError()
             source_operation = (
-                controller.source_persistence_operation(
+                controller.source_diagnostic_operation(args.channel, operation_id=args.operation_id,
+                                                      request_fingerprint=request_fingerprint)
+                if args.diagnose_source_identity
+                else controller.source_persistence_operation(
                     args.channel, operation_id=args.operation_id,
                     producer_kind=args.source_producer_kind,
+                    **dict[str, Any]({'current_state': True, 'request_fingerprint': request_fingerprint}
+                                    if args.current_state_source else {}),
                 )
                 if args.source_producer_kind == 'registry'
                 else controller.source_persistence_operation(
@@ -585,12 +648,17 @@ def main(argv: list[str] | None = None) -> int:
                 ):
                     raise PostgresDeployError()
                 remote = SshDeployRemote('ygg-' + args.channel)
-                proof = remote.prove_source_identity_absence(args.operation_id)
+                source_kind = 'source-diagnostic' if args.diagnose_source_identity else 'source-persistence'
+                proof = remote.prove_source_identity_absence(
+                    args.operation_id,
+                    **({'source_request': current_source_request} if args.current_state_source else {}),
+                )
                 operation.finish(TerminalEvidence(
-                    operation.operation_id, 'source-persistence', args.channel,
+                    operation.operation_id, source_kind, args.channel,
                     'failed', 'native-absence-proof',
                 ))
-            result = {**proof, 'host_operation_retired': True}
+            result = {**{key: value for key, value in proof.items() if key != 'request_fingerprint'},
+                      'host_operation_retired': True}
             print(json.dumps(result, sort_keys=True))
             return 0
         if args.restore_operator_source_identity:
@@ -672,6 +740,8 @@ def main(argv: list[str] | None = None) -> int:
                 controller.source_persistence_operation(
                     args.channel, operation_id=args.operation_id,
                     producer_kind=args.source_producer_kind,
+                    **dict[str, Any]({'current_state': True, 'request_fingerprint': request_fingerprint}
+                                    if args.current_state_source else {}),
                 )
                 if args.source_producer_kind == 'registry'
                 else controller.source_persistence_operation(
@@ -687,6 +757,8 @@ def main(argv: list[str] | None = None) -> int:
                     remote.persist_source_identity(
                         operation.operation_id, args.revision, args.image_digest,
                         cutover, args.source_producer_kind,
+                        **({'current_state': True, 'cleanup_only': _resumed}
+                           if args.current_state_source else {}),
                     )
                     if args.source_producer_kind == 'registry'
                     else remote.persist_source_identity(

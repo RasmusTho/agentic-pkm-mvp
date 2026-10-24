@@ -1798,6 +1798,70 @@ def _assert_strict_companion_storage_boundary(vault_root: Path) -> None:
                 raise ValueError("companion storage boundary is not a directory")
 
 
+def _strict_registry_companion_write_required(
+    vault_root: Path, note_uuid: str, relative_path: str, content_hash: str,
+) -> bool:
+    """Read the strict producer's existing evidence; never repair or write it."""
+    canonical_path = vault_root / companion_path(note_uuid, vault_root)
+    legacy_path = vault_root / "_system" / "companions" / f"{note_uuid}.md"
+    existing_paths: list[Path] = []
+    for candidate in dict.fromkeys((canonical_path, legacy_path)):
+        if not os.path.lexists(candidate):
+            continue
+        try:
+            observed = candidate.lstat()
+        except OSError:
+            raise ValueError("companion evidence is unreadable") from None
+        if not stat.S_ISREG(observed.st_mode):
+            raise ValueError("companion evidence is not a regular file")
+        existing_paths.append(candidate)
+    if len(existing_paths) > 1:
+        raise ValueError("companion identity is ambiguous")
+    existing = read_companion(vault_root, note_uuid)
+    if existing_paths and existing is None:
+        raise ValueError("companion evidence is malformed")
+    if existing is not None:
+        if (_normalize_uuid_value(existing.uuid) != note_uuid
+                or existing.source_ref != relative_path):
+            raise ValueError("companion identity conflicts with source")
+        if existing.content_hash == content_hash:
+            return False
+        if canonical_path not in existing_paths:
+            raise ValueError("legacy companion cannot be overwritten")
+    return True
+
+
+def _validate_strict_registry_source_identity(
+    note_path: Path, *, vault_root: Path, source_text: str,
+    frontmatter: Mapping[str, Any], body: str,
+) -> str:
+    """Shared read-only input guard for full-selection admission and production.
+
+    Missing identity remains the ordinary producer's creation case. Existing
+    identity, protected sources and companion evidence use its exact guards.
+    Production rechecks companion evidence again immediately before writing.
+    """
+    _assert_profile_ingestible(
+        note_path, vault_root=vault_root,
+        note_uuid=frontmatter.get("uuid") or frontmatter.get("id"),
+        source_text=source_text,
+    )
+    declared = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
+    if declared:
+        try:
+            if str(UUID(declared)) != declared:
+                raise ValueError
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("source identity is not a canonical UUID") from None
+    _assert_strict_companion_storage_boundary(vault_root)
+    if declared:
+        _strict_registry_companion_write_required(
+            vault_root, declared, str(note_path.relative_to(vault_root)),
+            hashlib.sha256(canonical_product_body_text(body).encode("utf-8")).hexdigest(),
+        )
+    return declared
+
+
 def persist_registry_source_identity(
     payload: Mapping[str, Any],
     *,
@@ -1837,23 +1901,18 @@ def persist_registry_source_identity(
         return None
 
     frontmatter, body, frontmatter_error = parse_bounded_frontmatter(raw_text)
-    _assert_profile_ingestible(
-        note_path,
-        vault_root=resolved_root,
-        note_uuid=frontmatter.get("uuid") or frontmatter.get("id"),
-        source_text=raw_text,
-    )
-    declared_uuid = _normalize_uuid_value(
-        frontmatter.get("uuid") or frontmatter.get("id")
-    )
-    if require_persisted_evidence and declared_uuid:
-        try:
-            if str(UUID(declared_uuid)) != declared_uuid:
-                raise ValueError
-        except (ValueError, TypeError, AttributeError):
-            raise ValueError("source identity is not a canonical UUID") from None
     if require_persisted_evidence:
-        _assert_strict_companion_storage_boundary(resolved_root)
+        declared_uuid = _validate_strict_registry_source_identity(
+            note_path, vault_root=resolved_root, source_text=raw_text,
+            frontmatter=frontmatter, body=body,
+        )
+    else:
+        _assert_profile_ingestible(
+            note_path, vault_root=resolved_root,
+            note_uuid=frontmatter.get("uuid") or frontmatter.get("id"),
+            source_text=raw_text,
+        )
+        declared_uuid = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
     healed_uuid = (
         ""
         if require_persisted_evidence and declared_uuid
@@ -1927,41 +1986,9 @@ def persist_registry_source_identity(
             )
             write_required = True
             if require_persisted_evidence:
-                canonical_companion_path = (
-                    resolved_root / companion_path(note_uuid, resolved_root)
+                write_required = _strict_registry_companion_write_required(
+                    resolved_root, note_uuid, str(rel_path), text_sha256,
                 )
-                legacy_companion_path = (
-                    resolved_root / "_system" / "companions" / f"{note_uuid}.md"
-                )
-                companion_paths = tuple(dict.fromkeys((
-                    canonical_companion_path, legacy_companion_path,
-                )))
-                existing_paths: list[Path] = []
-                for candidate in companion_paths:
-                    if not os.path.lexists(candidate):
-                        continue
-                    try:
-                        observed = candidate.lstat()
-                    except OSError:
-                        raise ValueError("companion evidence is unreadable") from None
-                    if not stat.S_ISREG(observed.st_mode):
-                        raise ValueError("companion evidence is not a regular file")
-                    existing_paths.append(candidate)
-                if len(existing_paths) > 1:
-                    raise ValueError("companion identity is ambiguous")
-                existing_companion = read_companion(resolved_root, note_uuid)
-                if existing_paths and existing_companion is None:
-                    raise ValueError("companion evidence is malformed")
-                if existing_companion is not None:
-                    if (
-                        _normalize_uuid_value(existing_companion.uuid) != note_uuid
-                        or existing_companion.source_ref != str(rel_path)
-                    ):
-                        raise ValueError("companion identity conflicts with source")
-                    if existing_companion.content_hash == text_sha256:
-                        write_required = False
-                    elif canonical_companion_path not in existing_paths:
-                        raise ValueError("legacy companion cannot be overwritten")
             if write_required:
                 if require_persisted_evidence:
                     _assert_strict_companion_storage_boundary(resolved_root)

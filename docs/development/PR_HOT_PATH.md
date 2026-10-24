@@ -82,6 +82,15 @@ opens or updates a PR. Required lane inputs must be concrete:
 
 - implementation lane requires a governing issue; an explicit `closing_issues` list may name up to
   ten unique positive IDs independently of that governing parent; the generator does not infer a set;
+- native issue-backed intake may explicitly keep its governing Issue open for post-merge proof:
+  supply `non_closing: true` and `closing_issues: []` in body input, and `--non-closing` to
+  `publication.py plan` (or the standalone generator). The body carries exactly one
+  `Issue-Lifecycle: non-closing` declaration, one governing Issue and its exact pickup receipt,
+  with no closing keywords or `Verified-Closing-Issues` authority. An empty set without this
+  opt-in, a missing/foreign receipt, or mixed lifecycle declarations fails closed. Ordinary
+  omitted closing input still closes the governing Issue; explicit batches retain the one-to-ten
+  limit. This native intake shape does not authorize dispatched/fenced verification or final Issue
+  closure; the governing Issue stays open until its remaining acceptance is proved;
 - closing authority must be declared only on a dedicated `Fixes #<id>`, `Closes #<id>`, or
   `Resolves #<id>` line; narrative prose must never place a closing keyword directly adjacent to
   `#<id>`;
@@ -206,8 +215,10 @@ false-green coordination evidence.
 Classifier output is advisory coordination evidence only:
 - `wait`: pending checks are still within the bounded threshold; keep waiting with the REST/backoff
   path.
-- `stalled`: queued or in-progress checks exceeded the threshold; execute the owning diagnosis and
-  authorized recovery workflow. A threshold alone does not justify a terminal CI-pending handoff;
+- `stalled`: a pending check exceeded its wait budget or lacks timing evidence; inspect job progress
+  and diagnostics. Defaults are 90 minutes for the running required unit gate and 30 minutes for
+  queued/other checks; an explicit caller threshold overrides both. Elapsed age alone justifies
+  neither a rerun nor a terminal CI-pending handoff;
   apply `GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss` before suspending delivery.
 - `flaky_or_external_failure`: latest failed conclusions point to infrastructure-style behavior
   such as timeout/cancel/stale; rerun guidance is advisory and does not make the check acceptable.
