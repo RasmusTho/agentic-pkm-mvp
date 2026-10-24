@@ -11193,6 +11193,40 @@ CODEMIRROR_MODULE_URL = "/static/vendor/codemirror-6.0.1.mjs"
 _VENDOR_STATIC_CACHE: dict[str, tuple[str, bytes]] | None = None
 
 
+def _local_system_tokens_sheet(source: bytes) -> bytes:
+    """Serve the shipped token sheet with the admitted local-font fallback.
+
+    The generated token source retains its design-system provenance, while the
+    Companion gateway's self-contained page removes its remote font import and
+    keeps the accepted system fallbacks. This is the constrained-reuse
+    no-egress normalization; it adds no token or visual language.
+    """
+    text = source.decode("utf-8")
+    text = re.sub(
+        r"^@import url\('https://fonts\.googleapis\.com/[^\n]+\);\n\n",
+        "",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    for original, normalized in (
+        (
+            "--font-display: 'EB Garamond', Georgia, serif;",
+            '--font-display: Georgia, "Times New Roman", serif;',
+        ),
+        (
+            "--font-ui: 'Space Grotesk', system-ui, sans-serif;",
+            '--font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;',
+        ),
+        (
+            "--font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;",
+            "--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;",
+        ),
+    ):
+        text = text.replace(original, normalized)
+    return text.encode("utf-8")
+
+
 def vendor_static_assets() -> dict[str, tuple[str, bytes]]:
     """Preloaded ``request-path -> (Content-Type, bytes)`` map for vendored ESM.
 
@@ -11216,7 +11250,10 @@ def vendor_static_assets() -> dict[str, tuple[str, bytes]]:
         # must stop startup instead of serving unstyled pages.
         try:
             with open(_YGGDRASIL_TOKENS_PATH, "rb") as fh:
-                cache[YGGDRASIL_TOKENS_URL] = ("text/css; charset=utf-8", fh.read())
+                cache[YGGDRASIL_TOKENS_URL] = (
+                    "text/css; charset=utf-8",
+                    _local_system_tokens_sheet(fh.read()),
+                )
         except OSError as exc:
             raise RuntimeError(
                 f"Yggdrasil tokens sheet missing at {_YGGDRASIL_TOKENS_PATH}; "
@@ -11774,9 +11811,6 @@ def render_index_html(
   <meta name="pkm-runtime-channel" content="{_e(runtime_channel)}">
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Real-Note Workspace [{title_suffix}]</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
   {production_static_link}
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
   <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
@@ -11790,7 +11824,7 @@ def render_index_html(
       --au-receipt:    #b98be0;
       --au-local:      #6b7a90;
       --au-blocked:    var(--destructive);
-      --font-mono:     'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      --font-mono:     ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }}
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     /* Global reset: the `hidden` attribute must always win. Several elements

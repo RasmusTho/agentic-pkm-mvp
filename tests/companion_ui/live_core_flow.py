@@ -668,17 +668,7 @@ class CoreFlow:
             if not opened:
                 raise AssertionError("vault_browse_control_missing")
         pane.wait_for(state="visible")
-        folders = path.split("/")[:-1]
-        for index in range(len(folders)):
-            folder = "/".join(folders[: index + 1])
-            groups = pane.get_by_test_id("workspace-vault-browser-group")
-            for n in range(groups.count()):
-                group = groups.nth(n)
-                if group.get_attribute("data-folder") == folder:
-                    details = group.locator(":scope > details")
-                    if details.get_attribute("open") is None:
-                        details.locator(":scope > summary").click()
-                    break
+        CoreFlow._expand_vault_browser_folders(pane, path)
         links = pane.get_by_test_id("workspace-vault-browser-note-link")
         for n in range(links.count()):
             link = links.nth(n)
@@ -690,6 +680,21 @@ class CoreFlow:
                 page.get_by_test_id("workspace-note-rendered").wait_for(state="visible")
                 return
         raise AssertionError("approved_note_not_reachable_in_browser")
+
+    @staticmethod
+    def _expand_vault_browser_folders(pane: Any, path: str) -> None:
+        """Open the shipped tree ancestors so a matching note is visible."""
+        folders = path.split("/")[:-1]
+        for index in range(len(folders)):
+            folder = "/".join(folders[: index + 1])
+            groups = pane.get_by_test_id("workspace-vault-browser-group")
+            for n in range(groups.count()):
+                group = groups.nth(n)
+                if group.get_attribute("data-folder") == folder:
+                    details = group.locator(":scope > details")
+                    if details.get_attribute("open") is None:
+                        details.locator(":scope > summary").click()
+                    break
 
     def _search_and_open_note(self, page: Any, phrase: str, expected_path: str) -> None:
         """Discover a note through the visible Vault Browser q surface, then open it."""
@@ -724,10 +729,26 @@ class CoreFlow:
         ).first
         if persistent_search.count():
             persistent_search.fill(phrase)
+            # The GET form submission is a new document navigation. Re-run the
+            # native first-contact admission immediately before it, just as
+            # the known-note path does before every document GET.
+            self._admit_navigation()
             persistent_search.press("Enter")
             page.wait_for_load_state("domcontentloaded")
             pane = page.locator('[data-testid="workspace-vault-browser"]:visible').first
+            if not pane.count():
+                # A document GET rebuilds the left-panel mode. Reuse the
+                # shipped vault chip to reveal the returned browse tree before
+                # selecting the matching nested result.
+                controls = page.locator('[data-testid="workspace-vault-chip"]')
+                for n in range(controls.count()):
+                    item = controls.nth(n)
+                    if item.is_visible():
+                        item.click()
+                        break
+                pane = page.locator('[data-testid="workspace-vault-browser"]:visible').first
             pane.wait_for(state="visible")
+            CoreFlow._expand_vault_browser_folders(pane, expected_path)
             links = pane.get_by_test_id("workspace-vault-browser-note-link")
             for n in range(links.count()):
                 link = links.nth(n)
@@ -750,13 +771,24 @@ class CoreFlow:
                 self._admit_navigation()
                 page.evaluate("window.vaultBrowser.open()")
                 search = page.locator('[data-testid="vault-browser-search"]:visible').first
-            search.fill(phrase)
+            with page.expect_response(
+                lambda response: (
+                    urlparse(response.url).path == "/api/companion/vault/notes"
+                    and parse_qs(urlparse(response.url).query).get("q") == [phrase]
+                    and response.request.method == "GET"
+                ),
+                timeout=self.d["request_ms"],
+            ):
+                search.fill(phrase)
             item = page.locator(
                 '[data-testid="vault-browser-list"] li[data-note-path]'
             ).filter(has_text=expected_path).first
             item.wait_for(state="visible")
             if phrase.casefold() in item.inner_text().casefold():
                 raise AssertionError("search_phrase_is_not_body_only")
+            # selectNote() submits the existing note_path form, which is also
+            # a document navigation and must pass the same admission gate.
+            self._admit_navigation()
             item.click()
 
         page.get_by_test_id("workspace-note-rendered").wait_for(state="visible")
