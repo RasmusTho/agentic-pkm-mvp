@@ -548,6 +548,30 @@ def _live_pr_review_api(
     return responses, api
 
 
+def test_native_nonclosing_scope_revalidation_keeps_governing_contract() -> None:
+    responses, api = _live_pr_review_api()
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = (
+        "Governing-Issue: #4028\nIssue-Lifecycle: non-closing\n"
+        "Pickup-Receipt: pickup-claim-complete issue=4028 branch=codex/issue-4028 "
+        "worktree=/tmp/issue-4028 coordination_mode=github-label-only-fallback "
+        "fallback_reason=dispatcher unavailable agent=codex session=test "
+        "evidence=github-comment:4028\n"
+    )
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo", pr_number=4029, governing_issue=4028,
+        head_sha="a" * 40, api=api,
+    )
+    assert history["governing_contract_sha256"] == hashlib.sha256(b"## Contract\nLive body\n").hexdigest()
+    pr["body"] += "Closes #4028\n"
+    with pytest.raises(ReviewBeforeCiGateError, match="governing Issue identity"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo", pr_number=4029, governing_issue=4028,
+            head_sha="a" * 40, api=api,
+        )
+
+
 def test_pr_scope_revalidation_derives_live_history_and_requires_exact_classification() -> None:
     responses, api = _live_pr_review_api()
     history = authenticated_pr_scope_revalidation_history(

@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ from app.dispatcher.verification_contract import (
     resolve_pr_contract_final_review_rounds,
 )
 from app.dispatcher.verified_merge import verified_merge_body_sha256
-from scripts.pr_body_generator import generate_pr_body_from_mapping
+from scripts.pr_body_generator import generate_pr_body_from_mapping, resolve_native_issue_authority
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -694,6 +695,78 @@ def test_issue_backed_pr_accepts_single_and_multi_issue_authority() -> None:
     assert authority.supporting_issues == (3626, 3698)
 
 
+def test_production_pr_contract_explicit_nonclosing_intake_and_refusals() -> None:
+    data = json.loads((REPO_ROOT / "tests/fixtures/pr_body_generator/governance_issue.json").read_text())
+    data.update(non_closing=True, closing_issues=[])
+    body = generate_pr_body_from_mapping(data)
+    receipt = str(data["pickup_receipt"])
+    fallback = (
+        "pickup-claim-complete issue=3275 branch=codex/issue-3275 worktree=/tmp/issue 3275 "
+        "coordination_mode=github-label-only-fallback fallback_reason=dispatcher unavailable "
+        "agent=worker agent=TBD session=run session=TBD evidence=github-comment:3275"
+    )
+    bodies = [
+        body,
+        body.replace("\n", "\r\n"),
+        body.replace(receipt, fallback),
+        body.replace("Issue-Lifecycle: non-closing", ""),
+        body.replace("Issue-Lifecycle: non-closing", "Issue-Lifecycle: closing"),
+        body.replace("Issue-Lifecycle: non-closing", "Issue-Lifecycle non-closing"),
+        body + "\nIssue-Lifecycle: non-closing\n",
+        body + "\nCloses #3275\n",
+        body + "\nVerified-Closing-Issues: #3275\n",
+        body.replace("Governing-Issue: #3275", ""),
+        body.replace("Governing-Issue: #3275", "Governing-Issue: #999"),
+        body.replace(f"Pickup-Receipt: {receipt}", ""),
+        body.replace(receipt, receipt.replace("issue=3275", "issue=999")),
+        body.replace(receipt, "pickup-claim-complete issue=3275"),
+        body + f"\nPickup-Receipt: {receipt}\n",
+    ]
+    for invalid_receipt in (
+        receipt.replace("worktree=/tmp/", "worktree=relative/"),
+        receipt.replace("holder=codex-slice-implementer", "holder=TBD"),
+        receipt.replace("task_id=github-RasmusTho--agentic-pkm-mvp-issue-3275", "task_id=foreign-issue-999"),
+        receipt.replace("branch=codex/", "branch=codex\x85/"),
+        receipt.replace("holder=codex-slice-implementer", "holder=\x85"),
+        fallback.replace("fallback_reason=dispatcher unavailable", "fallback_reason=none"),
+        fallback.replace("session=run session=TBD", "session=TODO"),
+    ):
+        bodies.append(body.replace(receipt, invalid_receipt))
+    # Execute the complete production github-script, including its branch that
+    # admits intake. Only GitHub read ports are substituted; there is no dummy guard.
+    source = textwrap.dedent(_read_workflow().split("  pr-contract:", 1)[1].split("          script: |\n", 1)[1])
+    script = r"""
+const {source, bodies} = JSON.parse(process.argv[1]);
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+(async () => {
+  const results = [];
+  for (const body of bodies) {
+    const failures = [], reads = [];
+    const github = {rest: {pulls: {get: async () => ({data: {body, title: "bounded change", commits: 0}}), listFiles: "files", listCommits: "commits"}, issues: {listComments: "comments"}},
+      paginate: async method => {reads.push(method); if (method === "comments") throw Error("native intake requested merge authentication"); return [];}};
+    await new AsyncFunction("github", "context", "core", "require", source)(github,
+      {repo: {owner: "RasmusTho", repo: "agentic-pkm-mvp"}, payload: {pull_request: {number: 1}}},
+      {setFailed: message => failures.push(message), warning: () => {}}, require);
+    results.push({failures, reads});
+  }
+  process.stdout.write(JSON.stringify(results));
+})();
+"""
+    completed = subprocess.run(["node", "-e", script, json.dumps({"source": source, "bodies": bodies})], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+    for index, (candidate, result) in enumerate(zip(bodies, json.loads(completed.stdout), strict=True)):
+        accepted = index < 3
+        assert (result["failures"] == []) is accepted, (index, result)
+        assert (resolve_native_issue_authority(candidate) is not None) is accepted
+        assert resolve_issue_authority(candidate) is None
+        assert resolve_neutralized_issue_authority(candidate) is None
+    classifier = _js_issue_authority(body)
+    assert classifier["nonClosingValid"] is True
+    assert classifier["valid"] is False
+    assert classifier["neutralizedValid"] is False
+    assert classifier["closingIssues"] == []
+
+
 def test_narrative_closer_is_rejected_by_javascript_and_python_authority() -> None:
     """The shared resolver must not authenticate closure authority from prose."""
     body = (
@@ -1337,7 +1410,7 @@ def test_workflow_requires_exactly_one_positive_governing_identity_for_issue_bac
         "const exactIssueLinkMatches =",
         "const hasIssueAuthority =",
         "const valid =",
-        "if (!issueAuthority.valid && !issueAuthority.neutralizedValid)",
+        "if (!issueAuthority.valid && !issueAuthority.neutralizedValid && !issueAuthority.nonClosingValid)",
         "exactly one positive `Governing-Issue: #<id>` line",
         "Verified-Closing-Issues: #<id>[, #<id>]",
     ):
