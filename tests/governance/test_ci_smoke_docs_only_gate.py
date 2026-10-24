@@ -344,6 +344,7 @@ def test_text_contract_lane_does_not_require_unrelated_product_gates() -> None:
 
 @pytest.mark.parametrize("changed_path,runtime_checks", (
     (".github/workflows/ci-smoke.yaml", "false"),
+    ("tests/ops/test_dormant_ownership_initialization.py", "false"),
     ("app/briefing/compose.py", "true"),
     ("requirements.txt", "true"),
 ))
