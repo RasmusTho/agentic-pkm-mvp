@@ -3801,7 +3801,12 @@ def _password_source_fixture(tmp_path, monkeypatch):
         assert 'os.open("/proc/self/fd/"' in argv[2]
         descriptor = kwargs['pass_fds'][0]
         before = os.lseek(descriptor, 0, os.SEEK_CUR)
-        assert os.pread(descriptor, 65537, 0) == b'fake-file-canary'
+        reopened = os.open(cfg.password_file, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            assert os.path.samestat(actual_fstat(reopened), actual_fstat(descriptor))
+            assert os.read(reopened, 65537) == b'fake-file-canary'
+        finally:
+            os.close(reopened)
         assert os.lseek(descriptor, 0, os.SEEK_CUR) == before
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(linux, '_root_directory', root_directory)
