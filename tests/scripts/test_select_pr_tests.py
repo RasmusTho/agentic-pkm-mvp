@@ -213,7 +213,7 @@ def test_append_plan_regressions_select_orchestration_targets() -> None:
     selection = select_tests(changed)
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("tests",)
+    assert selection.subsystems == ("orchestration",)
     assert selection.unowned_paths == ()
     assert set(changed) <= set(selection.targets)
     assert "tests/orchestrator" not in selection.targets
@@ -234,11 +234,10 @@ def test_governed_effect_spine_paths_select_orchestration_targets(
 
     assert selection.full_suite is False
     assert selection.unowned_paths == ()
+    assert selection.subsystems == ("orchestration",)
     if effect_spine_path.startswith("tests/"):
-        assert selection.subsystems == ("tests",)
         assert effect_spine_path in selection.targets
     else:
-        assert selection.subsystems == ("orchestration",)
         assert "tests/governance/test_governed_write.py" in selection.targets
     assert "tests/invariants/test_governed_effect_spine.py" in selection.targets
 
@@ -315,7 +314,7 @@ def test_mvr05_authority_recovery_architecture_test_has_vault_ci_owner() -> None
     selection = select_tests([path])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("tests",)
+    assert selection.subsystems == ("vault",)
     assert selection.unowned_paths == ()
     assert path in selection.targets
     assert "tests/ops" not in selection.targets
@@ -524,7 +523,7 @@ def test_builder_system_architecture_fitness_test_has_ci_owner() -> None:
     selection = select_tests([path])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("tests",)
+    assert selection.subsystems == ("builder_system",)
     assert selection.unowned_paths == ()
     assert path in selection.targets
 
@@ -535,7 +534,7 @@ def test_quality_wave_tests_have_ci_owner() -> None:
     selection = select_tests([path])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("tests",)
+    assert selection.subsystems == ("quality_wave",)
     assert selection.unowned_paths == ()
     assert "tests/quality_wave" not in selection.targets
     assert path in selection.targets
@@ -1518,7 +1517,7 @@ def test_top_level_panel_agent_regression_change_selects_its_owned_coverage() ->
     selection = select_tests(["tests/agents/test_panel_pipeline_integration.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("tests",)
+    assert selection.subsystems == ("promotion_panel",)
     assert "tests/agents/test_panel_pipeline_integration.py" in selection.targets
 
 
@@ -1629,12 +1628,11 @@ def test_cross_scope_flow_contract_surface_selects_episodes_coverage(path: str) 
     selection = select_tests([path])
 
     assert selection.full_suite is False
+    assert selection.subsystems == ("episodes",)
     assert selection.unowned_paths == ()
     if path.startswith("tests/"):
-        assert selection.subsystems == ("tests",)
         assert "tests/episodes" not in selection.targets
     else:
-        assert selection.subsystems == ("episodes",)
         assert "tests/episodes" in selection.targets
         assert "tests/invariants" in selection.targets
     assert "tests/architecture/test_cross_scope_flow_schema.py" in selection.targets
@@ -1767,7 +1765,7 @@ def test_governance_test_change_is_owned_by_builder_system() -> None:
     selection = select_tests(["tests/governance/test_project_pickup_deprecation.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("tests",)
+    assert selection.subsystems == ("builder_system",)
     assert selection.unowned_paths == ()
     assert "tests/governance/test_project_pickup_deprecation.py" in selection.targets
 
@@ -2135,6 +2133,7 @@ def test_deploy_test_only_change_keeps_real_consumers_without_sibling_suites() -
     selection = select_tests(paths)
 
     assert selection.reason == "test modules and their static consumers"
+    assert "ops_deploy" in selection.subsystems
     assert set(paths) | set(selector.CI_INTEGRITY_TARGETS) | {
         "tests/release_channels/test_pr_candidate_verification_workflow.py",
         "tests/release_channels/test_stable_promotion_from_test.py",

@@ -1964,7 +1964,11 @@ def select_tests(changed_files: list[str]) -> Selection:
     if not (ci_contract_only or pr_intake_contract_only or test_only):
         test_modules = _test_module_targets(paths)
         if test_modules is not None:
-            return Selection(False, ("tests",), _pr_targets([*CI_INTEGRITY_TARGETS, *test_modules]),
+            owners = _dedupe([
+                name for name, prefixes, _ in SUBSYSTEMS
+                if any(_subsystem_owns_path(path, name, prefixes) for path in paths)
+            ])
+            return Selection(False, owners, _pr_targets([*CI_INTEGRITY_TARGETS, *test_modules]),
                              "test modules and their static consumers")
     changed_tests = (
         tuple(target for path in paths for target in ISOLATED_TEST_MODULES[path])
