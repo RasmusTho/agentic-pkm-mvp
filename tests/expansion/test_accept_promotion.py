@@ -31,6 +31,7 @@ Plus the critical negative/enforcement paths (the point of this slice):
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -119,10 +120,12 @@ def _check_the_box(draft_path: Path) -> None:
 def test_accept_materializes_note_with_receipts_and_provenance(
     tmp_path: Path, kind: OutputKind
 ) -> None:
+    from app.expansion import accept as accept_module
     from scripts.yaml_roundtrip import load_frontmatter
 
     vault_root, draft_path, outbox_path = _stage_draft(tmp_path, kind=kind)
     _check_the_box(draft_path)
+    original_draft_bytes = draft_path.read_bytes()
 
     result = accept_draft(
         draft_path,
@@ -141,8 +144,20 @@ def test_accept_materializes_note_with_receipts_and_provenance(
 
     final_note = vault_root / result.final_note_path
     assert final_note.exists()
-    # The staged draft is consumed (not left dangling for re-acceptance).
+    # The staged draft is retired into an inert, receipt-bound recovery archive.
     assert not draft_path.exists()
+    _pending_name, retired_name = accept_module._receipt_retirement_names(
+        draft_path.name, result.receipt_id
+    )
+    retired_path = draft_path.parent / retired_name
+    assert retired_path.read_bytes() == original_draft_bytes
+    assert not retired_path.name.endswith(".md")
+    assert retired_path not in vault_root.rglob("*.md")
+    from app.expansion.create import sweep_expired_drafts
+
+    sweep = sweep_expired_drafts(vault_root=vault_root, outbox_path=outbox_path)
+    assert not sweep.expired
+    assert retired_path.exists()
 
     fm, body = load_frontmatter(final_note.read_text(encoding="utf-8"))
     # Provenance survives acceptance permanently.
@@ -861,6 +876,236 @@ def test_decline_writes_ledger_entry_and_no_note(tmp_path: Path) -> None:
     declined = [r for r in _outbox_records(outbox_path) if r["event"] == CREATE_DECLINED_EVENT]
     assert len(declined) == 1
     assert declined[0]["payload"]["draft_id"] == draft_id
+
+
+def test_decline_preserves_candidate_edit_arriving_after_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.expansion import accept as accept_module
+    from app.proposals.declined_ledger import DeclinedLedger
+
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    ledger = DeclinedLedger(tmp_path / "declined.jsonl")
+    emit_receipt = accept_module._emit_receipt
+    marker = "Manual edit after the decline snapshot was recorded."
+
+    def emit_then_edit(event: str, payload: dict, **kwargs: object) -> str:
+        receipt_id = emit_receipt(event, payload, **kwargs)
+        if event == CREATE_DECLINED_EVENT:
+            draft_path.write_text(
+                draft_path.read_text(encoding="utf-8") + f"\n{marker}\n",
+                encoding="utf-8",
+            )
+        return receipt_id
+
+    monkeypatch.setattr(accept_module, "_emit_receipt", emit_then_edit)
+
+    with pytest.raises(accept_module.AcceptanceReconciliationError) as unresolved:
+        decline_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            reason="not useful",
+            declined_ledger=ledger,
+            write_guard=_allow_all_guard(),
+        )
+
+    assert unresolved.value.receipt_id
+    assert unresolved.value.recovery_paths
+    assert ledger.is_declined(draft_path.stem)
+    assert draft_path.exists()
+    assert marker in draft_path.read_text(encoding="utf-8")
+    declined = [r for r in _outbox_records(outbox_path) if r["event"] == CREATE_DECLINED_EVENT]
+    assert len(declined) == 1
+    assert declined[0]["payload"]["draft_id"] == draft_path.stem
+
+
+@pytest.mark.parametrize("edit_mode", ["in_place", "atomic_replace_same_bytes", "atomic_replace_changed_bytes"])
+def test_exp4_retirement_restores_changed_or_replaced_draft(
+    edit_mode: str, tmp_path: Path
+) -> None:
+    from app.expansion import accept as accept_module
+
+    _vault_root, draft_path, _outbox_path = _stage_draft(tmp_path)
+    loaded = accept_module._load_draft(draft_path)
+    original = loaded.raw_content
+    changed = original + b"\nA concurrent editor changed this draft.\n"
+
+    if edit_mode == "in_place":
+        draft_path.write_bytes(changed)
+        expected = changed
+    else:
+        replacement = draft_path.with_name(f"{draft_path.name}.replacement")
+        expected = original if edit_mode == "atomic_replace_same_bytes" else changed
+        replacement.write_bytes(expected)
+        if edit_mode == "atomic_replace_same_bytes":
+            os.utime(replacement, ns=(replacement.stat().st_atime_ns, loaded.file_identity[3]))
+        replacement.replace(draft_path)
+
+    with pytest.raises(accept_module.AcceptanceReconciliationError):
+        accept_module._retire_loaded_draft_if_unchanged(loaded, receipt_id="test-receipt")
+
+    assert draft_path.read_bytes() == expected
+    assert not tuple(draft_path.parent.glob(f".{draft_path.name}.exp4-retire-*.pending"))
+    assert not tuple(draft_path.parent.glob(f".{draft_path.name}.exp4-retired-*.recovery"))
+
+
+@pytest.mark.parametrize("crash_after", ["pending", "retired"])
+def test_exp4_retirement_retry_finishes_each_rename_state(
+    crash_after: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.expansion import accept as accept_module
+
+    _vault_root, draft_path, _outbox_path = _stage_draft(tmp_path)
+    loaded = accept_module._load_draft(draft_path)
+    receipt_id = f"crash-{crash_after}"
+    pending_name, retired_name = accept_module._receipt_retirement_names(
+        draft_path.name, receipt_id
+    )
+    rename = accept_module._atomic_rename_noreplace_at
+    crash_name = pending_name if crash_after == "pending" else retired_name
+
+    def crash_after_rename(source_fd: int, source: str, dest_fd: int, dest: str) -> None:
+        rename(source_fd, source, dest_fd, dest)
+        if dest == crash_name:
+            raise SystemExit("simulated process crash after rename")
+
+    monkeypatch.setattr(accept_module, "_atomic_rename_noreplace_at", crash_after_rename)
+    with pytest.raises(SystemExit, match="simulated process crash"):
+        accept_module._retire_loaded_draft_if_unchanged(loaded, receipt_id=receipt_id)
+
+    monkeypatch.setattr(accept_module, "_atomic_rename_noreplace_at", rename)
+    archived = Path(
+        accept_module._retire_loaded_draft_if_unchanged(loaded, receipt_id=receipt_id)
+    )
+    assert archived.name == retired_name
+    assert archived.read_bytes() == loaded.raw_content
+    assert not draft_path.exists()
+    assert not (draft_path.parent / pending_name).exists()
+
+
+def test_exp4_retirement_preserves_edit_between_pending_verification_and_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.expansion import accept as accept_module
+
+    _vault_root, draft_path, _outbox_path = _stage_draft(tmp_path)
+    loaded = accept_module._load_draft(draft_path)
+    _pending_name, retired_name = accept_module._receipt_retirement_names(
+        draft_path.name, "edit-during-retirement"
+    )
+    edited = loaded.raw_content + b"\nEdited while being retired.\n"
+    rename = accept_module._atomic_rename_noreplace_at
+
+    def edit_before_archive(source_fd: int, source: str, dest_fd: int, dest: str) -> None:
+        if dest == retired_name:
+            descriptor = os.open(source, os.O_WRONLY | os.O_TRUNC, dir_fd=source_fd)
+            try:
+                os.write(descriptor, edited)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        rename(source_fd, source, dest_fd, dest)
+
+    monkeypatch.setattr(accept_module, "_atomic_rename_noreplace_at", edit_before_archive)
+    with pytest.raises(accept_module.AcceptanceReconciliationError):
+        accept_module._retire_loaded_draft_if_unchanged(
+            loaded, receipt_id="edit-during-retirement"
+        )
+
+    assert draft_path.read_bytes() == edited
+    assert not (draft_path.parent / retired_name).exists()
+
+
+def test_exp4_retirement_preserves_both_files_when_restore_name_is_occupied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.expansion import accept as accept_module
+
+    _vault_root, draft_path, _outbox_path = _stage_draft(tmp_path)
+    loaded = accept_module._load_draft(draft_path)
+    pending_name, _retired_name = accept_module._receipt_retirement_names(
+        draft_path.name, "restore-collision"
+    )
+    replacement = b"A newer file appeared at the original path.\n"
+    read_named = accept_module._read_named_draft
+
+    def collide_while_reading(directory_fd: int, name: str) -> tuple[bytes, os.stat_result]:
+        raw, info = read_named(directory_fd, name)
+        if name == pending_name:
+            draft_path.write_bytes(replacement)
+            return raw + b"changed", info
+        return raw, info
+
+    monkeypatch.setattr(accept_module, "_read_named_draft", collide_while_reading)
+    with pytest.raises(accept_module.AcceptanceReconciliationError) as conflict:
+        accept_module._retire_loaded_draft_if_unchanged(loaded, receipt_id="restore-collision")
+
+    assert draft_path.read_bytes() == replacement
+    assert (draft_path.parent / pending_name).read_bytes() == loaded.raw_content
+    assert str(draft_path.parent / pending_name) in conflict.value.recovery_paths
+
+
+def test_exp4_retired_archive_preserves_writes_from_an_already_open_editor(
+    tmp_path: Path
+) -> None:
+    from app.expansion import accept as accept_module
+
+    _vault_root, draft_path, _outbox_path = _stage_draft(tmp_path)
+    loaded = accept_module._load_draft(draft_path)
+    editor_fd = os.open(draft_path, os.O_RDWR)
+    try:
+        archive = Path(
+            accept_module._retire_loaded_draft_if_unchanged(
+                loaded, receipt_id="open-editor"
+            )
+        )
+        later_edit = loaded.raw_content + b"\nLate write through the editor descriptor.\n"
+        os.lseek(editor_fd, 0, os.SEEK_SET)
+        os.ftruncate(editor_fd, 0)
+        os.write(editor_fd, later_edit)
+        os.fsync(editor_fd)
+    finally:
+        os.close(editor_fd)
+
+    assert not draft_path.exists()
+    assert archive.exists()
+    assert archive.read_bytes() == later_edit
+
+
+def test_exp4_missing_path_reconciles_a_receipt_bound_pending_archive(
+    tmp_path: Path,
+) -> None:
+    from app.expansion import accept as accept_module
+
+    _vault_root, draft_path, _outbox_path = _stage_draft(tmp_path)
+    loaded = accept_module._load_draft(draft_path)
+    receipt_id = "reconcile-pending"
+    pending_name, retired_name = accept_module._receipt_retirement_names(
+        draft_path.name, receipt_id
+    )
+    directory_fd = os.open(draft_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        accept_module._atomic_rename_noreplace_at(
+            directory_fd,
+            draft_path.name,
+            directory_fd,
+            pending_name,
+        )
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+    assert not draft_path.exists()
+    archived = accept_module.reconcile_missing_draft_retirement(
+        draft_path,
+        receipt_id=receipt_id,
+        expected_content_sha256=loaded.raw_content_sha256,
+    )
+
+    assert archived == str(draft_path.parent / retired_name)
+    assert Path(archived).read_bytes() == loaded.raw_content
+    assert not (draft_path.parent / pending_name).exists()
 
 
 # --- Idempotency: re-accepting an already-accepted draft does not double-write -

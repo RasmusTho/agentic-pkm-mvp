@@ -192,6 +192,63 @@ def test_accept_refuses_candidate_edit_after_checkbox_projection(
     )
 
 
+@pytest.mark.parametrize("edit_mode", ["in_place", "atomic_replace"])
+def test_accept_preserves_candidate_edit_arriving_after_exp4_load(
+    edit_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import panel as panel_route
+    from app.expansion import accept as accept_module
+    from app.panel import checkbox_projection as checkbox_projection_module
+    from app.services.outbox import iter_jsonl_outbox_records
+    from fastapi import HTTPException
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault, draft_path, outbox, store, question, version = _stage_candidate(tmp_path)
+    request = _acceptance_request(
+        draft_path, vault=vault, question=question, question_version=version
+    )
+    service = CheckboxProjectionService(write_guard=_guard())
+    monkeypatch.setattr(checkbox_projection_module, "resolve_optional_vault_root", lambda: vault)
+    monkeypatch.setattr(panel_route.checkbox_projection_module, "_service", service)
+    monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
+    retire = accept_module._retire_loaded_draft_if_unchanged
+    marker = f"Manual edit after EXP-4 loaded the approved bytes ({edit_mode})."
+
+    def edit_before_retirement(loaded: Any, *, receipt_id: str) -> str:
+        updated = draft_path.read_text(encoding="utf-8") + f"\n{marker}\n"
+        if edit_mode == "atomic_replace":
+            replacement = draft_path.with_name(f"{draft_path.name}.replacement")
+            replacement.write_text(updated, encoding="utf-8")
+            replacement.replace(draft_path)
+        else:
+            draft_path.write_text(updated, encoding="utf-8")
+        return retire(loaded, receipt_id=receipt_id)
+
+    monkeypatch.setattr(accept_module, "_retire_loaded_draft_if_unchanged", edit_before_retirement)
+
+    with pytest.raises(HTTPException) as unresolved:
+        asyncio.run(panel_route.panel_checkbox_projection(request, _panel_request(vault)))
+
+    answered, _ = store.read_question_with_version(question["question_id"])
+    assert unresolved.value.detail["state"] == "acknowledgement_indeterminate"
+    assert answered["status"] == "open"
+    assert answered["candidate_answer_ref"] == question["candidate_answer_ref"]
+    assert draft_path.exists()
+    assert marker in draft_path.read_text(encoding="utf-8")
+    accepted_event = next(
+        record
+        for record in iter_jsonl_outbox_records(outbox)
+        if record.get("event") == "expansion.create.accepted"
+    )
+    accepted_path = vault / accepted_event["payload"]["final_note_path"]
+    _accepted_frontmatter, accepted_body = load_frontmatter(
+        accepted_path.read_text(encoding="utf-8")
+    )
+    assert marker not in accepted_body
+
+
 def test_accept_refuses_candidate_owned_by_nested_child_vault(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -522,6 +579,75 @@ def test_accept_reconciles_matcher_write_that_wins_question_cas(
     assert answered["evidence"][-1]["provenance_ref"] == "receipt:matcher-race"
 
 
+def test_accept_recovery_preserves_candidate_edit_arriving_after_exp4_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.routes import panel as panel_route
+    from app.expansion import accept as accept_module
+    from app.expansion.accept import CREATE_ACCEPTED_EVENT
+    from app.panel import checkbox_projection as checkbox_projection_module
+    from app.services.outbox import iter_jsonl_outbox_records
+    from fastapi import HTTPException
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault, draft_path, outbox, store, question, version = _stage_candidate(tmp_path)
+    request = _acceptance_request(
+        draft_path, vault=vault, question=question, question_version=version
+    )
+    service = CheckboxProjectionService(write_guard=_guard())
+    monkeypatch.setattr(checkbox_projection_module, "resolve_optional_vault_root", lambda: vault)
+    monkeypatch.setattr(panel_route.checkbox_projection_module, "_service", service)
+    monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
+    append_receipt = accept_module.append_jsonl_outbox_event
+
+    def fail_first_acceptance_receipt(path: Path, record: dict, **kwargs: Any) -> bool:
+        if record.get("event") == CREATE_ACCEPTED_EVENT:
+            raise OSError("injected crash after canonical materialization")
+        return append_receipt(path, record, **kwargs)
+
+    monkeypatch.setattr(accept_module, "append_jsonl_outbox_event", fail_first_acceptance_receipt)
+    with pytest.raises(HTTPException) as interrupted:
+        asyncio.run(panel_route.panel_checkbox_projection(request, _panel_request(vault)))
+    assert interrupted.value.detail["state"] == "acknowledgement_indeterminate"
+    assert draft_path.exists()
+
+    monkeypatch.setattr(accept_module, "append_jsonl_outbox_event", append_receipt)
+    retire = accept_module._retire_loaded_draft_if_unchanged
+    marker = "Manual edit after EXP-4 loaded the recovery candidate."
+
+    def edit_before_recovery_retirement(loaded: Any, *, receipt_id: str) -> str:
+        draft_path.write_text(
+            draft_path.read_text(encoding="utf-8") + f"\n{marker}\n",
+            encoding="utf-8",
+        )
+        return retire(loaded, receipt_id=receipt_id)
+
+    monkeypatch.setattr(
+        accept_module,
+        "_retire_loaded_draft_if_unchanged",
+        edit_before_recovery_retirement,
+    )
+    with pytest.raises(HTTPException) as unresolved:
+        asyncio.run(panel_route.panel_checkbox_projection(request, _panel_request(vault)))
+
+    answered, _ = store.read_question_with_version(question["question_id"])
+    assert unresolved.value.detail["state"] == "acknowledgement_indeterminate"
+    assert answered["status"] == "open"
+    assert answered["candidate_answer_ref"] == question["candidate_answer_ref"]
+    assert draft_path.exists()
+    assert marker in draft_path.read_text(encoding="utf-8")
+    accepted_event = next(
+        record
+        for record in iter_jsonl_outbox_records(outbox)
+        if record.get("event") == CREATE_ACCEPTED_EVENT
+    )
+    accepted_path = vault / accepted_event["payload"]["final_note_path"]
+    _accepted_frontmatter, accepted_body = load_frontmatter(
+        accepted_path.read_text(encoding="utf-8")
+    )
+    assert marker not in accepted_body
+
+
 def test_exp4_recovers_materialization_before_acceptance_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -650,7 +776,6 @@ def test_dismiss_declines_without_closing_question(
     ledger_path = tmp_path / "declined.jsonl"
     monkeypatch.setenv("DECLINED_LEDGER_PATH", str(ledger_path))
     monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
-
     result = dismiss_question_candidate(
         question["question_id"],
         vault_root=vault,
@@ -681,6 +806,7 @@ def test_dismiss_surfaces_indeterminate_after_durable_decline_if_question_cas_fa
     ledger_path = tmp_path / "declined.jsonl"
     monkeypatch.setenv("DECLINED_LEDGER_PATH", str(ledger_path))
     monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
+    update_review = QuestionStore.update_review_fields_if_unchanged
 
     def fail_question_ack(*_args: object, **_kwargs: object) -> object:
         if failure_kind == "conflict":
@@ -716,6 +842,18 @@ def test_dismiss_surfaces_indeterminate_after_durable_decline_if_question_cas_fa
     assert receipt is not None
     assert receipt.reason == "standing_question_candidate_dismissed"
     assert decline_event["payload"]["draft_id"] == draft_path.stem
+
+    monkeypatch.setattr(QuestionStore, "update_review_fields_if_unchanged", update_review)
+    reconciled = dismiss_question_candidate(
+        question["question_id"],
+        vault_root=vault,
+        expected_question_version=version,
+        write_guard=_guard(),
+    )
+    resolved, _ = store.read_question_with_version(question["question_id"])
+    assert reconciled["idempotent_replay"] is True
+    assert resolved["candidate_answer_ref"] is None
+    assert resolved["status"] == "open"
 
 
 def test_explicit_close_and_reopen(tmp_path: Path) -> None:

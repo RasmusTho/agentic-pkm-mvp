@@ -130,3 +130,33 @@ def test_projection_read_fails_closed_when_canonical_note_differs(
 
     assert stale.value.status_code == 503
     assert stale.value.detail["error"] == "question_projection_stale"
+
+
+def test_projection_freshness_normalizes_extreme_timestamp_fraction_text() -> None:
+    note = {
+        "question_id": "sq-00000000-0000-0000-0000-000000000001",
+        "scope": "work",
+        "text": "Does freshness compare legal extreme timestamps?",
+        "status": "open",
+        "created_at": "0000-02-29T00:00:00.120000Z",
+        "registered_via": "explicit",
+        "standing_answer_ref": None,
+        "candidate_answer_ref": None,
+        "evidence": [],
+        "last_matched_at": "9999-12-31T23:59:59.120000-23:59",
+        "last_refreshed_at": None,
+    }
+    row = {
+        **note,
+        # PostgreSQL emits astronomical year and BC notation, and removes
+        # insignificant fractional zeros from its timestamp text output.
+        "created_at": "0001-02-29 00:00:00.12 BC",
+        "last_matched_at": "10000-01-01 23:58:59.12",
+        "source_path": "questions/sq-00000000-0000-0000-0000-000000000001.md",
+    }
+
+    assert routes._projection_row_matches_note(
+        row,
+        note,
+        source_path="questions/sq-00000000-0000-0000-0000-000000000001.md",
+    )

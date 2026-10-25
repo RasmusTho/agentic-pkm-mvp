@@ -54,6 +54,13 @@ router = APIRouter(
 )
 
 _LOGGER = logging.getLogger(__name__)
+_PROJECTION_TIMESTAMP_TEXT_RE = re.compile(
+    r"^(?P<year>\d{4,})-(?P<month>\d{2})-(?P<day>\d{2})[ T]"
+    r"(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})"
+    r"(?:\.(?P<fraction>\d+))?(?P<offset>[+-]\d{2}(?::?\d{2})?)?"
+    r"(?:\s*(?P<era>BC|AD))?$",
+    re.IGNORECASE,
+)
 
 
 class QuestionListItem(BaseModel):
@@ -200,7 +207,26 @@ def _projection_timestamp_key(value: object) -> str | None:
     try:
         timestamp = _parse_projection_timestamp(text)
     except ValueError:
-        return text.strip()
+        # PostgreSQL's textual timestamp encoder trims insignificant trailing
+        # fractional zeros. Keep legal astronomical years (0000/10000) and
+        # BC notation comparable without constructing a Python datetime.
+        match = _PROJECTION_TIMESTAMP_TEXT_RE.fullmatch(text.strip())
+        if match is None:
+            return text.strip()
+        offset = match.group("offset")
+        if offset is not None:
+            digits = offset[1:].replace(":", "")
+            if any(character != "0" for character in digits):
+                return text.strip()
+        year = int(match.group("year"))
+        fraction = (match.group("fraction") or "").rstrip("0")
+        era = (match.group("era") or "").upper()
+        return (
+            f"{year:04d}-{match.group('month')}-{match.group('day')} "
+            f"{match.group('hour')}:{match.group('minute')}:{match.group('second')}"
+            f"{'.' + fraction if fraction else ''}"
+            f"{' BC' if era == 'BC' else ''}"
+        )
     timestamp = timestamp.replace(tzinfo=UTC) if timestamp.tzinfo is None else timestamp.astimezone(UTC)
     return timestamp.isoformat(timespec="microseconds")
 

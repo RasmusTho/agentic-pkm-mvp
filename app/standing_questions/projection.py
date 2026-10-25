@@ -59,11 +59,12 @@ def read_standing_questions_projection(vault_binding_id: str) -> list[dict[str, 
             cur.execute(
                 """
                 SELECT question_id, scope, text, status,
-                       created_at::text AS created_at,
+                       (created_at AT TIME ZONE 'UTC')::text AS created_at,
                        registered_via,
                        standing_answer_ref, candidate_answer_ref, evidence,
-                       last_matched_at::text AS last_matched_at,
-                       last_refreshed_at::text AS last_refreshed_at, source_path
+                       (last_matched_at AT TIME ZONE 'UTC')::text AS last_matched_at,
+                       (last_refreshed_at AT TIME ZONE 'UTC')::text AS last_refreshed_at,
+                       source_path
                 FROM standing_questions
                 WHERE vault_binding_id = %s
                 ORDER BY created_at, question_id

@@ -13,10 +13,12 @@ from app.expansion.accept import (
     AcceptanceReconciliationError,
     AcceptError,
     CREATE_ACCEPTED_EVENT,
+    CREATE_DECLINED_EVENT,
     DraftContentChangedError,
     DraftNotFoundError,
     accept_draft,
     decline_draft,
+    reconcile_missing_draft_retirement,
 )
 from app.expansion.create import standing_question_acceptance_option_id
 from app.knowledge.errors import KnowledgeWriteConflict
@@ -281,6 +283,8 @@ def complete_question_acceptance(
                 "EXP-4 materialized an answer, but its acceptance receipt could not be reconciled safely.",
                 state="acknowledgement_indeterminate",
                 draft_id=request.artifact_id,
+                authority_receipt_id=exc.receipt_id,
+                recovery_paths=list(exc.recovery_paths),
             ) from exc
         except DraftContentChangedError as exc:
             raise QuestionReviewError(
@@ -371,6 +375,136 @@ def complete_question_acceptance(
     }
 
 
+def _missing_candidate_path(vault_root: Path, reference: object) -> Path:
+    if not isinstance(reference, str) or not reference.strip():
+        raise QuestionReviewError(409, "candidate_missing", "This question has no pending candidate answer.")
+    relative = reference.removeprefix("vault://")
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise QuestionReviewError(409, "candidate_outside_vault", "The candidate answer is outside the selected vault.")
+    try:
+        path = (vault_root / relative_path).resolve()
+        path.relative_to(vault_root.resolve())
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise QuestionReviewError(409, "candidate_outside_vault", "The candidate answer is outside the selected vault.") from exc
+    if nearest_enclosing_vault_root(path, search_root=vault_root) != vault_root.resolve():
+        raise QuestionReviewError(
+            409,
+            "candidate_outside_vault",
+            "The candidate answer belongs to a nested child vault.",
+        )
+    return path
+
+
+def _reconcile_missing_question_dismissal(
+    question_id: str,
+    question: dict[str, Any],
+    version: str,
+    *,
+    draft_path: Path,
+    vault_root: Path,
+    outbox_path: Path,
+    write_guard: WriteGuard,
+) -> dict[str, Any]:
+    draft_id = draft_path.stem
+
+    def indeterminate(message: str, *, receipt_id: str | None = None, recovery_paths: tuple[str, ...] = ()) -> QuestionReviewError:
+        return QuestionReviewError(
+            409,
+            "acknowledgement_indeterminate",
+            message,
+            state="acknowledgement_indeterminate",
+            draft_id=draft_id,
+            decline_receipt_id=receipt_id,
+            recovery_paths=list(recovery_paths),
+        )
+
+    try:
+        events = [
+            record
+            for record in iter_jsonl_outbox_records(outbox_path)
+            if record.get("event") == CREATE_DECLINED_EVENT
+            and isinstance(record.get("payload"), dict)
+            and record["payload"].get("draft_id") == draft_id
+        ]
+    except Exception as exc:
+        raise indeterminate("The decline receipt could not be inspected safely.") from exc
+    if len(events) != 1:
+        raise indeterminate("The missing candidate has no unique decline receipt to reconcile.")
+
+    event = events[0]
+    payload = event.get("payload")
+    receipt_id = event.get("event_id")
+    relative_path = draft_path.relative_to(vault_root).as_posix()
+    if (
+        event.get("source") != ACCEPT_EVENT_SOURCE
+        or event.get("trace_id") != draft_id
+        or not isinstance(receipt_id, str)
+        or not receipt_id
+        or not isinstance(payload, dict)
+        or payload.get("reason") != "standing_question_candidate_dismissed"
+        or (payload.get("draft_path") is not None and payload.get("draft_path") != relative_path)
+    ):
+        raise indeterminate("The decline receipt does not identify this candidate transition.")
+
+    expected_hash = payload.get("draft_content_sha256")
+    if expected_hash is not None and (
+        not isinstance(expected_hash, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+    ):
+        raise indeterminate("The decline receipt has an invalid staged-draft digest.", receipt_id=receipt_id)
+
+    try:
+        from app.proposals.declined_ledger import default_declined_ledger
+
+        if not default_declined_ledger().is_declined(draft_id):
+            raise indeterminate(
+                "The decline receipt exists, but the declined-proposal ledger does not confirm this draft.",
+                receipt_id=receipt_id,
+            )
+    except QuestionReviewError:
+        raise
+    except Exception as exc:
+        raise indeterminate(
+            "The declined-proposal ledger could not be reconciled safely.",
+            receipt_id=receipt_id,
+        ) from exc
+
+    try:
+        reconcile_missing_draft_retirement(
+            draft_path,
+            receipt_id=receipt_id,
+            expected_content_sha256=expected_hash,
+        )
+    except AcceptanceReconciliationError as exc:
+        raise indeterminate(
+            "The decline is durable, but its staged draft retirement remains unresolved.",
+            receipt_id=receipt_id,
+            recovery_paths=exc.recovery_paths,
+        ) from exc
+
+    try:
+        updated, _receipt = QuestionStore(vault_root, write_guard=write_guard).update_review_fields_if_unchanged(
+            question_id,
+            question,
+            {"candidate_answer_ref": None},
+            expected_version=version,
+        )
+    except Exception as exc:
+        raise indeterminate(
+            "The decline is durable, but the Question pointer could not be cleared.",
+            receipt_id=receipt_id,
+        ) from exc
+    return {
+        "status": "open",
+        "question_id": question_id,
+        "candidate_answer_ref": updated.get("candidate_answer_ref"),
+        "decline_receipt_id": receipt_id,
+        "draft_id": draft_id,
+        "idempotent_replay": True,
+    }
+
+
 def dismiss_question_candidate(
     question_id: str,
     *,
@@ -392,7 +526,21 @@ def dismiss_question_candidate(
             raise QuestionReviewError(409, "stale_question", "This question changed. Reload it before dismissing the candidate.")
         if question["status"] != "open":
             raise QuestionReviewError(409, "question_not_open", "Only an open question can dismiss a candidate answer.")
-        draft_path = _candidate_path(vault_root, question.get("candidate_answer_ref"))
+        try:
+            draft_path = _candidate_path(vault_root, question.get("candidate_answer_ref"))
+        except QuestionReviewError as exc:
+            if exc.detail.get("error") != "candidate_missing":
+                raise
+            missing_path = _missing_candidate_path(vault_root, question.get("candidate_answer_ref"))
+            return _reconcile_missing_question_dismissal(
+                question_id,
+                question,
+                version,
+                draft_path=missing_path,
+                vault_root=vault_root,
+                outbox_path=outbox_path,
+                write_guard=write_guard,
+            )
         try:
             frontmatter, _body = load_frontmatter(draft_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, ValueError) as exc:
@@ -417,6 +565,16 @@ def dismiss_question_candidate(
             receipt_id = result.receipt_id
         except DraftNotFoundError as exc:
             raise QuestionReviewError(409, "candidate_missing", "The pending candidate answer is no longer available.") from exc
+        except AcceptanceReconciliationError as exc:
+            raise QuestionReviewError(
+                409,
+                "acknowledgement_indeterminate",
+                "The decline was recorded, but receipt-bound draft retirement needs reconciliation.",
+                state="acknowledgement_indeterminate",
+                draft_id=draft_id,
+                decline_receipt_id=exc.receipt_id,
+                recovery_paths=list(exc.recovery_paths),
+            ) from exc
         except (AcceptError, WritesBlockedError) as exc:
             raise QuestionReviewError(409, "dismissal_blocked", str(exc), state="blocked") from exc
 
@@ -577,6 +735,15 @@ def reconcile_missing_question_acceptance(
         except QuestionReviewError as exc:
             if exc.detail.get("error") != "candidate_missing":
                 raise
+            missing_candidate_path = _missing_candidate_path(
+                vault_root, question.get("candidate_answer_ref")
+            )
+            if _relative_path(vault_root, missing_candidate_path) != request.note_path:
+                raise QuestionReviewError(
+                    409,
+                    "stale_candidate",
+                    "The missing candidate reference does not match the reviewed draft path.",
+                )
             candidate_path = None
         if candidate_path is not None:
             return None
@@ -652,6 +819,25 @@ def reconcile_missing_question_acceptance(
             or sha256(accepted_bytes).hexdigest() != payload["materialized_content_sha256"]
         ):
             raise indeterminate("The canonical answer content and acceptance receipt do not match.")
+
+        draft_content_sha256 = payload.get("draft_content_sha256")
+        if draft_content_sha256 is not None and (
+            not isinstance(draft_content_sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", draft_content_sha256)
+        ):
+            raise indeterminate("The acceptance receipt has an invalid staged-draft digest.")
+        try:
+            reconcile_missing_draft_retirement(
+                vault_root / request.note_path,
+                receipt_id=receipt_id,
+                expected_content_sha256=draft_content_sha256,
+            )
+        except AcceptanceReconciliationError as exc:
+            raise indeterminate(
+                "The accepted answer is durable, but its staged draft retirement remains unresolved.",
+                authority_receipt_id=receipt_id,
+                recovery_paths=list(exc.recovery_paths),
+            ) from exc
 
         try:
             updated, _receipt = store.update_review_fields_if_unchanged(
