@@ -477,7 +477,7 @@ def _production_client(
     token: str,
 ) -> BuilderOpsControlPlaneClient:
     return BuilderOpsControlPlaneClient(
-        ClientConfig(base_url="http://builderops", token=token),
+        ClientConfig(base_url="https://builderops.invalid", token=token),
         http_client=TestClient(create_app(store=store, credentials=registry)),
         max_retries=0,
     )

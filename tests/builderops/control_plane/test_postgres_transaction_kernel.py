@@ -342,7 +342,7 @@ def test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries(
     store = control_plane_store
     source = _import_source()
     monkeypatch.setattr(cockpit_github_plane, "_run_gh", lambda args: copy.deepcopy(source))
-    monkeypatch.setenv("BUILDEROPS_API_URL", "http://builderops")
+    monkeypatch.setenv("BUILDEROPS_API_URL", "https://builderops.invalid")
     monkeypatch.setenv("BUILDEROPS_API_TOKEN", "client-token")
     monkeypatch.delenv("BUILDEROPS_API_TOKEN_FILE", raising=False)
     service = create_app(store=store, credentials=_registry(tmp_path))
@@ -364,7 +364,7 @@ def test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries(
     assert replay["transition_response"]["result"]["replayed"] is True
     assert store.authority_counts("rasmustho/agentic-pkm-mvp") == counts
     from app.builderops.control_plane.client import ClientConfig
-    with factory(ClientConfig(base_url="http://builderops", token="client-token")) as client:
+    with factory(ClientConfig(base_url="https://builderops.invalid", token="client-token")) as client:
         request = first["transition_request"]
         from app.builderops.control_plane.client import ControlPlaneConflictError, StaleLeaseError
         with pytest.raises(StaleLeaseError, match="LeaseRequired"):
