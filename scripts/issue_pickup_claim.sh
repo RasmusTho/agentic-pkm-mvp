@@ -3,6 +3,8 @@ set -euo pipefail
 
 ISSUE_NUMBER=""
 REPO=""
+TARGET_WORKTREE=""
+TARGET_WORKTREE_EXPLICIT=0
 READINESS_REPO_ROOT=""
 AGENT_ID=""
 SESSION_ID=""
@@ -23,6 +25,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --repo)
       REPO="$2"
+      shift 2
+      ;;
+    --target-worktree)
+      TARGET_WORKTREE="$2"
+      TARGET_WORKTREE_EXPLICIT=1
       shift 2
       ;;
     --readiness-repo-root)
@@ -77,12 +84,88 @@ if ! [[ "$TTL_MINUTES" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-EXPECTED_BRANCH="$(git branch --show-current)"
-EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"
+if [[ "$TARGET_WORKTREE_EXPLICIT" -eq 1 && -z "$TARGET_WORKTREE" ]]; then
+  echo "pickup refused: --target-worktree requires a path" >&2
+  exit 2
+fi
+if [[ -z "$TARGET_WORKTREE" ]]; then
+  TARGET_WORKTREE="$PWD"
+fi
+if ! TARGET_WORKTREE="$(cd "$TARGET_WORKTREE" 2>/dev/null && pwd -P)"; then
+  echo "pickup refused: target worktree path is unavailable" >&2
+  exit 1
+fi
+if ! EXPECTED_WORKTREE="$(git -C "$TARGET_WORKTREE" rev-parse --show-toplevel 2>/dev/null)"; then
+  echo "pickup refused: target path is not a Git worktree" >&2
+  exit 1
+fi
+if ! EXPECTED_BRANCH="$(git -C "$EXPECTED_WORKTREE" branch --show-current 2>/dev/null)"; then
+  echo "pickup refused: target worktree branch could not be read" >&2
+  exit 1
+fi
+if [[ -z "$EXPECTED_BRANCH" ]]; then
+  echo "pickup refused: target worktree is detached" >&2
+  exit 1
+fi
 
-scripts/agent_workspace_preflight.sh \
+github_repo_from_remote() {
+  printf '%s' "$1" | sed -E \
+    's#^(git@github\.com:|https://github\.com/|ssh://git@github\.com/)##; s#\.git$##'
+}
+
+if [[ "$PREFLIGHT_ONLY" -eq 0 ]]; then
+  if ! TARGET_ORIGIN_URL="$(git -C "$EXPECTED_WORKTREE" remote get-url origin 2>/dev/null)"; then
+    echo "pickup refused: target worktree origin could not be read" >&2
+    exit 1
+  fi
+  TARGET_REPO="$(github_repo_from_remote "$TARGET_ORIGIN_URL")"
+  if [[ "$TARGET_REPO" != */* || "$TARGET_REPO" == */*/* ]]; then
+    echo "pickup refused: target worktree origin is not a supported GitHub owner/repo" >&2
+    exit 1
+  fi
+  if ! HUB_ORIGIN_URL="$(git -C "$SCRIPT_REPO_ROOT" remote get-url origin 2>/dev/null)"; then
+    echo "pickup refused: hub checkout origin could not be read" >&2
+    exit 1
+  fi
+  HUB_REPO="$(github_repo_from_remote "$HUB_ORIGIN_URL")"
+  if [[ "$HUB_REPO" != */* || "$HUB_REPO" == */*/* ]]; then
+    echo "pickup refused: hub checkout origin is not a supported GitHub owner/repo" >&2
+    exit 1
+  fi
+  if [[ -z "$REPO" ]]; then
+    REPO="$TARGET_REPO"
+  fi
+  if [[ "$REPO" != "$TARGET_REPO" ]]; then
+    echo "pickup refused: selected repository does not match target worktree origin" >&2
+    exit 1
+  fi
+  if [[ "$TARGET_WORKTREE_EXPLICIT" -eq 0 && "$REPO" != "$HUB_REPO" ]]; then
+    echo "pickup refused: cross-repository pickup requires --target-worktree" >&2
+    exit 1
+  fi
+  if [[ "$TARGET_WORKTREE_EXPLICIT" -eq 1 && -z "$READINESS_REPO_ROOT" ]]; then
+    READINESS_REPO_ROOT="$EXPECTED_WORKTREE"
+  fi
+  if [[ "$TARGET_WORKTREE_EXPLICIT" -eq 1 ]]; then
+    if ! READINESS_REPO_ROOT="$(cd "$READINESS_REPO_ROOT" 2>/dev/null && pwd -P)"; then
+      echo "pickup refused: readiness repository root is unavailable" >&2
+      exit 1
+    fi
+    if [[ "$READINESS_REPO_ROOT" != "$EXPECTED_WORKTREE" ]]; then
+      echo "pickup refused: readiness repository root must match target worktree" >&2
+      exit 1
+    fi
+  fi
+fi
+
+PREFLIGHT_ARGS=(
   --expected-branch "$EXPECTED_BRANCH" \
   --expected-worktree "$EXPECTED_WORKTREE"
+)
+if [[ "$TARGET_WORKTREE_EXPLICIT" -eq 1 ]]; then
+  PREFLIGHT_ARGS+=(--cwd "$EXPECTED_WORKTREE")
+fi
+"$SCRIPT_REPO_ROOT/scripts/agent_workspace_preflight.sh" "${PREFLIGHT_ARGS[@]}"
 
 if [[ "$PREFLIGHT_ONLY" -eq 1 ]]; then
   echo "pickup-preflight-complete issue=$ISSUE_NUMBER branch=$EXPECTED_BRANCH worktree=$EXPECTED_WORKTREE claim_evidence=not-acquired"
@@ -98,10 +181,6 @@ if [[ -z "$SESSION_ID" ]]; then
   exit 2
 fi
 
-if [[ -z "$REPO" ]]; then
-  origin_url="$(git remote get-url origin)"
-  REPO="$(printf '%s' "$origin_url" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')"
-fi
 if [[ "$REPO" != */* ]]; then
   echo "could not resolve GitHub owner/repo; pass --repo OWNER/REPO" >&2
   exit 2
@@ -135,7 +214,7 @@ fi
 
 detect_coordination_receipt() {
   local status_json
-  if ! status_json="$("$PYTHON_BIN" -m app.dispatcher status --json 2>/dev/null)"; then
+  if ! status_json="$(run_dispatcher status --json 2>/dev/null)"; then
     echo "github-label-only-fallback dispatcher_status_failed"
     return 0
   fi
@@ -174,6 +253,13 @@ if not isinstance(reason, str) or not reason:
     reason = "none" if mode == "dispatcher-backed" else "dispatcher_unavailable"
 print(f"{mode} {reason}")
 PY
+}
+
+run_dispatcher() {
+  (
+    cd "$SCRIPT_REPO_ROOT"
+    "$PYTHON_BIN" -m app.dispatcher "$@"
+  )
 }
 
 read -r DETECTED_MODE DETECTED_REASON < <(detect_coordination_receipt)
@@ -380,7 +466,7 @@ PY
 release_dispatcher_claim() {
   local release_json
   if ! release_json="$(
-    "$PYTHON_BIN" -m app.dispatcher release "$TASK_ID" --agent "$AGENT_ID" --json 2>/dev/null
+    run_dispatcher release "$TASK_ID" --agent "$AGENT_ID" --json 2>/dev/null
   )"; then
     return 1
   fi
@@ -408,10 +494,10 @@ PY
 
 run_pickup_refresh() {
   if [[ -n "$READINESS_REPO_ROOT" ]]; then
-    "$PYTHON_BIN" -m app.dispatcher pickup-refresh "$TASK_ID" --repo "$REPO" \
+    run_dispatcher pickup-refresh "$TASK_ID" --repo "$REPO" \
       --readiness-repo-root "$READINESS_REPO_ROOT" --json
   else
-    "$PYTHON_BIN" -m app.dispatcher pickup-refresh "$TASK_ID" --repo "$REPO" --json
+    run_dispatcher pickup-refresh "$TASK_ID" --repo "$REPO" --json
   fi
 }
 
@@ -457,7 +543,7 @@ fi
 
 if [[ "$RECEIPT_COORDINATION_MODE" == "dispatcher-backed" ]]; then
   claim_json=""
-  if ! claim_json="$("$PYTHON_BIN" -m app.dispatcher claim "$TASK_ID" --agent "$AGENT_ID" --ttl-minutes "$TTL_MINUTES" --json)"; then
+  if ! claim_json="$(run_dispatcher claim "$TASK_ID" --agent "$AGENT_ID" --ttl-minutes "$TTL_MINUTES" --json)"; then
     # Provider-wide partial-sync metadata cannot prove why this exact task is
     # absent: the kill switch still runs the essential agent:ready scan. Keep
     # the dispatcher claim failure opaque and leave the label untouched rather
