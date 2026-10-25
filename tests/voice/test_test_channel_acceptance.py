@@ -228,6 +228,7 @@ def test_swedish_and_english_use_qualified_routes_and_return_audio(tmp_path: Pat
         ({}, {"git_sha": "f" * 40}, "candidate_mismatch"),
         ({}, {"available": False}, "target_unavailable"),
         ({"candidate": {"source_sha": "short", "image_digest": DIGEST}}, {}, "candidate_identity_invalid"),
+        ({"scope": 'x\r\n--b\r\nContent-Disposition: form-data; name="session_id"'}, {}, "scope_invalid"),
     ],
 )
 def test_candidate_and_channel_must_match_qualification(
@@ -336,6 +337,16 @@ def test_receipt_is_candidate_bound_and_secret_free(tmp_path: Path, monkeypatch:
     assert odd_receipt["languages"]["sv"]["status"] == "passed"
     assert "abc123" not in json.dumps(odd_receipt) and "sk-ref" not in json.dumps(odd_receipt)
 
+    # A non-synthetic citation is counted by hash, never named in the receipt.
+    mixed = FakeTestChannel()
+    mixed.sources_override = [{"uuid": "u", "path": SOURCES["sv"]},
+                              {"uuid": "real-uuid-1", "path": "journal/2026-10-private.md"}]
+    mixed_receipt = _run(tmp_path, mixed)
+    sv = mixed_receipt["languages"]["sv"]
+    assert sv["status"] == "passed" and sv["citations"] == [{"uuid": "u", "path": SOURCES["sv"]}]
+    assert len(sv["other_citations"]) == 1
+    assert "private.md" not in json.dumps(mixed_receipt) and "real-uuid-1" not in json.dumps(mixed_receipt)
+
     # A credential-bearing qualification input is refused, and the CLI never records the token.
     leaked = _qualification(tmp_path, api_url="https://user:pw@ygg-test.example.internal")
     assert vta.run_acceptance(leaked, FakeTestChannel(), base_dir=tmp_path)["refusal"] == "qualification_contains_secret"
@@ -370,9 +381,15 @@ def test_receipt_is_candidate_bound_and_secret_free(tmp_path: Path, monkeypatch:
 
     # An existing --out path is refused before any voice turn is sent.
     seen.clear()
-    with pytest.raises(FileExistsError):
-        vta.main(["--qualification", str(path), "--out", str(out)])
+    assert vta.main(["--qualification", str(path), "--out", str(out)]) == 3
     assert seen == []
+
+    # An invalid input is refused with its own reason before any transport carries the bearer.
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(_qualification(tmp_path, api_url="http://ygg-test.example.internal/extra")))
+    seen.clear()
+    assert vta.main(["--qualification", str(bad)]) == 2
+    assert seen == [None]
 
 
 def test_verifier_has_no_configuration_or_prod_write_path(tmp_path: Path) -> None:

@@ -53,6 +53,7 @@ import json
 import os
 from pathlib import Path
 import re
+import struct
 import sys
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
@@ -91,6 +92,7 @@ _SHA = re.compile(r"[0-9a-f]{40}")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _ACTOR = re.compile(r"synthetic-[a-z0-9][a-z0-9-]{2,62}")
+_SCOPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
 _ISSUE_REF = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+")
 _SENSITIVE_KEY = re.compile(
     r"(?:password|token|credential|private[_-]?key|api[_-]?key|secret|authorization|dsn|cookie)",
@@ -210,7 +212,7 @@ def validate_qualification(payload: Any, *, base_dir: Path | None = None) -> dic
     actor = payload["synthetic_actor"]
     _require(isinstance(actor, str) and bool(_ACTOR.fullmatch(actor)), "synthetic_actor_invalid")
     scope = payload.get("scope")
-    _require(scope is None or (isinstance(scope, str) and 0 < len(scope) <= 128), "scope_invalid")
+    _require(scope is None or (isinstance(scope, str) and bool(_SCOPE.fullmatch(scope))), "scope_invalid")
 
     fixtures = payload["fixtures"]
     _require(isinstance(fixtures, Mapping) and set(fixtures) == set(LANGUAGES), "fixtures_invalid")
@@ -328,7 +330,7 @@ def _audio_metadata(raw: bytes) -> dict[str, Any]:
             compressed = audio.getcomptype() != "NONE"
             width = audio.getsampwidth()
             channels = audio.getnchannels()
-    except (EOFError, wave.Error) as exc:
+    except (EOFError, wave.Error, struct.error, ValueError, MemoryError, OverflowError) as exc:
         raise AssertionError("audio_not_decodable_wav") from exc
     if frames <= 0 or rate <= 0 or compressed or not pcm:
         raise AssertionError("audio_empty_or_silent")
@@ -340,8 +342,13 @@ def _audio_metadata(raw: bytes) -> dict[str, Any]:
     samples.frombytes(pcm[: len(pcm) - len(pcm) % width])
     centre, full_scale = (128, 128) if width == 1 else (0, 2 ** (8 * width - 1))
     threshold = full_scale * AUDIBLE_PEAK_FRACTION
-    audible = sum(1 for x in samples if abs(x - centre) >= threshold)
-    if audible < max(10, len(samples) // 1000):
+    needed, audible = max(10, len(samples) // 1000), 0
+    for value in samples:
+        if abs(value - centre) >= threshold:
+            audible += 1
+            if audible >= needed:
+                break
+    if audible < needed:
         raise AssertionError("audio_empty_or_silent")
     return {"format": "audio/wav", "sha256": _sha256(raw), "bytes": len(raw), "frames": frames,
             "sample_rate": rate, "duration_ms": int(frames * 1000 / rate)}
@@ -388,7 +395,13 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
         outcome["transcript_present"] = bool(str(body.get("transcript") or "").strip())
         outcome["answer_present"] = bool(str(body.get("answer") or "").strip())
         citations = _citations(body.get("sources"))
-        outcome["citations"] = citations
+        expected_ids = set(fixture["expected_source_ids"])
+        # Non-synthetic citations are counted and hashed, never named, so a stray
+        # real note cannot leak its path or UUID into the parent-Issue receipt.
+        outcome["citations"] = [c for c in citations if c["uuid"] in expected_ids or c["path"] in expected_ids]
+        outcome["other_citations"] = sorted(
+            _sha256(json.dumps(c, sort_keys=True).encode())
+            for c in citations if not (c["uuid"] in expected_ids or c["path"] in expected_ids))
         session_error = body.get("session_error")
         outcome["session_transcript"] = "unavailable" if session_error else "recorded"
         if not outcome["transcript_present"]:
@@ -600,6 +613,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--qualification", type=Path, required=True,
                         help=f"{QUALIFICATION_SCHEMA} JSON (private file)")
     parser.add_argument("--out", type=Path, help="write the receipt here (refuses to overwrite)")
+    parser.epilog = "exit codes: 0 passed, 1 failed, 2 refused, 3 --out already exists (nothing sent)"
     args = parser.parse_args(argv)
     try:
         payload = json.loads(args.qualification.read_text(encoding="utf-8"))
@@ -610,11 +624,23 @@ def main(argv: list[str] | None = None) -> int:
     # evidence of turns that already ran (and tempt a replay).
     out = None
     if args.out is not None:
-        out = os.fdopen(os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8")
+        try:
+            out = os.fdopen(os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8")
+        except FileExistsError:
+            print("receipt path already exists; no voice turn was sent", file=sys.stderr)
+            return 3
+    base_dir = args.qualification.resolve().parent
     try:
         try:
-            transport = HttpTransport(origin, token=os.environ.get(AUTH_TOKEN_ENV) or None)
-            receipt = run_acceptance(payload, transport, base_dir=args.qualification.resolve().parent)
+            try:
+                validate_qualification(payload, base_dir=base_dir)
+            except VoiceAcceptanceRefusal:
+                # Refused before any request: the input's own refusal reason wins and
+                # no credential-bearing transport is built for an unvalidated target.
+                receipt = run_acceptance(payload, HttpTransport("https://refused.invalid"), base_dir=base_dir)
+            else:
+                transport = HttpTransport(origin, token=os.environ.get(AUTH_TOKEN_ENV) or None)
+                receipt = run_acceptance(payload, transport, base_dir=base_dir)
         except VoiceAcceptanceRefusal as exc:
             receipt = _finish({**_base_receipt(None), "refusal": exc.reason})
         except Exception as exc:  # never leave an empty receipt behind
