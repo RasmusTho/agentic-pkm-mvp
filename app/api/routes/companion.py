@@ -1024,14 +1024,16 @@ def _document_read_principal(
     if any(name in request.headers for name in ("X-Active-Context-Session", "X-Active-Context-Override")):
         return None
     registry_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
-    if not registry_path or VaultRegistryStore(Path(registry_path)).load().settings_rebind is None:
+    if not registry_path:
         return None
     try:
-        return _authenticated_principal_id(request, api_key, Path(registry_path))
-    except HTTPException:
+        principal = _authenticated_principal_id(request, api_key, Path(registry_path))
+        snapshot = VaultRegistryStore(Path(registry_path)).read_existing()
+    except (HTTPException, RegistryError, OSError):
         # Preserve the legacy read projection, but never grant a write proof to
-        # an unauthenticated/unprovisioned caller.
+        # an unauthenticated caller or initialize/repair unqualified state.
         return None
+    return principal if snapshot.settings_rebind is not None else None
 
 
 def _scoped_companion_document_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:

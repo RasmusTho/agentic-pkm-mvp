@@ -79,7 +79,9 @@
   compatibility ingress through content serialization. The first document response owns the proof,
   including a missing proof; later telemetry cannot substitute one. No scoped selection is minted.
   Real client IP and API-key context are forwarded even without cookies, including direct document
-  API and compatibility-write paths. An unauthenticated projection receives no write proof. These
+  API and compatibility-write paths. Proof readiness reads only existing qualified registry state
+  after authentication; a missing registry or recovery artifact is never initialized or repaired
+  by that probe. An unauthenticated projection receives no write proof. These
   pages check liveness through the legacy notes read while retaining their original document proof;
   newly shared stale intent still refuses, and missing proof never falls back to a legacy write.
   If another tab selects B while an A document stays open, A's proof cannot authorize a B mutation: the existing

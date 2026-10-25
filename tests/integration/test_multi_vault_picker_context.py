@@ -1916,3 +1916,49 @@ console.log(JSON.stringify({status:written.status,visible:!visible.hidden,cookie
     assert result['status'] == 401 and result['visible'] is True
     assert 'companion_context_session=' in result['cookie']
     assert not any(path.endswith('/compatibility') for _method,path,_headers,_body in calls)
+
+
+@pytest.mark.parametrize('surface', ['workspace', 'orientation'])
+@pytest.mark.parametrize('principal_present', [False, True])
+def test_default_proof_preflight_never_initializes_or_repairs_missing_registry(tmp_path, monkeypatch, surface, principal_present):
+    runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    if principal_present:
+        registry = runtime.registry.path
+        registry.unlink()  # Valid principal plus last-good state must not restore on this probe.
+    else:
+        parent = tmp_path / 'unprovisioned-state'
+        parent.mkdir(mode=0o700)
+        registry = parent / 'registry.json'
+        monkeypatch.setenv('INSTANCE_VAULT_REGISTRY_PATH', str(registry))
+    before = {p.relative_to(registry.parent):p.read_bytes() for p in registry.parent.rglob('*') if p.is_file()}
+    client = TestClient(app, raise_server_exceptions=True)
+    path = '/api/companion/'+surface+('?note_path=only-0.md' if surface == 'workspace' else '')
+    response = client.get(path)
+    assert response.status_code == 200, response.text
+    assert 'X-Compatibility-Write-Precondition' not in response.headers
+    assert not registry.exists()
+    assert {p.relative_to(registry.parent):p.read_bytes() for p in registry.parent.rglob('*') if p.is_file()} == before
+
+
+def test_unauthorized_default_proof_admission_never_probes_mutable_registry(tmp_path, monkeypatch):
+    import inspect
+    from app.instance.vault_registry import VaultRegistryStore
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    calls = []
+    load = VaultRegistryStore.load
+    read = VaultRegistryStore.read_existing
+    def observed_load(self):
+        calls.append(('load', inspect.currentframe().f_back.f_code.co_name))
+        return load(self)
+    def observed_read(self):
+        calls.append(('read_existing', inspect.currentframe().f_back.f_code.co_name))
+        return read(self)
+    monkeypatch.setattr(VaultRegistryStore, 'load', observed_load)
+    monkeypatch.setattr(VaultRegistryStore, 'read_existing', observed_read)
+    response = TestClient(app, client=('127.0.0.1',40000)).get('/api/companion/orientation',headers={'X-Forwarded-For':'203.0.113.8'})
+    assert response.status_code == 200
+    assert 'X-Compatibility-Write-Precondition' not in response.headers
+    assert not any(caller == '_document_read_principal' for _operation,caller in calls)
