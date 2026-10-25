@@ -308,17 +308,25 @@ def claim(
     agent_id: str,
     ttl_minutes: int = 90,
     takeover_stale: bool = False,
+    expected_lease_id: str | None = None,
 ) -> tuple[TaskRecord, LeaseRecord]:
     """Claim a task by creating a lease and updating task state.
 
     Atomically within a single transaction:
     1. Check if task is ready and unleased, or explicitly take over an expired lease
+       (optionally requiring the exact lease id observed by the caller)
     2. Create lease
     3. Update task with lease reference and claimed_by
     4. Emit task.claimed event
 
     Raises ValueError if task doesn't exist, is not ready, or is already claimed.
     """
+    if expected_lease_id is not None:
+        if not expected_lease_id or expected_lease_id.strip() != expected_lease_id:
+            raise ValueError("Expected stale lease id must be a non-empty exact identifier")
+        if not takeover_stale:
+            raise ValueError("Expected stale lease id requires --takeover-stale")
+
     lease_id = _make_lease_id()
     ttl_seconds = ttl_minutes * 60
     event_payload: dict[str, object] = {"ttl_minutes": ttl_minutes}
@@ -344,6 +352,10 @@ def claim(
             raise ValueError(f"Cannot claim task {task_id}: cleanup guard is active")
 
         existing_lease_id = task_row["lease_id"]
+        if expected_lease_id is not None and existing_lease_id != expected_lease_id:
+            raise ValueError(
+                f"Cannot claim task {task_id}: expected stale lease predecessor changed"
+            )
         if existing_lease_id is not None:
             existing_lease = conn.execute(
                 "SELECT * FROM dispatcher_leases WHERE lease_id = ?",
