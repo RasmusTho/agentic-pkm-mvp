@@ -88,6 +88,7 @@ def test_worker_configuration_and_receipt_bind_scope(native, tmp_path, monkeypat
         assert environment['BWS_DEPLOY_ACTIVATION_SCOPE'] == 'text-capture'
         for changed in ({**environment, 'BWS_DEPLOY_ACTIVATION_SCOPE': 'full'},
                         {**environment, 'DEPLOY_ACTIVATION_SCOPE': 'full'},
+                        {**environment, 'BWS_DEPLOY_TARGET_REVISION': 'e' * 40},
                         {**environment, 'BWS_DEPLOY_OPERATION_ID': str(uuid4())}):
             with patch.dict(os.environ, changed, clear=True), pytest.raises(PostgresDeployError):
                 linux.inherited_worker_guard(native.cfg.channel, 'run')
@@ -103,7 +104,7 @@ def test_worker_configuration_and_receipt_bind_scope(native, tmp_path, monkeypat
             '--automatic', '--existing-secrets-only', '--activation-scope', 'text-capture',
             '--operation-id', operation_id]
     assert host.main(args) == 0
-    assert len(refused) == 3
+    assert len(refused) == 4
     assert native.cfg.journal.read().payload()['activation_scope'] == 'text-capture'
     assert all(not boundary.containers for boundary in boundaries.values())
     # A fresh full worker strips every ambient scope input.
@@ -154,6 +155,7 @@ def test_native_text_activation_preserves_foundational_guards(tmp_path, channel,
         assert receipt['activation_scope'] == scope and receipt['full_channel_qualified'] is False
         assert not any(event.startswith(('embedding-identity-read', 'embedding-probe', 'source-rebuild', 'ollama-')) for event in events)
         assert not any(event.startswith('api-cli index') for event in events)
+        assert any(f'NATIVE_SOURCE_BOOTSTRAP={channel}:{sha}:text-capture' in event for event in events)
         assert any('up -d --force-recreate --no-deps api' in event for event in events)
         assert not any('up -d --force-recreate api worker watcher' in event for event in events)
     else:
@@ -161,6 +163,42 @@ def test_native_text_activation_preserves_foundational_guards(tmp_path, channel,
         assert any(event.startswith('embedding-probe ') for event in events)
         assert 'source-rebuild' in events
         assert 'api-cli index doctor --json --strict' in events
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+def test_legacy_selected_image_refuses_text_before_bootstrap_or_runtime(tmp_path, channel):
+    root, env, sha = _native_source_harness(tmp_path, channel=channel, ready=False)
+    repository = Path(__file__).resolve().parents[2]
+    legacy_revision = 'd4004fbb3bab42ac9068d65494a22edf05c5c96e'
+    # Use the actual pre-scope image source, rather than teaching a stub to
+    # return an invented compatibility verdict. Its strict preflight must win.
+    for relative in ('app/ops/native_source_bootstrap.py', 'app/api/app.py', 'scripts/start_api.sh'):
+        legacy = subprocess.check_output(['git', '-C', str(repository), 'show', legacy_revision + ':' + relative])
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(legacy)
+    env['BWS_DEPLOY_ACTIVATION_SCOPE'] = 'text-capture'
+    result = _run_deploy(root, env, sha, '--activation-scope', 'text-capture',
+                         '--automatic', '--image-digest', DIGEST, channel=channel)
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert any(f'NATIVE_SOURCE_BOOTSTRAP={channel}:{sha}:text-capture' in event for event in events)
+    assert 'api-migrations' not in events
+    assert not any(event.startswith(('api-cli ', 'source-rebuild', 'embedding-probe ')) for event in events)
+    assert not any('up -d --force-recreate --no-deps api' in event for event in events)
+    assert not (root / 'ops/deployments' / (channel + '-latest.json')).exists()
+
+
+@pytest.mark.parametrize('scope,selector_suffix', [('text-capture', ''), ('full', ':text-capture')])
+def test_bootstrap_scope_requires_explicit_selector_agreement(monkeypatch, scope, selector_suffix):
+    from app.ops import native_source_bootstrap as bootstrap
+    selector = 'dev:' + SHA + selector_suffix
+    monkeypatch.setenv('PKM_ENVIRONMENT', 'dev')
+    monkeypatch.setenv('PKM_ACTIVATION_SCOPE', scope)
+    monkeypatch.setenv('NATIVE_SOURCE_BOOTSTRAP', selector)
+    monkeypatch.setattr(bootstrap, '_instance_preflight', lambda *_args: pytest.fail('scope mismatch passed preflight'))
+    with pytest.raises(ValueError, match='source context invalid'):
+        bootstrap.preflight(selector)
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])

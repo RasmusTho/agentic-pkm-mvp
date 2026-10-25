@@ -15,6 +15,7 @@ def validate_activation_scope(scope: str, channel: str) -> str:
 
 
 def runtime_activation_scope() -> str:
-    return validate_activation_scope(
-        os.environ.get("PKM_ACTIVATION_SCOPE", "full"), active_environment()
-    )
+    scope = os.environ.get("PKM_ACTIVATION_SCOPE", "full")
+    if scope == "full":
+        return scope
+    return validate_activation_scope(scope, active_environment())

@@ -286,10 +286,13 @@ def preflight(selector: str) -> Path | None:
     from app.objects import resolve_store_backend
     from app.version import get_runtime_version
 
-    match = re.fullmatch(r'(dev|test|prod):([0-9a-f]{40})', selector)
+    # Text scope is part of the strict wire selector. Pre-scope images reject
+    # this shape in their first preflight, before migrations/replay/runtime.
+    match = re.fullmatch(r'(dev|test|prod):([0-9a-f]{40})(?::(text-capture))?', selector)
     scope = runtime_activation_scope()
     if (
         match is None or os.environ.get('NATIVE_SOURCE_BOOTSTRAP') != selector
+        or scope != (match[3] or 'full')
         or os.environ.get('PKM_ENVIRONMENT') != match[1]
         or active_environment() != match[1]
         or get_runtime_version().get('git_sha') != match[2]

@@ -448,6 +448,12 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - See `docs/CONCURRENCY.md`, `docs/EVENTS.md`, and `app/promotion/consumer.py` for the enacted guardrails and testing strategy.
 
 ## Boundary Enforcement
+- Explicit DEV/TEST `text-capture` activation binds the native request to a finite
+  API method/path perimeter before route dependencies and handlers. It retains
+  foundational identity/write/migration admission while leaving semantic serving
+  and producers unavailable; default/full activation retains its existing gates.
+  This source support is not full-channel or live acceptance. The deployment
+  contract is owned by [Native source preflight and recovery](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery).
 - Current runtime retrieval uses `ASK_DOMAIN_SCOPE` and `bridge_domains` as compatibility labels
   for a narrower operational-scope filter and explicit inclusion mechanism.
 - The active scope is bound PER REQUEST (#2921): the ASK request carries it down to the retrieval

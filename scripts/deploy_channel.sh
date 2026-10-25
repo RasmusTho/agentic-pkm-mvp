@@ -1745,7 +1745,10 @@ native_source_projection_gate() {
   if [ "${activation_scope}" != text-capture ]; then
     [ "${NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY:-0}" = "1" ] || { native_source_failure embedding_context_invalid; return 78; }
   fi
-  local operation="${BWS_DEPLOY_OPERATION_ID:-}" name="" rc=0
+  local operation="${BWS_DEPLOY_OPERATION_ID:-}" name="" rc=0 selector="${channel}:${target_sha}"
+  if [ "${activation_scope}" = text-capture ]; then
+    selector="${selector}:text-capture"
+  fi
   [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure source_preflight_failed; return 78; }
   [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure source_preflight_failed; return 78; }
   [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
@@ -1761,7 +1764,7 @@ native_source_projection_gate() {
   compose run --no-deps -T --name "${name}" \
     --label "yggdrasil.native.operation=${operation}" \
     --label "yggdrasil.native.revision=${target_sha}" \
-    -e "NATIVE_SOURCE_BOOTSTRAP=${channel}:${target_sha}" api || rc=$?
+    -e "NATIVE_SOURCE_BOOTSTRAP=${selector}" api || rc=$?
   local terminal_rc=0
   native_source_terminal_cleanup "${name}" "${rc}" || terminal_rc=$?
   # Only the observer's documented result namespace proves cleanup. A Python

@@ -8988,8 +8988,15 @@ def test_source_projection_refusal_restores_complete_previous_runtime(
     compose.chmod(0o755)
     env = os.environ.copy()
     env.update(COMPOSE_BIN=str(compose), FAKE_COMPOSE_ROWS=rows, PYTHON=sys.executable)
+    pin = tmp_path / 'channel.env'
+    pin.write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
     result = subprocess.run(
-        ["bash", "-c", f"compose() {{ \"${{COMPOSE_BIN}}\"; }}\n{gate}\nrollback_runtime_complete_gate"],
+        ["bash", "-c", f'''source "$1"
+pin_file="$2"
+channel=dev
+compose() {{ "${{COMPOSE_BIN}}"; }}
+{gate}
+rollback_runtime_complete_gate''', '--', str(REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'), str(pin)],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,

@@ -1250,6 +1250,11 @@ an unknown, empty or duplicate active pin scope refuses. A full deployment clear
 the text pin, and the previous pin preserves scope for governed rollback. The API
 factory also rejects an unknown scope and text scope outside DEV/TEST, including
 the ordinary default-to-PROD environment posture.
+The text source-bootstrap selector is explicitly `dev|test:<SHA>:text-capture`.
+It must agree with runtime scope. Older images reject that strict selector before
+API migration/bootstrap, source replay or runtime entry; an environment variable
+alone never asks an older bootstrap to perform a relaxed deployment. Full retains
+the existing `channel:<SHA>` selector.
 
 Text activation still authenticates existing secrets and the real PostgreSQL
 backend, selected existing root, instance ownership, principal and runtime floors,
@@ -1837,6 +1842,9 @@ need an archive volume. Once archive metadata is declared, the same preflight re
 and requires the already-mounted, identity-verified volume before any prod mutation. A present but
 malformed or unreadable channel config is also fail-closed and is never treated as absence. Archive
 operations themselves continue to fail closed without a verified binding.
+
+The numbered procedure below describes full activation. The explicit text scope
+above retains foundational steps 1–3 and uses its bounded startup/observations.
 
 1. **Pin the ref.** Resolve the commit SHA to deploy and its already-built image tag (`ghcr.io/<owner>/pkm-app:<sha>`). For `prod`, the SHA must be the one authorized by the promotion-plan contract in `docs/RELEASE_CHANNELS/README.md` (the `stable`-ref decision; see also #2527). Update the channel's deploy-pin file to that tag.
 2. **Migration gate (classification for every channel; operator acknowledgment for prod).** Diff the migrations between the currently-running SHA and the target SHA and classify each per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`. Record reversible and forward-only migrations in the deploy receipt for every channel. A forward-only classification describes recovery behavior; it does not by itself require an operator decision for `dev` or `test`. On every PROD deploy, a read-only pre-writer-stop probe runs the resolved candidate image's migration graph against `pkm-prod/app`; an explicit, target-bound operator acknowledgment is required before writer stop only when that live database has a pending forward-only migration. Changed classification metadata for an already-applied migration remains in the receipt but does not by itself require an acknowledgment. Reversible migrations proceed under the standard gate. DEV/TEST retain their channel-scoped migration and recovery behavior without inheriting PROD's acknowledgment gate.

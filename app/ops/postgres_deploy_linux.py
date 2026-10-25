@@ -433,7 +433,7 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
         if (expected_capture not in {'0', '1'} or expected_migration not in {'0', '1'}
             or not re.fullmatch(r'[0-9a-f]{40}', target_revision)):
             raise PostgresDeployError()
-        if (cutover or bound_plan.principal_cutover) and target_revision != bound_plan.revision:
+        if (cutover or bound_plan.principal_cutover or bound_plan.activation_scope != 'full') and target_revision != bound_plan.revision:
             raise PostgresDeployError()
         # The worker selected these consumers before any deployment mutation. Check
         # capture config again for every Compose call. Before the shell runs its
