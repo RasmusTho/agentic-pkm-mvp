@@ -386,10 +386,14 @@ def test_prod_transition_requires_operator_acknowledged_release_plan() -> None:
         encoding="utf-8"
     )
 
-    assert "all operator acknowledgment checkboxes ticked" in execute_skill
     assert (
-        "If the plan is incomplete or has un-ticked acknowledgment checkboxes, abort."
+        "Use this skill only with execution authority and a complete, "
+        "explicitly human-approved plan from"
         in execute_skill
     )
-    assert "operator reviews and ticks all checkboxes" in test_to_prod_skill
-    assert "does not auto-proceed past the plan review gate" in test_to_prod_skill
+    assert "It checks the complete reviewed plan and human approval;" in execute_skill
+    assert (
+        "Obtain the human's exact-plan approval and acknowledgments."
+        in test_to_prod_skill
+    )
+    assert "Preparation never auto-approves." in test_to_prod_skill
