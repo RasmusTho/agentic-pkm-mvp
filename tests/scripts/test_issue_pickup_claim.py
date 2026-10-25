@@ -42,6 +42,7 @@ def _dispatcher_claim(
         "ok": True,
         "task": {
             "task_id": github_issue_task_id(repo, issue_number),
+            "repo": repo,
             "issue_number": issue_number,
             "status": "claimed",
             "claimed_by": holder,
@@ -59,6 +60,53 @@ def _dispatcher_claim(
     return json.dumps(payload)
 
 
+def _dispatcher_stale_show(
+    *,
+    issue_number: int = 3301,
+    repo: str = "RasmusTho/agentic-pkm-mvp",
+    holder: str = "codex-3301",
+    lease_id: str = "lease-old-3301",
+    expires_at: str,
+    task_repo: str | None = None,
+    current_lease_id: str | None = None,
+    current_expires_at: str | None = None,
+) -> str:
+    current_lease_id = current_lease_id or lease_id
+    task = {
+        "task_id": github_issue_task_id(repo, issue_number),
+        "repo": task_repo or repo,
+        "issue_number": issue_number,
+        "status": "claimed",
+        "claimed_by": holder,
+        "lease_id": current_lease_id,
+    }
+    lease = {
+        "lease_id": current_lease_id,
+        "resource": f"issue:{issue_number}",
+        "holder": holder,
+        "expires_at": current_expires_at or expires_at,
+        "released_at": None,
+    }
+    events: list[dict[str, object]] = []
+    if current_lease_id != lease_id:
+        events.append(
+            {
+                "task_id": task["task_id"],
+                "event_type": "task.claimed",
+                "actor": holder,
+                "lease_id": current_lease_id,
+                "payload": {
+                    "takeover": {
+                        "previous_holder": holder,
+                        "previous_lease_id": lease_id,
+                        "previous_expires_at": expires_at,
+                    }
+                },
+            }
+        )
+    return json.dumps({"ok": True, "task": task, "lease": lease, "events": events})
+
+
 def _make_harness(
     tmp_path: Path,
     *,
@@ -71,6 +119,11 @@ def _make_harness(
     pickup_refresh_rc: int = 0,
     claim_json: str = "",
     claim_rc: int = 0,
+    show_before_json: str = "{}",
+    show_after_json: str = "{}",
+    show_rc: int = 0,
+    worktree_heartbeat_json: str | None = None,
+    worktree_heartbeat_rc: int = 0,
     label_replace_rc: int = 0,
     labels_json: str = '[{"name":"type:task"},{"name":"prio:high"},{"name":"lane:governance"},{"name":"agent:ready"}]',
     labels_after_write_json: str | None = None,
@@ -103,6 +156,16 @@ def _make_harness(
 
     worktree = tmp_path / "worktree"
     worktree.mkdir()
+    if worktree_heartbeat_json is None:
+        worktree_heartbeat_json = json.dumps(
+            {
+                "path": str(worktree.resolve()),
+                "branch": target_branch,
+                "generation": "a" * 32,
+                "owner": "session-3301",
+                "status": "active",
+            }
+        )
     hub_root = tmp_path / "hub"
     hub_scripts = hub_root / "scripts"
     hub_scripts.mkdir(parents=True)
@@ -143,8 +206,22 @@ set -u
 printf 'dispatcher-cwd %s\n' "$PWD" >> "$COMMAND_LOG"
 printf 'dispatcher %s\n' "$*" >> "$COMMAND_LOG"
 case "$*" in
+  *"scripts/agent_worktree.py"*"heartbeat"*)
+    printf 'worktree %s\n' "$*" >> "$COMMAND_LOG"
+    printf '%s\n' "$FAKE_WORKTREE_HEARTBEAT_JSON"
+    exit "$FAKE_WORKTREE_HEARTBEAT_RC"
+    ;;
   *"-m app.dispatcher status --json"*) printf '%s\n' "$FAKE_STATUS_JSON"; exit "$FAKE_STATUS_RC" ;;
   *"-m app.dispatcher pickup-refresh "*) printf '%s\n' "$FAKE_PICKUP_REFRESH_JSON"; exit "$FAKE_PICKUP_REFRESH_RC" ;;
+  *"-m app.dispatcher show "*)
+    if [[ ! -f "$FAKE_SHOW_MARKER" ]]; then
+      touch "$FAKE_SHOW_MARKER"
+      printf '%s\n' "$FAKE_SHOW_BEFORE_JSON"
+    else
+      printf '%s\n' "$FAKE_SHOW_AFTER_JSON"
+    fi
+    exit "$FAKE_SHOW_RC"
+    ;;
   *"-m app.dispatcher claim "*) printf '%s\n' "$FAKE_CLAIM_JSON"; exit "$FAKE_CLAIM_RC" ;;
   *"-m app.dispatcher release "*) printf '%s\n' "$FAKE_RELEASE_JSON"; exit "$FAKE_RELEASE_RC" ;;
   *) echo "unexpected dispatcher call: $*" >&2; exit 1 ;;
@@ -205,6 +282,12 @@ printf 'preflight %s\n' "$*" >> "$COMMAND_LOG"
             "FAKE_PICKUP_REFRESH_RC": str(pickup_refresh_rc),
             "FAKE_CLAIM_JSON": claim_json,
             "FAKE_CLAIM_RC": str(claim_rc),
+            "FAKE_SHOW_BEFORE_JSON": show_before_json,
+            "FAKE_SHOW_AFTER_JSON": show_after_json,
+            "FAKE_SHOW_RC": str(show_rc),
+            "FAKE_SHOW_MARKER": str(tmp_path / "dispatcher-show-complete"),
+            "FAKE_WORKTREE_HEARTBEAT_JSON": worktree_heartbeat_json,
+            "FAKE_WORKTREE_HEARTBEAT_RC": str(worktree_heartbeat_rc),
             "FAKE_LABEL_REPLACE_RC": str(label_replace_rc),
             "FAKE_LABELS_JSON": labels_json,
             "FAKE_LABELS_AFTER_WRITE_JSON": labels_after_write_json,
@@ -294,6 +377,460 @@ def test_dispatcher_backed_pickup_replaces_ready_with_in_progress_after_verified
     assert json.loads(Path(env["FAKE_LABEL_PAYLOAD"]).read_text(encoding="utf-8")) == {
         "labels": ["type:task", "prio:high", "lane:governance", "agent:in-progress"]
     }
+
+
+def test_stale_takeover_is_self_resume_bound_to_active_worktree_and_issue(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    old_expires_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    new_expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    active_issue = json.dumps(
+        {
+            "number": 3301,
+            "state": "open",
+            "labels": [
+                {"name": "type:task"},
+                {"name": "prio:high"},
+                {"name": "lane:governance"},
+                {"name": "agent:in-progress"},
+            ],
+            "body": VALID_READY_BODY,
+        }
+    )
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        claim_json=_dispatcher_claim(),
+        show_before_json=_dispatcher_stale_show(expires_at=old_expires_at),
+        show_after_json=_dispatcher_stale_show(
+            expires_at=old_expires_at,
+            current_lease_id="lease-3301",
+            current_expires_at=new_expires_at,
+        ),
+        issue_json=active_issue,
+        labels_json=(
+            '[{"name":"type:task"},{"name":"prio:high"},'
+            '{"name":"lane:governance"},{"name":"agent:in-progress"}]'
+        ),
+    )
+
+    result = _run(worktree, env, "--takeover-stale")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "stale-takeover-verified" in result.stdout
+    assert "previous_lease_id=lease-old-3301" in result.stdout
+    assert "lease_id=lease-3301 holder=codex-3301" in result.stdout
+    assert "pickup-claim-complete" in result.stdout
+    assert "dispatcher -m app.dispatcher claim" in Path(env["COMMAND_LOG"]).read_text()
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    claim_command = next(
+        line for line in commands.splitlines() if line.startswith("dispatcher ") and " claim " in line
+    )
+    assert "--takeover-stale" in claim_command
+    assert "--expected-lease-id lease-old-3301" in claim_command
+    assert "pickup-refresh" not in commands
+    assert "--allow-dirty" in commands
+    assert "worktree " in commands and "heartbeat" in commands
+    assert commands.count("gh api repos/RasmusTho/agentic-pkm-mvp/issues/3301") == 2
+    assert "repos/RasmusTho/agentic-pkm-mvp/issues/3301/labels" not in commands
+
+
+def test_stale_takeover_refuses_foreign_or_unexpired_lease_before_claim(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    active_issue = json.dumps(
+        {
+            "number": 3301,
+            "state": "open",
+            "labels": [{"name": "agent:in-progress"}],
+            "body": VALID_READY_BODY,
+        }
+    )
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    worktree, foreign_env = _make_harness(
+        tmp_path / "foreign",
+        status_json=json.dumps(
+            {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed"}
+        ),
+        show_before_json=_dispatcher_stale_show(
+            expires_at=future,
+            holder="another-agent",
+        ),
+        issue_json=active_issue,
+    )
+
+    foreign = _run(worktree, foreign_env, "--takeover-stale")
+
+    assert foreign.returncode != 0
+    assert "stale takeover refused" in foreign.stderr
+    foreign_commands = Path(foreign_env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher -m app.dispatcher claim" not in foreign_commands
+    assert not any(line.startswith("worktree ") for line in foreign_commands.splitlines())
+
+    worktree, unexpired_env = _make_harness(
+        tmp_path / "unexpired",
+        status_json=json.dumps(
+            {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed"}
+        ),
+        show_before_json=_dispatcher_stale_show(
+            expires_at=future,
+        ),
+        issue_json=active_issue,
+    )
+
+    unexpired = _run(worktree, unexpired_env, "--takeover-stale")
+
+    assert unexpired.returncode != 0
+    assert "expired lease held by this agent" in unexpired.stderr
+    unexpired_commands = Path(unexpired_env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher -m app.dispatcher claim" not in unexpired_commands
+    assert not any(line.startswith("worktree ") for line in unexpired_commands.splitlines())
+
+
+def test_stale_takeover_refuses_task_from_another_repository_before_claim(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    old_expires_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    active_issue = json.dumps(
+        {
+            "number": 3301,
+            "state": "open",
+            "labels": [{"name": "agent:in-progress"}],
+            "body": VALID_READY_BODY,
+        }
+    )
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed"}
+        ),
+        show_before_json=_dispatcher_stale_show(
+            expires_at=old_expires_at,
+            task_repo="Other/agentic-pkm-mvp",
+        ),
+        issue_json=active_issue,
+    )
+
+    result = _run(worktree, env, "--takeover-stale")
+
+    assert result.returncode != 0
+    assert "dispatcher stale-lease verification failed: task repository" in result.stderr
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher -m app.dispatcher claim" not in commands
+    assert "dispatcher -m app.dispatcher release" not in commands
+    assert "/labels" not in commands
+
+
+def test_stale_takeover_refuses_explicit_foreign_task_id_before_dispatcher_access(
+    tmp_path: Path,
+) -> None:
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed"}
+        ),
+    )
+
+    result = _run(
+        worktree,
+        env,
+        "--takeover-stale",
+        "--task-id",
+        "github-Other--agentic-pkm-mvp-issue-3301",
+    )
+
+    assert result.returncode == 2
+    assert "task id does not match the selected repository and Issue" in result.stderr
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher " not in commands
+
+
+def test_stale_takeover_refuses_fallback_and_invalid_issue_state(
+    tmp_path: Path,
+) -> None:
+    worktree, fallback_env = _make_harness(
+        tmp_path / "fallback",
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": False,
+                "coordination_mode": "github-label-only-fallback",
+                "fallback_reason": "dispatcher_db_missing",
+            }
+        ),
+    )
+
+    fallback = _run(worktree, fallback_env, "--takeover-stale")
+
+    assert fallback.returncode != 0
+    assert "requires dispatcher-backed coordination" in fallback.stderr
+    fallback_commands = Path(fallback_env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher -m app.dispatcher claim" not in fallback_commands
+    assert "gh " not in fallback_commands
+
+    blocked_issue = json.dumps(
+        {
+            "number": 3301,
+            "state": "open",
+            "labels": [
+                {"name": "agent:in-progress"},
+                {"name": "agent:blocked"},
+            ],
+            "body": VALID_READY_BODY,
+        }
+    )
+    worktree, invalid_env = _make_harness(
+        tmp_path / "invalid",
+        status_json=json.dumps(
+            {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed"}
+        ),
+        issue_json=blocked_issue,
+    )
+
+    invalid = _run(worktree, invalid_env, "--takeover-stale")
+
+    assert invalid.returncode != 0
+    assert "exact Issue is not freshly open, in-progress, and strictly valid" in invalid.stderr
+    invalid_commands = Path(invalid_env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher -m app.dispatcher show" not in invalid_commands
+    assert "dispatcher -m app.dispatcher claim" not in invalid_commands
+
+
+def test_stale_takeover_requires_current_session_worktree_registration(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    old_expires_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    active_issue = json.dumps(
+        {
+            "number": 3301,
+            "state": "open",
+            "labels": [{"name": "agent:in-progress"}],
+            "body": VALID_READY_BODY,
+        }
+    )
+    expected_worktree = (tmp_path / "worktree").resolve()
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed"}
+        ),
+        show_before_json=_dispatcher_stale_show(expires_at=old_expires_at),
+        issue_json=active_issue,
+        worktree_heartbeat_json=json.dumps(
+            {
+                "path": str(expected_worktree),
+                "branch": "codex/issue-3301-dispatcher-pickup-receipt",
+                "generation": "a" * 32,
+                "owner": "another-session",
+                "status": "active",
+            }
+        ),
+    )
+
+    result = _run(worktree, env, "--takeover-stale")
+
+    assert result.returncode != 0
+    assert "does not own the active target worktree registration" in result.stderr
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher -m app.dispatcher claim" not in commands
+    assert "repos/RasmusTho/agentic-pkm-mvp/issues/3301/labels" not in commands
+
+
+def test_stale_takeover_is_not_a_preflight_only_mode(tmp_path: Path) -> None:
+    worktree, env = _make_harness(tmp_path, status_json="{}")
+
+    result = _run(worktree, env, "--takeover-stale", "--preflight-only")
+
+    assert result.returncode == 2
+    assert "cannot be combined with --preflight-only" in result.stderr
+    assert not Path(env["COMMAND_LOG"]).exists()
+
+
+def test_stale_takeover_keeps_claim_when_exact_event_readback_is_missing(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    old_expires_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    new_expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    active_issue = json.dumps(
+        {
+            "number": 3301,
+            "state": "open",
+            "labels": [{"name": "agent:in-progress"}],
+            "body": VALID_READY_BODY,
+        }
+    )
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed"}
+        ),
+        claim_json=_dispatcher_claim(),
+        show_before_json=_dispatcher_stale_show(expires_at=old_expires_at),
+        show_after_json=_dispatcher_stale_show(
+            expires_at=old_expires_at,
+            current_lease_id="lease-3301",
+            current_expires_at=new_expires_at,
+        ).replace('"takeover"', '"unexpected"'),
+        issue_json=active_issue,
+    )
+
+    result = _run(worktree, env, "--takeover-stale")
+
+    assert result.returncode != 0
+    assert "claim-retained" in result.stderr
+    assert "pickup-claim-complete" not in result.stdout
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher -m app.dispatcher release" not in commands
+    assert "repos/RasmusTho/agentic-pkm-mvp/issues/3301/labels" not in commands
+
+
+def test_stale_takeover_does_not_confirm_foreign_repository_readback(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    old_expires_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    new_expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    active_issue = json.dumps(
+        {
+            "number": 3301,
+            "state": "open",
+            "labels": [{"name": "agent:in-progress"}],
+            "body": VALID_READY_BODY,
+        }
+    )
+    foreign_readback = _dispatcher_stale_show(
+        expires_at=old_expires_at,
+        current_lease_id="lease-3301",
+        current_expires_at=new_expires_at,
+    ).replace('"repo": "RasmusTho/agentic-pkm-mvp"', '"repo": "Other/agentic-pkm-mvp"')
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed"}
+        ),
+        claim_json=_dispatcher_claim(),
+        show_before_json=_dispatcher_stale_show(expires_at=old_expires_at),
+        show_after_json=foreign_readback,
+        issue_json=active_issue,
+        labels_json='[{"name":"agent:in-progress"}]',
+    )
+
+    result = _run(worktree, env, "--takeover-stale")
+
+    assert result.returncode != 0
+    assert "claim-not-confirmed" in result.stderr
+    assert "pickup-claim-complete" not in result.stdout
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher -m app.dispatcher release" not in commands
+    assert "repos/RasmusTho/agentic-pkm-mvp/issues/3301/labels" not in commands
+
+
+def test_stale_takeover_recovers_commit_then_nonzero_from_exact_readback(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    old_expires_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    new_expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    active_issue = json.dumps(
+        {
+            "number": 3301,
+            "state": "open",
+            "labels": [{"name": "agent:in-progress"}],
+            "body": VALID_READY_BODY,
+        }
+    )
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed"}
+        ),
+        claim_json="dispatcher command exited after commit",
+        claim_rc=1,
+        show_before_json=_dispatcher_stale_show(expires_at=old_expires_at),
+        show_after_json=_dispatcher_stale_show(
+            expires_at=old_expires_at,
+            current_lease_id="lease-3301",
+            current_expires_at=new_expires_at,
+        ),
+        issue_json=active_issue,
+        labels_json='[{"name":"agent:in-progress"}]',
+    )
+
+    result = _run(worktree, env, "--takeover-stale")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "command exited 1 after commit" in result.stderr
+    assert "pickup-claim-complete" in result.stdout
+    assert "lease_id=lease-3301 holder=codex-3301" in result.stdout
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "--expected-lease-id lease-old-3301" in commands
+    assert "dispatcher -m app.dispatcher show" in commands
+    assert "dispatcher -m app.dispatcher release" not in commands
+    assert "repos/RasmusTho/agentic-pkm-mvp/issues/3301/labels" not in commands
+
+
+def test_stale_takeover_predecessor_mismatch_is_retained_without_release(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    observed_expires_at = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    replacement_expires_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    current_expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    active_issue = json.dumps(
+        {
+            "number": 3301,
+            "state": "open",
+            "labels": [{"name": "agent:in-progress"}],
+            "body": VALID_READY_BODY,
+        }
+    )
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed"}
+        ),
+        claim_json="",
+        claim_rc=1,
+        show_before_json=_dispatcher_stale_show(expires_at=observed_expires_at),
+        show_after_json=_dispatcher_stale_show(
+            lease_id="lease-other-predecessor",
+            expires_at=replacement_expires_at,
+            current_lease_id="lease-new-3301",
+            current_expires_at=current_expires_at,
+        ),
+        issue_json=active_issue,
+        labels_json='[{"name":"agent:in-progress"}]',
+    )
+
+    result = _run(worktree, env, "--takeover-stale")
+
+    assert result.returncode != 0
+    assert "did not prove the exact predecessor" in result.stderr
+    assert "no-release" in result.stderr
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "--expected-lease-id lease-old-3301" in commands
+    assert "dispatcher -m app.dispatcher release" not in commands
+    assert "repos/RasmusTho/agentic-pkm-mvp/issues/3301/labels" not in commands
 
 
 def test_pickup_normalizes_stale_mixed_agent_labels_without_erasing_non_agent_labels(
