@@ -6624,6 +6624,8 @@ def test_local_retirement_ignores_embedded_code_receipt_examples(
     "Dedicated worktree /tmp/old is still dirty",
     "Pickup intent receipt: worktree: /tmp/old",
     "Preserved worktree: /tmp/old",
+    "Dedicated work<br>tree /tmp/old",
+    "Dedicated worktree /tmp/old is still di<br>rty",
 ])
 @pytest.mark.parametrize("wrapper", [
     "<code>{snippet}</code>", "<pre>{snippet}</pre>",
@@ -6644,6 +6646,10 @@ def test_local_retirement_ignores_embedded_code_receipt_examples(
     "<p>At head {sha}, child delivered.</p><p><code>{snippet}</code></p>",
     "<blockquote><code>{snippet}</code></blockquote>At head {sha}, child delivered.",
     "At head {sha}, child delivered.<blockquote><code>{snippet}</code></blockquote>",
+    "<div><code>{snippet}</code></div><div>At head {sha}, child delivered.</div>",
+    "<section><code>{snippet}</code></section><section>At head {sha}, child delivered.</section>",
+    "<ul><li><code>{snippet}</code></li><li>At head {sha}, child delivered.</li></ul>",
+    "<div><code>{snippet}</code><!-- gap\n\n--></div><div>At head {sha}, child delivered.</div>",
 ])
 def test_local_retirement_ignores_partial_html_receipt_examples(
     tmp_path, monkeypatch, snippet, wrapper
@@ -6692,6 +6698,11 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     "<code>Dedicated worktree /tmp/old is</code> st<br>ill)",
     "<code>Dedicated worktree /tmp/old</code> b<br>ranch: old",
     "<code>Pickup intent receipt: worktree: /tmp/old</code> h<br>ead: invalid",
+    "<code>Dedicated worktree /tmp/old is still dirty</code></td> on branch old at head {sha}",
+    "<code>Pickup intent receipt: worktree: /tmp/old</code></tr> branch: old; HEAD: {sha}",
+    "<code>Preserved worktree: /tmp/old</code></th> branch: old; HEAD: {sha}",
+    "<code>Dedicated worktree /tmp/old is still dirty</code><td> on branch old at head {sha}",
+    "<td><code>Dedicated worktree /tmp/old is still dirty</code></td> on branch old at head {sha}",
     "<code>Dedicated worktree /tmp/old is still dirty<p></p></code> on branch old at head {sha}",
     "<code>Dedicated worktree /tmp/old is still dirty</code></p> on branch old at head {sha}",
 ] + [

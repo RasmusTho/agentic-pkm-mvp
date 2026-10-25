@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, TypeGuard
 
 from markdown_it import MarkdownIt
+from markdown_it.common.html_blocks import block_names
 from markdown_it.rules_inline import backtick, html_inline
 import regex
 
@@ -1777,26 +1778,46 @@ _DISPATCHER_WORKTREE_KEYWORD = _dispatcher_linebreak_tolerant_keyword("worktree"
 _DISPATCHER_IS_KEYWORD = _dispatcher_linebreak_tolerant_keyword("is")
 _DISPATCHER_STILL_KEYWORD = _dispatcher_linebreak_tolerant_keyword("still")
 _DISPATCHER_DIRTY_KEYWORD = _dispatcher_linebreak_tolerant_keyword("dirty")
-_DISPATCHER_RETENTION_SEPARATOR = (
-    r"(?:\s+|[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)"
+_DISPATCHER_RETENTION_SEPARATOR = r"(?:\s+|[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)"
+_DISPATCHER_MARKDOWN = MarkdownIt("commonmark", {"html": True}).enable("strikethrough")
+# Only paired block owners may end an example's statement. Void elements
+# cannot prove a surrounding statement boundary; code/pre are the example.
+_DISPATCHER_EXAMPLE_BLOCK_TAGS = frozenset(block_names) - {
+    "base",
+    "basefont",
+    "col",
+    "frame",
+    "hr",
+    "link",
+    "param",
+    "track",
+}
+_DISPATCHER_EXAMPLE_TAG_RE = re.compile(
+    r"</?(?:" + "|".join(sorted(_DISPATCHER_EXAMPLE_BLOCK_TAGS | {"code", "pre"})) + r")\b",
+    re.IGNORECASE,
 )
-_DISPATCHER_MARKDOWN = MarkdownIt("commonmark", {"html": True}).enable(
-    "strikethrough"
+_DISPATCHER_TABLE_OWNER_TAGS = {
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "td",
+    "th",
+    "caption",
+    "colgroup",
+}
+_DISPATCHER_MARKDOWN_TABLE = (
+    MarkdownIt("commonmark", {"html": True}).enable("table").enable("strikethrough")
 )
-_DISPATCHER_MARKDOWN_TABLE = MarkdownIt("commonmark", {"html": True}).enable(
-    "table"
-).enable("strikethrough")
 _DISPATCHER_SPLITLINES_SEPARATOR_RE = re.compile(r"[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
-_DISPATCHER_MARKDOWN_TASK_PREFIX_RE = re.compile(
-    r"^[ \t]*\[[ xX]\][ \t]+", re.MULTILINE
-)
+_DISPATCHER_MARKDOWN_TASK_PREFIX_RE = re.compile(r"^[ \t]*\[[ xX]\][ \t]+", re.MULTILINE)
 _DISPATCHER_HTML_BREAK_TOKEN_RE = re.compile(
     r"<br(?=[\s/>])(?:[\s]+(?:[^\"'>]|\"[^\"]*\"|'[^']*')*)?[\s]*/?>",
     re.IGNORECASE | re.DOTALL,
 )
 _DISPATCHER_HTML_INVISIBLE_TOKEN_RE = re.compile(
-    r"(?:<\?(?:[^\"'>]|\"[^\"]*\"|'[^']*')*\?>"
-    r"|<![A-Za-z](?:[^\"'>]|\"[^\"]*\"|'[^']*')*>)",
+    r"(?:<\?(?:[^\"'>]|\"[^\"]*\"|'[^']*')*\?>" r"|<![A-Za-z](?:[^\"'>]|\"[^\"]*\"|'[^']*')*>)",
     re.IGNORECASE | re.DOTALL,
 )
 _DISPATCHER_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
@@ -2444,6 +2465,7 @@ class _DispatcherExampleEvent:
 class _DispatcherExampleBlock:
     text: str
     events: list[_DispatcherExampleEvent] = dataclass_field(default_factory=list)
+    structures: list[_DispatcherExampleEvent] = dataclass_field(default_factory=list)
     literals: list[tuple[int, int, int, int]] = dataclass_field(default_factory=list)
     barriers: list[tuple[int, int]] = dataclass_field(default_factory=list)
     bridge: bool = False
@@ -2465,7 +2487,7 @@ def _dispatcher_example_block(
     block = _DispatcherExampleBlock(rendered)
     if token.type not in {"inline", "html_block"} or token.map is None:
         return block
-    if not re.search(r"</?(?:code|pre)\b", token.content, re.IGNORECASE) and not any(
+    if not _DISPATCHER_EXAMPLE_TAG_RE.search(token.content) and not any(
         child.type == "code_inline" for child in token.children or []
     ):
         return block
@@ -2480,8 +2502,6 @@ def _dispatcher_example_block(
         if column < 0:
             raise RuntimeError("dispatcher_activity_invalid")
         offsets.extend(origins[starts[row] + column : starts[row] + column + len(line)])
-
-    paragraphs: list[tuple[str, int, int]] = []
 
     class Events(_DispatcherHTMLBlockTextParser):
         def __init__(
@@ -2509,35 +2529,21 @@ def _dispatcher_example_block(
                 if self.inline
                 else len("".join(self.parts))
             )
-            if tag in {"tr", "td", "th"}:
-                block.barriers.append((position, self.mapping[start]))
-            if tag in {"p", "blockquote"}:
-                if not closing:
-                    paragraphs.append((tag, position, self.mapping[start]))
-                else:
-                    matching = next(
-                        (i for i in range(len(paragraphs) - 1, -1, -1) if paragraphs[i][0] == tag),
-                        None,
-                    )
-                    if matching is not None:
-                        _, opening_position, opening_source = paragraphs[matching]
-                        del paragraphs[matching:]
-                        block.barriers.extend(
-                            ((opening_position, opening_source), (position, self.mapping[start]))
-                        )
-            if tag not in {"code", "pre"}:
+            if tag not in {"code", "pre"} and tag not in _DISPATCHER_EXAMPLE_BLOCK_TAGS:
                 return
             if stop <= start or stop > len(self.mapping) or min(self.mapping[start:stop]) < 0:
                 raise RuntimeError("dispatcher_activity_invalid")
-            block.events.append(
-                _DispatcherExampleEvent(
-                    tag,
-                    closing,
-                    self.mapping[start],
-                    self.mapping[stop - 1] + 1,
-                    position,
-                )
+            event = _DispatcherExampleEvent(
+                tag,
+                closing,
+                self.mapping[start],
+                self.mapping[stop - 1] + 1,
+                position,
             )
+            if tag in {"code", "pre"}:
+                block.events.append(event)
+            else:
+                block.structures.append(event)
 
         def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
             self.record(tag, False)
@@ -2596,11 +2602,13 @@ def _dispatcher_example_block(
             close = rendered.find("-->")
             if close < 0:
                 block.events.clear()
+                block.structures.clear()
                 block.literals.clear()
                 return block
             shift = close + 3 - rendered[:close].count("\n")
             block.events = [event for event in block.events if event.position >= close + 3]
-            for event in block.events:
+            block.structures = [event for event in block.structures if event.position >= close + 3]
+            for event in (*block.events, *block.structures):
                 event.position -= shift
             block.literals = [
                 (a - shift, b - shift, c, d) for a, b, c, d in block.literals if a >= close + 3
@@ -2662,13 +2670,46 @@ def _dispatcher_example_scan_source(body: str) -> str:
             previous.text += "\n\n"
         shift = len(previous.text)
         previous.text += block.text
-        for event in block.events:
+        for event in (*block.events, *block.structures):
             event.position += shift
         previous.events.extend(block.events)
+        previous.structures.extend(block.structures)
         previous.literals.extend((a + shift, b + shift, c, d) for a, b, c, d in block.literals)
         previous.barriers.extend((position + shift, origin) for position, origin in block.barriers)
 
     for block in groups:
+        owners: list[_DispatcherExampleEvent] = []
+        paired: list[tuple[_DispatcherExampleEvent, _DispatcherExampleEvent]] = []
+        valid_structure = True
+        for event in block.structures:
+            if not event.closing:
+                owners.append(event)
+            elif owners and owners[-1].tag == event.tag:
+                paired.append((owners.pop(), event))
+            else:
+                valid_structure = False
+        if valid_structure and not owners:
+            for opening, closing in paired:
+                # A cell/row outside its paired table cannot grant opacity.
+                containing = {
+                    parent.tag
+                    for parent, end in paired
+                    if parent.source_start
+                    < opening.source_start
+                    < closing.source_stop
+                    <= end.source_start
+                }
+                if opening.tag in _DISPATCHER_TABLE_OWNER_TAGS - {"table"}:
+                    if "table" not in containing:
+                        continue
+                    if opening.tag in {"td", "th"} and "tr" not in containing:
+                        continue
+                block.barriers.extend(
+                    (
+                        (opening.position, opening.source_start),
+                        (closing.position, closing.source_start),
+                    )
+                )
         literal_ranges = [(a, b) for a, b, _, _ in block.literals]
         literal_stack: list[_DispatcherExampleEvent] = []
         for event in block.events:
@@ -2710,6 +2751,14 @@ def _dispatcher_example_scan_source(body: str) -> str:
             complete = receipt_example(text)
             partial = any(
                 _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE.search(part)
+                or re.search(
+                    rf"^\s*{_DISPATCHER_DEDICATED_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
+                    rf"{_DISPATCHER_WORKTREE_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
+                    rf"`?/[^\s;`,]+`?(?:\s+{_DISPATCHER_IS_KEYWORD}(?:\s+{_DISPATCHER_STILL_KEYWORD})?)?\s*$",
+                    part,
+                    re.IGNORECASE,
+                )
+                or _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.search(part)
                 or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(part)
                 or _DISPATCHER_PRESERVED_WORKTREE_RE.search(part)
                 or (
