@@ -280,14 +280,19 @@ def _instance_preflight(channel: str) -> None:
 
 
 def preflight(selector: str) -> Path | None:
+    from app.config.activation_scope import runtime_activation_scope
     from app.config.environment import active_environment
     from app.config.paths import resolve_optional_vault_root
     from app.objects import resolve_store_backend
     from app.version import get_runtime_version
 
-    match = re.fullmatch(r'(dev|test|prod):([0-9a-f]{40})', selector)
+    # Text scope is part of the strict wire selector. Pre-scope images reject
+    # this shape in their first preflight, before migrations/replay/runtime.
+    match = re.fullmatch(r'(dev|test|prod):([0-9a-f]{40})(?::(text-capture))?', selector)
+    scope = runtime_activation_scope()
     if (
         match is None or os.environ.get('NATIVE_SOURCE_BOOTSTRAP') != selector
+        or scope != (match[3] or 'full')
         or os.environ.get('PKM_ENVIRONMENT') != match[1]
         or active_environment() != match[1]
         or get_runtime_version().get('git_sha') != match[2]
@@ -303,6 +308,8 @@ def preflight(selector: str) -> Path | None:
     # StorePort construction can run provider initialization/repair effects, so
     # defer it until the bound-root Product-readiness path below.
     if (root is not None and not root.is_dir()) or resolve_store_backend() != 'pg':
+        raise ValueError('source context invalid')
+    if scope == 'text-capture' and root is None:
         raise ValueError('source context invalid')
     return root
 
@@ -401,6 +408,9 @@ def rebuild_if_needed(selector: str) -> None:
         # or invalid configured roots still raise at the canonical resolver.
         return
     _checkpoint('source_settings_failed', _run_json, ['settings', 'validate', '--json'])
+    from app.config.activation_scope import runtime_activation_scope
+    if runtime_activation_scope() == 'text-capture':
+        return
     product_ready = _checkpoint('source_readiness_failed', _product_ready, root)
     rebuild_source_projection = not product_ready
     if product_ready:

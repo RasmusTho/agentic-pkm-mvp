@@ -1234,6 +1234,68 @@ and security exposure boundaries remain in force.
 
 ### Native source preflight and recovery
 
+The native deployment request supports an explicit DEV/TEST-only
+`--activation-scope text-capture` on the existing automatic, existing-secrets-only
+host command. The default is `full`; its retained request representation and
+semantic readiness requirements are unchanged. Unknown scopes, PROD, bootstrap,
+authority/principal cutover, source-repair operations, and same-operation scope
+changes refuse. This is source support for a separately authorized operation;
+it grants no installation, credential, DB, service or deployment authority.
+
+Scope travels in `DeployPlan` through host serialization, supervisor admission,
+the private immutable request/journal, worker argv, the inherited worker guard,
+the channel pin and the API-only Compose override. Ambient scope variables cannot
+opt a deployment into it. The worker and shell refuse propagation disagreement;
+an unknown, empty or duplicate active pin scope refuses. A full deployment clears
+the text pin, and the previous pin preserves scope for governed rollback. The API
+factory also rejects an unknown scope and text scope outside DEV/TEST, including
+the ordinary default-to-PROD environment posture.
+The text source-bootstrap selector is explicitly `dev|test:<SHA>:text-capture`.
+It must agree with runtime scope. Older images reject that strict selector before
+API migration/bootstrap, source replay or runtime entry; an environment variable
+alone never asks an older bootstrap to perform a relaxed deployment. Full retains
+the existing `channel:<SHA>` selector.
+
+Text activation still authenticates existing secrets and the real PostgreSQL
+backend, selected existing root, instance ownership, principal and runtime floors,
+restart fences, writer exclusion, migration inventory/execution and rollback
+constraints. It runs the ordinary source-bootstrap preflight and settings check
+after migrations. It omits embedding/model probing, selected-source replay,
+legacy identity reconciliation, vector repair and strict derived-index readiness.
+Only API and the managed Companion gateway are recreated; worker, watcher and
+capture-watch remain stopped. API startup omits index/cache warming, and capture
+omits the optional standing-question classifier/proposal (`registration_state:
+unavailable`). Capture append, WriteGuard/context refusal, governed-write receipt
+and event persistence retain their existing paths.
+Workspace reads omit the optional missing-UUID heal and preserve original bytes;
+a missing persisted identity stays visibly unresolved.
+
+The app assembly enforces a finite method/path boundary: GET orientation,
+vault-browser, workspace, vault-link-index, vault/notes and vault-related under
+`/api/companion`, plus GET active-context/selection and vault/notes/scoped for an
+already selected session. GET vault/context retains the existing proof harness's
+exact selected-root/vault-ID diagnostic. POST capture and capture/compatibility preserve the
+served client's existing document-bound write transport. Read-only briefing/today
+and existing health/status/version/metrics diagnostics remain. The session reads
+retain their real principal/context guards; compatibility capture retains its
+document write precondition and WriteGuard. Other routes and methods, including
+ASK/search, Canvas, TTS, first-contact generation, picker mutations and note-save
+mutations, return `activation_scope_unavailable` before dependencies or handlers.
+Health uses cached model observations and retains its actual readiness failures.
+
+The active API reports scope in response headers and health diagnostics; scoped
+health and the deployment receipt explicitly carry `full_channel_qualified:
+false`. The native terminal receipt binds `activation_scope`, and cannot satisfy
+a full-scope request. Text completion checks liveness, scope and exact version;
+it is not full health, heavy/journaling acceptance, a signed TEST promotion PASS,
+or PROD qualification. Source/CI delivery is separate from admitted DEV/TEST
+capture/find/open proof under #6321 and native effects under #3347. Their fixture,
+current-day-briefing-or-disabled-producer and consumed-operation no-replay
+preconditions remain mandatory.
+The browser proof harness recognizes only the plain and compatibility capture
+paths, sharing one armed, durably consumed capture budget across both. Its
+response interception and offline abort follow those same exact paths.
+
 Repository-only public-file transaction support (#6331) is available in
 `app.ops.bws_control_installation`. Its callable `install_public_files` consumes an exact
 finite reviewed manifest, replacement bytes and authenticated application/control/launcher/backup
@@ -1268,7 +1330,7 @@ admission, or same-final-image DEV/TEST acceptance. No boolean assertion replace
 prerequisites. #3347 remains open; repository delivery is neither an assembled installation
 packet nor permission to operate it.
 
-For BWS deploys, the target image's native-source embedding dependency is preflighted before the
+For full-scope BWS deploys, the target image's native-source embedding dependency is preflighted before the
 migration writer drain. A strict Product embedding route selects the current provider/model; the
 redacted Compose handoff exposes only those two fields. If Ollama is selected, the deploy starts the
 existing channel Ollama service, verifies or pulls that exact model, and probes the Product
@@ -1787,6 +1849,9 @@ need an archive volume. Once archive metadata is declared, the same preflight re
 and requires the already-mounted, identity-verified volume before any prod mutation. A present but
 malformed or unreadable channel config is also fail-closed and is never treated as absence. Archive
 operations themselves continue to fail closed without a verified binding.
+
+The numbered procedure below describes full activation. The explicit text scope
+above retains foundational steps 1–3 and uses its bounded startup/observations.
 
 1. **Pin the ref.** Resolve the commit SHA to deploy and its already-built image tag (`ghcr.io/<owner>/pkm-app:<sha>`). For `prod`, the SHA must be the one authorized by the promotion-plan contract in `docs/RELEASE_CHANNELS/README.md` (the `stable`-ref decision; see also #2527). Update the channel's deploy-pin file to that tag.
 2. **Migration gate (classification for every channel; operator acknowledgment for prod).** Diff the migrations between the currently-running SHA and the target SHA and classify each per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`. Record reversible and forward-only migrations in the deploy receipt for every channel. A forward-only classification describes recovery behavior; it does not by itself require an operator decision for `dev` or `test`. On every PROD deploy, a read-only pre-writer-stop probe runs the resolved candidate image's migration graph against `pkm-prod/app`; an explicit, target-bound operator acknowledgment is required before writer stop only when that live database has a pending forward-only migration. Changed classification metadata for an already-applied migration remains in the receipt but does not by itself require an acknowledgment. Reversible migrations proceed under the standard gate. DEV/TEST retain their channel-scoped migration and recovery behavior without inheriting PROD's acknowledgment gate.

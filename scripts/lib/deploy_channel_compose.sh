@@ -706,6 +706,21 @@ sys.stdout.write(container_signboard)
 PY
 }
 
+_deploy_channel_pin_activation_scope() {
+  local pin="$1" channel="$2" scope
+  scope=full
+  if [ -f "${pin}" ]; then
+    scope="$(awk 'BEGIN {value="full"} /^DEPLOY_ACTIVATION_SCOPE=/ {count++; value=substr($0, 25)} END {if (count>1) exit 78; print value}' "${pin}")" || {
+      echo 'active activation scope refused' >&2; return 78;
+    }
+  fi
+  case "${scope}:${channel}" in
+    full:dev|full:test|full:prod) printf 'full\n' ;;
+    text-capture:dev|text-capture:test) printf 'text-capture\n' ;;
+    *) echo 'active activation scope refused' >&2; return 78 ;;
+  esac
+}
+
 _deploy_channel_signboard_override_document() {
   cat <<'YAML'
 services:
@@ -713,6 +728,7 @@ services:
     environment:
       SIGNBOARD_ROOT:
 YAML
+  printf '      PKM_ACTIVATION_SCOPE: "%s"\n' "${1:-full}"
 }
 
 # host_secret_contract.json declares the `heimdal-capture-watch` consumer for
@@ -1101,7 +1117,9 @@ deploy_channel_compose() {
     # when the subshell running the actual Compose invocation exits, on every
     # path including an early `exit 1` above or a failing Compose command.
     trap 'rm -f -- "${signboard_override_file}" "${compose_stdout_file}" "${compose_stderr_file}"; if [ -n "${runtime_env_snapshot_file}" ]; then rm -f -- "${runtime_env_snapshot_file}"; fi' EXIT
-    _deploy_channel_signboard_override_document > "${signboard_override_file}"
+    local active_activation_scope
+    active_activation_scope="$(_deploy_channel_pin_activation_scope "${channel_env_file}" "${channel}")" || return $?
+    _deploy_channel_signboard_override_document "${active_activation_scope}" > "${signboard_override_file}"
     compose_args+=(-f "${signboard_override_file}")
 
     # Compose gives the caller shell precedence over --env-file values. Pin the

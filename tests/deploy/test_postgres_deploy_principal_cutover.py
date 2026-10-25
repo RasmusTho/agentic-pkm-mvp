@@ -122,10 +122,14 @@ def native(tmp_path, monkeypatch, request):
         elif argv[:2] == ['bash', str(root / 'scripts/deploy_channel.sh')]:
             plan = cfg.journal.bound_plan(cfg.journal.read().operation_id)
             assert argv[2:] == ['deploy', channel, state.sha, '--image-digest', DIGEST,
+                                *(['--activation-scope', plan.activation_scope] if plan.activation_scope != 'full' else []),
                                 *(['--automatic'] if plan.automatic else [])]
             assert cfg.journal.read().stage == 'activating'
             assert kwargs['pass_fds'] == (supervisor.operation.effects.lock_fd,)
             environment = kwargs['env']
+            if plan.activation_scope != 'full':
+                # The real shell derives this from argv before its first guard.
+                environment = {**environment, 'DEPLOY_ACTIVATION_SCOPE': argv[argv.index('--activation-scope') + 1]}
             # This is the first production shell guard, not a mocked admission.
             with patch.dict(os.environ, environment, clear=True):
                 linux.inherited_worker_guard(channel)

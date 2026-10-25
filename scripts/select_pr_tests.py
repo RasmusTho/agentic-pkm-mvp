@@ -416,7 +416,9 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "alembic.ini",
         "app/__init__.py",
         "app/alembic/versions/e7b4c9d2a6f1_heimdal_raw_representation.py",
+        "app/api/app.py",
         "app/cli.py",
+        "app/config/activation_scope.py",
         "app/config/database.py",
         "app/instance/mvr05_cutover.py",
         "app/instance/runtime.py",
@@ -1426,6 +1428,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 
 EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
     "governance": CI_CONTRACT_PATHS,
+    # Native request admission and API assembly share this finite scope helper.
+    # Own only this file; unknown sibling config modules still fail closed.
+    "companion_ui": frozenset({"app/config/activation_scope.py"}),
+    "ops_deploy": frozenset({"app/config/activation_scope.py"}),
     # The companion/source predicate is shared by watcher traversal, queued
     # workers and Alpha ingestion. A helper-only edit must execute all three
     # existing source-boundary owners without claiming sibling services.

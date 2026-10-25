@@ -69,6 +69,17 @@ def test_ci_wait_helper_does_not_narrow_cochanged_protected_source(protected_pat
         assert "tests/deploy" in selection.targets
 
 
+def test_activation_scope_helper_selects_api_and_native_deploy_coverage() -> None:
+    selection = select_tests(["app/config/activation_scope.py"])
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert selection.subsystems == ("companion_ui", "ops_deploy")
+    assert {"tests/api", "tests/deploy"} <= set(selection.targets)
+    for sibling in ("app/config/activation_scope_extra.py", "app/config/activation_scope.py.backup"):
+        assert select_tests([sibling]).unowned_paths == (sibling,)
+
+
 def test_companion_note_helper_selects_source_boundary_coverage() -> None:
     selection = select_tests(["app/services/companion_note.py"])
 

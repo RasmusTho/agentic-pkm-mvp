@@ -411,6 +411,10 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
             raise PostgresDeployError()
         checkpoint['name'] = 'authority_request_binding'
         bound_plan = cfg.journal.bound_plan(receipt.operation_id)
+        if os.environ.get('BWS_DEPLOY_ACTIVATION_SCOPE', 'full') != bound_plan.activation_scope:
+            raise PostgresDeployError()
+        if os.environ.get('DEPLOY_ACTIVATION_SCOPE', 'full') != bound_plan.activation_scope:
+            raise PostgresDeployError()
         expected_principal = '1' if bound_plan.principal_cutover else None
         if os.environ.get('MVR03_PRINCIPAL_CUTOVER') != expected_principal:
             raise PostgresDeployError()
@@ -429,7 +433,7 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
         if (expected_capture not in {'0', '1'} or expected_migration not in {'0', '1'}
             or not re.fullmatch(r'[0-9a-f]{40}', target_revision)):
             raise PostgresDeployError()
-        if (cutover or bound_plan.principal_cutover) and target_revision != bound_plan.revision:
+        if (cutover or bound_plan.principal_cutover or bound_plan.activation_scope != 'full') and target_revision != bound_plan.revision:
             raise PostgresDeployError()
         # The worker selected these consumers before any deployment mutation. Check
         # capture config again for every Compose call. Before the shell runs its
@@ -1262,6 +1266,7 @@ class LinuxEffects:
         self.active_revision: str | None = None
         self.capture_watch_configured: bool | None = None
         self.raw_migration_pending: bool | None = None
+        self.activation_scope: str | None = None
 
     def environment(
         self, cutover: AuthorityCutover | None = None,
@@ -1271,6 +1276,10 @@ class LinuxEffects:
         cfg = self.config
         runtime_env_file = database_input_files(cfg)[1]
         env = dict(os.environ)
+        for key in ('PKM_ACTIVATION_SCOPE', 'DEPLOY_ACTIVATION_SCOPE', 'BWS_DEPLOY_ACTIVATION_SCOPE'):
+            env.pop(key, None)
+        if self.activation_scope == 'text-capture':
+            env['BWS_DEPLOY_ACTIVATION_SCOPE'] = self.activation_scope
         if candidate is not None:
             candidate.validate()
             source_persistence_candidate = (
@@ -2717,15 +2726,17 @@ class LinuxEffects:
             or self.capture_watch_configured != capture
             or self.raw_migration_pending != migration
             or self.active_revision != plan.revision
+            or self.activation_scope != plan.activation_scope
         ):
             raise PostgresDeployError()
         self.active_consumers = candidate
         self.active_revision = plan.revision
         self.capture_watch_configured = capture
         self.raw_migration_pending = migration
+        self.activation_scope = plan.activation_scope
         return DeployPlan(plan.channel, plan.revision, plan.services, candidate, plan.ack_forward_only,
                           plan.image_digest, plan.automatic, plan.authority_cutover, plan.promotion_plan,
-                          plan.principal_cutover)
+                          plan.principal_cutover, plan.activation_scope)
 
     def require_promotion_admission(self, plan: DeployPlan) -> None:
         if plan.channel == 'prod':
@@ -3047,6 +3058,8 @@ class LinuxEffects:
                 argv += ['--image-digest', plan.image_digest]
             if plan.promotion_plan:
                 argv += ['--promotion-plan', plan.promotion_plan]
+            if plan.activation_scope != 'full':
+                argv += ['--activation-scope', plan.activation_scope]
             if plan.automatic:
                 argv.append('--automatic')
             _command(argv, cwd=self.config.root, env=env, pass_fds=(self.lock_fd,),

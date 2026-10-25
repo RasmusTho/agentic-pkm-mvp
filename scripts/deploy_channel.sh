@@ -101,6 +101,7 @@ dry_run="${DEPLOY_DRY_RUN:-0}"
 ack_forward_only="${DEPLOY_ACK_FORWARD_ONLY:-0}"
 ack_embedding_rebuild_required="${DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED:-0}"
 automatic=0
+activation_scope=full
 image_digest=""
 promotion_plan=""
 promotion_admission_json="{}"
@@ -110,6 +111,11 @@ while [ "$#" -gt 0 ]; do
     --ack-forward-only) ack_forward_only=1 ;;
     --ack-embedding-rebuild-required) ack_embedding_rebuild_required=1 ;;
     --automatic) automatic=1 ;;
+    --activation-scope)
+      [ "$#" -ge 2 ] || { usage; exit 2; }
+      activation_scope="$2"
+      shift
+      ;;
     --promotion-plan)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       promotion_plan="$2"
@@ -124,6 +130,23 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+case "${activation_scope}" in
+  full|text-capture) ;;
+  *) echo 'activation scope refused' >&2; exit 78 ;;
+esac
+# Request scope comes only from argv. Ambient runtime/env-file selectors cannot
+# authorize a relaxed BWS deployment, and a lost worker argument fails closed.
+DEPLOY_ACTIVATION_SCOPE="${activation_scope}"
+export DEPLOY_ACTIVATION_SCOPE
+if [ "${activation_scope}" != "${BWS_DEPLOY_ACTIVATION_SCOPE:-full}" ]; then
+  echo 'activation scope propagation refused' >&2
+  exit 78
+fi
+if [ "${activation_scope}" = text-capture ] && {
+    [ "${action}" != deploy ] || [ "${channel}" = prod ] || [ "${automatic}" != 1 ]; }; then
+  echo 'text activation requires an explicit DEV/TEST automatic request' >&2
+  exit 78
+fi
 if [ -n "${image_digest}" ] && ! [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "invalid immutable image digest" >&2
   exit 2
@@ -180,6 +203,9 @@ if [ -f "/etc/yggdrasil/bws-deploy/${channel}.json" ]; then
 fi
 if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
   "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}" || exit $?
+fi
+if [ "${activation_scope}" = text-capture ]; then
+  [ "${HOST_SECRET_PROVIDER:-}" = bws ] || { echo 'text activation requires the native worker' >&2; exit 78; }
 fi
 
 # Classify the selected channel before creating temporary state, acquiring the
@@ -312,11 +338,11 @@ read_pin() {
 }
 
 write_pin() {
-  local file="$1" sha="$2" digest="${3:-}"
+  local file="$1" sha="$2" digest="${3:-}" scope="${4:-full}"
   local tmp_file rc
   tmp_file="$(mktemp "${file}.tmp.XXXXXX")" || return $?
   if [ -f "${file}" ]; then
-    awk -F= '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG" && $1 != "APP_IMAGE_DIGEST_SUFFIX" { print }' "${file}" >"${tmp_file}" || {
+    awk -F= '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG" && $1 != "APP_IMAGE_DIGEST_SUFFIX" && $1 != "DEPLOY_ACTIVATION_SCOPE" { print }' "${file}" >"${tmp_file}" || {
       rc=$?
       rm -f -- "${tmp_file}" || true
       return "${rc}"
@@ -333,6 +359,9 @@ write_pin() {
       rm -f -- "${tmp_file}" || true
       return "${rc}"
     }
+  fi
+  if [ "${scope}" = text-capture ]; then
+    printf 'DEPLOY_ACTIVATION_SCOPE=text-capture\n' >>"${tmp_file}" || return $?
   fi
   mv "${tmp_file}" "${file}" || {
     local rc=$?
@@ -406,9 +435,11 @@ mkdir -p "$(dirname "${pin_file}")"
 acquire_channel_mutation_lock
 current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
 current_digest="$(awk -F= '/^APP_IMAGE_DIGEST_SUFFIX=/{sub(/^@/, "", $2); print $2; exit}' "${pin_file}" 2>/dev/null || true)"
+current_activation_scope="$(_deploy_channel_pin_activation_scope "${pin_file}" "${channel}")" || exit $?
 target_sha="$(resolve_target_sha "${target_sha}")"
 if [ "${action}" = "rollback" ] && [ "${target_sha}" = "$(read_pin "${previous_pin_file}" 2>/dev/null || true)" ]; then
   image_digest="$(awk -F= '/^APP_IMAGE_DIGEST_SUFFIX=/{sub(/^@/, "", $2); print $2; exit}' "${previous_pin_file}" 2>/dev/null || true)"
+  activation_scope="$(_deploy_channel_pin_activation_scope "${previous_pin_file}" "${channel}")" || exit $?
 fi
 # Compose must never inherit an unrelated caller digest, including on rollback.
 APP_IMAGE_DIGEST_SUFFIX="${image_digest:+@${image_digest}}"
@@ -1123,6 +1154,14 @@ health_gate() {
   wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
 }
 
+text_activation_gate() {
+  wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
+  wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
+  local observation
+  observation="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/api/health")" || return $?
+  "${PYTHON}" -c 'import json,sys; p=json.load(sys.stdin); assert p.get("activation_scope") == "text-capture" and p.get("full_channel_qualified") is False' <<<"${observation}"
+}
+
 embedding_provider_preflight_gate() {
   # Explicit embedding sources are authoritative.  Validate them in the
   # recreated API before the channel health gate can report this deployment
@@ -1152,6 +1191,13 @@ retire_scalar_rollback_services() {
 recreate_channel_services() {
   local rc=0
   local -a runtime_services=(api worker watcher)
+  if [ "$(_deploy_channel_pin_activation_scope "${pin_file}" "${channel}")" = text-capture ]; then
+    compose stop worker watcher heimdal-capture-watch || return $?
+    compose up -d --force-recreate --no-deps api || return $?
+    wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
+    compose up -d --force-recreate --no-deps companion-ui
+    return $?
+  fi
   if [ "${scalar_rollback}" = "1" ]; then
     compose stop api worker watcher heimdal-capture-watch companion-ui \
       scalar-rollback-gateway || return $?
@@ -1298,8 +1344,14 @@ apply_changed_migrations() {
 
 rollback_runtime_complete_gate() {
   local rows service result state health
+  local scope
+  local -a runtime_services=(api worker watcher)
+  scope="$(_deploy_channel_pin_activation_scope "${pin_file}" "${channel}")" || return $?
+  if [ "${scope}" = text-capture ]; then
+    runtime_services=(api companion-ui)
+  fi
   rows="$(compose ps --all --format json)" || return $?
-  for service in api worker watcher; do
+  for service in "${runtime_services[@]}"; do
     result="$(ROLLBACK_RUNTIME_ROWS="${rows}" ROLLBACK_RUNTIME_SERVICE="${service}" "${PYTHON}" -c '
 import json, os
 raw = os.environ["ROLLBACK_RUNTIME_ROWS"]
@@ -1315,11 +1367,22 @@ raise SystemExit(1)
 ')" || return 1
     IFS=$'\t' read -r state health <<<"${result}"
     [ "${state}" = "running" ] || return 1
-    case "${health}" in
-      healthy|running|'') ;;
-      *) return 1 ;;
-    esac
+    if [ "${scope}" = full ]; then
+      case "${health}" in
+        healthy|running|'') ;;
+        *) return 1 ;;
+      esac
+    fi
   done
+  if [ "${scope}" = text-capture ]; then
+    ROLLBACK_RUNTIME_ROWS="${rows}" "${PYTHON}" -c '
+import json, os
+raw = os.environ["ROLLBACK_RUNTIME_ROWS"]
+rows = json.loads(raw) if raw.startswith("[") else [json.loads(line) for line in raw.splitlines() if line]
+assert not any(row.get("Service") in {"worker", "watcher", "heimdal-capture-watch"} and row.get("State") == "running" for row in rows)
+' || return $?
+    text_activation_gate || return $?
+  fi
 }
 
 rollback_failed_startup() {
@@ -1397,7 +1460,7 @@ rollback_failed_startup() {
   fi
   if [ -n "${current_sha}" ]; then
     echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
-    if ! write_pin "${pin_file}" "${current_sha}" "${current_digest}"; then
+    if ! write_pin "${pin_file}" "${current_sha}" "${current_digest}" "${current_activation_scope}"; then
       echo "rollback pin restore failed for previous pin ${current_sha}" >&2
       return 0
     fi
@@ -1522,6 +1585,7 @@ native_source_failure() {
 }
 
 native_source_embedding_preflight_gate() {
+  [ "${activation_scope}" != text-capture ] || return 0
   if [ "${HOST_SECRET_PROVIDER:-}" != bws ] || [ "${action}" != deploy ]; then
     NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY=1
     return 0
@@ -1678,8 +1742,13 @@ native_source_projection_gate() {
   if [ "${HOST_SECRET_PROVIDER:-}" != bws ] || [ "${action}" != deploy ]; then
     return 0
   fi
-  [ "${NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY:-0}" = "1" ] || { native_source_failure embedding_context_invalid; return 78; }
-  local operation="${BWS_DEPLOY_OPERATION_ID:-}" name="" rc=0
+  if [ "${activation_scope}" != text-capture ]; then
+    [ "${NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY:-0}" = "1" ] || { native_source_failure embedding_context_invalid; return 78; }
+  fi
+  local operation="${BWS_DEPLOY_OPERATION_ID:-}" name="" rc=0 selector="${channel}:${target_sha}"
+  if [ "${activation_scope}" = text-capture ]; then
+    selector="${selector}:text-capture"
+  fi
   [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure source_preflight_failed; return 78; }
   [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure source_preflight_failed; return 78; }
   [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
@@ -1695,7 +1764,7 @@ native_source_projection_gate() {
   compose run --no-deps -T --name "${name}" \
     --label "yggdrasil.native.operation=${operation}" \
     --label "yggdrasil.native.revision=${target_sha}" \
-    -e "NATIVE_SOURCE_BOOTSTRAP=${channel}:${target_sha}" api || rc=$?
+    -e "NATIVE_SOURCE_BOOTSTRAP=${selector}" api || rc=$?
   local terminal_rc=0
   native_source_terminal_cleanup "${name}" "${rc}" || terminal_rc=$?
   # Only the observer's documented result namespace proves cleanup. A Python
@@ -1999,6 +2068,9 @@ payload = {
         os.environ.get("DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK", "0") == "1"
     ),
 }
+scope = "${activation_scope}"
+if scope != "full":
+    payload.update(activation_scope=scope, full_channel_qualified=False)
 if payload["channel"] == "prod" and payload["action"] == "deploy":
     payload["stable_promotion"] = json.loads(os.environ["DEPLOY_PROMOTION_ADMISSION_JSON"])
 Path(sys.argv[1]).write_text(
@@ -2213,15 +2285,15 @@ if [ "${scalar_rollback}" = "1" ]; then
   # in the ordinary rollback anchor, so the same command can resume without an
   # explicit SHA after a crash or partial container establishment.
   write_pin "${previous_pin_file}" "${target_sha}"
-elif [ -n "${current_sha}" ] && { [ "${current_sha}" != "${target_sha}" ] || [ "${current_digest}" != "${image_digest}" ]; }; then
+elif [ -n "${current_sha}" ] && { [ "${current_sha}" != "${target_sha}" ] || [ "${current_digest}" != "${image_digest}" ] || [ "${current_activation_scope}" != "${activation_scope}" ]; }; then
   # A same-target retry (or same-SHA redeploy) reads current_sha == target_sha
   # because a prior failed attempt already advanced the pin; overwriting the
   # rollback anchor with the failed target would make the true last-known-good
   # SHA unrecoverable through the rollback contract.
-  write_pin "${previous_pin_file}" "${current_sha}" "${current_digest}"
+  write_pin "${previous_pin_file}" "${current_sha}" "${current_digest}" "${current_activation_scope}"
 fi
 if [ "${scalar_rollback}" != "1" ]; then
-  write_pin "${pin_file}" "${target_sha}" "${image_digest}"
+  write_pin "${pin_file}" "${target_sha}" "${image_digest}" "${activation_scope}"
 fi
 rollback_target_recreated=0
 
@@ -2281,6 +2353,13 @@ if [ "${scalar_rollback}" = "1" ]; then
   DEPLOY_FAILURE_STAGE=scalar_runtime
   run_postmutation_gate "scalar rollback runtime gate failed" \
     scalar_rollback_runtime_gate || exit $?
+elif [ "${activation_scope}" = text-capture ]; then
+  # Foundational admission/migrations and the no-replay source preflight above
+  # remain mandatory. These observations qualify only this bounded surface.
+  DEPLOY_FAILURE_STAGE=health
+  run_postmutation_gate "text activation observation failed" text_activation_gate || exit $?
+  DEPLOY_FAILURE_STAGE=version
+  run_postmutation_gate "version gate failed" version_gate || exit $?
 else
   DEPLOY_FAILURE_STAGE=embedding_configuration
   run_postmutation_gate "embedding provider configuration preflight failed" \
