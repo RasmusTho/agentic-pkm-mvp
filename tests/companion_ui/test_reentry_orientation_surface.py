@@ -342,7 +342,10 @@ def test_no_mutation_calls() -> None:
     assert client.delete_calls == []
     assert "method: 'POST'" not in html
     assert 'data-api-method="POST"' not in html
-    assert "/api/companion/note/save" not in html
+    # The shared transport recognizes explicit save intent on every document;
+    # this orientation surface still emits no note-save producer or action.
+    assert 'data-api-path="/api/companion/note/save"' not in html
+    assert 'id="note-source-editor"' not in html
     assert "/api/companion/workspace/body" not in html
     assert "/api/panel/confirm" not in html
 
