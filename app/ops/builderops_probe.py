@@ -118,6 +118,14 @@ def _number(value: object) -> bool:
 
 def dependencies(config: ProbeConfig) -> list[str]:
     """Read dependencies only; mismatched identity refuses before any alert/state effect."""
+    # Configuration is validated even when a dependency is unavailable. Never
+    # turn an unreadable/malformed credential into a notification attempt.
+    try:
+        token = _read_file(Path(config.probe_token_file), token=True).decode("utf-8").strip()
+    except UnicodeError:
+        raise ProbeRefusal("probe_credential_invalid") from None
+    if not re.fullmatch(r"[!-~]{1,4096}", token):
+        raise ProbeRefusal("probe_credential_invalid")
     if _command("hostname") != config.target_hostname:
         raise ProbeRefusal("target_hostname_mismatch")
     docker = ("docker", "--host", config.engine_socket)
@@ -153,9 +161,6 @@ def dependencies(config: ProbeConfig) -> list[str]:
         failures.append("engine_or_container_unavailable")
         return failures
     try:
-        token = _read_file(Path(config.probe_token_file), token=True).decode("utf-8").strip()
-        if not re.fullmatch(r"[!-~]{1,4096}", token):
-            raise ProbeRefusal("probe_credential_invalid")
         request = urllib.request.Request(
             config.api_url + "/readyz", headers={"Authorization": "Bearer " + token}
         )

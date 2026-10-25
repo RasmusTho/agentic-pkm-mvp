@@ -24,6 +24,7 @@ import json, os, pathlib, sys
 name = pathlib.Path(sys.argv[0]).name
 mode = os.environ.get('CASE', '')
 if name == 'docker' and (os.environ.get('DOCKER_CONTEXT') or os.environ.get('DOCKER_HOST')): sys.exit(77)
+if name == 'docker' and mode == 'engine-down': sys.exit(1)
 with open(os.environ['CALLS'], 'a') as f: f.write(json.dumps({'kind': name, 'args': sys.argv[1:]})+'\\n')
 if name == 'hostname': print('wrong-host' if mode == 'wrong-host' else 'builder-system')
 elif 'info' in sys.argv: print(json.dumps('other-engine' if mode == 'wrong-engine' else 'engine-test'))
@@ -308,4 +309,20 @@ def test_overlapping_probe_refuses_without_notification(tmp_path: Path) -> None:
     with lock.open("r+") as owner:
         fcntl.flock(owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert invoke(env, "worker-stale").returncode == 78
+    assert not any(x["kind"] == "notification" for x in events(env))
+
+
+@pytest.mark.parametrize("private_input", ["missing", "invalid-utf8", "empty"])
+@pytest.mark.parametrize("dependency", ["", "engine-down"])
+def test_private_token_refusal_precedes_outage(
+    tmp_path: Path, private_input: str, dependency: str
+) -> None:
+    env = setup_probe(tmp_path)
+    token = tmp_path / "probe-token"
+    if private_input == "missing":
+        token.unlink()
+    else:
+        token.write_bytes(b"\xff\xfe" if private_input == "invalid-utf8" else b"")
+    result = invoke(env, dependency)
+    assert result.returncode == 78, result.stdout + result.stderr
     assert not any(x["kind"] == "notification" for x in events(env))
