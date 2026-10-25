@@ -73,7 +73,9 @@ no default, dimension, or watcher selection is inferred. The ledger activates on
 owner, retaining the original source identity and immutable lineage. Recovery reuses those IDs
 and refuses source-state drift instead of reinstalling a captured registration. After activation,
 only that transfer's temporary stopped window is released; the retired source root remains fenced
-against restart and foreground use. A retired scalar rollback target remains historical lineage
+against restart and foreground use. Root admission reads only qualified existing registry state;
+missing or unqualified authority refuses before an effect and is never initialized or repaired by
+a cached filesystem port or an admission probe. A retired scalar rollback target remains historical lineage
 and cannot be used by an older image.
 
 ## Commands

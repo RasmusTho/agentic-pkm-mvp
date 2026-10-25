@@ -194,3 +194,38 @@ def test_real_channel_startup_refuses_retired_source_and_admits_destination(tmp_
     assert _preflight_runtime(channel=destination.layout.channel_id, instance_state_root=destination.layout.root.parent,
         host_global_root=destination.ledger.root, consumer="api") == 0
     assert destination.registry.lookup(target).local_instance_id == original.local_instance_id
+
+
+@pytest.mark.parametrize("registry_state", ["missing-fresh", "missing-established"])
+@pytest.mark.parametrize("operation", ["read", "write"])
+def test_cached_filesystem_port_refuses_missing_authority_without_registry_repair(
+    tmp_path, monkeypatch, registry_state, operation,
+):
+    from app.knowledge.adapters import FsVaultAdapter
+    from app.knowledge.locators import make_note_locator
+    from tests._mvr05c_transfer_harness import transfer_pair
+
+    source, destination, original, stop = transfer_pair(tmp_path, monkeypatch)
+    (Path(original.path) / "source.md").write_text("retained source bytes\n")
+    cached = FsVaultAdapter(original.path)
+    source.transfer_to(destination, original.vault_binding_id, stop_and_prove=stop)
+    if registry_state == "missing-established":
+        registry = source.registry.path
+        registry.unlink()  # Last-good recovery is not an admission capability.
+    else:
+        private = tmp_path / "unprovisioned-source"
+        private.mkdir(mode=0o700)
+        registry = private / "registry.md"
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(registry))
+    before = {p.relative_to(registry.parent): p.read_bytes()
+              for p in registry.parent.rglob("*") if p.is_file()}
+    with pytest.raises(RuntimeError, match="required registry path is missing"):
+        if operation == "read":
+            cached.read_note(make_note_locator("source.md"))
+        else:
+            cached.write_note(make_note_locator("forbidden.md"), "must not write")
+    assert not registry.exists()
+    assert {p.relative_to(registry.parent): p.read_bytes()
+            for p in registry.parent.rglob("*") if p.is_file()} == before
+    assert (Path(original.path) / "source.md").read_text() == "retained source bytes\n"
+    assert not Path(original.path, "forbidden.md").exists()

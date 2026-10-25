@@ -70,7 +70,9 @@ def require_source_root_ingress(root: Path, *, allow_admitted_effect: bool = Fal
     if not configured:
         return
     registry = VaultRegistryStore(Path(configured))
-    snapshot = registry.load()
+    # Admission is a read, including for cached filesystem ports. It must never
+    # initialize missing authority or repair a last-good registry behind a probe.
+    snapshot = registry.read_existing()
     intent = snapshot.extensions.get("channelTransfer")
     if not isinstance(intent, dict):
         return

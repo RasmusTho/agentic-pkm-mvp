@@ -217,7 +217,7 @@ def test_capture_has_no_task_semantics(
     # task-state field exists anywhere in the contract.
     openapi = app.openapi()
     request_schema = openapi["components"]["schemas"]["CaptureRequest"]
-    assert set(request_schema["properties"].keys()) == {"text"}
+    assert set(request_schema["properties"].keys()) == {"text", "target_binding_id"}
     assert request_schema.get("additionalProperties") is False
 
     response_schema = openapi["components"]["schemas"]["CaptureResponse"]
@@ -317,6 +317,7 @@ def test_capture_writeguard_block_takes_precedence_over_vault_resolution(
 def test_capture_withholds_success_when_authority_receipt_event_is_not_persisted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mock_product_api_routes,
 ) -> None:
     vault, outbox = _setup_vault(tmp_path, monkeypatch)
     monkeypatch.setenv("STORE_BACKEND", "pg")

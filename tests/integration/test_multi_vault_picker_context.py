@@ -1952,6 +1952,9 @@ console.log(JSON.stringify({status:written.status,visible:!visible.hidden,cookie
 @pytest.mark.parametrize('principal_present', [False, True])
 def test_default_proof_preflight_never_initializes_or_repairs_missing_registry(tmp_path, monkeypatch, surface, principal_present):
     runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    # This probes read/proof admission. A retained UUID keeps it free of the
+    # separate optional healing write, which requires qualified authority.
+    (roots[0] / 'only-0.md').write_text('---\nuuid: 5248928c-2fef-49df-a8a7-6f1674876d29\n---\n\nvault 0\n')
     companion_module.get_vault_manager().select_vault(roots[0])
     if principal_present:
         registry = runtime.registry.path
