@@ -378,6 +378,26 @@ See also:
 - Vault surface, companion/system surface, runtime stores, and operational artifacts must remain separable by environment even when the underlying architecture is otherwise shared.
 - Production runtime must prefer conservative behavior, explicit gating, and recoverable failure over convenience.
 
+### Active context and vault bindings
+
+Production request ingress resolves one immutable `ActiveContextSet` before any vault-bound read or
+effect. The authenticated request/session carrier outranks the instance default; invalid, stale, or
+ambiguous selection fails closed and never falls back to `VAULT_ROOT`, compiled settings, or the
+compatibility watcher. The resolved binding IDs, registry generation, and authority snapshot travel
+through API, agent, MCP, CLI, retrieval, cache, and projection seams as request provenance.
+
+Nested and provisional bindings, channel-lease transfer, and authority changes are enforced at the
+effect boundary as well as at initial resolution. A request cannot cross-read a registered child,
+continue from a retired source binding, or widen its binding set after resolution. Retrieval cache
+identity includes binding provenance, and request-wide settings must agree across every selected
+binding before an effect begins.
+
+The existing picker remains a compatibility bridge: it creates or reuses a scoped selection while
+coordinating the single watcher/default rebind transaction. That bridge does not make process-global
+state authoritative for a scoped request. Until MVR-05C, vault-bound mutations presented through the
+scoped carrier remain sealed with `capability_not_ready`; MVR-06 owns retirement of the remaining
+single-watcher and global-resolution adapters.
+
 ### Architecture Statement: Bounded Agents on Shared Foundations
 - The architecture is expected to include multiple bounded agents with narrow responsibilities rather than one central general agent.
 - Shared scaffolding such as `AgentState`, LangGraph control patterns, common prompts, policies, and capabilities should provide the reusable foundation for those agents.
