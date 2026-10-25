@@ -52,6 +52,7 @@ def main() -> int:
                     "app/__init__.py",
                     "app/ops/__init__.py",
                     "app/ops/builderops_probe.py",
+                    "app/ops/builderops_probe_secret.py",
                     "ops/host-setup/mac-mini/notification_channels.py",
                     "config/systemd/yggdrasil-builderops-probe.service",
                     "config/systemd/yggdrasil-builderops-probe.timer",
