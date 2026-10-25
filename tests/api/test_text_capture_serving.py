@@ -46,6 +46,7 @@ def test_text_boundary_refuses_before_handlers(monkeypatch, channel):
             if ((method == 'GET' and route.path in allowed_get)
                 or (method == 'POST' and route.path in {
                     '/api/companion/capture', '/api/companion/capture/compatibility',
+                    '/api/companion/capture/scoped',
                 })):
                 continue
             route.dependant.call = _forbidden
@@ -138,6 +139,7 @@ def test_served_capture_handshake_retains_real_admission(tmp_path, monkeypatch, 
     runtime = new_runtime(tmp_path, channel=channel)
     vault = tmp_path / 'vault'
     vault.mkdir()
+    initialize_test_vault(vault)
     binding = runtime.bootstrap_env_binding(vault_root=vault, watcher_vault_path=vault)
     activate(runtime, binding, tmp_path)
     open_default_vault_service(runtime.registry.path).set(binding.vault_binding_id)
@@ -145,7 +147,6 @@ def test_served_capture_handshake_retains_real_admission(tmp_path, monkeypatch, 
         configured_credentials=0, credential=None, loopback_listener_proven=True,
         companion_proxy_configured=False,
     ))
-    initialize_test_vault(vault)
     _install_dormant_settings_rebind(runtime.registry, binding_id=binding.vault_binding_id,
                                    _capability=STORAGE_MUTATION_CAPABILITY)
     monkeypatch.setenv('PKM_ENVIRONMENT', channel)
@@ -191,9 +192,19 @@ console.log(JSON.stringify({status:response.status,body:await response.json()}))
 '''.replace('TEXT', json.dumps(text)))
     assert result['status'] == 200, result
     posts = [call for call in calls if call[0] == 'POST' and call[1] in _CAPTURE_PATHS]
-    assert len(posts) == 1 and posts[0][1] == '/api/companion/capture/compatibility'
-    assert posts[0][2].get('X-Compatibility-Write-Precondition')
-    assert 'X-Active-Context-Session' not in posts[0][2]
+    assert len(posts) == 1
+    capture_path = '/api/companion/capture/scoped' if journey == 'scoped' else '/api/companion/capture/compatibility'
+    assert posts[0][1] == capture_path
+    if journey == 'scoped':
+        assert posts[0][2].get('X-Active-Context-Session')
+        assert posts[0][3]['target_binding_id'] == binding.vault_binding_id
+        write_headers = {'X-Active-Context-Session': posts[0][2]['X-Active-Context-Session']}
+        write_payload = {'target_binding_id': binding.vault_binding_id}
+    else:
+        assert posts[0][2].get('X-Compatibility-Write-Precondition')
+        assert 'X-Active-Context-Session' not in posts[0][2]
+        write_headers = {'X-Compatibility-Write-Precondition': posts[0][2]['X-Compatibility-Write-Precondition']}
+        write_payload = {}
     assert not any(path.endswith('/vault/select') or path.endswith('/vault/initialize') for _, path, _, _ in calls)
     if journey == 'scoped':
         assert any(path == '/api/companion/active-context/selection' for _, path, _, _ in calls)
@@ -214,10 +225,8 @@ console.log(JSON.stringify({status:response.status,body:await response.json()}))
     opened = client.get('/api/companion/workspace', params={'note_path': note_path})
     assert opened.json()['artifact']['body'].encode() == original
     assert client.post('/api/companion/capture/compatibility', json={'text': 'no proof'}).status_code == 409
-    remote = client.post('/api/companion/capture/compatibility', json={'text': 'unauthenticated'}, headers={
-        'X-Forwarded-For': '203.0.113.8',
-        'X-Compatibility-Write-Precondition': posts[0][2]['X-Compatibility-Write-Precondition'],
-    })
+    remote = client.post(capture_path, json={**write_payload, 'text': 'unauthenticated'},
+                         headers={**write_headers, 'X-Forwarded-For': '203.0.113.8'})
     assert remote.status_code == 401
     for path in ('/api/companion/active-context/selection', '/api/companion/vault/notes/scoped'):
         stale = client.get(path, headers={'X-Active-Context-Session': 'never-issued'})
@@ -226,8 +235,8 @@ console.log(JSON.stringify({status:response.status,body:await response.json()}))
         raise WritesBlockedError(state='safe_mode', reason='fixture block', action=action)
 
     monkeypatch.setattr(capture.DEFAULT_WRITE_GUARD, 'assert_writes_allowed', blocked)
-    refused = client.post('/api/companion/capture/compatibility', json={'text': 'no guarded write'},
-                          headers={'X-Compatibility-Write-Precondition': posts[0][2]['X-Compatibility-Write-Precondition']})
+    refused = client.post(capture_path, json={**write_payload, 'text': 'no guarded write'},
+                          headers=write_headers)
     assert refused.status_code == 409, refused.text
     assert (vault / note_path).read_bytes() == original and outbox.read_bytes() == before_events
     client.close()

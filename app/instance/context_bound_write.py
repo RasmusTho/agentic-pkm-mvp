@@ -80,6 +80,10 @@ def context_bound_write_window(
     )
     adapter.validate_context(token, context=context, target_binding_id=target_binding_id)
     with context_bound_read_window(context, registry_store=registry_store) as roots:
+        # Lock acquisition may wait past the bearer snapshot's expiry. The
+        # pre-lock check is only early refusal; this is final authorization.
+        if context.expires_at is not None and context.expires_at <= time.time():
+            raise InvalidDecisionTokenError("active context expired before write")
         binding = next(
             b for b in context.source_bindings if b.vault_binding_id == target_binding_id
         )

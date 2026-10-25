@@ -229,3 +229,32 @@ def test_legacy_capture_revalidates_context_before_io(tmp_path, monkeypatch, end
     result = client.post(endpoint, headers=headers, json={"text": "Must be blocked"})
     assert result.status_code == 409, result.text
     assert not Path(first.path, "Inbox/inbox.md").exists()
+
+
+def test_expiry_is_revalidated_after_binding_lease_before_effect(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from app.instance import context_bound_write as writes
+
+    _, first, _, client, headers = setup_capture(tmp_path, monkeypatch)
+    note = Path(first.path, "Inbox/inbox.md")
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("Original capture bytes\n")
+    before = note.read_bytes()
+    original = writes.context_bound_read_window
+
+    @contextmanager
+    def expire_after_acquisition(context, **kwargs):
+        with original(context, **kwargs) as roots:
+            with monkeypatch.context() as clock:
+                clock.setattr(writes.time, "time", lambda: context.expires_at + 1)
+                yield roots
+
+    monkeypatch.setattr(writes, "context_bound_read_window", expire_after_acquisition)
+    result = client.post(
+        "/api/companion/capture/scoped",
+        headers=headers,
+        json={"text": "Expired while waiting", "target_binding_id": first.vault_binding_id},
+    )
+    assert result.status_code == 409, result.text
+    assert note.read_bytes() == before
+    assert not (tmp_path / "outbox.jsonl").exists()
