@@ -1018,7 +1018,29 @@ def _companion_scoped_read_window(context: ActiveContextSetV1) -> Iterator[_Scop
         raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
 
 
-def _scoped_companion_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:
+def _document_read_principal(
+    request: Request, api_key: str | None = Depends(api_key_header),
+) -> str | None:
+    if any(name in request.headers for name in ("X-Active-Context-Session", "X-Active-Context-Override")):
+        return None
+    registry_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+    if not registry_path or VaultRegistryStore(Path(registry_path)).load().settings_rebind is None:
+        return None
+    try:
+        return _authenticated_principal_id(request, api_key, Path(registry_path))
+    except HTTPException:
+        # Preserve the legacy read projection, but never grant a write proof to
+        # an unauthenticated/unprovisioned caller.
+        return None
+
+
+def _scoped_companion_document_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:
+    return _scoped_companion_read(endpoint, document_write_proof=True)
+
+
+def _scoped_companion_read(
+    endpoint: Callable[..., Any], *, document_write_proof: bool = False,
+) -> Callable[..., Any]:
     """Migrate one companion read route onto the per-request ActiveContextSet.
 
     Adds the carrier dependency to the route. A carrier-bearing request runs the
@@ -1039,6 +1061,23 @@ def _scoped_companion_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(endpoint)
     def route(*args: Any, **kwargs: Any) -> Any:
         context = kwargs.pop(_SCOPED_READ_ROUTE_PARAMETER, None)
+        principal = kwargs.pop("mvr05b5_document_principal", None)
+        if context is None and principal is not None:
+            from app.instance.settings_rebind import SettingsRebindStore
+
+            registry = VaultRegistryStore(Path(os.environ["INSTANCE_VAULT_REGISTRY_PATH"]))
+            # One sync worker owns this lock through content and serialization;
+            # no thread-owned lock spans a FastAPI dependency yield.
+            with _legacy_companion_vault_manager().selection_window():
+                with compatibility_write_target_window(selected_root=_legacy_companion_selected_root) as root:
+                    result = endpoint(*args, **kwargs)
+                    response = JSONResponse(content=jsonable_encoder(result))
+                    if root is not None and not isinstance(result, VaultSelectionRequiredResponse):
+                        binding_id = SettingsRebindStore(registry).compatibility_binding_id()
+                        response.headers[HEADER_COMPATIBILITY_PRECONDITION] = issue_compatibility_precondition(
+                            binding_id=binding_id, principal_id=principal, registry=registry,
+                        )
+                    return response
         if context is None:
             return endpoint(*args, **kwargs)
         with _companion_scoped_read_window(context):
@@ -1047,10 +1086,16 @@ def _scoped_companion_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:
                 return result
             return JSONResponse(content=jsonable_encoder(result))
 
+    extra_parameters = [carrier]
+    if document_write_proof:
+        extra_parameters.append(inspect.Parameter(
+            "mvr05b5_document_principal", inspect.Parameter.KEYWORD_ONLY,
+            default=Depends(_document_read_principal), annotation=str | None,
+        ))
     setattr(
         route,
         "__signature__",
-        signature.replace(parameters=[*signature.parameters.values(), carrier]),
+        signature.replace(parameters=[*signature.parameters.values(), *extra_parameters]),
     )
     return route
 
@@ -5353,7 +5398,7 @@ def read_today_briefing() -> dict[str, object]:
     "/orientation",
     response_model=WorkspaceOrientationResponse | VaultSelectionRequiredResponse,
 )
-@_scoped_companion_read
+@_scoped_companion_document_read
 def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectionRequiredResponse:
     trace_id = uuid4().hex
     generated_at = datetime.datetime.now(datetime.timezone.utc)
@@ -5585,7 +5630,7 @@ def read_companion_tts_audio(cache_key: str) -> FileResponse:
     "/workspace",
     response_model=WorkspaceStateResponse | VaultSelectionRequiredResponse,
 )
-@_scoped_companion_read
+@_scoped_companion_document_read
 def read_companion_workspace(
     note_path: str = Query(..., description="Runtime-relative note path"),
 ) -> WorkspaceStateResponse | VaultSelectionRequiredResponse:

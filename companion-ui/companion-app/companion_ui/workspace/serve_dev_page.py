@@ -9297,6 +9297,7 @@ def _render_orientation_index_html(
     boot_overlay: str = "",
     day_start_briefing: Optional[dict] = None,
     compatibility_precondition: Optional[str] = None,
+    scoped_document: bool = False,
 ) -> str:
     if entry_resolution is None:
         entry_resolution = resolve_entry_state(orientation=orientation)
@@ -9712,7 +9713,7 @@ def _render_orientation_index_html(
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Workspace Orientation [{title_suffix}]</title>
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
-  {scoped_session_script(compatibility_precondition)}
+  {scoped_session_script(compatibility_precondition, scoped_document=scoped_document)}
   <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     :root {{
@@ -11602,6 +11603,7 @@ def render_index_html(
     boot_overlay: str = "",
     day_start_briefing: Optional[dict] = None,
     compatibility_precondition: Optional[str] = None,
+    scoped_document: bool = False,
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -11661,6 +11663,7 @@ def render_index_html(
             boot_overlay=boot_overlay,
             day_start_briefing=day_start_briefing,
             compatibility_precondition=compatibility_precondition,
+            scoped_document=scoped_document,
         )
 
     content_section = ""
@@ -11828,7 +11831,7 @@ def render_index_html(
   <title>Companion UI — Real-Note Workspace [{title_suffix}]</title>
   {production_static_link}
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
-  {scoped_session_script(compatibility_precondition)}
+  {scoped_session_script(compatibility_precondition, scoped_document=scoped_document)}
   <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     /* Page-local tokens. Yggdrasil tokens come from YGGDRASIL_TOKENS_URL (YDS-03, #5629). */
@@ -16466,6 +16469,7 @@ def handle_get(
     page_origin_host: str = "",
     day_start_briefing: Optional[dict] = None,
     compatibility_precondition: Optional[str] = None,
+    scoped_document: bool = False,
 ) -> str:
     """Parse query string, optionally load a note, and return full page HTML.
 
@@ -16590,6 +16594,8 @@ def handle_get(
         orientation = None
         orientation_vault_browser = None
         error = ""
+    if compatibility_precondition is None and not scoped_document:
+        compatibility_precondition = getattr(client, "document_write_precondition", None)
     return render_index_html(
         api_base_url=api_base_url,
         note_path=note_path,
@@ -16610,6 +16616,7 @@ def handle_get(
         boot_overlay=boot_overlay,
         day_start_briefing=day_start_briefing,
         compatibility_precondition=compatibility_precondition,
+            scoped_document=scoped_document,
     )
 
 
@@ -17407,6 +17414,7 @@ def make_handler(
                 page_origin_host=self.headers.get("Host", ""),
                 day_start_briefing=day_start_briefing,
                 compatibility_precondition=page_write_proof,
+                scoped_document="X-Active-Context-Session" in page_headers or "X-Active-Context-Override" in page_headers,
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -17472,6 +17480,9 @@ def make_handler(
         _FORWARDED_CLIENT_AUTH_PATHS = frozenset(
             {
                 VAULT_SELECT_ENDPOINT,
+                "/", "/workspace", "/api/companion/vault/notes", "/api/operator/ask",
+                "/api/companion/workspace", "/api/companion/orientation",
+                "/api/companion/capture/compatibility", "/api/companion/note/save/compatibility",
                 "/api/companion/active-context/selection",
                 "/api/companion/vault/notes/scoped",
                 VAULT_INITIALIZE_ENDPOINT,
@@ -17570,7 +17581,7 @@ def make_handler(
             # Clone the transport per request; the class-level client is shared
             # by browsers and must never retain another browser's capability.
             headers = self._forwarded_client_headers(path)
-            if headers and hasattr(client, "with_context_headers"):
+            if hasattr(client, "with_context_headers"):
                 self._client = client.with_context_headers(headers)
 
         def _forwarded_client_headers(self, path: str) -> dict[str, str]:
@@ -17670,6 +17681,10 @@ def make_handler(
                 runtime_payload.pop("note_path", None)
             try:
                 forwarded_headers = self._forwarded_client_headers(parsed.path)
+                if parsed.path == "/api/operator/ask" and any(
+                    name in forwarded_headers for name in _ACTIVE_CONTEXT_HEADERS[:2]
+                ):
+                    runtime_path = "/api/ask/scoped"
                 post_kwargs: dict = {"json": runtime_payload}
                 if forwarded_headers:
                     post_kwargs["headers"] = forwarded_headers

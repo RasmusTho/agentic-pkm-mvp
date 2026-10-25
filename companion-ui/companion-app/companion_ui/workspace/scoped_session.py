@@ -63,7 +63,7 @@ def session_from_cookie(value: str) -> str | None:
     return session.value if session is not None and session.value else ""
 
 
-def scoped_session_script(compatibility_precondition: str | None = None) -> str:
+def scoped_session_script(compatibility_precondition: str | None = None, *, scoped_document: bool = False) -> str:
     script = r"""
 <script>
 /* companion-scoped-session: explicit intent survives navigation; write proof belongs to this document. */
@@ -73,6 +73,7 @@ def scoped_session_script(compatibility_precondition: str | None = None) -> str:
   var reselectionRequired = false;
   var handoffPending = false;
   var documentWriteProof = __DOCUMENT_WRITE_PROOF__;
+  var scopedDocument = __SCOPED_DOCUMENT__;
   function refusal(message, status) {
     return new Response(JSON.stringify({detail:{error:'reselection_required',message:message}}), {
       status:status || 409, headers:{'Content-Type':'application/json'}
@@ -178,7 +179,7 @@ def scoped_session_script(compatibility_precondition: str | None = None) -> str:
       if (!documentWriteProof) return reselection(refusal('Reload or reselect the vault before writing.'));
       // Validate current session liveness without acquiring a replacement write
       // proof. A stale rendered A document must never obtain B write intent.
-      return send('/api/companion/active-context/selection', {method:'GET'}).then(function(inspected) {
+      return send(scopedDocument ? '/api/companion/active-context/selection' : '/api/companion/vault/notes', {method:'GET'}).then(function(inspected) {
         if (!inspected.ok) return inspected;
         var headers = new Headers(options.headers || {});
         headers.set('X-Compatibility-Write-Precondition', documentWriteProof);
@@ -191,4 +192,4 @@ def scoped_session_script(compatibility_precondition: str | None = None) -> str:
 </script>
 """
     encoded = json.dumps(compatibility_precondition, ensure_ascii=True).replace("<", chr(92) + "u003c")
-    return script.replace("__DOCUMENT_WRITE_PROOF__", encoded)
+    return script.replace("__DOCUMENT_WRITE_PROOF__", encoded).replace("__SCOPED_DOCUMENT__", json.dumps(scoped_document))

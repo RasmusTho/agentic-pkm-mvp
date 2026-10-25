@@ -542,3 +542,19 @@ def test_tts_status_get_proxied() -> None:
     assert d.status_code == 200
     assert d.payload == response
     assert client.get_calls[-1] == ("/api/companion/tts/status", {})
+
+
+def test_carrier_free_document_proofs_and_writes_forward_actual_client_auth() -> None:
+    client = _FakeClient()
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+    handler = handler_cls.__new__(handler_cls)
+    handler.headers = {"X-API-Key": "synthetic-api-key"}
+    handler.client_address = ("203.0.113.10", 50000)
+    for path in (
+        "/", "/workspace", "/api/companion/workspace", "/api/companion/orientation",
+        "/api/companion/vault/notes", "/api/companion/capture/compatibility",
+        "/api/companion/note/save/compatibility",
+    ):
+        assert handler._forwarded_client_headers(path) == {
+            "X-Forwarded-For": "203.0.113.10", "X-API-Key": "synthetic-api-key",
+        }

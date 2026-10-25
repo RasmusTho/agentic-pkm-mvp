@@ -1172,7 +1172,11 @@ def _activated_picker_runtime(tmp_path, monkeypatch):
     _install_dormant_settings_rebind_for_test(runtime, first.vault_binding_id)
     manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+    monkeypatch.setattr("app.api.routes.vault_resolution.get_vault_manager", lambda: manager)
     monkeypatch.setattr("app.settings.ingestion.ingest_settings", _record_reload([]))
+    # Preserve the real durable capture path; optional post-append cognition
+    # is outside this carrier/target boundary and has separate model coverage.
+    monkeypatch.setattr("app.api.routes.capture.propose_question_registration", lambda **_kwargs: None)
     selection_routes.reset_selection_store_for_tests()
     return runtime, roots, first.vault_binding_id, extra[0].vault_binding_id
 
@@ -1510,7 +1514,7 @@ console.log(JSON.stringify({status:selected.status,oldCookie,cookie,page,handoff
 
 @pytest.mark.parametrize('surface', ['note', 'capture'])
 def test_rendered_document_proof_cannot_follow_another_tabs_binding(tmp_path, monkeypatch, surface):
-    import hashlib
+    from app.text.helpers import content_hash
     import json
     from tests._mvr05b_picker_browser import picker_browser
 
@@ -1526,7 +1530,7 @@ def test_rendered_document_proof_cannot_follow_another_tabs_binding(tmp_path, mo
         return response
 
     path = '/api/companion/note/save' if surface == 'note' else '/api/companion/capture'
-    payload = {'note_path':'shared.md','new_body':'edit from old A view\n','expected_content_hash':hashlib.sha256(original.encode()).hexdigest()} if surface == 'note' else {'text':'capture from old A view'}
+    payload = {'note_path':'shared.md','new_body':'edit from old A view\n','expected_content_hash':content_hash(original)} if surface == 'note' else {'text':'capture from old A view'}
     with picker_browser(monkeypatch, response_filter=observe_proof) as (run, calls):
         script = """
 await choose(ROOT_A);
@@ -1658,3 +1662,257 @@ console.log(JSON.stringify({{status:response.status,body:await response.json(),v
     assert [(method, path) for method, path, _headers, _body in calls] == [
         ('POST', '/api/companion/vault/initialize')
     ]
+
+
+@pytest.mark.parametrize('journey', ['carrier-free', 'selected', 'blank', 'stale-override'])
+def test_operator_ask_preserves_scoped_or_carrier_free_read_journey(tmp_path, monkeypatch, journey):
+    import importlib
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    ask_module = importlib.import_module('app.api.routes.ask')
+    _runtime, roots, _a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    contexts = []
+
+    def answer(_req, _request, *, active_context, **_kwargs):
+        contexts.append(active_context)
+        return ask_module.AskResponse(answer='grounded fixture', sources=[], latency_ms=0)
+
+    monkeypatch.setattr(ask_module, '_run_ask', answer)
+    with picker_browser(monkeypatch) as (run, calls):
+        script = """
+SELECT
+var response=await fetch('/api/operator/ask',{method:'POST',headers:HEADERS,body:JSON.stringify({question:'which selected vault?'})});
+console.log(JSON.stringify({status:response.status,body:await response.json()}));
+""".replace('SELECT', 'await choose('+json.dumps(str(roots[1]))+');' if journey in {'selected', 'stale-override'} else '').replace('HEADERS', json.dumps({'Content-Type':'application/json', **({'X-Active-Context-Session':''} if journey == 'blank' else {'X-Active-Context-Override':'never-issued'} if journey == 'stale-override' else {})}))
+        result = run(script)
+    expected_path = '/api/ask' if journey == 'carrier-free' else '/api/ask/scoped'
+    assert [path for method,path,_headers,_body in calls if method == 'POST' and path.startswith('/api/ask')] == [expected_path]
+    assert result['status'] == (200 if journey in {'carrier-free', 'selected'} else 401)
+    if journey == 'selected':
+        assert contexts[0].binding_ids == (binding_b,)
+    elif journey == 'carrier-free':
+        assert contexts == [None]
+    else:
+        assert not contexts
+
+
+@pytest.mark.parametrize('surface', ['note', 'capture'])
+@pytest.mark.parametrize('rebind', [False, True])
+def test_carrier_free_document_preserves_bound_writes_without_minting_selection(tmp_path, monkeypatch, surface, rebind):
+    from app.text.helpers import content_hash
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    manager = companion_module.get_vault_manager()
+    manager.select_vault(roots[0])
+    original = '---\nuuid: 3218928c-2fef-49df-a8a7-6f1674876d29\n---\n\nshared human template\n'
+    for root in roots:
+        (root / 'shared.md').write_text(original)
+    before_b = {path.relative_to(roots[1]): path.read_bytes() for path in roots[1].rglob('*') if path.is_file()}
+    producer_proofs = []
+
+    def observe(method, path, response):
+        if path in {'/api/companion/workspace', '/api/companion/orientation'}:
+            producer_proofs.append(response.headers.get('X-Compatibility-Write-Precondition'))
+        return response
+
+    def switch_before_write(method, path):
+        if rebind and path.endswith('/compatibility'):
+            manager.select_vault(roots[1])
+
+    write_path = '/api/companion/note/save' if surface == 'note' else '/api/companion/capture'
+    payload = {'note_path':'shared.md','new_body':'explicit default-page edit\n','expected_content_hash':content_hash(original)} if surface == 'note' else {'text':'explicit default-page capture'}
+    with picker_browser(monkeypatch, response_filter=observe, before_request=switch_before_write, raise_server_exceptions=True) as (run, calls):
+        script = """
+await bootDocument(PAGE);
+var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:PAYLOAD});
+console.log(JSON.stringify({status:written.status,body:await written.json(),cookie,handoffs}));
+""".replace('PAGE',json.dumps('/workspace?note_path=shared.md' if surface == 'note' else '/workspace')).replace('WRITE_PATH',json.dumps(write_path)).replace('PAYLOAD',json.dumps(json.dumps(payload)))
+        result = run(script)
+    assert result['status'] == (409 if rebind else 200), result['body']
+    if surface == 'capture' and not rebind:
+        assert 'explicit default-page capture' in (roots[0] / result['body']['note_path']).read_text()
+    assert result['cookie'] == ''
+    assert not result['handoffs']
+    assert not any(path.endswith('/vault/select') or '/active-context/selection' in path for _method,path,_headers,_body in calls)
+    write = next(call for call in calls if call[1] == write_path + '/compatibility')
+    assert write[2]['X-Compatibility-Write-Precondition'] == producer_proofs[0]
+    assert 'X-Active-Context-Session' not in write[2]
+    assert all(headers.get('X-Forwarded-For') == '127.0.0.1' for method,path,headers,_body in calls if path in {'/api/companion/workspace','/api/companion/orientation','/api/companion/vault/notes'})
+    if rebind:
+        assert (roots[0] / 'shared.md').read_text() == original
+    assert {path.relative_to(roots[1]): path.read_bytes() for path in roots[1].rglob('*') if path.is_file()} == before_b
+    assert runtime.registry.load().registrations
+
+
+@pytest.mark.parametrize('surface', ['note', 'capture'])
+def test_missing_default_document_proof_cannot_be_replaced_by_later_projection(tmp_path, monkeypatch, surface):
+    import json
+    import httpx
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    original = '---\nuuid: 9878928c-2fef-49df-a8a7-6f1674876d29\n---\n\nvault 0\n'
+    (roots[0] / 'only-0.md').write_text(original)
+    stripped = []
+
+    def strip_first_producer(method, path, response):
+        if not stripped and path in {'/api/companion/workspace','/api/companion/orientation'}:
+            stripped.append(path)
+            headers = dict(response.headers)
+            headers.pop('x-compatibility-write-precondition', None)
+            return httpx.Response(response.status_code, content=response.content, headers=headers)
+        return response
+
+    with picker_browser(monkeypatch, response_filter=strip_first_producer) as (run, calls):
+        script = """
+await bootDocument(PAGE);
+var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note_path:'only-0.md',new_body:'must not write',text:'must not capture'})});
+console.log(JSON.stringify({status:written.status}));
+""".replace('PAGE',json.dumps('/workspace?note_path=only-0.md' if surface == 'note' else '/workspace')).replace('WRITE_PATH',json.dumps('/api/companion/note/save' if surface == 'note' else '/api/companion/capture'))
+        result = run(script)
+    assert result['status'] == 409
+    assert not any(path.endswith('/compatibility') for _method,path,_headers,_body in calls)
+    assert (roots[0] / 'only-0.md').read_text() == original
+
+
+def test_default_document_does_not_launder_remote_ui_principal(tmp_path, monkeypatch):
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    remote = TestClient(app, client=('127.0.0.1', 40000))
+    for path in ['/api/companion/orientation','/api/companion/workspace?note_path=only-0.md']:
+        response = remote.get(path, headers={'X-Forwarded-For':'203.0.113.8'})
+        assert response.status_code == 200, response.text
+        assert 'X-Compatibility-Write-Precondition' not in response.headers
+
+
+@pytest.mark.parametrize('surface', ['note', 'capture'])
+def test_default_document_serialization_pins_proof_before_concurrent_rebind(tmp_path, monkeypatch, surface):
+    import json
+    from app.text.helpers import content_hash
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    manager = companion_module.get_vault_manager()
+    manager.select_vault(roots[0])
+    original = '---\nuuid: 5418928c-2fef-49df-a8a7-6f1674876d29\n---\n\nsame-name template\n'
+    for root in roots:
+        (root / 'shared.md').write_text(original)
+    serializing, release, selected = threading.Event(), threading.Event(), threading.Event()
+    encode = companion_module.jsonable_encoder
+    target_type = companion_module.WorkspaceStateResponse if surface == 'note' else companion_module.WorkspaceOrientationResponse
+    target_path = '/api/companion/workspace' if surface == 'note' else '/api/companion/orientation'
+    proofs, outcomes, errors = [], [], []
+
+    def pause(value, *args, **kwargs):
+        if isinstance(value, target_type) and not serializing.is_set():
+            serializing.set()
+            assert release.wait(5)
+        return encode(value, *args, **kwargs)
+
+    def after_response(method, path, response):
+        if path == target_path and not proofs:
+            proofs.append(response.headers.get('X-Compatibility-Write-Precondition'))
+            assert selected.wait(5)
+        return response
+
+    monkeypatch.setattr(companion_module, 'jsonable_encoder', pause)
+    with picker_browser(monkeypatch, response_filter=after_response) as (run, calls):
+        script = """
+await bootDocument(PAGE);
+var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:PAYLOAD});
+console.log(JSON.stringify({status:written.status,body:await written.json()}));
+""".replace('PAGE',json.dumps('/workspace?note_path=shared.md' if surface == 'note' else '/workspace')).replace('WRITE_PATH',json.dumps('/api/companion/note/save' if surface == 'note' else '/api/companion/capture')).replace('PAYLOAD',json.dumps(json.dumps({'note_path':'shared.md','new_body':'must not redirect','expected_content_hash':content_hash(original),'text':'must not redirect'})))
+        def browse():
+            try:
+                outcomes.append(run(script))
+            except BaseException as exc:
+                errors.append(exc)
+        browser = threading.Thread(target=browse)
+        browser.start()
+        assert serializing.wait(5)
+        def select_b():
+            manager.select_vault(roots[1])
+            selected.set()
+        selector = threading.Thread(target=select_b)
+        selector.start()
+        try:
+            assert not selected.wait(0.1)
+        finally:
+            release.set()
+        selector.join(5)
+        browser.join(10)
+        assert not selector.is_alive() and not browser.is_alive()
+    assert not errors
+    assert outcomes[0]['status'] == 409
+    assert outcomes[0]['body']['detail']['error'] == 'capability_not_ready'
+    write = next(call for call in calls if call[1].endswith('/compatibility'))
+    assert write[2]['X-Compatibility-Write-Precondition'] == proofs[0]
+    assert all((root / 'shared.md').read_text() == original for root in roots)
+
+
+def test_carrier_free_proof_follows_rendered_binding_when_default_differs(tmp_path, monkeypatch):
+    import json
+    from app.text.helpers import content_hash
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[1])
+    assert runtime.registry.load().default_vault_binding_id == binding_a
+    original = '---\nuuid: 3348928c-2fef-49df-a8a7-6f1674876d29\n---\n\nrendered B\n'
+    (roots[1] / 'shared.md').write_text(original)
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run("""
+await bootDocument('/workspace?note_path=shared.md');
+var written=await fetch('/api/companion/note/save',{method:'POST',headers:{'Content-Type':'application/json'},body:PAYLOAD});
+console.log(JSON.stringify({status:written.status,cookie}));
+""".replace('PAYLOAD',json.dumps(json.dumps({'note_path':'shared.md','new_body':'explicit B edit','expected_content_hash':content_hash(original)}))))
+    assert result['status'] == 200
+    assert result['cookie'] == ''
+    assert (roots[1] / 'shared.md').read_text().endswith('explicit B edit')
+    assert (roots[0] / 'only-0.md').read_text() == 'vault 0\n'
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id == binding_b
+    assert not any('/active-context/selection' in path or path.endswith('/vault/select') for _method,path,_headers,_body in calls)
+
+
+def test_pre_registry_document_read_never_invents_write_proof(tmp_path, monkeypatch):
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    monkeypatch.delenv('INSTANCE_VAULT_REGISTRY_PATH')
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run("""
+var page=await bootDocument();
+var written=await fetch('/api/companion/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'must not fall back'})});
+console.log(JSON.stringify({page,status:written.status,cookie,handoffs}));
+""")
+    assert 'Workspace Orientation' in result['page']
+    assert result['status'] == 409
+    assert result['cookie'] == '' and not result['handoffs']
+    assert not any(path.endswith('/compatibility') or path.endswith('/vault/select') for _method,path,_headers,_body in calls)
+
+
+def test_carrier_free_document_refuses_new_shared_stale_intent_before_write(tmp_path, monkeypatch):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    def restart_before_liveness(method, path):
+        if path == '/api/companion/vault/notes':
+            selection_routes.reset_selection_store_for_tests()
+    with picker_browser(monkeypatch, before_request=restart_before_liveness) as (run, calls):
+        result = run("""
+await bootDocument();
+var selected=await browserFetch('/api/companion/vault/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ROOT_A,scoped_selection:true})});
+document.cookie='companion_context_intent='+selected.headers.get('X-Companion-Scoped-Handoff')+'; Path=/; SameSite=Strict';
+var written=await fetch('/api/companion/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'must not use stale shared intent'})});
+console.log(JSON.stringify({status:written.status,visible:!visible.hidden,cookie}));
+""".replace('ROOT_A',json.dumps(str(roots[0]))))
+    assert result['status'] == 401 and result['visible'] is True
+    assert 'companion_context_session=' in result['cookie']
+    assert not any(path.endswith('/compatibility') for _method,path,_headers,_body in calls)

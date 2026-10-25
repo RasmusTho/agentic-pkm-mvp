@@ -60,17 +60,29 @@
   cookie is retained: neither a sole authorized binding, a matching
   default, nor API restart can silently mint or choose a replacement. A new browser without stale
   explicit intent may independently use the ordinary default journey.
+- The allowlisted `/api/operator/ask` alias targets `/api/ask/scoped` whenever an explicit
+  session or override carrier is present, including a blank one. A carrier-free request retains
+  `/api/ask`. Both paths preserve real client authentication and the presented carriers; there is
+  no retry on the legacy twin after a scoped refusal.
 - Compatibility mutations use distinct same-origin routes (`/api/companion/capture/compatibility`
   and `/api/companion/note/save/compatibility`). Before an explicit capture or note edit, the browser
   uses the opaque `X-Compatibility-Write-Precondition` captured with that rendered document.
-  Both the note and orientation/capture page producers obtain it through the existing scoped notes
+  For scoped pages, both note and orientation/capture producers obtain it through the existing scoped notes
   read with the same request-local adapter that loads the page, and capture its response header
   before later projection reads overwrite transport headers. It remains in document-local script
-  state. A save or capture validates session liveness through the authenticated strict selection
+  state. A scoped page save or capture validates session liveness through the authenticated strict selection
   inspection, then sends the retained proof unchanged. It never refreshes proof from a mutable
   current cookie or automatically retries a rejected write. Missing or expired proof blocks the
-  mutation and preserves the draft; recovery requires explicit reload/reselection. If another tab
-  selects B while an A document stays open, A's proof cannot authorize a B mutation: the existing
+  mutation and preserves the draft; recovery requires explicit reload/reselection.
+  For a carrier-free configured page, the actual `/workspace` or `/orientation` API producer
+  supplies the same existing proof after principal admission, while holding manager selection and
+  compatibility ingress through content serialization. The first document response owns the proof,
+  including a missing proof; later telemetry cannot substitute one. No scoped selection is minted.
+  Real client IP and API-key context are forwarded even without cookies, including direct document
+  API and compatibility-write paths. An unauthenticated projection receives no write proof. These
+  pages check liveness through the legacy notes read while retaining their original document proof;
+  newly shared stale intent still refuses, and missing proof never falls back to a legacy write.
+  If another tab selects B while an A document stays open, A's proof cannot authorize a B mutation: the existing
   compatibility ingress and binding/revision guard either finish an already-admitted A write on A
   or reject it after B commits. The gateway forwards the proof unchanged, and does not translate the session cookie
   on compatibility mutation or selector-bridge routes. The exact authenticated folder-discovery

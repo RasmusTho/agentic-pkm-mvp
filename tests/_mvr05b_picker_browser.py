@@ -23,8 +23,8 @@ from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 
 
 @contextmanager
-def picker_browser(monkeypatch, *, cookie="", response_filter=None, before_request=None):
-    api = TestClient(app, raise_server_exceptions=False, client=("127.0.0.1", 40000))
+def picker_browser(monkeypatch, *, cookie="", response_filter=None, before_request=None, raise_server_exceptions=False):
+    api = TestClient(app, raise_server_exceptions=raise_server_exceptions, client=("127.0.0.1", 40000))
     calls = []
 
     def request(method, url, **kwargs):

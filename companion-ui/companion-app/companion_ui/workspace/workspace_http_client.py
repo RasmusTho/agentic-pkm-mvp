@@ -97,6 +97,8 @@ class WorkspaceHttpClient:
         self._timeout = timeout
         self._context_headers: dict[str, str] = {}
         self.response_headers: dict[str, str] = {}
+        self.document_write_precondition: str | None = None
+        self._document_response_seen = False
 
     def with_context_headers(self, headers: dict[str, str]) -> WorkspaceHttpClient:
         """Create a request-local adapter; never put browser state on the shared client."""
@@ -107,8 +109,11 @@ class WorkspaceHttpClient:
     def _headers(self, headers: dict[str, str] | None) -> dict[str, str]:
         return {**self._context_headers, **(headers or {})}
 
-    def _capture_headers(self, response: httpx.Response) -> None:
+    def _capture_headers(self, response: httpx.Response, path: str) -> None:
         self.response_headers = dict(response.headers)
+        if path in {"/api/companion/workspace", "/api/companion/orientation"} and not self._document_response_seen:
+            self._document_response_seen = True
+            self.document_write_precondition = self.response_headers.get("x-compatibility-write-precondition")
 
     def get(
         self,
@@ -136,7 +141,7 @@ class WorkspaceHttpClient:
             resp = httpx.get(full_url, **get_kwargs)
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
-        self._capture_headers(resp)
+        self._capture_headers(resp, url)
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
@@ -193,7 +198,7 @@ class WorkspaceHttpClient:
             resp = httpx.post(full_url, **request_kwargs)
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
-        self._capture_headers(resp)
+        self._capture_headers(resp, url)
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
@@ -222,7 +227,7 @@ class WorkspaceHttpClient:
             )
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
-        self._capture_headers(resp)
+        self._capture_headers(resp, url)
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
@@ -244,7 +249,7 @@ class WorkspaceHttpClient:
             resp = httpx.delete(full_url, **request_kwargs)
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
-        self._capture_headers(resp)
+        self._capture_headers(resp, url)
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
