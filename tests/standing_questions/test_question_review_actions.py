@@ -29,6 +29,10 @@ def _guard() -> WriteGuard:
     return WriteGuard(snapshot_fn=lambda: {"state": "healthy", "reason": None})
 
 
+def _blocked_guard() -> WriteGuard:
+    return WriteGuard(snapshot_fn=lambda: {"state": "unhealthy", "reason": "test-blocked"})
+
+
 def _stage_candidate(tmp_path: Path, *, question_text: str = "Will the index move?") -> tuple[Path, Path, Path, QuestionStore, dict, str]:
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -108,6 +112,17 @@ def _panel_request(vault: Path | None) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(compatibility_write_root=vault))
 
 
+def _restore_pending_archive(draft_path: Path, receipt_id: str) -> tuple[Path, Path]:
+    from app.expansion import accept as accept_module
+
+    pending_name, retired_name = accept_module._receipt_retirement_names(
+        draft_path.name, receipt_id
+    )
+    pending_path = draft_path.parent / pending_name
+    (draft_path.parent / retired_name).rename(pending_path)
+    return pending_path, draft_path.parent / retired_name
+
+
 @pytest.mark.parametrize("legacy_markers", [False, True])
 def test_accept_projects_checkbox_and_flips_status_atomically(
     legacy_markers: bool,
@@ -165,6 +180,44 @@ def test_accept_projects_checkbox_and_flips_status_atomically(
     assert replay.status == "executed"
     assert replay.receipt is not None
     assert replay.receipt["idempotent_replay"] is True
+
+
+@pytest.mark.parametrize("identity_case", ["wrong_question", "generic_draft"])
+def test_markerless_legacy_control_is_not_offered_outside_its_question(
+    identity_case: str,
+    tmp_path: Path,
+) -> None:
+    from app.api.routes import standing_questions as standing_question_routes
+    from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+
+    vault, draft_path, _outbox, _store, question, version = _stage_candidate(tmp_path)
+    draft_text = draft_path.read_text(encoding="utf-8")
+    marker = (
+        f" <!--ai:option_id=sq_answer_{draft_path.stem}--> "
+        "<!--ai:proposed=exp4-->"
+    )
+    assert marker in draft_text
+    draft_text = draft_text.replace(marker, "", 1)
+    if identity_case == "generic_draft":
+        frontmatter, body = load_frontmatter(draft_text)
+        frontmatter = frontmatter or {}
+        frontmatter.pop("question_id", None)
+        draft_text = dump_frontmatter(frontmatter, body)
+        requested_question_id = question["question_id"]
+    else:
+        requested_question_id = "sq-00000000-0000-0000-0000-000000000099"
+    draft_path.write_text(draft_text, encoding="utf-8")
+
+    candidate = standing_question_routes._candidate_answer(
+        {"candidate_answer_ref": question["candidate_answer_ref"]},
+        question_id=requested_question_id,
+        question_version=version,
+        vault_root=vault,
+    )
+
+    assert candidate is not None
+    assert candidate.state == "not_selectable"
+    assert candidate.acceptance_control is None
 
 
 def test_accept_refuses_candidate_edit_after_checkbox_projection(
@@ -463,6 +516,64 @@ def test_accept_recovers_exact_checked_projection_after_lost_ack(
     assert response.status == "executed"
     assert updated["status"] == "answered"
     assert updated["candidate_answer_ref"] is None
+
+
+def test_missing_pending_archive_acceptance_retry_respects_write_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import panel as panel_route
+    from app.expansion import accept as accept_module
+    from fastapi import HTTPException
+
+    vault, draft_path, outbox, store, question, version = _stage_candidate(tmp_path)
+    request = _acceptance_request(
+        draft_path, vault=vault, question=question, question_version=version
+    )
+    draft_path.write_text(
+        draft_path.read_text(encoding="utf-8").replace("- [ ] Accept", "- [x] Accept", 1),
+        encoding="utf-8",
+    )
+    accepted = accept_module.accept_draft(
+        draft_path,
+        vault_root=vault,
+        outbox_path=outbox,
+        destination="notes/question-answer.md",
+        write_guard=_guard(),
+    )
+    assert accepted.receipt_id is not None
+    pending_path, retired_path = _restore_pending_archive(draft_path, accepted.receipt_id)
+    monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
+
+    monkeypatch.setattr(
+        review_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        lambda: {"state": "unhealthy", "reason": "test-blocked"},
+    )
+    with pytest.raises(HTTPException) as blocked:
+        asyncio.run(panel_route.panel_checkbox_projection(request, _panel_request(vault)))
+
+    unresolved, _ = store.read_question_with_version(question["question_id"])
+    assert blocked.value.detail["state"] == "acknowledgement_indeterminate"
+    assert blocked.value.detail["write_guard_state"] == "unhealthy"
+    assert unresolved["status"] == "open"
+    assert unresolved["candidate_answer_ref"] == question["candidate_answer_ref"]
+    assert pending_path.exists()
+    assert not retired_path.exists()
+    assert not draft_path.exists()
+
+    monkeypatch.setattr(
+        review_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        lambda: {"state": "healthy", "reason": None},
+    )
+    recovered = asyncio.run(panel_route.panel_checkbox_projection(request, _panel_request(vault)))
+    answered, _ = store.read_question_with_version(question["question_id"])
+    assert recovered.status == "executed"
+    assert answered["status"] == "answered"
+    assert answered["candidate_answer_ref"] is None
+    assert retired_path.exists()
+    assert not pending_path.exists()
 
 
 def test_exp4_success_with_question_cas_failure_is_indeterminate(
@@ -873,6 +984,57 @@ def test_dismiss_surfaces_indeterminate_after_durable_decline_if_question_cas_fa
     assert reconciled["idempotent_replay"] is True
     assert resolved["candidate_answer_ref"] is None
     assert resolved["status"] == "open"
+
+
+def test_missing_pending_archive_dismissal_retry_respects_write_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.expansion.accept import decline_draft
+    from app.standing_questions.review import QuestionReviewError
+
+    vault, draft_path, outbox, store, question, version = _stage_candidate(tmp_path)
+    ledger_path = tmp_path / "declined.jsonl"
+    monkeypatch.setenv("DECLINED_LEDGER_PATH", str(ledger_path))
+    monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
+    declined = decline_draft(
+        draft_path,
+        vault_root=vault,
+        outbox_path=outbox,
+        reason="standing_question_candidate_dismissed",
+        declined_ledger=DeclinedLedger(ledger_path),
+        write_guard=_guard(),
+    )
+    pending_path, retired_path = _restore_pending_archive(draft_path, declined.receipt_id)
+
+    with pytest.raises(QuestionReviewError) as blocked:
+        review_module.dismiss_question_candidate(
+            question["question_id"],
+            vault_root=vault,
+            expected_question_version=version,
+            write_guard=_blocked_guard(),
+        )
+
+    unresolved, _ = store.read_question_with_version(question["question_id"])
+    assert blocked.value.detail["state"] == "acknowledgement_indeterminate"
+    assert unresolved["status"] == "open"
+    assert unresolved["candidate_answer_ref"] == question["candidate_answer_ref"]
+    assert pending_path.exists()
+    assert not retired_path.exists()
+    assert not draft_path.exists()
+
+    recovered = review_module.dismiss_question_candidate(
+        question["question_id"],
+        vault_root=vault,
+        expected_question_version=version,
+        write_guard=_guard(),
+    )
+    resolved, _ = store.read_question_with_version(question["question_id"])
+    assert recovered["status"] == "open"
+    assert resolved["status"] == "open"
+    assert resolved["candidate_answer_ref"] is None
+    assert retired_path.exists()
+    assert not pending_path.exists()
 
 
 def test_explicit_close_and_reopen(tmp_path: Path) -> None:

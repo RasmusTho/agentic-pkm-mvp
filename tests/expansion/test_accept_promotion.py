@@ -40,6 +40,7 @@ from app.expansion.accept import (
     ACCEPT_MATERIALIZE_WRITE_ACTION,
     CREATE_ACCEPTED_EVENT,
     CREATE_DECLINED_EVENT,
+    AcceptanceReconciliationError,
     AcceptError,
     AcceptResult,
     DraftNotAcceptedError,
@@ -1108,11 +1109,71 @@ def test_exp4_missing_path_reconciles_a_receipt_bound_pending_archive(
         draft_path,
         receipt_id=receipt_id,
         expected_content_sha256=loaded.raw_content_sha256,
+        write_guard=_allow_all_guard(),
     )
 
     assert archived == str(draft_path.parent / retired_name)
     assert Path(archived).read_bytes() == loaded.raw_content
     assert not (draft_path.parent / pending_name).exists()
+
+
+@pytest.mark.parametrize("recovery", ["archive", "restore"])
+def test_exp4_missing_draft_recovery_checks_guard_before_mutation(
+    recovery: str,
+    tmp_path: Path,
+) -> None:
+    from app.expansion import accept as accept_module
+
+    _vault_root, draft_path, _outbox_path = _stage_draft(tmp_path)
+    loaded = accept_module._load_draft(draft_path)
+    receipt_id = f"guarded-{recovery}"
+    pending_name, retired_name = accept_module._receipt_retirement_names(
+        draft_path.name, receipt_id
+    )
+    directory_fd = os.open(draft_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        accept_module._atomic_rename_noreplace_at(
+            directory_fd,
+            draft_path.name,
+            directory_fd,
+            pending_name,
+        )
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+    expected_hash = loaded.raw_content_sha256 if recovery == "archive" else "0" * 64
+    with pytest.raises(WritesBlockedError):
+        accept_module.reconcile_missing_draft_retirement(
+            draft_path,
+            receipt_id=receipt_id,
+            expected_content_sha256=expected_hash,
+            write_guard=_blocked_guard(),
+        )
+
+    assert not draft_path.exists()
+    assert (draft_path.parent / pending_name).read_bytes() == loaded.raw_content
+    assert not (draft_path.parent / retired_name).exists()
+
+    if recovery == "archive":
+        archived = accept_module.reconcile_missing_draft_retirement(
+            draft_path,
+            receipt_id=receipt_id,
+            expected_content_sha256=expected_hash,
+            write_guard=_allow_all_guard(),
+        )
+        assert archived == str(draft_path.parent / retired_name)
+        assert Path(archived).read_bytes() == loaded.raw_content
+    else:
+        with pytest.raises(AcceptanceReconciliationError):
+            accept_module.reconcile_missing_draft_retirement(
+                draft_path,
+                receipt_id=receipt_id,
+                expected_content_sha256=expected_hash,
+                write_guard=_allow_all_guard(),
+            )
+        assert draft_path.read_bytes() == loaded.raw_content
+        assert not (draft_path.parent / pending_name).exists()
 
 
 # --- Idempotency: re-accepting an already-accepted draft does not double-write -

@@ -98,7 +98,7 @@ from app.expansion.create import (
 )
 from app.knowledge.write_ops import _atomic_rename_noreplace_at
 from app.services.outbox import append_jsonl_outbox_event, iter_jsonl_outbox_records
-from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
 # --- named, WriteGuard-gated action (dotted <module>.<verb> convention) ------
 ACCEPT_MATERIALIZE_WRITE_ACTION = "expansion.create.accept_materialize"
@@ -869,6 +869,8 @@ def _retire_loaded_draft_if_unchanged(
         return str(parent / retired_name)
     except AcceptanceReconciliationError:
         raise
+    except WritesBlockedError:
+        raise
     except Exception as exc:
         raise _retirement_conflict(
             "receipt-bound staged draft retirement did not complete safely",
@@ -885,6 +887,8 @@ def reconcile_missing_draft_retirement(
     *,
     receipt_id: str,
     expected_content_sha256: str | None,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    write_action: str = ACCEPT_MATERIALIZE_WRITE_ACTION,
 ) -> str | None:
     """Finish or verify receipt-bound retirement after the staged name vanished.
 
@@ -957,6 +961,7 @@ def reconcile_missing_draft_retirement(
             ) from exc
         if hashlib.sha256(raw).hexdigest() != expected_content_sha256:
             if pending_exists:
+                write_guard.assert_writes_allowed(write_action)
                 _restore_retirement_if_absent(
                     directory_fd,
                     source_name=pending_name,
@@ -986,6 +991,7 @@ def reconcile_missing_draft_retirement(
                 names=(original_name, pending_name),
             )
 
+        write_guard.assert_writes_allowed(write_action)
         try:
             _atomic_rename_noreplace_at(
                 directory_fd,
@@ -1022,6 +1028,8 @@ def reconcile_missing_draft_retirement(
             )
         return str(parent / retired_name)
     except AcceptanceReconciliationError:
+        raise
+    except WritesBlockedError:
         raise
     except Exception as exc:
         raise _retirement_conflict(

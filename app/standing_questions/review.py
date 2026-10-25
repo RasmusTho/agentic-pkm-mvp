@@ -27,6 +27,7 @@ from app.panel.checkbox_projection import (
     _project_checked,
     extract_panel_selectable_options,
 )
+from app.proposals.declined_ledger import DECLINED_LEDGER_WRITE_ACTION
 from app.runtime.runtime_loop import resolve_outbox_path
 from app.services.outbox import iter_jsonl_outbox_records
 from app.standing_questions.answer_refresh import (
@@ -487,12 +488,20 @@ def _reconcile_missing_question_dismissal(
             draft_path,
             receipt_id=receipt_id,
             expected_content_sha256=expected_hash,
+            write_guard=write_guard,
+            write_action=DECLINED_LEDGER_WRITE_ACTION,
         )
     except AcceptanceReconciliationError as exc:
         raise indeterminate(
             "The decline is durable, but its staged draft retirement remains unresolved.",
             receipt_id=receipt_id,
             recovery_paths=exc.recovery_paths,
+        ) from exc
+    except WritesBlockedError as exc:
+        raise indeterminate(
+            "The decline is durable, but WriteGuard blocks its staged-draft retirement.",
+            receipt_id=receipt_id,
+            recovery_paths=(str(draft_path.parent),),
         ) from exc
 
     try:
@@ -843,12 +852,20 @@ def reconcile_missing_question_acceptance(
                 vault_root / request.note_path,
                 receipt_id=receipt_id,
                 expected_content_sha256=draft_content_sha256,
+                write_guard=write_guard,
             )
         except AcceptanceReconciliationError as exc:
             raise indeterminate(
                 "The accepted answer is durable, but its staged draft retirement remains unresolved.",
                 authority_receipt_id=receipt_id,
                 recovery_paths=list(exc.recovery_paths),
+            ) from exc
+        except WritesBlockedError as exc:
+            raise indeterminate(
+                "The accepted answer is durable, but WriteGuard blocks its staged-draft retirement.",
+                authority_receipt_id=receipt_id,
+                recovery_paths=[str((vault_root / request.note_path).parent)],
+                write_guard_state=exc.state,
             ) from exc
 
         try:
