@@ -7,7 +7,7 @@ state: callers can rebuild it from those durable sources after a restart.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -198,6 +198,17 @@ def _trigger_identity(trigger: YouTubeSyncTrigger) -> tuple[str | None, str | No
     return (trigger.binding_id, trigger.trigger, trigger.playlist_item_id)
 
 
+def _merge_trigger(kept: YouTubeSyncTrigger, other: YouTubeSyncTrigger) -> YouTubeSyncTrigger:
+    """Fill fields the stored row omits (e.g. ``collection_ref``) from its event twin."""
+
+    missing = {
+        item.name: getattr(other, item.name)
+        for item in fields(kept)
+        if getattr(kept, item.name) is None and getattr(other, item.name) is not None
+    }
+    return replace(kept, **missing) if missing else kept
+
+
 def _request_rows(requests: Iterable[Any] | None) -> dict[str, Any]:
     result: dict[str, Any] = {}
     if requests is None:
@@ -306,20 +317,21 @@ def _rows_from_records(
         group = group_for(item_ref, request_id)
         if group is None:
             continue
-        triggers = []
-        trigger_identities = set()
-        for value in _field(request, "discovery_triggers", ()) or ():
-            trigger = _trigger(value)
-            if trigger is not None and _trigger_identity(trigger) not in trigger_identities:
-                triggers.append(trigger)
-                trigger_identities.add(_trigger_identity(trigger))
-        for trigger in group["triggers"]:
+        triggers: list[YouTubeSyncTrigger] = []
+        trigger_index: dict[tuple[str | None, str | None, str | None], int] = {}
+        stored = [_trigger(value) for value in _field(request, "discovery_triggers", ()) or ()]
+        for trigger in [*stored, *group["triggers"]]:
             if trigger is None:
                 continue
             identity = _trigger_identity(trigger)
-            if identity not in trigger_identities:
+            if identity in trigger_index:
+                # The stored row stays authoritative; its event twin only
+                # supplies metadata the stored contract does not persist.
+                position = trigger_index[identity]
+                triggers[position] = _merge_trigger(triggers[position], trigger)
+            else:
+                trigger_index[identity] = len(triggers)
                 triggers.append(trigger)
-                trigger_identities.add(identity)
         group["triggers"] = triggers
 
     rows: list[YouTubeSyncReceiptRow] = []

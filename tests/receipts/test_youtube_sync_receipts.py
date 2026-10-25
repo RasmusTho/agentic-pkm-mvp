@@ -111,6 +111,42 @@ def test_discovery_event_envelope_timestamp_merges_v1_playlist_trigger() -> None
     assert row.triggers[0].playlist_item_id == "pli-new"
 
 
+def test_stored_trigger_keeps_event_collection_ref_after_deduplication() -> None:
+    from app.knowledge_acquisition.acquisition_requests import DiscoveryTrigger
+
+    # The production stored row omits collection_ref; only the event carries it.
+    stored = DiscoveryTrigger(
+        binding_id="binding-playlist",
+        collection_kind="inbox_playlist",
+        collection_ref="PL-inbox",
+        trigger="poll",
+        playlist_item_id="pli-new",
+    ).stored_dict(discovered_at="2026-10-15T00:00:01+00:00")
+    assert "collection_ref" not in stored
+    request = SimpleNamespace(
+        request_id="request-playlist", item_ref="video-playlist", status="pending",
+        requested_at="2026-10-15T00:00:01+00:00", completed_at=None, attempts=0,
+        next_attempt_at=None, artifact_path=None, content_identity=None,
+        discovery_triggers=(stored,),
+    )
+    records = [{
+        "event": "youtube.source.discovered",
+        "event_id": "discover-playlist",
+        "timestamp": "2026-10-15T00:00:00+00:00",
+        "payload": {
+            "item_ref": "video-playlist", "binding_id": "binding-playlist",
+            "collection_kind": "inbox_playlist", "collection_ref": "PL-inbox",
+            "trigger": "poll", "playlist_item_id": "pli-new",
+        },
+    }]
+
+    row = query_youtube_sync_receipts(records=records, requests=(request,), sources=()).rows[0]
+
+    assert len(row.triggers) == 1
+    assert row.triggers[0].collection_ref == "PL-inbox"
+    assert row.triggers[0].discovered_at == "2026-10-15T00:00:01+00:00"
+
+
 def test_v1_playlist_cursor_uses_registered_shape_and_success_time() -> None:
     sources = (
         SimpleNamespace(
