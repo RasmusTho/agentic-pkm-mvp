@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Final
 
@@ -13,6 +14,7 @@ from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 from app.services.outbox import derive_idempotency_key, write_outbox_event
 from app.stores import episode_debrief as store
+from app.workers.outbox_binding_gate import current_binding_effect_window
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -56,8 +58,17 @@ def _closure_payload_is_valid(value: Any) -> bool:
     )
 
 
+def _resolve_inside(root: Path, relative: Path | str, subject: str) -> Path:
+    # Cyclic or unreadable links are a per-item reconciliation failure, never
+    # an abort that suppresses later healthy episodes.
+    try:
+        return (root / relative).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise DebriefReconciliationError(f"{subject} cannot be reconciled") from exc
+
+
 def _episode_fields(root: Path, row: store.EpisodeRow) -> dict[str, Any]:
-    path = (root / row.note_path).resolve()
+    path = _resolve_inside(root, row.note_path, f"episode note {row.episode_id}")
     if path == root or not path.is_relative_to(root):
         raise DebriefReconciliationError("episode projection points outside the selected vault")
     try:
@@ -84,11 +95,16 @@ def _already_debriefed(root: Path, fields: dict[str, Any], debrief_id: str) -> b
         # References are identities, not authority to read arbitrary paths.
         if not ref or Path(ref).name != ref or ref in {".", ".."}:
             raise DebriefReconciliationError("episode debrief_ref is not an artifact identity")
-        path = (root / "_system" / "episode-debriefs" / f"{ref}.md").resolve()
+        path = _resolve_inside(
+            root, Path("_system") / "episode-debriefs" / f"{ref}.md", f"debrief artifact {ref}"
+        )
         if not path.is_relative_to(root):
             raise DebriefReconciliationError("debrief artifact points outside the selected vault")
-        if path.is_file():
-            return True
+        try:
+            if path.is_file():
+                return True
+        except OSError as exc:
+            raise DebriefReconciliationError(f"debrief artifact {ref} cannot be reconciled") from exc
     return False
 
 
@@ -105,7 +121,20 @@ def run_debrief_tick(
     root = Path(vault_root).expanduser().resolve(strict=True)
     runtime = resolve_scalar_binding_runtime(requested_binding_id=vault_binding_id, vault_root=root)
     binding_id = runtime.vault_binding_id if runtime is not None else vault_binding_id
+    # Closures, cursor and triggers follow the resolved runtime binding. The
+    # scalar request reads the compatibility projection the current ERE
+    # producers still write; an explicit native binding reads only its own.
+    projection_binding_id = (
+        COMPATIBILITY_BINDING_ID if vault_binding_id == COMPATIBILITY_BINDING_ID else binding_id
+    )
     write_guard.assert_writes_allowed(TRIGGER_WRITE_ACTION)
+    # Freeze the selected root so nested outbox writes never borrow ambient
+    # scalar root authority.
+    with current_binding_effect_window(runtime) if runtime is not None else nullcontext():
+        return _reconcile(root, binding_id, projection_binding_id, limit)
+
+
+def _reconcile(root: Path, binding_id: str, projection_binding_id: str, limit: int) -> dict[str, Any]:
     rows = store.read_closures(vault_binding_id=binding_id, limit=limit)
     summary: dict[str, Any] = {
         "triggered": [], "pending_debrief": [], "consumed": len(rows),
@@ -113,7 +142,7 @@ def run_debrief_tick(
         "skipped_ineligible": 0, "skipped_already_debriefed": 0, "skipped_open": 0,
     }
     failures: list[str] = []
-    for episode in store.closed_episodes(vault_binding_id=binding_id):
+    for episode in store.closed_episodes(vault_binding_id=projection_binding_id):
         if episode.bound_artifact_count < EPISODE_DEBRIEF_MIN_ARTIFACT_COUNT:
             summary["skipped_ineligible"] += 1
             continue

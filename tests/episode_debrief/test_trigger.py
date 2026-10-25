@@ -48,21 +48,32 @@ def test_real_closure_producer_drives_debrief_consumer(debrief_db) -> None:
                               "WHERE topic='episode.closed'") == [("episode.closed.v1",)]
 
 
-def test_active_registry_closure_reconciles_compatibility_projection(debrief_db, monkeypatch) -> None:
-    from datetime import datetime, timezone
-    from app.episodes.closure import EpisodeCloseCandidate, close_episode
-    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
-    from app.write_guard import WriteGuard
+def _active_native_runtime(debrief_db, monkeypatch, *, extra_roots: tuple[str, ...] = ()):
+    """Active registry with a governed operator principal; the scalar root is the first binding."""
+    from tests._mvr03_principal_harness import AuthPosture, run_principal_cutover
     from tests._mvr_default_vault_harness import active_runtime
 
     authority_root = debrief_db.root / "native-runtime"
     authority_root.mkdir()
-    runtime, first, _ = active_runtime(authority_root)
+    runtime, first, extra = active_runtime(authority_root, extra_roots=extra_roots)
+    run_principal_cutover(runtime, channel_id=runtime.layout.channel_id, posture=AuthPosture(
+        configured_credentials=0, credential=None, loopback_listener_proven=True,
+        companion_proxy_configured=False))
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
     monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
     monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
     monkeypatch.setenv("VAULT_ROOT", first.path)
     monkeypatch.setenv("WATCHER_VAULT_PATH", first.path)
+    return first, extra
+
+
+def test_active_registry_closure_reconciles_compatibility_projection(debrief_db, monkeypatch) -> None:
+    from datetime import datetime, timezone
+    from app.episodes.closure import EpisodeCloseCandidate, close_episode
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+    from app.write_guard import WriteGuard
+
+    first, _ = _active_native_runtime(debrief_db, monkeypatch)
     debrief_db.root = Path(first.path)
     episode = debrief_db.episode(closed=False)
     # The current ERE producer owns the compatibility projection even after
@@ -88,16 +99,7 @@ def test_active_registry_closure_reconciles_compatibility_projection(debrief_db,
 
 
 def test_explicit_native_projection_uses_selected_root_effect_context(debrief_db, monkeypatch) -> None:
-    from tests._mvr_default_vault_harness import active_runtime
-
-    authority_root = debrief_db.root / "native-runtime"
-    authority_root.mkdir()
-    runtime, first, (second,) = active_runtime(authority_root, extra_roots=("two",))
-    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
-    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
-    monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
-    monkeypatch.setenv("VAULT_ROOT", first.path)
-    monkeypatch.setenv("WATCHER_VAULT_PATH", first.path)
+    _, (second,) = _active_native_runtime(debrief_db, monkeypatch, extra_roots=("two",))
     debrief_db.root = Path(second.path)
     episode = debrief_db.episode(binding=second.vault_binding_id, scope="private")
     debrief_db.episode(episode_id=episode, count=0, scope="work")
