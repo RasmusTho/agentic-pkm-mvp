@@ -2405,6 +2405,46 @@ def _dispatcher_example_scan_source(body: str) -> str:
             or _DISPATCHER_HEAD_BINDING_RE.search(normalized)
         )
 
+    def partial_html_example(text: str, stop: int) -> bool:
+        normalized = _dispatcher_strip_default_ignorables(text)
+        partial = any(
+            _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE.search(part)
+            or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(part)
+            or _DISPATCHER_PRESERVED_WORKTREE_RE.search(part)
+            or (
+                _DISPATCHER_PICKUP_RECEIPT_RE.search(part)
+                and _DISPATCHER_WORKTREE_BINDING_RE.search(part)
+            )
+            for part in (normalized, *normalized.splitlines())
+        )
+        if not partial:
+            return False
+        # A whole snippet is narrative, but a code-formatted prefix can still
+        # participate in visible retention intent. Preserve the existing scan
+        # when text outside the container supplies its continuation or fields.
+        following = _dispatcher_cross_line_scan_body(
+            source[:stop] + marker + source[stop:], normalize_default_ignorables=True
+        )
+        if marker not in following:
+            return False
+        continuation = _dispatcher_split_scan_segments(following.partition(marker)[2])[0]
+        if _DISPATCHER_HTML_TAG_NAME_RE.match(continuation.lstrip()):
+            return False
+        next_marker = _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(continuation)
+        bounded = continuation[:next_marker.start()] if next_marker else continuation
+        if any(
+            match.end() > len(normalized)
+            for match in _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.finditer(normalized + bounded)
+        ):
+            return False
+        return not re.search(
+            r"^\s*(?:is(?:\s+still)?\s*$|is\s+still\s+dirty\b|still\s+dirty\b"
+            r"|dirty\b|on\s+branch\b|at\s+head\b"
+            r"|[;,]?\s*(?:branch|(?:base\s+)?head)\s*[:=])",
+            continuation,
+            re.IGNORECASE,
+        )
+
     marker = "DISPATCHER_CODE_EXAMPLE_VISIBILITY"
     while marker in source:
         marker += "_"
@@ -2446,7 +2486,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
                         end = self.content.find(">", self.position()) + 1
                         stop = self.offsets[end - 1] + 1
                         rendered = _dispatcher_cross_line_scan_body(source[start:stop])
-                        if receipt_example(rendered):
+                        if receipt_example(rendered) or partial_html_example(rendered, stop):
                             spans.append((start, stop))
                     break
 
