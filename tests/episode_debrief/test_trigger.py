@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 from threading import Event, current_thread
@@ -45,6 +46,68 @@ def test_real_closure_producer_drives_debrief_consumer(debrief_db) -> None:
     assert debrief_db.tick()["triggered"] == [debrief_id_for_episode(episode)]
     assert debrief_db.execute("SELECT payload->'meta'->>'payload_schema' FROM outbox "
                               "WHERE topic='episode.closed'") == [("episode.closed.v1",)]
+
+
+def test_active_registry_closure_reconciles_compatibility_projection(debrief_db, monkeypatch) -> None:
+    from datetime import datetime, timezone
+    from app.episodes.closure import EpisodeCloseCandidate, close_episode
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+    from app.write_guard import WriteGuard
+    from tests._mvr_default_vault_harness import active_runtime
+
+    authority_root = debrief_db.root / "native-runtime"
+    authority_root.mkdir()
+    runtime, first, _ = active_runtime(authority_root)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
+    monkeypatch.setenv("VAULT_ROOT", first.path)
+    monkeypatch.setenv("WATCHER_VAULT_PATH", first.path)
+    debrief_db.root = Path(first.path)
+    episode = debrief_db.episode(closed=False)
+    # The current ERE producer owns the compatibility projection even after
+    # the existing scalar outbox translator stamps a native binding.
+    candidate = EpisodeCloseCandidate(episode, "work", f"episodes/{episode}.md",
+                                      datetime(2026, 10, 13, 9, tzinfo=timezone.utc))
+    result = close_episode(candidate, vault_root=debrief_db.root,
+                           write_guard=WriteGuard(lambda: {"state": "healthy"}))
+    assert result is not None and result.event_emitted
+    closure_id, closure_binding = debrief_db.execute(
+        "SELECT id, vault_binding_id FROM outbox WHERE topic='episode.closed'")[0]
+    assert closure_binding == first.vault_binding_id
+    assert debrief_db.execute("SELECT vault_binding_id, closed FROM episodes") == [(COMPATIBILITY_BINDING_ID, True)]
+    summary = debrief_db.tick()
+    assert summary["consumed"] == 1
+    assert summary["triggered"] == [debrief_id_for_episode(episode)]
+    assert store.get_cursor(vault_binding_id=first.vault_binding_id).row_id == str(closure_id)
+    assert store.get_cursor() is None
+    assert debrief_db.execute("SELECT vault_binding_id FROM outbox WHERE topic='debrief.trigger.created'") == [
+        (first.vault_binding_id,)]
+    assert debrief_db.tick()["pending_debrief"] == [debrief_id_for_episode(episode)]
+    assert len(debrief_db.triggers()) == 1
+
+
+def test_explicit_native_projection_uses_selected_root_effect_context(debrief_db, monkeypatch) -> None:
+    from tests._mvr_default_vault_harness import active_runtime
+
+    authority_root = debrief_db.root / "native-runtime"
+    authority_root.mkdir()
+    runtime, first, (second,) = active_runtime(authority_root, extra_roots=("two",))
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
+    monkeypatch.setenv("VAULT_ROOT", first.path)
+    monkeypatch.setenv("WATCHER_VAULT_PATH", first.path)
+    debrief_db.root = Path(second.path)
+    episode = debrief_db.episode(binding=second.vault_binding_id, scope="private")
+    debrief_db.episode(episode_id=episode, count=0, scope="work")
+    # Reconcile a selected native replay namespace without borrowing ambient
+    # root authority or unioning the compatibility projection.
+    summary = debrief_db.tick(vault_binding_id=second.vault_binding_id)
+    assert summary["triggered"] == [debrief_id_for_episode(episode)]
+    assert debrief_db.triggers()[0]["scope"] == "private"
+    assert debrief_db.execute("SELECT vault_binding_id, payload->'meta'->>'vault_root' FROM outbox "
+                              "WHERE topic='debrief.trigger.created'") == [(second.vault_binding_id, second.path)]
 
 
 def test_redelivered_closure_is_idempotent_at_consumer_entrypoint(debrief_db) -> None:
@@ -210,6 +273,33 @@ def test_bad_episode_does_not_suppress_unrelated_healthy_trigger(debrief_db) -> 
     assert [payload["episode_id"] for payload in debrief_db.triggers()] == [good]
     debrief_db.execute("UPDATE episodes SET note_path=%s WHERE episode_id=%s",
                        (f"episodes/{bad}.md", bad))
+    debrief_db.tick()
+    assert store.get_cursor().row_id == frontier
+    assert {payload["episode_id"] for payload in debrief_db.triggers()} == {good, bad}
+
+
+@pytest.mark.parametrize("cyclic_path", ["note", "artifact"])
+def test_cyclic_path_does_not_suppress_unrelated_healthy_trigger(debrief_db, cyclic_path: str) -> None:
+    bad = debrief_db.episode(episode_id="ep-00000000-0000-4000-8000-000000000001")
+    good = debrief_db.episode(episode_id="ep-00000000-0000-4000-8000-000000000002", scope="private")
+    debrief_db.closure(bad, malformed=True)
+    frontier = debrief_db.closure(good, ordinal=2, scope="private")
+    if cyclic_path == "note":
+        path = debrief_db.root / "episodes" / f"{bad}.md"
+        original = path.read_text(encoding="utf-8")
+        path.unlink()
+    else:
+        path = debrief_db.root / "_system" / "episode-debriefs" / f"{debrief_id_for_episode(bad)}.md"
+        path.parent.mkdir(parents=True)
+        original = None
+    path.symlink_to(path.name)
+    with pytest.raises(DebriefReconciliationError, match="cannot be reconciled"):
+        debrief_db.tick()
+    assert store.get_cursor() is None
+    assert [payload["episode_id"] for payload in debrief_db.triggers()] == [good]
+    path.unlink()
+    if original is not None:
+        path.write_text(original, encoding="utf-8")
     debrief_db.tick()
     assert store.get_cursor().row_id == frontier
     assert {payload["episode_id"] for payload in debrief_db.triggers()} == {good, bad}
