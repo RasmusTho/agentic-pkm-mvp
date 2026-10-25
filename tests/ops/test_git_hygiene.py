@@ -6650,6 +6650,12 @@ def test_local_retirement_ignores_embedded_code_receipt_examples(
     "<section><code>{snippet}</code></section><section>At head {sha}, child delivered.</section>",
     "<ul><li><code>{snippet}</code></li><li>At head {sha}, child delivered.</li></ul>",
     "<div><code>{snippet}</code><!-- gap\n\n--></div><div>At head {sha}, child delivered.</div>",
+    "<code>{snippet}</code> `<div>`",
+    "<code>{snippet}</code> `<div`\n\nAt head {sha}, child delivered.",
+    "<code>{snippet}</code> `</p>`",
+    pytest.param("- <code>{snippet}</code>\n  [ `] <div>` task-example", id="task-prefix-literal-html"),
+    "<code>{snippet}</code>.\u200b At head {sha}, child delivered.",
+    '<code>{snippet}</code> &lt;div title="sample."&gt;. At head {sha}, child delivered.',
 ])
 def test_local_retirement_ignores_partial_html_receipt_examples(
     tmp_path, monkeypatch, snippet, wrapper
@@ -6703,6 +6709,18 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     "<code>Preserved worktree: /tmp/old</code></th> branch: old; HEAD: {sha}",
     "<code>Dedicated worktree /tmp/old is still dirty</code><td> on branch old at head {sha}",
     "<td><code>Dedicated worktree /tmp/old is still dirty</code></td> on branch old at head {sha}",
+    "<code>Dedicated worktree /tmp/old is still dirty<p></code></p> on branch old at head {sha}",
+    "<code>Pickup intent receipt: worktree: /tmp/old<div></code></div> branch: old; HEAD: {sha}",
+    "<code>Preserved worktree: /tmp/old<section></code></section> branch: old; HEAD: {sha}",
+    "<pre>Dedicated worktree /tmp/old is still dirty<p></pre></p> on branch old at head {sha}",
+    "<table><tr><code>Dedicated worktree /tmp/old is still dirty<td></code></td></tr></table> on branch old at head {sha}",
+    r"<code>Dedicated worktree /tmp/old is still dirty</code> `\<!-- .` on branch old at head {sha}",
+    r"<code>Dedicated worktree /tmp/old is still dirty</code> `\<!-- !` on branch old at head {sha}",
+    r"<code>Pickup intent receipt: worktree: /tmp/old</code> `\<!-- .` branch: old; HEAD: {sha}",
+    r"<code>Preserved worktree: /tmp/old</code> `\<!-- ?` branch: old; HEAD: {sha}",
+    pytest.param("- <code>Dedicated worktree /tmp/old is still dirty</code>\n  [ `] .` on branch old at head {sha}", id="task-prefix-literal-period-intent"),
+    '<code>Dedicated worktree /tmp/old</code> (\u200b<div title="<!--. is still dirty on branch old at head {sha}',
+    '<code>Dedicated worktree /tmp/old</code> &lt;div title=". on branch old at head {sha}"&gt;',
     "<code>Dedicated worktree /tmp/old is still dirty<p></p></code> on branch old at head {sha}",
     "<code>Dedicated worktree /tmp/old is still dirty</code></p> on branch old at head {sha}",
 ] + [

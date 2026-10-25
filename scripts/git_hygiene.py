@@ -2575,7 +2575,7 @@ def _dispatcher_example_block(
             position = len(
                 _dispatcher_render_inline_tokens(
                     children[:index],
-                    strip_task_prefix=token.level > 1,
+                    strip_task_prefix=False,
                     mask_comment_closers=pending,
                 )
             )
@@ -2591,13 +2591,37 @@ def _dispatcher_example_block(
                     )
                     block.barriers.append((position, source_position))
             elif child.type == "code_inline":
+                literal = _dispatcher_render_inline_tokens(
+                    [child],
+                    strip_task_prefix=False,
+                    mask_comment_closers=pending,
+                )
                 block.literals.append(
-                    (position, position + len(child.content), offsets[start], offsets[stop - 1] + 1)
+                    (position, position + len(literal), offsets[start], offsets[stop - 1] + 1)
                 )
             elif child.type == "html_inline":
                 content = token.content[start:stop]
                 parser = Events(content, offsets[start:stop], position, True)
                 parser.feed(content)
+        if token.level > 1:
+            unstripped = _dispatcher_render_inline_tokens(
+                children,
+                strip_task_prefix=False,
+                mask_comment_closers=pending,
+            )
+            removed = [
+                match.span() for match in _DISPATCHER_MARKDOWN_TASK_PREFIX_RE.finditer(unstripped)
+            ]
+
+            def project(position: int) -> int:
+                return position - sum(
+                    max(0, min(position, stop) - start) for start, stop in removed
+                )
+
+            for event in (*block.events, *block.structures):
+                event.position = project(event.position)
+            block.literals = [(project(a), project(b), c, d) for a, b, c, d in block.literals]
+            block.barriers = [(project(position), origin) for position, origin in block.barriers]
         if pending:
             close = rendered.find("-->")
             if close < 0:
@@ -2688,6 +2712,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
                 paired.append((owners.pop(), event))
             else:
                 valid_structure = False
+        cell_boundaries = list(block.barriers)
         if valid_structure and not owners:
             for opening, closing in paired:
                 # A cell/row outside its paired table cannot grant opacity.
@@ -2770,6 +2795,20 @@ def _dispatcher_example_scan_source(body: str) -> str:
             if not complete and not partial:
                 continue
             if partial and not complete:
+                # An owner may surround or be disjoint from an example, but
+                # crossing its source interval makes the opacity indeterminate.
+                if any(
+                    opening.source_start < owner.source_start < event.source_stop < end.source_stop
+                    or owner.source_start
+                    < opening.source_start
+                    < end.source_stop
+                    < event.source_stop
+                    for owner, end in paired
+                ) or any(
+                    opening.source_start < origin < event.source_stop
+                    for _, origin in cell_boundaries
+                ):
+                    raise RuntimeError("dispatcher_activity_invalid")
                 stop = min(
                     (
                         position
@@ -2778,14 +2817,29 @@ def _dispatcher_example_scan_source(body: str) -> str:
                     ),
                     default=len(block.text),
                 )
-                if _DISPATCHER_HTML_TAG_NAME_RE.match(block.text[event.position : stop].lstrip()):
-                    raise RuntimeError("dispatcher_activity_invalid")
+                statement_literals = list(literal_ranges)
+                for tag in _DISPATCHER_HTML_TAG_NAME_RE.finditer(block.text, event.position, stop):
+                    if any(a <= tag.start() < b for a, b in statement_literals):
+                        continue
+                    # Visible tag text can come from a literal/entity, or from
+                    # canonical unfinished-tag recovery. Never let punctuation
+                    # inside it invent a sentence end before retention fields.
+                    whole_tag = re.match(
+                        r"<\s*/?\s*[A-Za-z][A-Za-z0-9:-]*(?:[^\"'>]|\"[^\"]*\"|'[^']*')*>",
+                        block.text[tag.start() : stop],
+                    )
+                    if whole_tag is None:
+                        raise RuntimeError("dispatcher_activity_invalid")
+                    statement_literals.append((tag.start(), tag.start() + whole_tag.end()))
                 # Sentence punctuation in code-formatted field values is literal.
                 # Commas, semicolons, parentheses, connectors and <br> do not
                 # end ownership. Hidden-comment newlines are not paragraphs.
-                for match in re.finditer(r"[.!?](?=\s|$)", block.text[event.position : stop]):
+                for match in regex.finditer(
+                    r"[.!?](?=\p{Default_Ignorable_Code_Point}*(?:\s|$))",
+                    block.text[event.position : stop],
+                ):
                     position = event.position + match.start()
-                    if any(a <= position < b for a, b in literal_ranges):
+                    if any(a <= position < b for a, b in statement_literals):
                         continue
                     stop = position
                     break
@@ -2834,7 +2888,8 @@ def _dispatcher_example_scan_source(body: str) -> str:
 
 
 def _dispatcher_resumable_binding_resources(
-    cwd: Path, record: Mapping[str, object],
+    cwd: Path,
+    record: Mapping[str, object],
 ) -> set[str]:
     """Return only structured or explicitly resumable task resource bindings.
 
