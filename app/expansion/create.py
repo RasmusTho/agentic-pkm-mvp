@@ -156,6 +156,12 @@ CREATE_EVENT_SOURCE = "app.expansion.create"
 _ACCEPTANCE_CHECKBOX_MARKER = "AI-åtgärder"  # "AI-åtgärder"
 
 
+def standing_question_acceptance_option_id(draft_id: str) -> str:
+    """Stable Panel option identity for a Standing Questions EXP-4 checkbox."""
+
+    return f"sq_answer_{draft_id}"
+
+
 class InvalidOutputKindError(ValueError):
     """Raised when ``kind`` is not a member of :data:`SUPPORTED_OUTPUT_KINDS`.
 
@@ -557,10 +563,14 @@ def _draft_note_text(
 ) -> str:
     from scripts.yaml_roundtrip import dump_frontmatter
 
+    question_option = ""
+    if frontmatter.get("question_id"):
+        option_id = standing_question_acceptance_option_id(draft_id)
+        question_option = f" <!--ai:option_id={option_id}--> <!--ai:proposed=exp4-->"
     checkbox_block = (
         "\n%% AI:Start %%\n"
         f"## {_ACCEPTANCE_CHECKBOX_MARKER}\n\n"
-        f"- [ ] Accept this draft into the vault (draft {draft_id[:12]})\n"
+        f"- [ ] Accept this draft into the vault (draft {draft_id[:12]}){question_option}\n"
         "%% AI:End %%\n"
     )
     return dump_frontmatter(frontmatter, body) + checkbox_block
@@ -1288,5 +1298,6 @@ __all__ = [
     "emit_digest_offer_receipt",
     "evaluate_create_activation",
     "run_create_pass",
+    "standing_question_acceptance_option_id",
     "sweep_expired_drafts",
 ]

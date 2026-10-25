@@ -84,6 +84,11 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
    approximations, not a loss of canonical truth — the vault's canonical RFC 3339 strings remain
    unchanged and the projection fully rebuilds from them; `evidence[].matched_at` remains unchanged
    inside JSON rather than being adapted as a database timestamp.
+   **Projection freshness boundary:** API GETs read the projection without rebuilding it, then compare
+   its Question identities and query fields with the canonical notes. A mismatch or unavailable source
+   returns an explicit degraded response instead of serving stale rows. Registration, review writes,
+   and non-dry-run watcher ingestion rebuild the binding-scoped projection after the canonical note
+   write; this rebuild remains the only projection writer.
 5. **Id minting**: `question_id = sq-<uuid>`, distinct namespace from `ep-*` (episodes) and any other
    entity id space in the vault — the store rejects a caller-supplied id that does not match the
    `sq-` prefix.

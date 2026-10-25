@@ -191,6 +191,9 @@ from app.vault.settings_service import (
     SettingsWriteError,
 )
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
+from app.config.database import runtime_database_is_named
+from app.instance.compatibility_binding import compatibility_binding_for_root
+from app.standing_questions.projection import rebuild_standing_questions_projection
 from app.standing_questions.registration import register_question_explicitly
 
 # MVR-05B3: every companion mutation carries the pre-05C seal (scoped carriers and
@@ -1264,6 +1267,15 @@ def register_companion_question(
             status_code=409,
             detail={"error": "writeguard_blocked", "state": "blocked", "message": str(exc)},
         ) from exc
+    if runtime_database_is_named(os.environ):
+        try:
+            binding_id = compatibility_binding_for_root(vault_root)
+            rebuild_standing_questions_projection(vault_root, vault_binding_id=binding_id)
+        except Exception:
+            # Registration is already durable in the vault; a later watcher
+            # pass repairs the query projection, and the read route fails closed
+            # while it remains stale.
+            logger.exception("standing-question projection refresh failed after registration")
     return QuestionRegistrationResponse(
         question_id=note["question_id"],
         status="open",
