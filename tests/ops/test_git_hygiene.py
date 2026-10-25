@@ -6576,6 +6576,98 @@ def test_local_retirement_ignores_historical_dispatcher_delivery_sha(
     assert result["deleted"] == 1
 
 
+@pytest.mark.parametrize("receipt", [
+    "Dedicated worktree /tmp/old is still dirty on branch old at head {sha}.",
+    "Preserved worktree: /tmp/old; branch: old; base HEAD: {sha}.",
+    "Pickup intent receipt: worktree: /tmp/old; branch: old; base HEAD: {sha}.",
+])
+@pytest.mark.parametrize("wrapper", [
+    "`{receipt}`", "``{receipt}``", "Example: `{receipt}`",
+    "<code>{receipt}</code>", "<pre>{receipt}</pre>",
+    "<pre><code>{receipt}</code></pre>",
+    "<code>\n{receipt}\n</code>", "<pre>\n{receipt}\n</pre>",
+    "<div><code>{receipt}</code></div>",
+    "<CODE class='example'>{receipt}</CODE>",
+    "| receipt | details |\n| --- | --- |\n| details | `{receipt}` |",
+    "`{receipt}`. Dedicated worktree /tmp/other is still dirty on branch other at head " + "b" * 40 + ".",
+    "<code>{receipt}</code>. Dedicated worktree /tmp/other is still dirty on branch other at head " + "b" * 40 + ".",
+    "`\n{receipt}\n`", "``\n{receipt}\n``",
+    "> `{receipt}`", "- `{receipt}`",
+    "<pre>\n<code>\n{receipt}\n</code>\n</pre>",
+])
+def test_local_retirement_ignores_embedded_code_receipt_examples(
+    tmp_path, monkeypatch, receipt, wrapper
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    body = wrapper.format(receipt=receipt.format(sha=sha))
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [{
+        "kind": "task", "record": {
+            "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+            "repo": "RasmusTho/agentic-pkm-mvp", "issue_number": 5258,
+            "status": "blocked", "linked_pr": None, "source_anchor_refs": "[]",
+            "sync_state": json.dumps({"comments": [{"body": body}]}),
+        },
+    }])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard fixture after narrative code example check",
+    )
+    assert result["deleted"] == 1
+    assert result["retained"] == {}
+    assert git_hygiene.run_git(["for-each-ref", "--format=%(refname)", ref], repo) == ""
+
+
+@pytest.mark.parametrize("example", [
+    "`Dedicated worktree /tmp/example is still dirty on branch example at head {sha}.`",
+    "`\nDedicated worktree /tmp/example is still dirty on branch example at head {sha}.\n`",
+    "<pre>\nDedicated worktree /tmp/example is still dirty on branch example at head {sha}.\n</pre>",
+])
+@pytest.mark.parametrize("receipt", [
+    "Pickup intent receipt: branch: old; HEAD: {sha}.",
+    "Preserved worktree: `/tmp/old`; branch: `old`; base HEAD: `{sha}`.",
+    "Dedicated worktree `/tmp/old` is still dirty on branch `old` at head `{sha}`.",
+    "<!--\nPickup intent receipt: branch: old; HEAD: {sha}.\n-->",
+    "<!-- pending\n\n<code>\nPickup intent receipt: branch: old; HEAD: {sha}.\n</code>\n-->",
+])
+@pytest.mark.parametrize("example_first", [False, True])
+@pytest.mark.parametrize("separator", ["\n", "\n\n"])
+def test_local_retirement_preserves_receipt_beside_code_example(
+    tmp_path, monkeypatch, example, receipt, example_first, separator
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    parts = [example.format(sha=sha), receipt.format(sha=sha)]
+    if not example_first:
+        parts.reverse()
+    body = separator.join(parts)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [{
+        "kind": "task", "record": {
+            "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+            "repo": "RasmusTho/agentic-pkm-mvp", "issue_number": 5258,
+            "status": "blocked", "linked_pr": None, "source_anchor_refs": "[]",
+            "sync_state": json.dumps({"comments": [{"body": body}]}),
+        },
+    }])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="preserve actual fixture receipt beside example",
+    )
+    assert result["deleted"] == 0
+    assert result["retained"][ref] == "live_or_resumable_activity"
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+@pytest.mark.parametrize("body", [
+    "Dedicated worktree /tmp/old is <code>still dirty</code> on branch old at head " + "a" * 40,
+    "Dedicated worktree <code>/tmp/old</code> is still dirty on branch old at head " + "a" * 40,
+    "<code>Dedicated worktree /tmp/old</code> is still dirty on branch old at head " + "a" * 40,
+    "`<code>`\nDedicated worktree /tmp/old is still dirty on branch old at head " + "a" * 40,
+    "<!--\nPickup intent receipt: branch: old; HEAD: " + "a" * 40 + ".\n-->",
+    r"\`Dedicated worktree /tmp/old is still dirty on branch old at head " + "a" * 40 + r".\`",
+])
+def test_dispatcher_code_examples_preserve_non_example_source(body):
+    assert git_hygiene._dispatcher_example_scan_source(body) == body
+
+
 def test_local_retirement_preserves_explicit_resumable_binding(
     tmp_path, monkeypatch
 ):
@@ -7439,11 +7531,6 @@ def test_local_retirement_handles_default_ignorable_marker_text_monotonically(
             "| receipt | details |\n"
             "| --- | --- |\n"
             "| details | Dedicated worktree /tmp/old is still dirty on branch old at head {sha} |"
-        ),
-        (
-            "| receipt | details |\n"
-            "| --- | --- |\n"
-            "| details | `Dedicated worktree /tmp/old is still dirty on branch old at head {sha}` |"
         ),
         (
             "| receipt | details |\n"
