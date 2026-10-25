@@ -22,17 +22,17 @@ def test_projection_answers_audit_questions_secret_free() -> None:
         artifact_path=None,
         content_identity=None,
         discovery_triggers=(
-            {"binding_id": "binding-a", "collection_kind": "inbox_playlist", "collection_ref": "PL-a", "discovered_at": "2026-10-15T00:00:00+00:00", "trigger": "poll"},
-            {"binding_id": "binding-b", "collection_kind": "inbox_playlist", "collection_ref": "PL-b", "discovered_at": "2026-10-15T00:00:01+00:00", "trigger": "poll"},
+            {"binding_id": "binding-a", "collection_kind": "inbox_playlist", "collection_ref": "PL-a", "discovered_at": "2026-10-15T00:00:00+00:00", "trigger": "poll", "playlist_item_id": "pli-a"},
+            {"binding_id": "binding-b", "collection_kind": "inbox_playlist", "collection_ref": "PL-b", "discovered_at": "2026-10-15T00:00:01+00:00", "trigger": "poll", "playlist_item_id": "pli-b"},
         ),
     )
     sources = (
-        SimpleNamespace(binding_id="binding-a", account_binding_id="account-a", cursor={"frontier": "2026-10-15T00:00:01+00:00"}, last_success_at="2026-10-15T00:00:02+00:00"),
-        SimpleNamespace(binding_id="binding-b", account_binding_id="account-b", cursor={}, last_success_at=None),
+        SimpleNamespace(binding_id="binding-a", account_binding_id="account-a", cursor={"version": 1, "frontier_playlist_item_id": "pli-a-newest", "known_playlist_item_ids": ["pli-a-newest", "pli-a"]}, last_success_at="2026-10-15T00:00:02+00:00"),
+        SimpleNamespace(binding_id="binding-b", account_binding_id="account-b", cursor={"version": 1, "frontier_playlist_item_id": "pli-b-newest", "known_playlist_item_ids": ["pli-b-newest", "pli-b"]}, last_success_at="2026-10-15T00:00:03+00:00"),
     )
     records = [
-        {"event": "youtube.source.discovered", "event_id": "source-1", "payload": {"item_ref": "video-1", "binding_id": "binding-a", "collection_kind": "inbox_playlist", "collection_ref": "PL-a", "trigger": "poll", "discovered_at": "2026-10-15T00:00:00+00:00"}},
-        {"event": "youtube.source.discovered", "event_id": "source-2", "payload": {"item_ref": "video-1", "binding_id": "binding-b", "collection_kind": "inbox_playlist", "collection_ref": "PL-b", "trigger": "poll", "discovered_at": "2026-10-15T00:00:01+00:00"}},
+        {"event": "youtube.source.discovered", "event_id": "source-1", "timestamp": "2026-10-15T00:00:00+00:00", "payload": {"item_ref": "video-1", "binding_id": "binding-a", "collection_kind": "inbox_playlist", "collection_ref": "PL-a", "trigger": "poll", "playlist_item_id": "pli-a"}},
+        {"event": "youtube.source.discovered", "event_id": "source-2", "timestamp": "2026-10-15T00:00:01+00:00", "payload": {"item_ref": "video-1", "binding_id": "binding-b", "collection_kind": "inbox_playlist", "collection_ref": "PL-b", "trigger": "poll", "playlist_item_id": "pli-b"}},
         {"event": "acquisition.failed", "event_id": "failed-1", "payload": {"request_id": "request-1", "item_ref": "video-1", "attempt": 1, "reason_code": "auth_revoked", "error": "refresh-token-super-secret"}},
     ]
     result = query_youtube_sync_receipts(
@@ -52,16 +52,17 @@ def test_projection_answers_audit_questions_secret_free() -> None:
     assert row.failure_reason_code == "auth_revoked"
     assert row.failed_stage == "acquisition"
     assert row.cursor_advanced is True
+    assert row.cursor_frontier is None
     assert row.next_retry_at == "2026-10-15T00:05:00+00:00"
     assert row.account_binding_ids == ("account-a", "account-b")
     assert row.channel_database == "isolated-test-db"
     assert "refresh-token-super-secret" not in json.dumps(projection)
 
 
-def test_discovery_event_envelope_timestamp_merges_request_trigger() -> None:
+def test_discovery_event_envelope_timestamp_merges_v1_playlist_trigger() -> None:
     request = SimpleNamespace(
-        request_id="request-rss",
-        item_ref="video-rss",
+        request_id="request-playlist",
+        item_ref="video-playlist",
         status="pending",
         requested_at="2026-10-15T00:00:01+00:00",
         completed_at=None,
@@ -71,25 +72,27 @@ def test_discovery_event_envelope_timestamp_merges_request_trigger() -> None:
         content_identity=None,
         discovery_triggers=(
             {
-                "binding_id": "binding-rss",
-                "collection_kind": "subscription_feed",
-                "collection_ref": "UC-rss",
+                "binding_id": "binding-playlist",
+                "collection_kind": "inbox_playlist",
+                "collection_ref": "PL-inbox",
                 "discovered_at": "2026-10-15T00:00:01+00:00",
                 "trigger": "poll",
+                "playlist_item_id": "pli-new",
             },
         ),
     )
     records = [
         {
             "event": "youtube.source.discovered",
-            "event_id": "discover-rss",
+            "event_id": "discover-playlist",
             "timestamp": "2026-10-15T00:00:00+00:00",
             "payload": {
-                "item_ref": "video-rss",
-                "binding_id": "binding-rss",
-                "collection_kind": "subscription_feed",
-                "collection_ref": "UC-rss",
+                "item_ref": "video-playlist",
+                "binding_id": "binding-playlist",
+                "collection_kind": "inbox_playlist",
+                "collection_ref": "PL-inbox",
                 "trigger": "poll",
+                "playlist_item_id": "pli-new",
             },
         }
     ]
@@ -105,14 +108,19 @@ def test_discovery_event_envelope_timestamp_merges_request_trigger() -> None:
     assert row.deduplicated is False
     assert len(row.triggers) == 1
     assert row.triggers[0].discovered_at == "2026-10-15T00:00:01+00:00"
+    assert row.triggers[0].playlist_item_id == "pli-new"
 
 
-def test_failed_rss_completion_does_not_report_cursor_advanced() -> None:
+def test_v1_playlist_cursor_uses_registered_shape_and_success_time() -> None:
     sources = (
         SimpleNamespace(
-            binding_id="binding-rss",
-            account_binding_id="account-rss",
-            cursor={"newest_published_seen": "2026-10-15T00:00:00+00:00"},
+            binding_id="binding-playlist",
+            account_binding_id="account-youtube",
+            cursor={
+                "version": 1,
+                "frontier_playlist_item_id": "pli-existing",
+                "known_playlist_item_ids": ["pli-existing", "pli-older"],
+            },
             last_success_at="2026-10-15T00:00:00+00:00",
         ),
     )
@@ -123,24 +131,134 @@ def test_failed_rss_completion_does_not_report_cursor_advanced() -> None:
             "timestamp": "2026-10-15T00:05:00+00:00",
             "payload": {
                 "item_ref": "video-new",
-                "binding_id": "binding-rss",
-                "collection_kind": "subscription_feed",
-                "collection_ref": "UC-rss",
+                "binding_id": "binding-playlist",
+                "collection_kind": "inbox_playlist",
+                "collection_ref": "PL-inbox",
                 "trigger": "poll",
+                "playlist_item_id": "pli-new",
             },
         }
     ]
 
-    result = query_youtube_sync_receipts(records=records, requests=(), sources=sources)
+    request = SimpleNamespace(
+        request_id="request-new",
+        item_ref="video-new",
+        status="pending",
+        requested_at="2026-10-15T00:05:00+00:00",
+        completed_at=None,
+        attempts=0,
+        next_attempt_at=None,
+        artifact_path=None,
+        content_identity=None,
+        discovery_triggers=(
+            {
+                "binding_id": "binding-playlist",
+                "collection_kind": "inbox_playlist",
+                "collection_ref": "PL-inbox",
+                "discovered_at": "2026-10-15T00:05:00+00:00",
+                "trigger": "poll",
+                "playlist_item_id": "pli-new",
+            },
+        ),
+    )
+
+    result = query_youtube_sync_receipts(
+        records=records, requests=(request,), sources=sources
+    )
 
     assert len(result.rows) == 1
     row = result.rows[0]
     assert row.cursor_advanced is False
-    assert row.cursor_frontier == "2026-10-15T00:00:00+00:00"
+    assert row.cursor_frontier == "pli-existing"
     assert row.triggers[0].discovered_at == "2026-10-15T00:05:00+00:00"
+    assert row.deduplicated is False
 
 
-def test_rss_sync_receipt_uses_registered_source_shape() -> None:
+def test_cursor_advanced_requires_each_discovery_binding_to_succeed() -> None:
+    request = SimpleNamespace(
+        request_id="request-multiple-sources",
+        item_ref="video-multiple-sources",
+        status="pending",
+        requested_at="2026-10-15T00:00:05+00:00",
+        completed_at=None,
+        attempts=0,
+        next_attempt_at=None,
+        artifact_path=None,
+        content_identity=None,
+        discovery_triggers=(
+            {
+                "binding_id": "binding-a",
+                "collection_kind": "inbox_playlist",
+                "collection_ref": "PL-a",
+                "discovered_at": "2026-10-15T00:00:00+00:00",
+                "trigger": "poll",
+                "playlist_item_id": "pli-a",
+            },
+            {
+                "binding_id": "binding-b",
+                "collection_kind": "inbox_playlist",
+                "collection_ref": "PL-b",
+                "discovered_at": "2026-10-15T00:00:05+00:00",
+                "trigger": "poll",
+                "playlist_item_id": "pli-b",
+            },
+        ),
+    )
+    sources = (
+        SimpleNamespace(
+            binding_id="binding-a",
+            account_binding_id="account-a",
+            cursor={"frontier_playlist_item_id": "pli-a-new"},
+            last_success_at="2026-10-15T00:00:06+00:00",
+        ),
+        SimpleNamespace(
+            binding_id="binding-b",
+            account_binding_id="account-b",
+            cursor={"frontier_playlist_item_id": "pli-b-old"},
+            last_success_at="2026-10-15T00:00:01+00:00",
+        ),
+    )
+    records = [
+        {
+            "event": "youtube.source.discovered",
+            "event_id": "discover-a",
+            "timestamp": "2026-10-15T00:00:00+00:00",
+            "payload": {
+                "item_ref": "video-multiple-sources",
+                "binding_id": "binding-a",
+                "collection_kind": "inbox_playlist",
+                "collection_ref": "PL-a",
+                "trigger": "poll",
+                "playlist_item_id": "pli-a",
+            },
+        },
+        {
+            "event": "youtube.source.discovered",
+            "event_id": "discover-b",
+            "timestamp": "2026-10-15T00:00:05+00:00",
+            "payload": {
+                "item_ref": "video-multiple-sources",
+                "binding_id": "binding-b",
+                "collection_kind": "inbox_playlist",
+                "collection_ref": "PL-b",
+                "trigger": "poll",
+                "playlist_item_id": "pli-b",
+            },
+        },
+    ]
+
+    result = query_youtube_sync_receipts(
+        records=records, requests=(request,), sources=sources
+    )
+
+    assert len(result.rows) == 1
+    assert result.rows[0].cursor_advanced is False
+    assert result.rows[0].cursor_frontier is None
+
+
+def test_deferred_sync_event_is_a_source_level_compatibility_diagnostic() -> None:
+    # The V1 producer does not emit youtube.sync.*; retain read compatibility
+    # without presenting synthetic future events as shipped production receipts.
     records = [
         {
             "event": "youtube.sync.degraded",
@@ -148,8 +266,8 @@ def test_rss_sync_receipt_uses_registered_source_shape() -> None:
             "trace_id": "trace-rss",
             "timestamp": "2026-10-15T00:05:00+00:00",
             "payload": {
-                "binding_id": "binding-rss",
-                "run_id": "rss:run-1",
+                "binding_id": "binding-future",
+                "run_id": "future:run-1",
                 "reason_code": "persistence_failed",
                 "detail": "cursor transaction failed",
             },
@@ -167,7 +285,7 @@ def test_rss_sync_receipt_uses_registered_source_shape() -> None:
             "at": "2026-10-15T00:05:00+00:00",
             "reason_code": "persistence_failed",
             "reason": "source_level_sync_receipt",
-            "binding_id": "binding-rss",
-            "run_id": "rss:run-1",
+            "binding_id": "binding-future",
+            "run_id": "future:run-1",
         },
     )

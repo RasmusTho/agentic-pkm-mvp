@@ -334,8 +334,8 @@ def _rows_from_records(
             sorted({trigger.binding_id for trigger in projected_triggers if trigger.binding_id})
         )
         account_binding_ids = set(group.get("account_binding_ids") or ())
-        source_successes: list[str] = []
-        frontiers: list[str] = []
+        source_successes: dict[str, str] = {}
+        source_frontiers: dict[str, str] = {}
         for binding_id in source_binding_ids:
             source = source_map.get(binding_id)
             if source is None:
@@ -344,14 +344,37 @@ def _rows_from_records(
             account_binding_ids.add(account_binding_id or binding_id)
             success = first_str(_field(source, "last_success_at"))
             if success:
-                source_successes.append(success)
+                source_successes[binding_id] = success
             cursor = _field(source, "cursor", {})
             if isinstance(cursor, Mapping):
-                frontier = first_str(cursor.get("frontier"), cursor.get("newest_published_seen"), cursor.get("newest_published_at"), cursor.get("last_published_at"))
+                frontier = first_str(
+                    cursor.get("frontier_playlist_item_id"),
+                    cursor.get("frontier"),
+                    cursor.get("newest_published_seen"),
+                    cursor.get("newest_published_at"),
+                    cursor.get("last_published_at"),
+                )
                 if frontier:
-                    frontiers.append(frontier)
-        discovered_times = [trigger.discovered_at for trigger in projected_triggers if trigger.discovered_at]
-        cursor_advanced = bool(source_successes and (not discovered_times or max(source_successes) >= max(discovered_times)))
+                    source_frontiers[binding_id] = frontier
+        discovered_times_by_binding: dict[str, list[str]] = {}
+        for trigger in projected_triggers:
+            if trigger is None or not trigger.binding_id or not trigger.discovered_at:
+                continue
+            discovered_times_by_binding.setdefault(trigger.binding_id, []).append(
+                trigger.discovered_at
+            )
+        cursor_advanced = bool(source_binding_ids) and all(
+            binding_id in source_successes
+            and bool(discovered_times_by_binding.get(binding_id))
+            and source_successes[binding_id]
+            >= max(discovered_times_by_binding[binding_id])
+            for binding_id in source_binding_ids
+        )
+        cursor_frontier = (
+            source_frontiers.get(source_binding_ids[0])
+            if len(source_binding_ids) == 1
+            else None
+        )
         failures = group.get("failures") or []
         failure = failures[-1] if failures else None
         request_id = first_str(group.get("request_id"))
@@ -372,7 +395,7 @@ def _rows_from_records(
                 failure_reason_code=first_str(failure.get("reason_code")) if failure else None,
                 failure_at=first_str(failure.get("at")) if failure else None,
                 cursor_advanced=cursor_advanced,
-                cursor_frontier=max(frontiers) if frontiers else None,
+                cursor_frontier=cursor_frontier,
                 account_binding_ids=tuple(sorted(account_binding_ids)),
                 channel_database=first_str(
                     group.get("channel_database"), channel_database, active_environment()
