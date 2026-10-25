@@ -87,6 +87,7 @@ def _stage_draft(
     kind: OutputKind = OutputKind.OVERVIEW,
     title: str = "Topic X overview",
     sources: tuple[SourceInput, ...] | None = None,
+    question_id: str | None = None,
 ) -> tuple[Path, Path, str]:
     """Produce a real staged draft via EXP-3's run_create_pass; return
     (vault_root, draft_abs_path, outbox_path)."""
@@ -100,7 +101,13 @@ def _stage_draft(
         )
     request = CreateRequest(kind=kind, title=title, sources=sources, question="What is X?")
     report = run_create_pass(
-        request, vault_root=vault_root, outbox_path=outbox_path, write_guard=_allow_all_guard()
+        request,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        draft_frontmatter_enricher=(
+            (lambda _draft: {"question_id": question_id}) if question_id is not None else None
+        ),
     )
     assert report.draft_path is not None
     return vault_root, vault_root / report.draft_path, outbox_path
@@ -1145,3 +1152,53 @@ def test_reaccept_is_idempotent(tmp_path: Path) -> None:
         r for r in _outbox_records(outbox_path) if r["event"] == CREATE_ACCEPTED_EVENT
     ]
     assert len(accepted_receipts) == 1
+
+
+def test_question_acceptance_recovery_checks_write_guard_before_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.expansion import accept as accept_module
+
+    vault_root, draft_path, outbox_path = _stage_draft(
+        tmp_path,
+        kind=OutputKind.ANSWER_NOTE,
+        question_id="sq-00000000-0000-0000-0000-000000000001",
+    )
+    _check_the_box(draft_path)
+    destination = "notes/question-answer.md"
+    destination_path = vault_root / destination
+    retire = accept_module._retire_loaded_draft_if_unchanged
+
+    def crash_before_retirement(_loaded, *, receipt_id: str) -> str:
+        raise OSError("simulated crash before draft retirement")
+
+    monkeypatch.setattr(accept_module, "_retire_loaded_draft_if_unchanged", crash_before_retirement)
+    with pytest.raises(OSError, match="simulated crash"):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination=destination,
+            write_guard=_allow_all_guard(),
+        )
+    monkeypatch.setattr(accept_module, "_retire_loaded_draft_if_unchanged", retire)
+
+    leftover_link = destination_path.with_name(f".{destination_path.name}.leftover.tmp")
+    os.link(destination_path, leftover_link)
+    destination_stat = destination_path.stat()
+    assert draft_path.exists()
+    assert leftover_link.exists()
+
+    with pytest.raises(WritesBlockedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination=destination,
+            write_guard=_blocked_guard(),
+        )
+
+    assert draft_path.exists()
+    assert leftover_link.exists()
+    assert os.stat(leftover_link).st_ino == destination_stat.st_ino

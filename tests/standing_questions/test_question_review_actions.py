@@ -108,17 +108,36 @@ def _panel_request(vault: Path | None) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(compatibility_write_root=vault))
 
 
+@pytest.mark.parametrize("legacy_markers", [False, True])
 def test_accept_projects_checkbox_and_flips_status_atomically(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    legacy_markers: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.api.routes import panel as panel_route
+    from app.api.routes import standing_questions as standing_question_routes
     from app.panel import checkbox_projection as checkbox_projection_module
     from scripts.yaml_roundtrip import load_frontmatter
 
     vault, draft_path, outbox, store, question, version = _stage_candidate(tmp_path)
-    request = _acceptance_request(
-        draft_path, vault=vault, question=question, question_version=version
+    if legacy_markers:
+        draft_text = draft_path.read_text(encoding="utf-8")
+        marker = (
+            f" <!--ai:option_id=sq_answer_{draft_path.stem}--> "
+            "<!--ai:proposed=exp4-->"
+        )
+        assert marker in draft_text
+        draft_path.write_text(draft_text.replace(marker, "", 1), encoding="utf-8")
+    candidate = standing_question_routes._candidate_answer(
+        {"candidate_answer_ref": question["candidate_answer_ref"]},
+        question_id=question["question_id"],
+        question_version=version,
+        vault_root=vault,
     )
+    assert candidate is not None
+    assert candidate.state == "pending"
+    assert candidate.acceptance_control is not None
+    request = CheckboxProjectionRequest.model_validate(candidate.acceptance_control)
     service = CheckboxProjectionService(write_guard=_guard())
     monkeypatch.setattr(checkbox_projection_module, "resolve_optional_vault_root", lambda: vault)
     monkeypatch.setattr(panel_route.checkbox_projection_module, "_service", service)

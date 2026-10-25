@@ -147,6 +147,18 @@ def prepare_question_acceptance(
         normalized,
         artifact_id=request.artifact_id,
         note_path=request.note_path,
+        legacy_standing_question_acceptance=(
+            (
+                standing_question_acceptance_option_id(draft_id),
+                f"Accept this draft into the vault (draft {draft_id[:12]})",
+            )
+            if (
+                frontmatter.get("create_kind") == "create.answer_note"
+                and frontmatter.get("authority_state") == "proposal"
+                and frontmatter.get("question_id") == question_id
+            )
+            else None
+        ),
     )
     option = next(
         (

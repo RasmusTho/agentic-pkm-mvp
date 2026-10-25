@@ -434,12 +434,22 @@ def _candidate_answer(
     except Exception:
         return CandidateAnswer(state="not_selectable", draft_id=draft_id, body=body.strip())
     normalized = raw.replace("\r\n", "\n").replace("\r", "\n")
+    expected_option_id = standing_question_acceptance_option_id(draft_id)
     options = extract_panel_selectable_options(
         normalized,
         artifact_id=str(identity.artifact_id or ""),
         note_path=note_path,
+        legacy_standing_question_acceptance=(
+            (expected_option_id, f"Accept this draft into the vault (draft {draft_id[:12]})")
+            if (
+                frontmatter.get("create_kind") == "create.answer_note"
+                and frontmatter.get("authority_state") == "proposal"
+                and frontmatter.get("question_id") == question_id
+                and identity.artifact_id == draft_id
+            )
+            else None
+        ),
     )
-    expected_option_id = standing_question_acceptance_option_id(draft_id)
     option = next(
         (
             item

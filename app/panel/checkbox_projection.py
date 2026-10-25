@@ -209,10 +209,13 @@ def extract_panel_selectable_options(
     artifact_id: str,
     note_path: str,
     content_hash: str | None = None,
+    legacy_standing_question_acceptance: tuple[str, str] | None = None,
 ) -> list[PanelSelectableOption]:
     """Return source-backed Panel checkbox options eligible for UI projection.
 
-    Options without an explicit durable ``ai:option_id`` marker are omitted.
+    Options without an explicit durable ``ai:option_id`` marker are omitted,
+    except for an exact legacy Standing Questions acceptance control explicitly
+    identified by a caller that has already verified the linked answer draft.
     Ordinary Markdown tasks, code-block tasks, receipt checkboxes, and tasks
     outside a valid Panel ``AI-åtgärder`` section are not returned.
     """
@@ -246,16 +249,29 @@ def extract_panel_selectable_options(
             if current_section != "actions":
                 continue
             parsed = parse_action_line(raw_line)
-            if parsed is None or parsed.option_id is None:
+            if parsed is None:
+                continue
+            legacy_option_id: str | None = None
+            legacy_control = bool(
+                legacy_standing_question_acceptance is not None
+                and parsed.option_id is None
+                and parsed.proposal_marker is None
+                and parsed.label == legacy_standing_question_acceptance[1]
+            )
+            if legacy_control:
+                if legacy_standing_question_acceptance is not None:
+                    legacy_option_id = legacy_standing_question_acceptance[0]
+            option_id = parsed.option_id or legacy_option_id
+            if option_id is None:
                 continue
             action_id = parsed.action_id or stable_action_id(parsed.label)
-            proposal_pending = parsed.proposal_marker is not None
+            proposal_pending = parsed.proposal_marker is not None or legacy_control
             options.append(
                 PanelSelectableOption(
                     artifact_id=artifact_id,
                     note_path=note_path,
                     panel_id=panel_id,
-                    option_id=parsed.option_id,
+                    option_id=option_id,
                     action_id=action_id,
                     label=parsed.label,
                     checked=parsed.checked,
@@ -307,6 +323,7 @@ class CheckboxProjectionService:
         *,
         sealed_root: Path | None = None,
         execute_runtime: bool = True,
+        legacy_standing_question_acceptance: tuple[str, str] | None = None,
     ) -> CheckboxProjectionResponse:
         cached = self._idempotency.get(request.idempotency_key)
         if cached is not None:
@@ -334,6 +351,7 @@ class CheckboxProjectionService:
                 safe_note_path,
                 sealed_root=sealed_root,
                 execute_runtime=execute_runtime,
+                legacy_standing_question_acceptance=legacy_standing_question_acceptance,
             )
 
     def _project_locked(
@@ -343,6 +361,7 @@ class CheckboxProjectionService:
         *,
         sealed_root: Path | None = None,
         execute_runtime: bool = True,
+        legacy_standing_question_acceptance: tuple[str, str] | None = None,
     ) -> CheckboxProjectionResponse:
         try:
             vault_root = resolve_optional_vault_root()
@@ -427,6 +446,7 @@ class CheckboxProjectionService:
             artifact_id=request.artifact_id,
             note_path=safe_note_path,
             content_hash=content_hash_before,
+            legacy_standing_question_acceptance=legacy_standing_question_acceptance,
         )
         matches = [
             option

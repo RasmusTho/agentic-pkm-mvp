@@ -1382,6 +1382,9 @@ def _recover_materialized_question_acceptance(
             )
         return None
 
+    # Recovery may remove a leftover staging link and retire the draft below,
+    # so gate it even when the exact acceptance receipt already exists.
+    write_guard.assert_writes_allowed(ACCEPT_MATERIALIZE_WRITE_ACTION)
     _cleanup_linked_acceptance_temps(destination_path)
 
     try:
@@ -1426,7 +1429,6 @@ def _recover_materialized_question_acceptance(
                     "the accepted answer receipt has no event identity"
                 )
         else:
-            write_guard.assert_writes_allowed(ACCEPT_MATERIALIZE_WRITE_ACTION)
             event_id = hashlib.sha256(
                 f"{CREATE_ACCEPTED_EVENT}\x1f{payload['draft_id']}\x1f{receipt_id}".encode("utf-8")
             ).hexdigest()

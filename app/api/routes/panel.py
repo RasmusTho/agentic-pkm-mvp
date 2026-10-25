@@ -206,6 +206,14 @@ async def panel_checkbox_projection(
                 request,
                 sealed_root=sealed_root,
                 execute_runtime=preflight is None,
+                legacy_standing_question_acceptance=(
+                    (
+                        request.option_id,
+                        f"Accept this draft into the vault (draft {request.artifact_id[:12]})",
+                    )
+                    if preflight is not None
+                    else None
+                ),
             )
     except CheckboxProjectionHTTPError as exc:
         raise HTTPException(
