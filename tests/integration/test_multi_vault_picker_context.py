@@ -1962,3 +1962,17 @@ def test_unauthorized_default_proof_admission_never_probes_mutable_registry(tmp_
     assert response.status_code == 200
     assert 'X-Compatibility-Write-Precondition' not in response.headers
     assert not any(caller == '_document_read_principal' for _operation,caller in calls)
+
+
+@pytest.mark.parametrize('surface', ['workspace', 'orientation'])
+def test_unselected_compatibility_bridge_preserves_read_without_write_proof(tmp_path, monkeypatch, surface):
+    runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    InstanceDefaultVaultService(runtime.registry, capability=STORAGE_MUTATION_CAPABILITY).clear()
+    before = runtime.registry.read_existing()
+    assert before.settings_rebind['candidateBindingId'] is None
+    path = '/api/companion/'+surface+('?note_path=only-0.md' if surface == 'workspace' else '')
+    response = TestClient(app).get(path)
+    assert response.status_code == 200, response.text
+    assert 'X-Compatibility-Write-Precondition' not in response.headers
+    assert runtime.registry.read_existing() == before

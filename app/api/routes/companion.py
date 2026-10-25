@@ -1033,7 +1033,10 @@ def _document_read_principal(
         # Preserve the legacy read projection, but never grant a write proof to
         # an unauthenticated caller or initialize/repair unqualified state.
         return None
-    return principal if snapshot.settings_rebind is not None else None
+    return principal if (
+        snapshot.settings_rebind is not None
+        and snapshot.settings_rebind.get("candidateBindingId") is not None
+    ) else None
 
 
 def _scoped_companion_document_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:
