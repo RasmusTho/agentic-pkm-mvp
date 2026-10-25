@@ -6633,6 +6633,13 @@ def test_local_retirement_ignores_embedded_code_receipt_examples(
     "| example | details |\n| --- | --- |\n| <code>{snippet}</code> | sample |",
     "<pre>{snippet}</pre>\n\nChild delivery receipt at head `{sha}`.",
     "Example. <code>{snippet}</code>. Child delivery receipt at head `{sha}`.",
+    "<code>{snippet}</code>.\n\nAt head `{sha}`, child delivery completed.",
+    "<pre>{snippet}</pre>.\n\nAt head `{sha}`, child delivery completed.",
+    "At head `{sha}`, child delivery completed.\n\n<code>{snippet}</code>.",
+    "At head `{sha}`, child delivery completed.\n\n<pre>{snippet}</pre>.",
+    "<code>\n\n{snippet}\n\n</code>",
+    "| example | delivery |\n| --- | --- |\n| <code>{snippet}</code> | At head `{sha}`, child delivered. |",
+    "<table><tr><td><code>{snippet}</code></td><td>At head {sha}, child delivered.</td></tr></table>",
 ])
 def test_local_retirement_ignores_partial_html_receipt_examples(
     tmp_path, monkeypatch, snippet, wrapper
@@ -6673,6 +6680,11 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     "<div><code>Dedicated worktree /tmp/old is still</code><!-- outer\n\n--> dirty on branch old at head {sha}</div>",
     '<div><code>Dedicated worktree /tmp/old</code><!-- outer\n\n--><div title="<!--. is still dirty on branch old at head {sha}',
     "<code>Dedicated worktree /tmp/old</code> remains paused and is still dirty on branch old at head {sha}",
+] + [
+    prefix + "<code>" + snippet + "</code>" + continuation
+    for prefix in ["", "DISPATCHER&#95;CODE_EXAMPLE_VISIBILITY\n\n", "DISPATCHER_CODE_EXAMPLE_VISIBI\u200bLITY\n\n"]
+    for snippet in ["Dedicated worktree /tmp/old is still dirty", "Pickup intent receipt: worktree: /tmp/old", "Preserved worktree: /tmp/old"]
+    for continuation in [" branch old at head {sha}", ", with local changes, on branch old at head {sha}", "; branch: `old.release`; HEAD: `{sha}`", " (branch: old; HEAD: invalid)"]
 ] + [
     "<code>Dedicated worktree /tmp/old is still dirty</code> " + opening + fields + closing
     for opening, closing in [
@@ -6789,7 +6801,12 @@ def test_local_retirement_preserves_receipt_beside_code_example(
     r"\`Dedicated worktree /tmp/old is still dirty on branch old at head " + "a" * 40 + r".\`",
 ])
 def test_dispatcher_code_examples_preserve_non_example_source(body):
-    assert git_hygiene._dispatcher_example_scan_source(body) == body
+    if body.startswith("<code>Dedicated worktree"):
+        # Explicit refusal preserves the unsafe source's effect before any CAS.
+        with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+            git_hygiene._dispatcher_example_scan_source(body)
+    else:
+        assert git_hygiene._dispatcher_example_scan_source(body) == body
 
 
 def test_local_retirement_preserves_explicit_resumable_binding(
