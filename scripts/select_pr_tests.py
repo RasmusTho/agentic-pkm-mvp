@@ -1379,7 +1379,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         # already reach tests/deploy for the scripts/ callers, but not for
         # this app/ surface itself.
         "release_channels",
-        ("app/release_channels/", "tests/release_channels/", "docs/RELEASE_CHANNELS/"),
+        (
+            "app/release_channels/",
+            "tests/release_channels/",
+            # Exact legacy-path contract for model-access rollback in the
+            # release_channels module; keep this narrow rather than assigning
+            # every test under tests/release/ to this subsystem.
+            "tests/release/test_model_access_router_rollback_plan.py",
+            "docs/RELEASE_CHANNELS/",
+        ),
         ("tests/release_channels", "tests/deploy"),
     ),
     (

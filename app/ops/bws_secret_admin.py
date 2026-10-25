@@ -23,6 +23,12 @@ DEVUI_TARGET = 'bob-1'
 DEVUI_SECRET = 'devui.github-token'
 DEVUI_IDENTITY = DEVUI_TARGET + '/' + DEVUI_SECRET
 
+# Fixed Heimdal-owned standalone host handoff, not a Product channel consumer.
+# It reads the existing shared identity; it creates no BWS item or reader grant.
+BUILDEROPS_ALERT_TARGET = 'bob-1'
+BUILDEROPS_ALERT_IDENTITY = 'shared/discord.webhook'
+BUILDEROPS_ALERT_CONSUMER = 'heimdal-builderops-alerts'
+
 
 def valid_devui_token(value: str) -> bool:
     return bool(re.fullmatch(r'(?:github_pat_|ghp_)[A-Za-z0-9_]{20,255}', value))
