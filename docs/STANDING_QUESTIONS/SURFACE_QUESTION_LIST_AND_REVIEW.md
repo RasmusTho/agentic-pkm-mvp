@@ -42,9 +42,16 @@ visual-pick-over-typing posture that governs every companion UI surface in this 
      an authority store separate from the vault-visible Panel state") — reusing the existing
      `POST /api/panel/checkbox-projection` runtime-mediated projection, not a new endpoint or a new
      authority model. Acceptance executes the governed materialization EXP-4 defines (draft →
-     `standing_answer_ref`) **and**, in the same governed transaction, flips `status: answered` on the
-     Question note — the single explicit human act that is the *only* path to that lifecycle state
-     (INV-SQ-C).
+     `standing_answer_ref`) only if EXP-4 loads the exact checked draft bytes bound to the reviewed
+     checkbox control; an intervening draft edit is stale and is not materialized. The Question note
+     becomes `answered` only after EXP-4's accepted note and receipt are durable and its exact-version
+     Question write sets `standing_answer_ref` and clears `candidate_answer_ref`. A failure between
+     those writes remains explicitly unresolved; it is never reported as answered. This human act is
+     the *only* path to that lifecycle state (INV-SQ-C).
+     Pending answer drafts created before durable Panel option markers were added remain reviewable
+     through the same checkbox path. The runtime derives the deterministic option identity only for
+     the exact legacy acceptance label on a question-linked EXP-4 proposal; it does not rewrite the
+     staged draft just to render or project the control.
    - **Dismiss** routes the draft into the existing declined-proposal ledger
      (`docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md :: 3`) — the question stays
      `open`, `candidate_answer_ref` clears, evidence keeps accumulating, and a future threshold

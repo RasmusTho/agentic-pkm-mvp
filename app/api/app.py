@@ -101,6 +101,11 @@ except ImportError:
     panel_router = None
 
 try:
+    from app.api.routes.standing_questions import router as standing_questions_router
+except ImportError:
+    standing_questions_router = None
+
+try:
     from app.api.routes.artifacts import router as artifacts_router
 except ImportError:
     artifacts_router = None
@@ -406,6 +411,8 @@ def _create_app() -> FastAPI:
         application.include_router(canvas_router, prefix="/api")
     if panel_router is not None:
         application.include_router(panel_router, prefix="/api")
+    if standing_questions_router is not None:
+        application.include_router(standing_questions_router, prefix="/api")
     if artifacts_router is not None:
         application.include_router(artifacts_router, prefix="/api")
     if companion_router is not None:

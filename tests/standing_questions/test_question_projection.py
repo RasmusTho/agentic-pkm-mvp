@@ -8,10 +8,12 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.standing_questions.projection import (
     QuestionsDirectoryMissingError,
     _postgres_timestamptz_value,
     iter_question_notes,
+    read_standing_questions_projection,
     rebuild_standing_questions_projection,
 )
 from app.standing_questions.question_store import QuestionStore, parse_rfc3339_datetime
@@ -279,6 +281,10 @@ def test_projection_adapts_rfc3339_edges_for_postgres(
     store = _store(vault)
     created_at_cases = {
         "year-zero": ("0000-02-29T00:00:00Z", "0001-02-29 00:00:00.000000 BC"),
+        "utc-overflow": (
+            "9999-12-31T23:59:59-23:59",
+            "10000-01-01 23:58:59.000000 AD",
+        ),
         "positive-extreme": (
             "2026-07-11T10:00:00+23:59",
             "2026-07-10 10:01:00.000000 AD",
@@ -319,6 +325,7 @@ def test_projection_adapts_rfc3339_edges_for_postgres(
         "ordinary": ("2026-07-11T10:00:00Z", "2026-07-11 10:00:00.000000 AD"),
     }
     expected_created_at: dict[str, str] = {}
+    question_ids_by_label: dict[str, str] = {}
     for label, (source, expected) in created_at_cases.items():
         note, _receipt = store.create_question(
             text=label,
@@ -327,6 +334,7 @@ def test_projection_adapts_rfc3339_edges_for_postgres(
             created_at=source,
         )
         expected_created_at[note["question_id"]] = expected
+        question_ids_by_label[label] = note["question_id"]
         assert store.read_question(note["question_id"])["created_at"] == source
 
     system_note, _receipt = store.create_question(
@@ -351,13 +359,30 @@ def test_projection_adapts_rfc3339_edges_for_postgres(
                 }
             ],
             "last_matched_at": "0000-02-29T00:00:00Z",
-            "last_refreshed_at": "2026-07-11T10:00:00-23:59",
+            "last_refreshed_at": "9999-12-31T23:59:59-23:59",
         },
     )
 
     summary = rebuild_standing_questions_projection(vault)
 
     assert summary.inserted == len(created_at_cases) + 1
+    projected_rows = read_standing_questions_projection(COMPATIBILITY_BINDING_ID)
+    assert len(projected_rows) == summary.inserted
+    assert all(
+        isinstance(row[field], str)
+        for row in projected_rows
+        for field in ("created_at", "last_matched_at", "last_refreshed_at")
+        if row[field] is not None
+    )
+    projected_by_id = {row["question_id"]: row for row in projected_rows}
+    year_zero_text = projected_by_id[question_ids_by_label["year-zero"]]["created_at"]
+    utc_overflow_text = projected_by_id[question_ids_by_label["utc-overflow"]]["created_at"]
+    assert year_zero_text.startswith("0001-02-29") and year_zero_text.endswith("BC")
+    assert utc_overflow_text.startswith("10000-01-01 23:58:59")
+    system_projection = projected_by_id[system_note["question_id"]]
+    assert system_projection["last_matched_at"].startswith("0001-02-29")
+    assert system_projection["last_matched_at"].endswith("BC")
+    assert system_projection["last_refreshed_at"].startswith("10000-01-01 23:58:59")
     expected_created_at[system_note["question_id"]] = "2026-07-11 10:00:00.000000 AD"
     with psycopg.connect(scratch_db, autocommit=True) as conn:
         created_rows = conn.execute(
@@ -392,11 +417,11 @@ def test_projection_adapts_rfc3339_edges_for_postgres(
     assert dict(created_rows) == expected_created_at
     assert system_row is not None
     assert system_row[0] == "0001-02-29 00:00:00.000000 BC"
-    assert system_row[1] == "2026-07-12 09:59:00.000000 AD"
+    assert system_row[1] == "10000-01-01 23:58:59.000000 AD"
     assert system_row[2][0]["matched_at"] == evidence_timestamp
     persisted_system_note = store.read_question(system_note["question_id"])
     assert persisted_system_note["last_matched_at"] == "0000-02-29T00:00:00Z"
-    assert persisted_system_note["last_refreshed_at"] == "2026-07-11T10:00:00-23:59"
+    assert persisted_system_note["last_refreshed_at"] == "9999-12-31T23:59:59-23:59"
     assert persisted_system_note["evidence"][0]["matched_at"] == evidence_timestamp
 
 
