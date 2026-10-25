@@ -63,21 +63,29 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
    - **Required-check presence (exit 7):** before reporting success, the expected required
      contexts must be *present* on the head (deduped check-run names plus classic status
      contexts). The expected set resolves in this order: (1) live branch-protection
-     `required_status_checks` contexts for the PR's base branch via REST when readable (the
-     endpoint needs admin; failure falls through), else (2) the documented per-base fallback set
-     from `docs/development/GITHUB_GOVERNANCE_SETUP.md` — base `stable`: `smoke`, `smoke-docker`,
-     `pr-contract`; any other base (the `main` default): `Unit tests (not pg)`. A late-attaching
-     required workflow keeps waiting inside the normal backoff; the absence only becomes terminal
-     at the deadline. Only the required set participates — absence of an arbitrary optional check
-     never fails the wait. `--sha` diagnostic mode skips both gates by design (it inspects a
-     pinned commit and is not a merge gate).
+     `required_status_checks` contexts for the target repository's PR base via REST when readable
+     (the endpoint needs admin; these contexts take precedence over any caller profile); (2) when
+     protection is unavailable or yields no contexts, the Hub repository
+     `RasmusTho/agentic-pkm-mvp` uses its documented fallback from
+     `docs/development/GITHUB_GOVERNANCE_SETUP.md` — base `stable`: `smoke`, `smoke-docker`,
+     `pr-contract`; otherwise (the `main` default): `Unit tests (not pg)`; (3) a non-Hub target may
+     use an explicit caller-supplied profile via one or more `--required-check <context>` flags.
+     The Hub fallback never applies to another repository. A non-Hub target with no readable
+     branch-protection contexts and no caller profile fails closed with exit 64 before polling;
+     the script never infers required contexts from attached check runs. A late-attaching required
+     workflow keeps waiting inside the normal backoff; the absence only becomes terminal at the
+     deadline. Only the selected required set participates — absence of an arbitrary optional check
+     never fails the wait. `--sha` diagnostic mode skips required-check resolution and both merge
+     gates by design (it inspects a pinned commit and is not a merge gate).
 
 ## Blessed path
 
 ```bash
-scripts/await_pr_checks.sh <PR>            # wait for required check-runs, REST-only, calibrated backoff
+scripts/await_pr_checks.sh <PR>            # Hub fallback or live branch protection, REST-only
 scripts/await_pr_checks.sh <PR> --codex    # also resolve the Codex verdict with one combined query
-scripts/await_pr_checks.sh --help          # flags: --initial-wait, --interval, --timeout, --sha
+scripts/await_pr_checks.sh <PR> --repo owner/name --required-check "CI context"
+                                            # foreign target profile; repeat --required-check as needed
+scripts/await_pr_checks.sh --help          # flags: --repo, --required-check, --initial-wait, --interval, --timeout, --sha
 ```
 
 `--sha` pins a commit for inspection and is **not** a merge gate (PR head-drift is not verified); omit
@@ -96,6 +104,7 @@ failing **closed** on any fetch error (an unverifiable state never reports succe
 - `5` — the PR head moved during the wait (when SHA is auto-resolved) — verified checks are stale; re-run
 - `6` — the PR is `mergeable_state=dirty`, so pull_request workflows will not schedule (merge-gating mode) — fix conflicts and re-run
 - `7` — expected required check contexts are absent from the head (merge-gating mode) — absence is not success; see Rule 8
+- `64` — required-check configuration is invalid or unavailable for the target repository — configure it before retrying
 
 The read-only `scripts/ci_stall_classifier.py` keeps a 30-minute default for queued and unrelated
 checks, and allows 90 minutes for an in-progress `Unit tests (not pg)` check. An explicit

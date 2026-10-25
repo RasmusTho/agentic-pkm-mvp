@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, TypeGuard
 
 from markdown_it import MarkdownIt
+from markdown_it.rules_inline import backtick, html_inline
 import regex
 
 if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocation.
@@ -2350,6 +2351,150 @@ _DISPATCHER_HEAD_BINDING_RE = re.compile(
 )
 
 
+def _dispatcher_source_span_rule(rule: Callable[..., bool]) -> Callable[..., bool]:
+    def capture(state: Any, silent: bool) -> bool:
+        start = state.pos
+        count = len(state.tokens)
+        matched = rule(state, silent)
+        if not silent and len(state.tokens) > count:
+            token = state.tokens[-1]
+            if token.type in {"code_inline", "html_inline"}:
+                token.meta["source_span"] = (start, state.pos)
+        return matched
+    return capture
+
+
+_DISPATCHER_EXAMPLE_MARKDOWN = MarkdownIt("commonmark", {"html": True}).enable("strikethrough")
+_DISPATCHER_EXAMPLE_MARKDOWN.inline.ruler.at("backticks", _dispatcher_source_span_rule(backtick))
+_DISPATCHER_EXAMPLE_MARKDOWN.inline.ruler.at("html_inline", _dispatcher_source_span_rule(html_inline))
+
+
+def _dispatcher_example_scan_source(body: str) -> str:
+    """Mask code examples in source coordinates, leaving receipt grammar intact.
+
+    Markdown token spans exclude escaped delimiters and fenced examples. HTML
+    events come only from actual HTML tokens, so tags inside code spans, link
+    destinations or comments cannot open or close an example. Keeping source
+    offsets and newlines prevents an example from lending fields to a real
+    receipt on the same line or moving a later receipt to another source slot.
+    """
+    source = body.replace("\r\n", "\n").replace("\r", "\n")
+    source = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", source)
+    lines = source.splitlines(keepends=True)
+    starts: list[int] = []
+    cursor = 0
+    for line in lines:
+        starts.append(cursor)
+        cursor += len(line)
+    spans: list[tuple[int, int]] = []
+    code_stack: list[tuple[str, int]] = []
+
+    def receipt_example(text: str) -> bool:
+        normalized = _dispatcher_strip_default_ignorables(text)
+        marker = any(
+            pattern.search(part)
+            for part in (normalized, *normalized.splitlines())
+            for pattern in (
+                _DISPATCHER_PICKUP_RECEIPT_RE,
+                _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE,
+                _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE,
+            )
+        )
+        return marker and bool(
+            _DISPATCHER_BRANCH_BINDING_RE.search(normalized)
+            or _DISPATCHER_HEAD_BINDING_RE.search(normalized)
+        )
+
+    marker = "DISPATCHER_CODE_EXAMPLE_VISIBILITY"
+    while marker in source:
+        marker += "_"
+
+    def visible_at(offset: int) -> bool:
+        # Keep the existing whole-comment visibility rules authoritative when
+        # HTML token chunks straddle comments, paragraphs or unfinished tags.
+        visible = _dispatcher_cross_line_scan_body(source[:offset] + marker + source[offset:])
+        return marker in visible
+
+    class CodeElements(HTMLParser):
+        def __init__(self, content: str, offsets: list[int]) -> None:
+            super().__init__(convert_charrefs=True)
+            self.content = content
+            self.offsets = offsets
+            self.line_starts = [0]
+            self.line_starts.extend(match.end() for match in re.finditer("\n", content))
+
+        def position(self) -> int:
+            row, column = self.getpos()
+            return self.line_starts[row - 1] + column
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag in {"code", "pre"}:
+                start = self.position()
+                stop = start + len(self.get_starttag_text())
+                content_start = self.offsets[stop - 1] + 1
+                if visible_at(content_start):
+                    code_stack.append((tag, self.offsets[start]))
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag not in {"code", "pre"} or not visible_at(self.offsets[self.position()]):
+                return
+            for index in range(len(code_stack) - 1, -1, -1):
+                if code_stack[index][0] == tag:
+                    start = code_stack[index][1]
+                    del code_stack[index:]
+                    if not code_stack:
+                        end = self.content.find(">", self.position()) + 1
+                        stop = self.offsets[end - 1] + 1
+                        rendered = _dispatcher_cross_line_scan_body(source[start:stop])
+                        if receipt_example(rendered):
+                            spans.append((start, stop))
+                    break
+
+    for token in _DISPATCHER_EXAMPLE_MARKDOWN.parse(source):
+        if token.type not in {"inline", "html_block"} or token.map is None:
+            continue
+        if token.type == "inline" and not any(
+            child.type == "code_inline" and receipt_example(child.content)
+            or child.type == "html_inline" and re.search(r"</?(?:code|pre)\b", child.content, re.IGNORECASE)
+            for child in token.children or []
+        ):
+            continue
+        if token.type == "html_block" and not re.search(r"</?(?:code|pre)\b", token.content, re.IGNORECASE):
+            continue
+        offsets: list[int] = []
+        for index, content_line in enumerate(token.content.splitlines(keepends=True)):
+            row = token.map[0] + index
+            literal = content_line.rstrip("\n")
+            column = lines[row].find(literal)
+            if column < 0:
+                # A source extent that cannot be proved must never hide intent.
+                raise RuntimeError("dispatcher_activity_invalid")
+            offsets.extend(range(starts[row] + column, starts[row] + column + len(content_line)))
+        if token.type == "html_block":
+            parser = CodeElements(token.content, offsets)
+            parser.feed(token.content)
+            continue
+        for child in token.children or []:
+            extent = child.meta.get("source_span")
+            if extent is None:
+                continue
+            start, stop = extent
+            if child.type == "code_inline" and receipt_example(child.content):
+                spans.append((offsets[start], offsets[stop - 1] + 1))
+            elif child.type == "html_inline":
+                parser = CodeElements(token.content[start:stop], offsets[start:stop])
+                parser.feed(token.content[start:stop])
+    masked = list(source)
+    for start, stop in spans:
+        for index in range(start, stop):
+            if masked[index] != "\n":
+                masked[index] = " "
+        # Boundaries prevent an example from joining fragments or creating a
+        # fresh line-start receipt that the original source does not contain.
+        masked[start] = masked[stop - 1] = _DISPATCHER_TABLE_CELL_BOUNDARY
+    return "".join(masked)
+
+
 def _dispatcher_resumable_binding_resources(
     cwd: Path, record: Mapping[str, object],
 ) -> set[str]:
@@ -2439,9 +2584,10 @@ def _dispatcher_resumable_binding_resources(
         if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
             raise RuntimeError("dispatcher_activity_invalid")
         body = comment["body"]
-        cross_line_scan_body = _dispatcher_cross_line_scan_body(body)
+        scan_source = _dispatcher_example_scan_source(body)
+        cross_line_scan_body = _dispatcher_cross_line_scan_body(scan_source)
         normalized_cross_line_scan_body = _dispatcher_cross_line_scan_body(
-            body, normalize_default_ignorables=True
+            scan_source, normalize_default_ignorables=True
         )
         if any(
             re.search(r"[\r\n]", match.group(0))
@@ -2456,19 +2602,22 @@ def _dispatcher_resumable_binding_resources(
         ):
             raise RuntimeError("dispatcher_activity_invalid")
         truncated_scan_lines = _dispatcher_cross_line_scan_source_lines(
-            body, mask_code_inline=True
+            scan_source, mask_code_inline=True
         )
         normalized_truncated_scan_lines = _dispatcher_cross_line_scan_source_lines(
-            body, mask_code_inline=True, normalize_default_ignorables=True
+            scan_source, mask_code_inline=True, normalize_default_ignorables=True
         )
         lines = body.splitlines()
-        table_scan_lines = _dispatcher_normalize_gfm_table_pipes(body).splitlines()
-        table_line_numbers = _dispatcher_gfm_table_line_numbers(body)
-        table_line_numbers.update(_dispatcher_html_table_line_numbers(body))
-        code_block_lines = _dispatcher_code_block_line_numbers(body)
+        scan_source_lines = scan_source.splitlines()
+        table_scan_lines = _dispatcher_normalize_gfm_table_pipes(scan_source).splitlines()
+        table_line_numbers = _dispatcher_gfm_table_line_numbers(scan_source)
+        table_line_numbers.update(_dispatcher_html_table_line_numbers(scan_source))
+        code_block_lines = _dispatcher_code_block_line_numbers(scan_source)
         for line_number, line in enumerate(lines):
             if line_number in code_block_lines:
                 continue
+            original_line = line
+            line = scan_source_lines[line_number]
             scan_line = (
                 table_scan_lines[line_number]
                 if line_number < len(table_scan_lines)
@@ -2626,17 +2775,30 @@ def _dispatcher_resumable_binding_resources(
                 continue
             if dedicated_cross_line_marker or dedicated_truncated_marker:
                 raise RuntimeError("dispatcher_activity_invalid")
+            # Opacity only removes source matches. Every accepted token remains
+            # byte-identical at the same offset in the original comment body.
+            def source_binding(pattern: re.Pattern[str]) -> re.Match[str] | None:
+                match = pattern.search(line)
+                if match is None:
+                    return None
+                original = pattern.match(original_line, match.start())
+                if original is None or original.group(0) != match.group(0):
+                    raise RuntimeError("dispatcher_activity_invalid")
+                return original
+
+            if _DISPATCHER_PICKUP_RECEIPT_RE.search(line):
+                source_binding(_DISPATCHER_PICKUP_RECEIPT_RE)
             if (
                 _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
-                and not _DISPATCHER_PRESERVED_WORKTREE_RE.search(line)
+                and not source_binding(_DISPATCHER_PRESERVED_WORKTREE_RE)
             ) or (
                 (dedicated_marker_match or normalized_dedicated_marker_match)
-                and not _DISPATCHER_DEDICATED_WORKTREE_RE.search(line)
+                and not source_binding(_DISPATCHER_DEDICATED_WORKTREE_RE)
             ):
                 raise RuntimeError("dispatcher_activity_invalid")
-            worktree = _DISPATCHER_WORKTREE_BINDING_RE.search(line)
-            branch = _DISPATCHER_BRANCH_BINDING_RE.search(line)
-            head = _DISPATCHER_HEAD_BINDING_RE.search(line)
+            worktree = source_binding(_DISPATCHER_WORKTREE_BINDING_RE)
+            branch = source_binding(_DISPATCHER_BRANCH_BINDING_RE)
+            head = source_binding(_DISPATCHER_HEAD_BINDING_RE)
             if not any((branch, head)):
                 # An explicit marker with only a path (or no parseable
                 # branch/head) is unsafe: the remaining binding may be on a
