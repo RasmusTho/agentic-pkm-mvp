@@ -177,7 +177,13 @@ neither establishes a hang or justifies a rerun. This fixes waiting guidance and
 test execution. `tests/scripts/test_await_pr_checks.py` exercises a long-running job through the real
 shell helper with a fake clock; `tests/scripts/test_ci_stall_classifier.py` covers the budgets,
 overrides, missing timing and terminal failures. The shared procedure remains
-`.codex/skills/_shared/CI_WAIT_CONTRACT.md`.
+`.codex/skills/_shared/CI_WAIT_CONTRACT.md`. Required contexts are scoped to the target repository:
+readable branch-protection contexts take precedence; when protection is unavailable, the Hub keeps
+its documented `main` fallback (`Unit tests (not pg)`) and `stable` fallback (`smoke`,
+`smoke-docker`, `pr-contract`). If protection is unavailable or returns no contexts, a non-Hub
+target must supply its required contexts with one or more `--required-check` flags; without a profile,
+the waiter fails closed before polling. `--sha` remains diagnostic and skips merge-gating
+required-check resolution.
 
 Diffs limited to the read-only CI wait helpers (`scripts/await_pr_checks.sh` and
 `scripts/ci_stall_classifier.py`) plus their exact CI contract tests and existing governance/docs
