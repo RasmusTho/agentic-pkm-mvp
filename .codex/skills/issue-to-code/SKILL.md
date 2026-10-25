@@ -310,6 +310,23 @@ pickup wrapper for both dispatcher-backed and degraded label-only pickup:
 scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" --agent <agent_id> --session <session_id>
 ```
 
+For an Issue in a different repository, run the wrapper from the checkout that owns the shared
+dispatcher state, and bind pickup and Verify-path readiness to the target checkout:
+
+```bash
+TARGET_REPO_ROOT=/absolute/path/to/target-repo
+scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" \
+  --target-worktree "$TARGET_REPO_ROOT" \
+  --readiness-repo-root "$TARGET_REPO_ROOT" \
+  --agent <agent_id> --session <session_id>
+```
+
+With `--target-worktree`, the wrapper resolves the target branch, worktree, and `origin` from that
+checkout; `--repo` and `--readiness-repo-root` must match it. The wrapper calls workspace preflight
+from its own repository with `--cwd` set to the target worktree, while dispatcher status, refresh,
+claim, and release commands run from the wrapper repository so they use its shared dispatcher state.
+The readiness root defaults to the target worktree when omitted.
+
 The wrapper runs workspace preflight and `dispatcher status`, derives the exact repo-qualified task id
 `github-<owner>--<repo>-issue-<N>` (matching the id `dispatcher pull` assigns; pass `--task-id` to
 override), and does not substitute a candidate returned by `dispatcher next`. When the
@@ -354,7 +371,9 @@ scripts/issue_pickup_claim.sh \
 
 Explicit label-only fallback is refused if a successful status response shows the dispatcher
 database exists. A failed automatic dispatcher refresh while the dispatcher is available is a stop condition,
-not permission to bypass its lease state.
+not permission to bypass its lease state. When using this explicit fallback for a different target
+repository, include the same `--target-worktree "$TARGET_REPO_ROOT"` and
+`--readiness-repo-root "$TARGET_REPO_ROOT"` arguments shown above.
 
 Preserve the wrapper's receipt in the PR body. Do not reconstruct a dispatcher-backed receipt from
 `status --json`, database existence, or a separate label command.
@@ -541,6 +560,7 @@ When continuing through anchor drift:
 1. Select the Issue according to priority and readiness rules.
 2. Run mandatory pickup claim wrapper before any lifecycle mutation:
    - `scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" --agent <agent_id> --session <session_id>`
+   - For a different target repository, use the cross-repository command in **Dispatcher Integration** with both `--target-worktree` and `--readiness-repo-root` set to the target checkout root.
    - This wrapper enforces workspace isolation preflight before atomically replacing `agent:*` labels with exactly `agent:in-progress`.
    - If preflight fails, stop and resolve branch/worktree collisions before claiming.
    - After a successful claim, register the dedicated checkout without switching the shared root:

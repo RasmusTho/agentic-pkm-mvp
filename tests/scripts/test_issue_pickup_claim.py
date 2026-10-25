@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -28,24 +29,29 @@ def _write_executable(path: Path, content: str) -> None:
 
 def _dispatcher_claim(
     *,
-    holder: str = "codex-3301",
+    repo: str = "RasmusTho/agentic-pkm-mvp",
+    issue_number: int = 3301,
+    holder: str | None = None,
     include_lease: bool = True,
     expires_at: str = "2099-07-10T01:00:00Z",
 ) -> str:
+    if holder is None:
+        holder = f"codex-{issue_number}"
+    lease_id = f"lease-{issue_number}"
     payload: dict[str, object] = {
         "ok": True,
         "task": {
-            "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-3301",
-            "issue_number": 3301,
+            "task_id": github_issue_task_id(repo, issue_number),
+            "issue_number": issue_number,
             "status": "claimed",
             "claimed_by": holder,
-            "lease_id": "lease-3301",
+            "lease_id": lease_id,
         },
     }
     if include_lease:
         payload["lease"] = {
-            "lease_id": "lease-3301",
-            "resource": "issue:3301",
+            "lease_id": lease_id,
+            "resource": f"issue:{issue_number}",
             "holder": holder,
             "expires_at": expires_at,
             "released_at": None,
@@ -72,6 +78,8 @@ def _make_harness(
     release_json: str = '{"ok":true,"task":{"task_id":"github-RasmusTho--agentic-pkm-mvp-issue-3301","status":"ready","claimed_by":null,"lease_id":null}}',
     release_rc: int = 0,
     issue_json: str | None = None,
+    target_origin_url: str = "https://github.com/RasmusTho/agentic-pkm-mvp.git",
+    target_branch: str = "codex/issue-3301-dispatcher-pickup-receipt",
 ) -> tuple[Path, dict[str, str]]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True)
@@ -93,14 +101,37 @@ def _make_harness(
             }
         )
 
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    hub_root = tmp_path / "hub"
+    hub_scripts = hub_root / "scripts"
+    hub_scripts.mkdir(parents=True)
+    shutil.copy2(SCRIPT, hub_scripts / "issue_pickup_claim.sh")
+    (hub_root / "app").symlink_to(REPO_ROOT / "app", target_is_directory=True)
+    (hub_root / "tests").symlink_to(REPO_ROOT / "tests", target_is_directory=True)
+    (hub_scripts / "validate_issue_readiness.py").symlink_to(
+        REPO_ROOT / "scripts" / "validate_issue_readiness.py"
+    )
+    (worktree / "tests" / "scripts").mkdir(parents=True)
+    (worktree / "tests" / "scripts" / "test_validate_issue_readiness.py").write_text(
+        "def test_target_repo_verify_path(): pass\n", encoding="utf-8"
+    )
+
     _write_executable(
         bin_dir / "git",
         """#!/usr/bin/env bash
 set -eu
-case "$*" in
-  "branch --show-current") echo "codex/issue-3301-dispatcher-pickup-receipt" ;;
-  "rev-parse --show-toplevel") printf '%s\n' "$FAKE_WORKTREE" ;;
-  "remote get-url origin") echo "https://github.com/RasmusTho/agentic-pkm-mvp.git" ;;
+if [[ "$1" == "-C" ]]; then
+  repo_root="$2"
+  shift 2
+else
+  repo_root="$PWD"
+fi
+case "$repo_root $*" in
+  "$FAKE_WORKTREE rev-parse --show-toplevel") printf '%s\n' "$FAKE_WORKTREE" ;;
+  "$FAKE_WORKTREE branch --show-current") printf '%s\\n' "$FAKE_TARGET_BRANCH" ;;
+  "$FAKE_WORKTREE remote get-url origin") printf '%s\n' "$FAKE_TARGET_ORIGIN_URL" ;;
+  "$FAKE_HUB_ROOT remote get-url origin") echo "https://github.com/RasmusTho/agentic-pkm-mvp.git" ;;
   *) echo "unexpected git call: $*" >&2; exit 1 ;;
 esac
 """,
@@ -109,6 +140,7 @@ esac
         bin_dir / "fake-python",
         """#!/usr/bin/env bash
 set -u
+printf 'dispatcher-cwd %s\n' "$PWD" >> "$COMMAND_LOG"
 printf 'dispatcher %s\n' "$*" >> "$COMMAND_LOG"
 case "$*" in
   *"-m app.dispatcher status --json"*) printf '%s\n' "$FAKE_STATUS_JSON"; exit "$FAKE_STATUS_RC" ;;
@@ -146,12 +178,11 @@ esac
 """,
     )
 
-    worktree = tmp_path / "worktree"
-    (worktree / "scripts").mkdir(parents=True)
     _write_executable(
-        worktree / "scripts" / "agent_workspace_preflight.sh",
+        hub_scripts / "agent_workspace_preflight.sh",
         """#!/usr/bin/env bash
 set -eu
+printf 'preflight-script %s\n' "$0" >> "$COMMAND_LOG"
 printf 'preflight %s\n' "$*" >> "$COMMAND_LOG"
 """,
     )
@@ -164,6 +195,10 @@ printf 'preflight %s\n' "$*" >> "$COMMAND_LOG"
             "JSON_PYTHON": env.get("PYTHON", "python3"),
             "COMMAND_LOG": str(command_log),
             "FAKE_WORKTREE": str(worktree),
+            "FAKE_HUB_ROOT": str(hub_root),
+            "FAKE_TARGET_ORIGIN_URL": target_origin_url,
+            "FAKE_TARGET_BRANCH": target_branch,
+            "FAKE_WRAPPER": str(hub_scripts / "issue_pickup_claim.sh"),
             "FAKE_STATUS_JSON": status_json,
             "FAKE_STATUS_RC": str(status_rc),
             "FAKE_PICKUP_REFRESH_JSON": pickup_refresh_json,
@@ -184,22 +219,31 @@ printf 'preflight %s\n' "$*" >> "$COMMAND_LOG"
     return worktree, env
 
 
-def _run(worktree: Path, env: dict[str, str], *extra: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    worktree: Path,
+    env: dict[str, str],
+    *extra: str,
+    issue: str = "3301",
+    repo: str = "RasmusTho/agentic-pkm-mvp",
+    agent: str = "codex-3301",
+    session: str = "session-3301",
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "bash",
-            str(SCRIPT),
+            env["FAKE_WRAPPER"],
             "--issue",
-            "3301",
+            issue,
             "--repo",
-            "RasmusTho/agentic-pkm-mvp",
+            repo,
             "--agent",
-            "codex-3301",
+            agent,
             "--session",
-            "session-3301",
+            session,
             *extra,
         ],
-        cwd=worktree,
+        cwd=cwd or worktree,
         env=env,
         capture_output=True,
         text=True,
@@ -227,10 +271,19 @@ def test_dispatcher_backed_pickup_replaces_ready_with_in_progress_after_verified
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "coordination_mode=dispatcher-backed" in result.stdout
+    assert f"branch=codex/issue-3301-dispatcher-pickup-receipt worktree={worktree}" in result.stdout
     assert "task_id=github-RasmusTho--agentic-pkm-mvp-issue-3301" in result.stdout
     assert "lease_id=lease-3301" in result.stdout
     assert "holder=codex-3301" in result.stdout
     commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    preflight = next(line for line in commands.splitlines() if line.startswith("preflight "))
+    assert "--cwd" not in preflight
+    dispatcher_cwds = [
+        line.removeprefix("dispatcher-cwd ")
+        for line in commands.splitlines()
+        if line.startswith("dispatcher-cwd ")
+    ]
+    assert dispatcher_cwds and set(dispatcher_cwds) == {env["FAKE_HUB_ROOT"]}
     assert commands.index("dispatcher -m app.dispatcher pickup-refresh") < commands.index(
         "dispatcher -m app.dispatcher claim"
     )
@@ -307,32 +360,163 @@ def test_default_task_id_is_repo_qualified_to_match_dispatcher_pull(tmp_path: Pa
                 },
             }
         ),
+        target_origin_url="https://github.com/RasmusTho/bifrost.git",
+        target_branch="codex/bifrost-issue-21",
     )
 
-    result = subprocess.run(
-        [
-            "bash",
-            str(SCRIPT),
-            "--issue",
-            "21",
-            "--repo",
-            "RasmusTho/bifrost",
-            "--agent",
-            "codex-21",
-            "--session",
-            "session-21",
-        ],
-        cwd=worktree,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+    result = _run(
+        worktree,
+        env,
+        "--target-worktree",
+        str(worktree),
+        issue="21",
+        repo="RasmusTho/bifrost",
+        agent="codex-21",
+        session="session-21",
+        cwd=Path(env["FAKE_HUB_ROOT"]),
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "task_id=github-RasmusTho--bifrost-issue-21" in result.stdout
+    assert f"branch=codex/bifrost-issue-21 worktree={worktree}" in result.stdout
     commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
     assert "dispatcher -m app.dispatcher claim github-RasmusTho--bifrost-issue-21" in commands
+    assert f"--readiness-repo-root {worktree}" in commands
+    assert f"preflight-script {env['FAKE_HUB_ROOT']}/scripts/agent_workspace_preflight.sh" in commands
+    assert f"--cwd {worktree}" in commands
+    dispatcher_cwds = [
+        line.removeprefix("dispatcher-cwd ")
+        for line in commands.splitlines()
+        if line.startswith("dispatcher-cwd ")
+    ]
+    assert dispatcher_cwds and set(dispatcher_cwds) == {env["FAKE_HUB_ROOT"]}
+    assert "gh api --method GET repos/RasmusTho/bifrost/issues/21/labels" in commands
+
+
+def test_cross_repo_pickup_rejects_repo_that_does_not_match_target_origin(
+    tmp_path: Path,
+) -> None:
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        target_origin_url="https://github.com/RasmusTho/bifrost.git",
+    )
+
+    result = _run(
+        worktree,
+        env,
+        "--target-worktree",
+        str(worktree),
+        issue="21",
+        repo="RasmusTho/agentic-pkm-mvp",
+        cwd=Path(env["FAKE_HUB_ROOT"]),
+    )
+
+    assert result.returncode != 0
+    assert "selected repository does not match target worktree origin" in result.stderr
+    command_log = Path(env["COMMAND_LOG"])
+    assert not command_log.exists() or not any(
+        line.startswith(("dispatcher ", "gh "))
+        for line in command_log.read_text(encoding="utf-8").splitlines()
+    )
+
+
+def test_cross_repo_pickup_requires_explicit_target_worktree(tmp_path: Path) -> None:
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        target_origin_url="https://github.com/RasmusTho/bifrost.git",
+    )
+
+    result = _run(worktree, env, issue="21", repo="RasmusTho/bifrost")
+
+    assert result.returncode != 0
+    assert "cross-repository pickup requires --target-worktree" in result.stderr
+    command_log = Path(env["COMMAND_LOG"])
+    assert not command_log.exists() or not any(
+        line.startswith(("dispatcher ", "gh "))
+        for line in command_log.read_text(encoding="utf-8").splitlines()
+    )
+
+
+def test_cross_repo_pickup_requires_readiness_root_to_match_target(
+    tmp_path: Path,
+) -> None:
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        target_origin_url="https://github.com/RasmusTho/bifrost.git",
+    )
+    other_repo = tmp_path / "other-repo"
+    other_repo.mkdir()
+
+    result = _run(
+        worktree,
+        env,
+        "--target-worktree",
+        str(worktree),
+        "--readiness-repo-root",
+        str(other_repo),
+        issue="21",
+        repo="RasmusTho/bifrost",
+        cwd=Path(env["FAKE_HUB_ROOT"]),
+    )
+
+    assert result.returncode != 0
+    assert "readiness repository root must match target worktree" in result.stderr
+    command_log = Path(env["COMMAND_LOG"])
+    assert not command_log.exists() or not any(
+        line.startswith(("dispatcher ", "gh "))
+        for line in command_log.read_text(encoding="utf-8").splitlines()
+    )
+
+
+def test_target_preflight_only_does_not_require_github_origin(
+    tmp_path: Path,
+) -> None:
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json="{}",
+        target_origin_url="",
+    )
+
+    result = _run(
+        worktree,
+        env,
+        "--preflight-only",
+        "--target-worktree",
+        str(worktree),
+        cwd=Path(env["FAKE_HUB_ROOT"]),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"branch=codex/issue-3301-dispatcher-pickup-receipt worktree={worktree}" in result.stdout
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert f"preflight-script {env['FAKE_HUB_ROOT']}/scripts/agent_workspace_preflight.sh" in commands
+    assert f"--cwd {worktree}" in commands
+    assert "dispatcher " not in commands
+    assert "gh " not in commands
 
 
 def test_explicit_task_id_override_still_wins(tmp_path: Path) -> None:
