@@ -31,6 +31,11 @@ from .archival_operations import (
     ArchivalOperationServerConfig,
     build_archival_operation_handlers,
 )
+from .read_operations import (
+    ReadOperationAdapter,
+    RequestContextCarrier,
+    read_capability_discovery,
+)
 
 __all__ = [
     "CapabilityAvailability",
@@ -58,4 +63,7 @@ __all__ = [
     "RESTORE_OPERATION_ID",
     "ArchivalOperationServerConfig",
     "build_archival_operation_handlers",
+    "ReadOperationAdapter",
+    "RequestContextCarrier",
+    "read_capability_discovery",
 ]
