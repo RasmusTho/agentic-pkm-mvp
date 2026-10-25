@@ -356,6 +356,7 @@ def _create_app() -> FastAPI:
                 '/api/companion/orientation', '/api/health', '/api/status',
                 '/api/companion/vault-browser', '/api/companion/workspace',
                 '/api/companion/vault-link-index', '/api/companion/vault/notes',
+                '/api/companion/vault/context',
                 '/api/companion/vault/notes/scoped', '/api/companion/active-context/selection',
                 '/api/companion/vault-related', '/api/companion/briefing/today',
                 '/healthz', '/readyz', '/status', '/version', '/metrics',

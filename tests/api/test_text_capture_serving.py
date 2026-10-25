@@ -34,6 +34,7 @@ def test_text_boundary_refuses_before_handlers(monkeypatch, channel):
         '/api/companion/orientation', '/api/health', '/api/status',
         '/api/companion/vault-browser', '/api/companion/workspace',
         '/api/companion/vault-link-index', '/api/companion/vault/notes',
+        '/api/companion/vault/context',
         '/api/companion/vault/notes/scoped', '/api/companion/active-context/selection',
         '/api/companion/vault-related', '/api/companion/briefing/today',
         '/healthz', '/readyz', '/status', '/version', '/metrics',
@@ -204,6 +205,10 @@ console.log(JSON.stringify({status:response.status,body:await response.json()}))
     assert any(json.loads(line).get('event') == 'capture.inbox.appended' for line in outbox.read_text().splitlines())
     before_events = outbox.read_bytes()
     client = TestClient(application, client=('127.0.0.1', 40000))
+    context = client.get('/api/companion/vault/context').json()
+    assert context['status'] == 'selected'
+    assert context['active_vault_path'] == str(vault)
+    assert context['active_vault_id'] == manager.context.active_vault_id
     found = client.get('/api/companion/vault-browser', params={'q': 'LITERAL-6340 Ω?'})
     assert [note['note_path'] for note in found.json()['notes']] == [note_path]
     opened = client.get('/api/companion/workspace', params={'note_path': note_path})

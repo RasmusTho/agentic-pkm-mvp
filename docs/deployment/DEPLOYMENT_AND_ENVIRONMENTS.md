@@ -1273,7 +1273,8 @@ a missing persisted identity stays visibly unresolved.
 The app assembly enforces a finite method/path boundary: GET orientation,
 vault-browser, workspace, vault-link-index, vault/notes and vault-related under
 `/api/companion`, plus GET active-context/selection and vault/notes/scoped for an
-already selected session. POST capture and capture/compatibility preserve the
+already selected session. GET vault/context retains the existing proof harness's
+exact selected-root/vault-ID diagnostic. POST capture and capture/compatibility preserve the
 served client's existing document-bound write transport. Read-only briefing/today
 and existing health/status/version/metrics diagnostics remain. The session reads
 retain their real principal/context guards; compatibility capture retains its

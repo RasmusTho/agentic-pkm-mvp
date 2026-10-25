@@ -64,6 +64,14 @@ changed-test inclusion. `tests/governance/test_ci_smoke_docs_only_gate.py` execu
 classification command against real finite Git diffs and checks its consumers. Workflow failure,
 timeout, coverage and process-cleanup proofs stay in `tests/ops/test_ci_workflow.py`.
 
+The shared DEV/TEST activation helper `app/config/activation_scope.py` has exact
+ownership in both `companion_ui` and `ops_deploy`, retaining API and native-deploy
+proof after heavy-target filtering. Its exact heavy-input entry and the API
+factory input read by the pre-scope-image regression retain selected deployment
+coverage. Unknown sibling config paths remain unowned and refuse; no config
+prefix or text-only runtime exception is introduced. The regression is
+`tests/scripts/test_select_pr_tests.py::test_activation_scope_helper_selects_api_and_native_deploy_coverage`.
+
 ### Exact PR intake and publication source scope
 
 The bounded route is available only when a change includes one of these exact source paths or one
