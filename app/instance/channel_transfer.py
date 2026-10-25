@@ -84,5 +84,3 @@ def require_source_root_ingress(root: Path, *, allow_admitted_effect: bool = Fal
             ):
                 return
         raise CapabilityNotReadyError("source binding ingress is closed for transfer")
-
-
