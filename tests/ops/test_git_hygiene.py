@@ -6640,6 +6640,10 @@ def test_local_retirement_ignores_embedded_code_receipt_examples(
     "<code>\n\n{snippet}\n\n</code>",
     "| example | delivery |\n| --- | --- |\n| <code>{snippet}</code> | At head `{sha}`, child delivered. |",
     "<table><tr><td><code>{snippet}</code></td><td>At head {sha}, child delivered.</td></tr></table>",
+    "<p><code>{snippet}</code></p><p>At head {sha}, child delivered.</p>",
+    "<p>At head {sha}, child delivered.</p><p><code>{snippet}</code></p>",
+    "<blockquote><code>{snippet}</code></blockquote>At head {sha}, child delivered.",
+    "At head {sha}, child delivered.<blockquote><code>{snippet}</code></blockquote>",
 ])
 def test_local_retirement_ignores_partial_html_receipt_examples(
     tmp_path, monkeypatch, snippet, wrapper
@@ -6680,11 +6684,25 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     "<div><code>Dedicated worktree /tmp/old is still</code><!-- outer\n\n--> dirty on branch old at head {sha}</div>",
     '<div><code>Dedicated worktree /tmp/old</code><!-- outer\n\n--><div title="<!--. is still dirty on branch old at head {sha}',
     "<code>Dedicated worktree /tmp/old</code> remains paused and is still dirty on branch old at head {sha}",
+    "<code>Dedicated worktree /tmp/old is still</code> di<br>rty",
+    "<code>Dedicated worktree /tmp/old is</code> st<br>ill dirty",
+    "<code>Dedicated worktree /tmp/old</code> i<br>s still dirty",
+    "<code>Dedicated worktree /tmp/old</code> i<br>s",
+    "<code>Dedicated worktree /tmp/old</code> is st<br>ill",
+    "<code>Dedicated worktree /tmp/old is</code> st<br>ill)",
+    "<code>Dedicated worktree /tmp/old</code> b<br>ranch: old",
+    "<code>Pickup intent receipt: worktree: /tmp/old</code> h<br>ead: invalid",
+    "<code>Dedicated worktree /tmp/old is still dirty<p></p></code> on branch old at head {sha}",
+    "<code>Dedicated worktree /tmp/old is still dirty</code></p> on branch old at head {sha}",
 ] + [
     prefix + "<code>" + snippet + "</code>" + continuation
     for prefix in ["", "DISPATCHER&#95;CODE_EXAMPLE_VISIBILITY\n\n", "DISPATCHER_CODE_EXAMPLE_VISIBI\u200bLITY\n\n"]
     for snippet in ["Dedicated worktree /tmp/old is still dirty", "Pickup intent receipt: worktree: /tmp/old", "Preserved worktree: /tmp/old"]
-    for continuation in [" branch old at head {sha}", ", with local changes, on branch old at head {sha}", "; branch: `old.release`; HEAD: `{sha}`", " (branch: old; HEAD: invalid)"]
+    for continuation in [
+        " branch old at head {sha}", ", with local changes, on branch old at head {sha}",
+        "; branch: `old.release`; HEAD: `{sha}`", " (branch: old; HEAD: invalid)",
+        "<br>\non branch old at head {sha}", "<br><br>branch: old; HEAD: {sha}",
+    ]
 ] + [
     "<code>Dedicated worktree /tmp/old is still dirty</code> " + opening + fields + closing
     for opening, closing in [

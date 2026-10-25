@@ -2445,8 +2445,7 @@ class _DispatcherExampleBlock:
     text: str
     events: list[_DispatcherExampleEvent] = dataclass_field(default_factory=list)
     literals: list[tuple[int, int, int, int]] = dataclass_field(default_factory=list)
-    barriers: list[int] = dataclass_field(default_factory=list)
-    hidden: list[tuple[int, int]] = dataclass_field(default_factory=list)
+    barriers: list[tuple[int, int]] = dataclass_field(default_factory=list)
     bridge: bool = False
 
 
@@ -2482,6 +2481,8 @@ def _dispatcher_example_block(
             raise RuntimeError("dispatcher_activity_invalid")
         offsets.extend(origins[starts[row] + column : starts[row] + column + len(line)])
 
+    paragraphs: list[tuple[str, int, int]] = []
+
     class Events(_DispatcherHTMLBlockTextParser):
         def __init__(
             self, content: str, mapping: list[int], position: int = 0, inline: bool = False
@@ -2509,7 +2510,21 @@ def _dispatcher_example_block(
                 else len("".join(self.parts))
             )
             if tag in {"tr", "td", "th"}:
-                block.barriers.append(position)
+                block.barriers.append((position, self.mapping[start]))
+            if tag in {"p", "blockquote"}:
+                if not closing:
+                    paragraphs.append((tag, position, self.mapping[start]))
+                else:
+                    matching = next(
+                        (i for i in range(len(paragraphs) - 1, -1, -1) if paragraphs[i][0] == tag),
+                        None,
+                    )
+                    if matching is not None:
+                        _, opening_position, opening_source = paragraphs[matching]
+                        del paragraphs[matching:]
+                        block.barriers.extend(
+                            ((opening_position, opening_source), (position, self.mapping[start]))
+                        )
             if tag not in {"code", "pre"}:
                 return
             if stop <= start or stop > len(self.mapping) or min(self.mapping[start:stop]) < 0:
@@ -2532,11 +2547,6 @@ def _dispatcher_example_block(
             self.record(tag, True)
             super().handle_endtag(tag)
 
-        def handle_comment(self, data: str) -> None:
-            start = self.position + len("".join(self.parts))
-            super().handle_comment(data)
-            block.hidden.append((start, self.position + len("".join(self.parts))))
-
     if token.type == "html_block":
         content = token.content
         mapping = offsets
@@ -2546,7 +2556,6 @@ def _dispatcher_example_block(
             if close < 0:
                 return block
             position = content[:close].count("\n")
-            block.hidden.append((0, position))
             content, mapping = content[close + 3 :], mapping[close + 3 :]
         parser = Events(content, mapping, position)
         parser.feed(content)
@@ -2567,7 +2576,14 @@ def _dispatcher_example_block(
             if child.type == "dispatcher_cell":
                 origin = offsets[start]
                 if origin < 0 or original[origin] == "|":
-                    block.barriers.append(position)
+                    source_position = (
+                        origin
+                        if origin >= 0
+                        else next(
+                            (value for value in offsets[start + 1 :] if value >= 0), len(original)
+                        )
+                    )
+                    block.barriers.append((position, source_position))
             elif child.type == "code_inline":
                 block.literals.append(
                     (position, position + len(child.content), offsets[start], offsets[stop - 1] + 1)
@@ -2576,8 +2592,6 @@ def _dispatcher_example_block(
                 content = token.content[start:stop]
                 parser = Events(content, offsets[start:stop], position, True)
                 parser.feed(content)
-                if content.strip().startswith("<!--"):
-                    block.hidden.append((position, position + content.count("\n")))
         if pending:
             close = rendered.find("-->")
             if close < 0:
@@ -2592,9 +2606,10 @@ def _dispatcher_example_block(
                 (a - shift, b - shift, c, d) for a, b, c, d in block.literals if a >= close + 3
             ]
             block.barriers = [
-                position - shift for position in block.barriers if position >= close + 3
+                (position - shift, origin)
+                for position, origin in block.barriers
+                if position >= close + 3
             ]
-            block.hidden = [(0, rendered[:close].count("\n"))]
     return block
 
 
@@ -2651,8 +2666,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
             event.position += shift
         previous.events.extend(block.events)
         previous.literals.extend((a + shift, b + shift, c, d) for a, b, c, d in block.literals)
-        previous.barriers.extend(position + shift for position in block.barriers)
-        previous.hidden.extend((a + shift, b + shift) for a, b in block.hidden)
+        previous.barriers.extend((position + shift, origin) for position, origin in block.barriers)
 
     for block in groups:
         literal_ranges = [(a, b) for a, b, _, _ in block.literals]
@@ -2707,22 +2721,22 @@ def _dispatcher_example_scan_source(body: str) -> str:
             if not complete and not partial:
                 continue
             if partial and not complete:
-                if _DISPATCHER_HTML_TAG_NAME_RE.match(block.text[event.position :].lstrip()):
-                    raise RuntimeError("dispatcher_activity_invalid")
                 stop = min(
-                    (position for position in block.barriers if position >= event.position),
+                    (
+                        position
+                        for position, origin in block.barriers
+                        if position >= event.position and origin >= event.source_stop
+                    ),
                     default=len(block.text),
                 )
+                if _DISPATCHER_HTML_TAG_NAME_RE.match(block.text[event.position : stop].lstrip()):
+                    raise RuntimeError("dispatcher_activity_invalid")
                 # Sentence punctuation in code-formatted field values is literal.
                 # Commas, semicolons, parentheses, connectors and <br> do not
                 # end ownership. Hidden-comment newlines are not paragraphs.
-                for match in re.finditer(
-                    r"[.!?](?=\s|$)|\n[ \t]*\n", block.text[event.position : stop]
-                ):
+                for match in re.finditer(r"[.!?](?=\s|$)", block.text[event.position : stop]):
                     position = event.position + match.start()
                     if any(a <= position < b for a, b in literal_ranges):
-                        continue
-                    if any(a <= position < b for a, b in block.hidden):
                         continue
                     stop = position
                     break
@@ -2741,10 +2755,21 @@ def _dispatcher_example_scan_source(body: str) -> str:
                 ]
                 if next_receipts:
                     continuation = continuation[: min(next_receipts)]
-                if re.search(
-                    r"\b(?:branch|head)\b|\b(?:is(?:\s+still)?\s*$|still\s*$|dirty\b|is\s+still\b)",
+                if any(
+                    match.start() < len(text) < match.end()
+                    for match in _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.finditer(
+                        text + continuation
+                    )
+                ):
+                    raise RuntimeError("dispatcher_activity_invalid")
+                if regex.search(
+                    rf"\b(?:{_dispatcher_linebreak_tolerant_keyword('branch')}|"
+                    rf"{_dispatcher_linebreak_tolerant_keyword('head')}|{_DISPATCHER_DIRTY_KEYWORD})\b|"
+                    rf"\b{_DISPATCHER_IS_KEYWORD}\s+{_DISPATCHER_STILL_KEYWORD}\b|"
+                    rf"\b(?:{_DISPATCHER_IS_KEYWORD}(?:\s+{_DISPATCHER_STILL_KEYWORD})?|"
+                    rf"{_DISPATCHER_STILL_KEYWORD})[\s\p{{P}}\p{{S}}]*$",
                     continuation,
-                    re.IGNORECASE,
+                    regex.IGNORECASE,
                 ):
                     # Passing raw pickup/preserved fragments through is unsafe:
                     # their strict source parser cannot assemble HTML fields.
