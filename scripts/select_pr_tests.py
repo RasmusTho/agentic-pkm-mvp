@@ -162,6 +162,7 @@ CI_GOVERNANCE_CONTRACT_PATHS = frozenset({
     "scripts/select_pr_tests.py",
     "scripts/replay_pr_test_selection.py",
     "scripts/run_scoped_test_partitions.py",
+    "scripts/plan_full_suite_node_shards.py",
     "scripts/await_pr_checks.sh",
     "scripts/ci_stall_classifier.py",
     "scripts/docs_guard_logic.py",

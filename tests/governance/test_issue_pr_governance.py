@@ -1469,6 +1469,16 @@ def test_governance_allowed_exact_includes_docs_guard_logic() -> None:
     assert '"scripts/docs_guard_logic.py"' in exact
 
 
+def test_full_suite_node_sharding_surfaces_are_governance_lane_allowed() -> None:
+    text = _read_workflow()
+    exact = text.split("const governanceAllowedExact = new Set([", 1)[1].split(
+        "]);", 1
+    )[0]
+
+    assert '"scripts/plan_full_suite_node_shards.py"' in exact
+    assert '"tests/ops/test_ci_workflow.py"' in exact
+
+
 def test_pr_body_generator_fixtures_are_governance_lane_allowed() -> None:
     text = _read_workflow()
 
