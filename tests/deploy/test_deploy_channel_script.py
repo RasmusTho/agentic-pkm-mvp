@@ -7845,6 +7845,14 @@ else:
     text = text.replace(
         'case "$*" in\n',
         '''if [[ "$*" == *"NATIVE_SOURCE_BOOTSTRAP="* ]]; then
+  previous=""
+  for argument in "$@"; do
+    if [ "${previous}" = -f ] && [ -f "${argument}" ]; then
+      scope="$(awk '/PKM_ACTIVATION_SCOPE:/ {gsub(/"/, "", $2); print $2}' "${argument}")"
+      if [ -n "${scope}" ]; then export PKM_ACTIVATION_SCOPE="${scope}"; fi
+    fi
+    previous="${argument}"
+  done
   printf 'source-probe channel=%s image=%s api-context=%s\\n' \
     "${PKM_ENVIRONMENT:-unset}" "${APP_IMAGE_TAG:-unset}" \
     "${HOST_SECRET_RUNTIME_ENV_FILE_API:-unset}" >> "${FAKE_DEPLOY_EVENT_LOG:?}"

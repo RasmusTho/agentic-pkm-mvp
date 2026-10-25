@@ -5,11 +5,12 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config.llm import ensure_provider
+from app.config.activation_scope import runtime_activation_scope
 from app.index.doctor import diagnose_index
 from app.middleware.trace import TraceIdMiddleware
 from app.observability import configure_metrics, setup_logging
@@ -327,10 +328,15 @@ async def lifespan(app: FastAPI):
     start_ask_provenance_runtime()
     _run_ingress_key_preflight()
     _run_cold_volume_startup_binding()
-    await _run_index_preflight()
+    scope = runtime_activation_scope()
+    if scope != app.state.activation_scope:
+        raise ValueError('activation scope changed after app assembly')
+    if scope == 'full':
+        await _run_index_preflight()
     _log_v6_seam_status()
     _ingest_settings_at_startup()
-    _warm_retrieval_cache()
+    if scope == 'full':
+        _warm_retrieval_cache()
     yield
 
 
@@ -340,6 +346,32 @@ def _create_app() -> FastAPI:
     # call sites stay untouched.
     setup_logging()
     application = FastAPI(title="Agentic PKM API", lifespan=lifespan)
+    scope = runtime_activation_scope()
+    application.state.activation_scope = scope
+    if scope == 'text-capture':
+        # Deliberately finite: no prefix admission and no route dependency or
+        # handler executes before this request boundary.
+        allowed = {
+            ('GET', path) for path in (
+                '/api/companion/orientation', '/api/health', '/api/status',
+                '/api/companion/vault-browser', '/api/companion/workspace',
+                '/api/companion/vault-link-index', '/api/companion/vault/notes',
+                '/api/companion/vault-related', '/api/companion/briefing/today',
+                '/healthz', '/readyz', '/status', '/version', '/metrics',
+            )
+        } | {('POST', '/api/companion/capture')}
+
+        @application.middleware('http')
+        async def text_capture_boundary(request: Request, call_next):
+            if (request.method, request.url.path) not in allowed:
+                return JSONResponse(status_code=503, content={
+                    'detail': {'error': 'activation_scope_unavailable',
+                               'activation_scope': scope, 'full_channel_qualified': False},
+                })
+            response = await call_next(request)
+            response.headers['X-PKM-Activation-Scope'] = scope
+            response.headers['X-PKM-Full-Channel-Qualified'] = 'false'
+            return response
     application.add_middleware(TraceIdMiddleware)
     application.mount("/static", StaticFiles(directory=static_dir), name="static")
     configure_metrics(application)
@@ -414,7 +446,8 @@ def _create_app() -> FastAPI:
 # Product owns its provider-policy preflight here rather than in ``app``'s
 # namespace initializer.  BuilderOps can therefore import its own entrypoints
 # from this source tree without resolving Product configuration.
-ensure_provider()
+if runtime_activation_scope() == 'full':
+    ensure_provider()
 app = _create_app()
 
 

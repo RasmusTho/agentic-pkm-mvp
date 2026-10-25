@@ -76,6 +76,7 @@ from app.text.helpers import (
     split_frontmatter as _split_frontmatter,
 )
 from app.config.environment import active_environment
+from app.config.activation_scope import runtime_activation_scope
 from app.config.paths import (
     VaultRootMisconfiguredError,
     resolve_optional_vault_root,
@@ -5556,9 +5557,12 @@ def read_companion_workspace(
         vault_root=vault_root,
         safe_note_path=safe_note_path,
         body=body,
-        # A scoped read is write-sealed until MVR-05C: it reports an unresolved
-        # identity instead of healing a missing uuid into the note.
-        heal_missing_uuid=_SCOPED_COMPANION_READ.get() is None,
+        # Scoped and text-only reads report unresolved identity rather than
+        # healing a missing UUID into the original source.
+        heal_missing_uuid=(
+            _SCOPED_COMPANION_READ.get() is None
+            and runtime_activation_scope() == 'full'
+        ),
         allow_recovered_identity=True,
     )
     if identity.identity_state == "healed":

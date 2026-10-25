@@ -22,6 +22,26 @@ The first SBS enforcement rail is `tests/architecture/test_sbs_fitness_rules.py:
 
 ## Companion UI Browser Runtime Tests
 
+Explicit DEV/TEST `text-capture` activation has source integration coverage in
+`tests/deploy/test_text_capture_activation.py` and
+`tests/api/test_text_capture_serving.py`. The tests use the actual host request,
+supervisor, immutable journal, worker guard, deploy shell/source bootstrap and
+API factory, with external native/model ports injected. They cover default/full
+compatibility, propagation mismatch, same-operation refusal, foundational
+admission failure, the finite method/path perimeter, startup/classifier omission,
+and real temporary-vault capture → literal body discovery → exact original read
+with WriteGuard/context and event receipts preserved. No live native dispatch or
+provider inference is part of that proof.
+
+Text activation deliberately leaves semantic serving and background producers
+unavailable; its liveness, version, cached health diagnostics or PG profile do not
+qualify a full channel or signed TEST promotion. The deployment owner defines
+the exact scope and retained identity/migration/rollback requirements. Actual
+same-candidate DEV/TEST browser proof remains separate under #6321 and #3347.
+The existing initialized-fixture, source selection, current-day-briefing or
+disabled-producer navigation checks and one-use capture/no-replay admission below
+are unchanged. A scope header or source-test PASS cannot replace any of them.
+
 Decision (#1435): Companion UI client-JS runtime behaviour uses Playwright, not Selenium or
 Preview-MCP-only UAT. Browser runtime tests are additive to the existing static
 `tests/companion_ui/*_browser.py` assertions.

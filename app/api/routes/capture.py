@@ -145,7 +145,7 @@ class CaptureResponse(BaseModel):
     events_emitted: list[str] = Field(default_factory=list)
     governed_write: dict[str, Any] | None = None
     ingest_warning: str | None = None
-    registration_state: Literal["proposal_pending", "not_qualified", "degraded"] = "not_qualified"
+    registration_state: Literal["proposal_pending", "not_qualified", "degraded", "unavailable"] = "not_qualified"
     registration_proposal_id: str | None = None
 
 
@@ -440,11 +440,14 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
             },
         ) from exc
 
-    registration = _offer_question_registration_proposal(
+    text_scope = getattr(request.app.state, 'activation_scope', 'full') == 'text-capture'
+    registration = None if text_scope else _offer_question_registration_proposal(
         vault_root=vault_root, note_rel=note_rel, trace_id=trace_id
     )
-    registration_state: Literal["proposal_pending", "not_qualified", "degraded"]
-    if registration is None or not registration.classification.classified:
+    registration_state: Literal["proposal_pending", "not_qualified", "degraded", "unavailable"]
+    if text_scope:
+        registration_state = 'unavailable'
+    elif registration is None or not registration.classification.classified:
         registration_state = "degraded"
     elif registration.proposal_id is not None:
         registration_state = "proposal_pending"

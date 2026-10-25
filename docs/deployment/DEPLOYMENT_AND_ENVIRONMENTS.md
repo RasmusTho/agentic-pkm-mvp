@@ -1234,6 +1234,56 @@ and security exposure boundaries remain in force.
 
 ### Native source preflight and recovery
 
+The native deployment request supports an explicit DEV/TEST-only
+`--activation-scope text-capture` on the existing automatic, existing-secrets-only
+host command. The default is `full`; its retained request representation and
+semantic readiness requirements are unchanged. Unknown scopes, PROD, bootstrap,
+authority/principal cutover, source-repair operations, and same-operation scope
+changes refuse. This is source support for a separately authorized operation;
+it grants no installation, credential, DB, service or deployment authority.
+
+Scope travels in `DeployPlan` through host serialization, supervisor admission,
+the private immutable request/journal, worker argv, the inherited worker guard,
+the channel pin and the API-only Compose override. Ambient scope variables cannot
+opt a deployment into it. The worker and shell refuse propagation disagreement;
+an unknown, empty or duplicate active pin scope refuses. A full deployment clears
+the text pin, and the previous pin preserves scope for governed rollback. The API
+factory also rejects an unknown scope and text scope outside DEV/TEST, including
+the ordinary default-to-PROD environment posture.
+
+Text activation still authenticates existing secrets and the real PostgreSQL
+backend, selected existing root, instance ownership, principal and runtime floors,
+restart fences, writer exclusion, migration inventory/execution and rollback
+constraints. It runs the ordinary source-bootstrap preflight and settings check
+after migrations. It omits embedding/model probing, selected-source replay,
+legacy identity reconciliation, vector repair and strict derived-index readiness.
+Only API and the managed Companion gateway are recreated; worker, watcher and
+capture-watch remain stopped. API startup omits index/cache warming, and capture
+omits the optional standing-question classifier/proposal (`registration_state:
+unavailable`). Capture append, WriteGuard/context refusal, governed-write receipt
+and event persistence retain their existing paths.
+Workspace reads omit the optional missing-UUID heal and preserve original bytes;
+a missing persisted identity stays visibly unresolved.
+
+The app assembly enforces a finite method/path boundary: GET orientation,
+vault-browser, workspace, vault-link-index, vault/notes and vault-related under
+`/api/companion`, POST `/api/companion/capture`, read-only briefing/today and the
+existing health/status/version/metrics diagnostics. Other routes and methods,
+including ASK/search, Canvas, TTS, first-contact generation, picker mutations and
+compatibility capture, return `activation_scope_unavailable` before their
+dependencies or handlers execute. Existing admission on permitted routes remains.
+Health uses cached model observations and retains its actual readiness failures.
+
+The active API reports scope in response headers and health diagnostics; scoped
+health and the deployment receipt explicitly carry `full_channel_qualified:
+false`. The native terminal receipt binds `activation_scope`, and cannot satisfy
+a full-scope request. Text completion checks liveness, scope and exact version;
+it is not full health, heavy/journaling acceptance, a signed TEST promotion PASS,
+or PROD qualification. Source/CI delivery is separate from admitted DEV/TEST
+capture/find/open proof under #6321 and native effects under #3347. Their fixture,
+current-day-briefing-or-disabled-producer and consumed-operation no-replay
+preconditions remain mandatory.
+
 Repository-only public-file transaction support (#6331) is available in
 `app.ops.bws_control_installation`. Its callable `install_public_files` consumes an exact
 finite reviewed manifest, replacement bytes and authenticated application/control/launcher/backup
@@ -1268,7 +1318,7 @@ admission, or same-final-image DEV/TEST acceptance. No boolean assertion replace
 prerequisites. #3347 remains open; repository delivery is neither an assembled installation
 packet nor permission to operate it.
 
-For BWS deploys, the target image's native-source embedding dependency is preflighted before the
+For full-scope BWS deploys, the target image's native-source embedding dependency is preflighted before the
 migration writer drain. A strict Product embedding route selects the current provider/model; the
 redacted Compose handoff exposes only those two fields. If Ollama is selected, the deploy starts the
 existing channel Ollama service, verifies or pulls that exact model, and probes the Product
