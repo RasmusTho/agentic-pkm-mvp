@@ -23,6 +23,10 @@ from tests.companion_ui.live_smoke_contract import (
     assert_operator_channel,
 )
 
+_CAPTURE_PATHS = frozenset({
+    '/api/companion/capture', '/api/companion/capture/compatibility',
+})
+
 
 class Blocked(RuntimeError):
     """A prerequisite could not be established; this is not a passing test."""
@@ -530,7 +534,7 @@ class CoreFlow:
             return
         path = urlparse(request.url).path
         if (
-            path == "/api/companion/capture"
+            path in _CAPTURE_PATHS
             and request.method == "POST"
             and self.capture_armed
             and self.d["allow_capture"]
@@ -869,7 +873,7 @@ class CoreFlow:
         self._binding()
         self.capture_armed = True
         with self.page.expect_response(
-            lambda r: urlparse(r.url).path == "/api/companion/capture"
+            lambda r: urlparse(r.url).path in _CAPTURE_PATHS
             and r.request.method == "POST",
             timeout=self.d["request_ms"],
         ) as response:
@@ -993,7 +997,10 @@ class CoreFlow:
             page.set_default_navigation_timeout(self.d["navigation_ms"])
             page.set_default_timeout(10000)
             self._open_note(page, self.d["known_note_path"])
-            context.route("**/api/companion/capture", lambda route: route.abort("failed"))
+            context.route(
+                lambda url: urlparse(url).path in _CAPTURE_PATHS,
+                lambda route: route.abort("failed"),
+            )
             page.get_by_test_id("workspace-surface-icon-capture").click()
             draft = self.marker + "-offline-draft"
             page.get_by_test_id("capture-input").fill(draft)

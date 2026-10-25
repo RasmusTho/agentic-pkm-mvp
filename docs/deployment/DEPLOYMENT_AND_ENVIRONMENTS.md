@@ -1272,11 +1272,14 @@ a missing persisted identity stays visibly unresolved.
 
 The app assembly enforces a finite method/path boundary: GET orientation,
 vault-browser, workspace, vault-link-index, vault/notes and vault-related under
-`/api/companion`, POST `/api/companion/capture`, read-only briefing/today and the
-existing health/status/version/metrics diagnostics. Other routes and methods,
-including ASK/search, Canvas, TTS, first-contact generation, picker mutations and
-compatibility capture, return `activation_scope_unavailable` before their
-dependencies or handlers execute. Existing admission on permitted routes remains.
+`/api/companion`, plus GET active-context/selection and vault/notes/scoped for an
+already selected session. POST capture and capture/compatibility preserve the
+served client's existing document-bound write transport. Read-only briefing/today
+and existing health/status/version/metrics diagnostics remain. The session reads
+retain their real principal/context guards; compatibility capture retains its
+document write precondition and WriteGuard. Other routes and methods, including
+ASK/search, Canvas, TTS, first-contact generation, picker mutations and note-save
+mutations, return `activation_scope_unavailable` before dependencies or handlers.
 Health uses cached model observations and retains its actual readiness failures.
 
 The active API reports scope in response headers and health diagnostics; scoped
@@ -1288,6 +1291,9 @@ or PROD qualification. Source/CI delivery is separate from admitted DEV/TEST
 capture/find/open proof under #6321 and native effects under #3347. Their fixture,
 current-day-briefing-or-disabled-producer and consumed-operation no-replay
 preconditions remain mandatory.
+The browser proof harness recognizes only the plain and compatibility capture
+paths, sharing one armed, durably consumed capture budget across both. Its
+response interception and offline abort follow those same exact paths.
 
 Repository-only public-file transaction support (#6331) is available in
 `app.ops.bws_control_installation`. Its callable `install_public_files` consumes an exact

@@ -356,10 +356,13 @@ def _create_app() -> FastAPI:
                 '/api/companion/orientation', '/api/health', '/api/status',
                 '/api/companion/vault-browser', '/api/companion/workspace',
                 '/api/companion/vault-link-index', '/api/companion/vault/notes',
+                '/api/companion/vault/notes/scoped', '/api/companion/active-context/selection',
                 '/api/companion/vault-related', '/api/companion/briefing/today',
                 '/healthz', '/readyz', '/status', '/version', '/metrics',
             )
-        } | {('POST', '/api/companion/capture')}
+        } | {('POST', path) for path in (
+            '/api/companion/capture', '/api/companion/capture/compatibility',
+        )}
 
         @application.middleware('http')
         async def text_capture_boundary(request: Request, call_next):

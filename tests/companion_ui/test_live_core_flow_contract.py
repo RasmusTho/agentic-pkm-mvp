@@ -457,7 +457,10 @@ def test_ask_fallback_cannot_pass_grounded_answer() -> None:
         validate_ask(response, source, ["NewPerson"])
 
 
-def test_request_guard_limits_mutations_to_one_armed_action(tmp_path: Path) -> None:
+@pytest.mark.parametrize('capture_path', [
+    '/api/companion/capture', '/api/companion/capture/compatibility',
+])
+def test_request_guard_limits_mutations_to_one_armed_action(tmp_path: Path, capture_path: str) -> None:
     runner = _runner(tmp_path)
 
     def route(url: str) -> tuple[Any, list[str]]:
@@ -469,7 +472,7 @@ def test_request_guard_limits_mutations_to_one_armed_action(tmp_path: Path) -> N
         )
         return r, calls
 
-    r, calls = route("http://127.0.0.1:8111/api/companion/capture")
+    r, calls = route("http://127.0.0.1:8111" + capture_path)
     runner.capture_armed = True
     runner._guard_request(r)
     assert calls == ["abort"] and runner.capture_posts == 0
@@ -481,6 +484,10 @@ def test_request_guard_limits_mutations_to_one_armed_action(tmp_path: Path) -> N
     runner.capture_armed = True
     runner._guard_request(r)
     assert calls == ["abort"] and runner.capture_posts == 1
+    other = '/api/companion/capture' if capture_path.endswith('/compatibility') else '/api/companion/capture/compatibility'
+    r, calls = route('http://127.0.0.1:8111' + other)
+    runner._guard_request(r)
+    assert calls == ['abort'] and runner.capture_posts == 1
     r, calls = route("http://different-host:8111/api/operator/ask")
     runner.ask_armed = True
     runner._guard_request(r)
@@ -493,12 +500,15 @@ def test_existing_evidence_directory_is_not_overwritten(tmp_path: Path) -> None:
         _runner(tmp_path)
 
 
-def test_report_consumes_capture_slot_before_forwarding(tmp_path: Path) -> None:
+@pytest.mark.parametrize('capture_path', [
+    '/api/companion/capture', '/api/companion/capture/compatibility',
+])
+def test_report_consumes_capture_slot_before_forwarding(tmp_path: Path, capture_path: str) -> None:
     runner = _runner(tmp_path)
     runner.identity_ok = runner.capture_armed = True
     observations: list[int] = []
     route = SimpleNamespace(
-        request=SimpleNamespace(method="POST", url="http://127.0.0.1:8111/api/companion/capture"),
+        request=SimpleNamespace(method="POST", url="http://127.0.0.1:8111" + capture_path),
         continue_=lambda: observations.append(
             json.loads((runner.output / "report.json").read_text())["capture_posts"]
         ),
@@ -506,6 +516,32 @@ def test_report_consumes_capture_slot_before_forwarding(tmp_path: Path) -> None:
     )
     runner._guard_request(route)
     assert observations == [1]
+
+
+def test_offline_capture_interception_covers_both_transports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _runner(tmp_path)
+    runner.identity_ok = True
+    interceptions = []
+    item = SimpleNamespace(wait_for=lambda: None, get_attribute=lambda _name: None)
+    page = SimpleNamespace(
+        set_default_navigation_timeout=lambda _value: None,
+        set_default_timeout=lambda _value: None,
+        get_by_test_id=lambda _name: SimpleNamespace(click=lambda: None, fill=lambda _value: None),
+        locator=lambda _selector: SimpleNamespace(filter=lambda **_kwargs: item),
+    )
+    context = SimpleNamespace(
+        new_page=lambda: page, close=lambda: None,
+        route=lambda matcher, _handler: interceptions.append(matcher),
+    )
+    monkeypatch.setattr(runner.browser, 'new_context', lambda: context)
+    monkeypatch.setattr(runner, '_open_note', lambda *_args: None)
+    runner.capture_unavailable_preserves_draft()
+    assert len(interceptions) == 1
+    matcher = interceptions[0]
+    for path in ('/api/companion/capture', '/api/companion/capture/compatibility'):
+        assert matcher('http://127.0.0.1:8111' + path + '?trace=test')
+    assert not matcher('http://127.0.0.1:8111/api/companion/capture/unknown')
+    assert not matcher('http://127.0.0.1:8111/api/companion/note/save/compatibility')
 
 
 def test_report_failure_preserves_previous_snapshot(
@@ -553,8 +589,11 @@ def test_mock_or_unproven_generation_cannot_pass(route: Any, answer: str) -> Non
         validate_ask(response, source, ["Person1", "999", "Place1"])
 
 
+@pytest.mark.parametrize('capture_path', [
+    '/api/companion/capture', '/api/companion/capture/compatibility',
+])
 def test_invalid_ack_blocks_actual_dependent_steps(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capture_path: str,
 ) -> None:
     runner = _runner(tmp_path)
     runner.identity_ok = True
@@ -566,7 +605,8 @@ def test_invalid_ack_blocks_actual_dependent_steps(
     )
     response = SimpleNamespace(
         ok=True,
-        url="http://127.0.0.1:8111/api/companion/capture",
+        url="http://127.0.0.1:8111" + capture_path,
+        request=SimpleNamespace(method='POST'),
         json=lambda: {
             "outcome": "written",
             "note_path": "Other/inbox.md",
@@ -574,12 +614,16 @@ def test_invalid_ack_blocks_actual_dependent_steps(
             "governed_write": {"receipt": "receipt"},
         },
     )
-    monkeypatch.setattr(
-        runner.page,
-        "expect_response",
-        lambda *args, **kwargs: nullcontext(SimpleNamespace(value=response)),
-        raising=False,
-    )
+    def expect_response(predicate, **kwargs):
+        assert predicate(response)
+        assert not predicate(SimpleNamespace(
+            url='http://127.0.0.1:8111/api/companion/capture/unknown',
+            request=SimpleNamespace(method='POST'),
+        ))
+        assert not predicate(SimpleNamespace(url=response.url, request=SimpleNamespace(method='GET')))
+        return nullcontext(SimpleNamespace(value=response))
+
+    monkeypatch.setattr(runner.page, 'expect_response', expect_response, raising=False)
     with pytest.raises(AssertionError, match="capture_acknowledgement_invalid"):
         runner.capture_acknowledged_once()
     assert runner.capture_written and not runner.capture_verified

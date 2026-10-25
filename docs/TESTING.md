@@ -32,6 +32,12 @@ admission failure, the finite method/path perimeter, startup/classifier omission
 and real temporary-vault capture → literal body discovery → exact original read
 with WriteGuard/context and event receipts preserved. No live native dispatch or
 provider inference is part of that proof.
+The served document controller also crosses the real gateway and text API for
+carrier-free and already selected scoped sessions. It uses the existing session
+liveness reads and document-bound compatibility capture with real admission;
+picker and note-save mutations remain unavailable. The live journey's plain and
+compatibility capture URLs consume one shared capture budget and use the same
+response/offline interception. These are temporary-fixture integration checks.
 
 Text activation deliberately leaves semantic serving and background producers
 unavailable; its liveness, version, cached health diagnostics or PG profile do not
