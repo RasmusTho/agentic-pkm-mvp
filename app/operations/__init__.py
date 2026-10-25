@@ -34,7 +34,6 @@ from .archival_operations import (
 from .read_operations import (
     ReadOperationAdapter,
     RequestContextCarrier,
-    build_read_operation_handlers,
     read_capability_discovery,
 )
 
@@ -66,6 +65,5 @@ __all__ = [
     "build_archival_operation_handlers",
     "ReadOperationAdapter",
     "RequestContextCarrier",
-    "build_read_operation_handlers",
     "read_capability_discovery",
 ]

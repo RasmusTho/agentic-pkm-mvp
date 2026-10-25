@@ -124,14 +124,14 @@ def read_capability_discovery() -> CapabilityDiscovery:
     )
 
 
-def build_read_operation_handlers() -> dict[str, ReadOwner]:
-    """The production read owners admitted by AUTOOPS-03."""
-    return {
-        LIST_OPERATION_ID: _list_owner,
-        READ_OPERATION_ID: _read_owner,
-        SEARCH_OPERATION_ID: _search_owner,
-        RELATED_OPERATION_ID: _related_owner,
-    }
+def search_read_owner(
+    request: OperationRequest,
+    context: ActiveContextSetV1,
+    roots: tuple[ContextBoundReadRoot, ...],
+    registry_store: VaultRegistryStore,
+) -> ReadResult:
+    """Canonical retrieval-capability owner for ``artifact.search``."""
+    return _search_owner(request, context, roots, registry_store)
 
 
 @dataclass(frozen=True)
@@ -139,7 +139,7 @@ class ReadOperationAdapter:
     """Explicit direct-composition entrypoint; never a runtime singleton."""
 
     registry_store: VaultRegistryStore
-    owners: Mapping[str, ReadOwner] = field(default_factory=build_read_operation_handlers)
+    owners: Mapping[str, ReadOwner]
     discovery: CapabilityDiscovery = field(default_factory=read_capability_discovery)
 
     def invoke(
@@ -261,7 +261,7 @@ def _capability_item(capability: CapabilityAvailability) -> OperationItemOutcome
     )
 
 
-def _item(
+def read_item(
     stable_id: str | None,
     locator: str | None,
     context: ActiveContextSetV1,
@@ -294,143 +294,21 @@ def _item(
     )
 
 
-def _source_freshness(context: ActiveContextSetV1) -> dict[str, Any]:
+def source_freshness(context: ActiveContextSetV1) -> dict[str, Any]:
     return {"state": "source_read", "context_generation": context.generation}
 
 
-def _target_identity(request: OperationRequest) -> str | None:
+def target_identity(request: OperationRequest) -> str | None:
     target = request.targets[0] if len(request.targets) == 1 else {}
     value = target.get("artifact_id")
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def _limit(request: OperationRequest, default: int, maximum: int) -> int | None:
+def bounded_limit(request: OperationRequest, default: int, maximum: int) -> int | None:
     value = request.arguments.get("limit", default)
     if type(value) is not int or not 1 <= value <= maximum:
         return None
     return value
-
-
-@dataclass(frozen=True)
-class _LocatedArtifact:
-    root: ContextBoundReadRoot
-    note: Mapping[str, object]
-    notes: list[dict[str, object]]
-
-
-def _locate_identity(
-    stable_id: str, roots: tuple[ContextBoundReadRoot, ...]
-) -> _LocatedArtifact | str:
-    """Resolve a stable identity to exactly one owner-enumerated note.
-
-    The Companion relation index owns the identity -> current-locator mapping
-    (companion files never own a UUID; nested child vaults are pruned).  A
-    locator is never accepted as identity.
-    """
-    from app.api.routes.companion import _collect_relation_notes, _resolve_human_uuid_scope
-
-    found: list[_LocatedArtifact] = []
-    for root in roots:
-        notes = _collect_relation_notes(root.root)
-        if any(note.get("artifact_uuid") == stable_id for note in notes):
-            note = _resolve_human_uuid_scope(notes, artifact_uuid=stable_id)
-            found.append(_LocatedArtifact(root, note, notes))
-    if not found:
-        return "artifact_not_found"
-    if len(found) > 1:
-        return "identity_conflict"
-    return found[0]
-
-
-def _list_owner(request, context, roots, registry_store) -> ReadResult:  # type: ignore[no-untyped-def]
-    from app.api.routes.companion import _select_vault_notes
-    from app.services.companion_note import is_companion_path
-
-    limit = _limit(request, 250, 1000)
-    query = request.arguments.get("query", "")
-    if limit is None or not isinstance(query, str):
-        return ReadResult("invalid_arguments", warning="limit must be 1..1000 and query a string")
-    items: list[OperationItemOutcome] = []
-    unreadable = 0
-    freshness = _source_freshness(context)
-    for root in roots:
-        notes, _total, _filtered, _next, _prev, failed = _select_vault_notes(
-            root.root, query=query, limit=limit
-        )
-        unreadable += failed
-        for note in notes:
-            # A companion retains its source UUID for continuity but never owns it.
-            owns_identity = not is_companion_path(root.root / note.note_path, root.root)
-            items.append(
-                _item(
-                    note.uuid if owns_identity else None, note.note_path, context, root.vault_binding_id,
-                    owner=READ_OWNERS[LIST_OPERATION_ID], freshness=freshness,
-                    title=note.title, kind=note.kind,
-                )
-            )
-    if unreadable:
-        return ReadResult(
-            "partial", tuple(items[:limit]), freshness, f"{unreadable} note(s) could not be read"
-        )
-    return ReadResult("succeeded", tuple(items[:limit]), freshness)
-
-
-def _read_owner(request, context, roots, registry_store) -> ReadResult:  # type: ignore[no-untyped-def]
-    from app.api.routes.artifacts import _content_hash, _extract_title, _resolve_and_validate
-
-    stable_id = _target_identity(request)
-    if stable_id is None:
-        return ReadResult("invalid_arguments", warning="exactly one target with artifact_id is required")
-    located = _locate_identity(stable_id, roots)
-    if isinstance(located, str):
-        return ReadResult(located)
-    root = located.root
-    locator = str(located.note["note_path"])
-    try:
-        resolved = _resolve_and_validate(locator, root.root)
-        body = resolved.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return ReadResult("artifact_not_found")
-    except (OSError, UnicodeDecodeError):
-        return ReadResult("artifact_inaccessible")
-    freshness = _source_freshness(context)
-    version = _content_hash(body)
-    return ReadResult(
-        "succeeded",
-        (
-            _item(
-                stable_id, locator, context, root.vault_binding_id,
-                owner=READ_OWNERS[READ_OPERATION_ID], freshness=freshness, version=version,
-                title=_extract_title(body, fallback=resolved.stem), body=body,
-            ),
-        ),
-        freshness,
-    )
-
-
-def _related_owner(request, context, roots, registry_store) -> ReadResult:  # type: ignore[no-untyped-def]
-    from app.api.routes.companion import _rank_related_notes
-
-    stable_id = _target_identity(request)
-    limit = _limit(request, 10, 50)
-    if stable_id is None or limit is None:
-        return ReadResult("invalid_arguments", warning="one artifact_id target and limit 1..50 are required")
-    located = _locate_identity(stable_id, roots)
-    if isinstance(located, str):
-        return ReadResult(located)
-    freshness = _source_freshness(context)
-    items = tuple(
-        _item(
-            result.artifact_uuid, result.note_path, context, located.root.vault_binding_id,
-            owner=READ_OWNERS[RELATED_OPERATION_ID], freshness=freshness, title=result.title,
-            provenance={
-                "ranking_score": result.ranking_score,
-                "signals": [signal.model_dump() for signal in result.ranking_signals],
-            },
-        )
-        for result in _rank_related_notes(dict(located.note), located.notes, limit=limit)
-    )
-    return ReadResult("succeeded", items, freshness)
 
 
 def _search_owner(request, context, roots, registry_store) -> ReadResult:  # type: ignore[no-untyped-def]
@@ -439,7 +317,7 @@ def _search_owner(request, context, roots, registry_store) -> ReadResult:  # typ
     from app.retrieval.hybrid import get_store
 
     query = request.arguments.get("query")
-    limit = _limit(request, 10, 50)
+    limit = bounded_limit(request, 10, 50)
     if not isinstance(query, str) or not query.strip() or limit is None:
         return ReadResult("invalid_arguments", warning="a non-empty query and limit 1..50 are required")
     try:
@@ -473,7 +351,7 @@ def _search_owner(request, context, roots, registry_store) -> ReadResult:  # typ
         # An empty index for the selected bindings cannot answer "no matches".
         return ReadResult("index_unavailable", (), freshness, "no indexed documents for the selected bindings")
     items = tuple(
-        _item(
+        read_item(
             hit.doc_id, _hit_locator(hit), context, hit.payload.get("vault_binding_id"),
             owner=READ_OWNERS[SEARCH_OPERATION_ID], freshness=freshness,
             title=str(hit.payload.get("title") or ""), snippet=hit.snippet,
@@ -503,6 +381,10 @@ __all__ = [
     "ReadOperationAdapter",
     "ReadResult",
     "RequestContextCarrier",
-    "build_read_operation_handlers",
+    "bounded_limit",
+    "read_item",
+    "search_read_owner",
+    "source_freshness",
+    "target_identity",
     "read_capability_discovery",
 ]

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from app.api.read_operation_owners import build_read_operation_adapter
 from app.api.routes import active_context_selection as selection_routes
 from app.instance.active_context_service import (
     ACTION_SELECTION_INSPECT,
@@ -28,7 +29,7 @@ from app.operations.read_operations import (
     READ_OWNERS,
     RELATED_OPERATION_ID,
     SEARCH_OPERATION_ID,
-    ReadOperationAdapter,
+
     RequestContextCarrier,
 )
 from app.retrieval.hybrid import get_store
@@ -90,7 +91,7 @@ def bound(tmp_path, monkeypatch):
             }
         ]
     )
-    adapter = ReadOperationAdapter(registry_store=runtime.registry)
+    adapter = build_read_operation_adapter(runtime.registry)
     return adapter, carrier, context, root, first
 
 
@@ -121,8 +122,7 @@ def _all_requests(context) -> dict[str, OperationRequest]:
 
 def test_read_operations_delegate_to_canonical_production_services(bound, monkeypatch) -> None:
     adapter, carrier, context, root, first = bound
-    import app.api.routes.artifacts as artifacts
-    import app.api.routes.companion as companion
+    import app.api.read_operation_owners as owners
     import app.retrieval.capability as capability
 
     calls: list[tuple[str, object]] = []
@@ -136,10 +136,10 @@ def test_read_operations_delegate_to_canonical_production_services(bound, monkey
 
         monkeypatch.setattr(module, name, wrapper)
 
-    spy(companion, "_select_vault_notes", "list", lambda vault_root, **_: Path(vault_root))
-    spy(artifacts, "_resolve_and_validate", "read", lambda locator, vault_root: (locator, Path(vault_root)))
+    spy(owners, "_select_vault_notes", "list", lambda vault_root, **_: Path(vault_root))
+    spy(owners, "_resolve_and_validate", "read", lambda locator, vault_root: (locator, Path(vault_root)))
     spy(capability, "retrieve", "search", lambda request: request.active_context)
-    spy(companion, "_rank_related_notes", "related", lambda target, notes, **_: target["artifact_uuid"])
+    spy(owners, "_rank_related_notes", "related", lambda target, notes, **_: target["artifact_uuid"])
     seam_calls: list[dict] = []
     original_seam = ActiveContextSelectionService.resolve_request_context
 
@@ -257,9 +257,9 @@ def test_read_failures_are_typed_and_never_ambiguous_empty_success(bound, monkey
     locked = tmp_path / "locked.md"
     locked.write_text("secret", encoding="utf-8")
     locked.chmod(0)
-    import app.api.routes.artifacts as artifacts
+    import app.api.read_operation_owners as owners
 
-    monkeypatch.setattr(artifacts, "_resolve_and_validate", lambda locator, vault_root: locked)
+    monkeypatch.setattr(owners, "_resolve_and_validate", lambda locator, vault_root: locked)
     try:
         assert state(adapter.invoke(read, carrier)) == (OperationStatus.REJECTED, "artifact_inaccessible")
     finally:
