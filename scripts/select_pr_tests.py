@@ -1640,7 +1640,12 @@ def _test_module_targets(paths: tuple[str, ...]) -> tuple[str, ...] | None:
         path.startswith("tests/") and _is_test_module(path)
         and not {"..", "helpers", "fixtures", "support", "utils", "_shared"}.intersection(Path(path).parts)
         and (REPO_ROOT / path).is_file() and not (REPO_ROOT / path).is_symlink()
-        and any(_subsystem_owns_path(path, name, prefixes) for name, prefixes, _ in SUBSYSTEMS)
+        and (
+            any(_subsystem_owns_path(path, name, prefixes) for name, prefixes, _ in SUBSYSTEMS)
+            # Documentation contract tests are normally selected by docs-only PRs,
+            # but their own test-only edits still need the bounded module route.
+            or path.startswith("tests/docs/")
+        )
         for path in paths
     ):
         return None
@@ -1968,7 +1973,7 @@ def select_tests(changed_files: list[str]) -> Selection:
             owners = _dedupe([
                 name for name, prefixes, _ in SUBSYSTEMS
                 if any(_subsystem_owns_path(path, name, prefixes) for path in paths)
-            ])
+            ] + (["docs"] if any(path.startswith("tests/docs/") for path in paths) else []))
             return Selection(False, owners, _pr_targets([*CI_INTEGRITY_TARGETS, *test_modules]),
                              "test modules and their static consumers")
     changed_tests = (

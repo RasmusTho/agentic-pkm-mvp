@@ -2145,6 +2145,30 @@ def test_deploy_test_only_change_keeps_real_consumers_without_sibling_suites() -
     assert selector.requires_runtime_checks(paths) is True
 
 
+def test_docs_test_module_selects_its_import_consumers_and_ci_integrity_targets(
+    test_module_repository,
+) -> None:
+    test_module_repository({
+        "tests/docs/test_seed.py": "shared = 1\ndef test_seed(): pass\n",
+        "tests/docs/test_consumer.py": (
+            "from tests.docs.test_seed import shared\ndef test_consumer(): pass\n"
+        ),
+        "tests/docs/test_unrelated.py": "def test_unrelated(): pass\n",
+    })
+
+    selection = select_tests(["tests/docs/test_seed.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("docs",)
+    assert selection.unowned_paths == ()
+    assert selection.reason == "test modules and their static consumers"
+    assert set(selection.targets) == {
+        *selector.CI_INTEGRITY_TARGETS,
+        "tests/docs/test_seed.py",
+        "tests/docs/test_consumer.py",
+    }
+
+
 @pytest.mark.parametrize("statement", [
     "from tests.deploy.test_seed import shared",
     "from .test_seed import shared",
