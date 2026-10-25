@@ -88,3 +88,20 @@ def test_every_issue_to_code_pickup_preserves_selected_repo() -> None:
         'scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" '
         "--agent <agent_id> --session <session_id>"
     ) in workflow
+
+
+def test_issue_to_code_documents_target_worktree_pickup_binding() -> None:
+    issue_to_code = (SKILLS / "issue-to-code" / "SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(issue_to_code.split())
+
+    assert (
+        'scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" \\\n'
+        '  --target-worktree "$TARGET_REPO_ROOT" \\\n'
+        '  --readiness-repo-root "$TARGET_REPO_ROOT" \\\n'
+        '  --agent <agent_id> --session <session_id>'
+    ) in issue_to_code
+    assert (
+        "dispatcher status, refresh, claim, and release commands run from the wrapper repository"
+        in normalized
+    )
+    assert "readiness root defaults to the target worktree" in normalized
