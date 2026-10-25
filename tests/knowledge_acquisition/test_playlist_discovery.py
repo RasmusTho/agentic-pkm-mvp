@@ -22,7 +22,9 @@ from app.knowledge_acquisition import youtube_plugin as plugin
 from app.knowledge_acquisition.acquisition_requests import (
     YOUTUBE_SOURCE_DISCOVERED_TOPIC,
     AcquisitionRequests,
+    DiscoveryTrigger,
     drain_one,
+    request_identity,
     reset_memory_acquisition_requests,
 )
 from app.knowledge_acquisition.extraction_registry import clear_registry
@@ -396,6 +398,83 @@ def test_new_inbox_item_enqueues_once_at_production_call_site(
     assert rows[0].discovery_triggers[0]["collection_kind"] == "inbox_playlist"
     assert rows[0].discovery_triggers[0]["playlist_item_id"] == "pli-a"
     assert len(outbox.rows_for(YOUTUBE_SOURCE_DISCOVERED_TOPIC)) == 1
+
+
+def test_shared_request_policy_conflict_is_sanitized_and_traced_for_inbox(
+    outbox: FakeOutboxConn,
+) -> None:
+    account = str(uuid.uuid4())
+    registry = SourceRegistry.for_runtime()
+    requests = AcquisitionRequests.for_runtime()
+    binding = _register_inbox(registry, account)
+    subscription = registry.register(
+        collection_kind="subscription_feed",
+        collection_ref="UC" + "c" * 22,
+        title="Synthetic metadata source",
+        acquisition_policy={"mode": "candidate_metadata_only"},
+    )
+    requests.enqueue(
+        source_kind="youtube_url",
+        item_ref=VIDEO_A,
+        source_ref=f"https://www.youtube.com/watch?v={VIDEO_A}",
+        trigger=DiscoveryTrigger(
+            binding_id=subscription.binding_id,
+            collection_kind=subscription.collection_kind,
+            collection_ref=subscription.collection_ref,
+            trigger="poll",
+        ),
+        policy_snapshot=subscription.acquisition_policy,
+    )
+
+    service = _service(
+        account,
+        registry,
+        requests,
+        StubApiClient(_page(_item("pli-conflict", VIDEO_A))),
+    )
+    result = service.sync_now()
+
+    assert result == {
+        "status": "degraded",
+        "discovered": 0,
+        "enqueued": 0,
+        "deduped": 0,
+        "not_modified": False,
+        "reason_code": "policy_conflict",
+    }
+    latest_error = service.status()["latest_error"]
+    assert latest_error["reason_code"] == "policy_conflict"
+    assert latest_error["detail"] == (
+        "This video was discovered with a different acquisition policy; "
+        "resolve the source policies before retrying."
+    )
+    assert isinstance(latest_error["at"], str)
+    stored = registry.get(binding.binding_id)
+    assert stored is not None
+    assert stored.cursor == {}
+    assert stored.last_success_at is None
+    assert stored.last_error["reason_code"] == "policy_conflict"
+    existing = requests.get(request_identity("youtube_url", VIDEO_A, 1))
+    assert existing is not None
+    assert existing.policy_snapshot["mode"] == "candidate_metadata_only"
+    assert [trigger["binding_id"] for trigger in existing.discovery_triggers] == [
+        subscription.binding_id
+    ]
+    inbox_discoveries = [
+        payload
+        for payload in outbox.payloads_for(YOUTUBE_SOURCE_DISCOVERED_TOPIC)
+        if payload["binding_id"] == binding.binding_id
+    ]
+    assert inbox_discoveries == [
+        {
+            "binding_id": binding.binding_id,
+            "collection_kind": "inbox_playlist",
+            "collection_ref": PLAYLIST_A,
+            "item_ref": VIDEO_A,
+            "trigger": "poll",
+            "playlist_item_id": "pli-conflict",
+        }
+    ]
 
 
 def test_registry_materialization_policy_survives_discovery_into_queue(

@@ -1,11 +1,19 @@
-State: SoT v5.5 baseline (descriptive, ops-oriented). Local Compose is the fallback runtime; the live
-product topology is the new Linux/Tailscale host split recorded below. If a detail drifts, prefer live
-host evidence and the deployment contract, then update this doc.
+State: Application runtime reference on the SoT v5.5 baseline. Local Compose is a development
+fallback. Current physical infrastructure status is owned by `yggdrasil-infra/CURRENT_STATUS.md`.
+Doc role: Application infrastructure reference
+Authority: Describes this repository's local Compose fallback; environment selection, deployment
+and release policy remain with their linked owner documents.
+Temporal class: operational
+Review cadence: when the application Compose reference or infrastructure reading path changes
+Source of truth: repository Compose files and the linked owner contracts
+Last reviewed: 2026-10-21 (status ownership and stale host references only)
+Last verified against: `docker-compose.yaml`, `docs/ENVIRONMENTS.md`,
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and the infrastructure current-status view
 
 Documentation hierarchy: `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the
-target operational-platform boundary. This document owns the local Docker/Colima fallback description
-and records the verified live host boundary; it does not claim that the new-host deployment handoff is
-already a separately delivered implementation.
+target operational-platform boundary. This document owns the application-side Docker/Colima
+fallback description. The infrastructure repository owns the observed host, VM, network, storage
+and service inventory; this reference does not duplicate that current-status view.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -13,22 +21,25 @@ already a separately delivered implementation.
 - Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
-# Infrastructure — Local Fallback and New-Host Runtime
+# Infrastructure — Application Runtime Reference
 
-This document describes the local Docker + Colima fallback and the current live host boundary for the
-Agentic PKM stack. It does not claim that local Compose is the live product deployment.
+This document describes the application's local Docker + Colima fallback and routes operators to
+the current physical inventory. Local Compose is not evidence of a Linux channel deployment.
 
-## Current live host boundary (verified 2026-08-22)
+## Current infrastructure status
 
-- Dedicated Ollama host: Ollama/model serving only; no product API, worker, watcher, database, or Companion UI.
-- `ygg-dev`: Linux/Tailscale dev runtime, API `:18001`, Companion UI `:8111`; reachable but degraded.
-- `ygg-test`: intended isolated test runtime; no reachable host or endpoint was found.
-- `ygg-prod`: Linux/Tailscale prod runtime, API `:18000`; liveness responds but functional health is
-  failing and Companion UI `:8113` is unavailable.
-- Both live APIs report `git_sha=unknown`; promotion cannot use them as immutable artifact evidence.
+Use [yggdrasil-infra — Current local infrastructure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+for the dated Macs, TARS/Proxmox guest roles, Docker engines, networking, storage and related
+services, including explicit unverified areas. It is an observed status view, not a requirement,
+deployment plan or acceptance receipt. Builder Vault holds its sanitized handoff and the private
+host-local evidence locator. Private bindings and raw observations stay outside Git and synchronized
+folders.
 
-The repository still documents and supports local Compose commands for fallback development and
-verification. Those commands do not deploy the new hosts and are not promotion evidence.
+The August host snapshot formerly embedded here is superseded as current status. In particular,
+an Ollama-only Mac, an absent TEST host and universally unknown API build identities must not be
+inferred from that old snapshot. [ENVIRONMENTS](ENVIRONMENTS.md) owns environment selection;
+[the deployment contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md) owns physical application
+deployment and [release channels](RELEASE_CHANNELS/README.md) own promotion and rollback.
 
 ## Local fallback stack overview
 - Host: macOS
@@ -198,7 +209,7 @@ policy.
 - Outbox: Backed by the `outbox` table in Postgres; worker polls it continuously. JSONL (`INDEX_OUTBOX_PATH`) remains audit-only.
 
 ## Startup Flow
-1. Ensure Colima/Docker is running.
+1. For a managed local Colima profile, use the shared `scripts/lib/colima_runtime_readiness.sh` helper through the startup entrypoints. Its reviewed profile lives at `~/.config/yggdrasil/colima-runtime.env` (or `COLIMA_RESOURCE_PROFILE_FILE`). Readiness requires the exact writable persistent filesystem and Docker/containerd bind roots, containerd RPC/metadata, the intended Docker context/socket, and exact required persisted/API identity coverage (including stopped durable containers), with separately proven volume-safe terminal AutoRemove accounting. The guest socket remains root-only through preflight and restore; failed service starts queue `docker.socket` to stop, normal service stops and restarts propagate through the socket unit, and `docker.service` pulls that socket in when started. Docker-group access opens only after exact inventory equality and the post-restore containerd PID check. A successful Colima CLI exit alone is insufficient. Other Docker providers retain their existing binding.
 2. `make start` is the supported local startup path. It writes `tmp/runtime.env` for the default/prod local stack, brings up the core services, auto-selects a Docker-reachable Ollama endpoint when needed, and verifies the live runtime from inside the `api` container before exiting `0`. The `pkm-test` Compose/bootstrap lane writes `tmp-test/runtime.env` instead.
 3. `docker compose up -d` remains available for low-level debugging, but it skips the startup wrapper's endpoint repair, vault probes, and authoritative runtime verification.
 3. `scripts/start_api.sh` (container entrypoint):
@@ -210,6 +221,30 @@ policy.
 4. Worker bootstrap:
    - Uses an autocommit psycopg connection to create the `outbox` table/indexes and `pgcrypto` if needed.
    - Polls the outbox and triggers the indexer for ingest events.
+
+### Colima persistent substrate readiness
+
+The checked-in installer at `ops/host-setup/mac-mini/install_colima_runtime_readiness.sh`
+installs the mount boundary, substrate gate, containerd dependency/time limits, Docker
+pre-start and post-start gates, and a restricted API socket. It defaults to a dry-run and never restarts a service. Installation
+requires inactive Docker/socket/containerd units; default-profile installation additionally requires
+an accepted isolated proof. Systemd refuses startup when configuration, mount identity, free
+blocks/inodes, containerd metadata, or inventory checks fail. The Docker socket is root-only during
+restore and the exact inventory check; Docker-group access opens only after the IDs match. Post-start
+failure leaves the socket restricted, stops socket activation, and fails the Docker unit; containerd
+and the data mounts remain available for diagnosis.
+
+This mechanism concerns the Mac's local helper/development Docker engine. It does not qualify or
+operate Product channels on TARS. Follow the isolated proof and activation procedure in
+`docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md :: Colima persistent substrate readiness` before
+using it on an existing profile. Repository tests do not establish live activation.
+
+The storage target is a Colima persistent ext4 filesystem backed by storage directly on a native
+host APFS filesystem, avoiding an APFS image nested on an interchange filesystem such as exFAT.
+Live Docker/containerd metadata must not depend on that nested storage path. Moving existing data
+is a separate capacity-proven, cold-copy migration. Until that migration is complete, serialize
+Git/common-dir bulk I/O and worktree checkout with Colima cold start/restore; a quiet process
+snapshot alone does not prevent another session from starting I/O.
 
 ### Runtime verification
 - `make verify-runtime` is the recommended operator check once the stack is up.

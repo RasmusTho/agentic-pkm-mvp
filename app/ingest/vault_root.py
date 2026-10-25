@@ -14,7 +14,11 @@ from app.services.note_uuid import ensure_note_uuid
 from app.domain.state_axes import normalize_artifact_state_axes
 from app.index.outbox import append_jsonl
 from app.knowledge.profile_authority_store import assert_profile_note_ingestible
-from app.observability.ingest_meta import record_ingest_failure, record_ingest_success
+from app.observability.ingest_meta import (
+    ingest_binding_for_root,
+    record_ingest_failure,
+    record_ingest_success,
+)
 from app.observability.log import with_trace_id
 from app.search.service import ingest_object as index_ingest_object
 from app.stores import get_object_store, resolve_store_backend
@@ -268,9 +272,11 @@ def ingest_vault_root(root: Path, limit: int | None = None) -> int:
             except Exception as exc:  # pragma: no cover - defensive logging
                 failures += 1
                 logger.exception("Failed to ingest %s: %s", path, exc)
-        record_ingest_success(run_started)
+        record_ingest_success(run_started, vault_binding_id=ingest_binding_for_root(root) or "")
     except Exception as exc:
-        record_ingest_failure(run_started, str(exc))
+        record_ingest_failure(
+            run_started, str(exc), vault_binding_id=ingest_binding_for_root(root) or ""
+        )
         raise
 
     if failures:

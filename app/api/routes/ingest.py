@@ -1,8 +1,9 @@
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
+from app.api.compatibility_mutation import seal_vault_mutation
 from app.domain.state_axes import normalize_artifact_state_axes
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED
@@ -10,7 +11,8 @@ from app.observability.tracer import start_span
 from app.services.outbox import insert_object_and_outbox
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
-router = APIRouter()
+# MVR-05B3: the vault-bound object ingest carries the pre-05C mutation seal.
+router = APIRouter(dependencies=[Depends(seal_vault_mutation)])
 
 # Named WriteGuard action for this seam (formal-model.md F-D, owner-decided on
 # epic #2778: this V-write seam gets the same fail-closed

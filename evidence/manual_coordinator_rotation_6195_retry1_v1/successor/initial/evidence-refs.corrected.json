@@ -1,0 +1,6 @@
+{
+  "source_checkpoint": "evidence/manual_coordinator_rotation_6195_retry1_v1/accepted/source-checkpoint.json",
+  "context_pack": "evidence/manual_coordinator_rotation_6195_retry1_v1/context-pack.json",
+  "agent_response": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/initial/agent-response.original.json",
+  "comparison_receipt": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/initial/comparison.json"
+}

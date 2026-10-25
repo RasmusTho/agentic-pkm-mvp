@@ -227,6 +227,9 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
   - single entry point for routing Jev calls, Mac Keychain secrets, Linux BWS, Heimdal credentials,
     and planned infrastructure credentials to their existing owner contracts and current
     qualification state; it never stores or defines secret policy
+- `secret-management`
+  - cross-owner secret architecture and access-policy maintenance; uses existing owner contracts,
+    stores, and interfaces, with a reusable update prompt and metadata-only routing where implemented
 - `jev-direct`
   - run one bounded, typed development-time Jev call through the local helper; the provider key
     stays inside that helper, and the tool does not change Codex/Claude models or runtime routes
@@ -234,7 +237,7 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
   - repair stale or false Issue / PR / label state before or during execution, plus optional
     Project projection when explicitly in scope
 - `deliver-issue-set`
-  - review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set; when delivery scope is omitted, automatically select one bounded executable scope by priority, bug urgency, dependencies, and executable epic size; use `issue-to-code` and `verification-and-closure` as the main lenses; if the ready pool is too small, repair or create bounded ready issues through `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`; may claim multiple issues only for rational parallel sub-agent delivery with isolated worktrees and explicit receipts
+  - review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set; when delivery scope is omitted, automatically select a bounded set of issues/epics: high-priority bugs first, then work that unblocks other work, then executable epics unless current evidence makes other work more important; use `issue-to-code` and `verification-and-closure` as the main lenses; if the ready pool is too small, repair or create bounded ready issues through `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`; may claim multiple issues only for rational parallel sub-agent delivery with isolated worktrees and explicit receipts
   - for larger `type:bug` sets, follow `AGENTS.md :: Transition-period bug-delivery policy`
 - `docs-governance`
   - decision and routing skill for docs-as-code ownership, anti-sprawl, DOCS_INDEX impact, and narrower docs workflow selection
@@ -351,6 +354,7 @@ or design-provenance material and do not authorize invocation.
 | `start-model-inquiry` | unaffected | Retains its separate role-specific model-access contract; it is not the active issue-worker carrier. |
 | `jev-direct` | unaffected | Runs one bounded typed judgment without changing coding-agent model or execution routing. |
 | `secret-routing` | unaffected | Routes credential handling to its owner contract; it does not select worker capability. |
+| `secret-management` | unaffected | Coordinates credential-owner evidence and lifecycle routing; it does not select workers or grant access. |
 | `temporal-doc-governance` | principle-only | Uses TCD normally; temporal authority routing is unchanged. |
 | `verification-and-closure` | principle-only | Verification capability may vary under TCD, but routing cannot weaken its gates. |
 | `verify-promotion` | unaffected | Verifies release-channel state independently of execution routing. |
@@ -418,7 +422,9 @@ lease check, then keep the rest of execution local and deterministic.
   lifecycle lock spans only that command. It durably records a generation-bound `removal_pending`
   transition before Git removal; successful removal retires the exact generation before branch
   deletion, and restart reconciliation completes only pending transitions. Ordinary missing
-  lifecycle records remain preservation evidence. Broad metadata pruning remains report-only. The compatibility
+  lifecycle records remain preservation evidence. `agent_worktree.py` may mark one exact expired
+  active generation `missing_preserved` after an explicit owner disposition while retaining its branch; this
+  terminal state blocks path reuse and branch retirement and never authorizes cleanup. Broad metadata pruning remains report-only. The compatibility
   `scripts/git_hygiene_janitor.py` entrypoint refuses destructive cleanup. These are scripts, not
   skills.
 

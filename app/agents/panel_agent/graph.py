@@ -25,6 +25,7 @@ from app.events.panel import (
     PanelRuntimeActionResult,
 )
 from app.events.schema import OutboxEvent
+from app.receipts.artifact_receipts import stamp_producing_binding
 
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
@@ -214,6 +215,7 @@ def _logged_event(
     reason: str,
     *,
     cognition_metadata: dict[str, Any] | None = None,
+    producing_binding_id: str | None = None,
 ) -> PanelActionLoggedEvent:
     payload = {
         "note": intent_event.payload.note.model_dump(mode="json"),
@@ -227,7 +229,12 @@ def _logged_event(
         # #984 attach bounded cognition-route observability so receipts surface
         # provider/model/fallback alongside the reason code.
         payload["cognition_metadata"] = dict(cognition_metadata)
-    return PanelActionLoggedEvent(trace_id=intent_event.trace_id, source=_build_panel_source(), payload=payload)
+    # MVR-05B4c2: stamp the dispatch's producing binding; a carrier-free run (None) stamps the live compatibility binding.
+    return PanelActionLoggedEvent(
+        trace_id=intent_event.trace_id,
+        source=_build_panel_source(),
+        payload=stamp_producing_binding(payload, producing_binding_id),
+    )
 
 
 def _handle_action(
@@ -257,6 +264,7 @@ def _handle_action(
                 action_to_use,
                 "proposal_offered",
                 cognition_metadata=cognition_metadata,
+                producing_binding_id=state.producing_binding_id,
             )
             emitted.append(logged)
             return _build_action_result(
@@ -298,6 +306,7 @@ def _handle_action(
             action_to_use,
             resolution_reason,
             cognition_metadata=cognition_metadata,
+            producing_binding_id=state.producing_binding_id,
         )
         emitted.append(logged)
         emitted_names.append(logged.event)
@@ -327,6 +336,7 @@ def _handle_action(
         action_to_use,
         logged_reason,
         cognition_metadata=cognition_metadata,
+        producing_binding_id=state.producing_binding_id,
     )
     emitted.append(logged)
     emitted_names.append(logged.event)
@@ -489,7 +499,7 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
         no_match_event = PanelActionLoggedEvent(
             trace_id=intent_event.trace_id,
             source=_build_panel_source(),
-            payload=no_match_payload,
+            payload=stamp_producing_binding(no_match_payload, state.producing_binding_id),
         )
         emitted.append(no_match_event)
 

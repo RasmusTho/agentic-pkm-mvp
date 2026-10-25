@@ -50,8 +50,9 @@ APP_ROOT = REPO_ROOT / "app"
 # and event/payload justifications remain unchanged.
 # #6091 re-pins unchanged calls after admission-metadata preservation.
 # #6096 re-pins unchanged calls after the side-effect-free preparation hook.
+# #6100 re-pins the same sinks after extracting canonical native preparation.
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 385): (
+    ("app/services/indexer.py", 418): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
         "would be a duplicate, not completeness (formal-model.md T-materialize). "
@@ -464,7 +465,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "census's own directly-related-repair convention when #3451 bound "
         "write_frontmatter to the exact NoteRead version."
     ),
-    ("app/vault/manager.py", 991): (
+    ("app/vault/manager.py", 1001): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed('vault.identity_heal') immediately before this "
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
@@ -475,11 +476,14 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "to 973. #3336 adds the process-local selection window above the "
         "unchanged guarded site, moving it to 991."
     ),
-    ("app/vault/settings_service.py", 629): (
-        "guarded: SettingsService.update_setting asserts "
+    ("app/vault/settings_service.py", 730): (
+        "guarded for runtime-gating definitions: SettingsService.update_setting asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
-        "earlier in the same method before persist=True reaches this write. "
-        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 -> 617 -> 629 (site unchanged); re-pinned per this census's "
+        "earlier in the same method before persist=True reaches this write; other settings "
+        "are intentionally outside the runtime-gating guard. The screen-control path now "
+        "uses the versioned write_note_from_absolute port instead. "
+        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 -> 617 -> 629 -> 730 as #3342 "
+        "added the versioned screen-control source write; re-pinned per this census's "
         "own directly-related-repair convention when YSS-01 (#3916) added the "
         "youtubeSync.* SettingDefinitions and the scaffold action constant, "
         "then MARR-11 (#5794) added a clone-local model-profile definition "
@@ -506,7 +510,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
 # closed so moving a write from ``write_frontmatter`` cannot make it disappear
 # from the WriteGuard inventory.
 WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/vault/manager.py", 771): (
+    ("app/vault/manager.py", 781): (
         "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
         "pre-selection initialization transition; O_EXCL preserves existing owner files. "
         "Line drifted 496 -> 621 -> 623 -> 704 -> 714 -> 720 (site unchanged) when #3164 added the "
@@ -516,10 +520,11 @@ WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "#3336 adds the process-local selection window above the unchanged "
         "bootstrap site, moving it to 771."
     ),
-    ("app/vault/settings_service.py", 708): (
+    ("app/vault/settings_service.py", 857): (
         "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) before the O_EXCL scaffold call. "
-        "Line moved by the MARR-11 (#5794) model-profile SettingDefinition."
+        "Line moved 708 -> 857 when #3342 added screen-control source version checks "
+        "and its governed write path before this unchanged helper."
     ),
 }
 
@@ -746,12 +751,17 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "addition to the port's own guard (#2807)."
     ),
     ("app/briefing/compose.py", "_atomic_write", 1): (
+        "guarded_by_caller: the canonical first-write-wins briefing publication "
+        "receives the cached caller guard/action under the Profile-authority fence, "
+        "and the create-once port asserts that guard before I/O (#6301)."
+    ),
+    ("app/briefing/compose.py", "_atomic_write", 2): (
         "guarded_by_caller: compose_briefing asserts write_guard."
         "assert_writes_allowed(BRIEFING_WRITE_ACTION) before the private atomic "
         "staging directory is created, and passes the same guard/action through "
         "to the port's own guard (#3315)."
     ),
-    ("app/briefing/compose.py", "_atomic_write", 2): (
+    ("app/briefing/compose.py", "_atomic_write", 3): (
         "guarded_by_caller: the canonical expected-version-aware rewrite in "
         "_atomic_write receives the same guard/action after the complete private "
         "stage is prepared, and the port asserts that guard before its atomic "
@@ -919,6 +929,9 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
 # WriteGuard census above: create-once is a producer contract, while the
 # guard classification proves only that the shared seam is protected.
 WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
+    ("app/briefing/compose.py", "_atomic_write", 1): (
+        "create_once: deterministic dated Daily Briefing preserves a concurrent first writer."
+    ),
     ("app/agent_memory/materialization.py", "materialize_promoted_memory", 1): (
         "create_once: deterministic promoted-memory artifact; retry/recovery logic owns idempotency."
     ),
@@ -1632,20 +1645,20 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
     ("app/ingest/vault_alpha.py", 825): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
-    ("app/ingest/vault_root.py", 197): (
+    ("app/ingest/vault_root.py", 201): (
         "carries_frontmatter: canonical_payload carries episode_ref; objects_store.upsert -> "
         "PgObjects.upsert -> PgObjectStore.put -> store_objects (round-5 finding: this IS a "
         "canonical store_objects write, not the legacy `objects` table alone)."
     ),
-    ("app/ingest/vault_root.py", 201): (
+    ("app/ingest/vault_root.py", 205): (
         "carries_frontmatter: the TypeError fallback uses the same canonical_payload; "
         "objects_store.upsert -> store_objects."
     ),
-    ("app/ingest/vault_root.py", 216): (
+    ("app/ingest/vault_root.py", 220): (
         "carries_frontmatter: _ingest_file payload carries episode_ref; index_ingest_object -> "
         "store_vector_index."
     ),
-    ("app/ingest/vault_root.py", 228): (
+    ("app/ingest/vault_root.py", 232): (
         "carries_frontmatter: same payload ({**payload, 'text': ...}) -> store.put -> store_objects."
     ),
     ("app/rebuildability/product_projection_rebuild.py", 544): (
@@ -1688,16 +1701,16 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "derived-artifact payload; ingest_object -> store_vector_index."
     ),
     # -- carries_via_indexed_unit_builder: payload = build_indexed_unit_payload(...) (the choke) --
-    ("app/cli/index_rebuild.py", 285): (
+    ("app/cli/index_rebuild.py", 286): (
         "carries_via_indexed_unit_builder: missing-only repair constructs the derived payload "
         "through build_indexed_unit_payload before insert_missing -> store_vector_index."
     ),
-    ("app/cli/index_rebuild.py", 432): (
+    ("app/cli/index_rebuild.py", 433): (
         "carries_via_indexed_unit_builder: cold rebuild re-embeds store_objects rows through "
         "build_indexed_unit_payload (defaults episode_ref) -> idx.upsert -> store_vector_index. "
         "Line shifted 320 -> 321 when #5820 routed Product embedding through the portal client."
     ),
-    ("app/cli/index_rebuild.py", 838): (
+    ("app/cli/index_rebuild.py", 839): (
         "carries_via_indexed_unit_builder: fallback rebuild upsert via build_indexed_unit_payload "
         "-> store_vector_index. Line shifted 726 -> 727 when #5820 routed Product embedding "
         "through the portal client."
@@ -1716,13 +1729,13 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
-    ("app/services/indexer.py", 385): (
+    ("app/services/indexer.py", 418): (
         "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
         "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
         "into the input on the vault-changed path and preserves an existing binding via the merge. "
         "Line moved to 379 when #5927 added source-backed metadata and binding checks before the sink."
     ),
-    ("app/services/indexer.py", 467): (
+    ("app/services/indexer.py", 500): (
         "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
         "'payload'] = build_indexed_unit_payload(...) -> store_vector_index. Line shifted 256 -> 257 "
         "when #5820 routed Product embedding through the portal client, then moved to 461 when #5927 "
@@ -1769,21 +1782,21 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "-> store_objects. Verified by test_plan_to_object_carries_episode_ref."
     ),
     # -- transport_passthrough: facade/plumbing forwarding a caller-built (verified) payload ------
-    ("app/stores/pg.py", 1242): (
+    ("app/stores/pg.py", 1246): (
         "transport_passthrough: legacy reconciliation forwards the canonical vault-alpha "
         "producer's prepared vector payload unchanged inside its atomic transaction; "
         "test_legacy_source_uuid_forms_match_producer_and_refuse_duplicates proves episode_ref carry."
     ),
-    ("app/stores/pg.py", 1472): (
+    ("app/stores/pg.py", 1476): (
         "transport_passthrough: PgVectorIndex.insert_missing forwards the caller-built payload "
         "unchanged to upsert with an atomic absent-only source snapshot; its only producer "
         "repair_missing_vectors uses build_indexed_unit_payload and is classified above."
     ),
-    ("app/objects/__init__.py", 124): (
+    ("app/objects/__init__.py", 132): (
         "transport_passthrough: ObjectStore.save_object facade forwards dict(obj.payload) to the "
         "backing store.put -> store_objects; the caller that builds obj.payload carries episode_ref "
-        "(every save_object caller is itself a classified producer above). Line drifted 121 -> 124 "
-        "when #5921 documented and exported the backend-only facade; the sink behavior is unchanged."
+        "(every save_object caller is itself a classified producer above). Line drifted 124 -> 132 "
+        "when #3324 added binding-aware backend resolution; the sink behavior is unchanged."
     ),
     ("app/stores/memory.py", 98): (
         "transport_passthrough: MemoryObjectStore.put_if_absent delegates the caller-supplied "

@@ -25,17 +25,82 @@
 - Keep interruption and re-entry semantics explicit at the interface boundary.
 
 ## Single-origin API proxy (#2125)
+- The existing Companion picker opts into a scoped handoff on `POST /api/companion/vault/select`.
+  The API freezes the selected canonical filesystem identity before the compatibility rebind,
+  selects that exact root, revalidates its physical identity, and matches exactly one registered
+  binding before minting an authenticated opaque selection. Retargeting a filesystem alias while
+  rebind waits cannot redirect the handoff to a different binding. A successful
+  explicit selection replaces the browser's `companion_context_session` session cookie. It is
+  HttpOnly, SameSite=Strict, and has no persistent expiry; it contains no path or principal data.
+  On successful explicit `/vault/select` or `/vault/initialize` only, the gateway moves the returned
+  `context_selection_id` into `Set-Cookie` and omits that credential field (including its nested
+  initialization-context copy) from browser-facing JSON, including partial successful responses
+  that lost the top-level field. It also returns `X-Companion-Scoped-Handoff`, a non-authority digest
+  of the transported bearer bytes. All non-credential payload fields, statuses, and upstream errors
+  retain their runtime meaning. This is a route-specific transport handoff, not generic JSON rewriting. The gateway keeps no shared session state. On page navigation, fragments,
+  and browser API reads, it forwards this opaque value as `X-Active-Context-Session` through a request-local HTTP adapter.
+  Before select or initialize, the browser writes the nonsecret session cookie
+  `companion_context_intent=pending` and pauses content requests. A successful handoff records its
+  expected transport digest in that cookie and must pass one strict scoped read before the client
+  accepts it or clears its retained bootstrap token. On later requests, a pending, missing, or
+  mismatched bearer becomes a blank explicit selection header, so an old valid A cookie cannot
+  substitute for a lost B handoff. Browser storage failure is a visible refusal before selection.
+  This intent marker and digest grant no authority; the API still authenticates and resolves the
+  actual opaque bearer. Explicit `X-Active-Context-*` headers retain precedence, including blank
+  carriers. The gateway derives no principal or binding authority.
 - Scoped runtime routes (`/api/search/scoped`, `/api/ask/scoped`, and
-  `/api/companion/vault/notes/scoped`) accept an opaque `X-Active-Context-Session` bearer. An
-  optional `X-Active-Context-Override` is one-request only and has server-enforced precedence.
-  Missing, stale, or stripped carriers return `reselection_required`; a scoped request never
-  retries through a carrier-free legacy route. These bearers name no path and grant no write
-  authority. The browser forwarding change is owned by the picker migration in MVR-05B.
-  Compatibility mutations have distinct same-origin routes (`/api/companion/capture/compatibility`
-  and `/api/companion/note/save/compatibility`). The proxy forwards the authenticated API key,
-  active-context carriers, and opaque `X-Compatibility-Write-Precondition` unchanged. These
-  routes are callable migration infrastructure only; shipped HTML remains on the legacy journey
-  until #3860 integrates the complete MVR-05B chain.
+  `/api/companion/vault/notes/scoped`) enforce the opaque bearer. The consumed Companion read
+  `/api/companion/vault/notes/scoped` and authenticated
+  `GET /api/companion/active-context/selection` inspection are explicitly allowlisted in the gateway.
+  Missing, stale, or stripped carriers return `reselection_required`; there is no carrier-free
+  retry. Other Companion production reads forward the same session to their request-context
+  dependency, including server-rendered page and fragment reads. A stale page session is checked
+  before page-triggered work and renders the existing picker. Browser content-read failures visibly
+  ask for reselection and stop subsequent content requests until explicit picker success. The old
+  cookie is retained: neither a sole authorized binding, a matching
+  default, nor API restart can silently mint or choose a replacement. A new browser without stale
+  explicit intent may independently use the ordinary default journey.
+- The allowlisted `/api/operator/ask` alias targets `/api/ask/scoped` whenever an explicit
+  session or override carrier is present, including a blank one. A carrier-free request retains
+  `/api/ask`. Both paths preserve real client authentication and the presented carriers; there is
+  no retry on the legacy twin after a scoped refusal.
+- Compatibility mutations use distinct same-origin routes (`/api/companion/capture/compatibility`
+  and `/api/companion/note/save/compatibility`). Before an explicit capture or note edit, the browser
+  uses the opaque `X-Compatibility-Write-Precondition` captured with that rendered document.
+  For scoped pages, both note and orientation/capture producers obtain it through the existing scoped notes
+  read with the same request-local adapter that loads the page, and capture its response header
+  before later projection reads overwrite transport headers. It remains in document-local script
+  state. A scoped page save or capture validates session liveness through the authenticated strict selection
+  inspection, then sends the retained proof unchanged. It never refreshes proof from a mutable
+  current cookie or automatically retries a rejected write. Missing or expired proof blocks the
+  mutation and preserves the draft; recovery requires explicit reload/reselection.
+  For a carrier-free configured page, the actual `/workspace` or `/orientation` API producer
+  supplies the same existing proof after principal admission, while holding manager selection and
+  compatibility ingress through content serialization. The first document response owns the proof,
+  including a missing proof; later telemetry cannot substitute one. No scoped selection is minted.
+  Real client IP and API-key context are forwarded even without cookies, including direct document
+  API and compatibility-write paths. Proof readiness reads only existing qualified registry state
+  after authentication; a missing registry or recovery artifact is never initialized or repaired
+  by that probe. An unselected bridge retains its read projection without a write proof.
+  An unauthenticated projection receives no write proof. These
+  pages check liveness through the legacy notes read while retaining their original document proof;
+  newly shared stale intent still refuses, and missing proof never falls back to a legacy write.
+  If another tab selects B while an A document stays open, A's proof cannot authorize a B mutation: the existing
+  compatibility ingress and binding/revision guard either finish an already-admitted A write on A
+  or reject it after B commits. The gateway forwards the proof unchanged, and does not translate the session cookie
+  on compatibility mutation or selector-bridge routes. The exact authenticated folder-discovery
+  route `/api/companion/vault/browse` also omits cookie-derived selection: it lists picker folders,
+  never vault content or a selected context. Its existing API authentication and filesystem
+  containment checks still apply. Discovery remains available after stale-session refusal and can
+  browse siblings of a live selected vault; only an explicit picker selection changes the retained
+  session. Explicitly supplied session headers remain intact and are validated/refused by the
+  applicable scoped-read dependency or pre-05C seal. Other writes keep that seal and WriteGuard.
+- First-vault initialization uses the existing in-band confirmation gesture, obtains the
+  authenticated single-use `/api/companion/vault/initialize/bootstrap` precondition, and executes
+  initialization with that exact token. The successful server-owned scoped handoff sets the same
+  session cookie, so the next read resolves the new binding. An explicit retry after a failed or
+  lost handoff retains the exact token in page memory; it never automatically repeats an effect
+  or remints a bootstrap token. Bootstrap tokens select no general write target.
 - The browser only ever talks to the UI origin. The UI server proxies an
   **explicit allowlist** of consumed routes (not a `/api/companion/*` wildcard)
   through to the configured runtime API base (`COMPANION_API_BASE_URL`, default
@@ -43,8 +108,8 @@
   never needs direct access to the runtime origin. The forwarded routes are the
   ones the served page actually calls — orientation, workspace
   (read/body/update), vault (notes/select/initialize/reload/settings),
-  vault-related, capture, note save, TTS (status/plan/synthesize and the audio
-  pattern), the canvas co-author pattern, and the operator status/health/settings/events
+  authenticated first-vault initialize/bootstrap and scoped notes, vault-related, capture, note save,
+  TTS (status/plan/synthesize and the audio pattern), the canvas co-author pattern, and the operator status/health/settings/events
   routes — defined in `_GET_PROXY_PATHS`/`_POST_PROXY_PATHS` (plus a small set of
   `_GET_PROXY_PATTERNS`/`_POST_PROXY_PATTERNS` regexes). A route outside the
   allowlist (e.g. `GET /api/companion/vault-browser`) is **not** proxied. This
@@ -58,8 +123,9 @@
   `{"status":"routed_to_panel", ...}` handoff body survives to the page); a
   non-JSON or non-object error body is wrapped in the diagnostic
   `runtime_api_error` shape (status preserved). The proxy never re-classifies,
-  caches, or rewrites the status code, and does not rewrite JSON-object bodies:
-  the server declares, the UI renders.
+  caches, or rewrites the status code. Apart from the two successful picker credential-to-cookie
+  handoffs described above, it does not rewrite JSON-object bodies: the server declares, the UI
+  renders.
 - The runtime API target is configuration; it does not relax operator
   bind/exposure posture. Remote exposure of the UI origin remains an explicit
   operator choice, independent of this proxy path.
@@ -95,7 +161,7 @@ binding, not vault-scoped governance.
 
 | Action | API route | Gov/EXE routing | Receipt |
 |--------|-----------|-----------------|---------|
-| Vault select | `POST /api/companion/vault/select` | WSP binding (app-local) | None (binding logged) |
+| Vault select | `POST /api/companion/vault/select` with explicit scoped handoff | WSP compatibility rebind + authenticated ephemeral selection | Scoped handoff (never logged) |
 | Vault init | `POST /api/companion/vault/initialize` | WSP init (app-local) | None (init logged) |
 | Vault reload | `POST /api/companion/vault/reload` | WSP refresh | None |
 

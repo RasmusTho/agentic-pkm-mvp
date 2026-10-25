@@ -1034,6 +1034,70 @@ def test_cli_reads_issue_number_from_environment(tmp_path: Path) -> None:
     assert payload["issue_number"] == 3212
 
 
+def test_cli_uses_selected_repo_root_for_verify_path_checks(tmp_path: Path) -> None:
+    target_root = tmp_path / "constituent-repository"
+    target_path = "app/selected_repository_verify.py"
+    target_file = target_root / target_path
+    target_file.parent.mkdir(parents=True)
+    target_file.write_text("def test_selected_root(): pass\n", encoding="utf-8")
+
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8").replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        f"{target_path}::test_selected_root",
+    )
+    body_file = tmp_path / "issue.md"
+    body_file.write_text(body, encoding="utf-8")
+
+    default_root = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_issue_readiness.py",
+            "--body-file",
+            str(body_file),
+            "--observe-only",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    selected_root_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_issue_readiness.py",
+            "--body-file",
+            str(body_file),
+            "--repo-root",
+            str(target_root),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert json.loads(default_root.stdout)["readiness_classification"] == "missing_verify_file_paths"
+    assert json.loads(selected_root_result.stdout)["readiness_classification"] == "ready_candidate"
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["/tmp/outside.py::test_outside", "../outside.py::test_outside"],
+)
+def test_repo_root_override_keeps_absolute_and_parent_paths_unresolvable(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8").replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        target,
+    )
+
+    report = classify_issue_body(body, repo_root=tmp_path)
+
+    assert report.readiness_classification != "ready_candidate"
+
+
 def test_declared_parent_reference_must_be_machine_parseable() -> None:
     """A declared child->parent reference must be exactly one canonical
     ``Parent: #<N>`` line (INV-DG-3, #4443)."""

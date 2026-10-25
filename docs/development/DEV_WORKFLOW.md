@@ -134,7 +134,18 @@ ambiguous. Review remains responsible for those cases.
   - run any repo docs validation command if one exists
   - when `.codex/skills/**` changed, run `python3 scripts/lint_skills_consistency.py` (exit 0, zero output = clean)
   - otherwise run lightweight repo checks that are still appropriate
-- Code-affecting changes:
+- Exact CI-contract-only changes (`TEST_STRATEGY_HOT_PATH.md :: Exact CI contract scope`):
+  - lint the changed tooling and run the selector's covering CI/helper/workflow contract tests
+  - run documentation checks for the paired development owner docs
+  - Product-wide type/model/ACL gates are unnecessary when the closed CI predicate admits no
+    Product, dependency, runtime-configuration or shared-fixture change
+- Isolated test-module-only changes (`TEST_STRATEGY_HOT_PATH.md :: Test-only scope`):
+  - run the explicit representative targets and common CI integrity checks; exhaustive fault matrices
+    run in the existing nightly/manual lane, and explicit full-matrix contracts still need full proof
+  - retain the normal test environment and dependencies; unrelated
+    Product type/model/ACL/smoke gates add no evidence for this exact no-consumer test-only scope
+  - shared fixtures, helpers, configuration and mixed Product changes use their normal broader scope
+- Product/runtime code-affecting changes:
   - `ruff check app tests companion-ui/companion-app`
   - `mypy app`
   - run the governing Issue's `Verify:` targets and the affected subsystem's focused tests
@@ -148,6 +159,12 @@ ambiguous. Review remains responsible for those cases.
   `tests/api/conftest.py::mock_product_api_routes` fixture only on those test functions. It forces
   the deterministic mock provider because compiled model routing can override `LLM_PROVIDER=mock`;
   keep selected-route health and admission tests outside this fixture. Do not make it autouse.
+- Operational caller or launcher changes must be checked as the final assembled invocation,
+  including its interpreter, cwd, configuration and import/validation boundary. Keep core
+  orchestration, public contract readers and validation real; substitute only external effect
+  ports. Cover both DEV and TEST when the affected caller supports both non-production channels,
+  including a credible refusal or partial-failure path. Apply the existing evidence-reuse and
+  stop rule in `docs/development/GOVERNANCE_PROPORTIONALITY.md`; this does not require a broader suite.
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
 
@@ -458,6 +475,8 @@ Use this lane only when:
   - `.github/workflows/issue-pr-governance.yml`
   - `Makefile`
   - `tests/architecture/test_requirements_consistency.py`
+  - `scripts/plan_full_suite_node_shards.py`
+  - `tests/ops/test_ci_workflow.py`
   - `scripts/select_pr_tests.py`
   - `tests/scripts/test_select_pr_tests.py`
   - `tests/architecture/test_handoff_fencing_governance.py`
@@ -507,6 +526,7 @@ Use this lane only when:
   - `tests/ops/test_review_before_ci_workflow_risk.py`
   - `tests/ops/test_host_global_lease.py`
   - `tests/scripts/test_validate_issue_readiness.py`
+  - `tests/scripts/test_issue_pickup_claim.py`
   - `tests/scripts/test_validate_source_anchors.py`
   - `tests/scripts/test_docs_guard.py`
   - `tests/scripts/test_pr_body_generator.py`
@@ -653,7 +673,10 @@ Enforcement surfaces:
   with the lifecycle lock held through that one command. Before Git removal it durably records a
   generation-bound `removal_pending` transition. Successful removal durably retires the exact
   generation before branch deletion; restart reconciliation completes only a pending transition
-  and never infers removal from an ordinary missing lifecycle record. Branch deletion after a
+  and never infers removal from an ordinary missing lifecycle record. A separate explicit
+  `preserve-missing` operation can mark one exact expired active generation `missing_preserved`
+  when its checkout is absent; it retains the branch and path identity, blocks path reuse and
+  branch retirement, and never authorizes cleanup. Branch deletion after a
   removal revalidates both the `worktree:<path>` and the `branch:<branch>` lease identity
   immediately before the irreversible delete and fails closed if either is claimed. That
   revalidation reads a foreign lease file it cannot lock, so it is a check-then-act guard, not

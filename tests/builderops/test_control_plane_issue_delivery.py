@@ -494,7 +494,7 @@ def _manifest(
 def _client(store: PostgresBuilderOpsStore, registry: CredentialRegistry, token: str) -> BuilderOpsControlPlaneClient:
     service = create_app(store=store, credentials=registry)
     return BuilderOpsControlPlaneClient(
-        ClientConfig(base_url="http://builderops", token=token),
+        ClientConfig(base_url="https://builderops.invalid", token=token),
         http_client=TestClient(service),
         max_retries=0,
     )

@@ -38,7 +38,12 @@ from __future__ import annotations
 
 import ast
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE_PATH = REPO_ROOT / "Dockerfile"
@@ -52,11 +57,6 @@ COMPOSE_RUNTIME_SCRIPTS = ("scripts/start_api.sh", "scripts/run_migrations.sh")
 # import reachable from these trees must be baked into the image too, or the
 # importing service crashes at boot (contract 6 in the module docstring).
 RUNTIME_PACKAGE_DIRS = ("app", "mimer_runtime", "companion-ui/companion-app")
-
-_SCRIPTS_IMPORT_RE = re.compile(
-    r"^\s*(?:from\s+scripts\.([A-Za-z0-9_]+)\s+import\b|import\s+scripts\.([A-Za-z0-9_]+))",
-    flags=re.MULTILINE,
-)
 
 
 def _runtime_imported_repo_packages() -> set[str]:
@@ -195,15 +195,36 @@ def test_dockerignore_reincludes_compose_runtime_scripts() -> None:
 
 
 def _runtime_imported_scripts_modules() -> set[str]:
-    """scripts.<module> names imported (top-level or lazily) anywhere in the
-    package trees the runtime stage bakes into the image."""
+    """Return curated flat scripts modules and their transitive module imports."""
     modules: set[str] = set()
-    for package_dir in RUNTIME_PACKAGE_DIRS:
-        for path in sorted((REPO_ROOT / package_dir).rglob("*.py")):
-            for from_mod, import_mod in _SCRIPTS_IMPORT_RE.findall(
-                path.read_text(encoding="utf-8")
-            ):
-                modules.add(from_mod or import_mod)
+    pending = [
+        path
+        for package_dir in RUNTIME_PACKAGE_DIRS
+        for path in sorted((REPO_ROOT / package_dir).rglob("*.py"))
+    ]
+    while pending:
+        path = pending.pop()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(
+                    alias.name.split(".")[1]
+                    for alias in node.names
+                    if alias.name.startswith("scripts.") and alias.name.count(".") == 1
+                )
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                if node.module == "scripts":
+                    imported.update(alias.name for alias in node.names)
+                elif node.module.startswith("scripts.") and node.module.count(".") == 1:
+                    # Preserve this guard's existing flat-module boundary;
+                    # nested script packages have separate image ownership.
+                    imported.add(node.module.split(".")[1])
+        for module in imported - modules:
+            modules.add(module)
+            dependency = REPO_ROOT / "scripts" / f"{module}.py"
+            if dependency.is_file():
+                pending.append(dependency)
     return modules
 
 
@@ -246,6 +267,80 @@ def test_runtime_imported_scripts_modules_are_baked_into_image() -> None:
             f"runtime stage must COPY {needed} — app/** imports it at runtime "
             "(worker/watcher/heimdal services crash at boot without it)"
         )
+
+
+@pytest.mark.parametrize(
+    "missing_modules",
+    [
+        (),
+        ("postmerge_controller",),
+        ("postmerge_channel_bug", "postmerge_dev_test", "postmerge_controller"),
+    ],
+    ids=["qualified", "missing-transitive-controller", "pre-repair-payload"],
+)
+def test_curated_image_scripts_import_production_promotion(
+    tmp_path: Path, missing_modules: tuple[str, ...]
+) -> None:
+    """Exercise the real promotion import with only the image's scripts payload.
+
+    Stage the actual copied runtime packages and scripts. Isolated Python gets
+    no source-checkout path or inherited PYTHONPATH, so missing direct or
+    transitive controller imports cannot fall back to developer files.
+    """
+    for package in ("app", "mimer_runtime", "llm_contract"):
+        shutil.copytree(
+            REPO_ROOT / package,
+            tmp_path / package,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+    text = _dockerfile_text().replace("\\\n", " ")
+    final_stage = text[text.rindex("FROM ") :]
+    copied = re.search(r"^\s*COPY\s+([^\n]+)\s+\./scripts/\s*$", final_stage, re.MULTILINE)
+    assert copied, "runtime scripts COPY must remain explicit"
+    staged_scripts = tmp_path / "scripts"
+    staged_scripts.mkdir()
+    for source in copied.group(1).split():
+        source_path = REPO_ROOT / source
+        assert source_path.parent == REPO_ROOT / "scripts"
+        shutil.copyfile(source_path, staged_scripts / source_path.name)
+    for missing_module in missing_modules:
+        (staged_scripts / f"{missing_module}.py").unlink()
+    code = """
+import importlib
+from pathlib import Path
+import sys
+stage = Path(sys.argv[1])
+sys.path.insert(0, str(stage))
+import app.release_channels.stable_promotion
+for name in (
+    "scripts.postmerge_channel_bug",
+    "scripts.postmerge_dev_test",
+    "scripts.postmerge_controller",
+):
+    importlib.import_module(name)
+for name, module in list(sys.modules.items()):
+    if name.split(".", 1)[0] in {"app", "mimer_runtime", "llm_contract", "scripts"}:
+        if getattr(module, "__file__", None):
+            assert Path(module.__file__).resolve().is_relative_to(stage), name
+print("promotion_runtime_import_closure_pass")
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(tmp_path)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if missing_modules:
+        assert result.returncode != 0
+        if missing_modules == ("postmerge_controller",):
+            assert "No module named 'scripts.postmerge_controller'" in result.stderr
+        else:
+            assert "cannot import name 'postmerge_channel_bug'" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "promotion_runtime_import_closure_pass"
 
 
 def test_runtime_imported_repo_packages_are_baked_into_image() -> None:

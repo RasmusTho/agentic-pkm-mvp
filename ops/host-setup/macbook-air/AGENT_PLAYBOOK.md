@@ -1,13 +1,13 @@
 # Agent Playbook — MacBook Air (thin client)
 
-The Air is just a **thin client**. No services run here; it only needs to reach
-the approved Linux/Tailscale runtime hosts and the dedicated Ollama host. This
-is mostly manual operator setup.
+This legacy playbook configures the Air as a **thin client** and installs no Product Runtime
+services. It is mostly manual operator setup, not an inventory of services currently running on
+the Air. [The infrastructure status view](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+owns dated host observations; this pass did not directly inventory Air services.
 
 ## Steps
 1. **Tailscale** installed and signed in (same tailnet). Verify with
-   `tailscale status` that the approved runtime and model-service peers are
-   reachable.
+   `tailscale status` that the approved runtime and operator peers are reachable.
 
 2. **Reach the Mac mini (macOS):**
    - GUI: Finder → Go → Connect to Server → `vnc://mac-mini` (Screen Sharing).
@@ -20,12 +20,13 @@ is mostly manual operator setup.
      simpler alternative for casual remote desktop.
    - Note: Windows 11 **Home cannot host RDP** — use Sunshine/Moonlight or RustDesk.
 
-4. **Use the prosthesis:** open the Yggdrasil companion UI on the Linux runtime
-   over Tailscale, for example `http://ygg-dev:8111` for development. The
-   production UI is `http://ygg-prod:8113` only when the live readback says it is
-   available. The Ollama host provides model service only; the API, watcher, and
-   routing belong to the selected Linux runtime host.
+4. **Use the prosthesis:** follow the infrastructure repository's
+   [UI access procedure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/client/README.md)
+   for the selected Linux channel. This legacy playbook does not establish a current direct-port
+   entrypoint or authorize a tunnel. The Mac mini also hosts model-execution and operator services;
+   its observed inventory belongs to the status view above. Application placement and routing
+   remain governed by the application environment and Model Access contracts.
 
-There is nothing to install as a service here. If the operator wants a one-click
+There is no Product Runtime service to install for this thin-client setup. If the operator wants a one-click
 "connect" experience, create Shortcuts/bookmarks for the VNC, SSH, and companion
 UI URLs above.

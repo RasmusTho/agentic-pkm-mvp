@@ -66,6 +66,9 @@ case "$path" in
     ;;
   *check-runs*)
     emit "$(cat "$FAKE_CHECK_RUNS_JSON")"
+    if [ -n "${FAKE_AFTER_FIRST_CHECKS_JSON:-}" ]; then
+      cp "$FAKE_AFTER_FIRST_CHECKS_JSON" "$FAKE_CHECK_RUNS_JSON"
+    fi
     ;;
   */status)
     emit '{"state":"pending","total_count":0,"statuses":[]}'
@@ -97,6 +100,9 @@ def _run_merge_gating(
     mergeable_state: str = "clean",
     base_ref: str = "main",
     protection_json: str = "",
+    repo: str | None = None,
+    required_checks: tuple[str, ...] = (),
+    pinned_sha: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     fake_bin_dir = _make_fake_gh(tmp_path)
     fixture_path = FIXTURES_DIR / fixture_name
@@ -114,18 +120,26 @@ def _run_merge_gating(
     # No --sha: this is the merge-gating mode the issue's fail-closed rules apply to.
     # --timeout 0 makes the deadline immediate, so a missing-required outcome resolves on
     # the first classification pass instead of sleeping through a >=60s backoff interval.
+    command = [
+        "bash",
+        str(SCRIPT),
+        "4321",
+        "--initial-wait",
+        "0",
+        "--interval",
+        "60",
+        "--timeout",
+        "0",
+    ]
+    if repo is not None:
+        command.extend(["--repo", repo])
+    for required_check in required_checks:
+        command.extend(["--required-check", required_check])
+    if pinned_sha is not None:
+        command.extend(["--sha", pinned_sha])
+
     return subprocess.run(
-        [
-            "bash",
-            str(SCRIPT),
-            "4321",
-            "--initial-wait",
-            "0",
-            "--interval",
-            "60",
-            "--timeout",
-            "0",
-        ],
+        command,
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
@@ -149,6 +163,44 @@ def test_dirty_pr_state_fails_before_false_green(tmp_path: Path) -> None:
     assert "all required checks passed" not in result.stdout
 
 
+def test_default_wait_allows_long_unit_job_to_complete_without_real_sleep(tmp_path: Path) -> None:
+    fake_bin = _make_fake_gh(tmp_path)
+    # First date call creates the deadline. The next observes 45 elapsed minutes:
+    # the old 30-minute default exited before observing the successful next poll.
+    for name, source in {
+        "date": '#!/usr/bin/env bash\nif [ -f "$FAKE_CLOCK_USED" ]; then echo 2700; else touch "$FAKE_CLOCK_USED"; echo 0; fi\n',
+        "sleep": "#!/usr/bin/env bash\nexit 0\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(source, encoding="utf-8")
+        path.chmod(0o755)
+    checks = tmp_path / "checks.json"
+    checks.write_text(
+        (FIXTURES_DIR / "required_running_then_skipped_duplicate.json").read_text(),
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        "FAKE_CLOCK_USED": str(tmp_path / "clock-used"),
+        "FAKE_SHA": FAKE_SHA,
+        "FAKE_CHECK_RUNS_JSON": str(checks),
+        "FAKE_AFTER_FIRST_CHECKS_JSON": str(FIXTURES_DIR / "head_required_present_green.json"),
+        "FAKE_MERGEABLE_STATE": "clean",
+        "FAKE_BASE_REF": "main",
+        "FAKE_PROTECTION_JSON": "",
+        "GH_REPO": "RasmusTho/agentic-pkm-mvp",
+    }
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "4321", "--initial-wait", "0"],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=10, check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "still running: Unit tests (not pg)" in result.stdout
+    assert f"all required checks passed on {FAKE_SHA}" in result.stdout
+
+
 def test_missing_required_check_names_fail_closed(tmp_path: Path) -> None:
     """AC2: a head with only unrelated green checks cannot pass — exit 7, naming the gap.
 
@@ -159,6 +211,83 @@ def test_missing_required_check_names_fail_closed(tmp_path: Path) -> None:
     assert result.returncode == 7, result.stdout + result.stderr
     assert "REQUIRED CHECKS MISSING" in result.stderr
     assert "Unit tests (not pg)" in result.stderr
+    assert "all required checks passed" not in result.stdout
+
+
+def test_target_repo_profile_prevents_hub_fallback(tmp_path: Path) -> None:
+    """A foreign repo checks its explicit profile, even when Hub fallback checks are green."""
+    result = _run_merge_gating(
+        tmp_path,
+        "head_required_present_green.json",
+        repo="example/constituent-repo",
+        required_checks=("Swift lint + package + app builds",),
+    )
+    assert result.returncode == 7, result.stdout + result.stderr
+    assert "required checks (caller-profile:example/constituent-repo)" in result.stdout
+    assert "Swift lint + package + app builds" in result.stderr
+    assert "Unit tests (not pg)" not in result.stdout + result.stderr
+    assert "all required checks passed" not in result.stdout
+
+
+def test_hub_main_uses_documented_fallback(tmp_path: Path) -> None:
+    """An unreadable Hub main protection endpoint retains the documented context."""
+    result = _run_merge_gating(tmp_path, "head_required_present_green.json")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "required checks (documented-fallback:main): Unit tests (not pg)" in result.stdout
+    assert "all required checks passed" in result.stdout
+
+
+def test_missing_foreign_repo_profile_fails_closed(tmp_path: Path) -> None:
+    """Foreign-repo green checks cannot pass without readable protection or a profile."""
+    result = _run_merge_gating(
+        tmp_path,
+        "head_required_present_green.json",
+        repo="example/constituent-repo",
+    )
+    assert result.returncode == 64, result.stdout + result.stderr
+    assert "required-check configuration unavailable" in result.stderr
+    assert "--required-check '<context>'" in result.stderr
+    assert "all required checks passed" not in result.stdout
+
+
+def test_invalid_foreign_repo_profile_fails_closed(tmp_path: Path) -> None:
+    """A blank caller context is rejected as configuration error, not ignored."""
+    result = _run_merge_gating(
+        tmp_path,
+        "head_required_present_green.json",
+        repo="example/constituent-repo",
+        required_checks=("   ",),
+    )
+    assert result.returncode == 64, result.stdout + result.stderr
+    assert "--required-check needs one non-empty context" in result.stderr
+    assert "all required checks passed" not in result.stdout
+
+
+def test_foreign_repo_sha_mode_remains_diagnostic_without_profile(tmp_path: Path) -> None:
+    """Pinned-SHA inspection skips merge-gating config and presence checks."""
+    result = _run_merge_gating(
+        tmp_path,
+        "head_only_unrelated_green.json",
+        repo="example/constituent-repo",
+        pinned_sha=FAKE_SHA,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "diagnostic, NOT a merge gate" in result.stderr
+    assert "required-check configuration unavailable" not in result.stderr
+
+
+def test_live_branch_protection_overrides_foreign_repo_profile(tmp_path: Path) -> None:
+    """Readable target protection remains authoritative over a caller-supplied profile."""
+    result = _run_merge_gating(
+        tmp_path,
+        "head_required_present_green.json",
+        repo="example/constituent-repo",
+        required_checks=("Unit tests (not pg)",),
+        protection_json='{"contexts":["Swift required"],"checks":[]}',
+    )
+    assert result.returncode == 7, result.stdout + result.stderr
+    assert "required checks (branch-protection:main): Swift required" in result.stdout
+    assert "Swift required" in result.stderr
     assert "all required checks passed" not in result.stdout
 
 

@@ -102,6 +102,13 @@ class CheckboxProjectionResponse(BaseModel):
     idempotency_key: str
 
 
+def _same_vault_root(left: Path, right: Path) -> bool:
+    try:
+        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+
+
 class CheckboxProjectionHTTPError(Exception):
     def __init__(self, status_code: int, response: CheckboxProjectionResponse) -> None:
         self.status_code = status_code
@@ -280,7 +287,12 @@ class CheckboxProjectionService:
                 self._locks[safe_note_path] = threading.Lock()
             return self._locks[safe_note_path]
 
-    def project(self, request: CheckboxProjectionRequest) -> CheckboxProjectionResponse:
+    def project(
+        self,
+        request: CheckboxProjectionRequest,
+        *,
+        sealed_root: Path | None = None,
+    ) -> CheckboxProjectionResponse:
         cached = self._idempotency.get(request.idempotency_key)
         if cached is not None:
             return cached
@@ -302,12 +314,14 @@ class CheckboxProjectionService:
             cached = self._idempotency.get(request.idempotency_key)
             if cached is not None:
                 return cached
-            return self._project_locked(request, safe_note_path)
+            return self._project_locked(request, safe_note_path, sealed_root=sealed_root)
 
     def _project_locked(
         self,
         request: CheckboxProjectionRequest,
         safe_note_path: str,
+        *,
+        sealed_root: Path | None = None,
     ) -> CheckboxProjectionResponse:
         try:
             vault_root = resolve_optional_vault_root()
@@ -329,6 +343,18 @@ class CheckboxProjectionService:
                 before="",
                 after="",
                 block_reason="no_vault_bound",
+            )
+            raise CheckboxProjectionHTTPError(409, response)
+        if sealed_root is not None and not _same_vault_root(vault_root, sealed_root):
+            # The pre-05C seal: the projection's own root must be the sealed
+            # compatibility binding, or nothing is read or written.
+            response = self._response(
+                request,
+                status="blocked",
+                note_path=safe_note_path,
+                before="",
+                after="",
+                block_reason="capability_not_ready",
             )
             raise CheckboxProjectionHTTPError(409, response)
         note_path = _vault_contained_abs_path(vault_root, safe_note_path)

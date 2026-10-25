@@ -4,18 +4,21 @@ State: Active capability specification.
 Temporal class: strategic
 Review cadence: at each MVR child merge or stage-acceptance update
 Source of truth: this document for capability and stage decomposition; live Issues, PRs, and exact-SHA CI for delivery state
-Last reviewed: 2026-09-28
-Last verified against: main de4efaa3b6cce282ede722ed064b31b2e34200a7; Issues #3859, #3860, #4942; PR #4953
+Last reviewed: 2026-10-17 (TEST dormant preparation context/admission continuity; other sections retain their existing evidence)
+Last verified against: MVR-05A stage acceptance on `origin/main` `2a47ceb6fd3a` ([nightly pg-contracts](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38696096987), 366 passed, zero required skips); exact-head production proof #6051 / PR #6054 ([receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6051#issuecomment-6184628420)); outbox repair #5989 / PR #6057; stage hub #3859 closed; open validation hub #2143
 
 Delivered: MVR-01A/01B/01C (#3853/#3854/#3855) mechanical substrate and authority cutover, MVR-02
 (#3856) explicit instance default, MVR-03 (#3857 plus #4524) the versioned request/session
 ActiveContextSet seam with its selection store, delegated-principal producer, fail-closed runtime
 floor, and explicit stopped-window deployment activation, and MVR-04 (#3858) non-authoritative
 dimension membership with all-or-nothing member resolution. All MVR-05A implementation children,
-including residual MVR-05A9 (#4942), are merged, but stage hub #3859 remains blocked on the aggregate
-isolation, classification, and non-skippable real-PostgreSQL evidence. Task 05 onward remains
-incomplete, so no global "multi-vault delivered" claim is allowed: production request-carrier
-propagation and background lifecycle binding are still target state.
+including residual MVR-05A9 (#4942), are merged. The combined MVR-05A production-read isolation,
+classification, and non-skippable real-PostgreSQL stage evidence is accepted through #6051 / PR #6054
+with the #5989 / PR #6057 outbox repair. The [proof on #3859](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3859#issuecomment-6184628679)
+records the exact candidate and complete target/result inventory. MVR-05A is delivered: stage hub
+#3859 is reconciled and closed, and its stage receipt is posted to #2143. MVR-05B onward remains incomplete, so no
+global "multi-vault delivered" claim is allowed: full production request-carrier propagation and
+background lifecycle binding are still target state.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 
@@ -273,6 +276,83 @@ journal/backup, nor a stale lease may be interpreted as proof of ownership, comp
 effect. Activation must consume the complete convergence receipt; it cannot create ownership or a
 prior effect result by inference.
 
+The explicit TEST-only `deployment-initialize-dormant-ownership` operator seam prepares a fresh
+protected pair for one retained, populated dormant registration when both previous ownership
+artifacts are absent. It requires the retained binding explicitly, exact registry and canonical
+owner-receipt digests, the current native stopped-window proof, physically disjoint private roots
+and backup destination, and acknowledgement of a new ownership epoch. It preserves the registry,
+default selection, retained identities and source bytes; it does not recover lost authority or
+infer prior effects. DEV, PROD, partial/divergent evidence and implicit ordinary-deploy recovery
+remain refused.
+
+Source-projection recovery preserves the managed TEST `instance-state` volume. It may remove only
+the rebuildable PostgreSQL projection and runtime-temporary volume; ordinary consumer preflight
+therefore continues to refuse a genuinely absent or corrupt registry without initializing it. The
+one already-observed TEST total-loss shape has a separate explicit producer,
+`deployment-reconstruct-missing-test-instance-state`. That command is admitted only for the exact
+terminal failed successor and the distinct completed original recovery disposition, a fresh
+two-pass owner inventory and stopped-writer proof, the existing host-global ownership key/ledger,
+and the exact candidate revision and image digest. The receipt must cover every active TEST lease;
+a reconstruction does not assume that the VM's single-slot request journal retains the original
+reset operation after the failed successor is admitted: that journal authenticates the current
+terminal successor, while the private completed disposition is matched to the host-retained reset
+request's operation ID, revision, image digest, authority tuple, and bounded runtime surface.
+A read-only runtime-UID preflight authenticates that complete set and its ledger digest before the
+recovery receipt or Compose volume effect. A pending ownership-key rotation is a byte-preserving
+refusal at this boundary; the preflight never recovers or deletes its rotation journal. The same
+preflight re-observes the native controller PID, start token, and execution namespace, so a proof
+whose controller has exited or changed identity is refused before owner evidence is trusted. That
+native observation is host-only; the mounted producer revalidates the byte-bound proof and ledger
+without requiring its container namespace to equal the controller namespace or exposing the native
+content root. The host preflight matches the materialized root; the producer consumes the receipt's
+authenticated physical identity and exact ledger coverage. Under
+deployment-admission -> producer-transition -> ownership-ledger ->
+registry-store ordering it materializes only the proven TEST registrations through the existing
+snapshot/checksum/legacy-export APIs, leaves the registry dormant at inactive-fenced revision zero
+before its first registration, and records a crash-idempotent result. It cannot mint or rotate
+ownership, infer a binding from path order, activate runtime authority, edit vault/source bytes, or
+run as an ordinary startup side effect; divergent retries remain refused.
+
+Later deployment finalization preserves a receipt-materialized registration whose source-owning
+producer has completed both stable identity fields, including its existing display name and
+last-opened metadata. Binding, ref, path, status, content epoch, and provenance must still match
+the receipt-derived registration exactly; a partial identity pair or authority drift refuses
+before materialization or backup. Finalization does not erase completed identities to reproduce
+the earlier minimal recovery representation. Explicit missing-state reconstruction retains its
+stricter requirement for the exact minimal receipt-derived registration on retries.
+
+In the Compose producer,
+`/app/instance-ownership` is the authenticated fixed mount for the host ownership directory; the
+host-side ownership path remains in the exact authority tuple and is never inferred from the mount
+path. A retry that finds the registry transaction journal uses the registry store's canonical
+recovery path before accepting the byte-identical dormant generation, and a source-reset-only host
+checkpoint never counts as reconstruction evidence. The producer first runs the existing root-owned
+permission-only one-shot for a genuinely new named volume only after the preflight; both that
+one-shot and the runtime-UID producer execute the authenticated candidate image, not an ambient
+channel pin. The supervisor validates the
+authenticated ownership directory against the configured runtime UID and accepts only the
+root-to-runtime private receipt handoff, so a retry remains readable after permission preparation
+without broadening the checkpoint's authority.
+
+The existing private backup manifest binds the absent-pair before-image and one authenticated
+prepared epoch. Reservation evidence in the existing TEST deployment safety records fences retries
+to that package, including interrupted directory durability; generic restore and rotation do not
+consume it. The original qualified native source/module and launcher/interpreter identity remains
+bound through the existing proof and safety records, including lock-held initialization retries
+and guarded release; the authenticated backup retains that proof for interrupted cleanup.
+Native begin cannot adopt an ordinary claim or change an existing claim's original context.
+A released window's validated private census is retired under admission only when every safety
+record and canonical proof is absent; current-window census/proof nonce or context damage refuses
+instead of being treated as prior evidence.
+After exact interrupted cleanup completes, native begin revalidates the original context and
+re-evaluates fresh admission under the same lock before a new nonce or blocker is published.
+It rechecks the original context after retirement's fsync as well. Once native mode is established,
+expected private-input or durability errors produce a fixed redacted refusal, retaining pending
+evidence; ordinary CLI error behavior is unchanged.
+Preparation remains `inactive_fenced`. Source support and synthetic fixture proof are
+not live TEST repair or activation: a future invocation still needs the separately attributable
+operator acknowledgement, qualified native execution, and existing downstream activation gates.
+
 ## Reconciliation — do not duplicate
 
 - **#2566** owns the downstream overlay/UI active-vault switcher. It consumes this runtime seam;
@@ -306,8 +386,8 @@ prior effect result by inference.
   `AskRequest.scope` a `TRANSITIONAL SURFACE`, naming #3857 and #3860 as its follow-ons. MVR-03
   removes the *reason* that surface existed — the resolver now returns a known server-derived
   scope instead of `unknown` — but does not replace the HTTP field, because MVR-03's own contract
-  keeps production request-carrier propagation sealed until MVR-05B. **#3860 remains the sole
-  resolver of that surface.**
+  keeps production request-carrier propagation sealed until MVR-05B. **The #3860 stage remains the
+  sole resolver of that surface**; within it, the agent carrier lands in MVR-05B4a (#6160).
 - **ADR-0055 / #3132** govern concurrent writers to a content vault. Multi-vault selection does
   not reopen or duplicate the multi-writer consistency model.
 - host/container mount terminology from #2141 and instance/device/replica identity remain
@@ -349,18 +429,33 @@ hub. This allocation does not change #3854's exhausted repair ledger or claim pr
 | 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](RESOLVE_INSTANCE_DEFAULT_VAULT.md) | [#3856](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3856) | explicit default and fail-closed precedence | 01A–01C | Sol/high |
 | 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](VERSION_ACTIVE_CONTEXT_SELECTION.md) | [#3857](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3857) | versioned request/session `ActiveContextSet` | 01A–01C, 02 | Sol/xhigh |
 | 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | [#3858](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3858) | non-authoritative dimension membership and context resolution | 01A–01C, 03 | Sol/high design; Terra/high execution after contract freeze |
-| 05A | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3859](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3859) | binding-keyed persistence cutover — **stage hub**; aggregate proof remains pending | 03, 04 | blocked — #3859 aggregate AC1–AC4 evidence pending |
+| 05A | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3859](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3859) | binding-keyed persistence cutover — **stage hub**; five-surface production isolation, classification and required real-PG proof accepted | 03, 04 | delivered — stage evidence #6051 / PR #6054 with #5989 / PR #6057; stage receipt posted to #2143 |
 | 05A0 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4543](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4543) | `file_state` adoption and binding rekey | 03, 04 | delivered — PR #4550 |
 | 05A1 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4560](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4560) | `objects` / `agent_memories` adoption, runtime-DDL retirement | 05A0 | delivered — PR #4569 |
-| 05A2 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4576](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4576) | durable-table classification inventory and the revision-chain-derived architecture gate | 05A1 | Sol/high |
-| 05A3 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4577](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4577) | `store_*` projection group and its `app/stores/pg.py` producers | 05A2 | Terra/high |
-| 05A4 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4578](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4578) | ingest projection group and its `app/db/db.py` producers | 05A3 | Terra/high |
-| 05A5 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4579](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4579) | replay projection group and binding-scoped rebuilds | 05A4 | Terra/high |
-| 05A6 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4580](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4580) | per-binding shared/exclusive effect lease | 05A5 | Sol/xhigh |
-| 05A7 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4581](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4581) | outbox binding column and dual-key compatibility dedup | 05A6 | Sol/xhigh |
-| 05A8 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4582](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4582) | all-process fence, runtime floor, worker gate, owner-doc writebacks, stage closure | 05A7 | Sol/high |
-| 05A9 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4942](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4942) | measured residual: final live binding keys, dead-schema retirement, and aggregate test targets | 05A8, #4939 | delivered — child scope; stage evidence pending under 05A |
-| 05B | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3860](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3860) | request ingress, picker, reads, retrieval, and read-race fence | 05A, #3163 | Sol/high; Terra/high mechanical consumers |
+| 05A2 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4576](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4576) | durable-table classification inventory and the revision-chain-derived architecture gate | 05A1 | delivered — PR #4590 |
+| 05A3 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4577](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4577) | `store_*` projection group and its `app/stores/pg.py` producers | 05A2 | delivered — PR #4852 |
+| 05A4 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4578](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4578) | ingest projection group and its `app/db/db.py` producers | 05A3 | delivered — PR #4910 |
+| 05A5 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4579](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4579) | replay projection group and binding-scoped rebuilds | 05A4 | delivered — PR #4924 |
+| 05A6 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4580](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4580) | per-binding shared/exclusive effect lease | 05A5 | delivered — PR #4928 |
+| 05A7 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4581](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4581) | outbox binding column and dual-key compatibility dedup | 05A6 | delivered — PR #4937 |
+| 05A8 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4582](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4582) | all-process fence, runtime floor, worker gate, owner-doc writebacks, stage closure | 05A7 | delivered — PR #4940 |
+| 05A9 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4942](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4942) | measured residual: final live binding keys, dead-schema retirement, and aggregate test targets | 05A8, #4939 | delivered — PR #4953 |
+| 05B | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3860](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3860) | request ingress, picker, reads, retrieval, and read-race fence — **stage closer**; all enabling and 05B0–05B5 children delivered, with the full acceptance matrix and architecture/settings writebacks owned here | 05A, #3163, 05B0–05B5 | delivered pending closer merge and #2143 stage receipt |
+| 05B0 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6135](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6135) | acceptance proof for shipped backend behavior plus the repairs it exposes | 05A | delivered — PR #6144 |
+| 05B1 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6136](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6136) | inventory-derived context-boundary gate with a shrinking compatibility-adapter allowlist | 05B0 | Sol/high |
+| 05B2 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6137](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6137) | companion read routes onto the per-request ActiveContextSet | 05B1 | Sol/high |
+| 05B3 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6138) | remaining API route modules and the pre-05C mutation seal | 05B2 | Sol/xhigh |
+| 05B4 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6139](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6139) | **sub-hub** for 05B4a–05B4c; closed after the 05B4c sub-sub-hub closes | 05B3 | — |
+| 05B4a | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6160](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6160) | agent, MCP, and CLI carrier propagation, retrieval provenance, and settings conflict | 05B3 | Sol/high |
+| 05B4b | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6161](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6161) | binding-aware companion read projections | 05B4a | Sol/high |
+| 05B4c | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6162](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6162) | **sub-sub-hub** for 05B4c1–05B4c6; closed after 05B4c6 merges | 05B4b | — |
+| 05B4c1 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6211](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6211) | review queue binding stamp, agent-memory posture, and orientation memory summary | 05B4b | Sol/high |
+| 05B4c2 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6212](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6212) | panel proposal/idempotency state, panel receipts, and orientation governance summary | 05B4c1 | Sol/high |
+| 05B4c3 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6213](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6213) | reach-out receipts, per-binding dedup, and `/now` nudges | 05B4c2 | Sol/high |
+| 05B4c4 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6214](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6214) | orientation runtime signals and the leave-point cursor keyed per binding | 05B4c3 | Sol/high |
+| 05B4c5 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6215](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6215) | emitted-bundle registry and the orientation, context-bundle and resurfacing reads | 05B4c4 | Sol/high |
+| 05B4c6 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6216](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6216) | Heimdal reads, debug-panel diagnostics, and removal of the 05B3 carrier refusal | 05B4c5 | Sol/high |
+| 05B5 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05b-child-decomposition) | [#6140](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6140) | Companion client activation, stale-selection recovery, and client-boundary writeback | 05B4c6, #6162, #6139 | delivered — PR #6339 |
 | 05C | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3861](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3861) | governed write target/token/receipt migration | 05B | Sol/xhigh |
 | 05D | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3862](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3862) | outbox producers, interim worker delivery, aggregate proof, owner docs | 05C | Sol/high; Terra/high mechanical consumers |
 | 06A | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | [#3863](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3863) | durable intent, service role, admin, and runtime floor | 05D, #3163 | Sol/xhigh |
@@ -379,7 +474,11 @@ producer set — so 05A2 through 05A8 run in listed order, each `agent:blocked` 
 until that predecessor is merged and reconciled on `origin/main`. Every merge posts a child receipt
 to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup. 05A itself is a stage
 hub: it posts the MVR-05A stage receipt once every 05A child has merged, and it is never picked up
-directly.
+directly. The mergeable 05B children 05B0–05B3, 05B4a, 05B4b, 05B4c1–05B4c6 and 05B5 run serially on the same
+terms. 05B4 (#6139) and 05B4c (#6162) are sub-hubs with no deliverable of their own, never merged
+themselves: #6162 is reconciled and closed once 05B4c6 has merged, and #6139 once #6162 is closed.
+05B (#3860) is the stage hub; unlike 05A it is also the stage closer, picked up only after every
+mergeable 05B child has merged and the #6139 and #6162 sub-hubs are closed.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -421,6 +520,21 @@ directly.
   keep mutation ingress gated and the prior lifecycle final-scanned/quiescent until durable commit,
   then resume; wake-up hints are never the transition authority. Per-operation authorization closes
   races between reconciliation passes.
+- A committed first adoption with no matching watcher receipt is recoverable only when the prior
+  binding is empty, the candidate is the configured watcher filesystem root, and settings reload is
+  complete for the committed revision. The watcher performs one fresh successful scan of that exact
+  root before writing typed `first_adoption_recovery` evidence; it never fabricates pre-commit
+  acknowledgement, old-root buffer, or registry/source intent. Restart and retry reuse that typed
+  evidence idempotently. Prior bindings, wrong roots, incomplete reload, stale or mismatched
+  evidence, scan failure or zero-match, and policy/GOV/ownership/lease refusal remain fail-closed;
+  operator promotion and deployed-channel claims remain separate gates.
+  Recovery is observation-only: direct and queued source work and sparse source-capable hooks
+  wait for the ordinary stable cycle without consuming delivery eligibility or cadence. Existing
+  missing-source observations also survive recovery finalization and restart, so the next normal
+  scan can deliver governed removals/resets before pruning their observations.
+  Configuration admission and candidate revalidation are also write-free during recovery:
+  selected roots are classified without identity healing. Ordinary-mode guarded healing and
+  the separate producer inventory's persisted-identity preflight remain unchanged.
 - Zero, one, and many bindings are all valid. One configured vault behaves as before; no-vault
   behavior remains truthful and idle.
 - The durable registry/default/dimension store is instance-local mechanical state; content and

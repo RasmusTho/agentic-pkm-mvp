@@ -55,7 +55,7 @@ from unittest import mock
 import pytest
 import yaml
 
-from app.ops.pg_acceptance import SELECTORS
+from app.ops.pg_acceptance import NIGHTLY_SELECTORS, SELECTORS
 
 from tests.architecture.durable_table_classification import (
     RECORDED_ATTACHED_DDL_DEBT,
@@ -768,14 +768,8 @@ def test_adopted_tables_are_reachable_from_the_alembic_revision_chain() -> None:
 # The PG proofs must run in the native profile and nightly lane
 # --------------------------------------------------------------------------- #
 
-# The shared native profile replaces the PR PG lane after actual coverage
-# handoff. The independently scheduled nightly lane retains its explicit list.
-PG_LANES = (
-    (
-        REPO_ROOT / ".github" / "workflows" / "integration-nightly.yaml",
-        "Bounded PG verification lane",
-    ),
-)
+# The native and independently scheduled nightly profiles retain separate
+# canonical target inventories in the guarded PG runner.
 HEIMDAL_TRIGGER_OWNERSHIP_SOURCES = (
     "app/heimdal/trigger_ownership.py",
     "app/heimdal/consent_ledger.py",
@@ -847,30 +841,25 @@ DURABLE_OWNERSHIP_PG_TARGETS = (
 )
 
 
-def _pytest_invocation_after(workflow: str, step_name_fragment: str) -> str:
-    """The `pytest ...` command of the step whose name contains the fragment.
-
-    Scoped deliberately: a plain substring search over the whole workflow would
-    pass if a path were moved into a YAML comment or into an unrelated job.
-    """
-    marker = workflow.index(step_name_fragment)
-    start = workflow.index("pytest", marker)
-    end = workflow.index("\n\n", start)
-    return workflow[start:end]
-
-
 def test_durable_ownership_pg_targets_run_in_both_pg_lanes() -> None:
     """Adoption and rekey guards stay enrolled in native and nightly execution."""
-    missing_native = set(DURABLE_OWNERSHIP_PG_TARGETS) - set(SELECTORS)
-    assert not missing_native, f"PG ownership proofs missing from native profile: {missing_native}"
-    for workflow_path, step_fragment in PG_LANES:
-        workflow = workflow_path.read_text(encoding="utf-8")
-        invocation = _pytest_invocation_after(workflow, step_fragment)
-        missing = [target for target in DURABLE_OWNERSHIP_PG_TARGETS if target not in invocation]
-        assert missing == [], (
-            f"{missing} are pg-marked but absent from the {step_fragment!r} pytest "
-            f"invocation in {workflow_path.name}; they would not run in that lane."
-        )
+    for profile, selectors in (("native", SELECTORS), ("nightly", NIGHTLY_SELECTORS)):
+        missing = set(DURABLE_OWNERSHIP_PG_TARGETS) - set(selectors)
+        assert not missing, f"PG ownership proofs missing from {profile} profile: {missing}"
+
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/integration-nightly.yaml").read_text(encoding="utf-8")
+    )
+    steps = [
+        step for step in workflow["jobs"]["pg-contracts"]["steps"]
+        if step.get("name") == "Bounded PG verification lane"
+    ]
+    assert len(steps) == 1
+    assert any(
+        line.strip().removesuffix("\\").rstrip()
+        == "python -m app.ops.pg_acceptance --ci --nightly"
+        for line in steps[0]["run"].splitlines()
+    ), "Nightly PG job must execute the guarded canonical target inventory"
 
     for target in DURABLE_OWNERSHIP_PG_TARGETS:
         assert (REPO_ROOT / target).exists(), f"{target} is listed in CI but does not exist"

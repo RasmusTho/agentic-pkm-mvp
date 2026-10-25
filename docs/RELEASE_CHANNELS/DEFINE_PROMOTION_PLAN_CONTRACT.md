@@ -29,15 +29,58 @@ This task produces the promotion-plan contract as a docs artifact under `docs/RE
 
 A promotion plan has these required sections:
 
-- **Promotion target** — the commit on `main` being promoted, and the current `stable` commit being replaced.
+- **Promotion target** — exact current green TEST source C and its immutable digest D, and the current protected `stable` baseline S being replaced.
 - **Code delta** — ordered list of PRs included, each annotated with: PR title, PR link, AC status (satisfied / partial / unverified), verification receipt pointer, and any known-regression notes.
-- **Migration delta** — schema and data migrations to apply to prod's active (`app` DB, compose project `pkm-prod`), each classified as **reversible** or **forward-only** per `DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION`. In the target gated promotion-plan workflow, this is the same active production applicability boundary that the current `main`-tracking path protects manually.
+- **Migration delta** — schema and data migrations from S to C to apply to prod's active (`app` DB, compose project `pkm-prod`), each classified as **reversible** or **forward-only** per `DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION`. Physical execution retains this boundary and every acknowledgment gate.
 - **Config / settings delta** — settings changes that take effect in prod after promotion (watcher policies, env vars, operator-visible defaults).
 - **Risk notes** — explicit list of risks the operator should consider, including forward-only migrations, any PR lacking full AC verification, and any cross-channel touchpoints.
 - **Rollback path** — the previous `stable` ref and the migration-reversal sequence (per `DEFINE_ROLLBACK_CONTRACT`).
 - **Operator acknowledgments** — explicit checkboxes the operator ticks before execution (e.g. "I accept forward-only migration X", "I have run verify-promotion in a dry context").
 
 The plan is written as a single markdown file in a known location (e.g. `ops/promotions/YYYY-MM-DD-<sha>.md`). After `execute-promotion` completes, the plan is retained as the promotion receipt.
+
+## Current TEST and protected stable evidence
+
+Issue #6228 adopts this plan as the existing durable carrier for production admission; it introduces
+no additional registry. The seven reviewed sections remain required. `Test evidence` adds one
+`<!-- stable-promotion -->` JSON block with these closed fields:
+
+- `candidate`: `sha` C, `digest` D, and positive `run_id`, `run_attempt`, `artifact_id` for the existing
+  build-once main-image producer. C must equal the exact current controller-owned `test` ref and
+  retain trusted green DEV and TEST evidence. A prior PASS candidate is insufficient.
+- `stable_baseline`: S, freshly read from the protected canonical stable ref before its PR; S must
+  be an ancestor of C. Divergence requires separately authorized reconciliation and a fresh TEST
+  qualification, never a force push or tree-only equivalence.
+- `deployment_model`: the actual `pinned-image` model, backed by the existing prod deployment
+  receipt's fleet-model fitness PASS. Normal checkout promotion refuses generated merge identity
+  before the stable PR. A plan cannot declare a cutover into existence.
+- `functional_evidence`: `receipt`, `registry`, `context`, `check_report`, `rendered`, `manifest` paths (absolute on the
+  execution host, or relative to the plan), and `receipt_id`. The signed STARTUP-04 v2 functional
+  PASS must bind C/D and S, match the retained report/context and existing trust registry, and pass
+  freshness, revocation, signature, config/test/vault/schema and migration checks. Deploy/PG smoke
+  alone cannot substitute for functional observations. The retained P2 render and ChannelManifest
+  must reconstruct the report's candidate identity for exact C/D; a valid signed receipt for
+  another source or another approved receipt cannot use this plan's baseline transition.
+- `approval`: a human `operator` identity and `plan_digest`. The read-only admission command's
+  `--approval-digest` hashes the entire reviewed narrative and the four input fields above. The
+  human records this digest and ticks all acknowledgments after review; the renderer never grants
+  approval. Editing reviewed code/config/migration/risk narrative or inputs invalidates approval.
+- `execution`: initially empty; after protected PR merge records only `pull_request` (number) and
+  `stable_sha` M. The consumer independently checks same repository, stable base, C head, merge M,
+  M's parents exactly `[S, C]`, unchanged tree, required protection and unchanged TEST/stable refs.
+  This output is excluded from the approval digest because it cannot change the approved inputs.
+
+M authorizes the protected stable transition only. The physical deployment remains source C and
+qualified digest D; no M image or runtime version is implicitly tested. The existing deploy script,
+Make producer and native host adapter forward the same plan and fail before secrets/effects when
+admission is absent. After merge, the STARTUP validator may retain signed S only by re-authenticating
+this exact approved S→M transition and immutable local Git objects. The caller cannot select S.
+The v2 receipt shape, signature and trust strength do not change.
+
+Append observed execution, verification and recovery narrative after one
+`<!-- promotion-outcomes -->` marker. This output area is excluded from approval and grants no
+admission authority. All required sections and the unique evidence block must precede it.
+The execution fields remain independently checked even when outcome text is present.
 
 ## Why This Matters
 

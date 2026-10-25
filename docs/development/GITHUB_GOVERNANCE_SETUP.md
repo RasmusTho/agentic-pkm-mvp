@@ -46,6 +46,41 @@ steps are complete for the configured organization-owned target.
 | `GITHUB_TOKEN` | Ordinary repository-owned Actions governance, plus Issue/PR reads and the documented fallback for the optional board workflows | Per-workflow repository token; no organization Project write authority |
 | Interactive `gh` authentication | Claude/Codex agent issue, PR, and delivery operations | Separate human/agent identity and quota from the board App |
 
+### Read-only Project discovery for builder agents
+
+Start with the organization-owned [Project #1](https://github.com/orgs/Yggdrasil-PKM/projects/1),
+`Agent Delivery Control Plane`; its human-facing view is `Kanban`, grouped by `Status`.
+For credential routing, use [secret-routing](../../.codex/skills/secret-routing/SKILL.md) and the
+consumer's owner contract before requesting another token or Bitwarden entry. Interactive builder
+reads use the existing GitHub connection or `gh` identity; the DevUI and runtime GitHub tokens have
+separate consumer bindings and are not replacement builder credentials.
+
+For project-associated Issue/PR discovery, use GitHub's documented
+[`project:` search qualifier](https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests#search-by-project)
+with the existing identity. For example, list open PRs through the REST search endpoint:
+
+```bash
+gh api --method GET search/issues \
+  -f q='project:Yggdrasil-PKM/1 is:pr is:open' \
+  -f per_page=100 --paginate \
+  --jq '{total_count, incomplete_results, items: [.items[] | {number, html_url}]}'
+```
+
+The connected GitHub PR-search tool accepts the same `project:Yggdrasil-PKM/1 is:open` qualifier.
+The configured interactive identity and connector both successfully used this route on 2026-10-18,
+even though a direct ProjectV2 GraphQL read was unavailable to that interactive identity.
+Inspect `total_count` and `incomplete_results`, consume every page, and partition searches that
+exceed GitHub's search-result limit. Search covers only content visible to the active identity;
+an empty result does not establish that the board is empty or fully accessible. Cross-check the
+accessible repository set and live Issue/PR state because Project membership may lag delivery.
+
+Search proves project membership; it does not return `Status`, custom fields, or view configuration.
+A direct ProjectV2 scope error therefore does not establish that project-associated search is
+unavailable. Qualify the selected identity's Project-read permission before claiming full field
+access. Board updates remain with the App workflows above and their existing quota gates. Do not dispatch a write
+workflow merely to obtain a read, bypass a quota gate, or claim a successful workflow updated the
+board when its log says projection was skipped. Project-field access is not a PR merge prerequisite.
+
 ## Exact label set
 
 Keep only these labels for the delivery control plane taxonomy:
@@ -234,6 +269,12 @@ generation-bound `removal_pending` transition. Successful removal durably retire
 generation before branch deletion; restart reconciliation completes only a pending transition and
 never infers removal from an ordinary missing lifecycle record. Broad worktree-metadata pruning
 remains report-only.
+
+An explicit `agent_worktree.py preserve-missing` disposition may move one exact expired active
+generation with an absent checkout to terminal `missing_preserved` state while retaining its branch
+ref and path-to-branch identity. The transition requires the recorded owner and exact generation,
+reserves the absent path through its durable readback, and blocks branch retirement and path reuse;
+it never authorizes cleanup or changes restart reconciliation.
 
 When a selected worktree has already been durably retired as an exact `removed` generation but its
 branch step did not complete, a later targeted apply may resume only that tombstone's bound local

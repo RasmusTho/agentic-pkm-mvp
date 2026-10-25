@@ -25,6 +25,7 @@ from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
     ClientConfig,
     ControlPlaneAuthError,
+    ControlPlaneConfigError,
     ControlPlaneProtocolError,
     ControlPlaneUnavailableError,
     StaleLeaseError,
@@ -138,7 +139,7 @@ def _registry(tmp_path: Path) -> CredentialRegistry:
 
 def _client(store: InMemoryStore, registry: CredentialRegistry, token: str = "client-token"):
     transport = TestClient(create_app(store=store, credentials=registry))
-    config = ClientConfig(base_url="http://builderops", token=token)
+    config = ClientConfig(base_url="https://builderops.invalid", token=token)
     return BuilderOpsControlPlaneClient(config, http_client=transport, max_retries=0)
 
 
@@ -149,6 +150,166 @@ def _envelope() -> dict[str, object]:
         "stack": "builderops-control-plane",
         "source_refs": ["github:issue:3791"],
     }
+
+
+def test_control_plane_origin_validation_precedes_transport() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ready": True}, request=request)
+
+    accepted = ("https://builderops.invalid", "http://127.0.0.1:18100/")
+    for base_url in accepted:
+        env_config = ClientConfig.from_env(
+            {"BUILDEROPS_API_URL": base_url, "BUILDEROPS_API_TOKEN": "synthetic-token"}
+        )
+        assert env_config.base_url == base_url.rstrip("/")
+        with httpx.Client(
+            transport=httpx.MockTransport(handler), base_url=env_config.base_url
+        ) as http:
+            with BuilderOpsControlPlaneClient(
+                env_config, http_client=http, max_retries=0
+            ) as client:
+                assert client.status() == {"ready": True}
+
+        direct_config = ClientConfig(base_url=base_url, token="synthetic-token")
+        with httpx.Client(
+            transport=httpx.MockTransport(handler), base_url=direct_config.base_url
+        ) as http:
+            with BuilderOpsControlPlaneClient(
+                direct_config, http_client=http, max_retries=0
+            ) as client:
+                assert client.status() == {"ready": True}
+
+    assert len(requests) == 4
+    assert {request.url.scheme for request in requests} == {"https", "http"}
+    assert all(request.headers["Authorization"] == "Bearer synthetic-token" for request in requests)
+
+    rejected = (
+        "http://builderops.invalid",
+        "https://",
+        "https://builderops.invalid:not-a-port",
+        "https://builderops.invalid:",
+        "https://user:synthetic-secret@builderops.invalid",
+        "https://builderops.invalid?query=yes",
+        "https://builderops.invalid?",
+        "https://builderops.invalid#fragment",
+        "https://builderops.invalid#",
+        "https://builderops.invalid/v1",
+        "https://bad host.invalid",
+        "https://bad..host.invalid",
+        "https://-bad.invalid",
+        "http://localhost:18100",
+        "https://builderops.invalid:0",
+        "https://builderops.invalid:65536",
+    )
+    bypass_http = httpx.Client(transport=httpx.MockTransport(handler))
+    for base_url in rejected:
+        with pytest.raises(ControlPlaneConfigError) as env_error:
+            ClientConfig.from_env(
+                {"BUILDEROPS_API_URL": base_url, "BUILDEROPS_API_TOKEN": "synthetic-token"}
+            )
+        assert "synthetic-token" not in str(env_error.value)
+        assert "synthetic-secret" not in str(env_error.value)
+
+        with pytest.raises(ControlPlaneConfigError) as direct_error:
+            ClientConfig(base_url=base_url, token="synthetic-token")
+        assert "synthetic-token" not in str(direct_error.value)
+        assert "synthetic-secret" not in str(direct_error.value)
+
+        # A caller cannot bypass the config check by passing an object that
+        # carries the public config fields without running dataclass creation.
+        bypassed_config = object.__new__(ClientConfig)
+        object.__setattr__(bypassed_config, "base_url", base_url)
+        object.__setattr__(bypassed_config, "token", "synthetic-token")
+        with pytest.raises(ControlPlaneConfigError) as client_error:
+            BuilderOpsControlPlaneClient(
+                bypassed_config, http_client=bypass_http
+            )
+        assert "synthetic-token" not in str(client_error.value)
+        assert "synthetic-secret" not in str(client_error.value)
+
+    assert len(requests) == 4
+    bypass_http.close()
+
+
+def test_control_plane_transport_refuses_proxy_and_redirect_routing(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+
+    def redirect(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            307,
+            json={"accepted": True},
+            headers={"Location": "https://collector.invalid/receive"},
+            request=request,
+        )
+
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(key, "http://proxy.invalid:8080")
+
+    real_httpx_client = httpx.Client
+    owned_policy: dict[str, object] = {}
+
+    def owned_client_factory(**kwargs: object) -> httpx.Client:
+        owned_policy.update(kwargs)
+        return real_httpx_client(
+            transport=httpx.MockTransport(redirect), **kwargs  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr("app.builderops.control_plane.client.httpx.Client", owned_client_factory)
+    owned = BuilderOpsControlPlaneClient(
+        ClientConfig(base_url="https://builderops.invalid", token="synthetic-token"),
+        max_retries=0,
+    )
+    assert owned_policy["trust_env"] is False
+    assert owned_policy["verify"] is True
+    assert owned_policy["follow_redirects"] is False
+    with pytest.raises(ControlPlaneProtocolError, match="returned a redirect"):
+        owned.issue_delivery_preview(manifest={"operation": "synthetic-operation"})
+    assert len(requests) == 1
+    assert requests[0].url.host == "builderops.invalid"
+    assert requests[0].headers["Authorization"] == "Bearer synthetic-token"
+    assert json.loads(requests[0].content) == {
+        "manifest": {"operation": "synthetic-operation"}
+    }
+    owned.close()
+
+    # A caller-supplied HTTPX client is a test seam, but its broader default
+    # cannot turn a token-bearing request into an automatically followed hop.
+    requests.clear()
+    injected_http = real_httpx_client(
+        transport=httpx.MockTransport(redirect),
+        base_url="https://builderops.invalid",
+        follow_redirects=True,
+    )
+    assert injected_http.follow_redirects is True
+    injected = BuilderOpsControlPlaneClient(
+        ClientConfig(base_url="https://builderops.invalid", token="synthetic-token"),
+        http_client=injected_http,
+        max_retries=0,
+    )
+    with pytest.raises(ControlPlaneProtocolError, match="returned a redirect"):
+        injected.issue_delivery_preview(manifest={"operation": "synthetic-operation"})
+    assert len(requests) == 1
+    assert requests[0].url.host == "builderops.invalid"
+    assert requests[0].headers["Authorization"] == "Bearer synthetic-token"
+    assert json.loads(requests[0].content) == {
+        "manifest": {"operation": "synthetic-operation"}
+    }
+
+    requests.clear()
+    for unsafe_path in (
+        "https://collector.invalid/receive",
+        "//collector.invalid/receive",
+    ):
+        with pytest.raises(ControlPlaneProtocolError, match="must be origin-relative"):
+            injected.issue_delivery_preview(
+                manifest={"operation": "synthetic-operation"}, path=unsafe_path
+            )
+    assert requests == []
+    injected_http.close()
 
 
 def test_all_authority_commands_use_remote_api(tmp_path: Path) -> None:
@@ -239,17 +400,28 @@ def test_client_failure_never_creates_local_authority_fallback(tmp_path: Path) -
     prior = os.getcwd()
     os.chdir(workdir)
     try:
-        # 1) Service unreachable -> typed unavailable error, no fallback.
+        # 1) Synthetic transport failure -> typed unavailable error, no fallback.
+        def fail_transport(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("synthetic connection refusal", request=request)
+
+        unreachable_http = httpx.Client(
+            transport=httpx.MockTransport(fail_transport),
+            base_url="https://builderops.invalid",
+        )
         unreachable = BuilderOpsControlPlaneClient(
-            ClientConfig(base_url="http://127.0.0.1:1", token="client-token"),
+            ClientConfig(base_url="https://builderops.invalid", token="client-token"),
+            http_client=unreachable_http,
             max_retries=0,
         )
-        with pytest.raises(ControlPlaneUnavailableError):
-            unreachable.claim_lease(
-                envelope=_envelope(),
-                resource_id="resource-3791",
-                idempotency_key="claim-resource-3791",
-            )
+        try:
+            with pytest.raises(ControlPlaneUnavailableError):
+                unreachable.claim_lease(
+                    envelope=_envelope(),
+                    resource_id="resource-3791",
+                    idempotency_key="claim-resource-3791",
+                )
+        finally:
+            unreachable_http.close()
 
         # 2) Credential rejected -> typed auth error, no fallback.
         store = InMemoryStore()
@@ -287,7 +459,7 @@ def test_unreachable_service_is_retried_then_fails_closed(tmp_path: Path) -> Non
     store = Flaky()
     transport = TestClient(create_app(store=store, credentials=_registry(tmp_path)))
     client = BuilderOpsControlPlaneClient(
-        ClientConfig(base_url="http://builderops", token="client-token"),
+        ClientConfig(base_url="https://builderops.invalid", token="client-token"),
         http_client=transport,
         max_retries=2,
     )
@@ -307,9 +479,9 @@ def test_malformed_409_body_raises_instead_of_silently_downgrading(tmp_path: Pat
         def handle_request(self, request: httpx.Request) -> httpx.Response:
             return httpx.Response(409, content=b"<not json at all>")
 
-    http = httpx.Client(transport=_MalformedTransport(), base_url="http://builderops")
+    http = httpx.Client(transport=_MalformedTransport(), base_url="https://builderops.invalid")
     client = BuilderOpsControlPlaneClient(
-        ClientConfig(base_url="http://builderops", token="client-token"),
+        ClientConfig(base_url="https://builderops.invalid", token="client-token"),
         http_client=http,
         max_retries=0,
     )
@@ -351,7 +523,7 @@ def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_p
     source, store = _import_source(), SourceStore()
     source["body"] = source["body"].replace(".codex/skills/_shared/ISSUE_CONTRACT.md", "docs/AGENT_ISSUE_DISPATCHER.md").replace(".github/workflows/issue-pr-governance.yml", "docs/AGENT_ISSUE_DISPATCHER.md")
     monkeypatch.setattr(cockpit_github_plane, "_run_gh", lambda args: copy.deepcopy(source))
-    monkeypatch.setenv("BUILDEROPS_API_URL", "http://builderops")
+    monkeypatch.setenv("BUILDEROPS_API_URL", "https://builderops.invalid")
     monkeypatch.setenv("BUILDEROPS_API_TOKEN", "client-token")
     monkeypatch.delenv("BUILDEROPS_API_TOKEN_FILE", raising=False)
     registry = _registry(tmp_path)
@@ -398,7 +570,7 @@ def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_p
     assert build_first_read_observation(**inputs)["verdict"] == "pass"
     from app.builderops.control_plane.client import ControlPlaneConflictError
     before_calls = list(store.calls)
-    with factory(ClientConfig(base_url="http://builderops", token="client-token")) as client:
+    with factory(ClientConfig(base_url="https://builderops.invalid", token="client-token")) as client:
         with pytest.raises(ControlPlaneConflictError, match="StateConflict"):
             client.transition_task(**{**request, "outbox": {"effect_type": "github.comment", "payload": {}}})
     assert store.calls == before_calls
@@ -422,3 +594,28 @@ def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_p
         return client
     assert main(command, client_factory=stale_factory) == 3
     assert store._seq == before
+
+
+def test_generic_lease_release_uses_api(tmp_path: Path) -> None:
+    from tests.builderops.control_plane.test_service_auth import _registry as lease_registry, _Store
+
+    class ReleaseStore(_Store):
+        def release_lease(self, **kw):
+            self.kw = kw
+            return TransactionResult(kw['envelope'].repository, kw['lease'].resource_id,
+                                     'lease.released', 3, '0/3', None)
+
+    store = ReleaseStore()
+    transport = TestClient(create_app(store=store, credentials=lease_registry(tmp_path)))
+    client = BuilderOpsControlPlaneClient(ClientConfig(base_url='https://builderops.invalid', token='client-token'),
+                                        http_client=transport, max_retries=0)
+    claimed = client.claim_lease(envelope=_envelope(), resource_id='maintenance-fixture',
+                                idempotency_key='claim-fixture', ttl_seconds=60)
+    result = client.release_lease(envelope=_envelope(), lease=claimed['lease'],
+                                  idempotency_key='release-fixture')
+    assert result['result']['state'] == 'lease.released'
+    assert result['result']['recovery_lsn'] == '0/3'
+    assert store.kw['lease'].resource_id == claimed['lease']['resource_id']
+    assert store.kw['envelope'].actor == 'client:macbook'
+    assert store.kw['request'] == {}
+    assert store.kw['idempotency_key'] == 'release-fixture'

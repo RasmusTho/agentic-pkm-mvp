@@ -1,0 +1,9 @@
+{
+  "schema_name": "manual_rotation_correction",
+  "schema_version": 2,
+  "experiment_id": "manual_coordinator_rotation_6195_retry1",
+  "kind": "implementation_repair",
+  "actor": "/root/implement_manual_rotation_6236",
+  "at": "2026-10-18T12:15:14Z",
+  "reason": "Post-initial writer evidence-assembly artifact repair: the newly generated successor/initial/evidence-refs.json named a nonexistent source-checkpoint.json at the namespace root. The unchanged receipt CLI refused it once with 'context_pack source_ref must be a retained regular source file'. Preserved that derived file, then created evidence-refs.corrected.json selecting the exact packet-carried accepted/source-checkpoint.json. Receipt creation and separate-process normalization succeeded before the actual clock.curr_time observation at 12:15:14Z. This is one derived artifact correction, not a native admission retry, original capture edit, read-command retry, code/test change, or repair within the already completed initial v2 interval."
+}

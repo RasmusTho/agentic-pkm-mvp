@@ -25,6 +25,7 @@ from app.builderops.control_plane.api_models import (
     IssueDeliveryStartRequest,
     IssueDeliveryOperationRecordRequest,
     LeaseClaimRequest,
+    LeaseReleaseRequest,
     LeaseInput,
     OutboxClaimRequest,
     OutboxEffectEligibilityRequest,
@@ -41,6 +42,7 @@ from app.builderops.control_plane.api_models import (
     TaskHeartbeatRequest,
     TaskReleaseRequest,
     TaskTransitionRequest,
+    TaskPayloadStatusCorrectionRequest,
     RowDerivedPostEffectPendingRequest,
     RowDerivedPostEffectReconcileRequest,
 )
@@ -311,12 +313,24 @@ def _assert_secret_metadata_shape(key: str, value: Any) -> None:
         ) is None:
             raise ValueError("fingerprint must be a SHA-256 digest")
     elif key == "scopes":
-        if not isinstance(value, (list, tuple)) or not all(
-            isinstance(scope, str)
-            and re.fullmatch(r"[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*", scope)
-            for scope in value
-        ):
+        if not isinstance(value, (list, tuple)):
             raise ValueError("scopes must contain bounded scope identifiers")
+        for scope in value:
+            if not isinstance(scope, str):
+                raise ValueError("scopes must contain bounded scope identifiers")
+            namespace, separator, action = scope.partition(":")
+            # Preserve the ASCII scope grammar with one linear pass rather
+            # than applying an unbounded regular expression to request data.
+            if not separator or any(
+                not part
+                or not "a" <= part[0] <= "z"
+                or any(
+                    not ("a" <= char <= "z" or "0" <= char <= "9" or char in "_-")
+                    for char in part[1:]
+                )
+                for part in (namespace, action)
+            ):
+                raise ValueError("scopes must contain bounded scope identifiers")
     elif key == "rotation_generation":
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError("rotation_generation must be a positive integer")
@@ -678,6 +692,7 @@ def create_app(
     # caller-supplied executor or no-op production port is accepted.
     inquiry_workflow = SanctionedModelInquiryWorkflow()
     task_write = _credential_dependency(credentials, rate_limiter, "tasks:write")
+    task_correction_write = _credential_dependency(credentials, rate_limiter, "tasks:write", "leases:write")
     attempt_write = _credential_dependency(credentials, rate_limiter, "attempts:write")
     promotion_write = _credential_dependency(credentials, rate_limiter, "promotions:write")
     receipt_read = _credential_dependency(credentials, rate_limiter, "receipts:read")
@@ -1830,6 +1845,29 @@ def create_app(
             },
         }
 
+    @application.post("/v1/leases/release")
+    async def release_generic_lease(
+        request: LeaseReleaseRequest,
+        credential: Credential = Depends(lease_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            envelope = _envelope(request.envelope, credential)
+            if canonical_repository(request.lease.repository) != envelope.repository:
+                raise HTTPException(status_code=403, detail="lease repository differs from envelope")
+            result = await run_in_threadpool(
+                store.release_lease,
+                envelope=envelope,
+                lease=_lease_from_input(envelope.repository, request.lease, credential),
+                idempotency_key=request.idempotency_key,
+                request=request.request,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {"result": _transition_response(result)}
+
     @application.post("/v1/records")
     async def commit_record(
         request: RecordCommitRequest | OwnerOutcomeCommitRequest | OwnerAskCommitRequest,
@@ -2126,6 +2164,33 @@ def create_app(
         except Exception as exc:
             raise _control_plane_error(exc) from exc
         return {"result": _transition_response(result)}
+
+    @application.post("/v1/tasks/{task_id}/correct-payload-status")
+    async def correct_task_payload_status(
+        task_id: str,
+        request: TaskPayloadStatusCorrectionRequest,
+        credential: Credential = Depends(task_correction_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            if canonical_repository(request.lease.repository) != canonical_repository(
+                request.envelope.repository
+            ):
+                raise HTTPException(status_code=403, detail="maintenance lease repository mismatch")
+            _assert_durable_payload_safe(
+                {"task_id": task_id, **request.model_dump(mode="json")}, credentials
+            )
+            values = request.model_dump(exclude={"envelope", "lease"})
+            return await run_in_threadpool(
+                store.correct_task_payload_status,
+                task_id=task_id,
+                envelope=_envelope(request.envelope, credential),
+                lease=_lease_from_input(request.envelope.repository, request.lease, credential),
+                **values,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
 
     @application.post("/v1/tasks/complete")
     async def complete_task(

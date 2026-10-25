@@ -97,6 +97,17 @@ The channel, webhook, provider account, and host-native credential reference are
 this document. They require the bounded delivery work tracked by the observability Issues and a
 redacted live drill receipt.
 
+The bounded bob-1 BuilderOps host binding under #6347 is
+`heimdal-builderops-alerts`. The existing administrator-host BWS controller resolves only the
+existing `non-prod` / `shared/discord.webhook` identity and sends it to a fixed
+receiver on bob-1. The existing systemd encrypted credential facility supplies
+only the BuilderOps probe's private temporary runtime handoff. The
+[cloud-secret owner procedure](../CLOUD_SECRET_PROVISIONING/README.md#bob-1-builderops-alert-handoff)
+owns application, recovery and rotation. This admission creates no provider,
+channel, BWS account, Product consumer grant, or separate secret store; Heimdal
+retains the shared relationship and credential lifecycle. Runtime activation and
+delivery remain unverified until #6347 records their exact live receipts.
+
 ## Integration and event boundary
 
 External helper systems that cross a Mimer boundary use the applicable Integration Fabric contract.

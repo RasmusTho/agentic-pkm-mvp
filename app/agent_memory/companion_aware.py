@@ -233,6 +233,8 @@ def promote_candidate_from_companion(
 def discover_candidates_from_companions(
     companions: list[SynthesisCompanion],
     queue: Optional[MemoryCandidateReviewQueue] = None,
+    *,
+    binding: Optional[str] = None,
 ) -> MemoryCandidateReviewQueue:
     """Discover pending memory candidates from synthesis_companion artifacts.
 
@@ -241,6 +243,9 @@ def discover_candidates_from_companions(
     enqueues all candidates not already present in ``queue``.
 
     If ``queue`` is None a fresh ``MemoryCandidateReviewQueue`` is created.
+
+    ``binding`` stamps every enqueued candidate with its producing vault binding
+    (MVR-05B4c1) and scopes the already-present check to that binding.
 
     Returns the queue with all discovered candidates enqueued.
     """
@@ -255,9 +260,12 @@ def discover_candidates_from_companions(
             continue
 
         for candidate in companion.candidates.values():
-            existing_ids = {e.candidate_id for e in queue.pending() + queue.decided()}
+            existing_ids = {
+                e.candidate_id
+                for e in queue.pending(binding=binding) + queue.decided(binding=binding)
+            }
             if candidate.candidate_id not in existing_ids:
-                queue.enqueue(candidate)
+                queue.enqueue(candidate, binding=binding)
 
     return queue
 

@@ -19,10 +19,11 @@ if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocati
 
 from app.dispatcher.verification_contract import (
     has_closing_issue_attempt,
+    has_issue_lifecycle_marker,
     resolve_builderops_routing_status,
-    resolve_issue_authority,
     resolve_pr_contract_final_review_rounds,
 )
+from scripts.pr_body_generator import resolve_native_issue_authority
 from scripts.validate_issue_readiness import classify_issue_body
 
 try:  # Supports both ``python scripts/...`` and package imports in tests.
@@ -471,7 +472,7 @@ def authenticated_pr_scope_revalidation_history(
             raise ReviewBeforeCiGateError(
                 "GitHub governing Issue body is unavailable for contract binding"
             )
-        authority = resolve_issue_authority(pr["body"])
+        authority = resolve_native_issue_authority(pr["body"])
         if authority is None or authority.governing_issue != governing_issue:
             raise ReviewBeforeCiGateError(
                 "GitHub PR governing Issue identity is missing, foreign, or stale"
@@ -812,6 +813,7 @@ def _issue_free_pr_contract_lane(body: object) -> str | None:
         or UNSUPPORTED_CONTRACT_LINE_SEPARATOR.search(body)
         or GOVERNING_ISSUE_ATTEMPT.search(body)
         or has_closing_issue_attempt(body)
+        or has_issue_lifecycle_marker(body)
         or NEUTRALIZED_CLOSING_ATTEMPT.search(body)
     ):
         return None

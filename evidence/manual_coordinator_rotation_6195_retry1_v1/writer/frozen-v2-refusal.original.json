@@ -1,0 +1,44 @@
+{
+  "purpose": "Immutable actual frozen-protocol-v2 serialized refusal; not a conforming experiment result or acceptance authority.",
+  "actor": "/root/implement_manual_rotation_6236",
+  "argv": [
+    "/Users/rasmus/.pyenv/versions/3.12.7/bin/python3",
+    "-m",
+    "app.builderops.manual_coordinator_rotation",
+    "build",
+    "--input-file",
+    "evidence/manual_coordinator_rotation_6195_retry1_v1/rotation-input.json",
+    "--capture-contract-file",
+    "evidence/manual_coordinator_rotation_6195_retry1_v1/capture-contract.json",
+    "--expected-capture-sha256",
+    "36a2bda8af7a092d7b660fb203dd620790d57c1865bec01d8f5efa97d252f022",
+    "--output",
+    "evidence/manual_coordinator_rotation_6195_retry1_v1/receipt.json"
+  ],
+  "result": {
+    "chunk_id": "627dc9",
+    "wall_time_seconds": 0.147774208,
+    "exit_code": 2,
+    "original_token_count": 26,
+    "output": "manual rotation refused: native admission engine_identity_source is not bound to its retained authority\n"
+  },
+  "retention_clock": {
+    "tool": "clock.curr_time",
+    "result": {
+      "current_time": "2026-10-18 12:28:43 UTC"
+    },
+    "scope": "Actual clock read after this refusal replay; not the original first attempt's start or end."
+  },
+  "module": {
+    "ref": "app/builderops/manual_coordinator_rotation.py",
+    "sha256": "5d657d8905f8f61ad24723fc55018bd1149a86d35345fe7cb4805cc59df8ff37",
+    "bytes_length": 32512
+  },
+  "input": {
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/rotation-input.json",
+    "sha256": "0f5271fb2c637801f0fcc82ba7711fead8062cfe9f1bb374b87f2cedd800bdbe",
+    "bytes_length": 2758
+  },
+  "output_created": false,
+  "qualifying_interval_repair_count_unchanged": 3
+}

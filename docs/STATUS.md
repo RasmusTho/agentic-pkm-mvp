@@ -5,7 +5,23 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-15 (BWS / #5667 status reconciliation; unrelated status entries were not re-audited)
+Last reviewed: 2026-10-18 UTC (native executor startup / #6245; private CKM source admission / #6194; manual shadow rehydration / #6174 retains its 2026-10-17 review; unrelated status entries were not re-audited)
+Last verified against (native executor startup): Issue #6245, `app/ops/builder_executor_keyring.py`,
+the fixed systemd unit and affected lifecycle/consumer tests; repository and isolated synthetic Linux
+evidence only, without production activation, personal authentication or #6146 qualification.
+Last verified against (private CKM source admission): Issue #6194, `app/builderops/devui_ckm_snapshot.py`, `app/ops/devui_ckm_snapshot.py`, and focused managed source tests; repository evidence only.
+Last reviewed (SCREEN-06 host controls): 2026-10-17
+Last verified against (SCREEN-06 host controls): Issue #3342, `app/heimdal/screen_control.py`,
+`app/heimdal/retention.py`, `app/api/routes/heimdal_screen.py`,
+`tests/heimdal/test_screen_control_receipts.py`, `tests/heimdal/test_screen_control_settings.py`,
+`tests/heimdal/test_screen_frame_retention.py`, and
+`tests/integration/test_multi_vault_request_isolation.py`. Scoped control reads fail closed until the
+surface is vault-bound. If the settings source is missing, host capture remains degraded/paused and
+screen retention currently refuses cleanup even when a durable last-accepted bound exists. Actual
+native capture/indicator agreement remains Bifrost #72, #3341, and parent #3340 acceptance.
+Last verified against (manual shadow rehydration): Issue #6174, the two probe modules and focused
+tests, and `evidence/shadow_rehydration_3798_field_contract.v2.json`; repository/manual-probe
+evidence only, not positive live GitHub/remote-head rehydration or rotation acceptance.
 Last reviewed (Builder execution routing): 2026-10-11
 Last verified against (Builder execution routing): `docs/settings/models/providers.yaml`,
 `.codex/agents/verification-closer.toml`, and the focused provider-census, execution-routing,
@@ -80,6 +96,12 @@ permission write, key import, host installation, or Jev call is claimed.
 Source: Issues #5764, #5667, and #5801; `docs/TYPESAFE_SYSTEM_ONE/README.md`,
 `docs/CLOUD_SECRET_PROVISIONING/README.md`, and PR #5803, merged at
 `cf2a8dbe0d670e120fedf85a347db0babf916fe3`.
+Last verified against (DevUI component promotion): Issue #6105,
+`app/ops/devui_component_promotion.py` and its focused production-path tests. Repository support
+provides an attested manual DevUI-only promotion and rollback with exact image/config and browser
+checks; [the deployment owner](BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#bounded-manual-devui-component-promotion)
+defines its boundary. This is no live deployment, complete-system/source qualification or human
+outcome claim; subsequent VM102 evidence remains on #5181 and owner acceptance stays separate.
 Last verified against (DevUI supervised continuity): Issue #5655,
 `app/builderops/devui_issue_work.py`, `app/builderops/devui_sources.py`, and
 `tests/builderops/test_devui_issue_work.py` on 2026-09-24. The managed Focus read carries an
@@ -102,14 +124,18 @@ The same 2026-10-05 readback found that `ygg-prod` still reports `required_ok=fa
 
 Production remains on the current `main`-tracking deployment baseline; the `stable` ref is dormant. The Issue #5868 repository candidate adds an explicit existing-value TARS deployment mode: it validates the selected values, refuses a missing PostgreSQL password before RPC, binds the mode to the host operation journal, and performs no BWS write. Once merged, that path will not require bootstrap-only writer qualification; BWS bootstrap writes remain under #5667. This is repository-candidate evidence only and does not qualify the production caller or change live routing/deployment. Before promotion, verify the production caller binding and selected existing values, obtain candidate-bound TEST verification (or follow the governed bypass procedure), and prepare the exact release plan. Forward-only migrations require acknowledgment for that exact plan. Ollama model installation and embedding-index rebuild are separate operational steps. The live readback and decision do not claim that any of these actions occurred.
 
-### Live environment baseline (2026-08-22)
+### Current infrastructure status
 
-The Mac mini is now an Ollama/model host only. Product runtime evidence is on the new Linux/Tailscale
-hosts: `ygg-dev` is reachable but degraded, `ygg-test` is not available, and `ygg-prod` has API
-liveness but failing functional health (stale watcher/no worker heartbeat; Companion UI unavailable).
-Both new-host APIs report unknown build identity. The promotion chain is therefore not yet executable;
-the missing test host, immutable artifact identity, and authoritative deployment handoff are explicit
-follow-up gates rather than implied by local Compose or old Mac mini state.
+The observed local environment is maintained in
+[yggdrasil-infra — Current local infrastructure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md), with a 2026-10-21 read-only snapshot and
+explicit gaps. Builder Vault carries the operational handoff and private evidence locator. This is
+a descriptive status view; application deployment, release eligibility and capability acceptance
+remain with their existing owners.
+
+The August 22 baseline formerly here and the dated October 5 observations above are historical.
+Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those
+older paragraphs. Infrastructure-reference review on 2026-10-21 does not revalidate the other
+capability or acceptance claims in this document.
 
 The BWS-04 implementation (#5680) adds a supervised Linux database deployment path with selected
 host/VM secret checks, durable same-ID receipts, file-only PostgreSQL credentials, and real
@@ -153,6 +179,13 @@ Status snapshot now includes SoT baseline + release-line fields and intent/event
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
 
+2026-10-18 native executor startup support (#6245): the fixed Mac-administered installer prepares
+plan-bound startup/unlock and retained-state withdrawal for BOB-1. The sandboxed bootstrap decodes
+only after read-only mounts apply and permanently drops privileges before GNOME; sanitized Codex
+consumers receive only validated local bus metadata. Production activation, personal login and
+the installed-main qualification under #6146 remain separate gates. The operational procedure stays
+in `docs/deployment/profiles/TARS_PROXMOX.md`; this status entry adds no credential grant.
+
 2026-09-13 DevUI read-model and managed-journey writeback (verified against `docs/DEVUI.md`,
 `docs/plans/DEVUI_IMPLEMENTATION.md`, `app/builderops/devui_overview.py`,
 `app/builderops/devui_runtime.py`, `app/builderops/devui_sources.py`, and
@@ -187,13 +220,26 @@ deployment, host, or owner-acceptance claims.
   preflight (#5522), without Product or Companion gateway startup. Its typed qualification/deploy/health producers validate supplied
   component evidence and distinguish preparation from observed health. The managed GET now reads
   the admitted BuilderOps API, bounded gh REST and immutable candidate documents alongside the
-  independent VM102 receipts (#5520); CKM remains unavailable. Source configuration, partial
+  independent VM102 receipts (#5520). #6194 adds the separately owner-approved private CKM
+  snapshot from the existing local read-only query through fixed SSH publication and the existing
+  receipt mount. The complete capture retains original identity/watermarks and expires after
+  24 hours; missing or invalid captures remain refused while independent sources stay available.
+  This is repository support; live installation/publication and browser proof remain separate
+  under #5181. Source configuration, partial
   task projection, quota refusal and candidate provenance are defined at
   [Managed read journey admission](BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission).
   The separate local browser proof and constrained-reuse envelope establish repository behavior;
   VM102 deployment, qualified live sources, final-main deployed browser proof, complete health and
   owner acceptance remain under #5181, #4749 and parent #4741. The runtime/receipt owner contract is
   `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Standalone DevUI receipt production`.
+- #6175 adds repository support for a fenced, same-state terminal task payload-status correction
+  in the existing BuilderOps API/client/CLI. It aligns only a completed GitHub task's redundant
+  ready status, retaining historical source data and ordinary lifecycle guards. The
+  [terminal correction contract](BUILDEROPS_CONTROL_PLANE/README.md#terminal-task-payload-status-correction)
+  now also exposes exact generic maintenance cleanup through the authenticated API/client/CLI
+  (#6198), preserving task-ownership isolation and existing store fencing/idempotency. It
+  separates this implementation from control-plane installation, task5495 data application,
+  owner acceptance and complete system/source qualification under #5181.
 - FCP-04 (#4697) implements the exact nonvisual Start/Hold preview and authenticated bounded
   Model Inquiry command in the existing BuilderOps service. Its production constructor uses the
   single skill-owned facade and destination reservation/attempt/readback interface; the existing
@@ -316,6 +362,15 @@ promote public internet readiness.
 - The Heimdal time-spend projection's vault writes (#4609, repairing PR #4586 P1 residuals) quarantine observed bucket labels through the HEIM-9 path before materialization, replace owned notes only by expected-version compare-and-swap, create absent targets atomically no-clobber, and clear owned weekly notes the rebuild fold no longer targets — a racing human edit or creation always wins with a loud, item-scoped `blocked` receipt entry (`docs/HEIMDAL_SCREEN_STREAM/PROJECT_TIME_SPEND_ANALYSIS.md`).
 
 ## Runtime verification
+- SCREEN-06 (#3342) exposes authenticated host pause/exclusion/tunable controls through the existing
+  Settings Spine, live Markdown ingestion, and durable actor-tagged receipts. Source version-CAS
+  preserves concurrent edits; invalid or unaccepted changes are visible and deny capture permission.
+  Pause revokes active screen grants through the canonical ledger and its raw-erasure path; resume
+  alone never grants consent again. Erasure/receipt failures remain refused and retryable.
+  Status reports requested/effective control state with `capture_state=unknown_external_client`.
+  Native capture enforcement, actual loop/indicator agreement, and live capability acceptance remain
+  with Bifrost #72, #3341, and #3340; no production activation is claimed. The owner contract is
+  `docs/HEIMDAL_SCREEN_STREAM/CONTROL_SURFACE_AND_EXCLUSIONS.md`.
 - Sources-zone runtime boundaries are shipped (#5700, PR #5701): acquisition candidate and proposal writes, source-bundle outputs, Heimdal projections, and meeting finalization check the effective capture note before side effects; internal MCP append refuses destinations inside the configured Sources zone. Knowledge adapters and artifact identity classify the selected-vault Sources root across filesystem aliases. The Sources writer set and owner contract are unchanged; #3414’s separate writer census and fitness check remain outstanding.
 - `/api/health` reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
 - `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `watcher.run` audit rows plus `index.embedding.created` / `index.embedding.failed` (legacy alias: `index.object.embedded`), and log diagnostics when sources are missing.
@@ -764,6 +819,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   product/runtime truth and never bypass repo authority gates. (ADR-0010's "not implemented" header
   predates this store/CLI/API delivery under the #1500-series follow-ups and is the stale surface to
   reconcile next.)
+- Manual Builder shadow rehydration preserves v1 evidence/API semantics and adds an explicit v2
+  typed field contract, exact retained-chain validation, and provenance-bound packet/response byte,
+  wall-clock and bounded native-event measurements. Missing live evidence and unavailable carrier
+  token/cost/human-effort data remain unknown; no rotation, automatic worker start or changed dispatch
+  is activated. The [dispatcher owner contract](AGENT_ISSUE_DISPATCHER.md#manual-shadow-rehydration-probe)
+  owns the detailed semantics and trust limits.
 - BuilderOps `PromotionIntent` creation validates `target_authority_surface` against the canonical
   promotion target registry shared with the promotion gateway
   (`app/builderops/models.py::PROMOTION_TARGET_SURFACES`): unsupported targets fail before
@@ -1131,6 +1192,14 @@ parent validation hub #1921.
 
 ## Cognitive Expansion — activation status (2026-07-05)
 
+Last reviewed (Expansion acceptance boundary): 2026-10-21 UTC
+Last verified against (Expansion acceptance boundary): Issue #6293 candidate, `app/expansion/accept.py`,
+`tests/expansion/test_accept_promotion.py`, and the focused UAT suite; repository-only evidence.
+No live TEST UAT is claimed. The synthetic test-actor authority is the owner amendment on
+[#4826](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4826#issuecomment-6107736254);
+current TEST qualification remains unproven. #3320 tracks a separate TEST recovery/security
+decision and does not grant Expansion actor authority.
+
 This system pursues two classes of value (see `docs/COGNITIVE_PROSTHESIS_CHARTER.md` §2.1):
 **Cognitive Maintenance** (preserve cognition) and **Cognitive Expansion** (improve cognition).
 Maintenance is broadly live and test-backed. The Contextual Relevance Engine above is the first
@@ -1151,7 +1220,7 @@ truth, not a backlog.
 | Source Understanding lenses | `app/source_understanding/*` | **seam** (`/p0` route reachable, no runtime caller) | a consuming flow + admissibility |
 | Planner / next-action | `app/planner/*`, `app/orchestrator/*` | **dormant** (orchestrator imported only by CLI/smoke, not the three runtime services) | proven loop + commitment surfacing |
 | Commitment surfacing | `app/domain/commitments.py`, `app/commitments/*`, Companion workspace state/API/UI | **live read-side** (durable vault-backed commitment artifacts feed a read-only Companion projection; no mutation/transition affordance) | mutation, reminders, automatic closure, and CRE reach-out remain follow-ons |
-| Knowledge compilation / cross-note synthesis | `app/knowledge_compilation/*`, `app/reasoning/multi.py`, `app/expansion/create.py`, `app/expansion/accept.py` | **gated-active-via-contract** (EXP-3, #2996: `run_create_pass` is the first runtime caller of both `run_multi_note_reasoning` and `proposal_builders.build_compilation_draft`, activated through `app/activation/gate.py` at `proposal` authority — the gate's second proof after ASK #2026. EXP-4, #2997: governed acceptance now lands the checked-checkbox path — `app.expansion.accept.accept_draft` is the ONLY path from a staged draft to a canonical note, WriteGuard-gated with a decision-token + acceptance receipt. Output kinds: `create.overview`, `create.answer_note`, and `create.digest` (EXP-5, #2998) all share the identical staged-draft lifecycle; digests are explicit-ask only, never auto-run from a moment. The shared `ReasoningOutput` result keeps runtime-owned `success` / `empty_output` / `provider_failure` / `missing_input` outcomes explicit; degraded runs never fabricate claims or inferences, and Create records that outcome separately from deterministic source collation.) | test-channel UAT with the live (Ollama) provider before prod promotion |
+| Knowledge compilation / cross-note synthesis | `app/knowledge_compilation/*`, `app/reasoning/multi.py`, `app/expansion/create.py`, `app/expansion/accept.py` | **gated-active-via-contract** (EXP-3, #2996: `run_create_pass` is the first runtime caller of both `run_multi_note_reasoning` and `proposal_builders.build_compilation_draft`, activated through `app/activation/gate.py` at `proposal` authority — the gate's second proof after ASK #2026. EXP-4, #2997: governed acceptance now lands the checked-checkbox path — `app.expansion.accept.accept_draft` is the ONLY path from a staged draft to a canonical note, WriteGuard-gated with a decision-token + acceptance receipt. Acceptance recognizes only the single draft-ID-bound checked control in the balanced body AI panel; frontmatter, unrelated tasks, duplicate/wrong-ID controls, and literal examples do not authorize materialization. Output kinds: `create.overview`, `create.answer_note`, and `create.digest` (EXP-5, #2998) all share the identical staged-draft lifecycle; digests are explicit-ask only, never auto-run from a moment. The shared `ReasoningOutput` result keeps runtime-owned `success` / `empty_output` / `provider_failure` / `missing_input` outcomes explicit; degraded runs never fabricate claims or inferences, and Create records that outcome separately from deterministic source collation.) | test-channel UAT with the live (Ollama) provider before prod promotion |
 | Conversational Journaling draft (`journal_draft_proposal`) | `app/journaling/draft.py`, `app/activation/journal_draft.py` | **gated-active-via-contract** (JRNL-03/#3349: a guarded, serialized no-follow transaction stages one proposal per day under `<system_folder>/drafts/journal/`; every transcript/day-context source retains its actual review posture and must independently reach cited-proposal admission (`revised` stays read-only; rejected/unknown is excluded) before cognition or staging. UUID-addressable cognition consumes the runtime-owned explicit reasoning outcome and bounded degradation reason, never infers success from counts, and never fabricates claims or synthesis; deterministic cited collation remains visibly separate. The content-free activation receipt is embedded atomically with the draft. The canonical daily note is never written; accepted-entry follow-ups route to a separate addendum candidate.) | JRNL-04 owns explicit human acceptance/promotion; test-channel UAT before prod promotion |
 | Connect — relationship surfacing (`connection_proposal`) | `app/expansion/connect.py`, `app/curation/findings.py`, `app/curation/proposal_writer.py` | **gated-active-via-contract** (EXP-1/#2994, EXP-2/#2995, EXP-5/#2998: `run_connect_pass` proposes `connect.related_unlinked`/`connect.thematic_link` findings and `find_cluster_emergence` proposes `connect.cluster_emergence` findings — all candidate-only, materialized as unchecked panel checkboxes via the G2 writer, never auto-applied. An accepted `connect.cluster_emergence` finding hands off to a `create.overview` request via `cluster_emergence_to_create_request`, still through the full staged-draft lifecycle) — moved dormant → gated-active as its EXP-6 (#2998) activation-gate record (`app/activation/expansion_records.py::evaluate_connection_proposal_activation`) went green | test-channel UAT before prod promotion |
 | Create — synthesized outputs (`synthesis_note_proposal`) | `app/expansion/create.py`, `app/expansion/accept.py`, `app/activation/expansion_records.py` | **gated-active-via-contract** — moved dormant → gated-active as its EXP-6 (#2998) activation-gate record (`evaluate_synthesis_note_proposal_activation`) went green; a regressed precondition on either Expansion record yields blocked-with-reason, never a silent run (`expansion_requires_activation_record`) | test-channel UAT before prod promotion |

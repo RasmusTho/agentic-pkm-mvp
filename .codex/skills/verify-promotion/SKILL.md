@@ -5,14 +5,13 @@ description: "Verify that prod is healthy and functionally correct after a promo
 
 # Verify Promotion
 
-> **Status: step 1 below describes the TARGET gated-`stable` model (deferred promotion
-> hardening).** Prod currently tracks `main` directly per
-> `docs/RELEASE_CHANNELS/README.md §Promotion model` and
-> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
-> **dormant** and is not an ancestor of `origin/main`. Under the current baseline, do **not**
-> assert the running prod ref equals `origin/stable` — that false-FAILs a healthy prod and routes
-> to a rollback against a dormant, diverged ref. Compare against the current promotion ref
-> (`main`) instead; see step 1.
+> **Status: current source promotion policy (ADR-0068 D4, Issue #6228).**
+> `stable` is the production promotion authority. Normal advancement requires the exact current
+> `test` candidate C, trusted green TEST evidence, a durable functional PASS, and explicit approval
+> of the concrete plan. Protected merge M records stable authority; it does not qualify a new
+> source version or image. Production deploys the tested source C and immutable digest D.
+> Repository support does not establish a running-prod observation or physical cutover. Current
+> infrastructure observations belong to `RasmusTho/yggdrasil-infra/CURRENT_STATUS.md`.
 
 Use this skill immediately after `execute-promotion` succeeds, and again after `rollback-promotion`. Its sole job is to confirm the running prod channel is healthy and report any failures clearly.
 
@@ -42,8 +41,8 @@ Before verifying, resolve the prod channel's deployment model:
 - **Checkout model (interim / no-dead-window):** the channel remains on the checkout model until a
   cutover receipt exists for prod: a fleet-model fitness PASS recorded at
   `ops/deployments/prod-latest.json`. In this mode, keep the existing checkout-based code-ref check
-  against the current promotion ref (`main` now, `origin/stable` only after that authority is
-  restored).
+  against protected `stable`. A generated merge M is not automatically qualified as a checkout
+  runtime; normal forward admission refuses that mismatch before effects.
 - **Pinned-image model (post-cutover):** once the cutover receipt exists, verify the physical deploy
   by consuming the `scripts/deploy_channel.sh` receipt at `ops/deployments/prod-latest.json` and by
   confirming `/version` and `/api/health.version` report the authorized SHA. The checkout may still
@@ -72,7 +71,17 @@ SHA divergence, or gateway `/healthz` failure. The guard receipt embedded in
 
 ## What this skill does
 
-1. Confirms the running prod code identity matches the current **promotion ref/SHA** for the active deployment model. In checkout model, run `python -m app.release_channels.prod_ref_fitness <prod-checkout> --promotion-ref main` — the same guard `execute-promotion`/`rollback-promotion` rely on, and the single source of truth for "current," so this step never hardcodes or re-derives the ref by hand. Under the future gated checkout model the flag becomes `--promotion-ref origin/stable`; do not pass that while `origin/stable` remains dormant. In pinned-image model, read `ops/deployments/prod-latest.json` and confirm the receipt, `/version`, and `/api/health.version` all match the authorized SHA deployed by `scripts/deploy_channel.sh`. In both models, run the fleet-model fitness guard described above and treat pinned-image guard failures as promotion verification failures.
+1. Confirms the running source C and immutable digest D match the authorized deployment identity.
+   For a normal pinned-image promotion, revalidate the approved plan through
+   `python -m app.release_channels.stable_promotion --plan <plan> --phase deploy --candidate <C> --image-digest <D>`;
+   read `ops/deployments/prod-latest.json`, including `stable_promotion`, and confirm its C/D, S/M,
+   approval digest and functional receipt identity. `/version` and `/api/health.version` must report
+   **C**, and the running image must be D; M is the protected stable merge, never an assumed tested
+   runtime or rebuilt image. For separately authorized recovery verify the recorded previous-good
+   pin and recovery receipt instead of applying forward-promotion eligibility. A checkout
+   reproducibility check uses `python -m app.release_channels.prod_ref_fitness <prod-checkout>`
+   (default stable); it does not grant promotion authority. In every model run the fleet-model
+   fitness guard above and treat pinned-image guard failures as verification failures.
 2. Confirms the prod Postgres container is healthy (port 15432 responsive, outbox consumer running, no error state in worker heartbeat).
 3. Runs `python -m app.cli status` against the prod channel and confirms all components report healthy.
 4. Runs `python -m app.cli settings-explain` against the prod channel and confirms the resolved environment is `prod`, the vault root is the real vault, and the DB resolves to the prod DB.
@@ -82,7 +91,7 @@ SHA divergence, or gateway `/healthz` failure. The guard receipt embedded in
 6. Checks the watcher heartbeat and confirms it is ticking within expected cadence.
 7. Reads the latest outbox state and confirms no stuck or errored events from the promotion.
 8. Reports a clear PASS / FAIL with the checks run and their results.
-9. Appends the verification receipt (timestamp, checks run, outcome) to the promotion plan file at `ops/promotions/YYYY-MM-DD-<short-sha>.md`.
+9. Appends the observed verification receipt (timestamp, checks run, outcome) after `<!-- promotion-outcomes -->` in the promotion plan file at `ops/promotions/YYYY-MM-DD-<short-sha>.md`.
 
 ## Pre-conditions
 

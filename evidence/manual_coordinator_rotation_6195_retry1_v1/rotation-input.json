@@ -1,0 +1,60 @@
+{
+  "schema_name": "manual_coordinator_rotation_input",
+  "schema_version": 2,
+  "experiment_id": "manual_coordinator_rotation_6195_retry1",
+  "capture_contract": {
+    "bytes_length": 1514,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/capture-contract.json",
+    "sha256": "36a2bda8af7a092d7b660fb203dd620790d57c1865bec01d8f5efa97d252f022"
+  },
+  "probe_receipt": {
+    "bytes_length": 15588,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/initial/probe-receipt.json",
+    "sha256": "92d1704425aed45e5f9a574acf53ef65f6275443500cda9bc0dba3dad6aca043"
+  },
+  "admission": {
+    "bytes_length": 1138,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/operator/admission.corrected.original.json",
+    "sha256": "1f7efddc9e5a80d9344fc596c4f7e867d40089c790358d51555fd5edbe2b148c"
+  },
+  "initial_fidelity": {
+    "bytes_length": 13064,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/initial/capture-fidelity.original.json",
+    "sha256": "6208b394c13c8ae9792accb5e8d139289f90a44e577888e02c948147091d981d"
+  },
+  "manual_decision": {
+    "bytes_length": 1642,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/operator/manual-decision.original.json",
+    "sha256": "8aea47e322725d21817c7d2802b89c6d1471adab8a99a66bf8b8afbeefd0c4dc"
+  },
+  "quiescence": {
+    "bytes_length": 541,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/operator/quiescence.original.json",
+    "sha256": "a56bc3284942cee704b7e4fdf4a03f68225c8f1b97966da73cfa0669d878fee7"
+  },
+  "acknowledgment": {
+    "bytes_length": 944,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/acknowledgment.original.json",
+    "sha256": "c4d3279aec60022bb13d5529e6b6ad03f15301f7dffb7e920c150aea9d9e8dc6"
+  },
+  "activation": {
+    "bytes_length": 711,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/operator/activation.original.json",
+    "sha256": "b6a3a6ad11a79640090490c06184e8241fa249b11a6b3419da16d3912aee493f"
+  },
+  "continuation": {
+    "bytes_length": 3320,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/continuation/continuation.original.json",
+    "sha256": "2de1a689c8f3970ddfe71024296da61a45876ab4cb9aea8c1765afdf5b795d5c"
+  },
+  "continuation_fidelity": {
+    "bytes_length": 16917,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/successor/continuation/capture-fidelity.original.json",
+    "sha256": "99bd179ac69ffb468420e02995ee8bf4fbfdfcbed16fdbff11cb761068debe47"
+  },
+  "execution": {
+    "bytes_length": 7105,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/operator/execution.json",
+    "sha256": "013fb4370123eeab210089555f3986371074eb8cc91775238f8d465772a7a117"
+  }
+}

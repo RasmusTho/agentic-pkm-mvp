@@ -23,6 +23,10 @@ from tests.companion_ui.live_smoke_contract import (
     assert_operator_channel,
 )
 
+_CAPTURE_PATHS = frozenset({
+    '/api/companion/capture', '/api/companion/capture/compatibility',
+})
+
 
 class Blocked(RuntimeError):
     """A prerequisite could not be established; this is not a passing test."""
@@ -85,6 +89,7 @@ def validate_manifest(d: dict[str, Any]) -> dict[str, Any]:
         "embedding_identity",
         "allow_capture",
         "allow_ask",
+        "capture_only",
         "navigation_ms",
         "index_seconds",
         "request_ms",
@@ -141,6 +146,11 @@ def validate_manifest(d: dict[str, Any]) -> dict[str, Any]:
         if type(d.get(key, False)) is not bool:
             raise ValueError("effect_permission_invalid")
         d.setdefault(key, False)
+    if type(d.get("capture_only", False)) is not bool:
+        raise ValueError("capture_only_mode_invalid")
+    d.setdefault("capture_only", False)
+    if d["capture_only"] and (not d["allow_capture"] or d["allow_ask"]):
+        raise ValueError("capture_only_requires_capture_without_ask")
     for key in ("known_note_path", "capture_note_path"):
         if d.get(key) and not _relative(d[key]):
             raise ValueError("fixture_path_invalid")
@@ -478,7 +488,7 @@ def validate_capture_ack(ack: dict[str, Any], expected_path: str, posts: int) ->
 
 
 class CoreFlow:
-    """One bounded journey, with independent status for its eight steps."""
+    """One bounded journey, with independent status for full or capture-only steps."""
 
     def __init__(
         self,
@@ -524,7 +534,7 @@ class CoreFlow:
             return
         path = urlparse(request.url).path
         if (
-            path == "/api/companion/capture"
+            path in _CAPTURE_PATHS
             and request.method == "POST"
             and self.capture_armed
             and self.d["allow_capture"]
@@ -548,9 +558,12 @@ class CoreFlow:
         else:
             route.abort("blockedbyclient")
 
-    def _get(self, url: str) -> dict[str, Any]:
+    def _get(self, url: str, *, page: Any | None = None) -> dict[str, Any]:
         try:
-            response = self.page.request.get(url, timeout=self.d["request_ms"], max_redirects=0)
+            request_page = page or self.page
+            response = request_page.request.get(
+                url, timeout=self.d["request_ms"], max_redirects=0
+            )
         except Exception as exc:
             raise Blocked("endpoint_unreachable") from exc
         if not response.ok:
@@ -659,17 +672,7 @@ class CoreFlow:
             if not opened:
                 raise AssertionError("vault_browse_control_missing")
         pane.wait_for(state="visible")
-        folders = path.split("/")[:-1]
-        for index in range(len(folders)):
-            folder = "/".join(folders[: index + 1])
-            groups = pane.get_by_test_id("workspace-vault-browser-group")
-            for n in range(groups.count()):
-                group = groups.nth(n)
-                if group.get_attribute("data-folder") == folder:
-                    details = group.locator(":scope > details")
-                    if details.get_attribute("open") is None:
-                        details.locator(":scope > summary").click()
-                    break
+        CoreFlow._expand_vault_browser_folders(pane, path)
         links = pane.get_by_test_id("workspace-vault-browser-note-link")
         for n in range(links.count()):
             link = links.nth(n)
@@ -681,6 +684,169 @@ class CoreFlow:
                 page.get_by_test_id("workspace-note-rendered").wait_for(state="visible")
                 return
         raise AssertionError("approved_note_not_reachable_in_browser")
+
+    @staticmethod
+    def _expand_vault_browser_folders(pane: Any, path: str) -> None:
+        """Open the shipped tree ancestors so a matching note is visible."""
+        folders = path.split("/")[:-1]
+        for index in range(len(folders)):
+            folder = "/".join(folders[: index + 1])
+            groups = pane.get_by_test_id("workspace-vault-browser-group")
+            for n in range(groups.count()):
+                group = groups.nth(n)
+                if group.get_attribute("data-folder") == folder:
+                    details = group.locator(":scope > details")
+                    if details.get_attribute("open") is None:
+                        details.locator(":scope > summary").click()
+                    break
+
+    def _search_and_open_note(self, page: Any, phrase: str, expected_path: str) -> None:
+        """Discover a note through the visible Vault Browser q surface, then open it."""
+        self._admit_navigation()
+        if phrase.casefold() in expected_path.casefold():
+            raise AssertionError("search_phrase_is_not_body_only")
+        page.goto(self.d["ui_url"], wait_until="domcontentloaded")
+
+        pane = page.locator('[data-testid="workspace-vault-browser"]:visible').first
+        if not pane.count():
+            opened = False
+            for selector in (
+                '[data-testid="workspace-vault-chip"]',
+                '[data-intent="vault.open"]',
+                '[data-testid="vault-browse-button"]',
+            ):
+                controls = page.locator(selector)
+                for n in range(controls.count()):
+                    item = controls.nth(n)
+                    if item.is_visible():
+                        item.click()
+                        opened = True
+                        break
+                if opened:
+                    break
+            if not opened:
+                raise AssertionError("vault_browse_control_missing")
+            pane = page.locator('[data-testid="workspace-vault-browser"]:visible').first
+
+        persistent_search = page.locator(
+            '[data-testid="workspace-vault-browser-search"]:visible'
+        ).first
+        if persistent_search.count():
+            persistent_search.fill(phrase)
+            # The GET form submission is a new document navigation. Re-run the
+            # native first-contact admission immediately before it, just as
+            # the known-note path does before every document GET.
+            self._admit_navigation()
+            persistent_search.press("Enter")
+            page.wait_for_load_state("domcontentloaded")
+            pane = page.locator('[data-testid="workspace-vault-browser"]:visible').first
+            if not pane.count():
+                # A document GET rebuilds the left-panel mode. Reuse the
+                # shipped vault chip to reveal the returned browse tree before
+                # selecting the matching nested result.
+                controls = page.locator('[data-testid="workspace-vault-chip"]')
+                for n in range(controls.count()):
+                    item = controls.nth(n)
+                    if item.is_visible():
+                        item.click()
+                        break
+                pane = page.locator('[data-testid="workspace-vault-browser"]:visible').first
+            pane.wait_for(state="visible")
+            CoreFlow._expand_vault_browser_folders(pane, expected_path)
+            links = pane.get_by_test_id("workspace-vault-browser-note-link")
+            for n in range(links.count()):
+                link = links.nth(n)
+                href = link.get_attribute("href") or ""
+                if parse_qs(urlparse(href).query).get("note_path") != [expected_path]:
+                    continue
+                title = link.get_attribute("title") or ""
+                if phrase.casefold() in title.casefold():
+                    raise AssertionError("search_phrase_is_not_body_only")
+                self._admit_navigation()
+                link.click(timeout=self.d["navigation_ms"])
+                break
+            else:
+                raise AssertionError("body_phrase_not_found_in_visible_browser")
+        else:
+            # The narrow overlay is the existing client-search reference. Its
+            # response carries only the exact read-only path/title identity.
+            search = page.locator('[data-testid="vault-browser-search"]:visible').first
+            if not search.count():
+                self._admit_navigation()
+                page.evaluate("window.vaultBrowser.open()")
+                search = page.locator('[data-testid="vault-browser-search"]:visible').first
+            with page.expect_response(
+                lambda response: (
+                    urlparse(response.url).path == "/api/companion/vault/notes"
+                    and parse_qs(urlparse(response.url).query).get("q") == [phrase]
+                    and response.request.method == "GET"
+                ),
+                timeout=self.d["request_ms"],
+            ) as query_response:
+                search.fill(phrase)
+            response = query_response.value
+            if not response.ok:
+                raise AssertionError("filtered_query_response_failed")
+            try:
+                query_payload = response.json()
+            except (TypeError, ValueError) as exc:
+                raise AssertionError("filtered_query_response_invalid") from exc
+            if not isinstance(query_payload, dict):
+                raise AssertionError("filtered_query_response_invalid")
+            returned_notes = [
+                note for note in query_payload.get("notes", []) if isinstance(note, dict)
+            ]
+            returned_paths = {
+                str(note.get("note_path") or note.get("path") or "")
+                for note in returned_notes
+            }
+            if expected_path not in returned_paths:
+                raise AssertionError("body_phrase_not_found_in_query_response")
+            query_note = next(
+                note
+                for note in returned_notes
+                if str(note.get("note_path") or note.get("path") or "") == expected_path
+            )
+            page.wait_for_function(
+                "query => document.getElementById('vault-browser-list')"
+                ".getAttribute('data-query') === query",
+                arg=phrase,
+                timeout=self.d["request_ms"],
+            )
+            items = page.locator(
+                '[data-testid="vault-browser-list"] li[data-note-path]'
+            )
+            for index in range(items.count()):
+                item = items.nth(index)
+                if item.get_attribute("data-note-path") == expected_path:
+                    break
+            else:
+                raise AssertionError("body_phrase_not_found_in_visible_browser")
+            item.wait_for(state="visible")
+            query_title = str(query_note.get("title") or "").strip()
+            if query_title and query_title not in item.inner_text():
+                raise AssertionError("filtered_query_result_not_rendered")
+            if phrase.casefold() in item.inner_text().casefold():
+                raise AssertionError("search_phrase_is_not_body_only")
+            # selectNote() submits the existing note_path form, which is also
+            # a document navigation and must pass the same admission gate.
+            self._admit_navigation()
+            item.click()
+
+        page.get_by_test_id("workspace-note-rendered").wait_for(state="visible")
+        if parse_qs(urlparse(page.url).query).get("note_path") != [expected_path]:
+            raise AssertionError("visible_search_opened_wrong_note")
+        note = self._get(
+            urljoin(self.d["api_url"], "/api/companion/workspace")
+            + "?note_path="
+            + quote(expected_path),
+            page=page,
+        )
+        if note.get("artifact", {}).get("artifact_id") != self.d["capture_note_uuid"]:
+            raise AssertionError("visible_search_note_identity_mismatch")
+        body = page.get_by_test_id("workspace-note-rendered").inner_text()
+        if phrase not in body or not all(fact in body for fact in self.facts):
+            raise AssertionError("visible_search_note_body_mismatch")
 
     def open_known_note(self) -> None:
         self._need_identity()
@@ -707,7 +873,7 @@ class CoreFlow:
         self._binding()
         self.capture_armed = True
         with self.page.expect_response(
-            lambda r: urlparse(r.url).path == "/api/companion/capture"
+            lambda r: urlparse(r.url).path in _CAPTURE_PATHS
             and r.request.method == "POST",
             timeout=self.d["request_ms"],
         ) as response:
@@ -728,6 +894,11 @@ class CoreFlow:
         item = self.page.locator('[data-capture-state="written"]').filter(has_text=self.marker)
         if item.get_attribute("data-ack-trace-id") != self.ack["trace_id"]:
             raise AssertionError("capture_trace_not_rendered")
+        if self.ack.get("ingest_warning"):
+            warning = self.page.get_by_test_id("capture-ingest-warning")
+            warning.wait_for(state="visible")
+            if str(self.ack["ingest_warning"]) not in warning.inner_text():
+                raise AssertionError("capture_ingest_warning_not_rendered")
         self._binding()
         if not self.probe(self.d, self.marker).get("source_has_marker"):
             raise AssertionError("capture_not_in_approved_source")
@@ -738,12 +909,13 @@ class CoreFlow:
         self._need_identity()
         if not self.capture_verified:
             raise Blocked("no_verified_capture")
+        self._search_and_open_note(self.page, self.text, self.d["capture_note_path"])
         context = self.browser.new_context()
         try:
             page = context.new_page()
             page.set_default_navigation_timeout(self.d["navigation_ms"])
             page.set_default_timeout(10000)
-            self._open_note(page, self.d["capture_note_path"])
+            self._search_and_open_note(page, self.text, self.d["capture_note_path"])
             text = page.get_by_test_id("workspace-note-rendered").inner_text()
             if text.count(self.marker) != 1 or not all(x in text for x in self.facts):
                 raise AssertionError("fresh_context_did_not_read_capture")
@@ -825,7 +997,10 @@ class CoreFlow:
             page.set_default_navigation_timeout(self.d["navigation_ms"])
             page.set_default_timeout(10000)
             self._open_note(page, self.d["known_note_path"])
-            context.route("**/api/companion/capture", lambda route: route.abort("failed"))
+            context.route(
+                lambda url: urlparse(url).path in _CAPTURE_PATHS,
+                lambda route: route.abort("failed"),
+            )
             page.get_by_test_id("workspace-surface-icon-capture").click()
             draft = self.marker + "-offline-draft"
             page.get_by_test_id("capture-input").fill(draft)
@@ -873,6 +1048,12 @@ class CoreFlow:
             self.capture_unavailable_preserves_draft,
             self.ask_failure_is_visible_and_retryable,
         ]
+        capture_only = bool(self.d.get("capture_only", False))
+        if capture_only:
+            # A capture-only admission intentionally stops after the visible
+            # current/fresh-context discovery proof. It does not require the
+            # semantic index freshness diagnostic or any ASK/model outcome.
+            actions = actions[:4]
         try:
             for number, action in enumerate(actions, 1):
                 start = time.monotonic()
@@ -924,7 +1105,10 @@ class CoreFlow:
             "capture_acknowledgement": self.ack,
             "capture_write_observed": self.capture_written,
             "capture_verified": self.capture_verified,
-            "passed": len(self.results) == 8 and all(x["status"] == "passed" for x in self.results),
+            "execution_mode": "capture_only" if self.d.get("capture_only", False) else "full_core_flow",
+            "passed": bool(self.results)
+            and len(self.results) == (4 if self.d.get("capture_only", False) else 8)
+            and all(x["status"] == "passed" for x in self.results),
         }
         path = self.output / "report.json"
         temporary = self.output / "report.json.next"

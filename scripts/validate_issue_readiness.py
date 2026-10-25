@@ -464,7 +464,7 @@ def _is_new_behavioral_test_file_target(target: str, path: str) -> bool:
     )
 
 
-def _target_has_missing_file_path(target: str) -> bool:
+def _target_has_missing_file_path(target: str, repo_root: Path = REPO_ROOT) -> bool:
     if re.search(r"<[^>]+>", target):
         return False
     path = _verify_file_path(target)
@@ -473,12 +473,12 @@ def _target_has_missing_file_path(target: str) -> bool:
     candidate = Path(path)
     if candidate.is_absolute() or ".." in candidate.parts:
         return True
-    return not (REPO_ROOT / candidate).is_file() and not _is_new_behavioral_test_file_target(
+    return not (repo_root / candidate).is_file() and not _is_new_behavioral_test_file_target(
         target, path
     )
 
 
-def _target_has_existing_file_path(target: str) -> bool:
+def _target_has_existing_file_path(target: str, repo_root: Path = REPO_ROOT) -> bool:
     if re.search(r"<[^>]+>", target):
         return False
     path = _verify_file_path(target)
@@ -488,7 +488,7 @@ def _target_has_existing_file_path(target: str) -> bool:
     return (
         not candidate.is_absolute()
         and ".." not in candidate.parts
-        and (REPO_ROOT / candidate).is_file()
+        and (repo_root / candidate).is_file()
     )
 
 
@@ -540,25 +540,31 @@ def _is_joined_verify_target(target: str) -> bool:
     )
 
 
-def _joined_verify_targets(item: str) -> list[str]:
+def _joined_verify_targets(item: str, repo_root: Path = REPO_ROOT) -> list[str]:
     return [
         target
         for target in _verify_targets(item)
-        if _is_joined_verify_target(target) and _target_has_missing_file_path(target)
+        if _is_joined_verify_target(target)
+        and _target_has_missing_file_path(target, repo_root)
     ]
 
 
-def _missing_verify_file_paths(item: str) -> list[str]:
+def _missing_verify_file_paths(item: str, repo_root: Path = REPO_ROOT) -> list[str]:
     missing_paths: list[str] = []
     for target in _verify_targets(item):
-        if _target_has_missing_file_path(target):
+        if _target_has_missing_file_path(target, repo_root):
             path = _verify_file_path(target)
             if path is not None:
                 missing_paths.append(path)
     return missing_paths
 
 
-def analyze_acceptance_criteria(section: str | None, *, resolve_files: bool = True) -> AcceptanceCriteriaReport:
+def analyze_acceptance_criteria(
+    section: str | None,
+    *,
+    resolve_files: bool = True,
+    repo_root: Path = REPO_ROOT,
+) -> AcceptanceCriteriaReport:
     lines = _non_placeholder_lines(section)
     items = _extract_acceptance_items(section)
     malformed = bool(lines) and not items
@@ -568,10 +574,10 @@ def analyze_acceptance_criteria(section: str | None, *, resolve_files: bool = Tr
         if not _has_concrete_verify_marker(item)
     ]
     missing_file_paths = [
-        path for item in items for path in _missing_verify_file_paths(item)
+        path for item in items for path in _missing_verify_file_paths(item, repo_root)
     ] if resolve_files else []
     joined_targets = [
-        target for item in items for target in _joined_verify_targets(item)
+        target for item in items for target in _joined_verify_targets(item, repo_root)
     ] if resolve_files else []
     return AcceptanceCriteriaReport(
         present=bool(items),
@@ -671,6 +677,7 @@ def classify_issue_body(
     *,
     issue_number: int | None = None,
     labels: Sequence[str] = (),
+    repo_root: str | Path | None = None,
     _resolve_verify_files: bool = True,
 ) -> IssueReadinessReport:
     # The fixed retained-source importer mode preserves its independently
@@ -682,8 +689,15 @@ def classify_issue_body(
 
     source_docs_lines = _non_placeholder_lines(_section_content(sections, "Source Docs"))
     source_docs_present = bool(source_docs_lines)
+    verification_root = (
+        REPO_ROOT
+        if repo_root is None
+        else Path(repo_root).expanduser().resolve()
+    )
     ac_report = analyze_acceptance_criteria(
-        _section_content(sections, "Acceptance Criteria"), resolve_files=_resolve_verify_files,
+        _section_content(sections, "Acceptance Criteria"),
+        resolve_files=_resolve_verify_files,
+        repo_root=verification_root,
     )
     label_names = sorted(dict.fromkeys(labels))
     human_acceptance_exception = _has_human_acceptance_exception(body)
@@ -915,6 +929,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--body-file", help="Path to an issue body markdown file.")
     parser.add_argument("--issue-number", type=int)
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        help="Repository root to use when resolving relative Verify file paths.",
+    )
     parser.add_argument("--label", action="append", default=[], help="Issue label; may be repeated or comma-separated.")
     parser.add_argument("--output-json", help="Write JSON report to this path.")
     parser.add_argument("--output-markdown", help="Write Markdown report to this path.")
@@ -929,6 +948,7 @@ def main() -> int:
         _read_body(args),
         issue_number=_issue_number_arg(args.issue_number),
         labels=_parse_labels(args.label),
+        repo_root=args.repo_root,
     )
     payload = asdict(report)
     json_text = json.dumps(payload, indent=2, sort_keys=True) + "\n"

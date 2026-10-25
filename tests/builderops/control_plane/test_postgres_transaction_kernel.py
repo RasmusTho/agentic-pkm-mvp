@@ -342,7 +342,7 @@ def test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries(
     store = control_plane_store
     source = _import_source()
     monkeypatch.setattr(cockpit_github_plane, "_run_gh", lambda args: copy.deepcopy(source))
-    monkeypatch.setenv("BUILDEROPS_API_URL", "http://builderops")
+    monkeypatch.setenv("BUILDEROPS_API_URL", "https://builderops.invalid")
     monkeypatch.setenv("BUILDEROPS_API_TOKEN", "client-token")
     monkeypatch.delenv("BUILDEROPS_API_TOKEN_FILE", raising=False)
     service = create_app(store=store, credentials=_registry(tmp_path))
@@ -364,7 +364,7 @@ def test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries(
     assert replay["transition_response"]["result"]["replayed"] is True
     assert store.authority_counts("rasmustho/agentic-pkm-mvp") == counts
     from app.builderops.control_plane.client import ClientConfig
-    with factory(ClientConfig(base_url="http://builderops", token="client-token")) as client:
+    with factory(ClientConfig(base_url="https://builderops.invalid", token="client-token")) as client:
         request = first["transition_request"]
         from app.builderops.control_plane.client import ControlPlaneConflictError, StaleLeaseError
         with pytest.raises(StaleLeaseError, match="LeaseRequired"):
@@ -377,3 +377,151 @@ def test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries(
     assert main(command, client_factory=factory) != 0
     assert store.authority_counts("rasmustho/agentic-pkm-mvp") == claimed_counts
     assert store.get_task("rasmustho/agentic-pkm-mvp", request["task_id"])["state"] == "claimed"
+
+
+def test_terminal_payload_status_correction_changes_only_status(control_plane_store, envelope):
+    from tests.builderops.control_plane.correction_helpers import correction_setup, TASK
+
+    store = control_plane_store
+    args, before = correction_setup(store, envelope)
+    counts = store.authority_counts(envelope.repository)
+    with store._connect() as conn:
+        transitions = conn.execute("SELECT count(*) AS n FROM builderops_transitions").fetchone()[
+            "n"
+        ]
+    result = store.correct_task_payload_status(**args)
+    after = store.get_task(envelope.repository, TASK)
+    assert after["payload"] == dict(before["payload"], status="completed")
+    assert after["version"] == 4 and after["state"] == "completed"
+    assert after["updated_at"] != before["updated_at"]
+    assert after["lease"] == before["lease"]
+    assert after["authority_envelope"]["actor"] == envelope.actor
+    evidence = result["correction"]
+    assert evidence["previous_authority_envelope"] == before["authority_envelope"]
+    assert evidence["before_version"] == 3 and evidence["after_version"] == 4
+    assert evidence["before_payload_sha256"] == args["expected_payload_sha256"]
+    assert result["result"]["recovery_lsn"] != "0/0"
+    assert result["result"]["operation_key"] is None
+    assert store.authority_counts(envelope.repository) == dict(
+        counts, receipts=counts["receipts"] + 1, idempotency=counts["idempotency"] + 1
+    )
+    with store._connect() as conn:
+        assert (
+            conn.execute("SELECT count(*) AS n FROM builderops_transitions").fetchone()["n"]
+            == transitions
+        )
+        row = conn.execute(
+            "SELECT event_type,recovery_lsn FROM builderops_receipts WHERE receipt_sequence=%s",
+            (result["result"]["receipt_sequence"],),
+        ).fetchone()
+        assert row["event_type"] == "task.payload_status_corrected" and row["recovery_lsn"]
+
+
+def test_terminal_payload_status_correction_is_atomic_and_idempotent(control_plane_store, envelope):
+    from tests.builderops.control_plane.correction_helpers import correction_setup, TASK
+
+    store = control_plane_store
+    args, before = correction_setup(store, envelope)
+    counts = store.authority_counts(envelope.repository)
+    for phase in (
+        "after_correction_state",
+        "after_correction_receipt",
+        "after_correction_idempotency",
+    ):
+        with pytest.raises(RuntimeError, match="injected transaction fault"):
+            store.correct_task_payload_status(**args, fault_at=phase)
+        assert store.get_task(envelope.repository, TASK) == before
+        assert store.authority_counts(envelope.repository) == counts
+    with pytest.raises(RuntimeError, match="injected transaction fault"):
+        store.correct_task_payload_status(**args, fault_at="after_correction_commit")
+    # A committed result must survive lease release and process reconstruction.
+    store.release_lease(
+        envelope=envelope, lease=args["lease"], idempotency_key="maintenance-release", request={}
+    )
+    from app.builderops.control_plane import PostgresBuilderOpsStore
+
+    restarted = PostgresBuilderOpsStore(store.dsn)
+    replay = restarted.correct_task_payload_status(**args)
+    assert replay["result"]["replayed"] and replay["result"]["recovery_lsn"] != "0/0"
+    assert replay["correction"]["after_version"] == 4
+    counts = store.authority_counts(envelope.repository)
+    assert restarted.correct_task_payload_status(**args) == replay
+    assert store.authority_counts(envelope.repository) == counts
+    with pytest.raises(IdempotencyConflict):
+        restarted.correct_task_payload_status(**dict(args, proposal_ref="different-proposal"))
+
+
+def test_terminal_payload_status_correction_rejects_drift_and_active_lease(
+    control_plane_store, envelope
+):
+    from datetime import timedelta
+    from app.builderops.control_plane import StateConflict, StaleFencingToken, LeaseUnavailable
+    from tests.builderops.control_plane.correction_helpers import correction_setup, TASK
+
+    store = control_plane_store
+    args, before = correction_setup(store, envelope)
+    for delta in (
+        {"expected_version": 2},
+        {"expected_updated_at": args["expected_updated_at"] - timedelta(seconds=1)},
+        {"expected_payload_sha256": "sha256:" + "0" * 64},
+    ):
+        with pytest.raises(StateConflict):
+            store.correct_task_payload_status(**dict(args, **delta))
+    for delta in (
+        {"lease": replace(args["lease"], fencing_token=999)},
+        {"lease": replace(args["lease"], holder="foreign")},
+        {"task_id": "foreign-task"},
+    ):
+        with pytest.raises((LeaseRequired, StaleFencingToken)):
+            store.correct_task_payload_status(**dict(args, **delta))
+    # Expiry is checked against the locked database row, not the echoed timestamp.
+    with store._connect() as conn:
+        conn.execute("UPDATE builderops_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE lease_kind='generic'")
+    with pytest.raises(StaleFencingToken):
+        store.correct_task_payload_status(**args)
+    with store._connect() as conn:
+        conn.execute("UPDATE builderops_leases SET expires_at=%s WHERE lease_kind='generic'", (args["lease"].expires_at,))
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_leases SET expires_at=clock_timestamp()+interval '1 hour' WHERE lease_kind='task'"
+        )
+    with pytest.raises(LeaseUnavailable):
+        store.correct_task_payload_status(**args)
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_leases SET expires_at=clock_timestamp()-interval '1 hour' WHERE lease_kind='task'"
+        )
+    for patch in (
+        {"issue_delivery": {}},
+        {"repo": "foreign/repo"},
+        {"issue_number": 5496},
+        {"status": "completed"},
+    ):
+        with store._connect() as conn:
+            from psycopg.types.json import Jsonb
+
+            conn.execute(
+                "UPDATE builderops_tasks SET payload=%s WHERE task_id=%s",
+                (Jsonb(dict(before["payload"], **patch)), TASK),
+            )
+        with pytest.raises(StateConflict):
+            store.correct_task_payload_status(**args)
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_tasks SET payload=%s WHERE task_id=%s",
+            (Jsonb(before["payload"]), TASK),
+        )
+    barrier = Barrier(2)
+
+    def correct(index):
+        barrier.wait()
+        try:
+            return store.correct_task_payload_status(**dict(args, idempotency_key=f"race-{index}"))[
+                "correction"
+            ]["after_version"]
+        except StateConflict:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(correct, (1, 2)))
+    assert outcomes.count(4) == outcomes.count("conflict") == 1

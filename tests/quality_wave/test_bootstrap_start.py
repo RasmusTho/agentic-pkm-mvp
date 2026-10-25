@@ -36,6 +36,8 @@ def _startup_env(**extra: str) -> dict[str, str]:
     env = {
         "PATH": _SUBPROCESS_PATH,
         "HOME": str(Path.home()),
+        "COLIMA_RESOURCE_PROFILE_FILE": os.devnull,
+        "DOCKER_CONTEXT": "default",
     }
     env.update(extra)
     return env
@@ -63,9 +65,9 @@ class TestBootstrapStartContract:
     def test_unset_vault_root_boots_idle_not_exit_2(self) -> None:
         """#2005: an unset VAULT_ROOT no longer exits 2 — it boots no-vault idle.
 
-        Hermetic (no Docker): a fake `docker` that fails loudly proves the
-        script reached the no-vault idle posture (no exit 2, idle banner) before
-        any real Docker interaction. Mirrors the fake-docker pattern in
+        Hermetic (no Docker): a fake `docker` accepts the readiness probe and
+        refuses subsequent effects after the no-vault idle posture (no exit 2,
+        idle banner). Mirrors the fake-docker pattern in
         tests/uat/test_negative_safety_integrated_runtime.py.
         """
         import tempfile
@@ -73,7 +75,9 @@ class TestBootstrapStartContract:
         with tempfile.TemporaryDirectory() as td:
             fake_docker = Path(td) / "docker"
             fake_docker.write_text(
-                "#!/usr/bin/env bash\necho fake docker should not run >&2\nexit 99\n",
+                "#!/usr/bin/env bash\n"
+                'if [ "${1:-}" = "info" ]; then exit 0; fi\n'
+                "echo fake docker effect refused >&2\nexit 99\n",
                 encoding="utf-8",
             )
             fake_docker.chmod(0o755)
@@ -294,6 +298,11 @@ class TestBootstrapStartContract:
                 **os.environ,
                 "PATH": f"{tmp_path}:{_SUBPROCESS_PATH}",
                 "VAULT_ROOT": "",
+                "COLIMA_RESOURCE_PROFILE_FILE": os.devnull,
+                "COLIMA_RUNTIME_PROVIDER": "external",
+                "COLIMA_READINESS_REQUIRED": "0",
+                "DOCKER_CONTEXT": "default",
+                "DOCKER_HOST": "",
             },
         )
         combined = result.stdout + result.stderr

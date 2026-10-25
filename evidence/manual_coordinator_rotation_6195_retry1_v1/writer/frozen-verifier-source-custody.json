@@ -1,0 +1,22 @@
+{
+  "purpose": "Historical exact-byte verifier source custody; no new execution or approval authority.",
+  "captured_module": {
+    "ref": "app/builderops/manual_coordinator_rotation.py",
+    "sha256": "5d657d8905f8f61ad24723fc55018bd1149a86d35345fe7cb4805cc59df8ff37",
+    "bytes_length": 32512
+  },
+  "preserved_source": {
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/writer/frozen-verifier-5d657d8905f8f61ad24723fc55018bd1149a86d35345fe7cb4805cc59df8ff37.py.txt",
+    "sha256": "5d657d8905f8f61ad24723fc55018bd1149a86d35345fe7cb4805cc59df8ff37",
+    "bytes_length": 32512
+  },
+  "strict_refusal_ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/writer/frozen-v2-refusal.original.json",
+  "verification": "Before any implementation change, the preserved copy has the exact captured module SHA256 and byte length. The captured ref names its then-current source location, not a claim that the working module remains unchanged after repair.",
+  "observed_clock": {
+    "tool": "clock.curr_time",
+    "result": {
+      "current_time": "2026-10-18 12:33:24 UTC"
+    }
+  },
+  "historical_replay_note": "Use the preserved source explicitly for historical replay; separately replay the repaired current module's strict path. Do not substitute changed current-path bytes for this captured source."
+}

@@ -389,6 +389,655 @@ def test_picker_and_watcher_rebind_is_failure_atomic(
     assert recovered.reload_revision == recovered.desired_revision
 
 
+def test_session_selection_reuses_bindings_with_per_request_server_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One bearer drives a read and, later, a separately authorized governed write.
+
+    The selection stores bindings and server-derived cognitive context only. Action, write
+    class, and permission are derived from each endpoint's own contract per call; the
+    bearer gains nothing from a successful read, and a denied operation stays denied.
+    """
+
+    import app.instance.active_context_service as service_module
+    from app.api.compatibility_mutation import HEADER_COMPATIBILITY_PRECONDITION
+    from app.instance.active_context_service import (
+        ACTION_SELECTION_INSPECT,
+        PERMISSION_SELECTION_READ,
+        WRITE_CLASS_READ,
+    )
+    from app.instance.context_selection import ContextSelectionRecord
+    from tests._mvr03_principal_harness import provisioned_instance
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    runtime, first, extra, _record = provisioned_instance(tmp_path, extra_roots=("two",))
+    binding_a = first.vault_binding_id
+    binding_b = extra[0].vault_binding_id
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+    root_a = Path(runtime.registry.load().registrations[binding_a].path)
+    initialize_test_vault(root_a)
+    (root_a / "shared.md").write_text("before\n", encoding="utf-8")
+    _install_dormant_settings_rebind_for_test(runtime, binding_a)
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
+    manager.select_vault(root_a)
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+    selection_routes.reset_selection_store_for_tests()
+    client = TestClient(app)
+
+    seen: list[object] = []
+    live_authorize = service_module._LiveRegistryAuthorizer.authorize
+
+    def recording_authorize(self, request):  # type: ignore[no-untyped-def]
+        seen.append(request)
+        return live_authorize(self, request)
+
+    monkeypatch.setattr(service_module._LiveRegistryAuthorizer, "authorize", recording_authorize)
+
+    created = client.post(
+        "/api/companion/active-context/selection",
+        json={"vault_binding_ids": [binding_a]},
+    )
+    assert created.status_code == 201, created.text
+    bearer = created.json()["context_selection_id"]
+    stored_context = created.json()["context"]
+    # The selection is not an authority record: it has no field that could carry one.
+    authority_fields = {"action", "write_class", "required_permission", "permission"}
+    assert not authority_fields & set(ContextSelectionRecord.__dataclass_fields__)
+    assert not authority_fields & set(stored_context)
+
+    # -- 1. an authorized production read, with the read contract's own GOV inputs ----
+    read = client.get(
+        "/api/companion/vault/notes/scoped",
+        headers={"X-Active-Context-Session": bearer},
+    )
+    assert read.status_code == 200, read.text
+    assert {note["vault_binding_id"] for note in read.json()["notes"]} == {binding_a}
+    assert [(item.vault_binding_id, item.action, item.write_class, item.required_permission) for item in seen] == [
+        (binding_a, ACTION_SELECTION_INSPECT, WRITE_CLASS_READ, PERMISSION_SELECTION_READ)
+    ]
+    precondition = read.headers[HEADER_COMPATIBILITY_PRECONDITION]
+
+    # -- 2. a denied operation: the bearer cannot itself carry a write before MVR-05C ----
+    seen.clear()
+    for path, headers in (
+        ("/api/companion/note/save", {"X-Active-Context-Session": bearer}),
+        (
+            "/api/companion/note/save/compatibility",
+            {
+                "X-Active-Context-Session": bearer,
+                HEADER_COMPATIBILITY_PRECONDITION: precondition,
+            },
+        ),
+    ):
+        denied = client.post(
+            path,
+            headers=headers,
+            json={"note_path": "shared.md", "new_body": "must not write\n"},
+        )
+        assert denied.status_code == 409, (path, denied.text)
+        assert denied.json()["detail"]["error"] == "capability_not_ready"
+    assert (root_a / "shared.md").read_text(encoding="utf-8") == "before\n"
+    # The refusal happened before any binding authorization: nothing was widened to try.
+    assert seen == []
+
+    # -- 3. later, an independently authorized governed write on the same binding ------
+    written = client.post(
+        "/api/companion/note/save/compatibility",
+        headers={HEADER_COMPATIBILITY_PRECONDITION: precondition},
+        json={"note_path": "shared.md", "new_body": "after\n"},
+    )
+    assert written.status_code == 200, written.text
+    assert written.json()["status"] == "ok"
+    assert (root_a / "shared.md").read_text(encoding="utf-8").strip().endswith("after")
+    # The write authorized itself against the principal and the durable compatibility
+    # binding; it consulted no selection-held authority and resolved no scoped context.
+    assert seen == []
+
+    # -- 4. the bearer is exactly what it was: same bindings, same cognitive context --
+    reread = client.get(
+        "/api/companion/active-context/selection",
+        headers={"X-Active-Context-Session": bearer},
+    )
+    assert reread.status_code == 200, reread.text
+    assert reread.json()["context"] == stored_context
+    assert reread.json()["context"]["vault_binding_ids"] == [binding_a]
+    assert binding_b not in reread.json()["context"]["vault_binding_ids"]
+    for field in ("scope", "sphere_memberships", "situated_identity", "workspace", "generation"):
+        assert reread.json()["context"][field] == stored_context[field]
+
+    # The denied operation stays denied after the successful write, too.
+    still_denied = client.post(
+        "/api/companion/note/save",
+        headers={"X-Active-Context-Session": bearer},
+        json={"note_path": "shared.md", "new_body": "still must not write\n"},
+    )
+    assert still_denied.status_code == 409
+    assert (root_a / "shared.md").read_text(encoding="utf-8").strip().endswith("after")
+
+    # And the same bearer still drives the read, with fresh per-call read inputs.
+    seen.clear()
+    again = client.get(
+        "/api/companion/vault/notes/scoped",
+        headers={"X-Active-Context-Session": bearer},
+    )
+    assert again.status_code == 200, again.text
+    assert again.json()["context_generation"] == read.json()["context_generation"]
+    assert [(item.action, item.write_class, item.required_permission) for item in seen] == [
+        (ACTION_SELECTION_INSPECT, WRITE_CLASS_READ, PERMISSION_SELECTION_READ)
+    ]
+
+
+@contextmanager
+def _running_watcher(config_path: Path, *, long_lived: bool = False):
+    """Run the production watcher reconciler as an independent, separately ticking loop.
+
+    The picker never calls it: it only observes the durable receipts this loop publishes,
+    exactly as it would observe a separately deployed watcher container. By default every
+    tick reloads its configuration from the environment, so each tick is also a watcher
+    *restart*: the loop converges only from durable state. ``long_lived`` instead keeps one
+    in-memory configuration across ticks, like the deployed ``watcher run`` loop.
+    """
+
+    stop = threading.Event()
+    errors: list[BaseException] = []
+    loaded = watcher_registry.load_registry_config(config_path) if long_lived else None
+
+    def loop() -> None:
+        while not stop.is_set():
+            try:
+                if loaded is None:
+                    watcher_registry.run_registry_once(config_path)
+                else:
+                    # The entrypoint decorator reloads config per call; keep the one
+                    # in-memory config under the same single-writer lock instead.
+                    with watcher_registry._registry_writer_lock(loaded.state_dir):
+                        watcher_registry.run_registry_once.__wrapped__(
+                            config_path, _loaded_config=loaded
+                        )
+            except BaseException as exc:  # pragma: no cover - asserted by caller
+                errors.append(exc)
+                return
+            time.sleep(0.01)
+
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    try:
+        yield errors
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+
+def _heartbeat_root(tmp_path: Path) -> str:
+    import json
+
+    return str(
+        json.loads((tmp_path / "watcher-heartbeat.json").read_text(encoding="utf-8"))[
+            "vault_path"
+        ]
+    )
+
+
+def _wait_until(predicate, *, timeout: float = 10.0) -> None:  # type: ignore[no-untyped-def]
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    assert predicate()
+
+
+def test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy picker and default SET/CLEAR share one durable single-watcher handoff."""
+
+    import json
+
+    from app.instance._storage_boundary import CapabilityNotReadyError, RegistryError
+    from app.instance.active_context_service import (
+        ACTION_SELECTION_INSPECT,
+        PERMISSION_SELECTION_READ,
+        WRITE_CLASS_READ,
+        binding_facts,
+        build_authorizer,
+    )
+    from app.instance.context_selection import (
+        ActiveContextSelectionResolver,
+        ContextSelectionStore,
+    )
+    from app.instance.runtime import _require_runtime_floor
+    from app.instance.settings_rebind import (
+        MINIMUM_SETTINGS_REBIND_RUNTIME,
+        MINIMUM_SETTINGS_REBIND_RUNTIME_KEY,
+        SETTINGS_REBIND_SCHEMA,
+    )
+    from app.vault.active_context_v1 import PrincipalContext, WorkspaceState
+
+    runtime, vault_a, vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, enabled=True, prepare=False
+    )
+    monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "10")
+    reloads: list[Path] = []
+    monkeypatch.setattr("app.settings.ingestion.ingest_settings", _record_reload(reloads))
+    assert _heartbeat_root(tmp_path) == str(vault_a)
+
+    # The in-process VaultChangedEvent is only a wake-up hint: suppress it entirely and
+    # the separately ticking watcher must still converge from durable state alone.
+    monkeypatch.setattr(VaultManager, "_emit_changed", lambda *_args, **_kwargs: None)
+    hints: list[object] = []
+
+    def record_hint(receipt: object) -> None:
+        # The default-mutation event is published only after the durable handoff has
+        # committed and the watcher has completed it.
+        record = runtime.open_settings_rebind_store().read()
+        assert record.phase == "committed"
+        assert record.reload_revision == record.desired_revision
+        hints.append(receipt)
+
+    defaults = InstanceDefaultVaultService(
+        runtime.registry,
+        capability=STORAGE_MUTATION_CAPABILITY,
+        emit_event=record_hint,
+    )
+
+    with _running_watcher(config_path) as watcher_errors:
+        # -- 1. legacy choose/open picker: A -> B -----------------------------------
+        selected = VaultManager().select_vault(vault_b)
+        assert selected.active_vault_path == str(vault_b)
+        picked = runtime.open_settings_rebind_store().read()
+        assert (picked.phase, picked.prior_binding_id, picked.candidate_binding_id) == (
+            "committed",
+            "binding-a",
+            "binding-b",
+        )
+        assert picked.desired_revision == picked.reload_revision == 1
+        assert load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1)).stage == "completed"
+        _wait_until(lambda: _heartbeat_root(tmp_path) == str(vault_b))
+
+        # -- 2. MVR-02 default SET drives the same transaction: B -> A ---------------
+        set_receipt = defaults.set("binding-a")
+        after_set = runtime.registry.load()
+        rebound = runtime.open_settings_rebind_store().read()
+        assert set_receipt.vault_binding_id == after_set.default_vault_binding_id == "binding-a"
+        assert (rebound.phase, rebound.prior_binding_id, rebound.candidate_binding_id) == (
+            "committed",
+            "binding-b",
+            "binding-a",
+        )
+        assert rebound.desired_revision == rebound.reload_revision == 2
+        assert load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 2)).stage == "completed"
+        _wait_until(lambda: _heartbeat_root(tmp_path) == str(vault_a))
+
+        # -- 3. a default mutation that cannot hand off fails before changing it ------
+        monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "0")
+        with _paused_watcher(monkeypatch):
+            with pytest.raises(RegistryError, match="did not reach acknowledged"):
+                defaults.set("binding-b")
+        monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "10")
+        unchanged = runtime.registry.load()
+        cancelled = runtime.open_settings_rebind_store().read()
+        assert unchanged.default_vault_binding_id == "binding-a"
+        assert (cancelled.phase, cancelled.candidate_binding_id) == ("cancelled", "binding-a")
+        assert len(hints) == 1
+
+        # -- 4. default CLEAR also hands the single watcher off ----------------------
+        clear_receipt = defaults.clear()
+        cleared = runtime.open_settings_rebind_store().read()
+        assert clear_receipt.vault_binding_id is None
+        assert runtime.registry.load().default_vault_binding_id is None
+        assert cleared.candidate_binding_id is None
+        assert cleared.reload_revision == cleared.desired_revision
+        assert len(hints) == 2
+
+    assert not watcher_errors
+    # The deployed long-lived watcher entrypoint (startup reconciliation plus its in-memory
+    # loop) treats the completed no-target handoff as stable idle state, not a crash.
+    reloads_before_restart = len(reloads)
+    watcher_registry.run_registry_forever(config_path, max_ticks=3)
+    assert runtime.open_settings_rebind_store().read() == cleared
+    # ...and its startup does not recompile the cleared vault's settings.
+    assert reloads[reloads_before_restart:] == []
+    # Default mutations never wrote picker history; only the picker did.
+    assert runtime.registry.load().last_active_vault_ref == picked_ref(runtime, "binding-b")
+
+    # -- 5. generic scoped session/request selection never touches the bridge --------
+    before = runtime.registry.load()
+    principal = PrincipalContext(
+        principal_id="operator", principal_kind="delegated_operator_role", subject="trusted_loopback"
+    )
+    store = ContextSelectionStore()
+    raw, _ = store.create(
+        principal=principal,
+        instance_identity=before.app_install_id,
+        workspace=WorkspaceState.none(),
+        scope="default",
+        sphere_memberships=(),
+        situated_identity=None,
+        binding_ids=("binding-a",),
+    )
+    store.replace_bindings(
+        raw,
+        principal=principal,
+        instance_identity=before.app_install_id,
+        binding_ids=("binding-b",),
+    )
+    resolver = ActiveContextSelectionResolver(
+        binding_facts=lambda: binding_facts(runtime.registry.load()),
+        registry_revision=lambda: runtime.registry.load().revision,
+        authorizer=build_authorizer(runtime.registry.load()),
+        instance_identity=before.app_install_id,
+    )
+    scoped = resolver.resolve(
+        selection=store.inspect(raw, principal=principal, instance_identity=before.app_install_id),
+        principal=principal,
+        action=ACTION_SELECTION_INSPECT,
+        write_class=WRITE_CLASS_READ,
+        required_permission=PERMISSION_SELECTION_READ,
+    ).snapshot
+    assert scoped.binding_ids == ("binding-b",)
+    after = runtime.registry.load()
+    assert after.settings_rebind == before.settings_rebind
+    assert after.default_vault_binding_id == before.default_vault_binding_id
+    assert after.last_active_vault_ref == before.last_active_vault_ref
+    assert after.revision == before.revision
+
+    # -- 6. the bridge is one named, floor-guarded record that MVR-06 retires atomically --
+    attestation = json.loads(
+        (Path(__file__).resolve().parents[2] / "app/instance/settings_rebind_runtime_capability.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert attestation["capability"] == "settings-rebind-runtime-floor"
+    assert attestation["rollbackPosture"] == "reject-incompatible-writer"
+    assert set(attestation["preserves"]) == {
+        SETTINGS_REBIND_SCHEMA,
+        f"{MINIMUM_SETTINGS_REBIND_RUNTIME_KEY}={MINIMUM_SETTINGS_REBIND_RUNTIME}",
+    }
+    assert after.settings_rebind["schema"] == SETTINGS_REBIND_SCHEMA
+    floors = after.extensions["runtimeFloors"]
+    assert floors[MINIMUM_SETTINGS_REBIND_RUNTIME_KEY] == MINIMUM_SETTINGS_REBIND_RUNTIME
+    # A legacy scalar writer cannot boot alongside the bridge, and neither can a runtime
+    # built for a different bridge revision: there is never "both or neither".
+    with pytest.raises(CapabilityNotReadyError, match="legacy scalar writer"):
+        _require_runtime_floor(after, scalar_runtime=True)
+    incompatible = replace_extensions(
+        after,
+        runtimeFloors={**floors, MINIMUM_SETTINGS_REBIND_RUNTIME_KEY: "2"},
+    )
+    with pytest.raises(CapabilityNotReadyError, match="settings rebind runtime floor"):
+        _require_runtime_floor(incompatible, scalar_runtime=False)
+    _require_runtime_floor(after, scalar_runtime=False)
+    # Only the sealed storage capability can write it, and never backwards.
+    with pytest.raises(CapabilityNotReadyError):
+        runtime.registry.set_settings_rebind_state(after.settings_rebind)
+    regressed = SettingsRebindRecord.dormant(binding_id="binding-a").as_payload()
+    with pytest.raises(RegistryError, match="monotonic"):
+        runtime.registry.set_settings_rebind_state(
+            regressed, _capability=STORAGE_MUTATION_CAPABILITY
+        )
+    # The foreground SETTINGS-01 reload ran for each new compatibility root.
+    assert {vault_a, vault_b} <= set(reloads)
+
+    # -- 7. after a completed CLEAR, a long-lived watcher re-arms only for its own root --
+    # Activation and reconciliation must agree: the configured watcher acknowledges the
+    # next first selection of its own root instead of silently answering no_lifecycle,
+    # and refuses (staying idle, scanning nothing) a selection of any other root.
+    with _running_watcher(config_path, long_lived=True) as long_lived_errors:
+        before_refusal = runtime.open_settings_rebind_store().read()
+        events_before = len(_event_paths(tmp_path))
+        (vault_a / "cleared-root-edit.md").write_text("must not be scanned\n", encoding="utf-8")
+        monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "0.5")
+        with pytest.raises(RegistryError, match="did not reach acknowledged"):
+            VaultManager().select_vault(vault_b)
+        monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "10")
+        refused = runtime.open_settings_rebind_store().read()
+        assert refused.phase == "cancelled"
+        assert refused.candidate_binding_id is None
+        assert refused.desired_revision == before_refusal.desired_revision + 1
+        assert not _revision_receipt_path(tmp_path, refused.desired_revision).exists()
+        assert _event_paths(tmp_path)[events_before:] == []
+
+        reselected = VaultManager().select_vault(vault_a)
+        assert reselected.active_vault_path == str(vault_a)
+        readopted = runtime.open_settings_rebind_store().read()
+        assert (readopted.phase, readopted.prior_binding_id, readopted.candidate_binding_id) == (
+            "committed",
+            None,
+            "binding-a",
+        )
+        assert readopted.reload_revision == readopted.desired_revision
+        assert (
+            load_settings_rebind_watcher_receipt(
+                _revision_receipt_path(tmp_path, readopted.desired_revision)
+            ).stage
+            == "completed"
+        )
+        _wait_until(lambda: _heartbeat_root(tmp_path) == str(vault_a))
+    assert not long_lived_errors
+
+
+def picked_ref(runtime, binding_id: str) -> str:  # type: ignore[no-untyped-def]
+    return runtime.registry.load().registrations[binding_id].ref
+
+
+def replace_extensions(snapshot, **extensions):  # type: ignore[no-untyped-def]
+    from dataclasses import replace as dataclass_replace
+
+    return dataclass_replace(snapshot, extensions={**snapshot.extensions, **extensions})
+
+
+@contextmanager
+def _paused_watcher(monkeypatch: pytest.MonkeyPatch):
+    """Make the separately running watcher publish nothing, as if it were stalled."""
+
+    with monkeypatch.context() as patch:
+        patch.setattr(watcher_registry, "run_registry_once", lambda *_a, **_kw: None)
+        yield
+
+
+def test_prepare_drains_old_binding_writes_before_quiescent_ack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admitted A mutations drain before prepare; the watcher acks a quiescent A scan."""
+
+    from app.instance._storage_boundary import RegistryError
+    from app.instance.settings_rebind import compatibility_ingress_window
+
+    runtime, vault_a, vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, enabled=True, prepare=False
+    )
+    monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "10")
+    monkeypatch.setattr("app.settings.ingestion.ingest_settings", _record_reload([]))
+    store = runtime.open_settings_rebind_store()
+    activation = SettingsRebindActivation.from_environment(runtime.registry)
+
+    # A carrier-free compatibility mutation has been admitted on A and is mid-effect: it
+    # holds the production ingress window exactly as `require_compatibility_mutation` does.
+    admitted = threading.Event()
+    finish_admitted = threading.Event()
+    mutation_errors: list[BaseException] = []
+
+    def admitted_a_mutation() -> None:
+        try:
+            with compatibility_ingress_window(runtime.registry):
+                assert store.compatibility_binding_id() == "binding-a"
+                admitted.set()
+                assert finish_admitted.wait(timeout=10)
+                (vault_a / "admitted-before-prepare.md").write_text("A\n", encoding="utf-8")
+        except BaseException as exc:  # pragma: no cover - asserted below
+            mutation_errors.append(exc)
+
+    mutation = threading.Thread(target=admitted_a_mutation)
+    mutation.start()
+    assert admitted.wait(timeout=5)
+
+    commit_reached = threading.Event()
+    release_commit = threading.Event()
+    original_commit = activation.store.commit_selection
+
+    def hold_commit(**kwargs: object) -> SettingsRebindRecord:
+        commit_reached.set()
+        assert release_commit.wait(timeout=10)
+        return original_commit(**kwargs)
+
+    monkeypatch.setattr(activation.store, "commit_selection", hold_commit)
+    results: list[SettingsRebindRecord] = []
+    picker_errors: list[BaseException] = []
+
+    def pick_b() -> None:
+        try:
+            results.append(
+                activation.activate(
+                    selection=_known_ref(runtime, "binding-b"),
+                    candidate_binding_id="binding-b",
+                    candidate_root=vault_b,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            picker_errors.append(exc)
+
+    with _running_watcher(config_path) as watcher_errors:
+        picker = threading.Thread(target=pick_b)
+        picker.start()
+        # Prepare is gated behind the admitted A mutation: no revision is published.
+        time.sleep(0.2)
+        gated = store.read()
+        assert (gated.phase, gated.candidate_binding_id, gated.desired_revision) == (
+            "dormant",
+            "binding-a",
+            0,
+        )
+
+        finish_admitted.set()
+        mutation.join(timeout=5)
+        assert not mutation.is_alive()
+        assert not mutation_errors
+
+        # The watcher acknowledges the prepared revision only from a complete A scan
+        # that already contains the drained write; B has produced nothing.
+        (vault_b / "candidate-before-commit.md").write_text("B\n", encoding="utf-8")
+        assert commit_reached.wait(timeout=10)
+        prepared = store.read()
+        assert (prepared.phase, prepared.prior_binding_id, prepared.candidate_binding_id) == (
+            "prepared",
+            "binding-a",
+            "binding-b",
+        )
+        ack = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
+        assert ack.stage == "acknowledged"
+        assert ack.acknowledgement is not None
+        assert ack.acknowledgement.scan_kind == "pre_commit"
+        # The drained write settled under A before the acknowledgement: either an ordinary
+        # A effect before prepare, or buffered by the pre-commit A scan.
+        admitted_write = vault_a / "admitted-before-prepare.md"
+        assert str(admitted_write) in _event_paths(tmp_path) or any(
+            item.relative_path == admitted_write.name for item in ack.buffer
+        )
+        assert not any(path.startswith(str(vault_b)) for path in _event_paths(tmp_path))
+        assert _heartbeat_root(tmp_path) == str(vault_a)
+
+        # New carrier-free compatibility ingress is closed while the revision is prepared.
+        with pytest.raises(RegistryError, match="awaiting commit"):
+            store.compatibility_binding_id()
+
+        # Old-root observation continues past the acknowledgement up to the commit.
+        (vault_a / "after-ack-before-commit.md").write_text("A\n", encoding="utf-8")
+        time.sleep(0.1)
+        assert store.read().phase == "prepared"
+        release_commit.set()
+        picker.join(timeout=20)
+        assert not picker.is_alive()
+
+    assert not watcher_errors
+    assert not picker_errors
+    assert len(results) == 1
+    final = store.read()
+    assert (final.phase, final.candidate_binding_id) == ("committed", "binding-b")
+    assert final.reload_revision == final.desired_revision == 1
+    completed = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
+    assert completed.stage == "completed"
+    buffered = {item.relative_path for item in completed.buffer}
+    # A write after the acknowledgement but before commit stays an A observation.
+    assert "after-ack-before-commit.md" in buffered
+    assert "candidate-before-commit.md" not in buffered
+    assert store.compatibility_binding_id() == "binding-b"
+
+
+def test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An intentionally disabled or absent watcher is a durable no_lifecycle commit."""
+
+    from app.instance.vault_registry import VaultRegistryStore
+
+    runtime, vault_a, vault_b, _config_path = _fixture(
+        tmp_path, monkeypatch, enabled=False, prepare=False
+    )
+    reloads: list[Path] = []
+    monkeypatch.setattr("app.settings.ingestion.ingest_settings", _record_reload(reloads))
+    # No watcher process exists and none will ever acknowledge: any wait would fail now.
+    monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "0")
+    waits: list[str] = []
+    original_wait = SettingsRebindActivation._wait_for_stage
+
+    def record_wait(self, record, *, required_stage):  # type: ignore[no-untyped-def]
+        waits.append(required_stage)
+        return original_wait(self, record, required_stage=required_stage)
+
+    monkeypatch.setattr(SettingsRebindActivation, "_wait_for_stage", record_wait)
+    receipts = tmp_path / "watcher-state"
+    before_receipts = set(receipts.glob("settings-rebind-watcher-r*.json")) if receipts.exists() else set()
+
+    # Intentionally disabled watcher (WATCHER_ENABLE=0): the legacy picker commits B.
+    selected = VaultManager().select_vault(vault_b)
+    assert selected.active_vault_path == str(vault_b)
+    disabled = VaultRegistryStore(runtime.registry.path).load()
+    record = SettingsRebindRecord.from_payload(disabled.settings_rebind)
+    assert (record.phase, record.lifecycle_posture) == ("no_lifecycle", "no_lifecycle")
+    assert record.candidate_binding_id == "binding-b"
+    assert record.desired_revision == record.applied_revision == record.reload_revision == 1
+
+    # Absent watcher (requested, but no watcher root configured): the candidate's watcher
+    # policy is still validated, then the same durable no_lifecycle commit applies.
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.delenv("WATCHER_VAULT_PATH")
+    back = VaultManager().select_vault(vault_a)
+    assert back.active_vault_path == str(vault_a)
+    absent = runtime.open_settings_rebind_store().read()
+    assert (absent.phase, absent.lifecycle_posture) == ("no_lifecycle", "no_lifecycle")
+    assert (absent.prior_binding_id, absent.candidate_binding_id) == ("binding-b", "binding-a")
+    assert absent.desired_revision == absent.applied_revision == absent.reload_revision == 2
+
+    # No process acknowledgement was awaited or produced, and the durable outcome is stable
+    # across a fresh reader and an idempotent no-watcher reconcile.
+    assert waits == []
+    after_receipts = set(receipts.glob("settings-rebind-watcher-r*.json")) if receipts.exists() else set()
+    assert after_receipts == before_receipts
+    assert runtime.open_settings_rebind_store().reconcile_no_lifecycle() == absent
+    assert reloads == [vault_b, vault_a]
+    assert runtime.open_settings_rebind_store().compatibility_binding_id() == "binding-a"
+
+
+def _install_dormant_settings_rebind_for_test(runtime, binding_id: str) -> None:
+    from app.instance.settings_rebind import _install_dormant_settings_rebind
+
+    _install_dormant_settings_rebind(
+        runtime.registry,
+        binding_id=binding_id,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+
 def test_compatibility_bridge_enables_legacy_without_scoped_activation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -425,27 +1074,26 @@ def test_first_vault_initialize_bootstrap_is_single_use_and_failure_atomic(
     )
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
     selection_routes.reset_selection_store_for_tests()
-    client = TestClient(app, raise_server_exceptions=False)
     target = tmp_path / "atomic-failure"
-    issued = client.post(
-        "/api/companion/vault/initialize/bootstrap",
-        json={"path": str(target), "confirm": True},
-    )
-    assert issued.status_code == 200, issued.text
-
     def fail_before_effect(*_args, **_kwargs):
         raise RuntimeError("injected pre-effect failure")
 
     monkeypatch.setattr(manager, "initialize_vault", fail_before_effect)
-    failed = client.post(
-        "/api/companion/vault/initialize",
-        json={
-            "path": str(target),
-            "confirm": True,
-            "bootstrap_token": issued.json()["bootstrap_token"],
-        },
-    )
-    assert failed.status_code == 500
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f"""
+var options={{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{path:{json.dumps(str(target))},confirm:true}})}};
+var failed=await fetch('/api/companion/vault/initialize',options);
+var retry=await fetch('/api/companion/vault/initialize',options);
+console.log(JSON.stringify({{failed:failed.status,retry:retry.status,cookie}}));
+""")
+    assert result['failed'] == 500
+    assert result['retry'] == 409
+    assert 'companion_context_session=' not in result['cookie']
+    assert 'companion_context_intent=pending' in result['cookie']
+    assert sum(path.endswith('/initialize/bootstrap') for _method,path,_headers,_body in calls) == 1
     snapshot = runtime.registry.load()
     assert snapshot.registrations == {}
     assert snapshot.default_vault_binding_id is None
@@ -472,22 +1120,24 @@ def test_fresh_vault_initialize_returns_usable_scoped_context(
     selection_routes.reset_selection_store_for_tests()
     client = TestClient(app)
     target = tmp_path / "fresh-scoped"
-    bootstrap = client.post(
-        "/api/companion/vault/initialize/bootstrap",
-        json={"path": str(target), "confirm": True},
-    )
-    assert bootstrap.status_code == 200, bootstrap.text
-    initialized = client.post(
-        "/api/companion/vault/initialize",
-        json={
-            "path": str(target),
-            "confirm": True,
-            "bootstrap_token": bootstrap.json()["bootstrap_token"],
-        },
-    )
-    assert initialized.status_code == 200, initialized.text
-    selection_id = initialized.json()["context_selection_id"]
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f"""
+await initialize({json.dumps(str(target))});
+var scoped=await fetch('/api/companion/vault/notes/scoped');
+console.log(JSON.stringify({{status:scoped.status,data:await scoped.json(),cookie,handoffs}}));
+""")
+    assert result['status'] == 200
+    assert len(result['handoffs']) == 1
+    assert 'context_selection_id' not in result['handoffs'][0]['body']
+    assert 'context_selection_id' not in result['handoffs'][0]['body']['context']
+    from http.cookies import SimpleCookie
+    selection_id = SimpleCookie(result['cookie'])['companion_context_session'].value
     assert selection_id
+    assert calls[-1][2]['X-Active-Context-Session'] == selection_id
+    assert sum(path.endswith('/initialize/bootstrap') for _method,path,_headers,_body in calls) == 1
     binding_id = runtime.registry.load().default_vault_binding_id
     scoped = client.get(
         "/api/companion/active-context/selection",
@@ -503,3 +1153,826 @@ def test_fresh_vault_initialize_returns_usable_scoped_context(
     # The scoped selection is the immediate read authority; the registry's
     # interaction-history field is deliberately not consulted or materialized.
     assert runtime.registry.load().last_active_vault_ref is None
+
+
+def _activated_picker_runtime(tmp_path, monkeypatch):
+    from tests._mvr03_principal_harness import provisioned_instance
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    runtime, first, extra, _principal = provisioned_instance(tmp_path, extra_roots=("two",))
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+    roots = [Path(runtime.registry.load().registrations[item.vault_binding_id].path) for item in (first, extra[0])]
+    for index, root in enumerate(roots):
+        initialize_test_vault(root)
+        (root / f"only-{index}.md").write_text(f"vault {index}\n", encoding="utf-8")
+    _install_dormant_settings_rebind_for_test(runtime, first.vault_binding_id)
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+    monkeypatch.setattr("app.api.routes.vault_resolution.get_vault_manager", lambda: manager)
+    monkeypatch.setattr("app.settings.ingestion.ingest_settings", _record_reload([]))
+    # Preserve the real durable capture path; optional post-append cognition
+    # is outside this carrier/target boundary and has separate model coverage.
+    monkeypatch.setattr("app.api.routes.capture.propose_question_registration", lambda **_kwargs: None)
+    selection_routes.reset_selection_store_for_tests()
+    return runtime, roots, first.vault_binding_id, extra[0].vault_binding_id
+
+
+def test_existing_picker_drives_scoped_request_context(tmp_path, monkeypatch, caplog):
+    """The shipped click controller crosses UI HTTP and real API scope/read/write gates."""
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv('VAULT_BROWSE_ROOT', str(roots[0].parent))
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f'''
+await choose({json.dumps(str(roots[0]))});
+var a=await (await fetch('/api/companion/vault/notes/scoped')).json();
+await browseChoose({json.dumps(str(roots[1]))});
+var b=await (await fetch('/api/companion/vault/notes/scoped')).json();
+var write=await fetch('/api/companion/note/save',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{note_path:'only-1.md',new_body:'updated by explicit edit\\n'}})}});
+console.log(JSON.stringify({{a,b,write:write.status,cookie,reloads,handoffs}}));
+''')
+        isolated = run("var r=await fetch('/api/companion/vault/notes/scoped');console.log(JSON.stringify({status:r.status}));")
+    assert isolated['status'] == 401
+    assert {note["vault_binding_id"] for note in result["a"]["notes"]} == {binding_a}
+    assert {note["vault_binding_id"] for note in result["b"]["notes"]} == {binding_b}
+    assert result["write"] == 200
+    assert len(result['handoffs']) == 2
+    for handoff in result['handoffs']:
+        assert 'HttpOnly' in handoff['headers']
+        assert 'SameSite=Strict' in handoff['headers']
+        assert 'Max-Age' not in handoff['headers']
+        assert 'context_selection_id' not in handoff['body']
+        assert handoff['headers'].split(';')[0].split('=', 1)[1] not in caplog.text
+    assert (roots[1] / "only-1.md").read_text().endswith("updated by explicit edit\n")
+    assert (roots[0] / "only-0.md").read_text() == "vault 0\n"
+    assert result["reloads"] == 2
+    selections = [call for call in calls if call[1] == "/api/companion/vault/select"]
+    assert all(call[3]["scoped_selection"] is True for call in selections)
+    reads = [call for call in calls if call[1].endswith('/notes/scoped')]
+    assert len({call[2]['X-Active-Context-Session'] for call in reads if call[2].get('X-Active-Context-Session')}) == 2
+    write = next(call for call in calls if call[1].endswith('/save/compatibility'))
+    assert "X-Compatibility-Write-Precondition" in write[2]
+    assert "X-Active-Context-Session" not in write[2]
+    assert not any(call[1] == '/api/companion/note/save' for call in calls)
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id == binding_b
+    discovery = next(call for call in calls if call[1] == '/api/companion/vault/browse')
+    assert 'X-Forwarded-For' in discovery[2]
+    assert 'X-Active-Context-Session' not in discovery[2]
+
+
+@pytest.mark.parametrize("bindings", ["zero", "sole-default", "many", "ambiguous", "default-mismatched"])
+def test_stale_selection_restart_requires_visible_reselection(tmp_path, monkeypatch, bindings, caplog):
+    from tests._mvr05b_picker_browser import picker_browser
+    from companion_ui.workspace.scoped_session import session_cookie
+
+    runtime, _roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    client = TestClient(app)
+    created = client.post('/api/companion/active-context/selection', json={"vault_binding_ids": [binding_a]})
+    assert created.status_code == 201, created.text
+    bearer = created.json()['context_selection_id']
+    # Restart destroys all evidence of the old selection's intended binding.
+    selection_routes.reset_selection_store_for_tests()
+    defaults = InstanceDefaultVaultService(runtime.registry, capability=STORAGE_MUTATION_CAPABILITY)
+    if bindings == 'zero':
+        empty_root = tmp_path / 'empty-restart'
+        empty_root.mkdir()
+        runtime, _principal = fresh_no_vault_instance(empty_root)
+        monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
+        monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+        assert runtime.registry.load().registrations == {}
+    elif bindings == 'default-mismatched':
+        defaults.set(binding_b)
+    elif bindings == 'sole-default':
+        runtime.registry.remove_registration(binding_b, _capability=STORAGE_MUTATION_CAPABILITY)
+        defaults.set(binding_a)
+        assert len(runtime.registry.load().registrations) == 1
+    elif bindings == 'ambiguous':
+        defaults.clear()
+    else:
+        defaults.set(binding_a)
+    with picker_browser(monkeypatch, cookie=session_cookie(bearer).split(';')[0]) as (run, calls):
+        result = run('''
+var read=await fetch('/api/companion/vault/notes/scoped');
+var write=await fetch('/api/companion/note/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note_path:'only-0.md',new_body:'must not write'})});
+var page=await (await nativeFetch(location.origin+'/workspace',{headers:{Cookie:cookie}})).text();
+console.log(JSON.stringify({status:read.status,write:write.status,visible:!visible.hidden,page,cookie,reloads}));
+''')
+    assert result['status'] == result['write'] == 401
+    assert result['visible'] is True
+    assert 'Choose a vault again to continue.' in result['page']
+    assert 'data-testid="vault-picker"' in result['page']
+    assert result['reloads'] == 0
+    assert bearer in result['cookie']
+    assert bearer not in result['page']
+    assert bearer not in caplog.text
+    assert len([call for call in calls if call[1].endswith('/notes/scoped')]) == 1
+    assert not any(method != 'GET' for method, _path, _headers, _body in calls)
+    assert all(headers.get('X-Active-Context-Session') == bearer for _method, _path, headers, _body in calls)
+
+
+def test_activated_picker_receipts_direct_write_between_scan_and_commit(tmp_path, monkeypatch):
+    import json
+    from app.instance.settings_rebind import SettingsRebindStore
+    from tests._mvr05b_picker_browser import picker_browser
+    from tests.integration.test_watcher_cross_process_rebind import (
+        _configure_watcher, _seed_daily_briefing_sentinel,
+    )
+
+    runtime, roots, _binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    for root in roots:
+        _seed_daily_briefing_sentinel(root)
+    config = _configure_watcher(monkeypatch, root=tmp_path, runtime=runtime, vault_a=roots[0])
+    monkeypatch.setenv('PKM_ENVIRONMENT', runtime.layout.channel_id)
+    monkeypatch.setenv('SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS', '10')
+    watcher_registry.run_registry_once(config)
+    between = roots[0] / 'direct-during-picker-commit.md'
+    original = SettingsRebindStore.commit_selection
+
+    def write_after_scan(self, **kwargs):
+        # The independent watcher has acknowledged the pre-commit scan. An
+        # external filesystem writer now arrives before the picker's commit.
+        between.write_text('external human write\n', encoding='utf-8')
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(SettingsRebindStore, 'commit_selection', write_after_scan)
+    with _running_watcher(config) as watcher_errors:
+        with picker_browser(monkeypatch) as (run, _calls):
+            result = run(f'''
+await choose({json.dumps(str(roots[1]))});
+var read=await (await fetch('/api/companion/vault/notes/scoped')).json();
+console.log(JSON.stringify({{read}}));
+''')
+    assert not watcher_errors
+    assert {item['vault_binding_id'] for item in result['read']['notes']} == {binding_b}
+    receipt = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
+    assert receipt.stage == 'completed'
+    assert any(item.relative_path == between.name for item in receipt.buffer)
+    assert any(path == str(between) for path in _event_paths(tmp_path))
+
+
+@pytest.mark.parametrize('failure_kind', ['server-error', 'missing-ack'])
+def test_picker_bootstrap_explicit_retry_recovers_only_committed_handoff(tmp_path, monkeypatch, failure_kind):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, _principal = fresh_no_vault_instance(tmp_path)
+    monkeypatch.setenv('INSTANCE_VAULT_REGISTRY_PATH', str(runtime.registry.path))
+    monkeypatch.setenv('INSTANCE_OWNERSHIP_ROOT', str(runtime.ledger.root))
+    monkeypatch.setenv('PKM_ENVIRONMENT', 'prod')
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / 'app-local.md'))
+    monkeypatch.setattr(companion_module, 'get_vault_manager', lambda: manager)
+    selection_routes.reset_selection_store_for_tests()
+    target = tmp_path / 'committed-handoff'
+    create = companion_module._create_initialized_scoped_selection
+    initialize = manager.initialize_vault
+    effects = []
+    handoffs = []
+
+    def one_effect(*args, **kwargs):
+        effects.append(True)
+        return initialize(*args, **kwargs)
+
+    def lost_handoff(**kwargs):
+        handoffs.append(True)
+        if len(handoffs) == 1 and failure_kind == 'server-error':
+            raise RuntimeError('response handoff unavailable after commit')
+        return create(**kwargs)
+
+    monkeypatch.setattr(manager, 'initialize_vault', one_effect)
+    monkeypatch.setattr(companion_module, '_create_initialized_scoped_selection', lost_handoff)
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f'''
+var options={{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{path:{json.dumps(str(target))},confirm:true}})}};
+dropHandoffAck={json.dumps(failure_kind == 'missing-ack')};
+var failed=await fetch('/api/companion/vault/initialize',options);
+dropHandoffAck=false;
+var recovered=await fetch('/api/companion/vault/initialize',options);
+var read=await fetch('/api/companion/vault/notes/scoped');
+console.log(JSON.stringify({{failed:failed.status,recovered:recovered.status,read:read.status,cookie}}));
+''')
+    assert result['failed'] == (500 if failure_kind == 'server-error' else 409)
+    assert result['recovered'] == result['read'] == 200
+    assert result['cookie']
+    assert len(effects) == 1
+    assert len(handoffs) == 2
+    issued = [call for call in calls if call[1].endswith('/initialize/bootstrap')]
+    assert len(issued) == 1
+    executions = [body for _method,path,_headers,body in calls if path.endswith('/initialize') and body.get('bootstrap_token')]
+    assert len(executions) == 2
+    assert executions[0]['bootstrap_token'] == executions[1]['bootstrap_token']
+    assert FirstVaultPreconditionStore(runtime.registry.path).load().state == 'consumed'
+
+
+def test_stale_picker_discovery_reselects_sibling_without_healing_content_intent(tmp_path, monkeypatch):
+    import json
+    from companion_ui.workspace.scoped_session import session_cookie
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv('VAULT_BROWSE_ROOT', str(roots[0].parent))
+    created = TestClient(app).post('/api/companion/active-context/selection', json={'vault_binding_ids':[binding_a]})
+    assert created.status_code == 201, created.text
+    old_bearer = created.json()['context_selection_id']
+    selection_routes.reset_selection_store_for_tests()
+    with picker_browser(monkeypatch, cookie=session_cookie(old_bearer).split(';')[0]) as (run, calls):
+        result = run(f'''
+var failed=await fetch('/api/companion/vault/notes/scoped');
+var oldCookie=cookie;
+var page=await (await nativeFetch(location.origin+'/workspace',{{headers:{{Cookie:cookie}}}})).text();
+await browseChoose({json.dumps(str(roots[1]))});
+var next=await fetch('/api/companion/vault/notes/scoped');
+console.log(JSON.stringify({{failed:failed.status,page,oldCookie,cookie,status:next.status,data:await next.json()}}));
+''')
+    assert result['failed'] == 401
+    assert 'data-testid="vault-picker-browse"' in result['page']
+    assert old_bearer in result['oldCookie']
+    assert result['cookie'] != result['oldCookie']
+    assert result['status'] == 200
+    assert {note['vault_binding_id'] for note in result['data']['notes']} == {binding_b}
+    browse = next(call for call in calls if call[1] == '/api/companion/vault/browse')
+    assert 'X-Active-Context-Session' not in browse[2]
+    assert 'X-Forwarded-For' in browse[2]
+    assert sum(path.endswith('/vault/select') for _method,path,_headers,_body in calls) == 1
+
+
+def test_picker_alias_retarget_after_rebind_cannot_change_scoped_handoff(tmp_path, monkeypatch):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, roots, binding_a, _binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    alias = tmp_path / 'picker-alias'
+    alias.symlink_to(roots[0], target_is_directory=True)
+    manager = companion_module.get_vault_manager()
+    selected = threading.Event()
+    retargeted = threading.Event()
+    select = manager.select_vault
+
+    def barrier(vault_path, **kwargs):
+        context = select(vault_path, **kwargs)
+        selected.set()
+        assert retargeted.wait(timeout=5)
+        return context
+
+    monkeypatch.setattr(manager, 'select_vault', barrier)
+    results = []
+    errors = []
+    with picker_browser(monkeypatch) as (run, _calls):
+        def click():
+            try:
+                results.append(run(f'''
+await choose({json.dumps(str(alias))});
+var read=await fetch('/api/companion/vault/notes/scoped');
+console.log(JSON.stringify({{status:read.status,data:await read.json()}}));
+'''))
+            except BaseException as exc:
+                errors.append(exc)
+
+        browser = threading.Thread(target=click)
+        browser.start()
+        assert selected.wait(timeout=5)
+        alias.unlink()
+        alias.symlink_to(roots[1], target_is_directory=True)
+        retargeted.set()
+        browser.join(timeout=10)
+        assert not browser.is_alive()
+    assert not errors
+    assert len(results) == 1
+    assert results[0]['status'] == 200
+    assert {note['vault_binding_id'] for note in results[0]['data']['notes']} == {binding_a}
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id == binding_a
+    assert alias.resolve() == roots[1]
+
+
+@pytest.mark.parametrize('prior_selection', [False, True])
+def test_missing_scoped_handoff_cannot_become_default_or_prior_selection(tmp_path, monkeypatch, prior_selection):
+    import json
+    import httpx
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    selected = 0
+
+    def strip_handoff(method, path, response):
+        nonlocal selected
+        if method == 'POST' and path.endswith('/vault/select') and response.status_code == 200:
+            selected += 1
+            if selected == (2 if prior_selection else 1):
+                data = response.json()
+                data.pop('context_selection_id', None)
+                return httpx.Response(200, json=data)
+        return response
+
+    with picker_browser(monkeypatch, response_filter=strip_handoff) as (run, calls):
+        script = """
+PRIOR
+var selected=await fetch('/api/companion/vault/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ROOT_B})});
+var page=await (await browserFetch('/workspace')).text();
+console.log(JSON.stringify({status:selected.status,cookie,page,reloads,visible:!visible.hidden,gatewayResponses}));
+""".replace('PRIOR', 'await choose('+json.dumps(str(roots[0]))+');' if prior_selection else '').replace('ROOT_B', json.dumps(str(roots[1])))
+        result = run(script)
+    assert result['status'] == 409
+    assert result['visible'] is True
+    assert 'companion_context_intent=pending' in result['cookie']
+    assert 'Choose a vault again to continue.' in result['page']
+    assert result['reloads'] == (1 if prior_selection else 0)
+    assert result['gatewayResponses'][-1]['status'] == 200  # transport status remains unchanged
+    assert 'context_selection_id' not in result['gatewayResponses'][-1]['body']
+    assert calls[-1][2]['X-Active-Context-Session'] == ''
+
+
+def test_stripped_b_cookie_cannot_substitute_old_a_for_expected_handoff(tmp_path, monkeypatch):
+    import json
+    from http.cookies import SimpleCookie
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    with picker_browser(monkeypatch) as (run, calls):
+        script = """
+await choose(ROOT_A);
+var oldCookie=cookie;
+dropHandoffCookie=true;
+var selected=await fetch('/api/companion/vault/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ROOT_B})});
+dropHandoffCookie=false;
+var page=await (await browserFetch('/workspace')).text();
+console.log(JSON.stringify({status:selected.status,oldCookie,cookie,page,handoffs,reloads}));
+""".replace('ROOT_A',json.dumps(str(roots[0]))).replace('ROOT_B',json.dumps(str(roots[1])))
+        result = run(script)
+    before, after = SimpleCookie(result['oldCookie']), SimpleCookie(result['cookie'])
+    assert before['companion_context_session'].value == after['companion_context_session'].value
+    assert after['companion_context_intent'].value == result['handoffs'][-1]['digest']
+    assert result['status'] == 401
+    assert result['reloads'] == 1
+    assert 'Choose a vault again to continue.' in result['page']
+    assert calls[-1][2]['X-Active-Context-Session'] == ''
+
+
+@pytest.mark.parametrize('surface', ['note', 'capture'])
+def test_rendered_document_proof_cannot_follow_another_tabs_binding(tmp_path, monkeypatch, surface):
+    from app.text.helpers import content_hash
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    original = 'shared template\n'
+    for root in roots:
+        (root / 'shared.md').write_text(original)
+    proofs = []
+
+    def observe_proof(method, path, response):
+        if method == 'GET' and path.endswith('/notes/scoped') and response.status_code == 200:
+            proofs.append(response.headers.get('X-Compatibility-Write-Precondition'))
+        return response
+
+    path = '/api/companion/note/save' if surface == 'note' else '/api/companion/capture'
+    payload = {'note_path':'shared.md','new_body':'edit from old A view\n','expected_content_hash':content_hash(original)} if surface == 'note' else {'text':'capture from old A view'}
+    with picker_browser(monkeypatch, response_filter=observe_proof) as (run, calls):
+        script = """
+await choose(ROOT_A);
+var pageA=lastDocumentHtml;
+NOTE_PAGE
+// The other tab replaces the shared browser transport, not this A document.
+document.cookie='companion_context_intent=pending; Path=/; SameSite=Strict';
+var b=await browserFetch('/api/companion/vault/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ROOT_B,scoped_selection:true})});
+if(!b.ok)throw new Error('other tab selection failed');
+document.cookie='companion_context_intent='+b.headers.get('X-Companion-Scoped-Handoff')+'; Path=/; SameSite=Strict';
+var background=await (await fetch('/api/companion/vault/notes/scoped')).json();
+var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:PAYLOAD});
+console.log(JSON.stringify({status:written.status,data:await written.json(),background,pageA}));
+""".replace('ROOT_A',json.dumps(str(roots[0]))).replace('ROOT_B',json.dumps(str(roots[1]))).replace('WRITE_PATH',json.dumps(path)).replace('PAYLOAD',json.dumps(json.dumps(payload))).replace('NOTE_PAGE', "pageA=await bootDocument('/workspace?note_path=shared.md');" if surface == 'note' else '')
+        result = run(script)
+    assert result['status'] == 409
+    assert result['data']['detail']['error'] == 'capability_not_ready'
+    assert {note['vault_binding_id'] for note in result['background']['notes']} == {binding_b}
+    if surface == 'note':
+        assert 'id="note-source-editor"' in result['pageA']
+    else:
+        assert 'Workspace Orientation' in result['pageA']
+    write = next(call for call in calls if call[1] == path + '/compatibility')
+    assert write[2]['X-Compatibility-Write-Precondition'] in proofs[:-1]
+    assert write[2]['X-Compatibility-Write-Precondition'] != proofs[-1]
+    assert all((root / 'shared.md').read_text() == original for root in roots)
+
+
+@pytest.mark.parametrize('proof_state', ['missing', 'expired'])
+def test_missing_or_expired_document_proof_never_refreshes_on_save(tmp_path, monkeypatch, proof_state):
+    import json
+    import httpx
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    if proof_state == 'expired':
+        monkeypatch.setattr('app.api.compatibility_mutation._TOKEN_TTL_SECONDS', -1)
+
+    def strip_proof(method, path, response):
+        if proof_state == 'missing' and method == 'GET' and path.endswith('/notes/scoped'):
+            headers = dict(response.headers)
+            headers.pop('x-compatibility-write-precondition', None)
+            return httpx.Response(response.status_code, content=response.content, headers=headers)
+        return response
+
+    with picker_browser(monkeypatch, response_filter=strip_proof) as (run, calls):
+        script = """
+await choose(ROOT_A);
+var written=await fetch('/api/companion/note/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note_path:'only-0.md',new_body:'must not write'})});
+console.log(JSON.stringify({status:written.status}));
+""".replace('ROOT_A',json.dumps(str(roots[0])))
+        result = run(script)
+    assert result['status'] == 409
+    assert (roots[0] / 'only-0.md').read_text() == 'vault 0\n'
+    # Exactly the handoff validation and document producer read, never a
+    # save-time notes read that could silently acquire a fresh proof.
+    assert sum(path.endswith('/notes/scoped') for _method,path,_headers,_body in calls) == 2
+    writes = [call for call in calls if call[1].endswith('/save/compatibility')]
+    assert len(writes) == (1 if proof_state == 'expired' else 0)
+
+
+@pytest.mark.parametrize('surface', ['note', 'capture'])
+@pytest.mark.parametrize('boundary', ['api-restart', 'rebind-before-admission'])
+def test_document_write_refuses_stale_session_or_rebound_target(tmp_path, monkeypatch, surface, boundary):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    inspections = 0
+    rebound = []
+
+    def interrupt(method, path):
+        nonlocal inspections
+        if method == 'GET' and path.endswith('/active-context/selection'):
+            inspections += 1
+            if boundary == 'api-restart' and inspections == 2:
+                # Document A is already rendered; no content read primes the
+                # refusal latch before the human's explicit write attempt.
+                selection_routes.reset_selection_store_for_tests()
+        if boundary == 'rebind-before-admission' and path.endswith('/compatibility'):
+            companion_module.get_vault_manager().select_vault(roots[1])
+            rebound.append(True)
+
+    path = '/api/companion/note/save' if surface == 'note' else '/api/companion/capture'
+    body = {'note_path':'only-0.md','new_body':'must not write'} if surface == 'note' else {'text':'must not capture'}
+    with picker_browser(monkeypatch, before_request=interrupt) as (run, calls):
+        script = """
+await choose(ROOT_A);
+var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:PAYLOAD});
+console.log(JSON.stringify({status:written.status,data:await written.json(),visible:!visible.hidden}));
+""".replace('ROOT_A',json.dumps(str(roots[0]))).replace('WRITE_PATH',json.dumps(path)).replace('PAYLOAD',json.dumps(json.dumps(body)))
+        result = run(script)
+    assert result['status'] == (401 if boundary == 'api-restart' else 409)
+    assert (roots[0] / 'only-0.md').read_text() == 'vault 0\n'
+    assert (roots[1] / 'only-1.md').read_text() == 'vault 1\n'
+    writes = [call for call in calls if call[1].endswith('/compatibility')]
+    if boundary == 'api-restart':
+        assert 'reselection_required' in json.dumps(result['data'])
+        assert result['visible'] is True
+        assert not writes
+    else:
+        assert result['data']['detail']['error'] == 'capability_not_ready'
+        assert len(writes) == len(rebound) == 1
+    assert sum(path.endswith('/notes/scoped') for _method,path,_headers,_body in calls) == 2
+
+
+def test_scoped_initialize_refuses_non_directory_before_effects(tmp_path, monkeypatch):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, _roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    before = runtime.registry.load()
+    target = tmp_path / 'ordinary-file.md'
+    target.write_text('human content\n')
+    manager = companion_module.get_vault_manager()
+    context = manager.context
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f'''
+var response=await fetch('/api/companion/vault/initialize',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{path:{json.dumps(str(target))},confirm:true}})}});
+console.log(JSON.stringify({{status:response.status,body:await response.json(),visible:!visible.hidden,cookie}}));
+''')
+    assert result['status'] == 409
+    assert 'reselection_required' in json.dumps(result['body'])
+    assert result['visible'] is True
+    assert 'companion_context_session=' not in result['cookie']
+    assert target.read_text() == 'human content\n'
+    assert manager.context == context
+    assert runtime.registry.load() == before
+    assert [(method, path) for method, path, _headers, _body in calls] == [
+        ('POST', '/api/companion/vault/initialize')
+    ]
+
+
+@pytest.mark.parametrize('journey', ['carrier-free', 'selected', 'blank', 'stale-override'])
+def test_operator_ask_preserves_scoped_or_carrier_free_read_journey(tmp_path, monkeypatch, journey):
+    import importlib
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    ask_module = importlib.import_module('app.api.routes.ask')
+    _runtime, roots, _a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    contexts = []
+
+    def answer(_req, _request, *, active_context, **_kwargs):
+        contexts.append(active_context)
+        return ask_module.AskResponse(answer='grounded fixture', sources=[], latency_ms=0)
+
+    monkeypatch.setattr(ask_module, '_run_ask', answer)
+    with picker_browser(monkeypatch) as (run, calls):
+        script = """
+SELECT
+var response=await fetch('/api/operator/ask',{method:'POST',headers:HEADERS,body:JSON.stringify({question:'which selected vault?'})});
+console.log(JSON.stringify({status:response.status,body:await response.json()}));
+""".replace('SELECT', 'await choose('+json.dumps(str(roots[1]))+');' if journey in {'selected', 'stale-override'} else '').replace('HEADERS', json.dumps({'Content-Type':'application/json', **({'X-Active-Context-Session':''} if journey == 'blank' else {'X-Active-Context-Override':'never-issued'} if journey == 'stale-override' else {})}))
+        result = run(script)
+    expected_path = '/api/ask' if journey == 'carrier-free' else '/api/ask/scoped'
+    assert [path for method,path,_headers,_body in calls if method == 'POST' and path.startswith('/api/ask')] == [expected_path]
+    assert result['status'] == (200 if journey in {'carrier-free', 'selected'} else 401)
+    if journey == 'selected':
+        assert contexts[0].binding_ids == (binding_b,)
+    elif journey == 'carrier-free':
+        assert contexts == [None]
+    else:
+        assert not contexts
+
+
+@pytest.mark.parametrize('surface', ['note', 'capture'])
+@pytest.mark.parametrize('rebind', [False, True])
+def test_carrier_free_document_preserves_bound_writes_without_minting_selection(tmp_path, monkeypatch, surface, rebind):
+    from app.text.helpers import content_hash
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    manager = companion_module.get_vault_manager()
+    manager.select_vault(roots[0])
+    original = '---\nuuid: 3218928c-2fef-49df-a8a7-6f1674876d29\n---\n\nshared human template\n'
+    for root in roots:
+        (root / 'shared.md').write_text(original)
+    before_b = {path.relative_to(roots[1]): path.read_bytes() for path in roots[1].rglob('*') if path.is_file()}
+    producer_proofs = []
+
+    def observe(method, path, response):
+        if path in {'/api/companion/workspace', '/api/companion/orientation'}:
+            producer_proofs.append(response.headers.get('X-Compatibility-Write-Precondition'))
+        return response
+
+    def switch_before_write(method, path):
+        if rebind and path.endswith('/compatibility'):
+            manager.select_vault(roots[1])
+
+    write_path = '/api/companion/note/save' if surface == 'note' else '/api/companion/capture'
+    payload = {'note_path':'shared.md','new_body':'explicit default-page edit\n','expected_content_hash':content_hash(original)} if surface == 'note' else {'text':'explicit default-page capture'}
+    with picker_browser(monkeypatch, response_filter=observe, before_request=switch_before_write, raise_server_exceptions=True) as (run, calls):
+        script = """
+await bootDocument(PAGE);
+var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:PAYLOAD});
+console.log(JSON.stringify({status:written.status,body:await written.json(),cookie,handoffs}));
+""".replace('PAGE',json.dumps('/workspace?note_path=shared.md' if surface == 'note' else '/workspace')).replace('WRITE_PATH',json.dumps(write_path)).replace('PAYLOAD',json.dumps(json.dumps(payload)))
+        result = run(script)
+    assert result['status'] == (409 if rebind else 200), result['body']
+    if surface == 'capture' and not rebind:
+        assert 'explicit default-page capture' in (roots[0] / result['body']['note_path']).read_text()
+    assert result['cookie'] == ''
+    assert not result['handoffs']
+    assert not any(path.endswith('/vault/select') or '/active-context/selection' in path for _method,path,_headers,_body in calls)
+    write = next(call for call in calls if call[1] == write_path + '/compatibility')
+    assert write[2]['X-Compatibility-Write-Precondition'] == producer_proofs[0]
+    assert 'X-Active-Context-Session' not in write[2]
+    assert all(headers.get('X-Forwarded-For') == '127.0.0.1' for method,path,headers,_body in calls if path in {'/api/companion/workspace','/api/companion/orientation','/api/companion/vault/notes'})
+    if rebind:
+        assert (roots[0] / 'shared.md').read_text() == original
+    assert {path.relative_to(roots[1]): path.read_bytes() for path in roots[1].rglob('*') if path.is_file()} == before_b
+    assert runtime.registry.load().registrations
+
+
+@pytest.mark.parametrize('surface', ['note', 'capture'])
+def test_missing_default_document_proof_cannot_be_replaced_by_later_projection(tmp_path, monkeypatch, surface):
+    import json
+    import httpx
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    original = '---\nuuid: 9878928c-2fef-49df-a8a7-6f1674876d29\n---\n\nvault 0\n'
+    (roots[0] / 'only-0.md').write_text(original)
+    stripped = []
+
+    def strip_first_producer(method, path, response):
+        if not stripped and path in {'/api/companion/workspace','/api/companion/orientation'}:
+            stripped.append(path)
+            headers = dict(response.headers)
+            headers.pop('x-compatibility-write-precondition', None)
+            return httpx.Response(response.status_code, content=response.content, headers=headers)
+        return response
+
+    with picker_browser(monkeypatch, response_filter=strip_first_producer) as (run, calls):
+        script = """
+await bootDocument(PAGE);
+var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note_path:'only-0.md',new_body:'must not write',text:'must not capture'})});
+console.log(JSON.stringify({status:written.status}));
+""".replace('PAGE',json.dumps('/workspace?note_path=only-0.md' if surface == 'note' else '/workspace')).replace('WRITE_PATH',json.dumps('/api/companion/note/save' if surface == 'note' else '/api/companion/capture'))
+        result = run(script)
+    assert result['status'] == 409
+    assert not any(path.endswith('/compatibility') for _method,path,_headers,_body in calls)
+    assert (roots[0] / 'only-0.md').read_text() == original
+
+
+def test_default_document_does_not_launder_remote_ui_principal(tmp_path, monkeypatch):
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    remote = TestClient(app, client=('127.0.0.1', 40000))
+    for path in ['/api/companion/orientation','/api/companion/workspace?note_path=only-0.md']:
+        response = remote.get(path, headers={'X-Forwarded-For':'203.0.113.8'})
+        assert response.status_code == 200, response.text
+        assert 'X-Compatibility-Write-Precondition' not in response.headers
+
+
+@pytest.mark.parametrize('surface', ['note', 'capture'])
+def test_default_document_serialization_pins_proof_before_concurrent_rebind(tmp_path, monkeypatch, surface):
+    import json
+    from app.text.helpers import content_hash
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    manager = companion_module.get_vault_manager()
+    manager.select_vault(roots[0])
+    original = '---\nuuid: 5418928c-2fef-49df-a8a7-6f1674876d29\n---\n\nsame-name template\n'
+    for root in roots:
+        (root / 'shared.md').write_text(original)
+    serializing, release, selected = threading.Event(), threading.Event(), threading.Event()
+    encode = companion_module.jsonable_encoder
+    target_type = companion_module.WorkspaceStateResponse if surface == 'note' else companion_module.WorkspaceOrientationResponse
+    target_path = '/api/companion/workspace' if surface == 'note' else '/api/companion/orientation'
+    proofs, outcomes, errors = [], [], []
+
+    def pause(value, *args, **kwargs):
+        if isinstance(value, target_type) and not serializing.is_set():
+            serializing.set()
+            assert release.wait(5)
+        return encode(value, *args, **kwargs)
+
+    def after_response(method, path, response):
+        if path == target_path and not proofs:
+            proofs.append(response.headers.get('X-Compatibility-Write-Precondition'))
+            assert selected.wait(5)
+        return response
+
+    monkeypatch.setattr(companion_module, 'jsonable_encoder', pause)
+    with picker_browser(monkeypatch, response_filter=after_response) as (run, calls):
+        script = """
+await bootDocument(PAGE);
+var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:PAYLOAD});
+console.log(JSON.stringify({status:written.status,body:await written.json()}));
+""".replace('PAGE',json.dumps('/workspace?note_path=shared.md' if surface == 'note' else '/workspace')).replace('WRITE_PATH',json.dumps('/api/companion/note/save' if surface == 'note' else '/api/companion/capture')).replace('PAYLOAD',json.dumps(json.dumps({'note_path':'shared.md','new_body':'must not redirect','expected_content_hash':content_hash(original),'text':'must not redirect'})))
+        def browse():
+            try:
+                outcomes.append(run(script))
+            except BaseException as exc:
+                errors.append(exc)
+        browser = threading.Thread(target=browse)
+        browser.start()
+        assert serializing.wait(5)
+        def select_b():
+            manager.select_vault(roots[1])
+            selected.set()
+        selector = threading.Thread(target=select_b)
+        selector.start()
+        try:
+            assert not selected.wait(0.1)
+        finally:
+            release.set()
+        selector.join(5)
+        browser.join(10)
+        assert not selector.is_alive() and not browser.is_alive()
+    assert not errors
+    assert outcomes[0]['status'] == 409
+    assert outcomes[0]['body']['detail']['error'] == 'capability_not_ready'
+    write = next(call for call in calls if call[1].endswith('/compatibility'))
+    assert write[2]['X-Compatibility-Write-Precondition'] == proofs[0]
+    assert all((root / 'shared.md').read_text() == original for root in roots)
+
+
+def test_carrier_free_proof_follows_rendered_binding_when_default_differs(tmp_path, monkeypatch):
+    import json
+    from app.text.helpers import content_hash
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[1])
+    assert runtime.registry.load().default_vault_binding_id == binding_a
+    original = '---\nuuid: 3348928c-2fef-49df-a8a7-6f1674876d29\n---\n\nrendered B\n'
+    (roots[1] / 'shared.md').write_text(original)
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run("""
+await bootDocument('/workspace?note_path=shared.md');
+var written=await fetch('/api/companion/note/save',{method:'POST',headers:{'Content-Type':'application/json'},body:PAYLOAD});
+console.log(JSON.stringify({status:written.status,cookie}));
+""".replace('PAYLOAD',json.dumps(json.dumps({'note_path':'shared.md','new_body':'explicit B edit','expected_content_hash':content_hash(original)}))))
+    assert result['status'] == 200
+    assert result['cookie'] == ''
+    assert (roots[1] / 'shared.md').read_text().endswith('explicit B edit')
+    assert (roots[0] / 'only-0.md').read_text() == 'vault 0\n'
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id == binding_b
+    assert not any('/active-context/selection' in path or path.endswith('/vault/select') for _method,path,_headers,_body in calls)
+
+
+def test_pre_registry_document_read_never_invents_write_proof(tmp_path, monkeypatch):
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    monkeypatch.delenv('INSTANCE_VAULT_REGISTRY_PATH')
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run("""
+var page=await bootDocument();
+var written=await fetch('/api/companion/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'must not fall back'})});
+console.log(JSON.stringify({page,status:written.status,cookie,handoffs}));
+""")
+    assert 'Workspace Orientation' in result['page']
+    assert result['status'] == 409
+    assert result['cookie'] == '' and not result['handoffs']
+    assert not any(path.endswith('/compatibility') or path.endswith('/vault/select') for _method,path,_headers,_body in calls)
+
+
+def test_carrier_free_document_refuses_new_shared_stale_intent_before_write(tmp_path, monkeypatch):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    def restart_before_liveness(method, path):
+        if path == '/api/companion/vault/notes':
+            selection_routes.reset_selection_store_for_tests()
+    with picker_browser(monkeypatch, before_request=restart_before_liveness) as (run, calls):
+        result = run("""
+await bootDocument();
+var selected=await browserFetch('/api/companion/vault/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ROOT_A,scoped_selection:true})});
+document.cookie='companion_context_intent='+selected.headers.get('X-Companion-Scoped-Handoff')+'; Path=/; SameSite=Strict';
+var written=await fetch('/api/companion/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'must not use stale shared intent'})});
+console.log(JSON.stringify({status:written.status,visible:!visible.hidden,cookie}));
+""".replace('ROOT_A',json.dumps(str(roots[0]))))
+    assert result['status'] == 401 and result['visible'] is True
+    assert 'companion_context_session=' in result['cookie']
+    assert not any(path.endswith('/compatibility') for _method,path,_headers,_body in calls)
+
+
+@pytest.mark.parametrize('surface', ['workspace', 'orientation'])
+@pytest.mark.parametrize('principal_present', [False, True])
+def test_default_proof_preflight_never_initializes_or_repairs_missing_registry(tmp_path, monkeypatch, surface, principal_present):
+    runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    if principal_present:
+        registry = runtime.registry.path
+        registry.unlink()  # Valid principal plus last-good state must not restore on this probe.
+    else:
+        parent = tmp_path / 'unprovisioned-state'
+        parent.mkdir(mode=0o700)
+        registry = parent / 'registry.json'
+        monkeypatch.setenv('INSTANCE_VAULT_REGISTRY_PATH', str(registry))
+    before = {p.relative_to(registry.parent):p.read_bytes() for p in registry.parent.rglob('*') if p.is_file()}
+    client = TestClient(app, raise_server_exceptions=True)
+    path = '/api/companion/'+surface+('?note_path=only-0.md' if surface == 'workspace' else '')
+    response = client.get(path)
+    assert response.status_code == 200, response.text
+    assert 'X-Compatibility-Write-Precondition' not in response.headers
+    assert not registry.exists()
+    assert {p.relative_to(registry.parent):p.read_bytes() for p in registry.parent.rglob('*') if p.is_file()} == before
+
+
+def test_unauthorized_default_proof_admission_never_probes_mutable_registry(tmp_path, monkeypatch):
+    import inspect
+    from app.instance.vault_registry import VaultRegistryStore
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    calls = []
+    load = VaultRegistryStore.load
+    read = VaultRegistryStore.read_existing
+    def observed_load(self):
+        calls.append(('load', inspect.currentframe().f_back.f_code.co_name))
+        return load(self)
+    def observed_read(self):
+        calls.append(('read_existing', inspect.currentframe().f_back.f_code.co_name))
+        return read(self)
+    monkeypatch.setattr(VaultRegistryStore, 'load', observed_load)
+    monkeypatch.setattr(VaultRegistryStore, 'read_existing', observed_read)
+    response = TestClient(app, client=('127.0.0.1',40000)).get('/api/companion/orientation',headers={'X-Forwarded-For':'203.0.113.8'})
+    assert response.status_code == 200
+    assert 'X-Compatibility-Write-Precondition' not in response.headers
+    assert not any(caller == '_document_read_principal' for _operation,caller in calls)
+
+
+@pytest.mark.parametrize('surface', ['workspace', 'orientation'])
+def test_unselected_compatibility_bridge_preserves_read_without_write_proof(tmp_path, monkeypatch, surface):
+    runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    companion_module.get_vault_manager().select_vault(roots[0])
+    InstanceDefaultVaultService(runtime.registry, capability=STORAGE_MUTATION_CAPABILITY).clear()
+    before = runtime.registry.read_existing()
+    assert before.settings_rebind['candidateBindingId'] is None
+    path = '/api/companion/'+surface+('?note_path=only-0.md' if surface == 'workspace' else '')
+    response = TestClient(app).get(path)
+    assert response.status_code == 200, response.text
+    assert 'X-Compatibility-Write-Precondition' not in response.headers
+    assert runtime.registry.read_existing() == before

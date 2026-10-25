@@ -198,6 +198,7 @@ def test_vault_multiwriter_relative_intent_census_is_closed() -> None:
     expected = {
         ("app/agent_memory/materialization.py", "materialize_promoted_memory", 1),
         ("app/agent_memory/provisional_write.py", "write_provisional_memory", 1),
+        ("app/briefing/compose.py", "_atomic_write", 1),
         ("app/chat/session_log.py", "SessionLogWriter.open_session", 1),
         ("app/episodes/segmenter.py", "_write_fusion_receipt", 1),
         ("app/eval/failure_capture.py", "_write_draft", 1),

@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import json
 from typing import Any
+from urllib.parse import urlencode
 
 from companion_ui.workspace.serve_dev_page import make_handler
 from companion_ui.workspace.vault_settings_panel import VAULT_SELECT_ENDPOINT
@@ -148,6 +149,37 @@ class _PostDriver:
             self.payload = payload
 
         self._instance._send_json = _send_json  # type: ignore[method-assign]
+
+    def run_post(self) -> None:
+        self._instance.do_POST()
+
+
+class _NativePostDriver:
+    """Drive a URL-encoded calibration form and capture its PRG response."""
+
+    def __init__(self, handler_cls: type, path: str, body: dict[str, Any]) -> None:
+        raw = urlencode(body).encode("utf-8")
+        self._instance = handler_cls.__new__(handler_cls)
+        self._instance.path = path
+        self._instance.rfile = io.BytesIO(raw)
+        self._instance.wfile = io.BytesIO()
+        self._instance.headers = {
+            "Content-Length": str(len(raw)),
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        self._instance.client_address = ("127.0.0.1", 50000)
+        self.status_code: int | None = None
+        self.headers: dict[str, str] = {}
+
+        def send_response(code: int, *_: Any) -> None:
+            self.status_code = code
+
+        def send_header(name: str, value: str) -> None:
+            self.headers[name] = value
+
+        self._instance.send_response = send_response  # type: ignore[method-assign]
+        self._instance.send_header = send_header  # type: ignore[method-assign]
+        self._instance.end_headers = lambda: None  # type: ignore[method-assign]
 
     def run_post(self) -> None:
         self._instance.do_POST()
@@ -375,6 +407,32 @@ def test_queue_review_post_proxied() -> None:
     )
 
 
+def test_calibration_native_form_uses_post_redirect_get() -> None:
+    path = "/api/companion/calibration/revisits/decision-1/decision"
+    response = {"status": "answered", "decision_id": "decision-1", "rung_index": 0}
+    client = _FakeClient(post_responses={path: response})
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+
+    driver = _NativePostDriver(
+        handler_cls,
+        path,
+        {
+            "outcome": "held",
+            "rung_index": "0",
+            "decision_object_id": "object-1",
+            "note_path": "Notes/current.md",
+        },
+    )
+    driver.run_post()
+
+    assert driver.status_code == 303
+    assert driver.headers["Location"] == "/workspace?note_path=Notes%2Fcurrent.md"
+    assert client.post_calls[-1] == (
+        path,
+        {"outcome": "held", "rung_index": 0, "decision_object_id": "object-1"},
+    )
+
+
 def test_vault_select_proxy_forwards_client_context_and_api_key() -> None:
     response = {"status": "selected"}
     client = _FakeClient(post_responses={VAULT_SELECT_ENDPOINT: response})
@@ -484,3 +542,19 @@ def test_tts_status_get_proxied() -> None:
     assert d.status_code == 200
     assert d.payload == response
     assert client.get_calls[-1] == ("/api/companion/tts/status", {})
+
+
+def test_carrier_free_document_proofs_and_writes_forward_actual_client_auth() -> None:
+    client = _FakeClient()
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+    handler = handler_cls.__new__(handler_cls)
+    handler.headers = {"X-API-Key": "synthetic-api-key"}
+    handler.client_address = ("203.0.113.10", 50000)
+    for path in (
+        "/", "/workspace", "/api/companion/workspace", "/api/companion/orientation",
+        "/api/companion/vault/notes", "/api/companion/capture/compatibility",
+        "/api/companion/note/save/compatibility",
+    ):
+        assert handler._forwarded_client_headers(path) == {
+            "X-Forwarded-For": "203.0.113.10", "X-API-Key": "synthetic-api-key",
+        }

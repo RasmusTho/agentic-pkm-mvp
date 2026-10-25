@@ -17,6 +17,14 @@ restore checks. It does not enforce a runtime deployment mode, create a fallback
 Vault or board into a distributed lock. Callers must continue to use the existing dispatcher claim,
 lease, receipt, and workspace-preflight flows.
 
+## Repository-scoped readiness
+
+For a pickup refresh targeting a constituent repository, callers may pass that checkout's root for
+relative `Verify:` path checks. The explicit root applies only to the exact target repository;
+other repositories refreshed in the same call retain the hub default, and no root mapping is
+persisted. The pickup wrapper carries this context through dispatcher refresh and label-only
+fallback validation without changing Issue identity or GitHub authority.
+
 ## State Transitions
 
 Modes are `normal`, `degraded`, and `recovery`. A transition is conditional on the revision read by

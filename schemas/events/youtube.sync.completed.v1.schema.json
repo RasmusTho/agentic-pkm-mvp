@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/youtube.sync.completed.v1.schema.json",
+  "title": "youtube.sync.completed payload (v1)",
+  "description": "Per-source YSS-07 subscription RSS poll receipt. Producer: app/knowledge_acquisition/channel_rss_discovery.py. Idempotency key basis: (topic, binding_id, run_id). Lineage posture: no dispatched consumer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "binding_id",
+    "collection_kind",
+    "collection_ref",
+    "run_id",
+    "discovered",
+    "enqueued",
+    "deduped",
+    "filtered_out",
+    "not_modified",
+    "duration_ms",
+    "quota_units_spent"
+  ],
+  "properties": {
+    "binding_id": { "type": "string", "minLength": 1 },
+    "collection_kind": { "const": "subscription_feed" },
+    "collection_ref": { "type": "string", "pattern": "^UC[A-Za-z0-9_-]{22}$" },
+    "run_id": { "type": "string", "format": "uuid" },
+    "discovered": { "type": "integer", "minimum": 0 },
+    "enqueued": { "type": "integer", "minimum": 0 },
+    "deduped": { "type": "integer", "minimum": 0 },
+    "filtered_out": { "type": "integer", "minimum": 0 },
+    "not_modified": { "const": false },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "quota_units_spent": { "const": 0 }
+  }
+}

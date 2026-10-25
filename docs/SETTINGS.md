@@ -30,7 +30,7 @@ convergence must preserve these named seams and their existing validation.
 
 ## Current-state baseline
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
-- DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
+- DB outbox (Postgres) is the canonical event-delivery queue; JSONL audit log is non-canonical for queue delivery and used for lag inspection. The existing durable settings receipt history separately owns accepted runtime-gating values, including the screen controls below.
 - Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
@@ -40,6 +40,51 @@ writers (SETTINGS-04), prompt settings (SETTINGS-06), and the serial model/TTS/w
 (SETTINGS-07A..07C). SETTINGS-05 parent acceptance remains open on #3156; SETTINGS-08 is the
 owner-document consolidation slice recorded by this PR. No separate settings owner or orphan schema
 is implied by the older roadmap.
+
+## Screen control settings
+
+SCREEN-06 (#3342) uses the existing `app/vault/settings_service.py` runtime-gating seam for the
+vault-shared `<vault>/settings/screen_control.md` source. `ScreenControlSettings` in
+`app/settings/models.py` is the sole declaration of defaults and bounds; SettingsService and vault
+initialization derive their registry/scaffold values from it. The exact controls and provisional
+values are listed in `docs/HEIMDAL_SCREEN_STREAM/README.md :: Provisional constants`.
+
+The authenticated screen control API, existing Companion settings writer, authorized service
+callers, and live settings watcher all use the same WriteGuard and durable `settings.write.receipt`
+acceptance path. Screen receipts carry `receipt_type=heimdal_screen_control_receipt`, the actor,
+old/new values, vault ID, and local-instance ID. HTTP actors come from server authentication; client
+fields cannot choose them. Shared-settings role checks and scoped-context mutation refusal remain
+in force. No new settings store or event-delivery queue is introduced.
+
+Desired Markdown and accepted runtime state are distinct. Cooperative local writers serialize
+updates and use the existing guarded filesystem version-CAS replacement against the original source.
+Receipt acceptance checks the exact requested output bytes. A concurrent human/Git edit or a failed
+receipt append therefore leaves a visible conflict/pending state; it cannot silently become an
+accepted resume. Watcher ingestion retains its source-generation checks. Replays and unchanged
+writes create no duplicate receipt. A pause request invokes canonical screen-scope consent
+revocation and grant-linked raw erasure before its setting receipt is accepted. Even an explicit
+pause whose setting is unchanged revokes active screen grants through the ledger; the unchanged
+setting itself has no duplicate receipt. Resume never grants consent.
+
+Revocation or erasure failure returns a refused/pending setting change. A committed revocation
+remains inactive even if later erasure or settings acceptance fails; there is no compensating
+re-grant. Pause retry uses the existing revocation work rows to reconcile screen-only erasure,
+while scheduled retention retains all-scope reconciliation. Published observations remain intact.
+
+The accepted receipt projection is keyed by vault and local instance and survives restart/rebind.
+Malformed, unknown, invalid, or unaccepted controls expose errors and deny capture permission;
+proven last-valid values remain visible. Raw-frame retention may retain its proven accepted value,
+but fails loudly when no valid authority can be established. Missing initialization or source files
+and unreadable receipt history never grant capture permission. The host reports requested/effective
+permission separately from `capture_state=unknown_external_client`; the native client remains
+responsible for actual capture enforcement and its visible indicator.
+
+An existing SCREEN-01 `_heimdal/settings.md` retention policy is not silently replaced by a new
+default. It requires an explicit canonical Settings Spine write, whose receipt preserves the old
+policy value. The legacy note remains migration evidence and is not a second effective settings
+source. Fresh vaults receive the canonical paused scaffold from the single model declaration.
+This bounded integration does not close Settings Spine parent acceptance #3156 or screen capability
+acceptance #3340.
 
 ## Target-state boundary
 
@@ -65,6 +110,18 @@ For a scoped MVR-05B read, the compiled bundle contributes cache provenance only
 resolves the authenticated active-context binding set first, then hashes the current typed bundle
 into that context's retrieval cache identity. `VAULT_ROOT`, compiled settings, and the single
 compatibility watcher never select or widen a scoped request binding.
+
+Instance settings and the durable instance default remain bootstrap/operator inputs. Per-vault
+compiled settings are resolved only after the immutable request binding set is known; a request that
+selects multiple bindings must obtain one compatible request-wide settings value or fail before any
+effect. `VAULT_ROOT`, `WATCHER_VAULT_PATH`, and compiled vault-layout state are therefore not request
+authority and cannot repair a missing, stale, invalid, or ambiguous carrier by fallback.
+
+The compatibility picker may still update the instance default and rebind the one watcher through
+the protected transaction described below. That transaction affects later bootstrap resolution, not
+an already-resolved request generation. Until MVR-05C supplies governed write targets, scoped
+vault-bound mutation routes keep the `capability_not_ready` seal; settings resolution cannot enable
+or redirect those writes.
 
 Runtime settings are compiled from vault-backed Markdown settings into `runtime/settings/`.
 

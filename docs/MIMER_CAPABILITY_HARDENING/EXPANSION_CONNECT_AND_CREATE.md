@@ -5,7 +5,7 @@ Owner: Architecture / product (Rasmus)
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed — code citations are current reality; design is proposal
-Last reviewed: 2026-07-05
+Last reviewed: 2026-10-21 UTC (EXP-4 acceptance-control boundary, #6293 candidate)
 
 # Expansion: Connect + Create (the north star capability)
 
@@ -170,6 +170,9 @@ trigger (human intent)
 
 ### 2.4 Acceptance: governed materialization (the only path to canonical)
 
+- The acceptance signal is exactly one generated checked control bound to this draft's ID in its
+  Markdown body AI panel. The panel must be balanced; ordinary tasks, controls for another draft,
+  duplicates, indented/fenced examples, and frontmatter examples do not carry acceptance authority.
 - The checked checkbox rides the canonical Panel confirmation semantics — the same confirm→execute
   loop the vertical-loop proof validated. Execution moves/promotes the draft to the human-chosen
   destination (default: a destination proposed in the checkbox label, correctable by the human)

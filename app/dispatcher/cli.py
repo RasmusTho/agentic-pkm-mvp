@@ -302,6 +302,7 @@ def _cmd_claim(args: argparse.Namespace, store: SqliteStore) -> int:
             agent_id=args.agent,
             ttl_minutes=args.ttl_minutes,
             takeover_stale=args.takeover_stale,
+            expected_lease_id=args.expected_lease_id,
         )
         _emit({
             "ok": True,
@@ -1196,7 +1197,11 @@ def _cmd_pickup_refresh(args: argparse.Namespace, store: SqliteStore) -> int:
 
     sync_meta = get_sync_meta(store, PROVIDER_IDENTITY)
     task = store.get_task(args.task_id)
-    refresh_reason = pickup_refresh_reason(task, sync_meta, args.repo)
+    refresh_reason = (
+        "explicit_readiness_repo_root"
+        if args.readiness_repo_root is not None
+        else pickup_refresh_reason(task, sync_meta, args.repo)
+    )
     if refresh_reason is None:
         _emit({
             "ok": True,
@@ -1215,6 +1220,8 @@ def _cmd_pickup_refresh(args: argparse.Namespace, store: SqliteStore) -> int:
             configured_repos,
             configured_repositories=configured_repos,
             source=GhCliIssueSource(),
+            readiness_repo=args.repo,
+            readiness_repo_root=args.readiness_repo_root,
         )
     except RepositoryConfigurationError as exc:
         _emit({
@@ -1435,6 +1442,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent", required=True)
     p.add_argument("--ttl-minutes", type=int, default=90, dest="ttl_minutes")
     p.add_argument("--takeover-stale", action="store_true")
+    p.add_argument(
+        "--expected-lease-id",
+        dest="expected_lease_id",
+        help="Require stale takeover to replace this exact observed predecessor lease",
+    )
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("heartbeat", help="Update lease heartbeat")
@@ -1576,6 +1588,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("task_id", help="Repo-qualified dispatcher task identity")
     p.add_argument("--repo", required=True, help="Task GitHub repository (owner/repo)")
+    p.add_argument(
+        "--readiness-repo-root",
+        help="Repository root for Verify path checks on the exact target repository.",
+    )
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser(

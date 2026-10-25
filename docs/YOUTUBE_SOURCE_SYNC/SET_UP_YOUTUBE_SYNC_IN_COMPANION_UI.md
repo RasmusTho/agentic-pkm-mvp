@@ -4,8 +4,8 @@ description: Guided setup flow (connect → pick inbox → choose sources → Ta
 task_id: YSS-11
 source_anchor: "docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Reason codes"
 parent_capability: YouTube Source Sync
-prerequisites: [YSS-02, YSS-05, YSS-06, YSS-09]
-depends_on: [BIND_YOUTUBE_ACCOUNT_WITH_OAUTH.md, DISCOVER_PLAYLIST_ITEMS_CONTINUOUSLY.md, SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md, SURFACE_SYNC_HEALTH_STATUS_AND_RECEIPTS.md]
+prerequisites: [YSS-02, YSS-05, YSS-06, YSS-07, YSS-08, YSS-09]
+depends_on: [BIND_YOUTUBE_ACCOUNT_WITH_OAUTH.md, DISCOVER_PLAYLIST_ITEMS_CONTINUOUSLY.md, SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md, SYNC_SUBSCRIPTIONS_FROM_TAKEOUT_AND_RSS.md, REPAIR_GAPS_WITH_PREVIEWED_BACKFILL.md, SURFACE_SYNC_HEALTH_STATUS_AND_RECEIPTS.md]
 can_parallelize_with: []
 ---
 
@@ -79,29 +79,29 @@ A UI that shows "up to date" while the runner is dead, leaks a token, or lets a 
 - [ ] Each setup state and the status card render correctly from fixture projections: cold,
       connecting, pick-inbox, choose-sources, subscriptions, preview, connected, degraded (per
       reason code), paused, offline.
-      Verify: `tests/companion_ui/test_youtube_sync_section.py::test_all_states_render_from_projections`
+      Verify: `tests/companion_ui/test_youtube_sync_setup.py::test_all_states_render_from_projections`
 - [ ] Watch Later / Watch History appear as not-connectable with the explanation; no control can
       submit them.
-      Verify: `tests/companion_ui/test_youtube_sync_section.py::test_watch_later_history_shown_unsupported`
+      Verify: `tests/companion_ui/test_youtube_sync_setup.py::test_watch_later_history_shown_unsupported`
 - [ ] The offline chip derives from staleness — a stale projection can never render "up to date".
-      Verify: `tests/companion_ui/test_youtube_sync_section.py::test_offline_derived_never_up_to_date_when_stale`
+      Verify: `tests/companion_ui/test_youtube_sync_setup.py::test_offline_derived_never_up_to_date_when_stale`
 - [ ] Backfill execute is unreachable in markup without a rendered plan id confirm; historical
       requires the distinct armed step.
-      Verify: `tests/companion_ui/test_youtube_sync_section.py::test_backfill_confirm_gates_in_markup`
+      Verify: `tests/companion_ui/test_youtube_sync_setup.py::test_backfill_confirm_gates_in_markup`
 - [ ] No token or secret-shaped value appears in any rendered fragment or API response for any
       state (sentinel scan across fixtures).
-      Verify: `tests/companion_ui/test_youtube_sync_section.py::test_no_secret_in_markup_or_responses`
+      Verify: `tests/companion_ui/test_youtube_sync_setup.py::test_no_secret_in_markup_or_responses`
 - [ ] Every endpoint enforces the same core-layer gates (inbox swap atomicity, unsupported
       refusal, lease-guarded sync-now) — production route wiring asserted, not handlers in
       isolation.
       Verify: `tests/api/test_companion_youtube_routes.py::test_routes_wired_to_core_gates`
 - [ ] Disconnect flow states artifacts are kept, calls the YSS-02 disconnect, and the section
       returns to cold with reconnect offered.
-      Verify: `tests/companion_ui/test_youtube_sync_section.py::test_disconnect_preserves_artifacts_copy_and_state`
+      Verify: `tests/companion_ui/test_youtube_sync_setup.py::test_disconnect_preserves_artifacts_copy_and_state`
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/companion_ui/test_youtube_sync_section.py tests/api/test_companion_youtube_routes.py`
+- `pytest -q tests/companion_ui/test_youtube_sync_setup.py tests/api/test_companion_youtube_routes.py`
 - `pytest -q -m "not pg"` (companion routes + UI are hot-path; full default suite)
 - `ruff check app tests && mypy app`
 

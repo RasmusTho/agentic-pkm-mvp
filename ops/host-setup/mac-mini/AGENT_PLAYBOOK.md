@@ -1,10 +1,15 @@
 # Agent Playbook — Mac mini (macOS)
 
-You are an operator or host agent running on the Mac mini. The Mac mini is
-**Ollama-only**: install and verify Ollama/model serving, but do not install or
+You are an operator or host agent running this legacy optional-Ollama playbook on the Mac mini.
+**This playbook's installation scope is Ollama only**: install and verify Ollama/model serving, but do not install or
 start the Yggdrasil API, database, worker, watcher, Companion UI, or gateway.
 Those product-runtime services belong on the new Linux/Tailscale hosts. Work
 top to bottom; stop and report if a step fails.
+
+Reference review: 2026-10-21. This is not a current host inventory. The Mac also has model-executor,
+control and client roles, recorded in
+[yggdrasil-infra current status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md).
+The steps below do not provision those services or describe their present acceptance state.
 
 ## Preconditions (the operator did these by hand)
 - Tailscale installed and signed in (same tailnet as the gaming PC + Air).

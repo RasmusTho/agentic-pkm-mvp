@@ -31,9 +31,23 @@ if TYPE_CHECKING:
     from app.ops.karakeep_deploy import KarakeepPlan
 
 
+_IMAGE_PULL_FAILURE_CLASSES = frozenset({
+    'registry_unauthorized', 'registry_denied', 'registry_manifest_unknown',
+    'registry_rate_limited', 'unclassified',
+})
+
+
 class PostgresDeployError(RuntimeError):
-    def __init__(self) -> None:
+    image_pull_failure: str | None = None
+
+    def __init__(self, *, image_pull_failure: str | None = None) -> None:
         super().__init__('database deployment refused; matching terminal evidence required')
+        if image_pull_failure is not None:
+            self.image_pull_failure = (
+                image_pull_failure
+                if type(image_pull_failure) is str and image_pull_failure in _IMAGE_PULL_FAILURE_CLASSES
+                else 'unclassified'
+            )
 
 
 @dataclass(frozen=True)
@@ -63,12 +77,21 @@ class DeployPlan:
     image_digest: str | None = None
     automatic: bool = False
     authority_cutover: AuthorityCutover | None = None
+    promotion_plan: str | None = None
+    principal_cutover: bool = False
+    activation_scope: str = 'full'
 
     def payload(self) -> dict[str, Any]:
         """Keep retained manual request bindings compatible with older workers."""
         payload = asdict(self)
+        if self.activation_scope == 'full':
+            del payload['activation_scope']
+        if not self.principal_cutover:
+            del payload['principal_cutover']
         if self.authority_cutover is None:
             del payload['authority_cutover']
+        if self.promotion_plan is None:
+            del payload['promotion_plan']
         if self.image_digest is None and not self.automatic:
             del payload['image_digest']
             del payload['automatic']
@@ -81,7 +104,7 @@ class DeployPlan:
         legacy = {'channel', 'revision', 'services', 'consumers', 'ack_forward_only'}
         if not isinstance(raw, dict):
             raise PostgresDeployError()
-        keys = set(raw) - {'authority_cutover'}
+        keys = set(raw) - {'authority_cutover', 'promotion_plan', 'principal_cutover', 'activation_scope'}
         if keys not in (legacy, legacy | {'image_digest', 'automatic'},
                         legacy | {'image_digest', 'automatic', 'verification_profile'}):
             raise PostgresDeployError()
@@ -92,14 +115,43 @@ class DeployPlan:
                 raise PostgresDeployError()
             cutover = AuthorityCutover(**selected)
         plan = cls(raw['channel'], raw['revision'], tuple(raw['services']), tuple(raw['consumers']),
-                   raw['ack_forward_only'], raw.get('image_digest'), raw.get('automatic', False), cutover)
+                   raw['ack_forward_only'], raw.get('image_digest'), raw.get('automatic', False), cutover,
+                   raw.get('promotion_plan'), raw.get('principal_cutover', False),
+                   raw.get('activation_scope', 'full'))
         plan.validate()
-        if (plan.automatic and raw != json.loads(json.dumps(plan.payload()))
+        canonical_raw = dict(raw)
+        if canonical_raw.get('principal_cutover') is False:
+            del canonical_raw['principal_cutover']
+        if canonical_raw.get('activation_scope') == 'full':
+            del canonical_raw['activation_scope']
+        if (plan.automatic and canonical_raw != json.loads(json.dumps(plan.payload()))
             or not plan.automatic and 'verification_profile' in raw):
             raise PostgresDeployError()
         return plan
 
     def validate(self) -> None:
+        from app.config.activation_scope import validate_activation_scope
+        try:
+            validate_activation_scope(self.activation_scope, self.channel)
+        except (ValueError, TypeError):
+            raise PostgresDeployError() from None
+        if self.activation_scope == 'text-capture' and (
+            not self.automatic or self.authority_cutover is not None
+            or self.principal_cutover or self.promotion_plan is not None
+        ):
+            raise PostgresDeployError()
+        if type(self.principal_cutover) is not bool or (self.principal_cutover and (
+            self.channel not in {'dev', 'test'} or self.image_digest is None
+            or self.authority_cutover is not None or self.promotion_plan is not None
+        )):
+            raise PostgresDeployError()
+        if self.promotion_plan is not None and (
+            self.channel != 'prod' or self.automatic
+            or not isinstance(self.promotion_plan, str)
+            or not Path(self.promotion_plan).is_absolute()
+            or len(self.promotion_plan) > 4096 or '\0' in self.promotion_plan
+        ):
+            raise PostgresDeployError()
         if self.authority_cutover is not None:
             if (not isinstance(self.authority_cutover, AuthorityCutover)
                 or self.channel not in {'dev', 'test'} or self.automatic):
@@ -134,6 +186,143 @@ class DeployPlan:
 
 
 @dataclass(frozen=True)
+class TestRecoveryRequest:
+    """Authenticated TEST-only reset or reconstruction request.
+
+    A reset request names the original failed authority-cutover operation.
+    Reconstruction additionally names that operation in ``source_operation_id``
+    and uses ``failed_operation_id`` for the terminal failed automatic
+    successor.  Keeping both identities prevents a fresh candidate from being
+    confused with either historical operation.
+    """
+
+    failed_operation_id: str
+    plan: DeployPlan
+    authority_cutover: AuthorityCutover
+    source_operation_id: str | None = None
+    source_plan: DeployPlan | None = None
+
+    def validate(self) -> None:
+        if (not isinstance(self.failed_operation_id, str)
+            or not isinstance(self.plan, DeployPlan)
+            or not isinstance(self.authority_cutover, AuthorityCutover)):
+            raise PostgresDeployError()
+        try:
+            canonical_operation_id = str(UUID(self.failed_operation_id))
+            canonical_source_operation_id = (
+                str(UUID(self.source_operation_id))
+                if self.source_operation_id is not None else None
+            )
+        except (ValueError, TypeError, AttributeError):
+            raise PostgresDeployError() from None
+        if (canonical_operation_id != self.failed_operation_id
+            or canonical_source_operation_id != self.source_operation_id
+            or self.source_operation_id == self.failed_operation_id
+            or self.plan.channel != 'test'
+            or not self.plan.automatic
+            or self.plan.authority_cutover is not None
+            or self.plan.principal_cutover
+            or self.plan.image_digest is None
+            or (self.source_operation_id is None) != (self.source_plan is None)):
+            raise PostgresDeployError()
+        self.plan.validate()
+        self.authority_cutover.validate()
+        if self.source_plan is not None:
+            self.validate_source_plan(self.source_plan)
+
+    def validate_failed_plan(self, failed_plan: DeployPlan) -> None:
+        """Authenticate the journal-bound cutover independently of the successor.
+
+        The request carries the fresh automatic candidate.  The failed plan is
+        deliberately reconstructed from the VM's exact operation binding so a
+        caller cannot replace it with a second, caller-supplied plan.  Only the
+        candidate/runtime fields are shared; the failed operation remains a
+        non-automatic authority cutover with the separately authenticated
+        authority tuple.
+        """
+        self.validate()
+        if not isinstance(failed_plan, DeployPlan):
+            raise PostgresDeployError()
+        failed_plan.validate()
+        if self.source_operation_id is None:
+            if (failed_plan.channel != 'test'
+                or failed_plan.automatic
+                or failed_plan.authority_cutover is None
+                or failed_plan.authority_cutover != self.authority_cutover):
+                raise PostgresDeployError()
+            # The first automatic successor is bound to the retained cutover.
+            for field in ('channel', 'revision', 'services', 'consumers'):
+                if getattr(failed_plan, field) != getattr(self.plan, field):
+                    raise PostgresDeployError()
+            if (failed_plan.image_digest is not None
+                and failed_plan.image_digest != self.plan.image_digest):
+                raise PostgresDeployError()
+            return
+        # Reconstruction is authorized by a distinct terminal automatic
+        # successor.  Its candidate bytes may differ from the new plan, while
+        # its runtime surface must remain the same bounded TEST profile.
+        if (failed_plan.channel != 'test'
+            or not failed_plan.automatic
+            or failed_plan.authority_cutover is not None
+            or failed_plan.principal_cutover
+            or failed_plan.image_digest is None):
+            raise PostgresDeployError()
+        for field in ('channel', 'services', 'consumers'):
+            if getattr(failed_plan, field) != getattr(self.plan, field):
+                raise PostgresDeployError()
+
+    def validate_source_plan(self, source_plan: DeployPlan) -> None:
+        """Validate the host-retained request for the completed reset."""
+        if self.source_operation_id is None or not isinstance(source_plan, DeployPlan):
+            raise PostgresDeployError()
+        source_plan.validate()
+        if (source_plan.channel != 'test'
+            or not source_plan.automatic
+            or source_plan.authority_cutover is not None
+            or source_plan.principal_cutover
+            or source_plan.image_digest is None):
+            raise PostgresDeployError()
+        for field in ('channel', 'services', 'consumers'):
+            if getattr(source_plan, field) != getattr(self.plan, field):
+                raise PostgresDeployError()
+
+    def payload(self) -> dict[str, Any]:
+        self.validate()
+        payload = {
+            'failed_operation_id': self.failed_operation_id,
+            'plan': self.plan.payload(),
+            'authority_cutover': asdict(self.authority_cutover),
+        }
+        if self.source_operation_id is not None:
+            if self.source_plan is None:
+                raise PostgresDeployError()
+            payload['source_operation_id'] = self.source_operation_id
+            payload['source_plan'] = self.source_plan.payload()
+        return payload
+
+    @classmethod
+    def from_payload(cls, raw: Any) -> TestRecoveryRequest:
+        if (not isinstance(raw, dict)
+            or set(raw) not in (
+                {'failed_operation_id', 'plan', 'authority_cutover'},
+                {
+                    'failed_operation_id', 'source_operation_id', 'source_plan',
+                    'plan', 'authority_cutover',
+                },
+            )
+            or not isinstance(raw['authority_cutover'], dict)
+            or set(raw['authority_cutover']) != {'binding_id', 'root', 'ownership_root'}):
+            raise PostgresDeployError()
+        request = cls(
+            raw['failed_operation_id'], DeployPlan.from_payload(raw['plan']),
+            AuthorityCutover(**raw['authority_cutover']), raw.get('source_operation_id'),
+            DeployPlan.from_payload(raw['source_plan']) if 'source_plan' in raw else None,
+        )
+        request.validate()
+        return request
+
+
+@dataclass(frozen=True)
 class DeployReceipt:
     operation_id: str
     channel: str
@@ -141,14 +330,22 @@ class DeployReceipt:
     stage: str
     terminal_result: str | None
     pg_acceptance: dict[str, Any] | None = None
+    source_failure: str | None = None
+    activation_scope: str = 'full'
 
     def payload(self) -> dict[str, Any]:
         payload = asdict(self)
+        if self.activation_scope == 'full':
+            del payload['activation_scope']
         if self.pg_acceptance is None:
             del payload['pg_acceptance']
+        if self.source_failure is None:
+            del payload['source_failure']
         return payload
 
     def require_profile(self, plan: DeployPlan) -> None:
+        if self.activation_scope != plan.activation_scope:
+            raise PostgresDeployError()
         if plan.automatic and self.terminal_result == 'committed':
             try:
                 require_pass(self.pg_acceptance, plan.revision, plan.image_digest or '',
@@ -157,6 +354,17 @@ class DeployReceipt:
                 raise PostgresDeployError() from None
 
     def validate(self) -> None:
+        from app.config.activation_scope import validate_activation_scope
+        try:
+            validate_activation_scope(self.activation_scope, self.channel)
+        except (ValueError, TypeError):
+            raise PostgresDeployError() from None
+        from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_REASONS
+        if self.source_failure is not None and (
+            self.source_failure not in SOURCE_PROJECTION_FAILURE_REASONS
+            or self.stage not in {'activating', 'failed'}
+        ):
+            raise PostgresDeployError()
         if (str(UUID(self.operation_id)) != self.operation_id or self.channel not in CHANNEL_PROJECTS
             or self.kind != 'deploy'
             or self.stage not in {'prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'verifying', 'committed', 'aborted', 'failed'}
@@ -233,7 +441,7 @@ class DeployJournal:
         plan.validate()
         if type(bootstrap) is not bool:
             raise PostgresDeployError()
-        if isinstance(plan, DeployPlan) and plan.authority_cutover is not None and bootstrap:
+        if isinstance(plan, DeployPlan) and (plan.authority_cutover is not None or plan.principal_cutover) and bootstrap:
             raise PostgresDeployError()
         DeployReceipt(operation_id, self.channel, 'deploy', 'prepared', None).validate()
         expected = {'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': bootstrap}
@@ -274,8 +482,7 @@ class DeployJournal:
                 except FileNotFoundError:
                     pass
 
-    def bound_plan(self, operation_id: str) -> DeployPlan:
-        """Load the private native request, then revalidate its exact coupling."""
+    def _bound_request(self, operation_id: str | None) -> dict[str, Any]:
         with self._directory() as directory:
             descriptor = os.open(self.channel + '.request.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                  dir_fd=directory)
@@ -286,8 +493,13 @@ class DeployJournal:
                     raise PostgresDeployError()
                 request = json.load(source)
         if (not isinstance(request, dict) or set(request) != {'operation_id', 'plan', 'bootstrap'}
-            or request['operation_id'] != operation_id):
+            or (operation_id is not None and request['operation_id'] != operation_id)):
             raise PostgresDeployError()
+        return request
+
+    def bound_plan(self, operation_id: str) -> DeployPlan:
+        """Load the private native request, then revalidate its exact coupling."""
+        request = self._bound_request(operation_id)
         plan = DeployPlan.from_payload(request['plan'])
         if plan.channel != self.channel:
             raise PostgresDeployError()
@@ -296,10 +508,19 @@ class DeployJournal:
 
     def write(self, operation_id: str, stage: str,
               pg_acceptance: dict[str, Any] | None = None) -> DeployReceipt:
+        scope = 'full'
+        if (self.directory / (self.channel + '.request.json')).exists():
+            request = self._bound_request(None)
+            if request['operation_id'] == operation_id:
+                scope = request['plan'].get('activation_scope', 'full')
         receipt = DeployReceipt(operation_id, self.channel, 'deploy', stage,
-                                stage if stage in {'committed', 'aborted', 'failed'} else None, pg_acceptance)
-        receipt.validate()
+                                stage if stage in {'committed', 'aborted', 'failed'} else None, pg_acceptance,
+                                activation_scope=scope)
         previous = self.read()
+        if previous and previous.operation_id == operation_id and previous.source_failure is not None:
+            receipt = DeployReceipt(operation_id, self.channel, 'deploy', stage,
+                                    receipt.terminal_result, pg_acceptance, previous.source_failure, scope)
+        receipt.validate()
         successors = {
             'prepared': {'preflighted', 'aborted'}, 'preflighted': {'materialized', 'aborted'},
             'materialized': {'authenticating', 'activating', 'aborted'},
@@ -311,6 +532,22 @@ class DeployJournal:
                 raise PostgresDeployError()
         elif stage != 'prepared' or (previous and previous.operation_id == operation_id):
             raise PostgresDeployError()
+        return self._persist(receipt)
+
+    def record_source_failure(self, operation_id: str, revision: str, reason: str) -> None:
+        previous = self.read()
+        plan = self.bound_plan(operation_id)
+        if (previous is None or previous.operation_id != operation_id or previous.stage not in {'activating', 'failed'}
+            or plan.revision != revision or previous.source_failure not in {None, reason}):
+            raise PostgresDeployError()
+        if previous.source_failure == reason:
+            return
+        receipt = DeployReceipt(operation_id, self.channel, 'deploy', previous.stage, previous.terminal_result,
+                                source_failure=reason, activation_scope=plan.activation_scope)
+        receipt.validate()
+        self._persist(receipt)
+
+    def _persist(self, receipt: DeployReceipt) -> DeployReceipt:
         with self._directory() as directory:
             temporary = self.channel + '.' + str(uuid4()) + '.tmp'
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
@@ -440,7 +677,7 @@ class DeployWorker:
 
     def run(self, operation_id: str, plan: DeployPlan) -> DeployReceipt:
         plan.validate()
-        if plan.authority_cutover is not None:
+        if plan.authority_cutover is not None or plan.principal_cutover or plan.activation_scope != 'full':
             self.journal.bind_request(operation_id, plan, False)
         previous = self.journal.read()
         if previous and previous.operation_id == operation_id:
@@ -517,6 +754,7 @@ class DeployRemote(Protocol):
     def activate(self, operation_id: str, plan: DeployPlan) -> DeployReceipt: ...
     def join(self, operation_id: str, plan: DeployPlan) -> DeployReceipt: ...
     def reconcile_failed(self, operation_id: str, plan: DeployPlan) -> DeployReceipt: ...
+    def prove_absence(self, operation_id: str, plan: DeployPlan) -> dict[str, str | bool]: ...
 
 
 def bootstrap_password(admin: SecretAdmin, operation: HostSecretOperation, *, empty: bool) -> None:
@@ -567,7 +805,9 @@ def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
     """Hold the shared controller lock through matching remote terminal evidence."""
     if (type(allow_bootstrap) is not bool or (plan.automatic and allow_bootstrap)
         or (plan.authority_cutover is not None and allow_bootstrap)
-        or (operation_id is not None and not (plan.automatic or plan.authority_cutover is not None))):
+        or (plan.principal_cutover and allow_bootstrap)
+        or (operation_id is not None and not (plan.automatic or plan.authority_cutover is not None
+                                             or plan.principal_cutover))):
         raise PostgresDeployError()
     plan.validate()
     try:

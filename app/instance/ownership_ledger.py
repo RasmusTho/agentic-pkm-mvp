@@ -176,7 +176,7 @@ class OwnershipLedger:
         _assert_private_file(self.rotation_path)
         try:
             journal = json.loads(self.rotation_path.read_text(encoding="utf-8"))
-            if journal.get("schema") != ROTATION_SCHEMA:
+            if journal.get("schema") != ROTATION_SCHEMA or "dormant_ownership" in journal:
                 raise ValueError
             journal_key = self._parse_key_value(journal["key"])
             journal_ledger = self._parse_ledger_value(journal["ledger"])
@@ -384,6 +384,7 @@ class OwnershipLedger:
         *,
         skip_unadopted: bool = False,
         allow_legacy: bool = False,
+        recover_rotation: bool = True,
     ) -> tuple[LegacyOwner, ...]:
         """Fill omitted owner binding IDs from the authenticated live ledger.
 
@@ -404,10 +405,21 @@ class OwnershipLedger:
         authenticate and persist the current schema through
         :meth:`require_registry_consistency`; ordinary consumers retain the
         fail-closed schema-v2-only default.
+
+        Read-only proof callers set ``recover_rotation=False`` so a pending
+        rotation is a refusal rather than an implicit authority mutation.
         """
 
         self._assert_existing_artifacts()
-        with self._locked(allow_legacy_rotation=allow_legacy):
+        if type(recover_rotation) is not bool:
+            raise LedgerError("ownership proof recovery mode is invalid")
+        lock = (
+            self._locked(allow_legacy_rotation=allow_legacy)
+            if recover_rotation else self._existing_read_lock()
+        )
+        with lock:
+            if not recover_rotation and os.path.lexists(self.rotation_path):
+                raise LedgerKeyError("pending ownership key rotation requires recovery")
             key = self._load_or_create_key_locked(allow_create=False)
             current = self._load_or_create_ledger_locked(
                 key,
@@ -2829,7 +2841,7 @@ class OwnershipLedger:
         _assert_private_file(self.rotation_path)
         try:
             journal = json.loads(self.rotation_path.read_text(encoding="utf-8"))
-            if journal.get("schema") != ROTATION_SCHEMA:
+            if journal.get("schema") != ROTATION_SCHEMA or "dormant_ownership" in journal:
                 raise ValueError
             key = journal["key"]
             ledger = journal["ledger"]

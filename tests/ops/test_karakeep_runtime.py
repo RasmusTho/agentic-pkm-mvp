@@ -161,6 +161,85 @@ def test_native_admission_checks_fixed_test_action_and_bindings_before_work(admi
         kr.child_preflight({**env, 'DATABASE_URL': 'postgresql://app@db:5432/app'}, 'karakeep-project')
 
 
+@pytest.mark.parametrize('action', sorted(kr.ACTIONS))
+@pytest.mark.parametrize('unset_root', [None, 'VAULT_ROOT', 'VAULT_ROOT_TEST'])
+def test_native_admission_accepts_optional_docker_unsets(admission, monkeypatch, action, unset_root):
+    env = admission.rows['pkm-test', 'api']['Config']['Env']
+    env.extend(['OPTIONAL_PROVIDER', 'VAULT_SOURCES_DIR_REL', 'KARAKEEP_API_TOKEN',
+                'KARAKEEP_BASE_URL', 'IGNORED_PROVIDER=value=with=equals'])
+    if unset_root:
+        env[:] = [entry for entry in env if not entry.startswith(unset_root + '=')]
+        env.append(unset_root)
+    if action == 'karakeep-project':
+        del admission.rows['karakeep-test', 'karakeep']
+    _, forwarded, endpoint = kr.admitted_runtime(admission.config, action)
+    expected = {**admission.environment, 'KARAKEEP_RUNTIME_DB_ADDRESS': '172.23.0.4'}
+    if unset_root:
+        del expected[unset_root]
+    assert forwarded == expected
+    assert endpoint == (ENDPOINT if action == 'karakeep-acquire' else None)
+
+    class Input(StringIO):
+        def close(self):
+            self.saved = self.getvalue()
+    pipe = Input()
+    launches, lookups = [], []
+    process = SimpleNamespace(stdin=pipe, stdout=StringIO(), wait=lambda timeout: 0, poll=lambda: 0)
+    monkeypatch.setattr(kr.subprocess, 'Popen', lambda argv, **kw: launches.append((argv, kw)) or process)
+    # Stop at the existing child-ready refusal: admission must launch the fixed
+    # child with only validated configuration, without looking up a source key.
+    monkeypatch.setattr(kr, '_read_line', lambda *a, **kw: {
+        'status': 'refused', 'action': action, 'channel': 'test'})
+    monkeypatch.setattr(LinuxConfig, 'reader', lambda self: lookups.append(True))
+    assert kr.dispatch(admission.config, {'action': action, 'channel': 'test'}, lambda: None)['status'] == 'refused'
+    assert len(launches) == 1 and lookups == []
+    assert json.loads(pipe.saved) == expected
+    assert launches[0][0][-3:] == ['child', action, 'test']
+    assert launches[0][1]['env'] == {'PATH': '/usr/local/bin:/usr/bin:/bin'}
+
+
+@pytest.mark.parametrize('action', sorted(kr.ACTIONS))
+@pytest.mark.parametrize('case', [
+    'null', 'mapping', 'string', 'non-string', 'empty', 'empty-key', 'bad-key', 'nul',
+    'duplicate-value', 'duplicate-unset', 'unset-then-value', 'value-then-unset',
+    'missing-revision', 'unset-revision', 'unset-roots', 'conflicting-roots',
+    'PGPASSWORD', 'POSTGRES_PASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE',
+    'KARAKEEP_API_TOKEN', 'KARAKEEP_BASE_URL',
+])
+def test_native_admission_refuses_unsafe_environment_metadata(admission, monkeypatch, action, case):
+    config = admission.rows['pkm-test', 'api']['Config']
+    env = config['Env']
+    if case in ('null', 'mapping', 'string'):
+        config['Env'] = {'null': None, 'mapping': {}, 'string': 'OPTIONAL'}[case]
+    elif case in ('non-string', 'empty', 'empty-key', 'bad-key', 'nul'):
+        env.append({'non-string': 3, 'empty': '', 'empty-key': '=canary-private-value',
+                    'bad-key': 'BAD KEY=canary-private-value', 'nul': 'OPTIONAL=bad\0value'}[case])
+    elif case in ('duplicate-value', 'value-then-unset'):
+        env.append('VCS_REF=' + REVISION if case == 'duplicate-value' else 'VCS_REF')
+    elif case in ('duplicate-unset', 'unset-then-value'):
+        env.extend(['OPTIONAL', 'OPTIONAL' if case == 'duplicate-unset' else 'OPTIONAL=canary-private-value'])
+    elif case in ('missing-revision', 'unset-revision'):
+        env[:] = [entry for entry in env if not entry.startswith('VCS_REF=')]
+        if case == 'unset-revision':
+            env.append('VCS_REF')
+    elif case == 'unset-roots':
+        env[:] = [entry for entry in env if not entry.startswith(('VAULT_ROOT=', 'VAULT_ROOT_TEST='))]
+        env.extend(['VAULT_ROOT', 'VAULT_ROOT_TEST'])
+    elif case == 'conflicting-roots':
+        env[:] = [entry for entry in env if not entry.startswith('VAULT_ROOT_TEST=')]
+        env.append('VAULT_ROOT_TEST=/app/foreign')
+    else:
+        env.append(case + '=canary-private-value')
+    launches, lookups = [], []
+    monkeypatch.setattr(kr.subprocess, 'Popen', lambda *a, **kw: launches.append(a))
+    monkeypatch.setattr(LinuxConfig, 'reader', lambda self: lookups.append(True))
+    with pytest.raises(kr.RuntimeRefused, match='^Karakeep runtime refused$'):
+        kr.admitted_runtime(admission.config, action)
+    result = kr.dispatch(admission.config, {'action': action, 'channel': 'test'}, lambda: None)
+    assert result == {'status': 'refused', 'action': action, 'channel': 'test'}
+    assert launches == lookups == []
+
+
 def test_native_producer_uses_scoped_key_and_published_handoff_only(binding, admission, monkeypatch):
     client, requests = source()
     # Reach the fixed supervisor dispatch, then the actual producer libraries;

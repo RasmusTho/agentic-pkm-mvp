@@ -15,6 +15,31 @@ from typing import Any
 from uuid import UUID
 
 from app.ops import pg_acceptance
+from app.ops.ere_real_day_qualification import (
+    ADMITTED_SOURCES as ERE_ADMITTED_SOURCES,
+    ALLOWED_EFFECTS as ERE_ALLOWED_EFFECTS,
+    EreAdmission,
+    EreBinding,
+    EreProfileRefusal,
+    LocalDayWindow,
+    PROFILE as ERE_PROFILE,
+    admit_profile as admit_ere_profile,
+    read_admitted_sources as read_ere_sources,
+    run_profile as run_ere_profile,
+)
+
+__all__ = [
+    "ERE_ADMITTED_SOURCES",
+    "ERE_ALLOWED_EFFECTS",
+    "ERE_PROFILE",
+    "EreAdmission",
+    "EreBinding",
+    "EreProfileRefusal",
+    "LocalDayWindow",
+    "admit_ere_profile",
+    "read_ere_sources",
+    "run_ere_profile",
+]
 
 WEB_PROFILE = 'native-web-pilots.v1'
 WEB_DEADLINE = 1800

@@ -157,6 +157,16 @@ def meetings_dir_rel(vault_root: Path | None = None) -> str:
     return MEETINGS_DIR_DEFAULT
 
 
+def configured_meeting_vault_root() -> Optional[Path]:
+    """The configured ``HEIMDAL_MEETING_VAULT_ROOT`` finalization target, if any.
+
+    Named for what it is -- this channel's meeting-finalization target, not the
+    process-selected vault -- so route seals can prove it against the binding.
+    """
+
+    return resolve_vault_root()
+
+
 def resolve_vault_root() -> Optional[Path]:
     """Resolve the finalization vault root, or None when unconfigured.
 
@@ -902,6 +912,20 @@ def latest_receipt(
     return _receipt_dict(receipt) if receipt else None
 
 
+def latest_receipt_for_binding(session_id: str, *, vault_binding_id: str) -> Optional[Dict[str, Any]]:
+    """The latest receipt of one already-proven binding (a scoped read, MVR-05B4c6).
+
+    The caller's request context has bound ``vault_binding_id``; the read never
+    resolves the process selection or scalar binding runtime, and reads only that
+    binding's rows of the binding-scoped receipt table.
+    """
+    binding = (vault_binding_id or "").strip()
+    if not binding:
+        raise MeetingFinalizationError("vault_binding_id must be a non-empty string")
+    receipt = _backend().latest(binding, session_id)
+    return _receipt_dict(receipt) if receipt else None
+
+
 def _receipt_dict(receipt: FinalizationReceipt) -> Dict[str, Any]:
     return {
         "session_id": receipt.session_id,
@@ -916,6 +940,7 @@ def _receipt_dict(receipt: FinalizationReceipt) -> Dict[str, Any]:
 
 
 __all__ = [
+    "latest_receipt_for_binding",
     "FINALIZATION_WRITER",
     "MEETINGS_DIR_DEFAULT",
     "FinalizationReceipt",

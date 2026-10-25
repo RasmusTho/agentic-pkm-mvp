@@ -417,7 +417,55 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   exact outbox record through the authenticated client after capability preflight; it does not
   accept a caller-authored terminal record. The watchdog's executor target selection requires this
   deployed reconciled v2 authority. Historical v1 parsing remains available for audit, while native
-  single-closer delivery keeps its separate existing path.
+  single-closer delivery keeps its separate existing path. The session-owned manual FULL_PATH
+  producer is the explicit public CLI mode
+  `scripts/build_verified_issue_set_merge_phase.py --mode manual`; it emits a continuous,
+  authenticated `verified_issue_set_merge_phase.v1` chain without deployed post-effect capability
+  or an operation key. Manual mode rejects post-effect inputs, consumer/in-flight v2 predecessors,
+  and mixed v1/v2 history, and is never a recoverable-consumer authority path.
+
+- The API-backed merge executor admits a native single-closer route only for an authenticated v3
+  full-review run with exactly one open governing closer and no parent, supporting or second Issue.
+  The complete bounded GitHub closing-reference and resolved-review-thread pages must agree with
+  exact repository, PR, head, base, title, raw body digest, Issue contract digest/update identity and
+  review depth. Existing verified-merge authority or phase comments preserve the in-flight protocol;
+  legacy and multi-Issue runs retain verified-merge. Incomplete pagination, duplicate identities,
+  cursor failures or snapshot drift confer no authority.
+- Closure mechanics do not relax the independent ledger review gate, required current-head CI,
+  protected-base/manifest/credential gates, exact Issue contract checks, review-thread resolution,
+  owner-doc receipt or final delivery readback. Admission rereads the freshly deployed #4897
+  capability and binds its source/image/schema/epoch identity. The existing task-bound effect intent
+  remains the sole durable writer fence. One serialized final reread precedes REST merge with the
+  exact expected head SHA and fixed non-closing title/message; expected-head conflict is not a retry
+  authorization. Returned and fetched merge SHAs must agree, and the fetched commit text must match.
+  A contradictory returned identity durably preserves the task's operation-bound
+  `native_merge_identity_conflict` refusal. Depending on the discovery point, the outbox may remain
+  pending or unknown, or may already be succeeded; the refusal does not rewrite it into a terminal
+  dead-letter. Only exact-attributed defensive compensation is permitted, and governed repair is
+  required; generic transport recovery cannot turn that contradiction into a successful merge receipt.
+- Before returning a native merge receipt, the executor requires the same operation's authenticated
+  #4897 reconciled post-effect authority and unchanged deployed identity. It reuses bounded repository
+  event enumeration and exact PR/repository/merge-SHA closure attribution, verifies the sole closer
+  closed by that PR, and reopens only an unexpected closure attributed to that PR. Compensation or
+  ambiguous attribution withholds the merge receipt. Before reopening an unexpected closure
+  attributed to this exact PR, the task-bound operation is durably fenced and every reopen write
+  revalidates its current task owner, lease, and exact operation binding; reopening the Issue,
+  restarting, lease expiry, or task takeover cannot erase that refusal, reuse former-owner write
+  authority, or reconstruct a successful merge receipt. Restart performs readback and reconciliation,
+  never another merge. A merge receipt is not terminal delivery:
+  PR-specific owner-doc receipts and the governing verification workflow's final lifecycle/readback
+  gates still apply. Repository delivery of this integration does not claim deployment.
+- The native consumer's final merged-recovery scan is another producer of that same refusal. If the
+  freshly claimed consumer observes a complete unexpected-closure record attributed to the exact
+  PR/repository/merge SHA after the executor's earlier scan was clean, it persists the existing
+  operation-bound conflict before delegating compensation to the same-ledger executor recovery path.
+  A missing or failed callback cannot clear the conflict or admit a later clean scan; unrelated PR
+  closures, manual closes, open references, and incomplete attribution receive no compensation
+  authority. The fresh database-clock/version-bound task transition is a compensation-only recovery
+  fence before credential resolution and each reopen write. An ordinary clean executor scan may
+  resolve the protected credential while determining that no compensation is needed, but it cannot
+  perform a reopen write without the per-write fence above; this narrower ordering is not additional
+  write authority.
 
 - Verification dispatch request v3 binds one non-empty, sorted set of at most 10 closing issues and
   one authenticated `final_review_rounds` value to
@@ -656,12 +704,32 @@ Normative behavior:
 
 Batch recovery through `reclaim_expired_leases` remains available. An agent that discovers an
 expired current lease may instead make an explicit, claim-time recovery with
-`dispatcher claim <task_id> --takeover-stale`. The dispatcher performs the stale-lease release,
-new lease creation, task update, and `task.claimed` event insert in one SQLite transaction. It
-marks the displaced lease with `release_reason="stale_takeover"`; it never displaces an unexpired
-lease, even when the flag is supplied. A normal stale claim remains eligible in its `claimed`
-status; legacy/reclaimed `ready` rows remain eligible too. A blocked task with an expired lease is
-rejected without changing its task or lease state.
+`dispatcher claim <task_id> --takeover-stale`. Callers that observed a particular predecessor can
+also pass `--expected-lease-id <lease-id>`; the dispatcher checks that the task still references
+that exact lease inside the same SQLite write transaction before any mutation. The dispatcher
+performs the stale-lease release, new lease creation, task update, and `task.claimed` event insert in
+one transaction. It marks the displaced lease with `release_reason="stale_takeover"`; it never
+displaces an unexpired lease, even when the flag is supplied. A normal stale claim remains eligible
+in its `claimed` status; legacy/reclaimed `ready` rows remain eligible too. A blocked task with an
+expired lease is rejected without changing its task or lease state.
+
+The mandatory `scripts/issue_pickup_claim.sh` exposes this recovery only as same-owner self-resume:
+pass `--takeover-stale` for an Issue that is still open with exactly `agent:in-progress`. The wrapper
+requires the canonical repo-qualified task id and a task repository matching the selected repository
+and Issue, then checks that repository binding again in the post-claim readback. It also requires the
+exact task's expired unreleased lease to belong to the same `--agent`, and heartbeats the active
+target-worktree registration using the supplied `--session` before claiming.
+It validates the Issue contract both before and after the claim, passes the exact observed lease id
+as `--expected-lease-id`, and verifies the new lease and the `task.claimed` event's predecessor
+fields. The dispatcher compares the expected id with the task's currently referenced lease inside
+the same write transaction; if another takeover replaced the observed predecessor, this claim makes
+no change. If the command exits unsuccessfully after committing, the wrapper uses an exact task,
+lease, and event readback to recognize the committed claim. Any ambiguous or mismatched stale
+takeover result leaves the dispatcher state in place for reconciliation; this path never runs the
+ordinary claim-release cleanup. The wrapper skips ready-list refresh and leaves Issue labels intact.
+It never falls back to label-only pickup. A different successor must complete the authenticated
+release → claim → worktree transfer in `resume-work`; an expired lease alone does not transfer
+workspace ownership.
 
 The new claim event remains the receipt. Its payload contains `ttl_minutes` and, for a takeover, a
 `takeover` object with `previous_holder`, `previous_lease_id`, and `previous_expires_at`. Without
@@ -691,6 +759,10 @@ Design boundary:
 
 Canonical loop:
 0. Run `scripts/issue_pickup_claim.sh --issue <N> --repo <owner/repo> --agent <agent_id> --session <session_id>`.
+   For an authenticated same-owner self-resume of an expired lease on an already `agent:in-progress`
+   Issue, add `--takeover-stale`; the wrapper requires the current session's active worktree
+   registration and passes the exact observed old lease id as `--expected-lease-id` before taking it
+   over.
    The wrapper checks `status --json`, then asks `pickup-refresh` to validate the exact
    repo-qualified `github-<owner>--<repo>-issue-<N>` task (matching the id `dispatcher pull` assigns;
    pass `--task-id` to override). A fresh per-repository ready scan and exact-task observation are
@@ -1205,6 +1277,222 @@ strictly advisory shadow recommendations: the receipt cannot dispatch or spawn a
 review, acceptance, merge, or closure state, or weaken any quality gate. See
 [the Dispatcher And Routing Model](development/BUILDER_SYSTEM_PROCESS_MAP.md#5-dispatcher-and-routing-model)
 for the cross-system classification.
+
+#### Manual shadow rehydration probe
+
+The delivered `app/builderops/epic_rehydration_probe.py` provides a manual, observer-only
+rehydration measurement for one accepted checkpoint. `build_context_pack` accepts only a strictly
+normalized `epic_run_context_budget_receipt.v1`, binds its exact source bytes/digest, target
+Issue/PR and verified head/merge SHAs, and carries explicit live-read instructions. A fresh probe
+agent must receive only that packet and the packet's instructions; it returns one strict
+`epic_rehydrated_observation.v1` object with provenance for every field. The comparison receipt
+preserves match, mismatch, and unknown results plus refresh, missing-claim, and fabricated-claim
+evidence without a quality aggregate. Retained packet, observation, comparison, and source
+custody refs are hashed as their exact JSON bytes and validated against the parsed normalized
+objects; external refresh compares the source marker projection to the same live marker
+projection, not the checkpoint envelope.
+
+The `build-pack`, `compare`, and `receipt` subcommands write only operator-selected local JSON
+evidence, and each output path must be new: existing files, symlinks, hardlinks, direct inputs, and
+transitive source/custody refs are rejected without changing bytes. Every pack consumer re-reads the
+retained source ref, requires its exact raw digest/length and parsed object to match the supplied
+receipt, and fails closed for missing or malformed custody. They do not import dispatcher, GitHub,
+lease, or agent-launch adapters and enumerate dispatch, lease, CI, review, acceptance, merge,
+closure, and agent-start effects as empty. Live external-state projection never fills missing live
+fields from the checkpoint; a sparse lifecycle/head observation is `unknown`, while a complete equal
+projection is `match` and a complete drift is `mismatch`. The operator must first emit a new actual
+checkpoint through the existing evaluator, read live GitHub, repository, and dispatcher truth, and
+accept/pin that receipt in run-state. A July serialization, fixture, stale source, automatic
+rotation, worker launch, or later lifecycle action is outside this manual shadow behavior.
+Standalone receipt deserialization reconstructs the retained pack, observation, comparison, and source
+chain and cross-binds their normalized objects and metadata before accepting any receipt. Unmeasured
+token, cost, elapsed-time, and human-minute values remain `unknown` in the frozen v1 contract.
+
+The explicit v2 surface is selected with `build-pack --schema-version 2`; the default remains v1,
+and the retained first-probe artifacts are unchanged. V2 carries its exact closed JSON response
+schema in `response_contract`. It separates `checkpoint_decision_delta`,
+`checkpoint_gate_invariants`, `checkpoint_recommendations`, and `live_slice_next_action` instead
+of comparing different representations or meanings. Status, open findings, and the complete
+external projection (Issue, PR, head/merge SHA, CI, repository head, and dispatcher mode/DB state)
+are typed facts. Checkpoint facts may cite the packet; live facts must come from independent live
+reads. Missing evidence is the literal `unknown`, not a checkpoint-filled observation. All schema
+keys are mandatory; an unavailable field uses `unknown` rather than omitting its key. Live-field
+provenance must include its required GitHub/repository/dispatcher kinds and bind each reference
+to declared independent `live_reads`. Each declared read is `{kind, evidence}` where evidence is
+the existing exact-byte `{ref, sha256, bytes_length}` binding to a regular local file. The packet
+carries `live_read_contract`: a closed `epic_rehydration_live_read.v2` envelope declaring probe,
+kind, repository/Issue/PR target, UTC observation time, availability, payload and unavailable reason.
+The GitHub payload retains Issue/PR objects and complete-or-incomplete review-thread facts;
+repository payload names the observed `origin` main SHA, and dispatcher payload retains status.
+Unavailable reads retain an explicit unknown payload and reason, not checkpoint-filled values.
+Raw upstream GitHub/dispatcher payload objects retain their upstream fields; the manual envelopes,
+bindings, review-thread projection and repository projection have closed schemas.
+
+One field-aware admission predicate is shared by observations and independent audit facts.
+It classifies references before filesystem use: arbitrary URI/opaque strings and query/fragment
+references are refused for live evidence. Local relative paths resolve from repository CWD;
+final-component symlinks are refused, parent paths are canonicalized, and packet/source/all custody
+files are excluded by both canonical path and device/inode identity. Renamed copies of packet or
+source JSON do not satisfy the live-read envelope. A genuinely independent unchanged reread may
+have identical bytes/hash; content equality alone is not grounds for refusal. This is the declared
+single trusted operator/fresh observer boundary, not authenticated fetch, auditor identity or
+upstream-truth verification. Full v2 observation admission requires the packet context and its
+exact retained-file binding; there is no context-free proof path. V1 admission stays unchanged.
+The response's packet `{ref, sha256, bytes_length}` is also the exact binding required by file-aware
+comparison, telemetry, receipt and audit consumers; a different formatting of equal JSON is not
+the packet observed by that response. Fresh probe reads must be timestamped at/after successful
+agent admission and at/before the response. The agent waits for recorded admission metadata before
+live capture. Separate audit reads instead fall between source checkpoint and independent fact
+observation; they are not asserted to be reads by the probe agent.
+
+Checkpoint fields instead cite the exact field-specific `packet:<probe-id>#<source-pointer>`
+listed in the carried contract. Such pointers are admitted only for `checkpoint_*` semantics,
+never a live fact. Agent missing/fabricated reporting uses `agent:<probe-id>` and holds no live
+evidence authority. Packet `read_instructions` must carry these semantic admission rules as well
+as the closed JSON schema: a schema-valid arbitrary reporting string is not an admitted identity.
+For native Codex captures, carry the existing sanctioned read-only `gh`/`git` invocation boundary
+(`sandbox_permissions=require_escalated` when required), exact argument vectors without prose
+punctuation, and the permitted temporary-storage placement. This authorizes only the named reads,
+not credential, ACL, DNS or host-network configuration changes. The observer must prove access in
+its own invocation; parent access and retained source custody are not substitutes. The CI dimension carries its
+scope explicitly: all returned PR status-rollup entries, including historical duplicates and
+cancellations. It is not a current required-CI verdict or merge gate; the original rollup stays
+retained. External dimensions retain separate results, including simultaneous drift and unknowns. Live next action
+is `not_comparable` to a checkpoint recommendation. Missing-claim reporting is checked against
+actually unavailable observed fields. Fabrication is never inferred from drift or self-report:
+the optional `compare --fabrication-audit-file` requires a separate auditor's explicit fabrication
+attestation, exact packet/response bindings and separately retained typed fact evidence. The same
+provenance predicate validates those facts; established live values are rederived from their own
+retained payloads, and established checkpoint values must match their exact source projection.
+An unknown observed claim cannot become fabricated merely because an audit has a known fact. Without
+that audit, fabrication stays unknown. Custody validation does not authenticate the auditor or
+prove external source truth.
+At a file-aware audit/comparison/telemetry/receipt join, the audit and joined response must have
+the same exact `{ref, sha256, bytes_length}`, not merely equal parsed JSON. Public comparison
+functions accept `observation_ref` for that file-aware check; standalone receipt replay supplies
+its retained response ref. Logical comparison without a file ref uses the audit's reopened binding
+as authority. Telemetry alone makes no claim about an audit it was not given.
+The v2 receipt CLI unconditionally joins its explicit packet/response/comparison file inputs to
+their retained refs, with or without audit. Use the same serialized ref spelling: equal JSON in
+a separately formatted or differently named file does not establish the exact raw input binding.
+
+Comparison retains the original observed value alongside independent live value/evidence support;
+an incorrect reconstruction or unknown remains measurable. It never replaces missing observed
+fields with independent or checkpoint facts. External refresh compares independent live state to
+the checkpoint, separately from an agent's mistaken summary of that state.
+
+V2 additionally hashes the exact retained Issue/PR, dispatcher and repository JSON custody files.
+The evaluator marker names `dispatcher_status_ref`, `repository_status_ref`, and a
+`probe_external_state` projection; that projection must agree with those retained reads. The
+source is emitted by the existing context-budget evaluator and accepted/pinned through run-state
+before building the packet. V2 consumers reuse the v1 source/identity guards, reject unsupported
+version mixtures, and rederive comparisons from the complete typed chain even during standalone
+receipt consumption. Duplicate JSON keys, extra/missing keys, coercion, non-finite values and
+coherently rehashed semantic corruption fail closed. No result authorizes a lifecycle action.
+V2 source custody requires exact integer Issue/PR identities. Its retained repository capture must
+name `remote: origin` and `ref: refs/heads/main`, using the same repository identity schema as live
+reads; producer diagnostic metadata remains raw-byte bound but cannot substitute a different remote
+or branch. All carried SHA values have their exact hexadecimal length, excluding terminal
+whitespace. This does not reinterpret v1 artifacts.
+
+The manual `telemetry` command derives measurements; callers cannot supply trusted totals:
+
+```bash
+python3 -m app.builderops.epic_rehydration_probe telemetry \
+  --pack-file <frozen-v2-pack.json> --observation-file <original-response.json> \
+  --execution-file <retained-execution-log.json> --output <new-telemetry.json>
+```
+
+The strict `epic_rehydration_execution_log.v2` has `probe_id`, `clock` (`name`, `unit=seconds`,
+`scope`), UTC `started_at`/`ended_at`, `invocation` (the response's exact `agent` object),
+`recorder`, `events_complete=true`, ordered `events`, and `usage`. Each event has a unique `id`,
+`kind`, UTC `at`, and nonempty `evidence` identifying the observed native receipt/action.
+`agent_start` counts successful native admissions (exactly one); `admission_retry` counts attempts
+after rejection and must precede that successful admission. `handoff` counts frozen-packet or
+original-response transfers. `implementation_repair`, `review_repair`, and `ci_repair` count
+code/test corrections after their respective failure within the declared probe scope, not native
+admission retries or historical delivery repairs. Zero counts require the recorder's complete-scope
+attestation. Admission retries must precede success in event order even at equal clock ticks.
+The native admitted model/reasoning is recorded separately from engine introspection.
+
+`usage` has `input_tokens`, `output_tokens`, `model_cost_usd`, and `human_minutes`; each measurement
+has `availability`, `value`, `unit`, `scope`, `source`, and `reason`. Unavailable values are
+`availability=unknown`, `value=unknown`, with the unavailable source/reason named. A known carrier
+value requires a retained `carrier_usage_receipt`, and human effort requires a retained
+`human_attestation`; the exact source bytes, probe identity and value are checked. A strict
+`epic_rehydration_usage_authority.v2` envelope binds `authority`, `metric`, `value`, `unit`, `scope`,
+UTC `observed_at`, and nonempty `source`, with no extra fields; arbitrary dictionaries are not
+accepted as measurement authority. This does not
+add billing integration or independently authenticate an operator-retained receipt. Units are
+tokens/tokens/USD/minutes respectively. The helper derives actual packet/response bytes, UTC
+elapsed seconds, and event counts from retained evidence and cross-binds all measurements again at
+receipt consumption. Bytes are not tokens; wall time includes only the declared interval and is
+neither model effort nor human effort. The new `shadow_rehydration_3798_field_contract.v2` evidence
+namespace records one manual fresh-agent observation; readiness remains limited to another
+explicitly authorized manual experiment, not rotation, compression, dispatch, takeover or adoption.
+
+The later `shadow_rehydration_3798_live_access.v2` receipt qualifies successful observer-owned
+GitHub Issue/PR/review-thread, direct `origin` / `refs/heads/main`, and dispatcher reads through the
+unchanged v2 consumers. Its accepted retry packet is 30,772 bytes, original response 7,230 bytes,
+and named recorder wall interval 177 seconds. The first 193-second attempt remains separately
+retained and semantically refused because its reporting provenance used the wrong prefix; it has
+no valid probe receipt. One corrected create-only packet and a new history-free admission produced
+the qualifying chain without rewriting originals or weakening admission. All comparable fields
+matched in that capture, refresh was not required, the live next action stayed not comparable and
+fabrication stayed unknown. The historical all-returned CI rollup was red due to cancelled entries,
+not a current delivery merge verdict. Exact originals, separate scoped counters, unknown usage and
+limitations are retained in `evidence/shadow_rehydration_3798_live_access_v2/README.md`; none of this
+authorizes automatic rotation or globally authenticates upstream truth.
+
+Issue #6236 subsequently exercised one operator-mediated replacement of a bounded read-only
+terminal-reconciliation role for closed #6195 / merged #6200. The actual operator/incumbent was
+`/root`, not an asserted human click. After inspecting the unchanged v2 comparison and raw-output/
+actual-clock joins, it separately recorded decision, incumbent-role quiescence, same-successor
+acknowledgment and manual activation. That same history-free successor then refreshed all live
+domains and ran the existing no-effect terminal planner. It retained newly observed repository
+drift and recommended leaving external state unchanged; none of four optional Project proposals
+was executed. Writer/lifecycle authority and the existing lease/worktree owner never transferred.
+
+The observed experiment is explicitly **NONCONFORMING**, not a successful frozen-protocol capture:
+the original admission and response contain different `engine_identity_source` explanation text.
+Engine identity remains unknown; the exact strings are not canonicalized. The frozen protocol-2
+strict `build`/`verify` path still refuses the mismatch. The separate, opt-in `build-result` /
+`verify-result` surface in `app/builderops/manual_coordinator_rotation.py` reports actual chain
+facts and that nonconformance, binding the actual refusal and byte-identical historical verifier
+source. It still refuses hard identity, custody, target, chronology, payload/clock, effect and
+serialized-input corruption. It is never an automatic fallback, role activator or approval gate.
+
+The actual observed recorder interval was 938 seconds, including three separately retained
+metadata/parser/evidence-reference repairs; later reporting maintenance is outside it. Packet,
+initial response and continuation were 55,875 / 6,630 / 3,320 bytes. Exact originals, the invalid
+unactivated first candidate, the extra invalid metadata transfer, scoped counters and replay
+commands are retained in `evidence/manual_coordinator_rotation_6195_retry1_v1/README.md`. Tokens,
+cost, engine/model-active data, human effort and complete delivery totals remain unknown. This
+proves only the observed manual read-only role boundary and continuation, with its producer
+nonconformance; it does not establish whole-session replacement, active-epic scheduling, writer
+takeover, process fencing, automatic rotation/compression/dispatch or Product-memory authority.
+
+Issue #6244 adds the finite `manual_coordinator_rotation metadata` producer on this same seam.
+It validates the independently pinned capture contract, accepted source and actual retained
+admission, then copies the existing six-field v2 invocation object exactly. The optional
+`--observation-file` preflight checks the original response against that object before an operator
+decision. Neither command activates a role, infers an engine identity or normalizes explanation
+strings; the existing strict build/verify and v2 consumers remain unchanged.
+
+The new `manual_coordinator_rotation_6195_conformant.v1` experiment is strictly conforming. Its
+packet-only successor copied actual admitted metadata through this producer before its own reads;
+the distinct `/root` operator decision, incumbent-role quiescence, same-actor acknowledgment and
+manual activation preceded a fresh no-effect terminal plan. Separate-process strict build/verify
+accepted the complete original chain. Seven initial field results matched; fabrication stayed
+unknown, live next action stayed not comparable, and no refresh was required. The successor
+recommended leaving external state unchanged; four optional Project proposals were not executed.
+The 58,717-byte packet, 7,049-byte initial response and 3,611-byte continuation bind a 685-second
+recorder interval; the initial interval was 276 seconds and continuation start-to-completion was
+101 seconds. These are bytes and scoped wall time, not tokens or effort. Actual clocks, native
+outputs, separate event scopes and unknown metrics are retained in
+`evidence/manual_coordinator_rotation_6195_conformant_v1/README.md`. The old NONCONFORMING evidence
+and strict refusal remain immutable. This proves one manually operated read-only terminal role,
+not whole-session/active-epic replacement, writer/lease transfer, runtime fencing or automatic adoption.
 
 When a PR is locally validated but GitHub Actions are still pending, coordinators may separate the
 implementation handoff from terminal closure with a CI-monitor handoff record:

@@ -1,0 +1,261 @@
+name: Post-merge heavy tests
+
+# Heavy test targets that scripts/select_pr_tests.py defers from the required
+# PR check `Unit tests (not pg)` (#6154, owner decision 2026-10-16) run on the
+# ygg `dev` VM after each candidate's native dev deployment (#6227). The
+# private host controller dispatches this workflow with a bounded verdict; the
+# run records it as the `post-merge-heavy-tests/ygg` commit status and goes red
+# unless it passed. An hourly watchdog turns a missing verdict into red plus a
+# GitHub-hosted fallback run. Every red run opens or updates one rolling
+# `type:bug` + `prio:high` alert Issue; the next green run closes it. This is
+# intentionally not a required PR check.
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Candidate SHA on main (host verdict only)"
+        required: false
+        default: ""
+      verdict:
+        description: "Host verdict: passed, failed or refused. Empty runs the GitHub-hosted job."
+        required: false
+        default: ""
+      operation_id:
+        description: "Native DEV operation UUID (legacy TEST verdicts remain compatible) (host verdict only)"
+        required: false
+        default: ""
+      counts:
+        description: "selected=N passed=N failed=N skipped=N docker_skipped=N"
+        required: false
+        default: ""
+      reason:
+        description: "Refusal reason (refused verdict only)"
+        required: false
+        default: ""
+      failures:
+        description: "Comma-separated failing test node IDs (bounded)"
+        required: false
+        default: ""
+
+# Never cancel a started run. Host verdicts are grouped per SHA, so a verdict
+# never displaces a pending verdict for another commit; watchdog and manual
+# runs share one group.
+concurrency:
+  group: post-merge-heavy-tests-${{ github.event.inputs.sha || 'watchdog' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: read
+    outputs:
+      mode: ${{ steps.resolve.outputs.mode }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      reason: ${{ steps.resolve.outputs.reason }}
+      description: ${{ steps.resolve.outputs.description }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve verdict, watchdog fallback, or no-op
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUTS: ${{ toJSON(github.event.inputs) }}
+        run: |
+          set -euo pipefail
+          python3 scripts/post_merge_heavy_tests_verdict.py --event "$EVENT" --inputs "$INPUTS" \
+            --github-sha "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --github-output "$GITHUB_OUTPUT"
+
+  record-verdict:
+    needs: resolve
+    if: needs.resolve.outputs.mode == 'verdict' || needs.resolve.outputs.mode == 'refused'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      statuses: write
+    steps:
+      - name: Record the ygg verdict as a commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.resolve.outputs.mode }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          VERDICT: ${{ github.event.inputs.verdict }}
+          DESCRIPTION: ${{ needs.resolve.outputs.description }}
+          REASON: ${{ needs.resolve.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$MODE" == "refused" ]]; then
+            echo "Refused host verdict: $REASON" >&2
+            exit 1
+          fi
+          state=failure
+          [[ "$VERDICT" == "passed" ]] && state=success
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$state" \
+            -f context=post-merge-heavy-tests/ygg -f description="$DESCRIPTION" -f target_url="$RUN_URL" >/dev/null
+          echo "ygg verdict for $SHA: $VERDICT ($REASON)" >&2
+          [[ "$state" == "success" ]]
+
+  heavy-tests:
+    # GitHub-hosted fallback: watchdog-selected when no ygg verdict arrived,
+    # or a manual dispatch without a verdict.
+    needs: resolve
+    if: needs.resolve.outputs.mode == 'fallback'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      statuses: write
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            dev-requirements.txt
+            pyproject.toml
+            mimer-mcp-sidecar/requirements.txt
+            mimer-mcp-sidecar/pyproject.toml
+
+      - name: Resolve heavy targets from the PR selector
+        id: targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          targets="$(python scripts/select_pr_tests.py --print-heavy-targets)"
+          if [[ -z "$targets" ]]; then
+            echo "No heavy targets resolved; refusing a vacuous green run" >&2
+            exit 1
+          fi
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r dev-requirements.txt
+          pip install --requirement mimer-mcp-sidecar/requirements.txt
+          pip install --no-deps --editable mimer-mcp-sidecar
+
+      - name: Run heavy not-pg tests
+        shell: bash
+        timeout-minutes: 60
+        env:
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+          PYTHONUNBUFFERED: "1"
+          HEAVY_TARGETS: ${{ steps.targets.outputs.targets }}
+        run: |
+          set -o pipefail
+          marker="$(python -c 'import sys; sys.path.insert(0, "scripts"); import select_pr_tests as s; print(s.PR_MARKER_EXPRESSION)')"
+          # shellcheck disable=SC2086
+          pytest -q -m "$marker" $HEAVY_TARGETS -vv --tb=short --durations=30 | tee pytest-heavy.log
+
+      - name: Record the fallback result as a commit status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          state=failure
+          [[ "$JOB_STATUS" == "success" ]] && state=success
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$state" \
+            -f context=post-merge-heavy-tests/fallback -f description="GitHub-hosted fallback $JOB_STATUS" \
+            -f target_url="$RUN_URL" >/dev/null
+
+      - name: Upload heavy test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-heavy-logs
+          path: pytest-heavy.log
+
+  alert:
+    # Fail loud: route every red, refused, missing or broken verdict (not a
+    # cancelled run) to the rolling alert Issue; close it again on green.
+    needs: [resolve, record-verdict, heavy-tests]
+    # Only main owns the rolling alert; a dispatch from another branch must not
+    # open or close it. A watchdog no-op has nothing to report.
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      needs.resolve.result != 'cancelled' && needs.record-verdict.result != 'cancelled' &&
+      needs.heavy-tests.result != 'cancelled' && needs.resolve.outputs.mode != 'noop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Open, update, or close the heavy-tests alert Issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MODE: ${{ needs.resolve.outputs.mode }}
+          RESOLVE_RESULT: ${{ needs.resolve.result }}
+          VERDICT_RESULT: ${{ needs.record-verdict.result }}
+          FALLBACK_RESULT: ${{ needs.heavy-tests.result }}
+          SHA: ${{ needs.resolve.outputs.sha || github.sha }}
+          REASON: ${{ needs.resolve.outputs.reason || 'resolver failed' }}
+          TARGETS: ${{ needs.heavy-tests.outputs.targets || 'tests/deploy' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Green only for a recorded passing ygg verdict. A watchdog fallback
+          # is red even when it passes: the VM verdict path is broken.
+          result=failure
+          if [[ "$RESOLVE_RESULT" == "success" && "$MODE" == "verdict" && "$VERDICT_RESULT" == "success" ]]; then
+            result=success
+          elif [[ "$MODE" == "fallback" && "$FALLBACK_RESULT" == "success" && "$REASON" == "manual GitHub-hosted heavy run" ]]; then
+            result=success
+          fi
+          if [[ "$MODE" == "fallback" ]]; then
+            REASON="$REASON (fallback $FALLBACK_RESULT)"
+          fi
+          title="$(python -c 'import sys; sys.path.insert(0, "scripts"); import post_merge_heavy_tests_alert as a; print(a.ALERT_TITLE)')"
+          legacy="$(python -c 'import sys; sys.path.insert(0, "scripts"); import post_merge_heavy_tests_alert as a; print(a.LEGACY_ALERT_TITLE)')"
+          export ALERT_TITLE="$title" LEGACY_ALERT_TITLE="$legacy"
+          existing="$(gh issue list --repo "$REPO" --state open --label type:bug --limit 200 \
+            --json number,title --jq '.[] | select(.title == env.ALERT_TITLE or .title == env.LEGACY_ALERT_TITLE) | .number' | head -n 1)"
+          if [[ "$result" == "success" ]]; then
+            if [[ -n "$existing" ]]; then
+              gh issue close "$existing" --repo "$REPO" \
+                --comment "Post-merge heavy tests are green again on \`main\` at \`$SHA\`: $RUN_URL"
+            fi
+            exit 0
+          fi
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --repo "$REPO" \
+              --body "Still red on \`main\` at \`$SHA\`: $REASON. $RUN_URL"
+          else
+            python scripts/post_merge_heavy_tests_alert.py --sha "$SHA" --run-url "$RUN_URL" \
+              --targets "$TARGETS" --reason "$REASON" --output alert.md
+            labels="$(python -c 'import sys; sys.path.insert(0, "scripts"); import post_merge_heavy_tests_alert as a; print(",".join(a.ALERT_LABELS))')"
+            gh issue create --repo "$REPO" --title "$title" --body-file alert.md --label "$labels"
+          fi
+          echo "Post-merge heavy tests are red at $SHA: $REASON ($RUN_URL)" >&2
+          exit 1

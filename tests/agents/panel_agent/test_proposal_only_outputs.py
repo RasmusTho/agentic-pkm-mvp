@@ -146,6 +146,8 @@ def test_proposal_outputs_remain_bounded(monkeypatch) -> None:
         "reason",
         "mapping",
         "cognition_metadata",
+        # MVR-05B4c2: the producing vault binding stamp (a bounded identifier).
+        "producing_vault_binding_id",
     }
     cognition_metadata = logged_payload.get("cognition_metadata") or {}
     assert set(cognition_metadata).issubset(

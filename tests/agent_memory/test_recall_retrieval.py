@@ -35,6 +35,18 @@ def _allowing_guard() -> WriteGuard:
     return WriteGuard(lambda: {"state": "healthy"})
 
 
+def _promotion_record(path: Path) -> dict[str, object]:
+    return next(
+        record
+        for record in (
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+        if record["event"] == "promotion.transition.applied"
+    )
+
+
 def _candidate(
     candidate_id: str,
     *,
@@ -144,7 +156,7 @@ def test_recall_validates_scope_and_provenance_during_receipt_consumption(
     outbox = tmp_path / "outbox.jsonl"
     candidate = _candidate("candidate-streamed", title="Read contracts", content="Read contracts before implementation.")
     _materialize(candidate, vault=_vault(vault_root), store=store, outbox=outbox)
-    retained = json.loads(outbox.read_text(encoding="utf-8").strip())
+    retained = _promotion_record(outbox)
     consumed = 0
     validated = 0
     original = recall_retrieval._promoted_from_row_with_scope
@@ -204,7 +216,7 @@ def test_recall_retains_requested_k_and_preserves_chronological_ties(tmp_path: P
     outbox = tmp_path / "outbox.jsonl"
     candidate = _candidate("bounded-k", title="Read contracts", content="Read contracts before implementation.")
     _materialize(candidate, vault=_vault(vault_root), store=ReviewDecisionStore(tmp_path / "decisions.sqlite3"), outbox=outbox)
-    retained = json.loads(outbox.read_text(encoding="utf-8").strip())
+    retained = _promotion_record(outbox)
     original = recall_retrieval.RecallCandidate
     live = 0
     peak = 0
@@ -625,7 +637,7 @@ def test_bound_recall_rejects_conflicting_receipt_artifact_identity(
         store=store,
         outbox=outbox,
     )
-    record = json.loads(outbox.read_text(encoding="utf-8"))
+    record = _promotion_record(outbox)
     record["payload"][field] = conflicting_value
 
     assert retrieve_relevant_promoted(

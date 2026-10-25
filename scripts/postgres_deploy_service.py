@@ -21,6 +21,7 @@ def run() -> int:
             'karakeep-boot': 3,
             'karakeep-acquire': 3,
             'karakeep-project': 3,
+            'qualify-heavy': 4,
         }
         if (
             len(sys.argv) != action_counts.get(sys.argv[1], -1)

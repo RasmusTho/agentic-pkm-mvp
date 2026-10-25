@@ -275,7 +275,7 @@ deploy-test:
 	@bash scripts/deploy_channel.sh deploy test "$(SHA)"
 
 deploy-prod:
-	@bash scripts/deploy_channel.sh deploy prod "$(SHA)"
+	@bash scripts/deploy_channel.sh deploy prod "$(SHA)" --image-digest "$(IMAGE_DIGEST)" --promotion-plan "$(PROMOTION_PLAN)"
 
 rollback-dev:
 	@bash scripts/deploy_channel.sh rollback dev $(if $(SHA),"$(SHA)",)

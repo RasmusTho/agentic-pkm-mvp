@@ -1,30 +1,46 @@
 from __future__ import annotations
 
 import argparse
+import ast
+from functools import lru_cache
+import importlib.util
+import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 STATIC_TARGET_COLLECTABILITY_FITNESS = (
     "tests/scripts/test_select_pr_tests.py::test_static_selector_targets_are_collectable"
 )
 
-ALWAYS_TARGETS = (
+CI_INTEGRITY_TARGETS = (
     "tests/ci",
     # This test must run on every scoped PR: a deleting/renaming PR otherwise
     # filters its missing static target before pytest has a chance to detect it.
     STATIC_TARGET_COLLECTABILITY_FITNESS,
+)
+
+ALWAYS_TARGETS = (
+    *CI_INTEGRITY_TARGETS,
     # The outbox producer gates are repo-wide AST censuses over app/, so the PR
     # that breaks them is by definition a PR that adds or edits a producer —
     # and every producer today lives in an OWNED subsystem (heimdal, watcher,
     # api routes, panel, workers, services, receipts, knowledge_acquisition).
     # A scoped selection therefore excluded exactly the PRs these gates exist
     # to catch, and a new producer defaulting to the dropping path could merge
-    # with a green required check (#4214 D5). They are cheap — pure ast.parse
-    # over app/, no fixtures, seconds — so run them on every scoped PR.
+    # with a green required check (#4214 D5). Keep these on Product/runtime
+    # scoped PRs; the closed CI-only scope cannot change an app/ producer.
     "tests/architecture/test_outbox_producer_durability.py",
     "tests/architecture/test_outbox_producer_idempotency.py",
+    # The MVR-05B context-boundary gate is the same kind of cheap AST census,
+    # over request entrypoints spread across many owned subsystems (api routes,
+    # agents, MCP, CLI). Scoping it to its own files would skip exactly the PRs
+    # that add a global vault lookup to a guarded entrypoint (#6136 review).
+    "tests/architecture/test_multi_vault_context_boundaries.py",
 )
 
 PR_MARKER_EXPRESSION = (
@@ -39,10 +55,6 @@ FULL_SUITE_REASONS = (
 )
 
 FULL_SUITE_EXACT = {
-    # CI Smoke owns the shared PR unit-test runtime. A change to its execution
-    # contract must prove the broad not-pg lane rather than only the workflow
-    # contract tests routed by the governance branch.
-    ".github/workflows/ci-smoke.yaml",
     # Shared CLI registration and path resolution affect many runtime
     # subsystems. Never narrow their coverage to a single feature owner.
     "app/cli.py",
@@ -120,10 +132,12 @@ ARO03_ROUTE_TESTS = (
     "tests/api/test_devui_api.py::test_overview_route_uses_live_composition_and_delivered_composer",
 )
 
-# Node-id targets outside SUBSYSTEMS still need the always-run static census.
-# Otherwise a renamed ARO-03 route proof could be filtered out before CI asks
-# pytest to collect it, leaving the exact-path selector green without proof.
-STATIC_SELECTOR_NODE_ID_TARGETS = ARO03_ROUTE_TESTS
+DEV_LIVENESS_TESTS = ("tests/governance/test_dev_delivery_liveness_workflow.py",)
+
+# Targets outside SUBSYSTEMS still need the always-run static census.
+# Otherwise a renamed proof could be filtered out before CI asks pytest to
+# collect it, leaving the exact-path selector green without proof.
+STATIC_SELECTOR_NODE_ID_TARGETS = (*ARO03_ROUTE_TESTS, *DEV_LIVENESS_TESTS)
 
 GOVERNANCE_TARGETS = (
     "tests/governance",
@@ -141,6 +155,139 @@ GOVERNANCE_TARGETS = (
     "tests/architecture",
     "tests/ops/test_review_before_ci_gate.py",
 )
+
+# Read-only CI inspection/selection contracts already covered by GOVERNANCE_TARGETS.
+# Keep this exact: unrelated scripts, fixtures and operational co-changes retain their owners.
+CI_GOVERNANCE_CONTRACT_PATHS = frozenset({
+    "scripts/select_pr_tests.py",
+    "scripts/replay_pr_test_selection.py",
+    "scripts/run_scoped_test_partitions.py",
+    "scripts/plan_full_suite_node_shards.py",
+    "scripts/await_pr_checks.sh",
+    "scripts/ci_stall_classifier.py",
+    "scripts/docs_guard_logic.py",
+    "scripts/docs_guard.py",
+    "tests/scripts/test_select_pr_tests.py",
+    "tests/scripts/test_await_pr_checks.py",
+    "tests/scripts/test_await_pr_checks_dedupe.py",
+    "tests/scripts/test_ci_stall_classifier.py",
+    "tests/scripts/test_docs_guard.py",
+    "tests/ops/test_ci_workflow.py",
+})
+
+# A CI-only edit cannot change Product producers, schemas or runtime behavior.
+# Exercise the CI commands and their consumers instead of all script/architecture suites.
+CI_CONTRACT_TARGETS = (
+    *CI_INTEGRITY_TARGETS,
+    "tests/governance",
+    "tests/scripts/test_select_pr_tests.py",
+    "tests/scripts/test_replay_pr_test_selection.py",
+    "tests/scripts/test_await_pr_checks.py",
+    "tests/scripts/test_await_pr_checks_dedupe.py",
+    "tests/scripts/test_ci_stall_classifier.py",
+    "tests/scripts/test_docs_guard.py",
+    "tests/ops/test_ci_workflow.py",
+    "tests/ops/test_ci_smoke_workflow.py",
+    "tests/ops/test_review_before_ci_gate.py",
+    "tests/deploy/test_dockerfile_python_alignment.py",
+    "tests/architecture/test_ci_smoke_contract.py",
+    "tests/architecture/test_companion_ui_sys_path.py",
+    "tests/architecture/test_import_boundary.py",
+    "tests/architecture/test_pr_hot_path_governance.py",
+    "tests/architecture/test_pr_test_selection.py",
+    "tests/architecture/test_requirements_consistency.py",
+    "tests/architecture/test_agent_skill_entrypoints.py",
+    "tests/architecture/test_dispatcher_skill_integration.py",
+)
+CI_CONTRACT_PATHS = CI_GOVERNANCE_CONTRACT_PATHS | frozenset({
+    ".github/workflows/ci-smoke.yaml",
+    ".codex/skills/_shared/CI_WAIT_CONTRACT.md",
+    "docs/development/TEST_STRATEGY_HOT_PATH.md",
+    "docs/development/DEV_WORKFLOW.md",
+    "docs/development/DOCUMENTATION_GUARD.md",
+    "docs/development/PR_HOT_PATH.md",
+    "tests/governance/test_ci_smoke_docs_only_gate.py",
+}) | frozenset(
+    target.split("::", 1)[0]
+    for target in CI_CONTRACT_TARGETS
+    if target.split("::", 1)[0].endswith(".py")
+)
+
+# Exact PR-intake/publication contract sources have many direct readers across
+# BuilderOps, dispatcher, scripts, governance docs and the publication workflow.
+# Keep this scope explicit: a changed source selects its complete direct-reader
+# set, while an unrelated BuilderOps/dispatcher/script co-change keeps normal
+# subsystem routing. The architecture doc is only a tolerated co-change here;
+# its own edits continue through the ordinary docs lane.
+PR_INTAKE_CONTRACT_SOURCE_PATHS = frozenset({
+    ".github/workflows/issue-pr-governance.yml",
+    "app/builderops/publication.py",
+    "app/dispatcher/verification_contract.py",
+    "scripts/pr_body_generator.py",
+    "scripts/review_before_ci_gate.py",
+})
+PR_INTAKE_RUNTIME_SOURCE_PATHS = PR_INTAKE_CONTRACT_SOURCE_PATHS - {
+    ".github/workflows/issue-pr-governance.yml",
+}
+PR_INTAKE_CONTRACT_READER_PATHS = frozenset({
+    "docs/ARCHITECTURE.md",
+    "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md",
+    "docs/development/PR_HOT_PATH.md",
+    "tests/architecture/test_agent_skill_entrypoints.py",
+    "tests/architecture/test_pr_hot_path_governance.py",
+    "tests/governance/test_autonomous_escalation_contract.py",
+    "tests/governance/test_epic_pr_batching_policy.py",
+    "tests/governance/test_issue_pr_governance.py",
+    "tests/governance/test_project_pickup_deprecation.py",
+    "tests/governance/test_skills_consistency_lint.py",
+    "tests/governance/test_verification_dispatch_request.py",
+    "tests/governance/test_verification_dispatch_workflow.py",
+    "tests/governance/test_pr_evidence_pack_workflow.py",
+    "tests/ops/test_builderops_package_smoke.py",
+    "tests/ops/test_review_before_ci_gate.py",
+    "tests/scripts/test_build_pr_evidence_pack.py",
+    "tests/scripts/test_closure.py",
+    "tests/scripts/test_pr_body_generator.py",
+    "tests/scripts/test_publication.py",
+    "tests/dispatcher/test_verification_dispatch.py",
+    "tests/dispatcher/test_verified_merge.py",
+})
+PR_INTAKE_CONTRACT_TARGETS = (
+    # Direct imports/consumers not already covered by CI_CONTRACT_TARGETS' full
+    # governance suite and exact review/architecture readers.
+    "tests/dispatcher/test_verification_dispatch.py",
+    "tests/dispatcher/test_verified_merge.py",
+    "tests/ops/test_builderops_package_smoke.py",
+    "tests/scripts/test_build_pr_evidence_pack.py",
+    "tests/scripts/test_closure.py",
+    "tests/scripts/test_pr_body_generator.py",
+    "tests/scripts/test_publication.py",
+)
+
+# This filesystem-only helper has one direct test contract and no tracked
+# operational caller. New consumers restore ordinary Ops ownership below.
+BWS_CONTROL_INSTALLATION_SOURCE = "app/ops/bws_control_installation.py"
+BWS_CONTROL_INSTALLATION_TEST = "tests/ops/test_bws_control_installation.py"
+BWS_CONTROL_INSTALLATION_PATHS = frozenset({
+    BWS_CONTROL_INSTALLATION_SOURCE,
+    BWS_CONTROL_INSTALLATION_TEST,
+    "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+})
+
+# Test-only edits to these unconsumed modules need representative harness proof.
+# Product/shared-fixture co-changes and nightly retain their complete matrices.
+ISOLATED_TEST_MODULES = {
+    "tests/ops/test_dormant_ownership_initialization.py": (
+        "tests/ops/test_dormant_ownership_initialization.py::test_exact_admission_preserves_source_and_registry_and_produces_one_authenticated_lease",
+        "tests/ops/test_dormant_ownership_initialization.py::test_refusal_matrix_is_before_effects[receipt]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_concurrency_and_stale_proof_recheck_all_locks",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[exact]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[foreign_owner]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[post_bind_source]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[cleanup_retry_exact]",
+        "tests/ops/test_dormant_ownership_initialization.py::test_test_preparation_producer_holds_window_until_explicit_initializer[native_error_prove_barrier]",
+    ),
+}
 
 # Every app/ file indexed by a (file, line)-keyed census registry in
 # tests/properties/_machinery.py (REGISTERED_MIRRORS, WRITE_FRONTMATTER_SITE_CLASSIFICATION,
@@ -238,7 +385,108 @@ E2E_OWNER_BY_FILE["tests/e2e/test_panel_llm_e2e.py"] = "promotion_panel"
 
 GENERIC_PR_EXCLUDED_TARGETS = frozenset({"tests/e2e/test_panel_llm_e2e.py"})
 
+# Heavy test targets run on the PR path only when the PR changes a source they
+# exercise; otherwise they run after merge on the ygg `test` VM, and
+# .github/workflows/post-merge-heavy-tests.yml records the verdict and files a
+# high-priority alert Issue when it is red or missing (#6154, #6158). Admit
+# a target here only with a timing receipt. `tests/deploy` was ~1497 s of PR
+# #6134's 2287 s unit step and timed out PR #6152, because ops_deploy owns all
+# of `scripts/` and any script change unioned it in. A changed test module
+# inside a deferred directory still runs as its own changed-file target; any
+# other changed file inside the directory (conftest, helpers) keeps it whole.
+HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
+    "tests/deploy": (
+        # Every repo file tests/deploy reads directly -- scripts, compose
+        # files, requirements, Dockerfile, deploy config and the app/ modules
+        # it imports by path -- census-enforced by
+        # tests/scripts/test_select_pr_tests.py, plus the deploy-channel
+        # directories it exercises.
+        "scripts/lib/",
+        "ops/",
+        "config/deploy/",
+        "app/release_channels/",
+        "tests/helpers/runtime_start_harness.py",
+        "tests/runtime/test_start_full_system_version_marker.py",
+        ".dockerignore",
+        ".github/workflows/app-image-build.yml",
+        ".github/workflows/ci-smoke.yaml",
+        ".github/workflows/postmerge-channel-bug.yml",
+        ".github/workflows/postmerge-dev-test.yml",
+        "Dockerfile",
+        "Makefile",
+        "alembic.ini",
+        "app/__init__.py",
+        "app/alembic/versions/e7b4c9d2a6f1_heimdal_raw_representation.py",
+        "app/api/app.py",
+        "app/cli.py",
+        "app/config/activation_scope.py",
+        "app/config/database.py",
+        "app/instance/mvr05_cutover.py",
+        "app/instance/runtime.py",
+        "app/instance/settings_rebind.py",
+        "app/instance/settings_rebind_runtime_capability.json",
+        "app/ops/__init__.py",
+        "app/ops/bws_secret_reader.py",
+        "app/ops/heavy_acceptance.py",
+        "app/ops/heavy_acceptance_runner.py",
+        "app/ops/host_secret_bootstrap.py",
+        "app/ops/host_secret_contract.py",
+        "app/ops/host_secret_controller.py",
+        "app/ops/native_source_bootstrap.py",
+        "app/ops/postgres_deploy_host.py",
+        "app/ops/postgres_deploy_linux.py",
+        "app/tts/config.py",
+        "companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md",
+        "config/model_access/executor_network_paths.yaml",
+        "config/runtime.defaults.env",
+        "config/secrets/bws_reader_token_targets.json",
+        "config/secrets/host_secret_contract.json",
+        "config/systemd/yggdrasil-bws-deploy@.service",
+        "config/tts-disabled/.gitkeep",
+        "docker-compose.app-bind.yml",
+        "docker-compose.bws-external.yml",
+        "docker-compose.bws.yml",
+        "docker-compose.dev.yml",
+        "docker-compose.full-host-vault.yml",
+        "docker-compose.legacy-vault.yml",
+        "docker-compose.prod.yml",
+        "docker-compose.scalar-rollback.yml",
+        "docker-compose.test-vault.yml",
+        "docker-compose.test.yml",
+        "docker-compose.yaml",
+        "docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md",
+        "docs/runbooks/RUNBOOK_TTS_PROVISIONING.md",
+        "requirements-bws-deploy.txt",
+        "requirements-tts.txt",
+        "requirements.txt",
+        "scripts/companion_ui_postdeploy_smoke.sh",
+        "scripts/compose_env.py",
+        "scripts/deploy_channel.sh",
+        "scripts/dev_test_environment_clobber_preflight.py",
+        "scripts/export_runtime_env.sh",
+        "scripts/install_bws_deploy_runtime.sh",
+        "scripts/install_postmerge_controller.py",
+        "scripts/instance_state_writer_inventory.py",
+        "scripts/post_merge_heavy_tests_verdict.py",
+        "scripts/postgres_deploy_service.py",
+        "scripts/postgres_entrypoint.sh",
+        "scripts/postmerge_channel_bug.py",
+        "scripts/postmerge_controller.py",
+        "scripts/postmerge_dev_test.py",
+        "scripts/prod_deploy_retry_preflight.py",
+        "scripts/prod_devui_gateway_preflight.py",
+        "scripts/run_migrations.sh",
+        "scripts/start_api.sh",
+        "scripts/start_full_system.sh",
+    ),
+}
+
+SCOPED_DEPLOY_PARALLEL_ROOTS = ("tests/deploy", "tests/scripts")
+SCOPED_DEPLOY_SERIAL_ROOT = "tests/ops"
+SCOPED_EXECUTION_MAX_WORK_UNITS = 4
+
 SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("governance", (), CI_CONTRACT_TARGETS),
     (
         "builder_system",
         (
@@ -285,6 +533,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Builder System architecture gate. Own this exact file so a
             # count/contract repair cannot fail closed as an unowned PR.
             "tests/architecture/test_multi_vault_projection_inventory.py",
+            # The MVR-05B context-boundary gate and its inventory helper are the
+            # same kind of architecture fitness; own them exactly (#6136).
+            "tests/architecture/context_boundary_inventory.py",
+            "tests/architecture/test_multi_vault_context_boundaries.py",
             # Isolated subprocess import wiring is a Builder test-harness
             # contract; own both the helper and its focused regression without
             # widening this subsystem to all helpers.
@@ -558,6 +810,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Orientation is a derived status projection; preserve its
             # unknown-on-corruption proof when its runtime adapter changes.
             "app/orientation/runtime.py",
+            # The leave-point cursor is the derived orientation trace the
+            # status projection reads (MVR-05B4c4); its route proofs are in tests/api.
+            "app/orientation/leave_point_cursor.py",
             "tests/observability/",
             "docs/OBSERVABILITY.md",
         ),
@@ -728,6 +983,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # surface as the consumer that later admits the memory to recall.
             "app/knowledge_compilation/review_admission.py",
             "app/retrieval/",
+            # Emitted ContextBundles are the retrieval capability's process-local
+            # addressability cache (MVR-05B4c5); its route proofs are in tests/api.
+            "app/context_bundles/",
             "app/index/",
             # Index rebuild is the memory-retrieval CLI producer for the
             # canonical vector rows exercised by the index suites.
@@ -744,6 +1002,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/outbox/events.py",
             "tests/agent_memory/",
             "tests/retrieval/",
+            "tests/context_bundles/",
             "tests/indexer/",
             "tests/e2e/test_index_rules_e2e.py",
             "tests/e2e/test_promotion_intent_to_index.py",
@@ -753,6 +1012,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/agent_memory",
             "tests/knowledge_compilation/test_review_admission_handoff.py",
             "tests/retrieval",
+            "tests/context_bundles",
+            "tests/api/test_context_bundle_route.py",
+            "tests/api/test_mvr05b4c_emitted_bundle_binding.py",
             "tests/index",
             "tests/indexer",
             "tests/search",
@@ -845,7 +1107,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/expansion/",
             "tests/reasoning/",
             "tests/expansion/",
+            "tests/uat/test_expansion_connect_create_accept_test_channel.py",
             "docs/MIMER_CAPABILITY_HARDENING/",
+            "docs/runbooks/UAT_EXPANSION_CONNECT_CREATE_ACCEPT.md",
         ),
         ("tests/reasoning", "tests/expansion", "tests/invariants"),
     ),
@@ -1088,6 +1352,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "ops_deploy",
         (
+            ".github/workflows/postmerge-channel-bug.yml",
             "scripts/",
             "ops/",
             "config/deploy/",
@@ -1115,7 +1380,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         # already reach tests/deploy for the scripts/ callers, but not for
         # this app/ surface itself.
         "release_channels",
-        ("app/release_channels/", "tests/release_channels/", "docs/RELEASE_CHANNELS/"),
+        (
+            "app/release_channels/",
+            "tests/release_channels/",
+            # Exact legacy-path contract for model-access rollback in the
+            # release_channels module; keep this narrow rather than assigning
+            # every test under tests/release/ to this subsystem.
+            "tests/release/test_model_access_router_rollback_plan.py",
+            "docs/RELEASE_CHANNELS/",
+        ),
         ("tests/release_channels", "tests/deploy"),
     ),
     (
@@ -1163,6 +1436,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 
 
 EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
+    "governance": CI_CONTRACT_PATHS,
+    # Native request admission and API assembly share this finite scope helper.
+    # Own only this file; unknown sibling config modules still fail closed.
+    "companion_ui": frozenset({"app/config/activation_scope.py"}),
+    "ops_deploy": frozenset({"app/config/activation_scope.py"}),
     # The companion/source predicate is shared by watcher traversal, queued
     # workers and Alpha ingestion. A helper-only edit must execute all three
     # existing source-boundary owners without claiming sibling services.
@@ -1201,12 +1479,14 @@ class Selection:
     targets: tuple[str, ...]
     reason: str
     unowned_paths: tuple[str, ...] = ()
+    deferred_targets: tuple[str, ...] = ()
 
     @property
     def pytest_args(self) -> str:
         marker = f'-m "{PR_MARKER_EXPRESSION}"'
         if self.full_suite:
-            return f"-q {marker} tests --ignore=tests/e2e"
+            ignores = "".join(f" --ignore={target}" for target in ("tests/e2e", *self.deferred_targets))
+            return f"-q {marker} tests{ignores}"
         return " ".join(("-q", marker, *self.targets))
 
 
@@ -1228,6 +1508,8 @@ def _dedupe(items: list[str]) -> tuple[str, ...]:
 
 
 def _subsystem_owns_path(path: str, name: str, prefixes: tuple[str, ...]) -> bool:
+    if name in {"ops", "ops_deploy"} and path in CI_CONTRACT_PATHS:
+        return False
     return path in EXACT_SUBSYSTEM_FILES.get(name, frozenset()) or any(
         path.startswith(prefix) for prefix in prefixes
     )
@@ -1285,9 +1567,236 @@ def _is_governance_only(paths: tuple[str, ...]) -> bool:
     governance_prefixes = (".github/", "docs/development/", "AGENTS.md", "CLAUDE.md", ".codex/")
     non_test = _non_test_signal(paths, GOVERNANCE_TARGETS)
     return bool(non_test) and all(
-        path.startswith(governance_prefixes) or path == "scripts/select_pr_tests.py"
+        path.startswith(governance_prefixes)
+        # These read-only CI helpers are covered by tests/scripts and the
+        # existing governance contracts, without unrelated host/deploy tests.
+        # Any co-changed runtime/operational source still disqualifies this lane.
+        or path in CI_GOVERNANCE_CONTRACT_PATHS
         for path in non_test
     )
+
+
+def _is_ci_contract_only(paths: tuple[str, ...]) -> bool:
+    return bool(paths) and all(path in CI_CONTRACT_PATHS for path in paths)
+
+
+def _is_pr_intake_contract_only(paths: tuple[str, ...]) -> bool:
+    # Existing exact CI-contract edits may accompany this source contract, for
+    # example when selector coverage is updated with its owner documentation.
+    # One of the seven added direct-reader targets also qualifies a test-only
+    # contract change. General governance/doc readers are tolerated co-changes,
+    # not anchors; every other co-change falls back to its owner.
+    allowed_paths = CI_CONTRACT_PATHS | PR_INTAKE_CONTRACT_SOURCE_PATHS | PR_INTAKE_CONTRACT_READER_PATHS
+    direct_reader_tests = frozenset(PR_INTAKE_CONTRACT_TARGETS)
+    return (
+        bool(paths)
+        and any(
+            path in PR_INTAKE_CONTRACT_SOURCE_PATHS or path in direct_reader_tests
+            for path in paths
+        )
+        and all(path in allowed_paths for path in paths)
+    )
+
+
+def _is_test_only(paths: tuple[str, ...]) -> bool:
+    return bool(paths) and all(path in ISOLATED_TEST_MODULES for path in paths)
+
+
+@lru_cache(maxsize=4096)
+def _module_dependencies(
+    path: Path, module: str, _mtime: int, _size: int, *, strict: bool = False,
+    metadata_literals: bool = False,
+) -> tuple[frozenset[str], bool, bool]:
+    """Cache parsed imports by source stat; strict censuses reject unreadable/invalid sources."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, SyntaxError):
+        if strict:
+            raise
+        return frozenset(), True, False
+    package = module.removesuffix(".__init__") if module.endswith(".__init__") else module.rpartition(".")[0]
+    imports: set[str] = set()
+    if metadata_literals:
+        # Plain selector path data is not a consumer. Keep imports, literals in
+        # executable calls, and simple literal bindings passed to consumers.
+        bindings: dict[str, set[str]] = {}  # Reassignment cannot erase a possible consumer.
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                for target in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                    if isinstance(target, ast.Name):
+                        bindings.setdefault(target.id, set()).add(node.value.value)
+        literal_uses = set()
+        for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+            name = call.func.id if isinstance(call.func, ast.Name) else call.func.attr if isinstance(call.func, ast.Attribute) else ""
+            if name in {"select_tests", "requires_runtime_checks", "_pr_targets", "Selection", "frozenset", "set"}:
+                continue  # Known selector data construction, not a reader.
+            literal_uses.update(id(node) for node in ast.walk(call) if isinstance(node, ast.Constant))
+            imports.update(
+                value for argument in [*call.args, *(keyword.value for keyword in call.keywords)]
+                for node in ast.walk(argument) if isinstance(node, ast.Name) and node.id in bindings
+                for value in bindings[node.id]
+            )
+    has_tests = any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+        or isinstance(node, ast.ClassDef) and (
+            node.name.startswith("Test") or any(
+                isinstance(base, ast.Name) and base.id == "TestCase"
+                or isinstance(base, ast.Attribute) and base.attr == "TestCase"
+                for base in node.bases
+            )
+        ) and any(
+            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name.startswith("test_")
+            for child in node.body
+        )
+        for node in tree.body
+    )
+    opaque = any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("pytest_")
+        or isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+            isinstance(target, ast.Name) and target.id == "pytest_plugins"
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        )
+        for node in tree.body
+    )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            try:
+                base = importlib.util.resolve_name("." * node.level + (node.module or ""), package)
+            except (ImportError, ValueError):
+                if strict:
+                    raise
+                return frozenset(), True, has_tests
+            imports.add(base)
+            imports.update(f"{base}.{alias.name}" for alias in node.names)
+            opaque |= any(alias.name == "*" for alias in node.names)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if metadata_literals and id(node) not in literal_uses:
+                continue
+            imports.add(node.value)  # Includes literal importlib module names.
+            if node.value.startswith("."):
+                imports.add(node.value.lstrip("."))  # Relative literal importlib calls.
+            if module.startswith("tests.") and node.value.startswith("tests/"):
+                imports.add(node.value.split("::", 1)[0].removesuffix(".py").replace("/", "."))
+        elif isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else ""
+            if name in {"__import__", "import_module", "spec_from_file_location", "run_module", "run_path", "exec", "eval"}:
+                opaque |= not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str)
+                if name in {"spec_from_file_location", "run_path", "exec", "eval"}:
+                    opaque = True  # File/code loaders do not establish a module import edge.
+    return frozenset(imports), opaque, has_tests
+
+
+def _is_bws_control_installation_contract_only(paths: tuple[str, ...]) -> bool:
+    """Admit the exact source contract only while every static consumer is covered."""
+    required = {BWS_CONTROL_INSTALLATION_SOURCE, BWS_CONTROL_INSTALLATION_TEST}
+    if BWS_CONTROL_INSTALLATION_SOURCE not in paths or not set(paths) <= BWS_CONTROL_INSTALLATION_PATHS:
+        return False
+    metadata_paths = {"scripts/select_pr_tests.py", STATIC_TARGET_COLLECTABILITY_FITNESS.split("::", 1)[0]}
+    try:
+        if any(not (REPO_ROOT / path).is_file() or (REPO_ROOT / path).is_symlink() for path in required | set(paths)):
+            return False
+        inventory = subprocess.run(
+            ["git", "ls-files", "-z", "--", "*.py"], cwd=REPO_ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.split("\0")
+        modules = {path.removesuffix(".py").replace("/", "."): path for path in inventory if path}
+        selected = {path.removesuffix(".py").replace("/", ".") for path in required}
+        if not selected <= modules.keys():
+            return False
+        dependencies = {}
+        for module, relative in modules.items():
+            file = REPO_ROOT / relative
+            if file.is_symlink():
+                return False
+            stat = file.stat()
+            dependencies[module] = _module_dependencies(
+                file, module, stat.st_mtime_ns, stat.st_size, strict=True,
+                metadata_literals=relative in metadata_paths,
+            )
+    except (OSError, UnicodeError, SyntaxError, ImportError, ValueError, subprocess.SubprocessError):
+        return False
+    if any(dependencies[module][1] for module in selected) or not dependencies[
+        BWS_CONTROL_INSTALLATION_TEST.removesuffix(".py").replace("/", ".")
+    ][2]:
+        return False
+    if any(opaque for module, (_, opaque, _) in dependencies.items() if modules[module] in metadata_paths):
+        return False
+    # A single collected node does not cover another consumer in that file.
+    covered_paths = tuple(target for target in ALWAYS_TARGETS if "::" not in target)
+    while True:
+        aliases = selected | {module.rsplit(".", 1)[-1] for module in selected}
+        for module in selected:
+            relative = modules[module]
+            aliases.update({relative, Path(relative).name, str(REPO_ROOT / relative)})
+        consumers = {
+            module for module, (imports, _, _) in dependencies.items()
+            if any(
+                reference in aliases
+                or reference.startswith("./") and Path(reference.split("::", 1)[0]).as_posix() in aliases
+                for reference in imports
+            )
+        }
+        added = consumers - selected
+        if not added:
+            return True
+        if any(
+            not _within_target_dirs(modules[module], covered_paths) or dependencies[module][1]
+            for module in added
+        ):
+            return False
+        selected.update(added)
+
+
+def _test_module_targets(paths: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Select test modules and their consumers; shared/unclear boundaries keep normal ownership."""
+    if not paths or not all(
+        path.startswith("tests/") and _is_test_module(path)
+        and not {"..", "helpers", "fixtures", "support", "utils", "_shared"}.intersection(Path(path).parts)
+        and (REPO_ROOT / path).is_file() and not (REPO_ROOT / path).is_symlink()
+        and (
+            any(_subsystem_owns_path(path, name, prefixes) for name, prefixes, _ in SUBSYSTEMS)
+            # Documentation contract tests are normally selected by docs-only PRs,
+            # but their own test-only edits still need the bounded module route.
+            or path.startswith("tests/docs/")
+        )
+        for path in paths
+    ):
+        return None
+    try:
+        inventory = subprocess.run(
+            ["git", "ls-files", "-z", "--", "*.py"], cwd=REPO_ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.split("\0")
+        modules = {path.removesuffix(".py").replace("/", "."): path for path in inventory if path}
+        selected = {path.removesuffix(".py").replace("/", ".") for path in paths}
+        if not selected <= modules.keys():
+            return None
+        dependencies = {}
+        for module, relative in modules.items():
+            file = REPO_ROOT / relative
+            if file.is_symlink():
+                return None
+            stat = file.stat()
+            dependencies[module] = _module_dependencies(file, module, stat.st_mtime_ns, stat.st_size)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    while True:
+        # Pytest's import mode can also expose a sibling by its bare module name.
+        aliases = selected | {module.rsplit(".", 1)[-1] for module in selected}
+        consumers = {module for module, (imports, _, _) in dependencies.items() if imports & aliases}
+        if consumers <= selected:
+            break
+        selected.update(consumers)
+    if any(
+        not modules[module].startswith("tests/")
+        or Path(modules[module]).name in {"__init__.py", "conftest.py"}
+        or dependencies[module][1]
+        for module in selected
+    ) or any(not dependencies[path.removesuffix(".py").replace("/", ".")][2] for path in paths):
+        return None
+    return _dedupe([*paths, *sorted(modules[module] for module in selected if _is_test_module(modules[module]))])
 
 
 def _foreign_subsystem_matches(
@@ -1342,6 +1851,183 @@ def _pr_targets(targets: list[str]) -> tuple[str, ...]:
     )
 
 
+def _is_test_module(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+
+
+def _heavy_target_triggered(target: str, triggers: tuple[str, ...], paths: tuple[str, ...]) -> bool:
+    return any(
+        path in triggers
+        or any(trigger.endswith("/") and path.startswith(trigger) for trigger in triggers)
+        or (_within_target_dirs(path, (target,)) and not _is_test_module(path))
+        for path in paths
+    )
+
+
+def _deferred_heavy_targets(paths: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        target
+        for target, triggers in HEAVY_PR_DEFERRED_TARGETS.items()
+        if not _heavy_target_triggered(target, triggers, paths)
+    )
+
+
+def _defer_heavy(selection: Selection, paths: tuple[str, ...]) -> Selection:
+    deferred = _deferred_heavy_targets(paths)
+    if not selection.full_suite:
+        deferred = tuple(target for target in deferred if target in selection.targets)
+    if not deferred:
+        return selection
+    return Selection(
+        selection.full_suite,
+        selection.subsystems,
+        tuple(target for target in selection.targets if target not in deferred),
+        selection.reason,
+        selection.unowned_paths,
+        deferred,
+    )
+
+
+def scoped_deploy_partitions(selection: Selection) -> tuple[tuple[str, ...], ...]:
+    """Partition source-triggered deploy coverage without changing its targets."""
+    if selection.full_suite or "tests/deploy" not in selection.targets:
+        return ()
+    buckets: list[list[str]] = [[] for _ in SCOPED_DEPLOY_PARALLEL_ROOTS]
+    remainder: list[str] = []
+    serial: list[str] = []
+    for target in selection.targets:
+        target_file = target.split("::", 1)[0]
+        if target_file == SCOPED_DEPLOY_SERIAL_ROOT or target_file.startswith(
+            f"{SCOPED_DEPLOY_SERIAL_ROOT}/"
+        ):
+            serial.append(target)
+            continue
+        for index, root in enumerate(SCOPED_DEPLOY_PARALLEL_ROOTS):
+            if target_file == root or target_file.startswith(f"{root}/"):
+                buckets[index].append(target)
+                break
+        else:
+            remainder.append(target)
+    partitions = [tuple(bucket) for bucket in buckets if bucket]
+    if remainder:
+        partitions.append(tuple(remainder))
+    if serial:
+        partitions.append(tuple(serial))
+    return tuple(partitions)
+
+
+def _scoped_deploy_test_files() -> tuple[str, ...]:
+    """Return the deploy test inventory in stable order.
+
+    The selector runs before the pytest environment is installed, so this
+    inventory is deliberately filesystem-only.  The runner performs the
+    later collection step that can split a very large file into node-level
+    work units.  Keeping this first expansion deterministic gives the
+    workflow a reviewable, authenticated plan without making selection depend
+    on an interpreter/plugin installation.
+    """
+
+    root = Path("tests/deploy")
+    if not root.is_dir():
+        return ()
+    return tuple(
+        str(path)
+        for path in sorted(root.rglob("*.py"))
+        if path.name.startswith("test_") or path.name.endswith("_test.py")
+    )
+
+
+def _target_weight(target: str) -> int:
+    """Use a stable, cheap proxy for balancing selector work units."""
+
+    path = Path(target.split("::", 1)[0])
+    try:
+        if path.is_file():
+            return max(1, len(path.read_text(encoding="utf-8").splitlines()))
+    except (OSError, UnicodeError):
+        pass
+    return 1
+
+
+def _balanced_work_units(
+    targets: list[str], *, max_units: int = SCOPED_EXECUTION_MAX_WORK_UNITS
+) -> tuple[tuple[str, ...], ...]:
+    """Greedily balance stable target units without changing their identity."""
+
+    if not targets:
+        return ()
+    buckets: list[list[str]] = [[] for _ in range(min(max_units, len(targets)))]
+    weights = [0] * len(buckets)
+    # Largest-first with the lexical target tie-break makes the plan stable and
+    # prevents one large source file from being appended to an already-heavy
+    # bucket.  The runner may refine deploy files into collected node IDs.
+    ordered = sorted(set(targets), key=lambda target: (-_target_weight(target), target))
+    for target in ordered:
+        index = min(range(len(buckets)), key=lambda candidate: (weights[candidate], candidate))
+        buckets[index].append(target)
+        weights[index] += _target_weight(target)
+    return tuple(tuple(bucket) for bucket in buckets if bucket)
+
+
+def scoped_deploy_execution_units(selection: Selection) -> tuple[tuple[str, ...], ...]:
+    """Build deterministic bounded work units for source-triggered deploy tests.
+
+    ``scoped_deploy_partitions`` remains the authenticated selected-target
+    inventory.  This derived plan expands ``tests/deploy`` into its concrete
+    files, removes directory/file overlap, and balances the files into at
+    most four units.  The runtime runner can refine those file units further
+    into collected node IDs after dependencies are installed; no selected
+    target is dropped or silently deferred.
+    """
+
+    partitions = scoped_deploy_partitions(selection)
+    if not partitions:
+        return ()
+
+    serial = partitions[-1] if any(
+        target.split("::", 1)[0] == SCOPED_DEPLOY_SERIAL_ROOT
+        or target.split("::", 1)[0].startswith(f"{SCOPED_DEPLOY_SERIAL_ROOT}/")
+        for target in partitions[-1]
+    ) else ()
+    parallel = partitions[:-1] if serial else partitions
+
+    expanded: list[str] = []
+    deploy_directory_selected = any(
+        target.split("::", 1)[0] == "tests/deploy" for partition in parallel for target in partition
+    )
+    deploy_files = _scoped_deploy_test_files() if deploy_directory_selected else ()
+    for partition in parallel:
+        for target in partition:
+            path = target.split("::", 1)[0]
+            if path == "tests/deploy":
+                expanded.extend(deploy_files)
+            elif deploy_directory_selected and path.startswith("tests/deploy/"):
+                # The directory's file expansion already authenticates this
+                # explicit changed-file target.  Keeping it again would run
+                # the same collected tests twice (the #6193 failure shape).
+                if path not in deploy_files:
+                    expanded.append(target)
+            else:
+                expanded.append(target)
+
+    parallel_limit = SCOPED_EXECUTION_MAX_WORK_UNITS - (1 if serial else 0)
+    balanced = _balanced_work_units(expanded, max_units=max(1, parallel_limit))
+    return (*balanced, serial) if serial else balanced
+
+
+SCOPED_DEPLOY_SERIAL_BOUNDARY = (
+    "tests/ops/test_dormant_ownership_initialization.py",
+    "tests/ops/test_git_hygiene.py",
+    "tests/ops/test_instance_state_deployment_lease.py",
+    "tests/ops/test_instance_state_volume_contract.py",
+    "tests/ops/test_instance_state_writer_inventory.py",
+    "tests/ops/test_mvr05_mixed_version_fence.py",
+    "tests/ops/test_native_journaling_acceptance.py",
+    "tests/ops/test_start_full_runtime_health.py",
+)
+
+
 def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     runtime_prefixes = ("app/", "companion-ui/")
     owned_prefixes = tuple(prefix for _, prefixes, _ in SUBSYSTEMS for prefix in prefixes)
@@ -1363,7 +2049,7 @@ def select_tests(changed_files: list[str]) -> Selection:
         return Selection(True, (), (), "no changed files were provided")
 
     if any(_is_full_suite_file(path) for path in paths):
-        return Selection(True, (), (), FULL_SUITE_REASONS[0])
+        return _defer_heavy(Selection(True, (), (), FULL_SUITE_REASONS[0]), paths)
 
     non_e2e_paths = tuple(path for path in paths if not path.startswith("tests/e2e/"))
     if not non_e2e_paths:
@@ -1381,7 +2067,7 @@ def select_tests(changed_files: list[str]) -> Selection:
         or path.startswith("tests/migrations/")
         for path in paths
     ):
-        return Selection(True, (), (), FULL_SUITE_REASONS[1])
+        return _defer_heavy(Selection(True, (), (), FULL_SUITE_REASONS[1]), paths)
 
     unowned_runtime_code = _unowned_runtime_code_paths(paths)
     if unowned_runtime_code:
@@ -1393,16 +2079,63 @@ def select_tests(changed_files: list[str]) -> Selection:
             unowned_runtime_code,
         )
 
-    changed_tests = _changed_test_targets(paths)
-    targets = list(ALWAYS_TARGETS)
+    ci_contract_only = _is_ci_contract_only(paths)
+    pr_intake_contract_only = _is_pr_intake_contract_only(paths)
+    test_only = _is_test_only(paths)
+    if not (ci_contract_only or pr_intake_contract_only or test_only):
+        if _is_bws_control_installation_contract_only(paths):
+            return Selection(
+                False, ("ops",), _pr_targets([*ALWAYS_TARGETS, BWS_CONTROL_INSTALLATION_TEST]),
+                "BWS control installation contract PR",
+            )
+        test_modules = _test_module_targets(paths)
+        if test_modules is not None:
+            owners = _dedupe([
+                name for name, prefixes, _ in SUBSYSTEMS
+                if any(_subsystem_owns_path(path, name, prefixes) for path in paths)
+            ] + (["docs"] if any(path.startswith("tests/docs/") for path in paths) else []))
+            return Selection(False, owners, _pr_targets([*CI_INTEGRITY_TARGETS, *test_modules]),
+                             "test modules and their static consumers")
+    changed_tests = (
+        tuple(target for path in paths for target in ISOLATED_TEST_MODULES[path])
+        if test_only else _changed_test_targets(paths)
+    )
+    targets = list(
+        CI_CONTRACT_TARGETS if ci_contract_only
+        else (*CI_CONTRACT_TARGETS, *PR_INTAKE_CONTRACT_TARGETS) if pr_intake_contract_only
+        else CI_INTEGRITY_TARGETS if test_only
+        else ALWAYS_TARGETS
+    )
+    if any(
+        path in CI_CONTRACT_PATHS and path.startswith(("scripts/", "tests/scripts/"))
+        for path in paths
+    ) and any(
+        path not in CI_CONTRACT_PATHS and _heavy_target_triggered(
+            "tests/deploy", HEAVY_PR_DEFERRED_TARGETS["tests/deploy"], (path,)
+        )
+        for path in paths
+    ):
+        # Preserve deploy proof formerly selected by a CI helper's scripts/
+        # ownership when it accompanies a real deploy input. The retention
+        # inventory is a filter, not new source-only subsystem ownership.
+        targets.append("tests/deploy")
 
     if any(path in ARO03_ROUTE_CONTRACT_PATHS for path in paths):
         targets.extend(ARO03_ROUTE_TESTS)
 
+    if any(path in {"scripts/dev_delivery_liveness.py", "scripts/postmerge_controller.py"} for path in paths):
+        targets.extend(DEV_LIVENESS_TESTS)
+
     governance_only = _is_governance_only(paths)
     docs_only = _is_docs_only(paths) if not governance_only else False
 
-    if governance_only or docs_only:
+    if ci_contract_only:
+        subsystems, reason = ("governance",), "CI contract-only PR"
+    elif pr_intake_contract_only:
+        subsystems, reason = ("governance", "builder_system"), "PR intake/publication contract PR"
+    elif test_only:
+        subsystems, reason = ("tests",), "isolated test-only smoke; exhaustive matrix deferred"
+    elif governance_only or docs_only:
         tolerated_targets = GOVERNANCE_TARGETS if governance_only else DOCS_TARGETS
         targets.extend(tolerated_targets)
         subsystems_list = ["governance" if governance_only else "docs"]
@@ -1431,15 +2164,19 @@ def select_tests(changed_files: list[str]) -> Selection:
             return Selection(False, ("unowned",), (), FULL_SUITE_REASONS[2], paths)
         subsystems, reason = _dedupe(matched), "matched subsystem SoI"
 
-    # Every scoped branch funnels through this single return, so a changed
-    # tests/** file is always unioned in exactly once — no per-branch splice
+    # Subsystem and docs branches funnel through this return, so changed
+    # test coverage (or the explicit isolated smoke) is unioned once — no splice
     # to forget if a future branch is added here (the #3383 failure mode).
-    return Selection(False, subsystems, _pr_targets([*targets, *changed_tests]), reason)
+    return _defer_heavy(
+        Selection(False, subsystems, _pr_targets([*targets, *changed_tests]), reason), paths
+    )
 
 
 def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_ref}...{head_ref}"],
+        # Keep both old and new paths for renames. The missing old module must
+        # disqualify test-only selection rather than hiding broken import users.
+        ["git", "diff", "--no-renames", "--name-only", f"{base_ref}...{head_ref}"],
         check=True,
         capture_output=True,
         text=True,
@@ -1461,12 +2198,25 @@ def _existing_test_targets(targets: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def requires_runtime_checks(changed_files: list[str]) -> bool:
-    """Text-only instructions/docs still run contract tests, not product gates.
+    """Text, CI-only and isolated-test changes omit unrelated Product gates.
 
-    Unknown, executable, fixture and configuration paths stay conservative. A
-    Markdown suffix alone does not make a runtime artifact documentation.
+    Executable paths outside the exact CI contract set, fixtures, configuration
+    and mixed changes stay conservative. A Markdown suffix alone is insufficient.
     """
     paths = tuple(_normalize(path) for path in changed_files if _normalize(path))
+    if _is_pr_intake_contract_only(paths) and any(
+        path in PR_INTAKE_RUNTIME_SOURCE_PATHS for path in paths
+    ):
+        # App and executable publication/review helpers still receive the
+        # mandatory Product type/runtime gates, even though pytest is scoped to
+        # the exact contracts that read them.
+        return True
+    if _is_pr_intake_contract_only(paths):
+        # The GitHub workflow contract has its direct governance readers and
+        # does not change the Python application type surface.
+        return False
+    if _is_ci_contract_only(paths) or _is_test_only(paths):
+        return False
     return not paths or not all(
         path in {"README.md", "CHANGELOG.md", "AGENTS.md", "CLAUDE.md"}
         or (path.endswith(".md") and path.startswith(("docs/", ".codex/")))
@@ -1476,12 +2226,31 @@ def requires_runtime_checks(changed_files: list[str]) -> bool:
 
 def _write_github_output(path: str, selection: Selection, *, runtime_checks: bool = True) -> None:
     output = Path(path)
+    partitions = scoped_deploy_partitions(selection)
+    execution_units = scoped_deploy_execution_units(selection)
+    target_files = {target.split("::", 1)[0] for target in selection.targets}
+    serial_boundary = (
+        SCOPED_DEPLOY_SERIAL_BOUNDARY
+        if SCOPED_DEPLOY_SERIAL_ROOT in target_files
+        else tuple(path for path in SCOPED_DEPLOY_SERIAL_BOUNDARY if path in target_files)
+    )
     with output.open("a", encoding="utf-8") as handle:
         handle.write(f"full_suite={'true' if selection.full_suite else 'false'}\n")
         handle.write(f"subsystems={','.join(selection.subsystems) or 'all'}\n")
         handle.write(f"pytest_args={selection.pytest_args}\n")
         handle.write(f"reason={selection.reason}\n")
+        handle.write(f"deferred_targets={' '.join(selection.deferred_targets)}\n")
         handle.write(f"runtime_checks={'true' if runtime_checks else 'false'}\n")
+        handle.write(f"pytest_targets_json={json.dumps(selection.targets, separators=(',', ':'))}\n")
+        handle.write(f"scoped_partitions_json={json.dumps(partitions, separators=(',', ':'))}\n")
+        handle.write(
+            "scoped_execution_units_json="
+            f"{json.dumps(execution_units, separators=(',', ':'))}\n"
+        )
+        handle.write(
+            "scoped_serial_boundary_json="
+            f"{json.dumps(serial_boundary, separators=(',', ':'))}\n"
+        )
 
 
 def main() -> int:
@@ -1490,7 +2259,16 @@ def main() -> int:
     parser.add_argument("--base-ref", default="", help="Base git ref for diff selection.")
     parser.add_argument("--head-ref", default="HEAD", help="Head git ref for diff selection.")
     parser.add_argument("--github-output", default="", help="Optional GITHUB_OUTPUT path.")
+    parser.add_argument(
+        "--print-heavy-targets",
+        action="store_true",
+        help="Print the heavy targets the post-merge/nightly heavy-tests workflow runs, then exit.",
+    )
     args = parser.parse_args()
+
+    if args.print_heavy_targets:
+        print(" ".join(HEAVY_PR_DEFERRED_TARGETS))
+        return 0
 
     changed = args.changed_file
     if not changed and args.base_ref:
@@ -1504,11 +2282,13 @@ def main() -> int:
             _existing_test_targets(selection.targets),
             selection.reason,
             selection.unowned_paths,
+            selection.deferred_targets,
         )
     print(f"full_suite={'true' if selection.full_suite else 'false'}")
     print(f"subsystems={','.join(selection.subsystems) or 'all'}")
     print(f"pytest_args={selection.pytest_args}")
     print(f"reason={selection.reason}")
+    print(f"deferred_targets={' '.join(selection.deferred_targets)}")
     if selection.unowned_paths:
         print(f"unowned_paths={','.join(selection.unowned_paths)}")
         return 2

@@ -349,6 +349,12 @@ def _runtime_env(tmp_path: Path, health: dict[str, object]) -> dict[str, str]:
     env.update(
         {
             "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+            # The fake engine is unmanaged; never load the operator's Colima profile.
+            "COLIMA_RESOURCE_PROFILE_FILE": os.devnull,
+            "COLIMA_RUNTIME_PROVIDER": "external",
+            "COLIMA_READINESS_REQUIRED": "0",
+            "DOCKER_CONTEXT": "default",
+            "DOCKER_HOST": "",
             # #4519 — scope the launcher's runtime env write to this test's
             # tmp_path. export_runtime_env.sh derives its default output path
             # from its own repo location, so without this override a launcher

@@ -58,8 +58,10 @@ from app.api.routes.ingest_binding import ingest_binding_status
 from app.api.compatibility_mutation import (
     reject_scoped_vault_mutation,
     require_compatibility_mutation,
+    require_compatibility_write_root,
+    seal_vault_mutation,
 )
-from app.api.routes.vault_resolution import active_vault_root_or_selection_required
+from app.api.routes.vault_resolution import compatibility_vault_root_or_selection_required
 from app.events.models import new_trace_id
 from app.events.schema import make_outbox_event
 from app.governance.governed_write import (
@@ -83,7 +85,14 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.standing_questions.registration import RegistrationProposalResult, propose_question_registration
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/companion", tags=["companion"])
+# MVR-05B3: every capture mutation carries the pre-05C seal. The legacy route's
+# write target is proved to be the sole compatibility binding; the distinct
+# ``/capture/compatibility`` route revalidates its migrated precondition instead.
+router = APIRouter(
+    prefix="/companion",
+    tags=["companion"],
+    dependencies=[Depends(seal_vault_mutation)],
+)
 
 CAPTURE_APPENDED_EVENT = "capture.inbox.appended"
 _WRITE_GUARD_ACTION = "companion.capture.append"
@@ -136,7 +145,7 @@ class CaptureResponse(BaseModel):
     events_emitted: list[str] = Field(default_factory=list)
     governed_write: dict[str, Any] | None = None
     ingest_warning: str | None = None
-    registration_state: Literal["proposal_pending", "not_qualified", "degraded"] = "not_qualified"
+    registration_state: Literal["proposal_pending", "not_qualified", "degraded", "unavailable"] = "not_qualified"
     registration_proposal_id: str | None = None
 
 
@@ -318,9 +327,12 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
 
     # vault-inbox note convention — resolution failures are explicit, the text is
     # never silently dropped.
-    vault_root = active_vault_root_or_selection_required(require_initialized=True)
+    vault_root = compatibility_vault_root_or_selection_required(require_initialized=True)
     if isinstance(vault_root, JSONResponse):
         return vault_root
+    # Pre-05C seal: the resolved write target must be the sealed compatibility
+    # binding (and, on the compatibility route, the precondition's binding).
+    require_compatibility_write_root(request, vault_root)
     try:
         note_rel = _capture_note_rel(vault_root)
     except Exception as exc:
@@ -428,11 +440,15 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
             },
         ) from exc
 
-    registration = _offer_question_registration_proposal(
+    # Legacy direct producer calls have no ASGI app and retain full behavior.
+    text_scope = getattr(getattr(request.scope.get('app'), 'state', None), 'activation_scope', 'full') == 'text-capture'
+    registration = None if text_scope else _offer_question_registration_proposal(
         vault_root=vault_root, note_rel=note_rel, trace_id=trace_id
     )
-    registration_state: Literal["proposal_pending", "not_qualified", "degraded"]
-    if registration is None or not registration.classification.classified:
+    registration_state: Literal["proposal_pending", "not_qualified", "degraded", "unavailable"]
+    if text_scope:
+        registration_state = 'unavailable'
+    elif registration is None or not registration.classification.classified:
         registration_state = "degraded"
     elif registration.proposal_id is not None:
         registration_state = "proposal_pending"

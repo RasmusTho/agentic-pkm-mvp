@@ -7,6 +7,7 @@ database consumer remain the admission boundaries. No child output escapes.
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -34,7 +35,63 @@ SOURCE_PROJECTION_FAILURE_CODES = {
     'source_doctor_failed': 87,
     'source_settings_failed': 88,
     'source_worker_failed': 89,
+    'legacy_producer_policy_refused': 90,
+    'legacy_source_refused': 91,
+    'legacy_admission_refused': 92,
+    'legacy_identity_refused': 93,
+    'legacy_race_refused': 94,
+    'legacy_write_failed': 95,
+    'source_worker_timeout': 96,
+    'source_worker_terminated': 97,
+    'source_worker_oom': 98,
+    'legacy_candidate_refused': 99,
+    'legacy_authority_refused': 100,
+    'legacy_trust_refused': 101,
+    'legacy_origin_refused': 102,
+    'legacy_payload_shape_refused': 103,
+    'legacy_system_path_refused': 104,
+    'legacy_profile_refused': 105,
+    'legacy_dependency_shape_refused': 106,
+    'legacy_retained_history_refused': 107,
+    'legacy_relation_retention_refused': 108,
+    'legacy_identity_persistence_refused': 109,
+    'legacy_identity_mismatch_refused': 110,
+    'legacy_identity_ambiguous_refused': 111,
+    'legacy_identity_producer_refused': 112,
+    'legacy_identity_canonical_refused': 113,
 }
+
+# Probe subprocess statuses are not source-worker checkpoints. Only the probe
+# call site decodes them; receipts may retain either actor's fixed reasons.
+EMBEDDING_PROBE_FAILURE_CODES = {
+    'embedding_probe_client_failed': 114,
+    'embedding_probe_identity_mismatch': 115,
+    'embedding_probe_generation_failed': 116,
+    'embedding_probe_vector_invalid': 117,
+    'embedding_probe_cleanup_failed': 118,
+    'embedding_probe_failed': 119,
+    'embedding_guard_refused': 120,
+}
+SOURCE_PROJECTION_FAILURE_REASONS = frozenset(SOURCE_PROJECTION_FAILURE_CODES) | frozenset(
+    EMBEDDING_PROBE_FAILURE_CODES
+)
+
+
+def source_terminal_reason(status: int, *, oom_killed: bool = False) -> str | None:
+    if oom_killed:
+        return 'source_worker_oom'
+    if status == 0:
+        return None
+    if status == 124:
+        return 'source_worker_timeout'
+    if status in {130, 143, -2, -15}:
+        return 'source_worker_terminated'
+    # 96–98 encode the host observer's result, not worker checkpoint exits.
+    # In particular a raw 98 cannot assert Docker's OOMKilled state.
+    return next((reason for reason, code in SOURCE_PROJECTION_FAILURE_CODES.items()
+                 if code == status and reason not in {
+                     'source_worker_timeout', 'source_worker_terminated', 'source_worker_oom',
+                 }), 'source_worker_failed')
 
 
 class SourceVectorProjectionFailure(RuntimeError):
@@ -119,17 +176,31 @@ def wait_for_owned_child(argv: list[str], *, timeout: float) -> int:
             signal.signal(signum, handler)
 
 
-def quiesce_owned_container(channel: str, name: str, operation: str, revision: str) -> bool:
+def quiesce_owned_container(channel: str, name: str, operation: str, revision: str, *,
+                            observe_terminal: Callable[[int, bool], None] | None = None,
+                            docker_command: Callable[..., str] | None = None,
+                            expected_image: str | None = None) -> bool:
     """Prove absence/stoppage of only this operation's Docker API one-shot."""
     if (
-        channel not in {'dev', 'test', 'prod'}
+        (expected_image is not None and re.fullmatch(
+            r'ghcr\.io/rasmustho/pkm-app:[0-9a-f]{40}@sha256:[0-9a-f]{64}', expected_image,
+        ) is None)
+        or channel not in {'dev', 'test', 'prod'}
         or re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', operation) is None
         or re.fullmatch(r'[0-9a-f]{40}', revision) is None
-        or name != f'pkm-{channel}-source-bootstrap-{operation}'
+        or name not in {
+            f'pkm-{channel}-source-bootstrap-{operation}',
+            *(
+                {f'pkm-dev-operator-identity-restoration-{operation}'}
+                if channel == 'dev' else set()
+            ),
+        }
     ):
         return False
 
     def docker(*arguments: str, timeout: int = 15) -> str:
+        if docker_command is not None:
+            return docker_command(['docker', *arguments], timeout=timeout).strip()
         return subprocess.run(
             ['docker', *arguments], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, check=True, timeout=timeout,
@@ -138,9 +209,9 @@ def quiesce_owned_container(channel: str, name: str, operation: str, revision: s
     def inventory() -> str:
         result = docker(
             'ps', '--all', '--filter', f'name=^/{name}$',
-            '--filter', f'label=com.docker.compose.project=pkm-{channel}',
-            '--filter', 'label=com.docker.compose.service=api',
-            '--filter', 'label=com.docker.compose.oneoff=True', '--format', '{{.ID}}',
+            # Labels are ownership evidence, never census filters: a foreign
+            # exact-name resource must not disappear into "proved absent".
+            '--format', '{{.ID}}',
         )
         if result and re.fullmatch(r'[0-9a-f]{12,64}', result) is None:
             raise ValueError('source inventory invalid')
@@ -157,6 +228,8 @@ def quiesce_owned_container(channel: str, name: str, operation: str, revision: s
             '/' + name, 'pkm-' + channel, 'api', 'True', operation, revision,
         ]:
             raise ValueError('source ownership invalid')
+        if expected_image is not None and docker('inspect', '--format', '{{.Config.Image}}', cid) != expected_image:
+            raise ValueError('source image ownership invalid')
         return fields[6]
 
     try:
@@ -179,6 +252,18 @@ def quiesce_owned_container(channel: str, name: str, operation: str, revision: s
             state = owned_state(cid)
         if state != 'false':
             return False
+        if observe_terminal is not None:
+            # Revalidate exact ownership after stop, then read only fixed Docker
+            # state fields. Never parse Error, logs, labels or free-form output.
+            if owned_state(cid) != 'false':
+                return False
+            fields = docker('inspect', '--format',
+                            '{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}', cid).split()
+            if (len(fields) != 3 or fields[0] not in {'exited', 'dead'}
+                or re.fullmatch(r'[0-9]{1,3}', fields[1]) is None
+                or not 0 <= int(fields[1]) <= 255 or fields[2] not in {'true', 'false'}):
+                return False
+            observe_terminal(int(fields[1]), fields[2] == 'true')
         docker('rm', cid)
         return True
     except (subprocess.SubprocessError, OSError, ValueError):
@@ -195,14 +280,19 @@ def _instance_preflight(channel: str) -> None:
 
 
 def preflight(selector: str) -> Path | None:
+    from app.config.activation_scope import runtime_activation_scope
     from app.config.environment import active_environment
     from app.config.paths import resolve_optional_vault_root
     from app.objects import resolve_store_backend
     from app.version import get_runtime_version
 
-    match = re.fullmatch(r'(dev|test|prod):([0-9a-f]{40})', selector)
+    # Text scope is part of the strict wire selector. Pre-scope images reject
+    # this shape in their first preflight, before migrations/replay/runtime.
+    match = re.fullmatch(r'(dev|test|prod):([0-9a-f]{40})(?::(text-capture))?', selector)
+    scope = runtime_activation_scope()
     if (
         match is None or os.environ.get('NATIVE_SOURCE_BOOTSTRAP') != selector
+        or scope != (match[3] or 'full')
         or os.environ.get('PKM_ENVIRONMENT') != match[1]
         or active_environment() != match[1]
         or get_runtime_version().get('git_sha') != match[2]
@@ -218,6 +308,8 @@ def preflight(selector: str) -> Path | None:
     # StorePort construction can run provider initialization/repair effects, so
     # defer it until the bound-root Product-readiness path below.
     if (root is not None and not root.is_dir()) or resolve_store_backend() != 'pg':
+        raise ValueError('source context invalid')
+    if scope == 'text-capture' and root is None:
         raise ValueError('source context invalid')
     return root
 
@@ -256,9 +348,12 @@ def _run_json(arguments: list[str]) -> Any:
         payload = _checkpoint('source_summary_invalid', json.loads, raw)
         if result.returncode:
             if arguments[:2] in (['index', 'repair-missing'], ['index', 'reconcile-legacy']):
+                from app.rebuildability.legacy_source import LEGACY_RECONCILIATION_REASONS
                 reason = payload.get('reason') if isinstance(payload, dict) else None
-                if reason not in {'source_post_rebuild_failed', 'embedding_generation_failed',
-                                  'vector_index_write_failed'}:
+                allowed = {'source_post_rebuild_failed', 'embedding_generation_failed', 'vector_index_write_failed'}
+                if arguments[:2] == ['index', 'reconcile-legacy']:
+                    allowed |= LEGACY_RECONCILIATION_REASONS
+                if reason not in allowed:
                     raise SourceBootstrapFailure('source_summary_invalid')
                 raise SourceBootstrapFailure(reason)
             counts = _checkpoint('source_summary_invalid', source_rebuild_counts, payload)
@@ -313,6 +408,9 @@ def rebuild_if_needed(selector: str) -> None:
         # or invalid configured roots still raise at the canonical resolver.
         return
     _checkpoint('source_settings_failed', _run_json, ['settings', 'validate', '--json'])
+    from app.config.activation_scope import runtime_activation_scope
+    if runtime_activation_scope() == 'text-capture':
+        return
     product_ready = _checkpoint('source_readiness_failed', _product_ready, root)
     rebuild_source_projection = not product_ready
     if product_ready:

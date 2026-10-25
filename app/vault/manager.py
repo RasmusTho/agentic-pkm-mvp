@@ -18,7 +18,7 @@ from app.instance.vault_registry import (
 from app.knowledge.multiwriter import is_conflict_artifact
 from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
-from app.settings.models import DEFAULT_ASK_SYSTEM_PROMPT
+from app.settings.models import DEFAULT_ASK_SYSTEM_PROMPT, ScreenControlSettings
 
 if TYPE_CHECKING:
     from app.write_guard import WriteGuard
@@ -623,7 +623,13 @@ class VaultManager:
             snapshot.authority,
         )
 
-    def validate_vault(self, vault_path: Path) -> VaultContext:
+    def validate_vault(self, vault_path: Path, *, heal_identity: bool = True) -> VaultContext:
+        """Classify ``vault_path`` into a :class:`VaultContext`.
+
+        ``heal_identity=False`` is the write-free read classification used by
+        per-request scoped reads (MVR-05B2): a missing identity id is reported
+        as a runtime id and never written back, whatever the machine role.
+        """
         # Lazy import: see the constructor's comment on the write_guard cycle.
         from app.write_guard import WritesBlockedError
 
@@ -687,8 +693,12 @@ class VaultManager:
         # A read-only role writes neither; a satellite with shared edits disabled
         # can still persist its own local clone id so recent-vault identity stays
         # stable (Codex #2030 P2).
-        allow_shared_heal = self._allow_shared_identity_heal(role, local_doc.frontmatter)
-        allow_local_heal = self._allow_local_identity_heal(role, local_doc.frontmatter)
+        allow_shared_heal = heal_identity and self._allow_shared_identity_heal(
+            role, local_doc.frontmatter
+        )
+        allow_local_heal = heal_identity and self._allow_local_identity_heal(
+            role, local_doc.frontmatter
+        )
         try:
             vault_id = self._ensure_frontmatter_id(
                 settings_dir / "vault.md",
@@ -1013,6 +1023,16 @@ def _static_shared_settings_seeds() -> tuple[tuple[str, dict[str, Any], str], ..
     not appear here and remain fail-loud when missing.
     """
     return (
+        (
+            "screen_control.md",
+            {
+                "schema": "heimdal.screen-control.v1",
+                "scope": "vault-shared",
+                **ScreenControlSettings().model_dump(),
+            },
+            "# Screen Stream Controls\nPause, exclusions, and provisional tunables.\n"
+            "The Settings Spine accepts each change with a durable receipt.\n",
+        ),
         (
             "paths.md",
             {

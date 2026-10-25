@@ -5,7 +5,7 @@ Owner: Yggdrasil Platform and Operations, with Product/Runtime and Builder Syste
 Temporal class: strategic
 Review cadence: after a task merge, BWS account/topology change, or live channel qualification
 Source of truth: this directory for target behavior; issue #5667 is the delivery and acceptance hub
-Last reviewed: 2026-10-15
+Last reviewed: 2026-10-21 (bounded TypeSafe DEV acceptance writeback; broader channel acceptance unchanged)
 Last verified against: merged PRs #5683, #5703, #5717, #5725, #5732, #5734, and #6015; #5667 comments #6114638077, #6114724380, and #6114787299. These verify repository delivery, current Free-plan entitlement, both reader scopes, active encrypted reader services on all three channel VMs, the MARR non-prod binding, and the accepted normal-writer model; full integrated channel acceptance remains open.
 
 # Cloud Secret Provisioning
@@ -79,11 +79,111 @@ permission or deployment changes.
 10. Production `heimdal.raw-store-key` rotation or deletion remains refused until a bounded rekey path is delivered, under the delegated safe-hold decision recorded in #5667 comment #5868385351. `archive-pass` remains protected pending its separate lifecycle policy. The PostgreSQL password must match the existing initialized database role: importing its current value is allowed, but changing the BWS item alone does not rotate that role. PostgreSQL password rotation on an initialized data directory requires a separate coordinated database-role cutover contract.
 11. For an initialized database, after both secret preflights pass under the host and VM locks, prove the candidate with a real password-authenticated connection to the active role. A stopped database may be started only as a supervised, same-ID PostgreSQL-only `--no-deps` probe: durably record `authenticating` before starting `db`, including its possible recovery/WAL writes. Never activate/recreate migration or application clients before authentication succeeds. On failure preserve a pre-existing running database; stop only a database this operation started, and record `aborted` only after verified quiescence. Otherwise remain pending. `pg_isready`, trust/peer authentication, matching BWS copies, and container startup are not password proof. The PostgreSQL password file is root-owned with mode `0440` and the configured database-client primary GID (`LOCAL_GID`); its parent tmpfs directory is root-only (`0700`). This gives the configured non-root application and migration UID/GID read access without granting host users directory traversal or world access. Grant the file-backed Compose secret only to PostgreSQL and the selected database clients. Local file-backed Compose secrets are bind mounts: Compose ignores secret `uid`, `gid`, and `mode` overrides, so prepare the source file's ownership and mode before mounting it ([Docker Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/), [Compose service secret attributes](https://docs.docker.com/reference/compose-file/services/)). Keep the source present while any consuming container may restart or be recreated; a managed host lifecycle rehydrates it before every Compose start/recreate and after host boot, and removes it only after all consumers stop. Docker must not restart a consumer before rehydration. Exclude the source path from Git and cleanup receipts.
 12. The existing Linux channel topology remains two projects and three machine accounts. The MARR TypeSafe binding uses that existing topology and adds no project or account requirement. Current entitlement, reader grants, MARR binding, and VM credential status are qualified in the #5667 receipts cited above; future BWS administration or permission changes remain separate operator actions. No paid-plan or subscription change is authorized by this contract.
-13. Repository tests and CI do not prove live BWS setup, token installation, host cleanup, or channel qualification. The cited #5667 receipts verify the specific entitlement, reader, MARR, encrypted VM-token, and retired-helper facts they record, but not complete target/action-bound DEV/TEST/PROD deployment/runtime acceptance. The TypeSafe binding uses fake sources in repository verification; live use separately follows the accepted normal-writer model in Fixed constraint 14 and requires the scoped MARR dev host installation, the already authorized one-call-per-caller dev acceptance with synthetic input, and redacted Product/Builder receipts on #5764. Routes remain disabled pending those receipts.
+13. Repository tests and CI do not prove live BWS setup, token installation, host cleanup, or channel qualification. The cited #5667 receipts verify the specific entitlement, reader, MARR, encrypted VM-token, and retired-helper facts they record, but not complete target/action-bound DEV/TEST/PROD deployment/runtime acceptance. The TypeSafe binding uses fake sources in repository verification; live use separately follows the accepted normal-writer model in Fixed constraint 14 and requires the scoped MARR dev host installation, the already authorized one-call-per-caller dev acceptance with synthetic input, and redacted Product/Builder receipts on #5764. The separate actual DEV receipts are now verified under [TypeSafe development host acceptance](../TYPESAFE_SYSTEM_ONE/README.md#typesafe-development-host-acceptance). Both allowances are consumed; ordinary routes remain disabled, and broader #5667 channel acceptance and TEST/PROD activation retain their separate gates.
 14. All supported BWS checks, admin writes, reader-token pushes, and channel deploy dispatches run through the designated Demerzel controller and a stable owner-only local operation lock outside Git/iCloud. The 2026-10-11 owner receipt accepts Demerzel login Keychain custody plus `scripts/secrets` as the sole supported normal writer, with human Organization Owner break-glass and read-only VM accounts. Deliberate same-user bearer use outside the controller is an accepted residual; the credential is not executably confined. No separate writer daemon or shared/distributed fencing is required for this one-owner setup. Reassess before extra operators/controllers or prod secrets requiring confidentiality. The local lock serializes cooperating entrypoints only, not direct bearer use or already-sent provider requests; do not claim externally fenced parity or full live qualification. Bootstrap retains the local qualification receipt requirement documented by the deployment owner. A Product deployment explicitly run with `--existing-secrets-only` may use existing selected values without this write-qualification gate; the host refuses a missing password before RPC and durably binds this mode to the deployment operation before the first RPC. This does not claim global fencing or complete BWS qualification. Lock order is agent-host operation lock first, then VM per-channel mutation lock; never acquire them in reverse. Persist a value-free operation ID, operation kind, target, and stage before external mutation; retain it until a matching terminal receipt is durable. After interruption, recovery must match the journaled operation ID to an authoritative terminal outcome: shared BWS import remains pending on an indeterminate provider send; token push and deploy require durable remote journal receipts; bootstrap also checks the locked empty directory and operation marker. A deploy worker on the VM, supervised independently of SSH, owns the remote lock through Compose completion and receipt write. Its durable stages are `prepared`, `preflighted`, `materialized`, optional `authenticating`, `activating`, then `committed` or `aborted`; `authenticating` precedes DB-only startup and `activating` precedes application Compose activation. A separate value-free request record binds the same ID to its channel, revision, consumer/service set, and bootstrap mode before the worker is prepared; a changed request cannot reuse a terminal receipt. Reconnect joins the same operation ID. If that worker ends without a receipt, a new worker cannot reconcile/admit work until the old worker/subprocess is gone and affected Compose/Docker resources are quiescent; if quiescence is unknown, remain pending. A VM lock snapshot or local lock release alone is not terminal proof.
 15. Normal deploys require `postgres.password` to be present before any remote deployment-state mutation. The only absent-password exception is BWS-04 first initialization: under the agent-host operation lock, check all other selected identities, acquire the VM per-channel lock as a coordination-only action, and inspect the actual database data directory under that lock. If it is not empty, release the lock and fail without creating a BWS password or changing deployment state. If it is empty, BWS-04 alone may generate and persist one password after BWS-02 has durably recorded the value-free absence tombstone and prepared operation ID. Include that ID in non-secret BWS item metadata, read the item back, and verify it before any deployment-state mutation; then recheck it on the VM before local mutation and Compose. If interrupted after a create may have reached BWS, the same operation ID remains pending. A retry rechecks emptiness and reads the BWS item; exactly one matching item is read and reused. An absent or ambiguous readback leaves the operation indeterminate and must not trigger another create without authoritative proof the prior request did not commit. It does not silently start a new bootstrap operation or replace an existing item. An initialized database with a missing item must import its current role value and cannot use bootstrap.
 
 16. The only direct runtime BWS consumer outside the Linux channel reader contract is `marr-server-dev`. It resolves `dev/typesafe.api-key` from non-prod through the existing `non-prod-reader` identity; its token is held in the MARR host Keychain and used in process memory. Product and Builder callers still receive neither the provider key nor the reader token, and the code-level MARR consumer binding remains mandatory. The accepted #5667 normal-writer model in Fixed constraint 14 governs BWS administration; the accepted broader read scope does not authorize a consumer or agent to use another binding.
+
+## BOB-1 DevUI GitHub token
+
+The separate Builder System binding is `bob-1/devui.github-token` in the existing
+`non-prod` project. It is administered on Demerzel through `scripts/secrets devui`.
+It is never an alias or mirror of `shared/github.token`, and it grants no Product
+channel consumer access. This closed binding lives in `app/ops/bws_secret_admin.py`;
+the existing Product channel and reader-token registries remain unchanged. BOB-1
+receives neither a BWS machine-account token nor an administrator token.
+
+Regenerate the existing GitHub credential `bob-1-devui-read-2026-09` with its
+existing selected repository and read-only permissions. Do not substitute another
+consumer's credential or increase its grants. BWS import changes only the stored
+value; it cannot create, restrict, or inspect GitHub's fine-grained token permissions.
+The operator must preserve those settings when regenerating the credential.
+
+From an up-to-date checkout on Demerzel, using the existing Python environment
+with `bitwarden-sdk` installed (for example, the operator checkout's
+`.venv/bin/python`):
+
+```bash
+python scripts/secrets devui preflight
+python scripts/secrets devui rotate
+```
+
+`rotate` first checks BWS and the actual DevUI binding, then prompts through the
+local terminal with echo disabled. Paste the regenerated token only at that hidden
+prompt. It refuses a terminal that cannot disable echo. No token is placed in a
+shell command, process argument, environment, transcript, or temporary input file.
+An automation that already owns a protected input stream may instead use
+`devui import --stdin`, followed by `devui apply`; never use `echo TOKEN`, a shell
+variable, or a here-document containing the token.
+
+The import uses the existing Demerzel Keychain administrator, host-controller lock,
+protected append-only secret history, and unknown-provider-outcome rules. Apply
+resolves only this BWS item under the same controller lock and sends its value over
+standard input through `bob-1-builder-system` with noninteractive `sudo`. No VM
+password or interactive VM login is needed. The fixed receiver checks the dedicated
+`/run/docker-builderops.sock` engine, the running `builderops-devui-devui-1`
+container, its repository, absence of token environment overrides, and its read-only
+directory mount before writing. It atomically replaces only the active account's
+two `oauth_token` entries in `/opt/builderops/devui-gh/hosts.yml`, preserving its
+root ownership, group, mode `0640`, other accounts, and other hosts. The directory
+bind mount sees the replacement without a container restart.
+
+Before replacement, the candidate must pass repository, Issues, PRs, branches, and
+commit-status GET requests. After replacement, those reads run through `gh` inside
+the same actual DevUI container. A failed container read restores the previous file.
+The value-free terminal receipt is written durably under
+`/opt/builderops/receipts/devui-github-token-<operation-id>.json` and read back over
+SSH before the host controller marks the operation terminal. Success proves those
+reads, not the absence of extra permissions on the externally issued token.
+
+Use `scripts/secrets devui check` for BWS presence without value output. If SSH
+acknowledgement is lost, run `scripts/secrets devui reconcile`: it reads the exact
+pending operation's durable remote receipt without resending the token. If no
+terminal receipt exists, admission remains pending; do not clear the journal or
+repeat import/apply to bypass it. Investigate the bounded operation on BOB-1 before
+recovery. Unknown BWS writes retain the existing stricter import recovery rules.
+
+This procedure changes no other GitHub token, runtime image, Compose configuration,
+Product channel, or BWS reader permission. Live rotation evidence belongs in the
+operation receipt and delivery PR, separately from broader #5667 acceptance.
+
+## BOB-1 BuilderOps alert handoff
+
+Issue #6347 admits the single Heimdal-owned `heimdal-builderops-alerts` host
+binding on bob-1 for the existing shared alert capability. Its source remains
+`shared/discord.webhook` in the existing `non-prod` BWS project. The fixed
+`scripts/secrets builderops-alerts check|preflight|apply|reconcile` entrypoint
+uses the same Demerzel administrator and host-controller operation lock as the
+DevUI handoff. It grants no Product consumer, BWS reader account, provider, channel,
+or additional webhook identity to bob-1. The closed binding is declared in
+`app/ops/bws_secret_admin.py`; it is independent of Product channel lookup.
+
+The fixed receiver accepts the value only on SSH stdin through
+`bob-1-builder-system`, requires guest `builder-system` and the qualified
+dedicated BuilderOps engine, and holds the existing deployment interlock.
+It uses the existing systemd host-key facility to encrypt the dedicated
+`builderops-discord` credential. Only ciphertext persists at
+`/etc/yggdrasil/credentials/builderops-discord.cred` (root-owned mode 0600).
+The probe service loads that credential through `LoadCredentialEncrypted`;
+its standalone bridge writes only `DISCORD_WEBHOOK` into the private mode-0600
+runtime handoff, then removes the handoff when the service exits. Reboot retains
+the encrypted source and recreates the runtime file at service execution.
+
+Apply preserves the previous encrypted source, compensates a failed replacement,
+and records an operation-bound terminal receipt under the existing BuilderOps
+receipt directory. The controller marks the operation terminal only after reading
+that exact receipt. An interrupted or ambiguous send remains pending; `reconcile`
+reads the receipt without resending the value. A missing receipt requires bounded
+host/process and ciphertext-state investigation before any recovery; never clear
+the controller journal or reapply to bypass an unknown outcome. Rotation remains
+Heimdal-owned: update the existing shared identity through its existing governed
+administration path, then apply this exact handoff; the next probe invocation
+loads the replacement. This does not rotate the provider identity itself.
+
+This repository route is an enabling change. Installation, handoff, enabled timer,
+and actual down/recovery delivery require separate redacted runtime receipts under
+#6347; the source change alone proves none of those effects or full BCP-06 acceptance.
 
 ## Specification delivery
 

@@ -40,6 +40,32 @@ class JsonlOutboxEventIdConflictError(RuntimeError):
 class JsonlOutboxCorruptionError(RuntimeError):
     """Raised when a JSONL outbox cannot be inspected safely before append."""
 
+
+def _reject_duplicate_json_object_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    """Build one JSON object while refusing ambiguous repeated keys."""
+
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise JsonlOutboxCorruptionError(
+                f"JSON contains duplicate object key: {key}"
+            )
+        result[key] = value
+    return result
+
+
+def loads_json_without_duplicate_keys(raw: str | bytes | bytearray) -> Any:
+    """Decode JSON without silently choosing one value for a repeated key.
+
+    ``object_pairs_hook`` is invoked for every object in the document, so the
+    rejection also covers nested authority evidence rather than only its outer
+    event envelope.
+    """
+
+    return json.loads(raw, object_pairs_hook=_reject_duplicate_json_object_keys)
+
 # Optional DB helpers (tests kan ge FakeConn). Import the real implementations
 # from app.db.db directly: the package-level names (`from app.db import
 # conn_rw`) resolve through app/db/__init__.py::__getattr__ to the permanent
@@ -94,7 +120,7 @@ def _assert_outbox_schema(conn: Any) -> None:
     depends only on the db service), so it must crash-retry under supervision,
     never spend poison budget or dead-letter.
     """
-    cur = _exec(conn, "SELECT to_regclass('outbox') AS oid")
+    cur = _exec(conn, "SELECT to_regclass('outbox')::oid AS oid")
     row = cur.fetchone() if hasattr(cur, "fetchone") else None
     oid = None
     if row is not None:
@@ -103,8 +129,9 @@ def _assert_outbox_schema(conn: Any) -> None:
         raise OutboxSchemaMissingError(f"Missing table 'outbox' in the configured Postgres. {_OUTBOX_MIGRATION_HINT}")
     cur = _exec(
         conn,
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_schema = current_schema() AND table_name = 'outbox'",
+        "SELECT attname AS column_name FROM pg_attribute "
+        "WHERE attrelid = %s AND attnum > 0 AND NOT attisdropped",
+        (oid,),
     )
     rows = cur.fetchall() if hasattr(cur, "fetchall") else []
     present = {(r[0] if not isinstance(r, dict) else r.get("column_name")) for r in rows}
@@ -338,12 +365,6 @@ def bootstrap(conn: Any = None) -> None:
         # No longer swallowed (KERNEL-05, #2850): a failure here must surface,
         # not silently mask a broken connection/legacy-schema seam.
         ensure_schema(conn)  # type: ignore[arg-type]
-        cur = _exec(conn, "SELECT to_regclass('outbox') AS oid")
-        row = cur.fetchone() if hasattr(cur, "fetchone") else None
-        oid = row.get("oid") if isinstance(row, dict) else (row[0] if row else None)
-        if oid:
-            _assert_outbox_schema(conn)
-            return
         if not _outbox_schema_autocreate_enabled():
             _assert_outbox_schema(conn)
             return
@@ -369,7 +390,13 @@ def bootstrap(conn: Any = None) -> None:
             ),
         )
         for table_name, statements in table_groups:
-            cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (table_name,))
+            # A later search_path relation must not suppress fixture creation
+            # in the active schema. PostgreSQL quotes both identifiers here.
+            cur = _exec(
+                conn,
+                "SELECT to_regclass(quote_ident(current_schema()) || '.' || quote_ident(%s))::oid AS oid",
+                (table_name,),
+            )
             row = cur.fetchone() if hasattr(cur, "fetchone") else None
             table_present = bool(
                 row.get("oid") if isinstance(row, dict) else (row[0] if row else None)
@@ -378,6 +405,7 @@ def bootstrap(conn: Any = None) -> None:
                 continue
             for statement in statements:
                 _exec(conn, statement)
+        _assert_outbox_schema(conn)
     finally:
         if close:
             conn.close()
@@ -566,7 +594,7 @@ def _read_jsonl_records_unlocked(
         if not line.strip():
             continue
         try:
-            existing = json.loads(line)
+            existing = loads_json_without_duplicate_keys(line)
         except (TypeError, ValueError) as exc:
             raise JsonlOutboxCorruptionError(
                 f"JSONL outbox contains malformed JSON: {outbox_path}"
@@ -648,7 +676,7 @@ def iter_jsonl_outbox_records(outbox_path: Path) -> Generator[dict[str, Any], No
                     if not line.strip():
                         continue
                     try:
-                        record = json.loads(line)
+                        record = loads_json_without_duplicate_keys(line)
                     except (TypeError, ValueError) as exc:
                         raise JsonlOutboxCorruptionError(
                             f"JSONL outbox contains malformed JSON: {canonical_path}"

@@ -13,6 +13,7 @@ from scripts.pr_body_generator import (
     PRBodyGeneratorError,
     TEMPLATE_SECTION_HEADINGS,
     generate_pr_body_from_mapping,
+    resolve_native_issue_authority,
 )
 
 
@@ -100,6 +101,42 @@ def test_generated_issue_identity_is_accepted_by_verification_dispatch_contract(
     body = generate_pr_body_from_mapping(_fixture("governance_issue.json"))
 
     assert resolve_issue_contract(body) == (3275, ())
+
+
+def test_explicit_nonclosing_body_retains_governing_pickup_without_closure() -> None:
+    data = {**_fixture("governance_issue.json"), "non_closing": True, "closing_issues": []}
+    body = generate_pr_body_from_mapping(data)
+    authority = resolve_native_issue_authority(body)
+    assert authority is not None
+    assert (authority.governing_issue, authority.closing_issues) == (3275, ())
+    assert "Issue-Lifecycle: non-closing" in body
+    assert f"Pickup-Receipt: {data['pickup_receipt']}" in body
+    assert not _ISSUE_LINK_REGEX.search(body)
+    assert "Verified-Closing-Issues" not in body
+    assert resolve_issue_contract(body) is None  # no dispatched closure authority
+
+
+@pytest.mark.parametrize("changes", [
+    {"closing_issues": None}, {"closing_issues": [3275]}, {"issue_number": None},
+    {"pickup_receipt": None}, {"pickup_receipt": "pickup-claim-complete issue=999"},
+    {"non_closing": "true"}, {"non_closing": 1}, {"non_closing": False},
+    {"notes": "Closes #3275"}, {"notes": "Verified-Closing-Issues: #3275"},
+    {"notes": "Issue-Lifecycle: non-closing"},
+])
+def test_nonclosing_generator_refuses_implicit_mixed_or_unclaimed_scope(changes: dict) -> None:
+    data = {**_fixture("governance_issue.json"), "non_closing": True, "closing_issues": [], **changes}
+    with pytest.raises(PRBodyGeneratorError):
+        generate_pr_body_from_mapping(data)
+
+
+@pytest.mark.parametrize("flags", [
+    ["--non-closing", "--non-closing"],
+    ["--non-closing", "--closing-issue", "3275"],
+])
+def test_nonclosing_cli_refuses_duplicate_or_mixed_flags(flags: list[str]) -> None:
+    completed = subprocess.run([sys.executable, "scripts/pr_body_generator.py", *flags], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+    assert completed.returncode == 2
+    assert completed.stdout == ""
 
 
 @pytest.mark.parametrize("free_text", [

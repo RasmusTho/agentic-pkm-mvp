@@ -2,16 +2,17 @@ State: Active capability specification. P1's manifest contract, P2's immutable a
 P3's read-only ordinary-boot doctor, and P4's durable promotion-test receipt writer and prod
 admission validator are implemented in the repository; P5–P6 remain unimplemented. This does not claim a running remote
 deployment model or a live immutable channel identity.
-Current-state note (2026-08-22): the live topology is now intended to be a dedicated Ollama host plus
-Linux/Tailscale `ygg-dev` / `ygg-test` / `ygg-prod` runtime hosts. The redesign contract is not yet
-implemented as a remote-host deployment path; `ygg-test` and immutable live artifact identity remain
-gates before staged promotion.
+Infrastructure reference review (2026-10-21): current physical host, guest and service observations
+belong to [the infrastructure status view](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md).
+The earlier 2026-08-22 topology note is historical. Guest presence or a running remote container
+does not prove this redesign's manifest/artifact identity, promotion receipt, or P5–P6 cutover and
+retirement acceptance. Those requirements retain the specification and operator gates below.
 Doc role: Capability specification directory (Product/Runtime + Builder System release boundary)
 Owning SoT: `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/README.md`, and `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/README.md`, and `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`
-Last reviewed: 2026-08-31
+Last reviewed: 2026-08-31 (capability contract); 2026-10-21 (infrastructure reference only)
 Last verified against: #5237 repository contract and the startup chain documents
 
 # Dev/Test/Prod Startup Redesign

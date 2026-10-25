@@ -51,7 +51,7 @@ fi
 usage() {
   cat >&2 <<'EOF'
 usage:
-  scripts/deploy_channel.sh deploy <dev|test|prod> <sha> [--dry-run] [--ack-forward-only] [--ack-embedding-rebuild-required] [--image-digest sha256:...] [--automatic]
+  scripts/deploy_channel.sh deploy <dev|test|prod> <sha> [--promotion-plan path] [--dry-run] [--ack-forward-only] [--ack-embedding-rebuild-required] [--image-digest sha256:...] [--automatic]
   scripts/deploy_channel.sh rollback <dev|test|prod> [sha] [--dry-run]
 
 Environment:
@@ -101,13 +101,26 @@ dry_run="${DEPLOY_DRY_RUN:-0}"
 ack_forward_only="${DEPLOY_ACK_FORWARD_ONLY:-0}"
 ack_embedding_rebuild_required="${DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED:-0}"
 automatic=0
+activation_scope=full
 image_digest=""
+promotion_plan=""
+promotion_admission_json="{}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) dry_run=1 ;;
     --ack-forward-only) ack_forward_only=1 ;;
     --ack-embedding-rebuild-required) ack_embedding_rebuild_required=1 ;;
     --automatic) automatic=1 ;;
+    --activation-scope)
+      [ "$#" -ge 2 ] || { usage; exit 2; }
+      activation_scope="$2"
+      shift
+      ;;
+    --promotion-plan)
+      [ "$#" -ge 2 ] || { usage; exit 2; }
+      promotion_plan="$2"
+      shift
+      ;;
     --image-digest)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       image_digest="$2"
@@ -117,6 +130,23 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+case "${activation_scope}" in
+  full|text-capture) ;;
+  *) echo 'activation scope refused' >&2; exit 78 ;;
+esac
+# Request scope comes only from argv. Ambient runtime/env-file selectors cannot
+# authorize a relaxed BWS deployment, and a lost worker argument fails closed.
+DEPLOY_ACTIVATION_SCOPE="${activation_scope}"
+export DEPLOY_ACTIVATION_SCOPE
+if [ "${activation_scope}" != "${BWS_DEPLOY_ACTIVATION_SCOPE:-full}" ]; then
+  echo 'activation scope propagation refused' >&2
+  exit 78
+fi
+if [ "${activation_scope}" = text-capture ] && {
+    [ "${action}" != deploy ] || [ "${channel}" = prod ] || [ "${automatic}" != 1 ]; }; then
+  echo 'text activation requires an explicit DEV/TEST automatic request' >&2
+  exit 78
+fi
 if [ -n "${image_digest}" ] && ! [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "invalid immutable image digest" >&2
   exit 2
@@ -149,6 +179,23 @@ case "${channel}" in
   *) usage; exit 2 ;;
 esac
 
+# Normal production advancement is admitted before temporary state, locks,
+# credential access, Docker, pin writes, migration probes or writer stop.
+# Rollback and ordinary restart retain their existing separate contracts.
+if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ] && [ "${dry_run}" != "1" ]; then
+  if [ -z "${promotion_plan}" ] || [ -z "${image_digest}" ]; then
+    echo "production deploy requires an approved promotion plan and the TEST-qualified image digest" >&2
+    exit 78
+  fi
+  promotion_admission_json="$(
+    cd "${ROOT}"
+    PYTHONPATH="${ROOT}" "${PYTHON}" -m app.release_channels.stable_promotion \
+      --plan "${promotion_plan}" --phase deploy --candidate "${target_sha}" --image-digest "${image_digest}"
+  )" || exit $?
+fi
+DEPLOY_PROMOTION_ADMISSION_JSON="${promotion_admission_json}"
+export DEPLOY_PROMOTION_ADMISSION_JSON
+
 # Linux BWS deployment can enter only through the supervised host-admitted worker.
 # Check before temporary state, pin directories or any Docker command.
 if [ -f "/etc/yggdrasil/bws-deploy/${channel}.json" ]; then
@@ -156,6 +203,9 @@ if [ -f "/etc/yggdrasil/bws-deploy/${channel}.json" ]; then
 fi
 if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
   "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}" || exit $?
+fi
+if [ "${activation_scope}" = text-capture ]; then
+  [ "${HOST_SECRET_PROVIDER:-}" = bws ] || { echo 'text activation requires the native worker' >&2; exit 78; }
 fi
 
 # Classify the selected channel before creating temporary state, acquiring the
@@ -288,11 +338,11 @@ read_pin() {
 }
 
 write_pin() {
-  local file="$1" sha="$2" digest="${3:-}"
+  local file="$1" sha="$2" digest="${3:-}" scope="${4:-full}"
   local tmp_file rc
   tmp_file="$(mktemp "${file}.tmp.XXXXXX")" || return $?
   if [ -f "${file}" ]; then
-    awk -F= '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG" && $1 != "APP_IMAGE_DIGEST_SUFFIX" { print }' "${file}" >"${tmp_file}" || {
+    awk -F= '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG" && $1 != "APP_IMAGE_DIGEST_SUFFIX" && $1 != "DEPLOY_ACTIVATION_SCOPE" { print }' "${file}" >"${tmp_file}" || {
       rc=$?
       rm -f -- "${tmp_file}" || true
       return "${rc}"
@@ -309,6 +359,9 @@ write_pin() {
       rm -f -- "${tmp_file}" || true
       return "${rc}"
     }
+  fi
+  if [ "${scope}" = text-capture ]; then
+    printf 'DEPLOY_ACTIVATION_SCOPE=text-capture\n' >>"${tmp_file}" || return $?
   fi
   mv "${tmp_file}" "${file}" || {
     local rc=$?
@@ -382,9 +435,11 @@ mkdir -p "$(dirname "${pin_file}")"
 acquire_channel_mutation_lock
 current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
 current_digest="$(awk -F= '/^APP_IMAGE_DIGEST_SUFFIX=/{sub(/^@/, "", $2); print $2; exit}' "${pin_file}" 2>/dev/null || true)"
+current_activation_scope="$(_deploy_channel_pin_activation_scope "${pin_file}" "${channel}")" || exit $?
 target_sha="$(resolve_target_sha "${target_sha}")"
 if [ "${action}" = "rollback" ] && [ "${target_sha}" = "$(read_pin "${previous_pin_file}" 2>/dev/null || true)" ]; then
   image_digest="$(awk -F= '/^APP_IMAGE_DIGEST_SUFFIX=/{sub(/^@/, "", $2); print $2; exit}' "${previous_pin_file}" 2>/dev/null || true)"
+  activation_scope="$(_deploy_channel_pin_activation_scope "${previous_pin_file}" "${channel}")" || exit $?
 fi
 # Compose must never inherit an unrelated caller digest, including on rollback.
 APP_IMAGE_DIGEST_SUFFIX="${image_digest:+@${image_digest}}"
@@ -1099,6 +1154,14 @@ health_gate() {
   wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
 }
 
+text_activation_gate() {
+  wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
+  wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
+  local observation
+  observation="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/api/health")" || return $?
+  "${PYTHON}" -c 'import json,sys; p=json.load(sys.stdin); assert p.get("activation_scope") == "text-capture" and p.get("full_channel_qualified") is False' <<<"${observation}"
+}
+
 embedding_provider_preflight_gate() {
   # Explicit embedding sources are authoritative.  Validate them in the
   # recreated API before the channel health gate can report this deployment
@@ -1128,6 +1191,13 @@ retire_scalar_rollback_services() {
 recreate_channel_services() {
   local rc=0
   local -a runtime_services=(api worker watcher)
+  if [ "$(_deploy_channel_pin_activation_scope "${pin_file}" "${channel}")" = text-capture ]; then
+    compose stop worker watcher heimdal-capture-watch || return $?
+    compose up -d --force-recreate --no-deps api || return $?
+    wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
+    compose up -d --force-recreate --no-deps companion-ui
+    return $?
+  fi
   if [ "${scalar_rollback}" = "1" ]; then
     compose stop api worker watcher heimdal-capture-watch companion-ui \
       scalar-rollback-gateway || return $?
@@ -1272,6 +1342,49 @@ apply_changed_migrations() {
   rm -f "${migration_pending_file}"
 }
 
+rollback_runtime_complete_gate() {
+  local rows service result state health
+  local scope
+  local -a runtime_services=(api worker watcher)
+  scope="$(_deploy_channel_pin_activation_scope "${pin_file}" "${channel}")" || return $?
+  if [ "${scope}" = text-capture ]; then
+    runtime_services=(api companion-ui)
+  fi
+  rows="$(compose ps --all --format json)" || return $?
+  for service in "${runtime_services[@]}"; do
+    result="$(ROLLBACK_RUNTIME_ROWS="${rows}" ROLLBACK_RUNTIME_SERVICE="${service}" "${PYTHON}" -c '
+import json, os
+raw = os.environ["ROLLBACK_RUNTIME_ROWS"]
+try:
+    rows = json.loads(raw) if raw.startswith("[") else [json.loads(line) for line in raw.splitlines() if line]
+except Exception:
+    raise SystemExit(1)
+for row in rows:
+    if isinstance(row, dict) and row.get("Service") == os.environ["ROLLBACK_RUNTIME_SERVICE"]:
+        print(str(row.get("State", "")) + "\t" + str(row.get("Health", "")))
+        raise SystemExit(0)
+raise SystemExit(1)
+')" || return 1
+    IFS=$'\t' read -r state health <<<"${result}"
+    [ "${state}" = "running" ] || return 1
+    if [ "${scope}" = full ]; then
+      case "${health}" in
+        healthy|running|'') ;;
+        *) return 1 ;;
+      esac
+    fi
+  done
+  if [ "${scope}" = text-capture ]; then
+    ROLLBACK_RUNTIME_ROWS="${rows}" "${PYTHON}" -c '
+import json, os
+raw = os.environ["ROLLBACK_RUNTIME_ROWS"]
+rows = json.loads(raw) if raw.startswith("[") else [json.loads(line) for line in raw.splitlines() if line]
+assert not any(row.get("Service") in {"worker", "watcher", "heimdal-capture-watch"} and row.get("State") == "running" for row in rows)
+' || return $?
+    text_activation_gate || return $?
+  fi
+}
+
 rollback_failed_startup() {
   local reason="$1" original_status="$2" forward_only_count="0"
   local current_floor_state="" inspection_rc=0 target_floor_state=""
@@ -1347,7 +1460,7 @@ rollback_failed_startup() {
   fi
   if [ -n "${current_sha}" ]; then
     echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
-    if ! write_pin "${pin_file}" "${current_sha}" "${current_digest}"; then
+    if ! write_pin "${pin_file}" "${current_sha}" "${current_digest}" "${current_activation_scope}"; then
       echo "rollback pin restore failed for previous pin ${current_sha}" >&2
       return 0
     fi
@@ -1369,6 +1482,10 @@ rollback_failed_startup() {
         recreate_channel_services
     ); then
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
+    else
+      if ! rollback_runtime_complete_gate; then
+        echo "rollback runtime incomplete for previous pin ${current_sha}; retaining pending operation" >&2
+      fi
     fi
   else
     echo "${reason} (status ${original_status}); rollback unavailable because no previous pin was recorded; retaining the no-baseline migration marker for same-target retry" >&2
@@ -1384,6 +1501,18 @@ import sys
 from app.ops.native_source_bootstrap import quiesce_owned_container
 raise SystemExit(0 if quiesce_owned_container(*sys.argv[1:]) else 78)
 ' "${channel}" "$1" "${BWS_DEPLOY_OPERATION_ID}" "${target_sha}" >/dev/null 2>&1
+}
+
+native_source_terminal_cleanup() {
+  PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON}" -c '
+import sys
+from app.ops.postgres_deploy_linux import record_source_terminal
+try:
+    status = record_source_terminal(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+except Exception:
+    raise SystemExit(78) from None
+raise SystemExit(status)
+' "${channel}" "$1" "$2" >/dev/null 2>&1
 }
 
 restore_pre_migration_deploy_pin() {
@@ -1456,13 +1585,14 @@ native_source_failure() {
 }
 
 native_source_embedding_preflight_gate() {
+  [ "${activation_scope}" != text-capture ] || return 0
   if [ "${HOST_SECRET_PROVIDER:-}" != bws ] || [ "${action}" != deploy ]; then
     NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY=1
     return 0
   fi
 
-  local operation="${BWS_DEPLOY_OPERATION_ID:-}" identity_json identity_result
-  local provider="" model="" identity_command probe_command service_ready=0 attempt
+  local operation="${BWS_DEPLOY_OPERATION_ID:-}" identity_json identity_result guard_refusal_file
+  local provider="" model="" identity_command probe_command probe_status=0 probe_reason service_ready=0 attempt compose_status=0
   [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure embedding_context_invalid; return 78; }
   [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure embedding_context_invalid; return 78; }
   [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
@@ -1470,11 +1600,22 @@ native_source_embedding_preflight_gate() {
     [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || { native_source_failure embedding_context_invalid; return 78; }
 
   identity_command='import json; from app.components.llm.router import LLMRouter, LLMTaskIntent; route = LLMRouter().route(LLMTaskIntent(task_kind="embed", strict_identity_required=True)); identity = route.embedding_identity; assert identity is not None; print(json.dumps({"contract": "native-source-embedding-identity.v1", "provider": identity.provider, "model": identity.model}, separators=(",", ":")))'
-  identity_json="$(DEPLOY_NATIVE_SOURCE_EMBEDDING_IDENTITY_OUTPUT=1 compose run --rm --no-deps -T \
-    --entrypoint python api -c "${identity_command}" 2>/dev/null)" || {
+  guard_refusal_file="$(umask 077; mktemp "${TMPDIR:-/tmp}/native-embedding-guard.XXXXXX")" || {
     native_source_failure embedding_identity_unavailable
     return 78
   }
+  identity_json="$(DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSAL_FILE="${guard_refusal_file}"
+    DEPLOY_NATIVE_SOURCE_EMBEDDING_IDENTITY_OUTPUT=1 \
+      compose run --rm --no-deps -T --entrypoint python api -c "${identity_command}" 2>/dev/null)" || {
+    if [ -s "${guard_refusal_file}" ]; then
+      native_source_failure embedding_guard_refused
+    else
+      native_source_failure embedding_identity_unavailable
+    fi
+    rm -f -- "${guard_refusal_file}"
+    return 78
+  }
+  rm -f -- "${guard_refusal_file}"
   identity_result="$(
     NATIVE_SOURCE_EMBEDDING_IDENTITY_JSON="${identity_json}" "${PYTHON}" - 2>/dev/null <<'PY'
 import json
@@ -1510,13 +1651,24 @@ PY
   [ "${provider}" = "ollama" ] && [ -n "${model}" ] || { native_source_failure embedding_identity_invalid; return 78; }
 
   compose up -d --no-deps ollama >/dev/null 2>&1 || {
-    native_source_failure embedding_service_unavailable
+    compose_status=$?
+    if [ "${compose_status}" = 120 ] && [ "${DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED:-0}" = "1" ]; then
+      native_source_failure embedding_guard_refused
+    else
+      native_source_failure embedding_service_unavailable
+    fi
     return 78
   }
   for ((attempt = 0; attempt < 30; attempt++)); do
     if compose exec -T ollama ollama list >/dev/null 2>&1; then
       service_ready=1
       break
+    else
+      compose_status=$?
+      if [ "${compose_status}" = 120 ] && [ "${DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED:-0}" = "1" ]; then
+        native_source_failure embedding_guard_refused
+        return 78
+      fi
     fi
     sleep 2
   done
@@ -1524,23 +1676,62 @@ PY
     native_source_failure embedding_service_not_ready
     return 78
   fi
-  if ! compose exec -T ollama ollama show "${model}" >/dev/null 2>&1; then
-    if ! compose exec -T ollama ollama pull "${model}" >/dev/null 2>&1; then
-      native_source_failure embedding_model_unavailable
+  if compose exec -T ollama ollama show "${model}" >/dev/null 2>&1; then
+    :
+  else
+    compose_status=$?
+    if [ "${compose_status}" = 120 ] && [ "${DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED:-0}" = "1" ]; then
+      native_source_failure embedding_guard_refused
+      return 78
+    fi
+    if compose exec -T ollama ollama pull "${model}" >/dev/null 2>&1; then
+      :
+    else
+      compose_status=$?
+      if [ "${compose_status}" = 120 ] && [ "${DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED:-0}" = "1" ]; then
+        native_source_failure embedding_guard_refused
+      else
+        native_source_failure embedding_model_unavailable
+      fi
       return 78
     fi
   fi
-  if ! compose exec -T ollama ollama show "${model}" >/dev/null 2>&1; then
-    native_source_failure embedding_model_not_ready
+  if compose exec -T ollama ollama show "${model}" >/dev/null 2>&1; then
+    :
+  else
+    compose_status=$?
+    if [ "${compose_status}" = 120 ] && [ "${DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED:-0}" = "1" ]; then
+      native_source_failure embedding_guard_refused
+    else
+      native_source_failure embedding_model_not_ready
+    fi
     return 78
   fi
 
-  probe_command=$'import os\nfrom app.components.llm.fabric import get_product_embedding_client\nclient = get_product_embedding_client()\ntry:\n    identity = client.identity\n    expected = (os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER"), os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL"))\n    if (identity.provider, identity.model) != expected:\n        raise SystemExit(78)\n    vector = client.embed_text("Yggdrasil deployment preflight")\n    if len(vector) != identity.dim:\n        raise SystemExit(78)\nfinally:\n    close = getattr(client, "close", None)\n    if callable(close):\n        close()'
-  if ! compose run --rm --no-deps -T \
+  # Only fixed process statuses cross the private child boundary. Retain the
+  # first failure if closing an already-failed client also fails.
+  probe_command=$'import os\nclient = None\nstatus = 0\nphase = 114\ntry:\n    from app.components.llm.fabric import get_product_embedding_client, RemoteEmbeddingIdentityError, RemoteEmbeddingVectorError\n    client = get_product_embedding_client()\n    identity = client.identity\n    actual = (identity.provider, identity.model)\n    dimension = identity.dim\n    expected = (os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER"), os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL"))\n    if actual != expected:\n        status = 115\n    else:\n        phase = 116\n        vector = client.embed_text("Yggdrasil deployment preflight")\n        phase = 117\n        if not isinstance(vector, (list, tuple)) or len(vector) != dimension:\n            status = 117\nexcept Exception as exc:\n    status = phase\n    if phase == 116 and isinstance(exc, RemoteEmbeddingIdentityError):\n        status = 115\n    elif phase == 116 and isinstance(exc, RemoteEmbeddingVectorError):\n        status = 117\nfinally:\n    if client is not None:\n        try:\n            close = getattr(client, "close_for_preflight", None)\n            if not callable(close):\n                close = getattr(client, "close", None)\n            if callable(close):\n                close()\n        except Exception:\n            if status == 0:\n                status = 118\nraise SystemExit(status)'
+  compose run --rm --no-deps -T \
       -e "NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER=${provider}" \
       -e "NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL=${model}" \
-      --entrypoint python api -c "${probe_command}" >/dev/null 2>&1; then
-    native_source_failure embedding_probe_failed
+      --entrypoint python api -c "${probe_command}" >/dev/null 2>&1 || probe_status=$?
+  if [ "${probe_status}" != 0 ]; then
+    case "${probe_status}" in
+      120)
+        if [ "${DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED:-0}" = "1" ]; then
+          probe_reason=embedding_guard_refused
+        else
+          probe_reason=embedding_probe_failed
+        fi
+        ;;
+      114) probe_reason=embedding_probe_client_failed ;;
+      115) probe_reason=embedding_probe_identity_mismatch ;;
+      116) probe_reason=embedding_probe_generation_failed ;;
+      117) probe_reason=embedding_probe_vector_invalid ;;
+      118) probe_reason=embedding_probe_cleanup_failed ;;
+      *) probe_reason=embedding_probe_failed ;;
+    esac
+    native_source_failure "${probe_reason}"
     return 78
   fi
 
@@ -1551,8 +1742,13 @@ native_source_projection_gate() {
   if [ "${HOST_SECRET_PROVIDER:-}" != bws ] || [ "${action}" != deploy ]; then
     return 0
   fi
-  [ "${NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY:-0}" = "1" ] || { native_source_failure embedding_context_invalid; return 78; }
-  local operation="${BWS_DEPLOY_OPERATION_ID:-}" name="" rc=0
+  if [ "${activation_scope}" != text-capture ]; then
+    [ "${NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY:-0}" = "1" ] || { native_source_failure embedding_context_invalid; return 78; }
+  fi
+  local operation="${BWS_DEPLOY_OPERATION_ID:-}" name="" rc=0 selector="${channel}:${target_sha}"
+  if [ "${activation_scope}" = text-capture ]; then
+    selector="${selector}:text-capture"
+  fi
   [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure source_preflight_failed; return 78; }
   [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure source_preflight_failed; return 78; }
   [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
@@ -1565,16 +1761,24 @@ native_source_projection_gate() {
     return "${rc}"
   }
   NATIVE_SOURCE_QUIESCENT=0
-  compose run --rm --no-deps -T --name "${name}" \
+  compose run --no-deps -T --name "${name}" \
     --label "yggdrasil.native.operation=${operation}" \
     --label "yggdrasil.native.revision=${target_sha}" \
-    -e "NATIVE_SOURCE_BOOTSTRAP=${channel}:${target_sha}" api || rc=$?
-  if native_source_container_quiescence "${name}"; then
-    NATIVE_SOURCE_QUIESCENT=1
-  else
-    native_source_failure source_quiescence_failed
-    return 78
-  fi
+    -e "NATIVE_SOURCE_BOOTSTRAP=${selector}" api || rc=$?
+  local terminal_rc=0
+  native_source_terminal_cleanup "${name}" "${rc}" || terminal_rc=$?
+  # Only the observer's documented result namespace proves cleanup. A Python
+  # import/crash or signal must never admit compensation/runtime writers.
+  case "${terminal_rc}" in
+    0|79|8[0-9]|9[0-9]|10[0-9]|11[0-3])
+      NATIVE_SOURCE_QUIESCENT=1
+      rc="${terminal_rc}"
+      ;;
+    *)
+      native_source_failure source_quiescence_failed
+      return 78
+      ;;
+  esac
   case "${rc}" in
     79) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed\n' >&2 ;;
     80) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=embedding_generation_failed\n' >&2 ;;
@@ -1586,7 +1790,31 @@ native_source_projection_gate() {
     86) native_source_failure source_post_rebuild_failed ;;
     87) native_source_failure source_doctor_failed ;;
     88) native_source_failure source_settings_failed ;;
-    89|124|130|143) native_source_failure source_worker_failed ;;
+    89) native_source_failure source_worker_failed ;;
+    90) native_source_failure legacy_producer_policy_refused ;;
+    91) native_source_failure legacy_source_refused ;;
+    92) native_source_failure legacy_admission_refused ;;
+    93) native_source_failure legacy_identity_refused ;;
+    94) native_source_failure legacy_race_refused ;;
+    95) native_source_failure legacy_write_failed ;;
+    96) native_source_failure source_worker_timeout ;;
+    97) native_source_failure source_worker_terminated ;;
+    98) native_source_failure source_worker_oom ;;
+    99) native_source_failure legacy_candidate_refused ;;
+    100) native_source_failure legacy_authority_refused ;;
+    101) native_source_failure legacy_trust_refused ;;
+    102) native_source_failure legacy_origin_refused ;;
+    103) native_source_failure legacy_payload_shape_refused ;;
+    104) native_source_failure legacy_system_path_refused ;;
+    105) native_source_failure legacy_profile_refused ;;
+    106) native_source_failure legacy_dependency_shape_refused ;;
+    107) native_source_failure legacy_retained_history_refused ;;
+    108) native_source_failure legacy_relation_retention_refused ;;
+    109) native_source_failure legacy_identity_persistence_refused ;;
+    110) native_source_failure legacy_identity_mismatch_refused ;;
+    111) native_source_failure legacy_identity_ambiguous_refused ;;
+    112) native_source_failure legacy_identity_producer_refused ;;
+    113) native_source_failure legacy_identity_canonical_refused ;;
     0) ;;
     *) native_source_failure source_worker_failed ;;
   esac
@@ -1840,6 +2068,11 @@ payload = {
         os.environ.get("DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK", "0") == "1"
     ),
 }
+scope = "${activation_scope}"
+if scope != "full":
+    payload.update(activation_scope=scope, full_channel_qualified=False)
+if payload["channel"] == "prod" and payload["action"] == "deploy":
+    payload["stable_promotion"] = json.loads(os.environ["DEPLOY_PROMOTION_ADMISSION_JSON"])
 Path(sys.argv[1]).write_text(
     json.dumps(payload, indent=2, sort_keys=True) + "\\n",
     encoding="utf-8",
@@ -2052,15 +2285,15 @@ if [ "${scalar_rollback}" = "1" ]; then
   # in the ordinary rollback anchor, so the same command can resume without an
   # explicit SHA after a crash or partial container establishment.
   write_pin "${previous_pin_file}" "${target_sha}"
-elif [ -n "${current_sha}" ] && { [ "${current_sha}" != "${target_sha}" ] || [ "${current_digest}" != "${image_digest}" ]; }; then
+elif [ -n "${current_sha}" ] && { [ "${current_sha}" != "${target_sha}" ] || [ "${current_digest}" != "${image_digest}" ] || [ "${current_activation_scope}" != "${activation_scope}" ]; }; then
   # A same-target retry (or same-SHA redeploy) reads current_sha == target_sha
   # because a prior failed attempt already advanced the pin; overwriting the
   # rollback anchor with the failed target would make the true last-known-good
   # SHA unrecoverable through the rollback contract.
-  write_pin "${previous_pin_file}" "${current_sha}" "${current_digest}"
+  write_pin "${previous_pin_file}" "${current_sha}" "${current_digest}" "${current_activation_scope}"
 fi
 if [ "${scalar_rollback}" != "1" ]; then
-  write_pin "${pin_file}" "${target_sha}" "${image_digest}"
+  write_pin "${pin_file}" "${target_sha}" "${image_digest}" "${activation_scope}"
 fi
 rollback_target_recreated=0
 
@@ -2120,6 +2353,13 @@ if [ "${scalar_rollback}" = "1" ]; then
   DEPLOY_FAILURE_STAGE=scalar_runtime
   run_postmutation_gate "scalar rollback runtime gate failed" \
     scalar_rollback_runtime_gate || exit $?
+elif [ "${activation_scope}" = text-capture ]; then
+  # Foundational admission/migrations and the no-replay source preflight above
+  # remain mandatory. These observations qualify only this bounded surface.
+  DEPLOY_FAILURE_STAGE=health
+  run_postmutation_gate "text activation observation failed" text_activation_gate || exit $?
+  DEPLOY_FAILURE_STAGE=version
+  run_postmutation_gate "version gate failed" version_gate || exit $?
 else
   DEPLOY_FAILURE_STAGE=embedding_configuration
   run_postmutation_gate "embedding provider configuration preflight failed" \

@@ -31,11 +31,12 @@ core answer; the note stays genuinely optional).
   a confident "nothing pending" when the scheduler cannot actually tell.
 - Adds two companion routes, mirroring the memory-review-queue pair
   (`/memory/review-queue`, `/memory/review-queue/{candidate_id}/decision`):
-  - `POST /companion/calibration/revisits/{decision_id}/decision` — body `{outcome, note?}`; calls
+  - `POST /companion/calibration/revisits/{decision_id}/decision` — body
+    `{outcome, note?, rung_index?, decision_object_id?}`; calls
     CAL-01's `append_outcome_receipt` through the governed write path (WriteGuard asserted at this call
     site, not just in the service function).
-  - `POST /companion/calibration/revisits/{decision_id}/dismiss` — calls CAL-02's dismissal-ledger
-    append.
+  - `POST /companion/calibration/revisits/{decision_id}/dismiss` — body
+    `{rung_index?, decision_object_id?}` (never an outcome); calls CAL-02's dismissal-ledger append.
 - Renders the card in the Panel/Companion UI: the decision's short title (from `decision-record.md`'s
   `# {{Decision: ...}}` heading), `decided_on` date, and the four outcome values as tappable/clickable
   visual picks — no free-text field required to submit; an optional note field is present but never
@@ -58,6 +59,28 @@ Workspace state includes:
 The Panel/Companion UI shows: "You decided **Postgres as projection, not source of truth** on
 2026-06-23 — did it hold?" with four buttons (Held / Partly held / Did not hold / Not sure yet) and an
 optional note field. Clicking a button submits immediately; the note is never required.
+
+## Request identity, replay, and acknowledgement contract
+
+The rendered card owns a stable action identity: `decision_id`, `decision_object_id`, and the
+displayed `rung_index`. Enhanced JSON submissions and native forms carry the latter two identity
+fields when available; the initial rung (`rung_index: 0`) retains the legacy identity-free request
+compatibility required by the original Issue body. Once the ladder has advanced, or when the
+displayed identity is ambiguous, an omitted rung is refused with HTTP 409
+`calibration_revisit_identity_required` and no durable write is attempted.
+
+Answer requests contain `outcome` plus the optional `note` and stable identity. Dismiss requests
+contain only the stable identity and never contain an outcome or note. A same-action replay returns
+the canonical existing action: an answer returns `status: answered` and its immutable outcome
+receipt; a dismissal returns `status: dismissed` with `receipt: null`. An opposite action for the
+same decision/rung is refused with HTTP 409 and cannot create a second receipt or dismissal marker.
+
+If a POST acknowledgement is lost, the client preserves the original decision, rung, intent, and
+payload, disables fresh mutations, and offers reconciliation of that same request only. The client
+renders the response's canonical receipt outcome (never the outcome from a later attempted choice)
+and reports an uncertain/degraded state until reconciliation succeeds. A failed workspace reread
+after a confirmed action is terminal durable success with refresh-only recovery; it is not reported
+as "Nothing durable happened."
 
 ## Why This Matters
 

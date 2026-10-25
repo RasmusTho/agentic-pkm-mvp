@@ -1,27 +1,26 @@
 """Admit a published main image and use the existing native dev/test boundary.
 
 Only public build identities and fixed terminal fields enter the output. No test
-or deployment child receives the GitHub read token; remote/native recovery owns
+or deployment child receives the GitHub token; remote/native recovery owns
 unknown outcomes. Resumption retains the same native operation ID; the native
 worker decides terminality without replaying an indeterminate activation.
 """
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import asdict
-import fcntl
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import re
-import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Callable
 from uuid import NAMESPACE_URL, UUID, uuid5
 from zipfile import ZipFile
@@ -30,15 +29,14 @@ if __package__ in {None, ''}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.ops.pg_acceptance import require_pass
+from scripts.postmerge_controller import (
+    CandidateRefused, _pause_time, checkpoint_lock, read_checkpoint_document, validate_observation,
+)
 
 REPOSITORY = 'RasmusTho/agentic-pkm-mvp'
 IMAGE_REPOSITORY = 'ghcr.io/rasmustho/pkm-app'
 BUILD_WORKFLOW = '.github/workflows/app-image-build.yml'
 BUILD_JOB = 'Build SHA-tagged app image'
-
-
-class CandidateRefused(RuntimeError):
-    pass
 
 
 @dataclass(frozen=True)
@@ -123,15 +121,26 @@ def _github(path: str) -> bytes:
     return result.stdout
 
 
-def load_candidate(run_id: int) -> Candidate:
-    run = json.loads(_github(f'repos/{REPOSITORY}/actions/runs/{run_id}'))
+def load_candidate(run_id: int, *, run_attempt: int | None = None,
+                   read: Callable[[str], bytes] | None = None) -> Candidate:
+    read = read or _github
+    suffix = '' if run_attempt is None else f'/attempts/{run_attempt}'
+    run = json.loads(read(f'repos/{REPOSITORY}/actions/runs/{run_id}{suffix}'))
+    if run_attempt is not None and (type(run_attempt) is not int or run_attempt < 1
+                                    or run.get('run_attempt') != run_attempt):
+        raise CandidateRefused('source_build_refused')
     sha = validate_source_run(run, run_id)
-    jobs = json.loads(_github(f'repos/{REPOSITORY}/actions/runs/{run_id}/jobs?filter=all&per_page=100'))
+    jobs = json.loads(read(f'repos/{REPOSITORY}/actions/runs/{run_id}/jobs?filter=all&per_page=100'))
     if jobs['total_count'] > 100:
         raise CandidateRefused('build_job_listing_incomplete')
     builds = [j for j in jobs['jobs'] if j.get('name') == BUILD_JOB]
     if not builds or any(j.get('run_id') != run_id or type(j.get('run_attempt')) is not int
-                         or not 1 <= j['run_attempt'] <= run['run_attempt'] for j in builds):
+                         or j['run_attempt'] < 1 for j in builds):
+        raise CandidateRefused('build_job_identity_refused')
+    # A retained admitted attempt survives later workflow reruns. Future jobs
+    # cannot authenticate an earlier image; select only its completed history.
+    builds = [j for j in builds if j['run_attempt'] <= run['run_attempt']]
+    if not builds:
         raise CandidateRefused('build_job_identity_refused')
     attempt = max(j['run_attempt'] for j in builds)
     latest = [j for j in builds if j['run_attempt'] == attempt]
@@ -139,7 +148,7 @@ def load_candidate(run_id: int) -> Candidate:
         raise CandidateRefused('build_job_identity_refused')
     # A failed-jobs-only rerun may reuse the already-passed image job. Bind its
     # actual attempt rather than requiring an unnecessary rebuild or new commit.
-    artifacts = json.loads(_github(f'repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100'))
+    artifacts = json.loads(read(f'repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100'))
     if artifacts['total_count'] > 100:
         raise CandidateRefused('artifact_listing_incomplete')
     prefix = 'app-image-tts-engine-proof-' + sha
@@ -149,7 +158,7 @@ def load_candidate(run_id: int) -> Candidate:
     if len(matches) != 1 or matches[0].get('size_in_bytes', 1048577) > 1048576:
         raise CandidateRefused('artifact_missing_or_ambiguous')
     artifact = matches[0]
-    archive = _github(f'repos/{REPOSITORY}/actions/artifacts/{artifact["id"]}/zip')
+    archive = read(f'repos/{REPOSITORY}/actions/artifacts/{artifact["id"]}/zip')
     return validate_artifact(run, artifact, archive, build_attempt=attempt)
 
 
@@ -184,62 +193,186 @@ def _atomic_checkpoint(path: Path, checkpoint: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-@contextmanager
-def checkpoint_lock(directory: Path):
-    # A single launchd controller runs this driver; this local lock also prevents
-    # duplicate manual invocations. Native locks remain deployment authority.
-    info = directory.lstat()
-    if (not directory.is_absolute() or directory.is_symlink() or not stat.S_ISDIR(info.st_mode)
-        or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700):
-        raise CandidateRefused('checkpoint_directory_refused')
-    descriptor = os.open(directory / 'postmerge-dev-test.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    try:
-        lock_info = os.fstat(descriptor)
-        if (not stat.S_ISREG(lock_info.st_mode) or lock_info.st_uid != os.geteuid()
-            or stat.S_IMODE(lock_info.st_mode) != 0o600 or lock_info.st_nlink != 1):
-            raise CandidateRefused('checkpoint_lock_refused')
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield
-    finally:
-        os.close(descriptor)
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def validate_pause(pause: Any) -> dict[str, Any]:
+    if (not isinstance(pause, dict) or set(pause) != {'issue', 'engaged_at', 'expires_at'}
+        or type(pause['issue']) is not int or not 0 < pause['issue'] < 10**10
+        or any(pause[field] != _pause_time(pause[field]).isoformat() for field in ('engaged_at', 'expires_at'))
+        or _pause_time(pause['expires_at']) <= _pause_time(pause['engaged_at'])):
+        raise CandidateRefused('pause_requires_issue_and_future_expiry')
+    return pause
+
+
+def pause_description(pause: dict[str, Any]) -> str:
+    validate_pause(pause)
+    return f"paused (#{pause['issue']}, until {pause['expires_at']})"
+
+
+def _next_observation(checkpoint: dict[str, Any] | None, now: datetime) -> dict[str, Any]:
+    previous = checkpoint.get('observation') if checkpoint else None
+    if previous is not None and now < _pause_time(previous['observed_at']):
+        raise CandidateRefused('controller_clock_regressed')
+    return validate_observation({'sequence': previous['sequence'] + 1 if previous else 1,
+                                 'observed_at': now.isoformat()})
+
+
+def _read_checkpoint(path: Path, *, allow_missing: bool = False) -> dict[str, Any] | None:
+    checkpoint = read_checkpoint_document(path, allow_missing=allow_missing)
+    if checkpoint is not None:
+        _validate_checkpoint(checkpoint)
+    return checkpoint
+
+
+def engage_pause(directory: Path, issue: int | None, until: str | None) -> None:
+    # The operator links an Issue in this repository. This local command uses
+    # no Issues API permission and does not establish live-host authorization.
+    now = _utc_now()
+    pause = validate_pause({'issue': issue, 'engaged_at': now.isoformat(),
+                            'expires_at': _pause_time(until).isoformat()})
+    with checkpoint_lock(directory) as fresh:
+        path = directory / 'postmerge-dev-test.json'
+        checkpoint = _read_checkpoint(path, allow_missing=fresh) or {}
+        checkpoint['observation'] = _next_observation(checkpoint, now)
+        checkpoint['pause'] = pause
+        _atomic_checkpoint(path, checkpoint)
+        print(json.dumps({'result': 'paused', 'description': pause_description(pause),
+                          'issue_url': f"https://github.com/{REPOSITORY}/issues/{issue}"}, sort_keys=True))
 
 
 def poll(directory: Path, *, build: Callable[[], int] = latest_build,
          load: Callable[[int], Candidate] = load_candidate,
          deploy: Callable[[str, Candidate], dict[str, Any]] | None = None,
          resume: Callable[[str, Candidate], dict[str, Any]] | None = None,
-         current_main: Callable[[], str] = _current_main) -> int:
+         absence: Callable[[str, Candidate], dict[str, Any]] | None = None,
+         current_main: Callable[[], str] = _current_main,
+         heavy: Callable[[Candidate], dict[str, Any]] | None = None,
+         dispatch: Callable[[Candidate, dict[str, Any]], None] | None = None,
+         signal: Callable[[Candidate, dict[str, Any]], None] | None = None,
+         alert: Callable[[dict[str, Any]], None] | None = None,
+         heartbeat: Callable[[str, dict[str, Any] | None, dict[str, Any]], None] | None = None) -> int:
     # No CI job runs this path. It is supervised on the existing private agent
     # host, which already owns credentials, SSH dispatch and terminal recovery.
-    with checkpoint_lock(directory):
+    with checkpoint_lock(directory) as fresh:
         path = directory / 'postmerge-dev-test.json'
-        checkpoint = None
-        try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        except FileNotFoundError:
-            pass
-        else:
-            with os.fdopen(descriptor) as source:
-                info = os.fstat(source.fileno())
-                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 65536 or info.st_nlink != 1):
-                    raise CandidateRefused('checkpoint_refused')
-                checkpoint = json.load(source)
-                _validate_checkpoint(checkpoint)
+        checkpoint = _read_checkpoint(path, allow_missing=fresh)
+        pause = checkpoint.get('pause') if checkpoint else None
+        now = _utc_now()
+        observation = _next_observation(checkpoint, now)
+        if pause and now < _pause_time(pause['engaged_at']):
+            raise CandidateRefused('pause_clock_before_engagement')
+        active_pause = pause if pause and now < _pause_time(pause['expires_at']) else None
+        # The durable clock floor and causal order precede every external effect.
+        # Retries dispatch this exact observation; restart allocates the next one.
+        checkpoint = checkpoint or {}
+        checkpoint['observation'] = observation
+        _atomic_checkpoint(path, checkpoint)
+        if heartbeat is not None:
+            try:
+                heartbeat(current_main(), active_pause, observation)
+            except Exception:
+                # The existing watchdog exposes missing signals; transport
+                # failure must neither bypass a pause nor stop later delivery.
+                print(json.dumps({'result': 'heartbeat_signal_failed'}, sort_keys=True))
+        if active_pause:
+            print(json.dumps({'result': 'paused', 'description': pause_description(active_pause)}, sort_keys=True))
+            return 0
+        if checkpoint and 'candidate' not in checkpoint:
+            checkpoint = None
+        last_green = dict(checkpoint.get('last_green', {})) if checkpoint else {}
+
+        def save(candidate: Candidate, outcome: dict[str, Any]) -> None:
+            nonlocal checkpoint
+            checkpoint = _save_outcome(path, candidate, outcome, last_green=last_green,
+                                       pause=pause, observation=observation)
+            report_terminal()
+
+        def report_terminal() -> None:
+            if checkpoint is None or checkpoint['phase'] not in {'passed', 'failed'}:
+                return
+            channel = checkpoint['channel']
+            candidate = Candidate(**checkpoint['candidate'])
+            outcome = dict(checkpoint['outcome'])
+            if channel == 'dev' and checkpoint['phase'] == 'passed':
+                # A native DEV pass is provisional until the exact heavy run.
+                if 'heavy' not in checkpoint:
+                    return
+                outcome['heavy_acceptance'] = _heavy_summary(checkpoint['heavy'])
+                outcome['result'] = 'passed' if checkpoint['heavy']['result'] == 'passed' else 'failed'
+            if 'channel_bug' not in checkpoint:
+                checkpoint['channel_bug'] = {'last_good_sha': last_green.get(channel), 'dispatch': None}
+                if outcome['result'] == 'passed':
+                    last_green[channel] = candidate.sha
+                checkpoint['last_green'] = dict(last_green)
+            report = checkpoint['channel_bug']
+            if report['dispatch'] is not None:
+                return
+            # Persist intent before the external dispatch. An unknown dispatch
+            # is not retried after restart and never replays a native operation.
+            report['dispatch'] = 'started'
+            _atomic_checkpoint(path, checkpoint)
+            _signal_dev_verdict(candidate, outcome, signal)
+            gate = ('heavy_acceptance' if 'heavy_acceptance' in outcome else
+                    'source_projection' if 'source_failure' in outcome else
+                    'pg_acceptance' if outcome.get('reason') == 'pg_profile_missing_or_mismatched' else
+                    'native_deploy')
+            evidence = {'candidate': asdict(candidate), 'channel': channel,
+                        'verdict': outcome['result'], 'gate': gate,
+                        'last_good_sha': report['last_good_sha'], 'receipt': outcome}
+            evidence['receipt_fingerprint'] = channel_verdict_fingerprint(evidence)
+            try:
+                (alert or dispatch_channel_verdict)(evidence)
+                report['dispatch'] = 'sent'
+            except Exception:
+                report['dispatch'] = 'failed'
+            _atomic_checkpoint(path, checkpoint)
+            print(json.dumps({'source_sha': candidate.sha, 'channel': channel,
+                              'channel_bug_dispatch': report['dispatch']}, sort_keys=True))
+
         if checkpoint and checkpoint['phase'] in {'started', 'pending'}:
             # The candidate's durable operation ID covers both a lost pending
             # reply and a committed native receipt preceding checkpoint fsync.
             candidate = Candidate(**checkpoint['candidate'])
-            receipt = (resume or native_deploy)(checkpoint['channel'], candidate)
-            _require_terminal_profile(receipt, checkpoint['channel'], candidate)
-            result = 'passed' if receipt['terminal_result'] == 'committed' else 'failed'
-            outcome = {**checkpoint['outcome'], 'result': result, 'operation_id': receipt['operation_id']}
-            if result == 'passed':
-                outcome['pg_acceptance'] = receipt['pg_acceptance']
-            _save_outcome(path, candidate, outcome)
-            checkpoint.update(phase=result, outcome=outcome)
-            if result != 'passed':
-                return 78
+            try:
+                receipt = (resume or native_deploy)(checkpoint['channel'], candidate)
+            except CandidateRefused as error:
+                if str(error) != 'native_terminal_evidence_refused':
+                    raise
+                # Absence retirement is only a path past a stale checkpoint.
+                # Fencing the current main candidate would make its immutable
+                # build ineligible for the normal same-ID retry below.
+                main_sha = current_main()
+                if re.fullmatch(r'[0-9a-f]{40}', main_sha) is None:
+                    raise CandidateRefused('current_main_refused')
+                if main_sha == candidate.sha:
+                    raise CandidateRefused('candidate_not_superseded')
+                proof = (absence or native_absence)(checkpoint['channel'], candidate)
+                _require_absence_profile(proof, checkpoint['channel'], candidate)
+                outcome = {
+                    **checkpoint['outcome'],
+                    'result': 'superseded_before_deployment',
+                    'channel': None,
+                    'operation_id': candidate.operation_id(checkpoint['channel']),
+                    'absence_proof': 'qualified',
+                }
+                save(candidate, outcome)
+                checkpoint.update(phase='superseded_before_deployment', channel=None, outcome=outcome)
+            else:
+                _require_terminal_profile(receipt, checkpoint['channel'], candidate)
+                result = 'passed' if receipt['terminal_result'] == 'committed' else 'failed'
+                outcome = {**checkpoint['outcome'], 'result': result, 'operation_id': receipt['operation_id']}
+                if result == 'passed':
+                    outcome['pg_acceptance'] = receipt['pg_acceptance']
+                else:
+                    outcome.update(_source_failure(receipt))
+                save(candidate, outcome)
+                checkpoint.update(phase=result, outcome=outcome)
+                if result != 'passed':
+                    if checkpoint['channel'] == 'dev':
+                        _report_dev_failure(path, checkpoint, dispatch or dispatch_verdict)
+                    return 78
         if checkpoint and checkpoint['phase'] == 'passed':
             candidate = Candidate(**checkpoint['candidate'])
             try:
@@ -254,32 +387,177 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                            'artifact_id': candidate.artifact_id, 'channel': checkpoint['channel'],
                            'operation_id': candidate.operation_id(checkpoint['channel']),
                            'result': 'failed', 'reason': 'pg_profile_missing_or_mismatched'}
-                _save_outcome(path, candidate, outcome)
+                save(candidate, outcome)
                 checkpoint.update(phase='failed', outcome=outcome)
         if checkpoint and checkpoint['phase'] == 'passed' and checkpoint['channel'] == 'dev':
             candidate = Candidate(**checkpoint['candidate'])
-            return deliver(candidate, deploy=deploy or native_deploy, current_main=lambda: candidate.sha,
-                           emit=lambda outcome: _save_outcome(path, candidate, outcome), channels=('test',))
+            if checkpoint.get('heavy', {}).get('dispatch') is None:
+                heavy_verdict(path, checkpoint, run=heavy or native_heavy, send=dispatch or dispatch_verdict)
+            report_terminal()
+            if checkpoint['heavy']['result'] == 'passed':
+                return deliver(candidate, deploy=deploy or native_deploy, current_main=lambda: candidate.sha,
+                               emit=lambda outcome: save(candidate, outcome), channels=('test',))
+            if checkpoint['heavy'].get('held') is not True:
+                checkpoint['heavy']['held'] = True
+                _atomic_checkpoint(path, checkpoint)
+                return 78
+        elif checkpoint and checkpoint['phase'] == 'failed' and checkpoint['channel'] == 'dev':
+            _report_dev_failure(path, checkpoint, dispatch or dispatch_verdict)
+        report_terminal()
+        # A legacy passed/TEST heavy receipt is already terminal. Do not run it
+        # again or treat it as permission to replay this candidate on DEV.
         run_id = build()
         candidate = load(run_id)
         if checkpoint and (checkpoint['candidate']['run_id'], checkpoint['candidate']['run_attempt']) == (
             candidate.run_id, candidate.run_attempt
         ):
             return 0
-        return deliver(candidate, deploy=deploy or native_deploy, current_main=current_main,
-                       emit=lambda outcome: _save_outcome(path, candidate, outcome))
+        status = deliver(candidate, deploy=deploy or native_deploy, current_main=current_main,
+                         emit=lambda outcome: save(candidate, outcome), channels=('dev',))
+        if checkpoint and checkpoint['phase'] == 'failed' and checkpoint['channel'] == 'dev':
+            _report_dev_failure(path, checkpoint, dispatch or dispatch_verdict)
+        return status
 
 
-def _save_outcome(path: Path, candidate: Candidate, outcome: dict[str, Any]) -> None:
-    _atomic_checkpoint(path, {'candidate': asdict(candidate), 'phase': outcome['result'],
-                              'channel': outcome.get('channel'), 'outcome': outcome})
+def _save_outcome(path: Path, candidate: Candidate, outcome: dict[str, Any], *,
+                  last_green: dict[str, str] | None = None,
+                  pause: dict[str, Any] | None = None,
+                  observation: dict[str, Any] | None = None) -> dict[str, Any]:
+    checkpoint = {'candidate': asdict(candidate), 'phase': outcome['result'],
+                  'channel': outcome.get('channel'), 'outcome': outcome}
+    if pause is not None:
+        checkpoint['pause'] = pause
+    if observation is not None:
+        checkpoint['observation'] = observation
+    if last_green is not None:
+        checkpoint['last_green'] = dict(last_green)
+    _atomic_checkpoint(path, checkpoint)
     print(json.dumps(outcome, sort_keys=True))
+    return checkpoint
+
+
+def channel_verdict_fingerprint(evidence: dict[str, Any]) -> str:
+    # Bind terminal identity in the existing successful workflow receipt even
+    # when a first green had no Issue. Last-green history is not terminal identity.
+    terminal = {key: evidence[key] for key in ('candidate', 'channel', 'verdict', 'gate', 'receipt')}
+    return hashlib.sha256(json.dumps(terminal, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def validate_channel_evidence(evidence: Any, channel: str) -> Candidate:
+    try:
+        if (not isinstance(evidence, dict)
+            or set(evidence) != {'candidate', 'channel', 'verdict', 'gate', 'last_good_sha', 'receipt', 'receipt_fingerprint'}
+            or channel not in {'dev', 'test'} or evidence['channel'] != channel
+            or evidence['verdict'] not in {'passed', 'failed'}):
+            raise ValueError()
+        candidate = Candidate(**evidence['candidate'])
+        if (re.fullmatch('[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
+            or any(type(value) is not int or value < 1
+                   for value in (candidate.run_id, candidate.run_attempt, candidate.artifact_id))):
+            raise ValueError()
+        previous = evidence['last_good_sha']
+        if previous is not None and (not isinstance(previous, str) or re.fullmatch('[0-9a-f]{40}', previous) is None):
+            raise ValueError()
+        receipt = evidence['receipt']
+        if set(receipt) - {'source_sha', 'image_digest', 'source_run_id', 'source_run_attempt', 'artifact_id',
+                           'channel', 'result', 'operation_id', 'pg_acceptance', 'source_failure',
+                           'failure_reference', 'reason', 'heavy_acceptance'}:
+            raise ValueError()
+        if any(receipt.get(key) != value for key, value in {
+            'source_sha': candidate.sha, 'image_digest': candidate.digest, 'source_run_id': candidate.run_id,
+            'source_run_attempt': candidate.run_attempt, 'artifact_id': candidate.artifact_id,
+            'channel': channel, 'result': evidence['verdict'], 'operation_id': candidate.operation_id(channel),
+        }.items()):
+            raise ValueError()
+        if 'failure_reference' in receipt and receipt['failure_reference'] != (
+            f'https://github.com/{REPOSITORY}/actions/runs/{candidate.run_id}'
+        ):
+            raise ValueError()
+        _source_failure(receipt)
+        reason = receipt.get('reason')
+        if reason is not None and (reason != 'pg_profile_missing_or_mismatched' or evidence['verdict'] != 'failed'):
+            raise ValueError()
+        heavy = receipt.get('heavy_acceptance')
+        if heavy is not None:
+            if (channel != 'dev' or set(heavy) - {'result', 'reason', 'failures', *HEAVY_COUNTS}
+                or _heavy_summary(heavy) != heavy or reason is not None or 'source_failure' in receipt
+                or (heavy['result'] == 'passed') != (evidence['verdict'] == 'passed')):
+                raise ValueError()
+        gate = ('heavy_acceptance' if heavy is not None else
+                'source_projection' if 'source_failure' in receipt else 'pg_acceptance' if reason else 'native_deploy')
+        if (evidence['gate'] != gate
+            or evidence['receipt_fingerprint'] != channel_verdict_fingerprint(evidence)):
+            raise ValueError()
+        if evidence['verdict'] == 'passed' or heavy is not None:
+            require_pass(receipt.get('pg_acceptance'), candidate.sha, candidate.digest,
+                         channel, candidate.operation_id(channel))
+        elif 'pg_acceptance' in receipt:
+            raise ValueError()
+        return candidate
+    except Exception:
+        raise CandidateRefused('channel_evidence_refused') from None
+
+
+def dispatch_channel_verdict(evidence: dict[str, Any]) -> None:
+    # Existing controller Actions-write permission only. Issue writes belong
+    # to reviewed main workflow code and its short-lived GITHUB_TOKEN.
+    # Validate before any private retained field can cross the host boundary.
+    validate_channel_evidence(evidence, evidence.get('channel', ''))
+    result = subprocess.run([
+        'gh', 'workflow', 'run', 'postmerge-channel-bug.yml', '--repo', REPOSITORY, '--ref', 'main',
+        '-f', 'channel=' + evidence['channel'], '-f', 'evidence=' + json.dumps(evidence, sort_keys=True),
+    ], capture_output=True, timeout=60, check=False)
+    if result.returncode:
+        raise CandidateRefused('channel_bug_dispatch_failed')
+
+
+def _signal_dev_verdict(candidate: Candidate, outcome: dict[str, Any],
+                        signal: Callable[[Candidate, dict[str, Any]], None] | None) -> None:
+    if signal is None or outcome.get('channel') != 'dev' or outcome.get('result') not in {'passed', 'failed'}:
+        return
+    try:
+        signal(candidate, outcome)
+    except Exception:
+        # A status transport failure must never stall later candidates. The
+        # scheduled watchdog turns the missing signal into a visible failure.
+        print(json.dumps({'source_sha': candidate.sha, 'result': 'liveness_signal_failed'}, sort_keys=True))
 
 
 def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
     try:
+        if not isinstance(checkpoint, dict):
+            raise ValueError()
+        if 'observation' in checkpoint:
+            validate_observation(checkpoint['observation'])
+        if 'pause' in checkpoint:
+            validate_pause(checkpoint['pause'])
+            if ('observation' not in checkpoint or
+                _pause_time(checkpoint['observation']['observed_at']) < _pause_time(checkpoint['pause']['engaged_at'])):
+                raise ValueError()
+        if set(checkpoint) in ({'observation'}, {'pause', 'observation'}):
+            return
+        _source_failure(checkpoint['outcome'])
         candidate = Candidate(**checkpoint['candidate'])
-        if (set(checkpoint) != {'candidate', 'phase', 'channel', 'outcome'}
+        if 'heavy' in checkpoint:
+            _validate_heavy(checkpoint['heavy'])
+        history = checkpoint.get('last_green', {})
+        if (not isinstance(history, dict) or set(history) - {'dev', 'test'}
+            or any(not isinstance(sha, str) or re.fullmatch(r'[0-9a-f]{40}', sha) is None
+                   for sha in history.values())):
+            raise ValueError()
+        if 'channel_bug' in checkpoint:
+            report = checkpoint['channel_bug']
+            if (checkpoint['phase'] not in {'passed', 'failed'} or not isinstance(report, dict)
+                or set(report) != {'last_good_sha', 'dispatch'}
+                or report['dispatch'] not in {None, 'started', 'sent', 'failed'}
+                or (report['last_good_sha'] is not None and (
+                    not isinstance(report['last_good_sha'], str)
+                    or re.fullmatch(r'[0-9a-f]{40}', report['last_good_sha']) is None))):
+                raise ValueError()
+        if (set(checkpoint) - {'heavy', 'last_green', 'channel_bug', 'pause', 'observation'} != {'candidate', 'phase', 'channel', 'outcome'}
+            or ('heavy' in checkpoint and (checkpoint['phase'], checkpoint['channel']) not in {
+                ('passed', 'dev'), ('passed', 'test'), ('failed', 'dev')})
+            or ('heavy' in checkpoint and checkpoint['phase'] == 'failed' and checkpoint['heavy'].get('reason') != 'dev_deploy_failed')
             or re.fullmatch(r'[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
             or any(type(value) is not int or value < 1
                    for value in (candidate.run_id, candidate.run_attempt, candidate.artifact_id))
@@ -296,19 +574,196 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
         raise CandidateRefused('checkpoint_refused') from None
 
 
+HEAVY_WORKFLOW = 'post-merge-heavy-tests.yml'
+HEAVY_COUNTS = ('selected', 'passed', 'failed', 'skipped', 'docker_skipped')
+LIVENESS_WORKFLOW = 'dev-delivery-liveness.yml'
+LIVENESS_PROTOCOL = 'dev-delivery-liveness.v1'
+
+
+def _dispatch_liveness_signal(kind: str, payload: dict[str, Any]) -> None:
+    """Use the approved Actions-write client; Actions owns status admission."""
+    if kind not in {'heartbeat', 'verdict'}:
+        raise CandidateRefused('liveness_signal_refused')
+    command = ['gh', 'workflow', 'run', LIVENESS_WORKFLOW, '--repo', REPOSITORY, '--ref', 'main',
+               '-f', f'kind={kind}', '-f', 'payload=' + json.dumps(payload, sort_keys=True)]
+    environment = {key: value for key, value in os.environ.items() if key not in {'SSH_AUTH_SOCK'}}
+    for attempt in range(3):
+        result = subprocess.run(command, env=environment, capture_output=True, text=True,
+                                timeout=60, check=False)
+        if result.returncode == 0:
+            return
+        if attempt < 2:
+            time.sleep(20)
+    raise CandidateRefused('liveness_signal_failed')
+
+
+def publish_heartbeat(sha: str, pause: dict[str, Any] | None, observation: dict[str, Any]) -> None:
+    """Dispatch the persisted observation; transport retries cannot renew it."""
+    if re.fullmatch(r'[0-9a-f]{40}', sha) is None:
+        raise CandidateRefused('liveness_signal_refused')
+    validate_observation(observation)
+    observed = _pause_time(observation['observed_at'])
+    payload = {'protocol': LIVENESS_PROTOCOL, 'sha': sha, **observation}
+    if pause is not None:
+        validate_pause(pause)
+        if not _pause_time(pause['engaged_at']) <= observed < _pause_time(pause['expires_at']):
+            raise CandidateRefused('pause_observation_refused')
+        payload['pause'] = pause
+    _dispatch_liveness_signal('heartbeat', payload)
+
+
+def publish_dev_verdict(candidate: Candidate, outcome: dict[str, Any]) -> None:
+    """Publish only a terminal DEV outcome bound to its admitted native operation."""
+    if (outcome.get('result') not in {'passed', 'failed'} or outcome.get('channel') != 'dev'
+            or outcome.get('operation_id') != candidate.operation_id('dev')):
+        raise CandidateRefused('liveness_verdict_refused')
+    _dispatch_liveness_signal('verdict', {
+        'protocol': LIVENESS_PROTOCOL, 'sha': candidate.sha,
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+        'candidate': asdict(candidate), 'result': outcome['result'],
+        'operation_id': outcome['operation_id'],
+    })
+
+
+def _validate_heavy(heavy: Any) -> dict[str, Any]:
+    from app.ops.heavy_acceptance import MAX_FAILURES, MAX_NODEID, VERDICTS
+    if (not isinstance(heavy, dict) or heavy.get('result') not in VERDICTS
+        or heavy.get('dispatch') not in {None, 'started', 'sent', 'failed'}
+        or ('held' in heavy and (heavy['held'] is not True or heavy['result'] == 'passed'))
+        or set(heavy) - {'result', 'reason', 'failures', 'dispatch', 'held', *HEAVY_COUNTS}
+        or ('reason' in heavy and (heavy['result'] != 'refused'
+                                   or re.fullmatch(r'[a-z0-9_]{1,64}', str(heavy['reason'])) is None))
+        or any(key in heavy and (type(heavy[key]) is not int or heavy[key] < 0) for key in HEAVY_COUNTS)
+        or (heavy['result'] != 'refused' and any(key not in heavy for key in HEAVY_COUNTS))
+        or (heavy['result'] == 'passed' and (heavy.get('selected', 0) == 0 or heavy.get('passed', 0) == 0
+                                             or heavy.get('failed') != 0 or heavy.get('docker_skipped') != 0
+                                             or heavy.get('failures', [])))
+        or not isinstance(heavy.get('failures', []), list) or len(heavy.get('failures', [])) > MAX_FAILURES
+        or any(not isinstance(item, str) or not item or len(item) > MAX_NODEID
+               or re.search(r'[\x00-\x1f]', item) for item in heavy.get('failures', []))):
+        raise CandidateRefused('heavy_evidence_refused')
+    return heavy
+
+
+def _heavy_summary(heavy: dict[str, Any]) -> dict[str, Any]:
+    validated = _validate_heavy(heavy)
+    return {key: value for key, value in validated.items() if key not in {'dispatch', 'held'}}
+
+
+def _report_dev_failure(path: Path, checkpoint: dict[str, Any],
+                        send: Callable[[Candidate, dict[str, Any]], None]) -> None:
+    if 'heavy' not in checkpoint:
+        checkpoint['heavy'] = {'result': 'refused', 'reason': 'dev_deploy_failed'}
+        _atomic_checkpoint(path, checkpoint)
+    if checkpoint['heavy'].get('dispatch') is None:
+        heavy_verdict(path, checkpoint, run=lambda _: checkpoint['heavy'], send=send)
+
+
+def native_heavy(candidate: Candidate) -> dict[str, Any]:
+    """Run the fixed `qualify-heavy` profile for the committed DEV operation.
+
+    The same launcher alias as the native deployment RPC; only the operation ID
+    crosses. A transport or evidence failure is a `refused` verdict, never green.
+    """
+    environment = {key: os.environ[key] for key in ('HOME', 'USER', 'LOGNAME', 'PATH', 'SSH_AUTH_SOCK')
+                   if key in os.environ}
+    command = ['/usr/bin/ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+               '-o', 'ServerAliveInterval=60', '--', 'ygg-dev', 'sudo', '-n',
+               '/usr/local/libexec/yggdrasil-bws-deploy', 'qualify-heavy', 'dev', candidate.operation_id('dev')]
+    try:
+        result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False,
+                                timeout=2 * 3600)
+        lines = result.stdout.strip().splitlines()
+        if not lines or len(lines[-1]) > 16384:
+            raise ValueError()
+        receipt = json.loads(lines[-1])
+        from app.ops.heavy_acceptance import PROFILE_VERSION
+        if not isinstance(receipt, dict) or receipt.get('profile_version') != PROFILE_VERSION:
+            raise ValueError()
+        if receipt.get('result') == 'refused':
+            return _validate_heavy({'result': 'refused', 'reason': str(receipt.get('reason', ''))})
+        if (receipt.get('source_sha') != candidate.sha or receipt.get('image_digest') != candidate.digest
+            or receipt.get('channel') != 'dev' or receipt.get('operation_id') != candidate.operation_id('dev')
+            or (receipt.get('result') == 'passed') != (result.returncode == 0)):
+            raise ValueError()
+        return _validate_heavy({key: receipt[key] for key in ('result', 'failures', *HEAVY_COUNTS)})
+    except Exception:
+        return {'result': 'refused', 'reason': 'native_heavy_evidence_refused'}
+
+
+def dispatch_verdict(candidate: Candidate, heavy: dict[str, Any]) -> None:
+    """Send the bounded verdict to the fail-loud GitHub workflow (Actions write only)."""
+    counts = ' '.join(f'{key}={heavy[key]}' for key in HEAVY_COUNTS if key in heavy)
+    # Node IDs may hold any character; mask what the workflow's bounded input
+    # grammar refuses so a red verdict keeps its failing tests, never a ping.
+    failures = re.sub(r'[^A-Za-z0-9_./:\[\]+=, -]', '?', ','.join(heavy.get('failures', [])))[:1000]
+    fields = {'sha': candidate.sha, 'verdict': heavy['result'], 'operation_id': candidate.operation_id('dev'),
+              'counts': counts, 'reason': heavy.get('reason', ''), 'failures': failures}
+    command = ['gh', 'workflow', 'run', HEAVY_WORKFLOW, '--repo', REPOSITORY, '--ref', 'main']
+    for key, value in fields.items():
+        command += ['-f', f'{key}={value}']
+    for attempt in range(3):
+        if subprocess.run(command, capture_output=True, timeout=60, check=False).returncode == 0:
+            return
+        if attempt < 2:
+            time.sleep(20)
+    raise CandidateRefused('heavy_dispatch_failed')
+
+
+def heavy_verdict(path: Path, checkpoint: dict[str, Any], *,
+                  run: Callable[[Candidate], dict[str, Any]],
+                  send: Callable[[Candidate, dict[str, Any]], None]) -> int:
+    # Fence both uncertain windows before effects. A crash during the run is
+    # conservatively refused on restart, and an uncertain dispatch is not sent
+    # again. Neither case can replay a native deployment or stall later builds.
+    candidate = Candidate(**checkpoint['candidate'])
+    heavy = checkpoint.get('heavy')
+    if heavy is None:
+        checkpoint['heavy'] = {'result': 'refused', 'reason': 'heavy_run_interrupted'}
+        _atomic_checkpoint(path, checkpoint)
+        try:
+            heavy = _heavy_summary(run(candidate))
+        except Exception:
+            heavy = {'result': 'refused', 'reason': 'native_heavy_evidence_refused'}
+        checkpoint['heavy'] = heavy
+        _atomic_checkpoint(path, checkpoint)
+    if heavy.get('dispatch') is None:
+        heavy['dispatch'] = 'started'
+        _atomic_checkpoint(path, checkpoint)
+        try:
+            send(candidate, heavy)
+            heavy['dispatch'] = 'sent'
+        except Exception:
+            heavy['dispatch'] = 'failed'
+        _atomic_checkpoint(path, checkpoint)
+    print(json.dumps({'source_sha': candidate.sha, 'channel': 'dev', 'heavy': heavy}, sort_keys=True))
+    return 0 if heavy['dispatch'] == 'sent' else 78
+
+
+def _native_host_command() -> list[str]:
+    # Keep the child on the same reviewed pin even if cwd or ambient Python
+    # configuration belongs to a broken candidate. No token enters this child.
+    return [sys.executable, '-I', '-S', '-c',
+            "import runpy, sys; from pathlib import Path; root = sys.argv.pop(1); "
+            "sys.dont_write_bytecode = True; sys.path[:0] = [root, str(Path(root).parent / 'vendor')]; "
+            "from app.ops.bws_secret_reader import _sdk_client; _sdk_client(); "
+            "runpy.run_module('app.ops.postgres_deploy_host', run_name='__main__')",
+            str(Path(__file__).resolve().parents[1])]
+
+
 def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
     # Existing host code sanitizes SSH's environment and retains the VM worker
     # through terminal evidence. Capture all streams; never print child errors.
     environment = {k: v for k, v in os.environ.items() if k not in {'GH_TOKEN', 'GITHUB_TOKEN'}}
     command = [
-        sys.executable, '-m', 'app.ops.postgres_deploy_host', channel, candidate.sha,
+        *_native_host_command(), channel, candidate.sha,
         '--operation-id', candidate.operation_id(channel),
         '--existing-secrets-only', '--automatic', '--image-digest', candidate.digest,
     ]
     result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
     try:
         receipt = json.loads(result.stdout)
-        if (set(receipt) not in ({'operation_id', 'channel', 'kind', 'stage', 'terminal_result'},
+        if (set(receipt) - {'source_failure'} not in ({'operation_id', 'channel', 'kind', 'stage', 'terminal_result'},
                                 {'operation_id', 'channel', 'kind', 'stage', 'terminal_result', 'pg_acceptance'})
             or receipt['channel'] != channel or receipt['kind'] != 'deploy'
             or receipt['stage'] != receipt['terminal_result']
@@ -325,7 +780,56 @@ def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
         raise CandidateRefused('native_terminal_evidence_refused') from None
 
 
+def native_absence(channel: str, candidate: Candidate) -> dict[str, Any]:
+    """Obtain exact host+native absence proof without reading private identities."""
+    environment = {k: v for k, v in os.environ.items() if k not in {'GH_TOKEN', 'GITHUB_TOKEN'}}
+    command = [
+        *_native_host_command(), channel, candidate.sha,
+        '--operation-id', candidate.operation_id(channel), '--existing-secrets-only',
+        '--automatic', '--image-digest', candidate.digest, '--prove-never-admitted',
+    ]
+    result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
+    try:
+        proof = json.loads(result.stdout)
+        _require_absence_profile(proof, channel, candidate)
+        if result.returncode != 0:
+            raise ValueError()
+        return proof
+    except Exception:
+        raise CandidateRefused('native_absence_evidence_refused') from None
+
+
+def _require_absence_profile(proof: dict[str, Any], channel: str, candidate: Candidate) -> None:
+    expected = {
+        'contract': 'postmerge-native-operation-absence.v1',
+        'operation_id': candidate.operation_id(channel),
+        'channel': channel,
+        'candidate_sha': candidate.sha,
+        'image_digest': candidate.digest,
+        'host_operation_absent': True,
+        'host_operation_retired': True,
+        'native_operation_absent': True,
+        'native_worker_absent': True,
+        'native_lock_absent': True,
+        'native_request_absent': True,
+    }
+    if proof != expected:
+        raise CandidateRefused('native_absence_evidence_refused')
+
+
+def _source_failure(receipt: dict[str, Any]) -> dict[str, str]:
+    from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_REASONS
+    if 'source_failure' not in receipt:
+        return {}
+    reason = receipt['source_failure']
+    if (type(reason) is not str or reason not in SOURCE_PROJECTION_FAILURE_REASONS
+        or receipt.get('terminal_result', receipt.get('result')) != 'failed'):
+        raise CandidateRefused('native_terminal_evidence_refused')
+    return {'source_failure': reason}
+
+
 def _require_terminal_profile(receipt: dict[str, Any], channel: str, candidate: Candidate) -> None:
+    _source_failure(receipt)
     if (receipt.get('channel') != channel or receipt.get('operation_id') != candidate.operation_id(channel)
         or receipt.get('terminal_result') not in {'committed', 'failed', 'aborted'}):
         raise CandidateRefused('native_terminal_evidence_refused')
@@ -337,8 +841,8 @@ def _require_terminal_profile(receipt: dict[str, Any], channel: str, candidate: 
 def deliver(candidate: Candidate, *, deploy: Callable[[str, Candidate], dict[str, Any]] = native_deploy,
             current_main: Callable[[], str] = _current_main,
             emit: Callable[[dict[str, Any]], None] = lambda result: print(json.dumps(result, sort_keys=True)),
-            channels: tuple[str, ...] = ('dev', 'test')) -> int:
-    if channels not in {('dev', 'test'), ('test',)}:
+            channels: tuple[str, ...] = ('dev',)) -> int:
+    if channels not in {('dev', 'test'), ('dev',), ('test',)}:
         raise CandidateRefused('invalid_stage_sequence')
     identity = {'source_sha': candidate.sha, 'image_digest': candidate.digest,
                 'source_run_id': candidate.run_id, 'source_run_attempt': candidate.run_attempt,
@@ -358,6 +862,7 @@ def deliver(candidate: Candidate, *, deploy: Callable[[str, Candidate], dict[str
             return 78
         if receipt['terminal_result'] != 'committed':
             emit({**identity, 'channel': channel, 'result': 'failed', 'operation_id': receipt['operation_id'],
+                  **_source_failure(receipt),
                   'failure_reference': f'https://github.com/{REPOSITORY}/actions/runs/{candidate.run_id}'})
             return 78
         emit({**identity, 'channel': channel, 'result': 'passed', 'operation_id': receipt['operation_id'],
@@ -370,21 +875,34 @@ def main(argv: list[str] | None = None) -> int:
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument('--source-run', type=int)
     selection.add_argument('--latest', action='store_true')
+    selection.add_argument('--pause', action='store_true')
+    parser.add_argument('--issue', type=int, help='linked deploy-machinery Issue in this repository')
+    parser.add_argument('--until', help='future ISO-8601 expiry with an explicit timezone')
     parser.add_argument('--admit-only', action='store_true')
     parser.add_argument('--state-directory', type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.pause:
+            if args.state_directory is None or args.admit_only:
+                raise CandidateRefused('pause_requires_private_checkpoint')
+            engage_pause(args.state_directory, args.issue, args.until)
+            return 0
+        if args.issue is not None or args.until is not None:
+            raise CandidateRefused('pause_options_require_pause')
         if args.latest:
             if args.state_directory is None or args.admit_only:
                 raise CandidateRefused('poll_requires_private_checkpoint')
-            return poll(args.state_directory)
+            return poll(args.state_directory, signal=publish_dev_verdict, heartbeat=publish_heartbeat)
         if args.source_run < 1:
             raise CandidateRefused('invalid_source_run')
+        if not args.admit_only:
+            if args.state_directory is None:
+                raise CandidateRefused('deploy_requires_private_checkpoint')
+            return poll(args.state_directory, build=lambda: args.source_run, load=load_candidate,
+                        signal=publish_dev_verdict, heartbeat=publish_heartbeat)
         candidate = load_candidate(args.source_run)
-        if args.admit_only:
-            print(json.dumps(asdict(candidate), sort_keys=True))
-            return 0
-        return deliver(candidate)
+        print(json.dumps(asdict(candidate), sort_keys=True))
+        return 0
     except Exception as error:
         if args.latest and isinstance(error, CandidateRefused) and str(error) == 'latest_build_not_ready':
             return 0

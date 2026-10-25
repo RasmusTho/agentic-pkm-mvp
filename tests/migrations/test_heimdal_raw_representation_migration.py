@@ -1818,6 +1818,7 @@ def test_pg_screen_retention_lease_then_postcommit_cleanup_restart_converges_met
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
     monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
 
     from app.heimdal import raw_liveness, raw_store, retention
     from app.heimdal.raw_read_gate import raw_ref_for
@@ -1832,6 +1833,7 @@ def test_pg_screen_retention_lease_then_postcommit_cleanup_restart_converges_met
         _issue_archive_volume_ready,
     )
     from app.write_guard import WriteGuard
+    from tests.helpers.vault_settings import set_test_screen_retention
 
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
@@ -1846,6 +1848,7 @@ def test_pg_screen_retention_lease_then_postcommit_cleanup_restart_converges_met
         ),
         write_guard=WriteGuard(lambda: {"state": "healthy"}),
     )
+    set_test_screen_retention(vault_root, 1)
     now = datetime.now(timezone.utc) + timedelta(days=2)
     leased = _insert_runtime_raw(
         b"pg-screen-live-lease",
@@ -1966,6 +1969,7 @@ def test_pg_screen_cross_reason_pending_cleanup_restart_converges_by_modality(
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
     monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
 
     from app.heimdal import raw_liveness, raw_store, retention
     from app.heimdal.settings_notes import SETTINGS, SettingsNote, write_settings_note
@@ -1974,6 +1978,7 @@ def test_pg_screen_cross_reason_pending_cleanup_restart_converges_by_modality(
         _issue_archive_volume_ready,
     )
     from app.write_guard import WriteGuard
+    from tests.helpers.vault_settings import set_test_screen_retention
 
     vault_root = tmp_path / "vault"
     archive_root = tmp_path / "mounted-cold"
@@ -1990,6 +1995,7 @@ def test_pg_screen_cross_reason_pending_cleanup_restart_converges_by_modality(
         ),
         write_guard=WriteGuard(lambda: {"state": "healthy"}),
     )
+    set_test_screen_retention(vault_root, 1)
     now = datetime.now(timezone.utc) + timedelta(days=2)
     grant_ref = f"grant-pg-screen-{deletion_source}"
     record = _insert_runtime_raw(

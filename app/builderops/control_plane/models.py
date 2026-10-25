@@ -196,6 +196,21 @@ class StorePort(Protocol):
 
     def get_task(self, repository: str, task_id: str) -> Mapping[str, Any]: ...
 
+    def correct_task_payload_status(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        task_id: str,
+        lease: Lease,
+        idempotency_key: str,
+        expected_state: str,
+        expected_version: int,
+        expected_updated_at: datetime,
+        expected_payload_sha256: str,
+        proposal_sha256: str,
+        proposal_ref: str,
+    ) -> dict[str, Any]: ...
+
     def list_tasks(
         self, repository: str, *, task_prefix: str | None = None
     ) -> list[Mapping[str, Any]]: ...

@@ -124,7 +124,19 @@ def load_panel_action_mappings(root: Optional[Path] = None) -> Dict[str, PanelAc
 
 
 def get_panel_actions_diagnostics(root: Optional[Path] = None) -> Dict[str, Any]:
-    _set_last_error(None)
+    """Probe the mapping root and record the outcome in the process-wide last-error slot."""
+    diagnostics = panel_actions_diagnostics_for_read(root)
+    _set_last_error(diagnostics["last_panel_mapping_load_error"])
+    return diagnostics
+
+
+def panel_actions_diagnostics_for_read(root: Optional[Path] = None) -> Dict[str, Any]:
+    """The same diagnostics computed for one read, never touching the last-error slot.
+
+    A scoped read (MVR-05B4c6) gets the outcome of its own probe, so it neither
+    rewrites the process-wide slot nor reports an error another caller recorded.
+    """
+    last_error: str | None = None
     resolved = _resolve_root(root)
     resolved_abs = str(resolved.resolve()) if resolved is not None else None
     mappings: Dict[str, PanelActionMapping] = {}
@@ -133,10 +145,10 @@ def get_panel_actions_diagnostics(root: Optional[Path] = None) -> Dict[str, Any]
             try:
                 mappings = load_panel_action_mappings(resolved)
             except Exception:
-                _set_last_error("mapping load failed")
+                last_error = "mapping load failed"
                 mappings = {}
         else:
-            _set_last_error(f"missing: {resolved}")
+            last_error = f"missing: {resolved}"
 
     ids_sample: list[str] = []
     for mapping in mappings.values():
@@ -151,7 +163,7 @@ def get_panel_actions_diagnostics(root: Optional[Path] = None) -> Dict[str, Any]
         "panel_actions_mappings_count": len(mappings),
         "panel_actions_ids_sample": ids_sample,
         "has_promote_evergreen_mapping": has_promote_evergreen,
-        "last_panel_mapping_load_error": _LAST_PANEL_ACTIONS_ERROR,
+        "last_panel_mapping_load_error": last_error,
     }
 
 
@@ -160,4 +172,5 @@ __all__ = [
     "load_panel_action_mappings",
     "resolve_panel_actions_root",
     "get_panel_actions_diagnostics",
+    "panel_actions_diagnostics_for_read",
 ]

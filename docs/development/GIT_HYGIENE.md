@@ -86,6 +86,20 @@ the path and branch lease identities immediately before deletion and retains
 prior path-to-branch bindings when a path is reused. A report, missing record,
 or missing worktree is never evidence that cleanup is authorized.
 
+An expired `active` record whose checkout is absent remains untouched by
+restart reconciliation. An operator may resolve that exact generation with
+`agent_worktree.py preserve-missing` only by supplying its path, branch,
+generation, recorded owner, and the explicit `retain-branch` disposition. The
+operation requires the branch ref to exist, confirms filesystem and Git
+registration absence, reserves the path across the locked registry write, and
+records `missing_preserved` provenance without changing the original identity,
+timestamps, branch ref, or any recovery bundle. This terminal state preserves
+the branch in automatic and explicit retirement paths, refuses reuse of the path
+including case or Unicode-normalisation aliases, and fails authority reads if
+the path is later recreated. It is not a `removed`
+tombstone and cannot resume cleanup. Ordinary-missing restart reconciliation
+continues to process only a previously durable `removal_pending` transition.
+
 Remote branch disposition is not a broad-janitor action. The bounded
 `targeted_remote_cleanup` production entrypoint accepts at most five caller-supplied
 candidates and requires each to bind the repository, fully qualified source ref,
@@ -245,9 +259,12 @@ prose, not an artifact registry. It contributes a binding only for an exact,
 line-bounded `Pickup intent receipt:` or explicit
 `Preserved worktree: /...; branch: ...; base HEAD: ...` / dedicated-worktree
 receipt shape. Delivery receipts, narrative mentions, embedded or negated
-marker text, and cross-line fragments do not preserve a target. Missing or
-malformed task identity, status, JSON, or explicit binding evidence fails
-closed before any CAS.
+marker text, and completed lifecycle prose without the retention-shaped
+`is still dirty` wording do not preserve a target. A retention-shaped
+dedicated-worktree line is explicit intent even when its path token is malformed:
+its path must be absolute and its branch/HEAD must be valid, or the line remains
+fail-closed. Cross-line fragments and missing or malformed task identity, status,
+JSON, or explicit binding evidence fail closed before any CAS.
 
 
 ## Rescue-backed serial maintenance policy

@@ -9,6 +9,7 @@ import argparse
 import datetime as dt
 import fcntl
 import hashlib
+from html.parser import HTMLParser
 import json
 import math
 import os
@@ -25,6 +26,10 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, TypeGuard
+
+from markdown_it import MarkdownIt
+from markdown_it.rules_inline import backtick, html_inline
+import regex
 
 if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -1740,7 +1745,591 @@ _DISPATCHER_PRESERVED_WORKTREE_RE = re.compile(
     r"(?:^|[.!?]\s+)preserved\s+worktree\s*:\s*`?/", re.IGNORECASE
 )
 _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE = re.compile(
+    r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree"
+    r"(?:\s*:\s*|\s+).*?\bis\s+still\s+dirty\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE = re.compile(
+    r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\s+`?"
+    r"/[^\s;`,]+`?(?:\s+is(?:\s+still)?)?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_DISPATCHER_TABLE_TRUNCATED_CONTINUATION_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:is|still)\s*$"
+    r"|(?:is\s+still\s+dirty|still\s+dirty)(?:\s+on\b|\s+at\b|\s*$)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _dispatcher_linebreak_tolerant_keyword(keyword: str) -> str:
+    separator = r"(?:[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)*"
+    return separator.join(re.escape(character) for character in keyword)
+
+
+_DISPATCHER_DEDICATED_KEYWORD = _dispatcher_linebreak_tolerant_keyword("dedicated")
+_DISPATCHER_WORKTREE_KEYWORD = _dispatcher_linebreak_tolerant_keyword("worktree")
+_DISPATCHER_IS_KEYWORD = _dispatcher_linebreak_tolerant_keyword("is")
+_DISPATCHER_STILL_KEYWORD = _dispatcher_linebreak_tolerant_keyword("still")
+_DISPATCHER_DIRTY_KEYWORD = _dispatcher_linebreak_tolerant_keyword("dirty")
+_DISPATCHER_RETENTION_SEPARATOR = (
+    r"(?:\s+|[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)"
+)
+_DISPATCHER_MARKDOWN = MarkdownIt("commonmark", {"html": True}).enable(
+    "strikethrough"
+)
+_DISPATCHER_MARKDOWN_TABLE = MarkdownIt("commonmark", {"html": True}).enable(
+    "table"
+).enable("strikethrough")
+_DISPATCHER_SPLITLINES_SEPARATOR_RE = re.compile(r"[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
+_DISPATCHER_MARKDOWN_TASK_PREFIX_RE = re.compile(
+    r"^[ \t]*\[[ xX]\][ \t]+", re.MULTILINE
+)
+_DISPATCHER_HTML_BREAK_TOKEN_RE = re.compile(
+    r"<br(?=[\s/>])(?:[\s]+(?:[^\"'>]|\"[^\"]*\"|'[^']*')*)?[\s]*/?>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DISPATCHER_HTML_INVISIBLE_TOKEN_RE = re.compile(
+    r"(?:<\?(?:[^\"'>]|\"[^\"]*\"|'[^']*')*\?>"
+    r"|<![A-Za-z](?:[^\"'>]|\"[^\"]*\"|'[^']*')*>)",
+    re.IGNORECASE | re.DOTALL,
+)
+_DISPATCHER_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_DISPATCHER_HTML_COMMENT_OPEN_RE = re.compile(r"<!--[^\r\n]*")
+_DISPATCHER_HTML_TAG_NAME_RE = re.compile(r"<\s*/?\s*([A-Za-z][A-Za-z0-9:-]*)")
+_DISPATCHER_OPAQUE_CODE_MARKER = "\x00"
+_DISPATCHER_TABLE_CELL_BOUNDARY = "\x1f"
+_DISPATCHER_DEFAULT_IGNORABLE_RE = regex.compile(
+    r"\p{Default_Ignorable_Code_Point}+"
+)
+_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER = "\x02"
+_DISPATCHER_HTML_COMMENT_CLOSER_MASK = "\x03"
+_DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER = "\x04"
+_DISPATCHER_CODED_ABSOLUTE_PATH_RE = re.compile(r"/[^\s;`,]+")
+
+
+def _dispatcher_is_html_break_token(content: str) -> bool:
+    return bool(_DISPATCHER_HTML_BREAK_TOKEN_RE.fullmatch(content.strip()))
+
+
+def _dispatcher_render_html_token(content: str) -> str:
+    stripped = content.strip()
+    if _DISPATCHER_HTML_COMMENT_RE.fullmatch(stripped) or stripped.startswith("<!--"):
+        return "\n" * content.count("\n")
+    if _DISPATCHER_HTML_INVISIBLE_TOKEN_RE.fullmatch(stripped):
+        return "\n" * content.count("\n")
+    if _dispatcher_is_html_break_token(content):
+        return "\n"
+    name = _DISPATCHER_HTML_TAG_NAME_RE.match(content)
+    if name is not None and not name.group(1).lower().startswith("br-"):
+        return ""
+    return content
+
+
+def _dispatcher_protect_escaped_html_comments(content: str) -> str:
+    protected: list[str] = []
+    cursor = 0
+    while cursor < len(content):
+        if content.startswith("<!--", cursor):
+            backslashes = 0
+            index = cursor - 1
+            while index >= 0 and content[index] == "\\":
+                backslashes += 1
+                index -= 1
+            if backslashes % 2:
+                protected.pop()
+                protected.append(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER)
+                cursor += len("<!--")
+                continue
+        if content.startswith("--", cursor):
+            end = cursor + 2
+            backslashes = 0
+            while end < len(content) and content[end] == "\\":
+                backslashes += 1
+                end += 1
+            if backslashes % 2 and end < len(content) and content[end] == ">":
+                protected.append(
+                    "--" + _DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER
+                )
+                cursor = end + 1
+                continue
+        protected.append(content[cursor])
+        cursor += 1
+    return "".join(protected)
+
+
+def _dispatcher_render_text_token(
+    content: str, *, mask_comment_closers: bool = False
+) -> str:
+    # Markdown leaves a completed pending comment's unfinished-tag suffix in
+    # a text token. Only an actual pending HTML comment may hide its opener;
+    # a literal opener in the parser's unfinished tag buffer remains visible.
+    if _DISPATCHER_HTML_COMMENT_OPEN_RE.search(content):
+        parser = _DispatcherHTMLBlockTextParser()
+        parser.feed(content)
+        if not _DISPATCHER_HTML_TAG_NAME_RE.match(parser.rawdata):
+            content = _DISPATCHER_HTML_COMMENT_OPEN_RE.sub("", content)
+    content = content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
+    if not mask_comment_closers:
+        content = content.replace(
+            _DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER, "-->"
+        )
+    return content
+
+
+def _dispatcher_render_pending_html_inline_token(content: str) -> str:
+    close = content.find("-->")
+    if close >= 0:
+        return content[: close + 3] + _dispatcher_render_html_token(content[close + 3 :])
+    if content.strip().startswith("<!--"):
+        return content
+    return _dispatcher_render_html_token(content)
+
+
+class _DispatcherHTMLBlockTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+    def handle_comment(self, data: str) -> None:
+        self.parts.append("\n" * data.count("\n"))
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        normalized_tag = tag.lower()
+        if normalized_tag in {"tr", "td", "th"}:
+            self.parts.append(_DISPATCHER_TABLE_CELL_BOUNDARY)
+        if normalized_tag == "br":
+            self.parts.append("\n")
+
+    def handle_startendtag(
+        self, tag: str, attrs: list[tuple[str, str | None]],
+    ) -> None:
+        normalized_tag = tag.lower()
+        if normalized_tag in {"tr", "td", "th"}:
+            self.parts.append(_DISPATCHER_TABLE_CELL_BOUNDARY)
+        if normalized_tag == "br":
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in {"tr", "td", "th"}:
+            self.parts.append(_DISPATCHER_TABLE_CELL_BOUNDARY)
+
+
+def _dispatcher_render_html_block(content: str) -> str:
+    parser = _DispatcherHTMLBlockTextParser()
+    parser.feed(content)
+    # Pending comments stay hidden. Preserve an unfinished tag's source text
+    # explicitly: HTMLParser.close() drops it on newer Python patch releases.
+    if _DISPATCHER_HTML_TAG_NAME_RE.match(parser.rawdata):
+        parser.parts.append(parser.rawdata)
+    elif not parser.rawdata.startswith("<!--"):
+        parser.close()
+    return "".join(parser.parts)
+
+
+def _dispatcher_html_comment_is_unclosed(content: str) -> bool:
+    return content.rfind("<!--") > content.rfind("-->")
+
+
+def _dispatcher_inline_html_comment_is_unclosed(token: Any) -> bool:
+    children = token.children or []
+    return bool(
+        any(
+            child.type in {"text", "html_inline"}
+            and _dispatcher_html_comment_is_unclosed(child.content)
+            for child in children
+        )
+    )
+
+
+def _dispatcher_consume_split_html_comment(content: str) -> tuple[str, bool]:
+    close = content.find("-->")
+    if close == -1:
+        return "\n" * content.count("\n"), True
+    return "\n" * content[:close].count("\n") + content[close + 3 :], False
+
+
+def _dispatcher_consume_pending_html_block_comment(
+    content: str,
+) -> tuple[str, bool]:
+    close = content.find("-->")
+    if close == -1:
+        return "\n" * content.count("\n"), True
+    raw_suffix = content[close + 3 :]
+    suffix = _dispatcher_render_html_block(raw_suffix)
+    return (
+        "\n" * content[:close].count("\n") + suffix,
+        _dispatcher_html_comment_is_unclosed(raw_suffix),
+    )
+
+
+def _dispatcher_mask_code_block(content: str) -> str:
+    masked = re.sub(r"[^\n]", " ", content)
+    return f"{_DISPATCHER_OPAQUE_CODE_MARKER}{masked}{_DISPATCHER_OPAQUE_CODE_MARKER}"
+
+
+def _dispatcher_strip_default_ignorables(text: str) -> str:
+    return _DISPATCHER_DEFAULT_IGNORABLE_RE.sub("", text)
+
+
+def _dispatcher_render_inline_tokens(
+    tokens: Sequence[Any], *, strip_task_prefix: bool, mask_comment_closers: bool = False,
+    mask_code_inline: bool = False,
+) -> str:
+    parts: list[str] = []
+    for token in tokens:
+        token_type = token.type
+        if token_type in {"softbreak", "hardbreak"}:
+            parts.append("\n")
+        elif token_type == "code_inline":
+            code = token.content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
+            if mask_comment_closers:
+                code = code.replace("-->", _DISPATCHER_HTML_COMMENT_CLOSER_MASK)
+            if mask_code_inline and not _DISPATCHER_CODED_ABSOLUTE_PATH_RE.fullmatch(
+                code.strip()
+            ):
+                parts.append(_dispatcher_mask_code_block(code))
+            else:
+                parts.append(code)
+        elif token_type == "text":
+            parts.append(
+                _dispatcher_render_text_token(
+                    token.content, mask_comment_closers=mask_comment_closers
+                )
+            )
+        elif token_type in {"html_inline", "html_block"}:
+            if mask_comment_closers:
+                content = token.content.replace(
+                    _DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--"
+                )
+                parts.append(_dispatcher_render_pending_html_inline_token(content))
+            else:
+                parts.append(_dispatcher_render_html_token(token.content))
+        elif token_type in {"link_open", "link_close", "image", "em_open", "em_close", "strong_open", "strong_close", "s_open", "s_close", "del_open", "del_close"}:
+            if token_type == "image":
+                parts.append(token.content)
+        elif token.children:
+            parts.append(
+                _dispatcher_render_inline_tokens(
+                    token.children,
+                    strip_task_prefix=False,
+                    mask_comment_closers=mask_comment_closers,
+                    mask_code_inline=mask_code_inline,
+                )
+            )
+        elif token.content:
+            parts.append(token.content)
+    rendered = "".join(parts)
+    if strip_task_prefix:
+        rendered = _DISPATCHER_MARKDOWN_TASK_PREFIX_RE.sub("", rendered)
+    return rendered
+
+
+def _dispatcher_inline_comment_source(tokens: Sequence[Any]) -> str:
+    parts: list[str] = []
+    for token in tokens:
+        if token.type == "code_inline":
+            code = token.content.replace("<!--", _DISPATCHER_ESCAPED_HTML_COMMENT_MARKER)
+            code = code.replace("-->", _DISPATCHER_HTML_COMMENT_CLOSER_MASK)
+            parts.append(code)
+        elif token.type in {"text", "html_inline", "html_block"}:
+            parts.append(token.content)
+        elif token.type in {"softbreak", "hardbreak"}:
+            parts.append("\n")
+        elif token.children:
+            parts.append(_dispatcher_inline_comment_source(token.children))
+    return "".join(parts)
+
+
+def _dispatcher_inline_comment_reopens_after_close(token: Any) -> bool:
+    source = _dispatcher_inline_comment_source(token.children or [])
+    close = source.find("-->")
+    return close >= 0 and _dispatcher_html_comment_is_unclosed(source[close + 3 :])
+
+
+def _dispatcher_normalize_gfm_table_pipes(body: str) -> str:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    lines = normalized.splitlines(keepends=True)
+    table_lines: set[int] = set()
+    for token in _DISPATCHER_MARKDOWN_TABLE.parse(normalized):
+        if token.type == "table_open" and token.map is not None:
+            table_lines.update(range(token.map[0], token.map[1]))
+    rendered_lines: list[str] = []
+    for index, line in enumerate(lines):
+        if index not in table_lines:
+            rendered_lines.append(line)
+            continue
+        rendered = _dispatcher_replace_gfm_table_delimiters(line)
+        if rendered.endswith("\n"):
+            rendered = (
+                rendered[:-1] + _DISPATCHER_TABLE_CELL_BOUNDARY + "\n"
+            )
+        else:
+            rendered += _DISPATCHER_TABLE_CELL_BOUNDARY
+        rendered_lines.append(rendered)
+    return "".join(rendered_lines)
+
+
+def _dispatcher_replace_gfm_table_delimiters(line: str) -> str:
+    result: list[str] = []
+    code_run = 0
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if character == "\\" and index + 1 < len(line):
+            result.extend((character, line[index + 1]))
+            index += 2
+            continue
+        if character == "`":
+            run_end = index
+            while run_end < len(line) and line[run_end] == "`":
+                run_end += 1
+            run_length = run_end - index
+            if code_run == 0:
+                code_run = run_length
+            elif run_length == code_run:
+                code_run = 0
+            result.extend(line[index:run_end])
+            index = run_end
+            continue
+        result.append(
+            _DISPATCHER_TABLE_CELL_BOUNDARY
+            if character == "|" and code_run == 0
+            else character
+        )
+        index += 1
+    return "".join(result)
+
+
+def _dispatcher_gfm_table_line_numbers(body: str) -> set[int]:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    return {
+        line_number
+        for token in _DISPATCHER_MARKDOWN_TABLE.parse(normalized)
+        if token.type == "table_open" and token.map is not None
+        for line_number in range(token.map[0], token.map[1])
+    }
+
+
+def _dispatcher_html_table_line_numbers(body: str) -> set[int]:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    line_numbers: set[int] = set()
+    for token in _DISPATCHER_MARKDOWN.parse(normalized):
+        if (
+            token.type == "html_block"
+            and token.map is not None
+            and re.search(r"<\s*/?\s*(?:table|thead|tbody|tfoot|tr|td|th)\b", token.content, re.IGNORECASE)
+        ):
+            line_numbers.update(range(token.map[0], token.map[1]))
+    return line_numbers
+
+
+def _dispatcher_split_scan_segments(text: str) -> list[str]:
+    return re.split(
+        rf"[{re.escape(_DISPATCHER_OPAQUE_CODE_MARKER)}{re.escape(_DISPATCHER_TABLE_CELL_BOUNDARY)}]",
+        text,
+    )
+
+
+def _dispatcher_marker_search(pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
+    for segment in _dispatcher_split_scan_segments(text):
+        match = pattern.search(segment)
+        if match is not None:
+            return match
+    return None
+
+
+def _dispatcher_table_marker_search(
+    pattern: re.Pattern[str], text: str, *, next_text: str | None = None
+) -> re.Match[str] | None:
+    segments = [
+        segment
+        for segment in text.split(_DISPATCHER_TABLE_CELL_BOUNDARY)
+        if segment.strip()
+    ]
+    next_segments = (
+        [
+            segment
+            for segment in next_text.split(_DISPATCHER_TABLE_CELL_BOUNDARY)
+            if segment.strip()
+        ]
+        if next_text is not None
+        else []
+    )
+    for index, segment in enumerate(segments):
+        match = pattern.search(segment)
+        if match is not None:
+            if (
+                pattern is _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE
+                and any(
+                    _DISPATCHER_TABLE_TRUNCATED_CONTINUATION_RE.match(following)
+                    for following in segments[index + 1 :]
+                )
+            ):
+                continue
+            if (
+                pattern is _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE
+                and index < len(next_segments)
+                and _DISPATCHER_TABLE_TRUNCATED_CONTINUATION_RE.match(
+                    next_segments[index]
+                )
+            ):
+                continue
+            return match
+    return None
+
+
+def _dispatcher_cross_line_scan_body(
+    body: str,
+    *,
+    mask_code_inline: bool = False,
+    normalize_default_ignorables: bool = False,
+    source_lines: list[str] | None = None,
+) -> str:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    normalized = _dispatcher_normalize_gfm_table_pipes(normalized)
+    tokens = _DISPATCHER_MARKDOWN.parse(
+        _dispatcher_protect_escaped_html_comments(normalized)
+    )
+    parts: list[str] = []
+    previous_end = 0
+    rendered_block = False
+    html_comment_open = False
+    for token in tokens:
+        if token.type == "inline":
+            rendered = _dispatcher_render_inline_tokens(
+                token.children or [],
+                strip_task_prefix=token.level > 1,
+                mask_comment_closers=html_comment_open,
+                mask_code_inline=mask_code_inline,
+            )
+        elif token.type in {"fence", "code_block"}:
+            rendered = _dispatcher_mask_code_block(token.content)
+        elif token.type == "html_block":
+            if html_comment_open:
+                rendered, html_comment_open = _dispatcher_consume_pending_html_block_comment(
+                    token.content
+                )
+            else:
+                rendered = _dispatcher_render_html_block(token.content)
+                html_comment_open = _dispatcher_html_comment_is_unclosed(token.content)
+        else:
+            continue
+        reopens_after_close = (
+            html_comment_open
+            and token.type == "inline"
+            and _dispatcher_inline_comment_reopens_after_close(token)
+        )
+        if html_comment_open and token.type != "html_block":
+            rendered, html_comment_open = _dispatcher_consume_split_html_comment(rendered)
+            html_comment_open = html_comment_open or reopens_after_close
+        elif not html_comment_open and token.type == "inline" and _dispatcher_inline_html_comment_is_unclosed(
+            token
+        ):
+            html_comment_open = True
+        if normalize_default_ignorables:
+            rendered = _dispatcher_strip_default_ignorables(rendered)
+        if token.map is None:
+            parts.append(rendered)
+            continue
+        start, end = token.map
+        expected_lines = max(1, end - start)
+        while len(rendered.splitlines()) < expected_lines:
+            rendered += "\n"
+        if source_lines is not None:
+            rendered_lines = rendered.splitlines(keepends=True)
+            if not rendered_lines:
+                rendered_lines = [""]
+            for offset in range(expected_lines):
+                if offset < len(rendered_lines):
+                    source_line = rendered_lines[offset]
+                    if offset == expected_lines - 1:
+                        source_line += "".join(rendered_lines[expected_lines:])
+                else:
+                    source_line = "\n"
+                source_index = start + offset
+                if source_index < len(source_lines):
+                    source_lines[source_index] += source_line
+        if rendered_block:
+            gap = max(1, start - previous_end + 1)
+            if parts[-1].endswith("\n"):
+                gap -= 1
+            parts.append("\n" * max(0, gap))
+        elif start:
+            parts.append("\n" * start)
+        parts.append(rendered)
+        previous_end = end
+        rendered_block = True
+    return "".join(parts)
+
+
+def _dispatcher_cross_line_scan_source_lines(
+    body: str,
+    *,
+    mask_code_inline: bool = False,
+    normalize_default_ignorables: bool = False,
+) -> list[str]:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    source_lines = [""] * (normalized.count("\n") + 1)
+    _dispatcher_cross_line_scan_body(
+        body,
+        mask_code_inline=mask_code_inline,
+        normalize_default_ignorables=normalize_default_ignorables,
+        source_lines=source_lines,
+    )
+    return source_lines
+
+
+def _dispatcher_code_block_line_numbers(body: str) -> set[int]:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    line_numbers: set[int] = set()
+    for token in _DISPATCHER_MARKDOWN.parse(normalized):
+        if token.type in {"fence", "code_block"} and token.map is not None:
+            line_numbers.update(range(token.map[0], token.map[1]))
+    return line_numbers
+
+
+_DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE = re.compile(
+    rf"(?:^[ \t]*|[.!?:][ \t]+|while[ \t]+the[ \t]+|"
+    rf"while[ \t]*(?:\n[ \t]*)+the[ \t]+){_DISPATCHER_DEDICATED_KEYWORD}"
+    rf"{_DISPATCHER_RETENTION_SEPARATOR}{_DISPATCHER_WORKTREE_KEYWORD}\b.*?\b"
+    rf"{_DISPATCHER_IS_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
+    rf"{_DISPATCHER_STILL_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
+    rf"{_DISPATCHER_DIRTY_KEYWORD}\b",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+_DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE = re.compile(
+    r"^\s*is\s+still\s+dirty\b",
+    re.IGNORECASE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_RE = re.compile(
+    r"^\s*still\s+dirty\b",
+    re.IGNORECASE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_STILL_RE = re.compile(
+    r"^\s*dirty\b",
+    re.IGNORECASE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_RE = re.compile(
+    r"\bis\s*$",
+    re.IGNORECASE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_STILL_RE = re.compile(
+    r"\bis\s+still\s*$",
     re.IGNORECASE,
 )
 _DISPATCHER_DEDICATED_WORKTREE_RE = re.compile(
@@ -1760,6 +2349,150 @@ _DISPATCHER_HEAD_BINDING_RE = re.compile(
     r"(?:\b(?:base\s+)?head\s*[:=]\s*|\bat\s+head\s+)`?(?P<value>[0-9a-f]{40,64})`?",
     re.IGNORECASE,
 )
+
+
+def _dispatcher_source_span_rule(rule: Callable[..., bool]) -> Callable[..., bool]:
+    def capture(state: Any, silent: bool) -> bool:
+        start = state.pos
+        count = len(state.tokens)
+        matched = rule(state, silent)
+        if not silent and len(state.tokens) > count:
+            token = state.tokens[-1]
+            if token.type in {"code_inline", "html_inline"}:
+                token.meta["source_span"] = (start, state.pos)
+        return matched
+    return capture
+
+
+_DISPATCHER_EXAMPLE_MARKDOWN = MarkdownIt("commonmark", {"html": True}).enable("strikethrough")
+_DISPATCHER_EXAMPLE_MARKDOWN.inline.ruler.at("backticks", _dispatcher_source_span_rule(backtick))
+_DISPATCHER_EXAMPLE_MARKDOWN.inline.ruler.at("html_inline", _dispatcher_source_span_rule(html_inline))
+
+
+def _dispatcher_example_scan_source(body: str) -> str:
+    """Mask code examples in source coordinates, leaving receipt grammar intact.
+
+    Markdown token spans exclude escaped delimiters and fenced examples. HTML
+    events come only from actual HTML tokens, so tags inside code spans, link
+    destinations or comments cannot open or close an example. Keeping source
+    offsets and newlines prevents an example from lending fields to a real
+    receipt on the same line or moving a later receipt to another source slot.
+    """
+    source = body.replace("\r\n", "\n").replace("\r", "\n")
+    source = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", source)
+    lines = source.splitlines(keepends=True)
+    starts: list[int] = []
+    cursor = 0
+    for line in lines:
+        starts.append(cursor)
+        cursor += len(line)
+    spans: list[tuple[int, int]] = []
+    code_stack: list[tuple[str, int]] = []
+
+    def receipt_example(text: str) -> bool:
+        normalized = _dispatcher_strip_default_ignorables(text)
+        marker = any(
+            pattern.search(part)
+            for part in (normalized, *normalized.splitlines())
+            for pattern in (
+                _DISPATCHER_PICKUP_RECEIPT_RE,
+                _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE,
+                _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE,
+            )
+        )
+        return marker and bool(
+            _DISPATCHER_BRANCH_BINDING_RE.search(normalized)
+            or _DISPATCHER_HEAD_BINDING_RE.search(normalized)
+        )
+
+    marker = "DISPATCHER_CODE_EXAMPLE_VISIBILITY"
+    while marker in source:
+        marker += "_"
+
+    def visible_at(offset: int) -> bool:
+        # Keep the existing whole-comment visibility rules authoritative when
+        # HTML token chunks straddle comments, paragraphs or unfinished tags.
+        visible = _dispatcher_cross_line_scan_body(source[:offset] + marker + source[offset:])
+        return marker in visible
+
+    class CodeElements(HTMLParser):
+        def __init__(self, content: str, offsets: list[int]) -> None:
+            super().__init__(convert_charrefs=True)
+            self.content = content
+            self.offsets = offsets
+            self.line_starts = [0]
+            self.line_starts.extend(match.end() for match in re.finditer("\n", content))
+
+        def position(self) -> int:
+            row, column = self.getpos()
+            return self.line_starts[row - 1] + column
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag in {"code", "pre"}:
+                start = self.position()
+                stop = start + len(self.get_starttag_text())
+                content_start = self.offsets[stop - 1] + 1
+                if visible_at(content_start):
+                    code_stack.append((tag, self.offsets[start]))
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag not in {"code", "pre"} or not visible_at(self.offsets[self.position()]):
+                return
+            for index in range(len(code_stack) - 1, -1, -1):
+                if code_stack[index][0] == tag:
+                    start = code_stack[index][1]
+                    del code_stack[index:]
+                    if not code_stack:
+                        end = self.content.find(">", self.position()) + 1
+                        stop = self.offsets[end - 1] + 1
+                        rendered = _dispatcher_cross_line_scan_body(source[start:stop])
+                        if receipt_example(rendered):
+                            spans.append((start, stop))
+                    break
+
+    for token in _DISPATCHER_EXAMPLE_MARKDOWN.parse(source):
+        if token.type not in {"inline", "html_block"} or token.map is None:
+            continue
+        if token.type == "inline" and not any(
+            child.type == "code_inline" and receipt_example(child.content)
+            or child.type == "html_inline" and re.search(r"</?(?:code|pre)\b", child.content, re.IGNORECASE)
+            for child in token.children or []
+        ):
+            continue
+        if token.type == "html_block" and not re.search(r"</?(?:code|pre)\b", token.content, re.IGNORECASE):
+            continue
+        offsets: list[int] = []
+        for index, content_line in enumerate(token.content.splitlines(keepends=True)):
+            row = token.map[0] + index
+            literal = content_line.rstrip("\n")
+            column = lines[row].find(literal)
+            if column < 0:
+                # A source extent that cannot be proved must never hide intent.
+                raise RuntimeError("dispatcher_activity_invalid")
+            offsets.extend(range(starts[row] + column, starts[row] + column + len(content_line)))
+        if token.type == "html_block":
+            parser = CodeElements(token.content, offsets)
+            parser.feed(token.content)
+            continue
+        for child in token.children or []:
+            extent = child.meta.get("source_span")
+            if extent is None:
+                continue
+            start, stop = extent
+            if child.type == "code_inline" and receipt_example(child.content):
+                spans.append((offsets[start], offsets[stop - 1] + 1))
+            elif child.type == "html_inline":
+                parser = CodeElements(token.content[start:stop], offsets[start:stop])
+                parser.feed(token.content[start:stop])
+    masked = list(source)
+    for start, stop in spans:
+        for index in range(start, stop):
+            if masked[index] != "\n":
+                masked[index] = " "
+        # Boundaries prevent an example from joining fragments or creating a
+        # fresh line-start receipt that the original source does not contain.
+        masked[start] = masked[stop - 1] = _DISPATCHER_TABLE_CELL_BOUNDARY
+    return "".join(masked)
 
 
 def _dispatcher_resumable_binding_resources(
@@ -1851,25 +2584,221 @@ def _dispatcher_resumable_binding_resources(
         if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
             raise RuntimeError("dispatcher_activity_invalid")
         body = comment["body"]
-        for line in body.splitlines():
+        scan_source = _dispatcher_example_scan_source(body)
+        cross_line_scan_body = _dispatcher_cross_line_scan_body(scan_source)
+        normalized_cross_line_scan_body = _dispatcher_cross_line_scan_body(
+            scan_source, normalize_default_ignorables=True
+        )
+        if any(
+            re.search(r"[\r\n]", match.group(0))
+            for scan_body in (
+                cross_line_scan_body,
+                normalized_cross_line_scan_body,
+            )
+            for scan_segment in _dispatcher_split_scan_segments(scan_body)
+            for match in _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.finditer(
+                scan_segment
+            )
+        ):
+            raise RuntimeError("dispatcher_activity_invalid")
+        truncated_scan_lines = _dispatcher_cross_line_scan_source_lines(
+            scan_source, mask_code_inline=True
+        )
+        normalized_truncated_scan_lines = _dispatcher_cross_line_scan_source_lines(
+            scan_source, mask_code_inline=True, normalize_default_ignorables=True
+        )
+        lines = body.splitlines()
+        scan_source_lines = scan_source.splitlines()
+        table_scan_lines = _dispatcher_normalize_gfm_table_pipes(scan_source).splitlines()
+        table_line_numbers = _dispatcher_gfm_table_line_numbers(scan_source)
+        table_line_numbers.update(_dispatcher_html_table_line_numbers(scan_source))
+        code_block_lines = _dispatcher_code_block_line_numbers(scan_source)
+        for line_number, line in enumerate(lines):
+            if line_number in code_block_lines:
+                continue
+            original_line = line
+            line = scan_source_lines[line_number]
+            scan_line = (
+                table_scan_lines[line_number]
+                if line_number < len(table_scan_lines)
+                else line
+            )
+            marker_scan_line = _dispatcher_cross_line_scan_body(scan_line)
+            normalized_marker_scan_line = _dispatcher_cross_line_scan_body(
+                scan_line, normalize_default_ignorables=True
+            )
+            truncated_scan_line = _dispatcher_cross_line_scan_body(
+                scan_line, mask_code_inline=True
+            )
+            normalized_truncated_scan_line = _dispatcher_cross_line_scan_body(
+                scan_line,
+                mask_code_inline=True,
+                normalize_default_ignorables=True,
+            )
+            visible_truncated_line = (
+                truncated_scan_lines[line_number]
+                if line_number < len(truncated_scan_lines)
+                else ""
+            )
+            next_visible_truncated_line = (
+                truncated_scan_lines[line_number + 1]
+                if line_number + 1 < len(truncated_scan_lines)
+                else ""
+            )
+            normalized_visible_truncated_line = (
+                normalized_truncated_scan_lines[line_number]
+                if line_number < len(normalized_truncated_scan_lines)
+                else ""
+            )
+            normalized_next_visible_truncated_line = (
+                normalized_truncated_scan_lines[line_number + 1]
+                if line_number + 1 < len(normalized_truncated_scan_lines)
+                else ""
+            )
+            continuation_line = (
+                table_scan_lines[line_number + 1]
+                if line_number + 1 < len(table_scan_lines)
+                else ""
+            )
+            normalized_continuation_line = _dispatcher_cross_line_scan_body(
+                continuation_line, normalize_default_ignorables=True
+            )
+            marker_segments = _dispatcher_split_scan_segments(marker_scan_line)
+            continuation_segments = _dispatcher_split_scan_segments(continuation_line)
+            normalized_marker_segments = _dispatcher_split_scan_segments(
+                normalized_marker_scan_line
+            )
+            normalized_continuation_segments = _dispatcher_split_scan_segments(
+                normalized_continuation_line
+            )
+            truncated_marker_lines = truncated_scan_line.splitlines()
+            normalized_truncated_marker_lines = normalized_truncated_scan_line.splitlines()
+            dedicated_truncated_marker = bool(visible_truncated_line.strip()) and any(
+                _dispatcher_table_marker_search(
+                    _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE,
+                    rendered_line,
+                    next_text=next_visible_truncated_line,
+                )
+                for rendered_line in truncated_marker_lines
+            )
+            normalized_dedicated_truncated_marker = bool(
+                normalized_visible_truncated_line.strip()
+            ) and any(
+                _dispatcher_table_marker_search(
+                    _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE,
+                    rendered_line,
+                    next_text=normalized_next_visible_truncated_line,
+                )
+                for rendered_line in normalized_truncated_marker_lines
+            )
+            dedicated_cross_line_marker = bool(
+                line_number not in table_line_numbers
+                and line_number + 1 not in table_line_numbers
+                and any(
+                    _DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE.search(
+                        continuation_segments[index]
+                        if index < len(continuation_segments)
+                        else ""
+                    )
+                    or (
+                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_RE.search(segment)
+                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_RE.search(
+                            continuation_segments[index]
+                            if index < len(continuation_segments)
+                            else ""
+                        )
+                    )
+                    or (
+                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_STILL_RE.search(segment)
+                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_STILL_RE.search(
+                            continuation_segments[index]
+                            if index < len(continuation_segments)
+                            else ""
+                        )
+                    )
+                    for index, segment in enumerate(marker_segments)
+                    if _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(segment)
+                )
+            )
+            normalized_dedicated_cross_line_marker = bool(
+                line_number not in table_line_numbers
+                and line_number + 1 not in table_line_numbers
+                and any(
+                    _DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE.search(
+                        normalized_continuation_segments[index]
+                        if index < len(normalized_continuation_segments)
+                        else ""
+                    )
+                    or (
+                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_RE.search(segment)
+                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_RE.search(
+                            normalized_continuation_segments[index]
+                            if index < len(normalized_continuation_segments)
+                            else ""
+                        )
+                    )
+                    or (
+                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_STILL_RE.search(segment)
+                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_STILL_RE.search(
+                            normalized_continuation_segments[index]
+                            if index < len(normalized_continuation_segments)
+                            else ""
+                        )
+                    )
+                    for index, segment in enumerate(normalized_marker_segments)
+                    if _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(segment)
+                )
+            )
+            dedicated_truncated_marker = (
+                dedicated_truncated_marker or normalized_dedicated_truncated_marker
+            )
+            dedicated_cross_line_marker = (
+                dedicated_cross_line_marker or normalized_dedicated_cross_line_marker
+            )
+            dedicated_marker_match = _dispatcher_marker_search(
+                _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE,
+                marker_scan_line,
+            )
+            normalized_dedicated_marker_match = _dispatcher_marker_search(
+                _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE,
+                normalized_marker_scan_line,
+            )
             explicit_binding = bool(
                 _DISPATCHER_PICKUP_RECEIPT_RE.search(line)
                 or _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
-                or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(line)
+                or dedicated_marker_match
+                or normalized_dedicated_marker_match
+                or dedicated_truncated_marker
+                or dedicated_cross_line_marker
             )
             if not explicit_binding:
                 continue
+            if dedicated_cross_line_marker or dedicated_truncated_marker:
+                raise RuntimeError("dispatcher_activity_invalid")
+            # Opacity only removes source matches. Every accepted token remains
+            # byte-identical at the same offset in the original comment body.
+            def source_binding(pattern: re.Pattern[str]) -> re.Match[str] | None:
+                match = pattern.search(line)
+                if match is None:
+                    return None
+                original = pattern.match(original_line, match.start())
+                if original is None or original.group(0) != match.group(0):
+                    raise RuntimeError("dispatcher_activity_invalid")
+                return original
+
+            if _DISPATCHER_PICKUP_RECEIPT_RE.search(line):
+                source_binding(_DISPATCHER_PICKUP_RECEIPT_RE)
             if (
                 _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
-                and not _DISPATCHER_PRESERVED_WORKTREE_RE.search(line)
+                and not source_binding(_DISPATCHER_PRESERVED_WORKTREE_RE)
             ) or (
-                _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(line)
-                and not _DISPATCHER_DEDICATED_WORKTREE_RE.search(line)
+                (dedicated_marker_match or normalized_dedicated_marker_match)
+                and not source_binding(_DISPATCHER_DEDICATED_WORKTREE_RE)
             ):
                 raise RuntimeError("dispatcher_activity_invalid")
-            worktree = _DISPATCHER_WORKTREE_BINDING_RE.search(line)
-            branch = _DISPATCHER_BRANCH_BINDING_RE.search(line)
-            head = _DISPATCHER_HEAD_BINDING_RE.search(line)
+            worktree = source_binding(_DISPATCHER_WORKTREE_BINDING_RE)
+            branch = source_binding(_DISPATCHER_BRANCH_BINDING_RE)
+            head = source_binding(_DISPATCHER_HEAD_BINDING_RE)
             if not any((branch, head)):
                 # An explicit marker with only a path (or no parseable
                 # branch/head) is unsafe: the remaining binding may be on a
@@ -2841,6 +3770,20 @@ def _branch_has_lifecycle_preservation(
         isinstance(record, Mapping)
         and record.get("branch") == branch
         and record.get("status") != "removed"
+        for record in lifecycle_records.values()
+    )
+
+
+def _branch_has_missing_preserved_lifecycle(
+    branch: str,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
+) -> bool:
+    if lifecycle_records is None:
+        return False
+    return any(
+        isinstance(record, Mapping)
+        and record.get("branch") == branch
+        and record.get("status") == "missing_preserved"
         for record in lifecycle_records.values()
     )
 
@@ -4226,13 +5169,19 @@ def _retire_inactive_ref_phase(
                         try:
                             for path, record in registry.items():
                                 if record.get("branch") == branch or _record_previously_bound(record, branch):
-                                    agent_worktree._validate_authority_record(path, record)
+                                    if record.get("status") == "missing_preserved":
+                                        agent_worktree._validate_missing_preserved_binding(
+                                            cwd, path, record
+                                        )
+                                    else:
+                                        agent_worktree._validate_authority_record(path, record)
                         except (RuntimeError, TypeError, ValueError):
                             receipt["retained"][ref] = "invalid_lifecycle_binding"
                             continue
                     branch_protected = kind in {"local_branch", "remote_tracking"} and (
                         any_live_lease or f"refs/heads/{branch}" in checked_refs or branch in open_branches
                         or _branch_has_worktree_path_lease(branch, resources, registry)
+                        or _branch_has_missing_preserved_lifecycle(branch, registry)
                         or any(record.get("branch") == branch and record.get("expires_at", 0) > time.time()
                                for record in registry.values())
                         or (special_protected is not None and (
@@ -4499,7 +5448,12 @@ def retire_inactive_remote_branches(
                 try:
                     for path, record in registry.items():
                         if record.get("branch") == branch or _record_previously_bound(record, branch):
-                            agent_worktree._validate_authority_record(path, record)
+                            if record.get("status") == "missing_preserved":
+                                agent_worktree._validate_missing_preserved_binding(
+                                    cwd, path, record
+                                )
+                            else:
+                                agent_worktree._validate_authority_record(path, record)
                 except (RuntimeError, TypeError, ValueError):
                     invalid = True
                 preserve = (
@@ -4508,6 +5462,7 @@ def retire_inactive_remote_branches(
                     or ref == special.pull_ref or sha == special.pull_sha
                     or re.search(r"(?:^|[-_/])" + str(special.issue_number) + r"(?:$|[-_/])", branch)
                     or any(record.get("branch") == branch and record["expires_at"] > time.time() for record in registry.values())
+                    or _branch_has_missing_preserved_lifecycle(branch, registry)
                     or any(row["kind"] == "lease" and not row["record"].get("released_at")
                            and _parse_dispatcher_time(row["record"].get("expires_at")).timestamp() > time.time() for row in dispatcher)
                     or any(branch in resource or sha in resource for resource in resources)

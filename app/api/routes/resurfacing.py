@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.context_bundles.runtime_registry import get_emitted_bundle
+from app.api.request_active_context import current_scoped_route_read, scoped_route_read
+from app.context_bundles.runtime_registry import emitted_bundle_context_key, get_emitted_bundle
 from app.context_bundles.schema import ContextBundle
 from app.resurfacing.bundle_consumer import (
     BundleAuthorityViolation,
@@ -22,6 +23,25 @@ from app.resurfacing.bundle_consumer import (
 router = APIRouter()
 
 
+def _visible_emitted_bundle(bundle_id: str) -> ContextBundle | None:
+    """The emitted bundle this request may see (MVR-05B4c5).
+
+    A scoped read sees only the emission of its own binding and full context
+    identity (a zero-binding selection sees none); a carrier-free read sees
+    carrier-free emissions only.
+    """
+    scoped = current_scoped_route_read()
+    if scoped is None:
+        return get_emitted_bundle(bundle_id)
+    if scoped.vault_binding_id is None or scoped.context is None:
+        return None
+    return get_emitted_bundle(
+        bundle_id,
+        vault_binding_id=scoped.vault_binding_id,
+        context_key=emitted_bundle_context_key(scoped.context),
+    )
+
+
 def _resurfacing_bundle_source(bundle_id: str) -> ContextBundle:
     """Resolve an emitted resurface-scoped bundle for the given id.
 
@@ -29,7 +49,7 @@ def _resurfacing_bundle_source(bundle_id: str) -> ContextBundle:
     synthesize a construction envelope when the requested emitted bundle is
     missing, because that would hide addressability failures from operators.
     """
-    bundle = get_emitted_bundle(bundle_id)
+    bundle = _visible_emitted_bundle(bundle_id)
     if bundle is None:
         raise HTTPException(
             status_code=404,
@@ -42,7 +62,8 @@ def _resurfacing_bundle_source(bundle_id: str) -> ContextBundle:
 
 
 @router.get("/resurfacing/bundle/{bundle_id}", response_model=ResurfacingBundleFrame)
-async def resurfacing_from_bundle(bundle_id: str) -> ResurfacingBundleFrame:
+@scoped_route_read
+def resurfacing_from_bundle(bundle_id: str) -> ResurfacingBundleFrame:
     """Consume a ContextBundle into a suggestion-only resurfacing frame."""
     bundle = _resurfacing_bundle_source(bundle_id)
     why_now = WhyNowSignal(

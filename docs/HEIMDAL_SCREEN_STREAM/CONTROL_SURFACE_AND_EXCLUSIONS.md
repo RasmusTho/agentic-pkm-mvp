@@ -26,8 +26,9 @@ status for the operator.
 1. **Governed pause/resume state (INV-SCREEN-C).** A durable, queryable control to pause and resume
    observation. SCREEN-03 owns the operator-visible status of the actual capture loop; this task owns
    the governed setting and must not claim that a resumed setting means an external client is
-   observing. Pause is the standing-grant revocation in miniature: paused = the `screen_always_on`
-   consent is not active.
+   observing. Pause revokes the active `screen_always_on` standing grants through the canonical
+   consent ledger. A subsequent resume setting never re-grants consent: capture stays refused until
+   a separate explicit grant exists.
 2. **Per-app and per-scope exclusions (INV-SCREEN-D).** An editable exclusion list: exclude by app
    (bundle id) and by scope. The list is honored **at capture** (SCREEN-03) — this task owns the
    list as a governed setting; the client reads it. A **scope→app mapping** lets the owner declare, e.g.,
@@ -42,19 +43,61 @@ status for the operator.
    (who / what / when / old→new). The owner can always answer "when did I pause, what did I exclude,
    when did the retention bound change?" — the audit trail the always-on posture needs.
 5. **Settings-governed (Settings Spine).** These are vault-scoped settings resolved through the one
-   spine; a change edited as markdown takes effect in the running client/host without a manual CLI step
-   (SET-1 ingestion), and rebinds on vault selection (SET-7). No bespoke settings store.
+   spine; a Markdown edit reaches the host's accepted control projection through SET-1 ingestion
+   without a manual CLI step, and rebinds on vault selection (SET-7). SCREEN-03 consumes that
+   projection. No bespoke settings store.
 
 ## Concretely
 
+```http
+GET /api/heimdal/screen/control?app_id=com.example.Editor&scopes=work
+
+PUT /api/heimdal/screen/control
+Content-Type: application/json
+
+{"key":"screen_paused","value":true}
 ```
-$ python -m app.cli heimdal screen-control status
-pause_setting: resumed   capture_state: unknown_external_client   excluded_apps: [com.apple.Passwords, com.bank.app]   excluded_scopes: [private]
-$ python -m app.cli heimdal screen-control pause
-pause setting changed to paused. receipt: heimdal_screen_control_receipt/2026-07-07T14:22Z (actor=operator, pause resumed->paused)
-$ python -m app.cli heimdal screen-control exclude-app com.some.app
-excluded com.some.app. receipt: ... (actor=operator, exclusions +com.some.app)
-```
+
+Both screen endpoints use the existing server-derived authentication subject. A write additionally
+requires shared-settings role permission and WriteGuard admission; scoped read-context credentials
+cannot select the compatibility vault for mutation. The existing
+`POST /api/companion/vault/settings` writer applies the same authentication to screen keys. The
+actor is never supplied by the request body.
+
+A carrier-free GET reads the compatibility vault. A GET carrying `X-Active-Context-Session` or
+`X-Active-Context-Override` answers from the request binding's own settings under the scoped
+route read window; a malformed, expired, unauthorized or blank carrier fails closed. PUT stays a
+carrier-free compatibility write: a carrier-bearing PUT returns `409 capability_not_ready`
+(`mvr05c_scoped_write`). Neither endpoint falls back to the current compatibility vault for a
+scoped request.
+
+The response exposes accepted `controls`, `requested_state` (`paused` or `resume_requested`),
+effective `state` (`paused`, `ready`, or `degraded`), `settings_state`, visible `errors`, and
+`capture_state=unknown_external_client`. `capture_permitted` requires a nonempty app ID, active
+consent, accepted resumed controls, and no app/scope exclusion. `ready` reports the general host
+gates; `capture_permitted` applies the queried app/scope exclusions. Neither observes the client's
+loop. A successful change returns its durable receipt; an unchanged
+value returns no new receipt. This slice does not add a screen-control CLI.
+
+The source is `<vault>/settings/screen_control.md`. The API, Companion writer, direct
+`SettingsService.update_setting` caller, and live watcher use the existing acceptance seam. Local
+service writers serialize control updates, preserve the original Markdown version with filesystem
+version-CAS, and accept only the bytes produced by the requested write. Pause then revokes every
+active screen-scope grant through `consent_ledger.revoke_consent` before settings acceptance. The
+canonical grant fence denies later raw admission; the same call erases the grant's hot/cold raw
+copies through HAR-05's receipted erasure path. Already published observations are not retracted by
+this control. Other capture lanes' grants are unchanged.
+
+A concurrent source edit, failed revocation/erasure, or failed settings receipt returns a refusal
+without accepting a stale pause. A durable revocation is never compensated by re-granting consent.
+If erasure fails after the ledger append, that existing revocation row remains the recovery work
+item. Pause retry reconciles screen-scope erasure before accepting the setting; the existing
+scheduled retention reconciliation also retains its all-scope recovery. An explicit pause of an
+already-paused setting still revokes active screen grants, with canonical actor-tagged revocation
+rows but no duplicate settings-change receipt.
+If one grant's revocation or erasure raises, the writer still attempts every remaining active
+screen grant before returning failure. An erasure failure must not leave a later grant admitting
+capture; no settings success receipt is written until the pending work is reconciled.
 
 ## Why This Matters
 
@@ -79,7 +122,7 @@ audit trail. Receipting every change is what makes the always-on posture account
 - [ ] AC4: an invalid retention/cadence value degrades loudly to last-valid with a visible degraded
       state, never silently to a code default. Verify: `tests/heimdal/test_screen_control_settings.py::test_invalid_tunable_degrades_loud_not_silent`
 - [ ] AC5 (non-behavioral): the screen-stream tunables are declared once in the single default registry
-      (no duplicated literals). Verify: doc writeback at `docs/HEIMDAL_SCREEN_STREAM/README.md :: Provisional constants` + `tests/settings/test_provider_census.py`-style single-source assertion for the screen tunables
+      (no duplicated literals). Verify: doc writeback at `docs/HEIMDAL_SCREEN_STREAM/README.md :: Provisional constants` + `tests/heimdal/test_screen_control_settings.py::test_screen_tunables_are_single_sourced`
 
 ## How to Verify (Pre-Merge)
 
@@ -99,12 +142,20 @@ Settings Spine.
 
 ## Restart / Durability Posture
 
-Pause state and the exclusion list are **durable governed settings** (vault-scoped markdown + resolved
-bundle): they survive a restart of the client and the host. The pause state's durability is the
-load-bearing one — a restart must never resume observation the owner had paused (SCREEN-03 defaults to
-paused on ambiguous restart; this task keeps the durable source of that state). A lost in-memory
-resolved bundle re-resolves from the markdown source on restart (Settings Spine reload path), so no
-control state is lost.
+Pause state and exclusions are **durable governed settings**: vault-scoped Markdown supplies desired
+values, and the existing durable settings receipt history reconstructs accepted values for the
+selected vault ID and local-instance ID. Restart and watcher replay retain accepted pause and do not
+duplicate a receipt. A source edit that has not completed durable acceptance remains pending and
+denies capture. Invalid replacements retain proven values with visible degradation; unavailable or
+corrupt receipt history cannot authorize capture or irreversible retention cleanup. No selected vault or
+a missing source file also denies capture. SCREEN-03 must still default to paused on ambiguous
+client restart and render its actual loop state. Resuming the setting after a completed pause keeps
+capture refused until a separate explicit consent grant; neither retry nor restart creates one.
+
+New-vault initialization derives the canonical file from the single model declaration. An existing
+legacy `_heimdal/settings.md` retention value is migration evidence only: an explicit canonical
+Settings Spine write records that old value before the screen retention policy becomes active.
+The old note is not rewritten. See `docs/SETTINGS.md :: Screen control settings`.
 
 ## Related Docs
 

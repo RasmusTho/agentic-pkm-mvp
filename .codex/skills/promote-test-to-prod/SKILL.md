@@ -1,193 +1,80 @@
 ---
 name: promote-test-to-prod
-description: "Staged workflow: promote a test-verified candidate commit to prod/stable. Requires a durable test verification receipt from promote-to-test (or an explicit emergency bypass receipt). Orchestrates the standard prepare → execute → verify → (rollback on failure) sequence against the prod channel."
+description: "Promote the exact current green TEST candidate with durable functional PASS and explicit plan approval through protected stable authority, then deploy its tested immutable image and verify."
 ---
 
 # Promote Test to Prod
 
-> **Status: describes the TARGET gated-`stable` model (deferred promotion hardening).** Prod
-> currently tracks `main` directly per `docs/RELEASE_CHANNELS/README.md §Promotion model` and
-> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
-> **dormant** and is not an ancestor of `origin/main`. This skill's entire prod-facing stage
-> cannot run against the current baseline without explicit operator direction — see README
-> §Current direction and §Promotion model before invoking.
+> **Status: current source promotion policy (ADR-0068 D4, Issue #6228).**
+> `stable` is the production promotion authority. Normal advancement requires the exact current
+> `test` candidate C, trusted green TEST evidence, a durable functional PASS, and explicit approval
+> of the concrete plan. Protected merge M records stable authority; it does not qualify a new
+> source version or image. Production deploys the tested source C and immutable digest D.
+> Repository support does not establish a running-prod observation or physical cutover. Current
+> infrastructure observations belong to `RasmusTho/yggdrasil-infra/CURRENT_STATUS.md`.
 
-Use this skill to advance a **test-verified** candidate commit to the prod channel. This is the second and final stage of the normal promotion path.
+Use this skill for the normal production stage of `main` → `dev` → `test` → `stable`. Read
+`docs/RELEASE_CHANNELS/README.md :: Promotion model`, `:: Promotion contract`,
+`docs/ENVIRONMENTS.md :: Code vs Environment Separation` and the existing plan contract. This is
+Builder System boundary work; release receipts do not constitute runtime/user memory.
 
-Read `docs/RELEASE_CHANNELS/README.md` (§Current direction, §Promotion contract, §Channel model) and `docs/ENVIRONMENTS.md` (§Code vs Environment Separation) before running.
-This is Builder System boundary work: promotion plans and receipts are Builder System governance
-artifacts, while the promoted code may change Product/Runtime behavior. Use
-`docs/architecture/SBS_OPERATING_MODEL.md` to classify owner-doc, SBS, release, and memory impacts
-before treating promotion evidence as Product truth.
+## Required evidence
 
-Do not use this skill to:
-- promote to the test channel (use `promote-to-test` first)
-- verify prod health in isolation (use `verify-promotion`)
-- roll back a failed prod promotion (use `rollback-promotion`)
+All of these are required together:
 
-## Purpose in the staged workflow
+- C is the **exact current** `test` ref, with trusted green DEV and TEST verdict artifacts from the
+  delivered controller, and published build-once image provenance for immutable digest D.
+- `promote-to-test` produced a durable functional PASS for C/D on isolated `test` bindings. Its signed
+  STARTUP-04 v2 receipt, report, context and existing trust registry are available and fresh,
+  non-revoked and mutually consistent. A green deploy, PG smoke or Markdown PASS alone is insufficient.
+- The plan enumerates S→C code, config, migration and rollback deltas. S is the freshly read protected
+  stable baseline and ancestor of C. A human approves this **concrete** plan, including every
+  forward-only migration acknowledgment. An approved different plan cannot be replayed.
+- Existing production model, isolation, vault, immutable-image and migration gates pass.
 
-```
-candidate commit
-  └─► promote-to-test ──► test verification receipt (required)
-                               └─► promote-test-to-prod ──► prod stable
-```
+An older PASS candidate is ineligible once `test` changes. No implicit emergency bypass is provided
+by this normal path or its source guard. A genuine emergency requires separately established
+operator authority and an explicit recovery contract; a written risk note alone does not waive
+these eligibility or migration checks.
 
-This skill is a wrapper that gates the standard `prepare-promotion → execute-promotion → verify-promotion` sequence behind a required test evidence check.
+## Procedure
 
-## Deployment model
+1. Read current channel evidence and resolve C/D. Invoke `promote-to-test` when functional evidence
+   is missing; do not replace it with fixtures or a deploy verdict.
+2. Invoke `prepare-promotion` for this exact C. Preserve the signed functional evidence and trust
+   inputs in the existing plan's `Test evidence` section; keep the seven required narrative sections.
+3. Obtain the human's exact-plan approval and acknowledgments. Preparation never auto-approves.
+4. Run `python -m app.release_channels.stable_promotion --plan <plan> --phase promotion` before
+   effects. Refuse divergent S, unqualified checkout M, missing cutover evidence or changed TEST.
+5. Invoke `execute-promotion --plan <plan>`. Both physical models retain the protected stable PR
+   requirement. The implemented normal path uses an established pinned-image model and verifies
+   M's `[S, C]` parents and unchanged tree, then deploys **C/D**, never an untested M image/version.
+6. Invoke `verify-promotion --plan <plan>`. Require live C/D and the retained S/M admission receipt,
+   plus all health, isolation, watcher, outbox and functional checks. Append observed receipts to
+   the plan's output area and return the acceptance evidence.
+7. On a pre-effect refusal, diagnose/repair. Reconcile unknown effects. Only an observed deployment
+   effect needing recovery permits authorized `rollback-promotion` → `verify-promotion`; do not
+   reverse forward-only migrations or start an automatic recovery loop.
 
-Before invoking the prod-facing stages, resolve the prod channel's deployment model:
+## Binding and effect limits
 
-- **Checkout model (interim / no-dead-window):** the channel remains on the checkout model until a
-  cutover receipt exists for prod: a fleet-model fitness PASS recorded at
-  `ops/deployments/prod-latest.json`. In this mode, the wrapper keeps the existing
-  `prepare-promotion -> execute-promotion -> verify-promotion` chain, and
-  `execute-promotion` performs the governed `stable` PR, checkout update, migrations, and
-  `make prod-start-full` restart.
-- **Pinned-image model (post-cutover):** once the prod cutover receipt exists, the wrapper keeps the
-  same test receipt / bypass gate, operator acknowledgments, and release-channel authority checks,
-  but `execute-promotion` must route physical deployment through
-  `scripts/deploy_channel.sh prod <authorized-sha>` and `rollback-promotion` must route physical
-  rollback through `scripts/deploy_channel.sh prod <previous-good-sha>`. The deployment model does
-  not move ADR-0040 authority; it only changes how the authorized SHA is applied to prod.
+Use `docker-compose.yaml:docker-compose.prod.yml`, project `pkm-prod`, `PKM_ENVIRONMENT=prod`, the
+operator-configured real vault, DB `app` on 15432 and prod artifact paths. Never use test resources
+for production. In pinned-image mode only `scripts/deploy_channel.sh deploy prod <C> --image-digest
+<D> --promotion-plan <path>` performs the physical forward deployment. Recovery uses the existing
+`rollback` command with the recorded previous-good pin under its separate authority.
 
-## Required evidence before prod promotion
-
-One of two evidence forms must be present before this skill proceeds:
-
-**Normal path — test verification receipt:**
-- A PASS receipt from `promote-to-test` for the same candidate SHA, at `ops/test-promotions/YYYY-MM-DD-<short-sha>.md`.
-- The receipt must name: candidate SHA, `channel: test`, `outcome: PASS`, and a timestamp.
-- The candidate SHA in the receipt must match the SHA being promoted to prod.
-
-**Emergency bypass path — bypass receipt:**
-- Operator invokes with `--bypass-test-receipt`.
-- Operator supplies a written risk note (stored in `ops/test-promotions/YYYY-MM-DD-<short-sha>-bypass.md`):
-  - Why the test stage was skipped.
-  - What risk the operator is accepting.
-  - Operator sign-off (name or identity token).
-- The bypass receipt is permanently attached to the prod promotion plan.
-- **Direct dev→prod via bypass is not the default path.** It is reserved for genuine emergencies (critical hotfix, production outage recovery). Every bypass is a permanent audit artifact.
-
-If neither form is present, this skill aborts with:
-```
-ABORT: no test verification receipt found for candidate <sha>.
-Run promote-to-test first, or invoke with --bypass-test-receipt and supply a risk note.
-```
-
-## Channel isolation preflight
-
-Before any prod mutation, confirm every prod binding in the table below is correct:
-
-| Binding | Required value |
-| --- | --- |
-| Compose file | `docker-compose.yaml:docker-compose.prod.yml` |
-| Compose project | `pkm-prod` (not `pkm-test`, not default) |
-| `PKM_ENVIRONMENT` | `prod` |
-| Vault root | Operator-supplied real vault path (never `vault-test/` or `vault-dev/`) |
-| Postgres port | `15432` |
-| DB name | `app` |
-| Runtime artifacts | `tmp/` |
-
-**Fail-closed rule:** if any binding does not match, abort immediately. Do not proceed on a partial or ambiguous prod channel configuration.
-
-## What this skill does
-
-1. **Evidence check.** Confirm a test verification receipt (or emergency bypass receipt) exists for the candidate SHA. Abort if neither is present.
-
-2. **Channel isolation preflight.** Confirm all prod bindings (above). Abort if any fails.
-
-3. **Prod-scoped prepare.** Invoke `prepare-promotion` for the prod channel:
-   - Diffs the candidate commit against the current `stable` ref.
-   - Enumerates migrations not yet applied to `app` (prod DB, port 15432).
-   - Classifies each migration as reversible or forward-only.
-   - Links the test verification receipt (or bypass receipt) in the plan under a `Test evidence` section.
-   - Produces the prod promotion plan at `ops/promotions/YYYY-MM-DD-<short-sha>.md`.
-   - Pauses for operator review and acknowledgement of forward-only migrations.
-
-4. **Operator acknowledgement.** The operator reviews and ticks all checkboxes in the prod promotion plan. This skill does not auto-proceed past the plan review gate.
-
-5. **Prod-scoped execute.** Invoke `execute-promotion` with the acknowledged plan:
-   - Records `stable-prev` before moving anything.
-   - In checkout model, advances `stable` via the governed PR targeting `stable` (the merge commit becomes the new `stable` HEAD — never a direct ref write; see `execute-promotion §Stable-branch protection and PR-based advancement`), applies migrations to `app` (port 15432), and restarts the prod process with `make prod-start-full`. Vault root is resolved from the operator-configured `.env.prod.local` (configured once per machine per `docs/RELEASE_CHANNELS/README.md §Current direction`) — do not restate `VAULT_ROOT` inline on the command.
-   - In pinned-image model, confirms the authorized SHA and invokes `scripts/deploy_channel.sh prod <authorized-sha>`; the deploy script performs the pin bump, migration gate, recreate, health gate, UI smoke, and receipt.
-
-6. **Prod-scoped verify.** Invoke `verify-promotion` against the prod channel:
-   - Confirms `PKM_ENVIRONMENT=prod`, vault=real vault, DB=`app`.
-   - Runs every check defined by `verify-promotion`.
-   - On PASS: appends the promotion acceptance receipt to the prod plan.
-
-7. **On FAIL.** Invoke `rollback-promotion`:
-   - Reverses reversible migrations on `app`.
-   - In checkout model, restores `stable` to `stable-prev` and restarts prod.
-   - In pinned-image model, runs `scripts/deploy_channel.sh prod <previous-good-sha>` to restore the previous-good pin and recreate prod.
-   - Calls `verify-promotion` again. If still FAIL: escalate to operator, do not loop.
-
-## Evidence handoff
-
-The prod promotion plan (`ops/promotions/YYYY-MM-DD-<short-sha>.md`) links both:
-- The test verification receipt (or bypass receipt) as pre-promotion evidence.
-- The post-promotion `verify-promotion` receipt as post-promotion acceptance.
-
-This is the capability-level validation evidence referenced by `docs/RELEASE_CHANNELS/README.md §Validation / acceptance path`.
-
-## What prod promotion does NOT do
-
-- Does not rewind the real vault. (See `docs/RELEASE_CHANNELS/README.md §Vault is not release state`.)
-- Does not affect the test channel. The test DB (`app_test`) and test vault (`vault-test/`) are untouched.
-- Does not reverse forward-only migrations on rollback. These were acknowledged by the operator.
-- Does not undo external side-effects.
-
-## Operator steps
-
-The `promote-test-to-prod ...` commands below are skill invocations, not installed shell binaries — they name this skill's entry contract and arguments.
-
-```bash
-# Normal path — after promote-to-test produced a PASS receipt:
-promote-test-to-prod \
-  --candidate <sha> \
-  --test-receipt ops/test-promotions/YYYY-MM-DD-<short-sha>.md
-
-# Emergency bypass — when test stage cannot be run:
-promote-test-to-prod \
-  --candidate <sha> \
-  --bypass-test-receipt \
-  --risk-note "Critical hotfix for <incident>; test stage skipped; operator: <name>"
-```
-
-## Key constraints
-
-- Never move `stable` without a test receipt or an explicit bypass receipt.
-- Always record `stable-prev` before moving `stable`.
-- Always call `verify-promotion` after `execute-promotion` — whether bypass or normal path.
-- Never bypass the test stage without a written, stored risk note.
-- Never use the test checkout, test DB, or test vault for prod operations.
-- In pinned-image mode, never substitute checkout update/restart for
-  `scripts/deploy_channel.sh`; post-cutover physical prod deployment and rollback are pin bump plus
-  recreate.
-
-## Authority order for decisions
-
-1. `docs/RELEASE_CHANNELS/README.md` — channel model, invariants, vault-is-not-release-state
-2. `docs/ENVIRONMENTS.md` — environment binding rules
-3. `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md` — prod promotion plan shape
-4. `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md` — rollback posture and limits
-5. `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md` — migration safety
-
-## Routing
-
-- Requires: `promote-to-test` (PASS receipt) or operator emergency bypass receipt
-- Calls: `prepare-promotion → execute-promotion → verify-promotion`
-- On verify FAIL: calls `rollback-promotion → verify-promotion`
-- On rollback verify FAIL: escalates to operator; does not loop
+The vault is never rewound; forward-only migrations and external effects cannot be undone by this
+workflow. A source-policy merge establishes repository support, not a completed physical cutover
+or running-prod observation. Current host facts belong to `RasmusTho/yggdrasil-infra/CURRENT_STATUS.md`.
 
 ## Workflow continuation
 
-Follow `.codex/skills/README.md :: Workflow continuation`. Execute the prepare → execute → verify
-chain through acceptance and return the receipt to the caller. On failure, use `execute-promotion`'s
-observed-effect recovery classification: failures before deployment effects require diagnosis/repair
-without rollback; unknown effects require state reconciliation. Only an observed deployment effect
-requiring recovery permits the authorized rollback → verification route. Existing operator
-acknowledgments, migration limits, and live
-deployment-model applicability remain gates.
+Follow `.codex/skills/README.md :: Workflow continuation`. Continue prepare → execute → verify when
+execution authority and exact-plan approvals already exist; do not ask twice for recorded approval.
+On failure, use `execute-promotion`'s observed-effect recovery classification: failures before
+deployment effects require diagnosis/repair without rollback; unknown effects require state
+reconciliation. Only an observed deployment effect requiring recovery permits the authorized
+rollback → verification route.
+Missing approval, protected PR merge authorization, cutover evidence and migration acknowledgments
+remain gates. Return preparation evidence when the authorized scope ends at planning.

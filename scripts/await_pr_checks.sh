@@ -10,7 +10,7 @@
 # Contract: .codex/skills/_shared/CI_WAIT_CONTRACT.md
 #
 # Usage:
-#   scripts/await_pr_checks.sh <PR> [--codex] [--repo owner/name] [--initial-wait S] [--interval S] [--timeout S] [--sha SHA]
+#   scripts/await_pr_checks.sh <PR> [--codex] [--repo owner/name] [--required-check CONTEXT ...] [--initial-wait S] [--interval S] [--timeout S] [--sha SHA]
 #   scripts/await_pr_checks.sh --help
 #
 # --sha pins a commit for inspection and is NOT a merge gate (PR head-drift is not verified). Omit
@@ -28,16 +28,18 @@
 #   5  PR head moved during the wait — verified checks are stale; re-run (when SHA is auto-resolved)
 #   6  PR is mergeable_state=dirty — pull_request workflows will not schedule; fix conflicts, re-run (merge-gating mode)
 #   7  required check contexts absent from the head — absence is NOT success (merge-gating mode)
+#   64 required-check configuration is invalid or unavailable for the target repository
 set -uo pipefail
 
-INITIAL_WAIT=180     # sleep before first check (~ CI p50; the `not pg` gate is the long pole)
+INITIAL_WAIT=180     # bounded initial pause; selected CI workloads have different durations
 INTERVAL=90          # backoff between checks on the tail (floored to 60)
-TIMEOUT=1800         # give up after this many seconds of total polling
+TIMEOUT=5400         # 75-minute unit step plus setup/queue margin; --timeout overrides
 CHECK_CODEX=0
 PR=""
 SHA=""
 SHA_FROM_PR=0        # 1 when SHA is auto-resolved from the PR (enables the head-drift recheck)
 REPO_FLAG=""
+CALLER_REQUIRED_CHECKS=""
 
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit 0; }
 
@@ -50,6 +52,34 @@ while [ $# -gt 0 ]; do
     --timeout) TIMEOUT="$2"; shift 2 ;;
     --sha) SHA="$2"; shift 2 ;;
     --repo) REPO_FLAG="$2"; shift 2 ;;
+    --required-check)
+      if [ "$#" -lt 2 ]; then
+        echo "error: --required-check needs one non-empty context without line breaks" >&2
+        exit 64
+      fi
+      required_check="$2"
+      case "$required_check" in
+        --help|-h|--codex|--initial-wait|--interval|--timeout|--sha|--repo|--required-check)
+          echo "error: --required-check needs one non-empty context without line breaks" >&2
+          exit 64
+          ;;
+      esac
+      case "$required_check" in
+        *$'\n'*|*$'\r'*)
+          echo "error: --required-check needs one non-empty context without line breaks" >&2
+          exit 64
+          ;;
+      esac
+      if [ -z "$(printf '%s' "$required_check" | tr -d '[:space:]')" ]; then
+        echo "error: --required-check needs one non-empty context without line breaks" >&2
+        exit 64
+      fi
+      if [ -n "$CALLER_REQUIRED_CHECKS" ]; then
+        CALLER_REQUIRED_CHECKS+=$'\n'
+      fi
+      CALLER_REQUIRED_CHECKS+="$required_check"
+      shift 2
+      ;;
     -*) echo "unknown flag: $1" >&2; exit 64 ;;
     *) PR="$1"; shift ;;
   esac
@@ -111,8 +141,9 @@ fi
 # few checks that happened to attach are green". Resolution order for the expected set
 # (documented in CI_WAIT_CONTRACT.md :: Rules):
 #   1. Live branch-protection contexts for the PR's base branch (REST; needs admin — best effort).
-#   2. Documented fallback set per base branch from docs/development/GITHUB_GOVERNANCE_SETUP.md:
+#   2. For this Hub repo only, the documented fallback set per base branch:
 #      stable -> smoke, smoke-docker, pr-contract; otherwise (main default) -> Unit tests (not pg).
+#   3. For another repo, a caller-supplied --required-check profile; without one, fail closed.
 # This is the repo-required set, not "every optional check": absence of an arbitrary optional
 # check never fails the wait. Merge-gating mode only; --sha diagnostic mode skips it.
 REQUIRED_CHECKS=""
@@ -126,17 +157,25 @@ if [ "$SHA_FROM_PR" -eq 1 ]; then
   if [ -n "$REQUIRED_CHECKS" ]; then
     REQUIRED_SOURCE="branch-protection:$base"
   else
-    if [ "$base" = "stable" ]; then
+    repo_key=$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')
+    if [ "$repo_key" = "rasmustho/agentic-pkm-mvp" ] && [ "$base" = "stable" ]; then
       REQUIRED_CHECKS=$(printf 'smoke\nsmoke-docker\npr-contract')
-    else
+      REQUIRED_SOURCE="documented-fallback:$base"
+    elif [ "$repo_key" = "rasmustho/agentic-pkm-mvp" ]; then
       REQUIRED_CHECKS='Unit tests (not pg)'
+      REQUIRED_SOURCE="documented-fallback:$base"
+    elif [ -n "$CALLER_REQUIRED_CHECKS" ]; then
+      REQUIRED_CHECKS="$CALLER_REQUIRED_CHECKS"
+      REQUIRED_SOURCE="caller-profile:$REPO"
+    else
+      echo "ERROR: required-check configuration unavailable for non-Hub repository '$REPO' base '$base': branch protection did not provide required contexts and no --required-check profile was supplied. Pass --required-check '<context>' once for each required context; refusing to infer requirements from attached checks." >&2
+      exit 64
     fi
-    REQUIRED_SOURCE="documented-fallback:$base"
   fi
   echo "required checks ($REQUIRED_SOURCE): $(printf '%s\n' "$REQUIRED_CHECKS" | paste -sd ',' - | sed 's/,/, /g')"
 fi
 
-echo "waiting ${INITIAL_WAIT}s before first check (CI runs ~4-5 min; not polling through it)..."
+echo "waiting ${INITIAL_WAIT}s before first check (total wait budget ${TIMEOUT}s; REST backoff ${INTERVAL}s)..."
 sleep "$INITIAL_WAIT"
 
 # Dedupe rule (see CI_WAIT_CONTRACT.md): GitHub keeps every check-run record for a head SHA, so a
@@ -233,6 +272,7 @@ while :; do
       exit 7
     fi
     echo "TIMEOUT after ${TIMEOUT}s; checks not confirmed complete (last pending: ${pending:-unknown})" >&2
+    echo "Inspect the current job's progress and diagnostics before recovery; elapsed time alone does not justify a rerun." >&2
     exit 2
   fi
   sleep "$INTERVAL"

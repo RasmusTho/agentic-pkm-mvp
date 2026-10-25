@@ -224,6 +224,7 @@ class HostFencedVerificationCycle:
             raise ValueError(
                 "host cycle requires one shared BuilderOps outbox authority"
             )
+        consumer.bind_native_conflict_recovery(merge_executor.recover)
         self.ledger = ledger
         self.consumer = consumer
         self.merge_executor = merge_executor

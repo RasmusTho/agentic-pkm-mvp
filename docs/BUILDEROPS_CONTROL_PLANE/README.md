@@ -153,7 +153,34 @@ credentials. The existing source owners still decide whether the configured acce
 | GitHub / CI / delivery references | Existing `cockpit_github_plane.default_github_reader`, bounded REST via `gh`, for one explicitly configured repository; server-side credential custody stays with the existing source owner | Required when work/PR/check claims use it. #5520 packages `gh` in the Builder image and uses its existing REST pagination/timeout policy for the explicit repository. The optional source overlay supplies a fixed read-only host-owned gh configuration reference. Live credentials and source access still require qualification; no hub default, browser token, GraphQL substitution or inferred closed/merged readiness. Missing/refused/partial reads withdraw affected claims. |
 | Feature intent and architecture documents | Existing `cockpit_docs_plane.read_docs_plane`, addressed candidate repository docs, capability YAML and issue-capability matrix with immutable source refs | Required for M1 intent/requirement inspection. #5520 bakes docs, capability YAML and the traceability matrix into the image, with a build-time repository/SHA and complete file-hash manifest. Every GET checks that exact candidate and file set before the existing docs reader runs. Missing or changed inputs withdraw the source; arbitrary document-root selection is refused. Missing docs cannot become empty requirements. |
 | VM102 deployment evidence | Existing read-only `/opt/builderops/receipts` mount and `read_vm102_receipt_provider`, validated through the owner producers and retained `devui-runtime-prerequisites.json` | The retained independently composed managed evidence transport. It rereads each request and withdraws missing, stale, malformed, partial-update or mismatched candidate evidence. |
-| CKM/Kvasir capability context | Existing local-only `CkmQueryService` policy; no remote transport is admitted by that policy | Optional for the first bounded work journey and currently unavailable. Do not turn a local policy into a remote query, add a DB mount, or present missing context as empty/complete. A later required CKM lens needs its own source admission. |
+| CKM/Kvasir capability context | Existing local-only `CkmQueryService` and the separately owner-approved private snapshot transfer in #6194 | Managed Overview and Builder System Control may consume the fixed complete captured export under `ckm-single-operator-private-devui-v1`. The original local query policy remains intact; this admits no remote query or DB mount. Missing, stale or invalid publication stays a typed refusal and never an empty/complete source. |
+
+#### Private CKM publication and refresh
+
+On Demerzel, use the existing admitted local BuilderOps source and the reviewed checkout:
+
+```bash
+python3 scripts/devui_ckm_sync.py publish
+```
+
+The command performs the existing complete read-only CKM query, then sends the bounded captured
+envelope through stdin over the fixed `bob-1-builder-system` SSH alias. No VM password or manual
+VM login is needed. Its reviewed fixed receiver requires guest `builder-system`, validates with
+the actual non-root DevUI container on `unix:///run/docker-builderops.sock`, and only then atomically
+replaces `/opt/builderops/receipts/devui-ckm-capabilities.json` with numeric ownership `0:101` and
+mode `0640`. The existing receipt-directory mount is sufficient; no new mount or credential is
+added. File and directory fsync complete publication. An older capture cannot replace a newer one.
+Only status, content digest and capability count are printed by `publish`; `export` deliberately
+returns the complete source envelope for operator inspection.
+
+The installed DevUI image must contain this consumer before publication. Publication failure or
+an uncertain SSH result requires inspection of that exact fixed source before retrying; it does
+not authorize another target or fallback source. The runtime rereads the file for every Overview
+and Builder System Control request. Original CKM snapshot identity/watermarks remain visible;
+the trust frame also names private transfer capture and expiry. Repeat the explicit command after
+source updates and before the 24-hour expiry when this context is needed. There is no scheduler,
+automatic query retention or silent stale-data fallback. This bounded capability context supplies
+no full-system qualification, deployment, owner trial or acceptance fact.
 
 The source adapter retains observation time, immutable reference and typed refusal for each
 provider; one optional provider failure must not erase healthy independent evidence. The existing
@@ -183,7 +210,8 @@ each receipt read and one final receipt-epoch probe without reopening the admitt
 The default 120-request/minute source limit therefore withdraws a 118-task read even with no receipt
 reads; this P2 fanout limitation remains deferred, and source qualification must retain the actual
 quota/refusal evidence. A rate-limited read cannot claim completeness. GitHub check failures retain the existing partial
-per-head refusal; docs retain their own stale watermark. CKM remains independently unavailable. The first
+per-head refusal; docs retain their own stale watermark. CKM availability is conditional on a valid
+private snapshot; missing, stale or invalid captures retain an independent refusal. The first
 read-journey implementation owns its bounded adapter/asset wiring and failure tests. Those owned
 deliverables are not prerequisites for its own pickup. By contrast, a downstream harness consuming
 that production seam requires it to exist. No target transport may be treated as live until its
@@ -436,6 +464,20 @@ deployment, a drill or owner acceptance. Keep the real operator gates and exact 
 gaps visible on #5181/#4076; never fabricate their observations with a repository receipt producer.
 
 ### Normative receipt dependency order
+
+The separate owner-authorized [bounded manual DevUI component promotion](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#bounded-manual-devui-component-promotion)
+from #6105 may install and browser-verify only `builderops-devui/devui`. Its
+`devui_component_deployment.v1` operational record is not an input to any full-system receipt below,
+does not supply source qualification or Ready to try, and never establishes owner pilot, trial or
+acceptance. It retains the complete inventory and its unresolved gaps. This bounded install path
+does not change the ordered complete-system chain.
+
+Its explicit config-only source-epoch rebind uses a closed v2 plan and the same component effect
+and receipt owner. Before/after observations run the existing consumer's GET-only source client;
+the receipt distinguishes source binding from refused or unavailable task data. Neither those
+observations nor a changed configuration fingerprint supplies a full-system prerequisite, source
+qualification, task correction, or transferred owner acceptance. See
+[Explicit source-epoch rebind](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#explicit-source-epoch-rebind).
 
 The full-system successful-deployment path is ordered by evidence dependency, not merely by receipt
 appearance. It remains unchanged by the target
@@ -867,6 +909,57 @@ Partial-failure examples:
   separately governed and accepted.
 - If BuilderOps is unavailable, MacBook commands return a typed unavailable/auth error. They do not
   initialize SQLite or fall back to direct GitHub lease simulation.
+
+## Terminal task payload-status correction
+
+Repository support from #6175 adds `POST /v1/tasks/{task_id}/correct-payload-status`,
+`BuilderOpsControlPlaneClient.correct_task_payload_status` and the API-only CLI
+`task-correct-payload-status`. This is a narrow metadata-maintenance operation: an already-completed,
+repo-qualified GitHub Issue task with `payload.state=completed` and `payload.status=ready` may align
+only its redundant payload status to completed. It accepts no arbitrary payload or state patch and
+refuses Issue-delivery/continuation bindings. The ordinary claim/transition/complete guards are
+unchanged; a generic lease does not authorize task lifecycle or effect writes.
+
+The existing principal must have both addressed `tasks:write` and `leases:write` grants and an
+unexpired generic maintenance lease on `payload-status-correction:<task_id>`. The service binds its
+holder/actor to the authenticated principal, requires the full claimed lease with its repository
+matching the request envelope, enforces repository scope and current authority epoch,
+and retains existing durable-secret rejection. The closed request carries exact expected completed
+state, positive integer version, timezone-aware update time, canonical before-payload SHA256,
+reviewed proposal SHA256/reference and an idempotency key. Hashing uses compact sorted-key UTF-8
+JSON with `ensure_ascii=False`; persisted JSONB contains no non-JSON numeric values. A proposal
+reference is an audit binding, not server attestation of human approval or GitHub completion.
+The operator separately verifies current GitHub completion/merge evidence and execution authority.
+
+The store takes the existing recovery fence, idempotency lock, task advisory lock, generic lease
+row lock, task lease row lock and task row lock in that order. Under those locks it rejects active
+task ownership, stale/foreign maintenance fencing, state/version/time/hash or GitHub identity drift.
+It changes only payload.status plus native version (+1), DB-clock update time and the authenticated
+correction envelope. The historical source snapshot, every other payload value, expired task lease
+and task fencing token remain intact. A `task.payload_status_corrected` receipt and the existing
+idempotency result retain old/new versions, timestamps, payload hashes, previous/current envelopes
+and proposal binding atomically. No lifecycle transition or outbox intent is created. No schema
+migration or new ledger is introduced.
+
+Success returns the actual receipt sequence and finalized local recovery LSN. After a lost response,
+replay the exact request with the same key: the persisted result is recovered even if the maintenance
+lease has since expired/released, without a second correction. A different request under that key
+refuses. A caller must not manufacture a new key after an unknown result. The source owner retains
+the authenticated exchange, then independently reads task/status and production DevUI source and
+browser results. Existing task GET does not expose correction transaction evidence. Release the
+exact generic maintenance lease through `POST /v1/leases/release`,
+`BuilderOpsControlPlaneClient.release_lease` or API-only `lease-release` after verified completion; failed or
+unknown cleanup is reconciled through that same lease identity and idempotency key. The cleanup
+route requires existing `leases:write`, current epoch, matching repository/holder and generic kind;
+it delegates fencing and durable replay to the existing store and cannot release task ownership. Do not roll the task back to ready
+or rewind a version to compensate for an observation failure.
+
+Repository implementation and tests do not install this support or apply the task5495 correction
+on VM102. Exact control-plane candidate promotion/rollback, existing writer-grant qualification,
+fresh execution-bound proposal and live apply authority belong to #5181 and remain separate.
+Current-source admission, useful task data, owner acceptance and complete system/source
+qualification are distinct gates. This operation does not refresh a historical `sync_state`,
+transfer owner acceptance to another config, or establish complete qualification.
 
 ## Capability acceptance criteria
 

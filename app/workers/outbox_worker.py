@@ -4,6 +4,7 @@ import errno
 import hashlib
 import logging
 import os
+import stat
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -57,11 +58,19 @@ from app.workers.outbox_binding_gate import (
 )
 from app.services.indexer import (
     handle_ingest_object_created,
+    watched_note_ingest_object,
     purge_object_vectors,
     resolve_event_object_id,
 )
 from app.rebuildability import canonical_product_body_text, parse_bounded_frontmatter
-from app.services.companion_note import CompanionNote, is_companion_path, scan_attachments, write_companion
+from app.services.companion_note import (
+    CompanionNote,
+    companion_path,
+    is_companion_path,
+    read_companion,
+    scan_attachments,
+    write_companion,
+)
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import (
@@ -76,7 +85,7 @@ from app.services.outbox import (
     poll_outbox_one,
     write_outbox_event,
 )
-from app.vault.paths import NoVaultSelectedError, get_vault_inbox_dir_rel
+from app.vault.paths import NoVaultSelectedError
 from app.events.models import new_event
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -994,15 +1003,8 @@ def _warn_once(key: str, message: str, *args: object) -> None:
 
 
 def _maybe_heal_uuid(note_path: Path, vault_root: Path) -> str:
-    try:
-        rel_path = note_path.relative_to(vault_root)
-    except Exception:
-        return ""
-
-    inbox_rel = Path(get_vault_inbox_dir_rel(vault_root))
-    try:
-        rel_path.relative_to(inbox_rel)
-    except Exception:
+    from app.services.note_uuid import inbox_uuid_heal_applies
+    if not inbox_uuid_heal_applies(note_path, vault_root):
         return ""
 
     # iCloud File Provider paths can transiently deny writes (EPERM/EACCES) even when
@@ -1675,6 +1677,13 @@ def handle_panel_scan_requested(
         vault_root=resolved_root,
         vault_uuid=note_uuid,
         persist_created_to_db=_use_db_outbox(),
+        # The sentinel is the carrier-free/legacy row attribution: those runs stamp
+        # the live compatibility binding. Any other binding is the producing vault.
+        producing_binding_id=(
+            source_vault_binding_id
+            if source_vault_binding_id != COMPATIBILITY_BINDING_ID
+            else None
+        ),
     )
     emitted = execution.emitted_count
 
@@ -1748,22 +1757,131 @@ def _use_db_outbox() -> bool:
     backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
     return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
 
-def handle_ingest_vault_changed(
+
+@dataclass(frozen=True)
+class RegistrySourceIdentityResult:
+    note_path: Path
+    raw_text: str
+    frontmatter: dict[str, Any]
+    body: str
+    frontmatter_error: object | None
+    content: str
+    note_uuid: str
+
+
+def _assert_strict_companion_storage_boundary(vault_root: Path) -> None:
+    """Refuse configured companion storage that traverses aliases or non-directories."""
+    sentinel_uuid = "00000000-0000-0000-0000-000000000000"
+    directories = tuple(dict.fromkeys((
+        companion_path(sentinel_uuid, vault_root).parent,
+        Path("_system/companions"),
+    )))
+    for relative in directories:
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            raise ValueError("companion storage path is not vault-relative")
+        candidate = vault_root
+        for part in relative.parts:
+            candidate = candidate / part
+            if not os.path.lexists(candidate):
+                continue
+            try:
+                observed = candidate.lstat()
+            except OSError:
+                raise ValueError("companion storage boundary is unreadable") from None
+            if stat.S_ISLNK(observed.st_mode):
+                raise ValueError("companion storage boundary contains an alias")
+            if not stat.S_ISDIR(observed.st_mode):
+                raise ValueError("companion storage boundary is not a directory")
+
+
+def _strict_registry_companion_write_required(
+    vault_root: Path, note_uuid: str, relative_path: str, content_hash: str,
+) -> bool:
+    """Read the strict producer's existing evidence; never repair or write it."""
+    canonical_path = vault_root / companion_path(note_uuid, vault_root)
+    legacy_path = vault_root / "_system" / "companions" / f"{note_uuid}.md"
+    existing_paths: list[Path] = []
+    for candidate in dict.fromkeys((canonical_path, legacy_path)):
+        if not os.path.lexists(candidate):
+            continue
+        try:
+            observed = candidate.lstat()
+        except OSError:
+            raise ValueError("companion evidence is unreadable") from None
+        if not stat.S_ISREG(observed.st_mode):
+            raise ValueError("companion evidence is not a regular file")
+        existing_paths.append(candidate)
+    if len(existing_paths) > 1:
+        raise ValueError("companion identity is ambiguous")
+    existing = read_companion(vault_root, note_uuid)
+    if existing_paths and existing is None:
+        raise ValueError("companion evidence is malformed")
+    if existing is not None:
+        if (_normalize_uuid_value(existing.uuid) != note_uuid
+                or existing.source_ref != relative_path):
+            raise ValueError("companion identity conflicts with source")
+        if existing.content_hash == content_hash:
+            return False
+        if canonical_path not in existing_paths:
+            raise ValueError("legacy companion cannot be overwritten")
+    return True
+
+
+def _validate_strict_registry_source_identity(
+    note_path: Path, *, vault_root: Path, source_text: str,
+    frontmatter: Mapping[str, Any], body: str,
+) -> str:
+    """Shared read-only input guard for full-selection admission and production.
+
+    Missing identity remains the ordinary producer's creation case. Existing
+    identity, protected sources and companion evidence use its exact guards.
+    Production rechecks companion evidence again immediately before writing.
+    """
+    _assert_profile_ingestible(
+        note_path, vault_root=vault_root,
+        note_uuid=frontmatter.get("uuid") or frontmatter.get("id"),
+        source_text=source_text,
+    )
+    declared = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
+    if declared:
+        try:
+            if str(UUID(declared)) != declared:
+                raise ValueError
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("source identity is not a canonical UUID") from None
+    _assert_strict_companion_storage_boundary(vault_root)
+    if declared:
+        _strict_registry_companion_write_required(
+            vault_root, declared, str(note_path.relative_to(vault_root)),
+            hashlib.sha256(canonical_product_body_text(body).encode("utf-8")).hexdigest(),
+        )
+    return declared
+
+
+def persist_registry_source_identity(
     payload: Mapping[str, Any],
     *,
     vault_root: Path | None = None,
     trace_id: str | None = None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
     payload_schema: str | None = None,
-) -> WorkerIngestSummary:
+    allow_retry_enqueue: bool = True,
+    require_persisted_evidence: bool = False,
+) -> RegistrySourceIdentityResult | None:
+    """Run the ordinary registry lane's identity and companion phase."""
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
     if is_companion_path(note_path, resolved_root):
-        logger.info("ingest skipped: companion continuity file")
-        return WorkerIngestSummary(ingested=0)
+        raise ValueError("companion continuity files are not ingest sources")
 
     raw_text = _stabilized_note_text(note_path)
     if raw_text is None:
+        if not allow_retry_enqueue:
+            return None
         if not _queue_transient_retry(
             INGEST_VAULT_CHANGED,
             payload,
@@ -1775,19 +1893,31 @@ def handle_ingest_vault_changed(
         ):
             if _retry_exhausted(payload):
                 logger.warning("ingest dropped after exhausted retries note_path=%s", note_path)
-                return WorkerIngestSummary(ingested=0)
-            raise TransientRetryEnqueueError(f"failed to queue retry for missing or unstable note: {note_path}")
+                return None
+            raise TransientRetryEnqueueError(
+                f"failed to queue retry for missing or unstable note: {note_path}"
+            )
         logger.warning("ingest skipped (missing note) note_path=%s", note_path)
-        return WorkerIngestSummary(ingested=0)
+        return None
 
     frontmatter, body, frontmatter_error = parse_bounded_frontmatter(raw_text)
-    _assert_profile_ingestible(
-        note_path,
-        vault_root=resolved_root,
-        note_uuid=frontmatter.get("uuid") or frontmatter.get("id"),
-        source_text=raw_text,
+    if require_persisted_evidence:
+        declared_uuid = _validate_strict_registry_source_identity(
+            note_path, vault_root=resolved_root, source_text=raw_text,
+            frontmatter=frontmatter, body=body,
+        )
+    else:
+        _assert_profile_ingestible(
+            note_path, vault_root=resolved_root,
+            note_uuid=frontmatter.get("uuid") or frontmatter.get("id"),
+            source_text=raw_text,
+        )
+        declared_uuid = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
+    healed_uuid = (
+        ""
+        if require_persisted_evidence and declared_uuid
+        else _maybe_heal_uuid(note_path, resolved_root)
     )
-    healed_uuid = _maybe_heal_uuid(note_path, resolved_root)
     # Canonicalize on the AI-panel-stripped body (KERNEL-06, #2768 fix): the panel
     # agent writes both the `%% AI:Start/End %%` fence contents and a separate
     # `> [!info]- AI status` receipt callout back into the note body on disk (see
@@ -1802,7 +1932,7 @@ def handle_ingest_vault_changed(
     # all three consumers looking at the same canonical source body.
     content = canonical_product_body_text(body)
 
-    note_uuid = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
+    note_uuid = declared_uuid
     if not note_uuid and healed_uuid:
         note_uuid = healed_uuid
     if not note_uuid:
@@ -1815,23 +1945,57 @@ def handle_ingest_vault_changed(
     if not note_uuid:
         logger.debug("note missing uuid after heal attempt note_path=%s", note_path)
     else:
+        if require_persisted_evidence:
+            persisted_text = _stabilized_note_text(note_path)
+            if persisted_text is None:
+                raise ValueError("source identity readback unavailable")
+            persisted_frontmatter, persisted_body, persisted_error = (
+                parse_bounded_frontmatter(persisted_text)
+            )
+            if (
+                persisted_error is not None
+                or _normalize_uuid_value(
+                    persisted_frontmatter.get("uuid")
+                    or persisted_frontmatter.get("id")
+                )
+                != note_uuid
+            ):
+                raise ValueError("source identity did not persist")
+            try:
+                if str(UUID(note_uuid)) != note_uuid:
+                    raise ValueError
+            except (ValueError, TypeError, AttributeError):
+                raise ValueError("source identity is not a canonical UUID") from None
+            raw_text = persisted_text
+            frontmatter = persisted_frontmatter
+            body = persisted_body
+            frontmatter_error = persisted_error
+            content = canonical_product_body_text(body)
         try:
             rel_path = note_path.relative_to(resolved_root)
             text_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            write_companion(
-                resolved_root,
-                CompanionNote(
-                    uuid=note_uuid,
-                    source_ref=str(rel_path),
-                    title=str(frontmatter.get("title") or note_path.stem),
-                    content_hash=text_sha256,
-                    ingest_state="tracked",
-                    last_ingested=datetime.now(timezone.utc).isoformat(),
-                    created_by_instance=_resolve_instance_id(),
-                    attachments=scan_attachments(content),
-                ),
+            companion = CompanionNote(
+                uuid=note_uuid,
+                source_ref=str(rel_path),
+                title=str(frontmatter.get("title") or note_path.stem),
+                content_hash=text_sha256,
+                ingest_state="tracked",
+                last_ingested=datetime.now(timezone.utc).isoformat(),
+                created_by_instance=_resolve_instance_id(),
+                attachments=scan_attachments(content),
             )
+            write_required = True
+            if require_persisted_evidence:
+                write_required = _strict_registry_companion_write_required(
+                    resolved_root, note_uuid, str(rel_path), text_sha256,
+                )
+            if write_required:
+                if require_persisted_evidence:
+                    _assert_strict_companion_storage_boundary(resolved_root)
+                write_companion(resolved_root, companion)
         except OSError as exc:
+            if require_persisted_evidence:
+                raise
             if exc.errno in {errno.EPERM, errno.EACCES, errno.EROFS}:
                 _warn_once(
                     f"companion_write_perm:{note_path}",
@@ -1842,27 +2006,59 @@ def handle_ingest_vault_changed(
             else:
                 raise
 
-    ingest_obj: dict[str, Any] = {
-        "uuid": note_uuid,
-        "content": content,
-        "title": frontmatter.get("title") or note_path.stem,
-        "review_state": frontmatter.get("review_state"),
-        "maturity": frontmatter.get("maturity") or None,
-        "trace_id": payload.get("trace_id"),
-        "payload": {
-            "frontmatter": frontmatter,
-            "raw_text": raw_text,
-            "hash": payload.get("hash"),
-            "watcher": payload.get("watcher"),
-        },
-        "source_ref": str(note_path),
-        "kind": "note",
-    }
+    result = RegistrySourceIdentityResult(
+        note_path,
+        raw_text,
+        frontmatter,
+        body,
+        frontmatter_error,
+        content,
+        note_uuid,
+    )
+    if require_persisted_evidence and not note_uuid:
+        raise ValueError("source identity did not persist")
+    return result
+
+
+def handle_ingest_vault_changed(
+    payload: Mapping[str, Any],
+    *,
+    vault_root: Path | None = None,
+    trace_id: str | None = None,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    payload_schema: str | None = None,
+) -> WorkerIngestSummary:
+    resolved_root = _resolve_vault_root(vault_root)
+    note_path = _note_path_from_payload(payload, vault_root=resolved_root)
+    if is_companion_path(note_path, resolved_root):
+        logger.info("ingest skipped: companion continuity file")
+        return WorkerIngestSummary(ingested=0)
+
+    persisted = persist_registry_source_identity(
+        payload,
+        vault_root=resolved_root,
+        trace_id=trace_id,
+        source_vault_binding_id=source_vault_binding_id,
+        payload_schema=payload_schema,
+    )
+    if persisted is None:
+        return WorkerIngestSummary(ingested=0)
+
+    ingest_obj = watched_note_ingest_object(
+        persisted.note_path,
+        persisted.frontmatter,
+        persisted.body,
+        note_uuid=persisted.note_uuid,
+        source_text=persisted.raw_text,
+        observation=payload,
+    )
 
     handle_ingest_object_created(
         ingest_obj,
         vault_root=resolved_root,
-        source_snapshot=None if frontmatter_error else raw_text,
+        source_snapshot=(
+            None if persisted.frontmatter_error else persisted.raw_text
+        ),
     )
     return WorkerIngestSummary(ingested=1)
 

@@ -42,7 +42,10 @@ from app.cli.journaling import journaling_group
 from app.cli.youtube_inbox_dev import youtube_inbox_dev
 
 
-from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root, resolve_system_settings_path
+from app.config.paths import resolve_system_settings_path
+from app.cli.vault_context import CliEnvPolicy, CliVaultContextError, resolve_cli_vault_context
+from app.instance.vault_carrier import VaultCarrier
+from app.mcp.vault_tools import VAULT_CARRIER_SETTING
 from app.services import settings as settings_service
 from app.watcher.vault_watcher import OutboxPathError as WatcherOutboxPathError, run_watcher_tick
 from app.runtime.runtime_loop import OutboxPathError, RuntimeLoopConfig, resolve_outbox_path, run_forever, run_once
@@ -148,19 +151,28 @@ def _write_note_via_knowledge_port(note_path: Path, content: str) -> None:
 def _resolve_vault_root_path(
     value: Path | None, *, allow_env: bool = True, fallback_to_default: bool = False
 ) -> Path | None:
-    """Resolve vault root, defaulting to the alpha vault path when requested."""
-    if value is not None:
-        return value
-    if allow_env:
-        try:
-            resolved = resolve_optional_vault_root()
-        except VaultRootMisconfiguredError as exc:
-            raise click.ClickException(str(exc)) from exc
-        if resolved is not None:
-            return resolved
-    if fallback_to_default:
-        return DEFAULT_VAULT_ROOT
-    return None
+    """Resolve this invocation's vault root once, defaulting to the alpha vault path when requested.
+
+    ``allow_env`` commands resolve through the CLI's one-context resolver
+    (explicit option, instance default, named compatibility env, no-vault);
+    the others only ever use the explicit option or the documented default.
+    """
+    default_path = DEFAULT_VAULT_ROOT if fallback_to_default else None
+    if value is not None or not allow_env:
+        return value if value is not None else default_path
+    return _cli_vault_carrier(value, env_policy="channel", default_path=default_path).root
+
+
+def _cli_vault_carrier(
+    value: Path | None,
+    *,
+    env_policy: CliEnvPolicy,
+    default_path: Path | None = None,
+) -> VaultCarrier:
+    try:
+        return resolve_cli_vault_context(value, env_policy=env_policy, default_path=default_path)
+    except CliVaultContextError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _require_vault_root_path(value: Path | None, *, purpose: str) -> Path:
@@ -170,21 +182,6 @@ def _require_vault_root_path(value: Path | None, *, purpose: str) -> Path:
             f"Vault root is required for {purpose}; pass --vault-root or configure VAULT_ROOT."
         )
     return resolved.expanduser().resolve()
-
-
-def _resolve_mcp_vault_root_path(value: Path | None) -> Path | None:
-    if value is not None:
-        return value
-    for env_var in ("MCP_VAULT_ROOT", "VAULT_DIR"):
-        env_root = os.getenv(env_var)
-        if not env_root or not env_root.strip():
-            continue
-        resolved = Path(env_root).expanduser()
-        if not resolved.exists():
-            exc = VaultRootMisconfiguredError(env_var, resolved)
-            raise click.ClickException(str(exc)) from exc
-        return resolved.resolve()
-    return _resolve_vault_root_path(None, allow_env=True, fallback_to_default=False)
 
 
 def _resolve_yggdrasil_root(path_override: Path | None) -> Path:
@@ -704,6 +701,28 @@ def acquire_youtube_cmd(
 
 
 @cli.command(
+    name="youtube-onboard",
+    help="Bootstrap YouTube subscriptions and playlists from a Google Takeout export.",
+)
+@click.argument("takeout_root", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--output", "output_path", required=True, type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True, help="Print the registry receipt as JSON.")
+def youtube_onboard(takeout_root: Path, output_path: Path, as_json: bool) -> None:
+    """Create a source registry without contacting YouTube or writing vault notes."""
+    from app.knowledge_acquisition.youtube_onboarding import parse_takeout, save_registry
+
+    registry = parse_takeout(takeout_root)
+    save_registry(output_path, registry)
+    receipt = {
+        "output": str(output_path),
+        "subscriptions": sum(source.kind == "subscription" for source in registry.sources),
+        "playlists": sum(source.kind == "playlist" for source in registry.sources),
+        "source_count": len(registry.sources),
+    }
+    click.echo(json.dumps(receipt if as_json else {**receipt, "status": "written"}, ensure_ascii=False))
+
+
+@cli.command(
     help="Run full pipeline (normalize -> classify -> optional transcribe). Accepts file, URL, or audio/YouTube."
 )
 @click.argument("source")
@@ -1147,14 +1166,16 @@ def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
     event = new_event(event_type=ASK_QUERY_RECEIVED, payload={"question": question_text}, source="cli")
     env_flag = os.getenv("MCP_VAULT_ENABLE")
     writes_enabled = enable_mcp_vault or _truthy_flag(env_flag)
-    resolved_root = (
-        _resolve_mcp_vault_root_path(vault_root)
+    # One explicit vault context for this invocation (MVR-05B4a). The MCP tools
+    # receive it as a carrier and never re-read the vault environment.
+    carrier = (
+        _cli_vault_carrier(vault_root, env_policy="mcp")
         if writes_enabled or vault_root is not None
         else None
     )
     tool_settings: Dict[str, Any] = {}
-    if resolved_root is not None:
-        tool_settings["vault_root"] = str(resolved_root)
+    if carrier is not None and carrier.root is not None:
+        tool_settings[VAULT_CARRIER_SETTING] = carrier
     elif writes_enabled:
         raise click.ClickException(
             "Vault root is required for MCP vault writes; pass --vault-root or configure VAULT_ROOT."

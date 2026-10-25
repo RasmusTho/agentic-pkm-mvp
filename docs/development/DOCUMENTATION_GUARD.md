@@ -44,6 +44,14 @@ Changes to that validator require this exact owner document; an Issue-contract
 summary or unrelated governance document alone cannot satisfy the pairing.
 Mixed runtime/config changes still require the normal temporal owner writeback.
 
+The CI selector, full-suite node planner (`scripts/plan_full_suite_node_shards.py`), selection
+replay, scoped-test runner, wait helper and stall classifier are paired with
+`docs/development/TEST_STRATEGY_HOT_PATH.md`. The node planner partitions the measured deploy
+module from actual pytest collection, assigns every node once, and keeps shared-checkout mutations
+together. These changes describe Builder verification behavior; they do not require a Product status
+or roadmap edit. Each source still requires that exact paired document, and co-changed runtime/config
+sources retain their normal temporal writeback.
+
 This document is the paired owner contract for both `scripts/docs_guard.py`
 and `scripts/docs_guard_logic.py`. When either script's policy, base/diff
 handling, documentation scope, language heuristic, or temporal-owner routing

@@ -1703,6 +1703,42 @@ def controller_token(pid: int) -> str:
     return _record_for_pid(pid).start_token
 
 
+def controller_namespace_digest(pid: int, roots: tuple[Path, ...] = ()) -> str:
+    """Read actual live controller state and a correlated native process/mount view.
+
+    This adds no authority: new TEST callers compare it to the host producer's
+    digest. Old proof consumers need not have this additional evidence.
+    """
+    token = controller_token(pid)
+    if sys.platform.startswith("linux"):
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+            namespaces = tuple(os.readlink(f"/proc/{pid}/ns/{name}") for name in ("pid", "mnt"))
+            own = tuple(os.readlink(f"/proc/self/ns/{name}") for name in ("pid", "mnt"))
+            if state not in {"R", "S", "D", "T", "t", "I"} or namespaces != own:
+                raise InventoryError("controller execution namespace is not qualified")
+            for root in roots:
+                native = Path(f"/proc/{pid}/root") / str(root).lstrip("/")
+                if not os.path.samestat(root.stat(), native.stat()):
+                    raise InventoryError("controller filesystem view differs")
+            material = (token.split(":", 1)[0], _read_linux_boot_id(), *namespaces)
+        except (OSError, IndexError) as exc:
+            raise InventoryError("controller execution namespace is unavailable") from exc
+    elif sys.platform == "darwin":
+        state = _run_checked(["ps", "-p", str(pid), "-o", "stat="],
+            label="controller native state", env={**os.environ, "LC_ALL": "C"}).strip()
+        if not state or state[0] not in {"R", "S", "I", "T", "U"}:
+            raise InventoryError("controller is not live")
+        # Darwin has no container PID/mount namespaces. Resolve every supplied
+        # native root here; Linux containers cannot claim this platform token.
+        for root in roots:
+            root.stat()
+        material = ("darwin", str(os.stat("/").st_dev), str(os.stat("/").st_ino))
+    else:
+        raise InventoryError("controller execution namespace is unsupported")
+    return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode()).hexdigest()
+
+
 def _basename(value: str) -> str:
     return value.rsplit("/", 1)[-1]
 
@@ -1893,8 +1929,16 @@ def _write_inventory(path: Path, payload: dict[str, object]) -> None:
 
 
 def prove_quiescent(
-    *, controller_pid: int, controller_start_token: str, output: Path
+    *, controller_pid: int, controller_start_token: str, output: Path,
+    native_host_global_root: Path | None = None,
 ) -> None:
+    context = None
+    nonce = None
+    if native_host_global_root is not None:
+        from app.instance.legacy_owner_recovery import require_native_window
+        from app.instance.runtime import _read_deployment_lease
+        context = require_native_window(native_host_global_root, required=True)
+        nonce = _read_deployment_lease(native_host_global_root)["nonce"]
     if TOKEN_RE.fullmatch(controller_start_token) is None or controller_start_token.startswith("docker:"):
         raise InventoryError("controller start identity is invalid")
     first = _snapshot(
@@ -1912,6 +1956,10 @@ def prove_quiescent(
     if first != second or any(first.values()) or any(second.values()):
         raise InventoryError("host-wide writer inventory is live or racing")
     digests = [_canonical_digest(first), _canonical_digest(second)]
+    if native_host_global_root is not None:
+        if (require_native_window(native_host_global_root, required=True) != context
+            or _read_deployment_lease(native_host_global_root).get("nonce") != nonce):
+            raise InventoryError("TEST native context changed")
     _write_inventory(
         output,
         {
@@ -1923,8 +1971,10 @@ def prove_quiescent(
                 "pid": controller_pid,
                 "start_token": controller_start_token,
             },
+            "controller_namespace_digest": controller_namespace_digest(controller_pid),
             "domains": first,
             "snapshot_digests": digests,
+            **({"native_execution_context": context, "deployment_nonce": nonce} if context is not None else {}),
         },
     )
 
@@ -1938,6 +1988,7 @@ def main(argv: list[str] | None = None) -> int:
     prove.add_argument("--controller-pid", type=int, required=True)
     prove.add_argument("--controller-start-token", required=True)
     prove.add_argument("--output", type=Path, required=True)
+    prove.add_argument("--native-host-global-root", type=Path)
     produce = subparsers.add_parser("produce-legacy-owners")
     produce.add_argument("--repo-root", type=Path, required=True)
     produce.add_argument("--active-channel", required=True)
@@ -1974,11 +2025,15 @@ def main(argv: list[str] | None = None) -> int:
             print(controller_token(args.pid))
             return 0
         if args.command == "prove-quiescent":
-            prove_quiescent(
-                controller_pid=args.controller_pid,
-                controller_start_token=args.controller_start_token,
-                output=args.output,
-            )
+            from app.instance.legacy_owner_recovery import native_operation_refusal
+            with native_operation_refusal(args.native_host_global_root,
+                required=args.native_host_global_root is not None):
+                prove_quiescent(
+                    controller_pid=args.controller_pid,
+                    controller_start_token=args.controller_start_token,
+                    output=args.output,
+                    native_host_global_root=args.native_host_global_root,
+                )
             return 0
         if args.command == "produce-legacy-owners":
             produce_legacy_owners(
@@ -2018,6 +2073,11 @@ def main(argv: list[str] | None = None) -> int:
     except InventoryError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    except RuntimeError:
+        if args.command == "prove-quiescent" and args.native_host_global_root is not None:
+            print("TEST native quiescence refused", file=sys.stderr)
+            return 1
+        raise
     raise AssertionError("unreachable")
 
 
