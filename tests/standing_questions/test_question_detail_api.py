@@ -126,3 +126,61 @@ def test_scoped_detail_does_not_return_nested_child_candidate_body(
     assert candidate is not None
     assert candidate.state == "unreadable"
     assert candidate.body is None
+
+
+def test_legacy_detail_hides_nested_child_candidate_and_evidence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from app.standing_questions import answer_refresh
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    child = vault / "private-child"
+    (child / "settings").mkdir(parents=True)
+    (child / "settings" / "vault.md").write_text("private child vault", encoding="utf-8")
+    candidate_path = child / "candidate.md"
+    candidate_path.write_text("private child candidate", encoding="utf-8")
+    (child / "evidence.md").write_text("private child evidence", encoding="utf-8")
+
+    store = QuestionStore(vault, write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}))
+    question, _ = store.create_question(
+        text="Does the parent need a refresh?",
+        scope="work",
+        registered_via="explicit",
+    )
+    question, version = store.read_question_with_version(question["question_id"])
+    question, _ = store.update_system_fields_if_unchanged(
+        question["question_id"],
+        question,
+        {
+            "candidate_answer_ref": "vault://private-child/candidate.md",
+            "evidence": [
+                {
+                    "artifact_ref": "vault://private-child/evidence.md",
+                    "source_stream": "vault.activity",
+                    "matched_at": "2026-10-25T10:00:00Z",
+                    "confidence_class": "high",
+                    "provenance_ref": "receipt:private-child",
+                    "quoted_span": "private child evidence quote",
+                    "content_hash": "0" * 64,
+                }
+            ],
+        },
+        expected_version=version,
+    )
+    row = {
+        **question,
+        "created_at": datetime.fromisoformat(question["created_at"].replace("Z", "+00:00")),
+        "source_path": f"questions/{question['question_id']}.md",
+    }
+    monkeypatch.setattr(answer_refresh, "_resolve_vault_ref", lambda _root, _ref: candidate_path)
+    monkeypatch.setattr(routes, "_vault_and_binding", lambda: (vault, "binding-1"))
+    monkeypatch.setattr(routes, "_current_projection_rows", lambda _root, _binding: [row])
+    monkeypatch.setattr(routes, "current_scoped_route_read", lambda: None)
+
+    detail = routes.read_standing_question(question["question_id"])
+
+    assert detail.candidate_answer is not None
+    assert detail.candidate_answer.state == "unreadable"
+    assert detail.candidate_answer.body is None
+    assert detail.evidence == []

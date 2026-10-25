@@ -44,6 +44,7 @@ from app.standing_questions.review import (
     transition_question_status,
 )
 from app.text.helpers import content_hash
+from app.vault.manager import nearest_enclosing_vault_root
 from scripts.yaml_roundtrip import load_frontmatter
 
 router = APIRouter(
@@ -334,6 +335,8 @@ def _source_note_path(
             return None
     except (OSError, RuntimeError, ValueError):
         return None
+    if nearest_enclosing_vault_root(resolved, search_root=vault_root) != vault_root.resolve():
+        return None
     if scoped is not None and not scoped_note_path_owned_by_binding(scoped, resolved):
         return None
     return relative
@@ -361,6 +364,11 @@ def _candidate_answer(
         # after EXP-4 materialized the answer but before the Question CAS ack.
         # Do not quietly render it as answered or as a harmless empty candidate.
         return CandidateAnswer(state="acknowledgement_indeterminate")
+    if nearest_enclosing_vault_root(draft_path, search_root=vault_root) != vault_root.resolve():
+        # Carrier-free compatibility reads still inherit the parent's nested
+        # vault boundary. A parent Question may contain a malformed reference
+        # to a private child-vault draft; never read or return its body.
+        return CandidateAnswer(state="unreadable")
     if scoped is not None and not scoped_note_path_owned_by_binding(scoped, draft_path):
         # Candidate references are vault-relative pointers, but nested child
         # vaults remain binding boundaries. Never return their content, even
@@ -504,22 +512,34 @@ def read_standing_question(question_id: str) -> QuestionDetailResponse | JSONRes
             raw_evidence = json.loads(raw_evidence)
         except ValueError:
             raw_evidence = []
-    evidence = [
-        EvidenceItem(
-            artifact_ref=str(entry.get("artifact_ref") or ""),
-            source_stream=str(entry.get("source_stream") or ""),
-            matched_at=str(entry.get("matched_at") or ""),
-            confidence_class=str(entry.get("confidence_class") or ""),
-            provenance_ref=entry.get("provenance_ref"),
-            quoted_span=str(entry.get("quoted_span") or ""),
-            content_hash=str(entry.get("content_hash") or ""),
-            source_note_path=_source_note_path(
-                entry.get("artifact_ref"), vault_root=root, scoped=scoped
-            ),
-        )
-        for entry in raw_evidence
-        if isinstance(entry, dict)
-    ] if isinstance(raw_evidence, list) else []
+    evidence: list[EvidenceItem] = []
+    if isinstance(raw_evidence, list):
+        for entry in raw_evidence:
+            if not isinstance(entry, dict):
+                continue
+            artifact_ref = entry.get("artifact_ref")
+            source_note_path = _source_note_path(artifact_ref, vault_root=root, scoped=scoped)
+            if (
+                isinstance(artifact_ref, str)
+                and artifact_ref.startswith("vault://")
+                and source_note_path is None
+            ):
+                # The citation and quoted span are derived from the referenced
+                # note. Suppress the whole item when that note is outside this
+                # vault's read boundary, including for legacy unscoped reads.
+                continue
+            evidence.append(
+                EvidenceItem(
+                    artifact_ref=str(artifact_ref or ""),
+                    source_stream=str(entry.get("source_stream") or ""),
+                    matched_at=str(entry.get("matched_at") or ""),
+                    confidence_class=str(entry.get("confidence_class") or ""),
+                    provenance_ref=entry.get("provenance_ref"),
+                    quoted_span=str(entry.get("quoted_span") or ""),
+                    content_hash=str(entry.get("content_hash") or ""),
+                    source_note_path=source_note_path,
+                )
+            )
     candidate = _candidate_answer(
         row,
         question_id=question_id,

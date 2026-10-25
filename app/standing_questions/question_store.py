@@ -411,7 +411,10 @@ class QuestionStore:
         elif current["status"] == "open" and next_status == "closed":
             valid = set(changes) == {"status"}
         elif current["status"] == "closed" and next_status == "open":
-            valid = set(changes) == {"status"} and next_answer is None
+            # Reopening changes only the human-owned status. A prior standing
+            # answer remains attached to the Question and is not cleared by
+            # close/reopen.
+            valid = set(changes) == {"status"}
         elif "status" not in changes:
             valid = (
                 current["status"] == "open"

@@ -39,6 +39,7 @@ from app.api.compatibility_mutation import (
 )
 from app.config.database import runtime_database_is_named
 from app.instance.compatibility_binding import compatibility_binding_for_root
+from app.auth import require_loopback_or_api_key
 from app.standing_questions.projection import rebuild_standing_questions_projection
 from app.standing_questions.review import (
     QuestionReviewError,
@@ -128,7 +129,11 @@ async def panel_confirm(
         raise HTTPException(status_code=422, detail=str(exc))
 
 
-@router.post("/checkbox-projection", response_model=CheckboxProjectionResponse)
+@router.post(
+    "/checkbox-projection",
+    response_model=CheckboxProjectionResponse,
+    dependencies=[Depends(require_loopback_or_api_key)],
+)
 async def panel_checkbox_projection(
     request: CheckboxProjectionRequest,
     http_request: Request,

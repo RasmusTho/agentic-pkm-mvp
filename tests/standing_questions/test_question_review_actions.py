@@ -564,6 +564,46 @@ def test_explicit_close_and_reopen(tmp_path: Path) -> None:
         store.update_system_fields(question["question_id"], {"status": "closed"})
 
 
+def test_close_and_reopen_preserves_existing_standing_answer_ref(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = QuestionStore(vault, write_guard=_guard())
+    question, _ = store.create_question(
+        text="Should this answered question be reopened?",
+        scope="work",
+        registered_via="explicit",
+    )
+    question, version = store.read_question_with_version(question["question_id"])
+    question, _ = store.update_system_fields_if_unchanged(
+        question["question_id"],
+        question,
+        {"standing_answer_ref": "vault://Answers/current.md"},
+        expected_version=version,
+    )
+    _, version = store.read_question_with_version(question["question_id"])
+
+    transition_question_status(
+        question["question_id"],
+        vault_root=vault,
+        expected_question_version=version,
+        status="closed",
+        write_guard=_guard(),
+    )
+    closed, closed_version = store.read_question_with_version(question["question_id"])
+    reopened = transition_question_status(
+        question["question_id"],
+        vault_root=vault,
+        expected_question_version=closed_version,
+        status="open",
+        write_guard=_guard(),
+    )
+    current, _ = store.read_question_with_version(question["question_id"])
+
+    assert closed["status"] == "closed"
+    assert reopened["status"] == "open"
+    assert current["standing_answer_ref"] == "vault://Answers/current.md"
+
+
 def test_ui_never_writes_authority_fields_directly() -> None:
     from companion_ui.workspace.standing_question_review import standing_question_review_script
 
