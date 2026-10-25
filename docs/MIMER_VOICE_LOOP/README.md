@@ -73,7 +73,8 @@ The **persisted** chat-session transcript survives a restart (it is a file in `v
 
 The live TEST validation above is produced by `python -m app.ops.voice_test_channel_acceptance
 --qualification <voice_test_channel_qualification.v1 JSON> --out <receipt>` (#6234). It binds to
-the exact qualified candidate and route/instance evidence, refuses PROD, mismatched, unqualified or
+the exact qualified candidate (observed `/version` SHA plus the image digest from a fresh TEST
+`product_tars_channel_topology.v1` observation) and route/instance evidence, refuses PROD, mismatched, unqualified or
 unavailable targets before any voice turn, and emits a secret-free `voice_test_channel_acceptance.v1`
 receipt for #3335. Its repository tests use HTTP doubles and do not themselves satisfy that criterion.
 

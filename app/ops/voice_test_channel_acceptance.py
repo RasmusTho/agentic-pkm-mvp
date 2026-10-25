@@ -26,8 +26,9 @@ Boundaries (fail closed):
 * ``/api/ask/voice`` has no actor or route-identity field. The synthetic actor
   is therefore a reference to the TEST channel's qualified synthetic actor and
   source binding, and the ASR/ASK route identities and image digest are bound
-  through the qualification evidence; the TTS provider/voice per segment and
-  the running git SHA are observed directly.
+  through the qualification evidence and the fresh TEST
+  ``product_tars_channel_topology.v1`` observation; the TTS provider/voice per
+  segment and the running git SHA are observed directly.
 
 Run (operator/coordinator, after #5977 and #6190 qualification evidence)::
 
@@ -54,6 +55,11 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 import uuid
 import wave
+
+from app.ops.product_tars_channel_topology import (
+    ProductTarsChannelTopologyError,
+    load_and_validate_product_tars_channel_topology,
+)
 
 QUALIFICATION_SCHEMA = "voice_test_channel_qualification.v1"
 RECEIPT_SCHEMA = "voice_test_channel_acceptance.v1"
@@ -141,7 +147,7 @@ def validate_qualification(payload: Any, *, base_dir: Path | None = None) -> dic
     _require(isinstance(payload, Mapping), "qualification_invalid")
     _walk_secret_free(payload, reason="qualification_contains_secret")
     expected = {"schema", "channel", "api_url", "candidate", "qualification", "routes",
-                "synthetic_actor", "fixtures"}
+                "synthetic_actor", "fixtures", "deployment_topology_path"}
     _require(set(payload) - {"scope"} == expected, "qualification_fields_invalid")
     _require(payload["schema"] == QUALIFICATION_SCHEMA, "qualification_schema_invalid")
     channel = str(payload["channel"]).strip().lower()
@@ -220,7 +226,37 @@ def validate_qualification(payload: Any, *, base_dir: Path | None = None) -> dic
     result["channel"] = channel
     result["api_url"] = _origin(api_url)
     result["fixtures"] = resolved
+    topology_path = Path(str(payload["deployment_topology_path"]))
+    if not topology_path.is_absolute():
+        if base_dir is None:
+            raise VoiceAcceptanceRefusal("deployment_identity_unavailable")
+        topology_path = base_dir / topology_path
+    result["deployment"] = deployment_identity(topology_path, candidate)
+    del result["deployment_topology_path"]
     return result
+
+
+def deployment_identity(path: Path, candidate: Mapping[str, str]) -> dict[str, str]:
+    """Bind the image digest through the existing redaction-safe TARS topology input.
+
+    The Product ``/version`` surface exposes only the git SHA, so the running
+    image identity comes from the fresh (<=24h) ``product_tars_channel_topology.v1``
+    observation for the TEST channel; it must name exactly the qualified digest.
+    """
+
+    try:
+        topology = load_and_validate_product_tars_channel_topology(path)
+    except ProductTarsChannelTopologyError as exc:
+        raise VoiceAcceptanceRefusal("deployment_identity_unavailable") from exc
+    entry = next(x for x in topology["channels"] if x["channel"] == CHANNEL)
+    _require(not entry["refusals"], "deployment_identity_refused")
+    image = entry["source_image_identity"]
+    _require(image != "unknown" and image.endswith("@" + candidate["image_digest"]), "deployment_image_mismatch")
+    version = entry["health_version"].removeprefix("version:").lower()
+    if re.fullmatch(r"[0-9a-f]{7,40}", version):
+        _require(candidate["source_sha"].startswith(version), "deployment_image_mismatch")
+    return {"source_ref": topology["source_ref"], "observed_at": topology["observed_at"],
+            "source_image_identity": image, "topology_sha256": _hash_json(topology)}
 
 
 def _json(status: int, raw: bytes, reason: str) -> dict[str, Any]:
@@ -253,13 +289,13 @@ def observe_candidate(q: Mapping[str, Any], transport: Transport) -> dict[str, s
     health_sha = str(health.get("version") or running).strip().lower()
     _require(health_sha == running, "candidate_mismatch")
     # The Product /version surface exposes only the git SHA today. A digest is
-    # compared whenever the target reports one; otherwise the digest binding is
-    # the qualification evidence (route and instance must name the same digest).
+    # compared whenever the target reports one; otherwise the digest is bound by
+    # the fresh TEST channel topology observation validated with the input.
     digest = version.get("image_digest")
     if digest is not None:
         _require(str(digest).strip().lower() == q["candidate"]["image_digest"], "candidate_mismatch")
     return {"channel": environment, "source_sha": running,
-            "image_digest_source": "observed" if digest is not None else "qualification_evidence"}
+            "image_digest_source": "observed" if digest is not None else "channel_topology"}
 
 
 def _read_fixture(fixture: Mapping[str, Any]) -> bytes:
@@ -282,10 +318,13 @@ def _audio_metadata(raw: bytes) -> dict[str, Any]:
             pcm = audio.readframes(frames)
             compressed = audio.getcomptype() != "NONE"
             width = audio.getsampwidth()
+            channels = audio.getnchannels()
     except (EOFError, wave.Error) as exc:
         raise AssertionError("audio_not_decodable_wav") from exc
     if frames <= 0 or rate <= 0 or compressed or not pcm:
         raise AssertionError("audio_empty_or_silent")
+    if len(pcm) != frames * width * channels:
+        raise AssertionError("audio_truncated")
     if width not in _PCM_CODES:
         raise AssertionError("audio_sample_width_unsupported")
     samples = array(_PCM_CODES[width])
@@ -423,7 +462,8 @@ def _base_receipt(q: Mapping[str, Any] | None) -> dict[str, Any]:
             routes=json.loads(json.dumps(q["routes"])),
             synthetic_actor=q["synthetic_actor"],
             scope_bound=bool(q.get("scope")),
-            qualification_sha256=_hash_json({k: (v if k != "fixtures" else {
+            deployment=dict(q["deployment"]),
+            qualification_sha256=_hash_json({k: (v if k != "fixtures" else {  # fixture paths excluded
                 lang: {"audio_sha256": f["audio_sha256"], "expected_source_ids": f["expected_source_ids"]}
                 for lang, f in v.items()}) for k, v in q.items()}),
         )

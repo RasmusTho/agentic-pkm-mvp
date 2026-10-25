@@ -7,6 +7,7 @@ The live sv/en run against the qualified TEST channel is the parent's receipt.
 from __future__ import annotations
 
 import ast
+from datetime import UTC, datetime, timedelta
 import hashlib
 import io
 import json
@@ -48,8 +49,24 @@ FIXTURE_AUDIO = {"sv": _wav(0.3), "en": _wav(0.25)}
 REPLY_AUDIO = _wav(0.5)
 
 
-def _qualification(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
+def _topology(*, digest: str = DIGEST, age: timedelta = timedelta(minutes=5),
+              refusals: list[str] | None = None) -> dict[str, Any]:
+    def entry(channel: str) -> dict[str, Any]:
+        return {"channel": channel, "vm_identity": f"tars-vm:ygg-{channel}",
+                "engine_identity": f"docker-engine:ygg-{channel}",
+                "source_image_identity": "image:ghcr.io/example/pkm@" + (digest if channel == "test" else DIGEST),
+                "ingress_auth_class": "private-tailscale", "health_version": "version:" + SHA[:12],
+                "data_backup_rollback_boundary": "explicit-gap", "gaps": ["backup_unqualified"],
+                "refusals": (refusals or []) if channel == "test" else []}
+
+    return {"schema_version": "product_tars_channel_topology.v1",
+            "observed_at": (datetime.now(UTC) - age).isoformat(), "source_ref": "qualification:voice-6234",
+            "channels": [entry(x) for x in ("dev", "test", "prod")]}
+
+
+def _qualification(tmp_path: Path, *, topology: dict[str, Any] | None = None, **overrides: Any) -> dict[str, Any]:
     tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "topology.json").write_text(json.dumps(topology or _topology()))
     fixtures = {}
     for language, raw in FIXTURE_AUDIO.items():
         (tmp_path / f"{language}.wav").write_bytes(raw)
@@ -68,6 +85,7 @@ def _qualification(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
         "routes": json.loads(json.dumps(ROUTES)),
         "synthetic_actor": "synthetic-voice-acceptance-v1",
         "fixtures": fixtures,
+        "deployment_topology_path": "topology.json",
     }
     payload.update(overrides)
     return payload
@@ -175,6 +193,14 @@ def test_swedish_and_english_use_qualified_routes_and_return_audio(tmp_path: Pat
 
     assert _run(tmp_path / "n", NearSilent())["languages"]["sv"]["reason"] == "audio_empty_or_silent"
 
+    class Truncated(FakeTestChannel):
+        def get(self, path: str, query: Mapping[str, str] | None = None) -> tuple[int, str, bytes]:
+            if vta.AUDIO_PATH.fullmatch(path):
+                return 200, "audio/wav", REPLY_AUDIO[:-2000]
+            return super().get(path, query)
+
+    assert _run(tmp_path / "t", Truncated())["languages"]["en"]["reason"] == "audio_truncated"
+
 
 @pytest.mark.parametrize(
     ("override", "channel_kwargs", "reason"),
@@ -238,6 +264,15 @@ def test_candidate_and_channel_must_match_qualification(
     other.reported = "sha256:" + "0" * 64
     assert _run(tmp_path, other)["refusal"] == "candidate_mismatch" and not other.voice_turns
 
+    # The image digest must be bound by a fresh, matching TEST topology observation.
+    for topology, expected in ((_topology(digest="sha256:" + "1" * 64), "deployment_image_mismatch"),
+                               (_topology(age=timedelta(hours=30)), "deployment_identity_unavailable"),
+                               (_topology(refusals=["image_unverified"]), "deployment_identity_refused")):
+        fresh = FakeTestChannel()
+        payload = _qualification(tmp_path / "t", topology=topology)
+        assert vta.run_acceptance(payload, fresh, base_dir=tmp_path / "t")["refusal"] == expected
+        assert fresh.calls == []
+
     # Evidence channel casing is normalized like the top-level channel.
     upper = _qualification(tmp_path, channel="TEST")
     upper["qualification"]["route"]["channel"] = "TEST"
@@ -250,7 +285,9 @@ def test_receipt_is_candidate_bound_and_secret_free(tmp_path: Path, monkeypatch:
     assert receipt["schema"] == "voice_test_channel_acceptance.v1"
     assert receipt["candidate"] == {"source_sha": SHA, "image_digest": DIGEST}
     assert receipt["observed_before"] == receipt["observed_after"] == {
-        "channel": "test", "source_sha": SHA, "image_digest_source": "qualification_evidence"}
+        "channel": "test", "source_sha": SHA, "image_digest_source": "channel_topology"}
+    assert receipt["deployment"]["source_image_identity"].endswith("@" + DIGEST)
+    assert receipt["deployment"]["source_ref"] == "qualification:voice-6234"
     assert receipt["routes"] == ROUTES
     assert receipt["qualification"]["route"]["ref"].endswith("#5977")
     assert receipt["qualification"]["instance"]["ref"].endswith("#6190")
@@ -358,8 +395,11 @@ def test_verifier_has_no_configuration_or_prod_write_path(tmp_path: Path) -> Non
     # The module imports no deployment, configuration, credential or process seam.
     tree = ast.parse(Path(vta.__file__).read_text())
     imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
-    imported |= {(node.module or "").split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
-    assert imported.isdisjoint({"subprocess", "shutil", "socket", "app", "docker", "paramiko"})
+    modules = {(node.module or "") for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    imported |= {m.split(".")[0] for m in modules}
+    assert imported.isdisjoint({"subprocess", "shutil", "socket", "docker", "paramiko"})
+    # The only Product import is the pure, read-only topology validator.
+    assert {m for m in modules if m.startswith("app")} == {"app.ops.product_tars_channel_topology"}
     source = Path(vta.__file__).read_text()
     for forbidden in ("subprocess", "os.system", "os.remove", "unlink(", "write_text(", "dotenv"):
         assert forbidden not in source
