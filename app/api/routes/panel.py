@@ -140,44 +140,48 @@ async def panel_checkbox_projection(
     preflight = None
     vault_root = Path(sealed_root) if sealed_root is not None else None
     if request.review_question_id is not None:
-        if vault_root is not None:
-            try:
-                replay = accepted_question_receipt(request, vault_root=vault_root)
-                if replay is not None:
-                    return CheckboxProjectionResponse(
-                        status="executed",
-                        artifact_id=request.artifact_id,
-                        note_path=request.note_path,
-                        panel_id=request.panel_id,
-                        option_id=request.option_id,
-                        content_hash_before=request.expected_content_hash,
-                        content_hash_after=request.expected_content_hash,
-                        receipt=replay,
-                        idempotency_key=request.idempotency_key,
-                    )
-                reconciled = reconcile_missing_question_acceptance(
-                    request,
-                    vault_root=vault_root,
+        if vault_root is None:
+            # The legacy pre-registry/pre-floor seal has no durable binding to
+            # prove. Do not let a Question acceptance fall through to ordinary
+            # checkbox projection or resolve the process-global selection.
+            raise capability_not_ready()
+        try:
+            replay = accepted_question_receipt(request, vault_root=vault_root)
+            if replay is not None:
+                return CheckboxProjectionResponse(
+                    status="executed",
+                    artifact_id=request.artifact_id,
+                    note_path=request.note_path,
+                    panel_id=request.panel_id,
+                    option_id=request.option_id,
+                    content_hash_before=request.expected_content_hash,
+                    content_hash_after=request.expected_content_hash,
+                    receipt=replay,
+                    idempotency_key=request.idempotency_key,
                 )
-                if reconciled is not None:
-                    _sync_standing_question_projection(Path(vault_root))
-                    return CheckboxProjectionResponse(
-                        status="executed",
-                        artifact_id=request.artifact_id,
-                        note_path=request.note_path,
-                        panel_id=request.panel_id,
-                        option_id=request.option_id,
-                        content_hash_before=request.expected_content_hash,
-                        content_hash_after=request.expected_content_hash,
-                        receipt=reconciled,
-                        idempotency_key=request.idempotency_key,
-                    )
-                preflight = prepare_question_acceptance(
-                    request,
-                    vault_root=vault_root,
+            reconciled = reconcile_missing_question_acceptance(
+                request,
+                vault_root=vault_root,
+            )
+            if reconciled is not None:
+                _sync_standing_question_projection(Path(vault_root))
+                return CheckboxProjectionResponse(
+                    status="executed",
+                    artifact_id=request.artifact_id,
+                    note_path=request.note_path,
+                    panel_id=request.panel_id,
+                    option_id=request.option_id,
+                    content_hash_before=request.expected_content_hash,
+                    content_hash_after=request.expected_content_hash,
+                    receipt=reconciled,
+                    idempotency_key=request.idempotency_key,
                 )
-            except QuestionReviewError as exc:
-                raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+            preflight = prepare_question_acceptance(
+                request,
+                vault_root=vault_root,
+            )
+        except QuestionReviewError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     try:
         if preflight is not None and preflight.already_projected:
             checked_note = preflight.draft_path.read_text(encoding="utf-8")

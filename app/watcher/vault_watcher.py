@@ -1144,12 +1144,12 @@ def run_watcher_tick(
             _is_standing_question_note_path(path, vault_root=vault_root)
             for path in result.changed
         )
-        if standing_candidates or question_note_changed:
-            question_deletions = [
-                path
-                for path in result.deleted
-                if _is_standing_question_note_path(path, vault_root=vault_root)
-            ]
+        question_deletions = [
+            path
+            for path in result.deleted
+            if _is_standing_question_note_path(path, vault_root=vault_root)
+        ]
+        if standing_candidates or question_note_changed or question_deletions:
             _refresh_standing_questions_projection([*result.changed, *question_deletions])
 
     if not skip_panel and policy_allowed_paths:

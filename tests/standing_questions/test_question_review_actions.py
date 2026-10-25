@@ -104,7 +104,7 @@ def _acceptance_request(
     )
 
 
-def _panel_request(vault: Path) -> SimpleNamespace:
+def _panel_request(vault: Path | None) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(compatibility_write_root=vault))
 
 
@@ -146,6 +146,36 @@ def test_accept_projects_checkbox_and_flips_status_atomically(
     assert replay.status == "executed"
     assert replay.receipt is not None
     assert replay.receipt["idempotent_replay"] is True
+
+
+def test_accept_refuses_without_a_sealed_vault_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.routes import panel as panel_route
+    from fastapi import HTTPException
+
+    vault, draft_path, _outbox, store, question, version = _stage_candidate(tmp_path)
+    request = _acceptance_request(
+        draft_path, vault=vault, question=question, question_version=version
+    )
+    service = CheckboxProjectionService(write_guard=_guard())
+    projected: list[bool] = []
+    monkeypatch.setattr(
+        service,
+        "project",
+        lambda *_args, **_kwargs: projected.append(True),
+    )
+    monkeypatch.setattr(panel_route.checkbox_projection_module, "_service", service)
+
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(panel_route.panel_checkbox_projection(request, _panel_request(None)))
+
+    current = store.read_question(question["question_id"])
+    assert refused.value.detail["error"] == "capability_not_ready"
+    assert projected == []
+    assert draft_path.exists()
+    assert current["status"] == "open"
+    assert current["candidate_answer_ref"]
 
 
 def test_atomic_acceptance_publication_leaves_no_partial_canonical_file(

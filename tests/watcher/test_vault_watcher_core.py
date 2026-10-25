@@ -418,6 +418,75 @@ def test_watcher_refreshes_question_projection_on_deletion_only_tick(
     assert projections == ["binding-1"]
 
 
+def test_watcher_refreshes_projection_when_question_deletion_shares_tick_with_unrelated_change(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.standing_questions.question_store import QuestionStore
+    from app.write_guard import WriteGuard
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    question, _ = QuestionStore(
+        vault,
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    ).create_question(
+        text="Does a mixed tick retain deletion cleanup?",
+        scope="work",
+        registered_via="explicit",
+    )
+    question_rel = f"questions/{question['question_id']}.md"
+    question_path = vault / question_rel
+    unrelated = _write_note(vault, "Concepts/unscoped.md", "Original")
+    snapshot_path = vault / ".state.json"
+    save_snapshot(
+        snapshot_path,
+        {
+            question_rel: question_path.stat().st_mtime,
+            "Concepts/unscoped.md": unrelated.stat().st_mtime,
+        },
+    )
+    time.sleep(0.01)
+    question_path.unlink()
+    unrelated.write_text("Changed", encoding="utf-8")
+    outbox = tmp_path / "events.jsonl"
+    projections: list[str] = []
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    monkeypatch.setattr(watcher_module, "runtime_database_is_named", lambda _env: True)
+    monkeypatch.setattr(
+        "app.instance.compatibility_binding.compatibility_binding_for_root",
+        lambda _root: "binding-1",
+    )
+    monkeypatch.setattr(watcher_module, "delete_note", lambda _path: True)
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        "app.standing_questions.projection.rebuild_standing_questions_projection",
+        lambda _root, *, vault_binding_id: projections.append(vault_binding_id)
+        or SimpleNamespace(inserted=0),
+    )
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+
+    assert summary["changed"] == 1
+    assert summary["deleted"] == 1
+    assert summary["deleted_purged"] == 1
+    assert projections == ["binding-1"]
+    assert question_rel not in load_snapshot(snapshot_path)
+
+
 def test_watcher_retries_blocked_standing_questions_before_advancing_snapshot(
     tmp_path: Path, monkeypatch
 ) -> None:
