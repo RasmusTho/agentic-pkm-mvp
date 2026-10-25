@@ -1234,6 +1234,40 @@ and security exposure boundaries remain in force.
 
 ### Native source preflight and recovery
 
+Repository-only public-file transaction support (#6331) is available in
+`app.ops.bws_control_installation`. Its callable `install_public_files` consumes an exact
+finite reviewed manifest, replacement bytes and authenticated application/control/launcher/backup
+root identities. It accepts Python files below `app/`, the application's separately loaded
+`config/secrets/host_secret_contract.json`, and the fixed `yggdrasil-bws-deploy` launcher only.
+It validates no-follow ancestor/file identities, ownership, single-link regular files, exact
+before hashes/modes or absence, and after hashes. Source/JSON replacements are mode `0644`;
+the launcher is mode `0755`. Already-matching targets retain their inode and timestamps.
+
+Before replacing a target, the component saves actual before bytes and supported modes (or an
+absence marker), fsyncs each backup and publishes a manifest inside an exclusively created
+mode-`0700` bundle. The bundle directory is never renamed over another pathname. Its live
+descriptor and every created backup inode remain held through publication/readback, so an
+exception after fsync cannot authorize adoption of a foreign same-byte bundle or claim success.
+Any existing bundle name refuses reuse; incomplete/published bundles and historical pins are
+retained. A partial install compensates only exact inodes written by that invocation, restoring
+actual before bytes/modes or removing its own newly created target. Foreign/drifted targets and
+missing, malformed or substituted backup material refuse compensation without overwrite.
+Explicit compensation raises a typed refusal with its live handle and per-target outcomes on
+any failure; invalid backup material refuses even when every target was already matching.
+The invocation-local handle exposes refusal/compensation outcomes and must be closed to release
+descriptors; it is not a persisted restart authority. Explicit compensation is one-shot, and
+there is no retry/adoption/replay loader, CLI, automatic post-merge hook or live-success receipt.
+
+These are **file mechanics only**, proved with temporary-filesystem tests. The caller must
+already hold authenticated exclusion of other writers for the complete handle lifetime;
+component directory flocks serialize cooperating component calls only, not native admission.
+They do not discharge the parent #3347 gates: actual native preflight, admission exclusion,
+old/new BWS generation, whole ExecStopPost no-write proof, complete imported Python and
+independent JSON closure, service stop/reload, one-use native effect decision, candidate
+admission, or same-final-image DEV/TEST acceptance. No boolean assertion replaces those
+prerequisites. #3347 remains open; repository delivery is neither an assembled installation
+packet nor permission to operate it.
+
 For BWS deploys, the target image's native-source embedding dependency is preflighted before the
 migration writer drain. A strict Product embedding route selects the current provider/model; the
 redacted Compose handoff exposes only those two fields. If Ollama is selected, the deploy starts the
