@@ -111,6 +111,18 @@ resolves the authenticated active-context binding set first, then hashes the cur
 into that context's retrieval cache identity. `VAULT_ROOT`, compiled settings, and the single
 compatibility watcher never select or widen a scoped request binding.
 
+Instance settings and the durable instance default remain bootstrap/operator inputs. Per-vault
+compiled settings are resolved only after the immutable request binding set is known; a request that
+selects multiple bindings must obtain one compatible request-wide settings value or fail before any
+effect. `VAULT_ROOT`, `WATCHER_VAULT_PATH`, and compiled vault-layout state are therefore not request
+authority and cannot repair a missing, stale, invalid, or ambiguous carrier by fallback.
+
+The compatibility picker may still update the instance default and rebind the one watcher through
+the protected transaction described below. That transaction affects later bootstrap resolution, not
+an already-resolved request generation. Until MVR-05C supplies governed write targets, scoped
+vault-bound mutation routes keep the `capability_not_ready` seal; settings resolution cannot enable
+or redirect those writes.
+
 Runtime settings are compiled from vault-backed Markdown settings into `runtime/settings/`.
 
 Primary source folder:
