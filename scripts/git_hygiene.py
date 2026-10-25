@@ -2827,29 +2827,61 @@ def _dispatcher_example_scan_source(body: str) -> str:
                     ),
                     default=len(block.text),
                 )
-                statement_literals = list(literal_ranges)
-                for tag in _DISPATCHER_HTML_TAG_NAME_RE.finditer(block.text, event.position, stop):
-                    if any(a <= tag.start() < b for a, b in statement_literals):
-                        continue
-                    # Visible tag text can come from a literal/entity, or from
-                    # canonical unfinished-tag recovery. Never let punctuation
-                    # inside it invent a sentence end before retention fields.
-                    whole_tag = re.match(
-                        r"<\s*/?\s*[A-Za-z][A-Za-z0-9:-]*(?:[^\"'>]|\"[^\"]*\"|'[^']*')*>",
-                        block.text[tag.start() : stop],
+                # Scan in order: a real sentence ends ownership before any
+                # later markup is inspected. Visible escaped HTML constructs
+                # are punctuation literals; their fields remain visible below.
+                cursor = event.position
+                while cursor < stop:
+                    literal_end = max(
+                        (b for a, b in literal_ranges if a <= cursor < b), default=cursor
                     )
-                    if whole_tag is None:
-                        raise RuntimeError("dispatcher_activity_invalid")
-                    statement_literals.append((tag.start(), tag.start() + whole_tag.end()))
-                # Sentence punctuation in code-formatted field values is literal.
-                # Commas, semicolons, parentheses, connectors and <br> do not
-                # end ownership. Hidden-comment newlines are not paragraphs.
-                for match in re.finditer(r"[.!?](?=\s|$)", block.text[event.position : stop]):
-                    position = event.position + match.start()
-                    if any(a <= position < b for a, b in statement_literals):
+                    if literal_end > cursor:
+                        cursor = literal_end
                         continue
-                    stop = position
-                    break
+                    character = block.text[cursor]
+                    if character in ".!?" and (
+                        cursor + 1 == stop or block.text[cursor + 1].isspace()
+                    ):
+                        stop = cursor
+                        break
+                    comment = (
+                        character == _DISPATCHER_ESCAPED_HTML_COMMENT_MARKER
+                        or block.text.startswith("<!--", cursor)
+                    )
+                    if (
+                        comment
+                        or character == "<"
+                        and re.match(r"<\s*(?:/?\s*[A-Za-z]|[!?])", block.text[cursor:stop])
+                    ):
+                        if comment:
+                            opener_length = (
+                                1 if character == _DISPATCHER_ESCAPED_HTML_COMMENT_MARKER else 4
+                            )
+                            ends = [
+                                block.text.find(closer, cursor + opener_length, stop)
+                                for closer in (
+                                    "-->",
+                                    "--" + _DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER,
+                                )
+                            ]
+                            end = min((position for position in ends if position >= 0), default=-1)
+                            markup_end = end + 3 if end >= 0 else None
+                        elif block.text.startswith("<![CDATA[", cursor):
+                            end = block.text.find("]]>", cursor + 9, stop)
+                            markup_end = end + 3 if end >= 0 else None
+                        else:
+                            pattern = (
+                                r"<\?(?:[^\"'?]|\"[^\"]*\"|'[^']*'|\?(?!>))*\?>"
+                                if block.text.startswith("<?", cursor)
+                                else r"<(?:[^\"'>]|\"[^\"]*\"|'[^']*')*>"
+                            )
+                            markup = re.match(pattern, block.text[cursor:stop])
+                            markup_end = cursor + markup.end() if markup else None
+                        if markup_end is None:
+                            raise RuntimeError("dispatcher_activity_invalid")
+                        cursor = markup_end
+                        continue
+                    cursor += 1
                 continuation = _dispatcher_strip_default_ignorables(
                     block.text[event.position : stop]
                 )

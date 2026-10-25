@@ -6655,6 +6655,9 @@ def test_local_retirement_ignores_embedded_code_receipt_examples(
     "<code>{snippet}</code> `</p>`",
     pytest.param("- <code>{snippet}</code>\n  [ `] <div>` task-example", id="task-prefix-literal-html"),
     "<code>{snippet}</code>.\u200b At head {sha}, child delivered.",
+    "<code>{snippet}</code>. Child delivery at head {sha} with &lt;div",
+    "<pre>{snippet}</pre>. Child delivery at head {sha} with &lt;div",
+    r"<pre>{snippet}</pre> \<!-- sample. -->. Child delivery at head {sha}",
     '<code>{snippet}</code> &lt;\u200bdiv title="sample. value"&gt;. At head {sha}, child delivered.',
     '<code>{snippet}</code> &lt;div title="sample."&gt;. At head {sha}, child delivered.',
 ])
@@ -6724,6 +6727,8 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     '<code>Dedicated worktree /tmp/old</code> &lt;div title=". on branch old at head {sha}"&gt;',
     '<pre>Dedicated worktree /tmp/old is still dirty</pre> <\ufeffdiv title="sample. on branch old at head {sha}',
     '- <code>Dedicated worktree /tmp/old is still dirty</code> <\u2060div title="sample. on branch old at head {sha}',
+    pytest.param(r"<pre>Dedicated worktree /tmp/old is still dirty</pre> \<!-- sample. --> on branch old at head {sha}", id="markup-pre-control"),
+    pytest.param(r"<pre><code>Dedicated worktree /tmp/old is still dirty</code></pre> \<?sample. ?> on branch old at head {sha}", id="markup-nested-control"),
     "<code>Dedicated worktree /tmp/old is still dirty<p></p></code> on branch old at head {sha}",
     "<code>Dedicated worktree /tmp/old is still dirty</code></p> on branch old at head {sha}",
 ] + [
@@ -6744,6 +6749,17 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
         '&lt;INVISIBLEdiv title="sample. on branch old at head {sha}',
         '<INVISIBLEdiv title="sample. value"> on branch old at head {sha}',
         '&lt;INVISIBLEdiv title="sample. value"&gt; branch: old; HEAD: {sha}',
+    ]
+] + [
+    "<code>" + snippet + "</code> " + suffix
+    for snippet in ["Dedicated worktree /tmp/old is still dirty", "Pickup intent receipt: worktree: /tmp/old", "Preserved worktree: /tmp/old"]
+    for suffix in [
+        r"\<!-- sample. --> on branch old at head {sha}",
+        r"\<!-- sample! --> on branch old at head {sha}",
+        r"\<!-- sample? --> on branch old at head {sha}",
+        r"\<!DOCTYPE sample. > on branch old at head {sha}",
+        r"\<?sample. ?> on branch old at head {sha}",
+        "&lt;![CDATA[sample. > value]]&gt; on branch old at head {sha}",
     ]
 ] + [
     "<code>Dedicated worktree /tmp/old is still dirty</code> " + opening + fields + closing
