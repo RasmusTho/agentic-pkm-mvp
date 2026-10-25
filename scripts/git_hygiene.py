@@ -2471,6 +2471,21 @@ class _DispatcherExampleBlock:
     bridge: bool = False
 
 
+def _dispatcher_project_example_positions(
+    block: _DispatcherExampleBlock,
+    removed: Sequence[tuple[int, int]],
+) -> None:
+    """Project rendered coordinates through an exact, nonoverlapping removal."""
+
+    def project(position: int) -> int:
+        return position - sum(max(0, min(position, stop) - start) for start, stop in removed)
+
+    for event in (*block.events, *block.structures):
+        event.position = project(event.position)
+    block.literals = [(project(a), project(b), c, d) for a, b, c, d in block.literals]
+    block.barriers = [(project(position), origin) for position, origin in block.barriers]
+
+
 def _dispatcher_example_block(
     token: Any,
     prepared: str,
@@ -2613,15 +2628,7 @@ def _dispatcher_example_block(
                 match.span() for match in _DISPATCHER_MARKDOWN_TASK_PREFIX_RE.finditer(unstripped)
             ]
 
-            def project(position: int) -> int:
-                return position - sum(
-                    max(0, min(position, stop) - start) for start, stop in removed
-                )
-
-            for event in (*block.events, *block.structures):
-                event.position = project(event.position)
-            block.literals = [(project(a), project(b), c, d) for a, b, c, d in block.literals]
-            block.barriers = [(project(position), origin) for position, origin in block.barriers]
+            _dispatcher_project_example_positions(block, removed)
         if pending:
             close = rendered.find("-->")
             if close < 0:
@@ -2702,6 +2709,9 @@ def _dispatcher_example_scan_source(body: str) -> str:
         previous.barriers.extend((position + shift, origin) for position, origin in block.barriers)
 
     for block in groups:
+        removed = [match.span() for match in _DISPATCHER_DEFAULT_IGNORABLE_RE.finditer(block.text)]
+        _dispatcher_project_example_positions(block, removed)
+        block.text = _dispatcher_strip_default_ignorables(block.text)
         owners: list[_DispatcherExampleEvent] = []
         paired: list[tuple[_DispatcherExampleEvent, _DispatcherExampleEvent]] = []
         valid_structure = True
@@ -2834,10 +2844,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
                 # Sentence punctuation in code-formatted field values is literal.
                 # Commas, semicolons, parentheses, connectors and <br> do not
                 # end ownership. Hidden-comment newlines are not paragraphs.
-                for match in regex.finditer(
-                    r"[.!?](?=\p{Default_Ignorable_Code_Point}*(?:\s|$))",
-                    block.text[event.position : stop],
-                ):
+                for match in re.finditer(r"[.!?](?=\s|$)", block.text[event.position : stop]):
                     position = event.position + match.start()
                     if any(a <= position < b for a, b in statement_literals):
                         continue

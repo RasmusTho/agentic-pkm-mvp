@@ -6655,6 +6655,7 @@ def test_local_retirement_ignores_embedded_code_receipt_examples(
     "<code>{snippet}</code> `</p>`",
     pytest.param("- <code>{snippet}</code>\n  [ `] <div>` task-example", id="task-prefix-literal-html"),
     "<code>{snippet}</code>.\u200b At head {sha}, child delivered.",
+    '<code>{snippet}</code> &lt;\u200bdiv title="sample. value"&gt;. At head {sha}, child delivered.',
     '<code>{snippet}</code> &lt;div title="sample."&gt;. At head {sha}, child delivered.',
 ])
 def test_local_retirement_ignores_partial_html_receipt_examples(
@@ -6721,6 +6722,8 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     pytest.param("- <code>Dedicated worktree /tmp/old is still dirty</code>\n  [ `] .` on branch old at head {sha}", id="task-prefix-literal-period-intent"),
     '<code>Dedicated worktree /tmp/old</code> (\u200b<div title="<!--. is still dirty on branch old at head {sha}',
     '<code>Dedicated worktree /tmp/old</code> &lt;div title=". on branch old at head {sha}"&gt;',
+    '<pre>Dedicated worktree /tmp/old is still dirty</pre> <\ufeffdiv title="sample. on branch old at head {sha}',
+    '- <code>Dedicated worktree /tmp/old is still dirty</code> <\u2060div title="sample. on branch old at head {sha}',
     "<code>Dedicated worktree /tmp/old is still dirty<p></p></code> on branch old at head {sha}",
     "<code>Dedicated worktree /tmp/old is still dirty</code></p> on branch old at head {sha}",
 ] + [
@@ -6731,6 +6734,16 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
         " branch old at head {sha}", ", with local changes, on branch old at head {sha}",
         "; branch: `old.release`; HEAD: `{sha}`", " (branch: old; HEAD: invalid)",
         "<br>\non branch old at head {sha}", "<br><br>branch: old; HEAD: {sha}",
+    ]
+] + [
+    "<code>" + snippet + "</code> " + suffix.replace("INVISIBLE", invisible)
+    for snippet in ["Dedicated worktree /tmp/old is still dirty", "Pickup intent receipt: worktree: /tmp/old", "Preserved worktree: /tmp/old"]
+    for invisible in ["\u200b", "\ufeff", "\u2060"]
+    for suffix in [
+        '<INVISIBLEdiv title="sample. on branch old at head {sha}',
+        '&lt;INVISIBLEdiv title="sample. on branch old at head {sha}',
+        '<INVISIBLEdiv title="sample. value"> on branch old at head {sha}',
+        '&lt;INVISIBLEdiv title="sample. value"&gt; branch: old; HEAD: {sha}',
     ]
 ] + [
     "<code>Dedicated worktree /tmp/old is still dirty</code> " + opening + fields + closing
