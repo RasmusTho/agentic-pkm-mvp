@@ -15,7 +15,7 @@ import threading
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.agents.panel.parser import is_ai_fence, parse_panel
 from app.agents.panel.writeback import parse_action_line, stable_action_id
@@ -73,6 +73,10 @@ class CheckboxProjectionRequest(BaseModel):
     expected_content_hash: str = Field(min_length=1)
     expected_source_hash: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
+    # Optional stale-observation binding for the SQ-05 review control. Ordinary
+    # Panel checkbox projections keep their existing request shape.
+    review_question_id: str | None = Field(default=None, min_length=1)
+    expected_question_version: str | None = Field(default=None, min_length=1)
 
     @field_validator(
         "artifact_id",
@@ -82,11 +86,21 @@ class CheckboxProjectionRequest(BaseModel):
         "expected_content_hash",
         "expected_source_hash",
         "idempotency_key",
+        "review_question_id",
+        "expected_question_version",
         mode="before",
     )
     @classmethod
     def _strip_value(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _review_binding_is_complete(self) -> CheckboxProjectionRequest:
+        if (self.review_question_id is None) != (self.expected_question_version is None):
+            raise ValueError(
+                "review_question_id and expected_question_version must be supplied together"
+            )
+        return self
 
 
 class CheckboxProjectionResponse(BaseModel):
@@ -292,6 +306,7 @@ class CheckboxProjectionService:
         request: CheckboxProjectionRequest,
         *,
         sealed_root: Path | None = None,
+        execute_runtime: bool = True,
     ) -> CheckboxProjectionResponse:
         cached = self._idempotency.get(request.idempotency_key)
         if cached is not None:
@@ -314,7 +329,12 @@ class CheckboxProjectionService:
             cached = self._idempotency.get(request.idempotency_key)
             if cached is not None:
                 return cached
-            return self._project_locked(request, safe_note_path, sealed_root=sealed_root)
+            return self._project_locked(
+                request,
+                safe_note_path,
+                sealed_root=sealed_root,
+                execute_runtime=execute_runtime,
+            )
 
     def _project_locked(
         self,
@@ -322,6 +342,7 @@ class CheckboxProjectionService:
         safe_note_path: str,
         *,
         sealed_root: Path | None = None,
+        execute_runtime: bool = True,
     ) -> CheckboxProjectionResponse:
         try:
             vault_root = resolve_optional_vault_root()
@@ -580,6 +601,7 @@ class CheckboxProjectionService:
             content_hash_after=content_hash_after,
             projected_version=written_version,
             vault_root=vault_root,
+            execute_runtime=execute_runtime,
         )
         self._idempotency.set(request.idempotency_key, response)
         return response
@@ -596,7 +618,16 @@ class CheckboxProjectionService:
         content_hash_after: str,
         projected_version: str,
         vault_root: Path,
+        execute_runtime: bool,
     ) -> CheckboxProjectionResponse:
+        if not execute_runtime:
+            return self._response(
+                request,
+                status="projected",
+                note_path=safe_note_path,
+                before=content_hash_before,
+                after=content_hash_after,
+            )
         try:
             canonical_artifact_id = resolve_canonical_object_id(request.artifact_id)
             refresh_panel_note_object(

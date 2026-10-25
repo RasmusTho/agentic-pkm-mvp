@@ -294,6 +294,130 @@ def test_watcher_retries_standing_questions_failure_before_advancing_snapshot(
     assert "Inbox/evidence.md" in load_snapshot(snapshot_path)
 
 
+def test_watcher_retries_question_projection_refresh_before_advancing_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.standing_questions.question_store import QuestionStore
+    from app.write_guard import WriteGuard
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    question, _ = QuestionStore(
+        vault,
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    ).create_question(
+        text="Will the projection retry?",
+        scope="work",
+        registered_via="explicit",
+    )
+    snapshot_path = vault / ".state.json"
+    outbox = tmp_path / "events.jsonl"
+    attempts: list[str] = []
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    monkeypatch.setattr(watcher_module, "runtime_database_is_named", lambda _env: True)
+    monkeypatch.setattr(
+        "app.instance.compatibility_binding.compatibility_binding_for_root",
+        lambda _root: "binding-1",
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=0, errors=0),
+    )
+
+    def rebuild(_root, *, vault_binding_id):
+        attempts.append(vault_binding_id)
+        if len(attempts) == 1:
+            raise RuntimeError("temporary projection outage")
+        return SimpleNamespace(inserted=1)
+
+    monkeypatch.setattr(
+        "app.standing_questions.projection.rebuild_standing_questions_projection",
+        rebuild,
+    )
+    question_rel = f"questions/{question['question_id']}.md"
+
+    first, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+    assert first["standing_questions_projection_error"] == "temporary projection outage"
+    assert question_rel not in load_snapshot(snapshot_path)
+
+    second, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+    assert attempts == ["binding-1", "binding-1"]
+    assert second["standing_questions_projection_rows"] == 1
+    assert question_rel in load_snapshot(snapshot_path)
+
+
+def test_watcher_refreshes_question_projection_on_deletion_only_tick(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.standing_questions.question_store import QuestionStore
+    from app.write_guard import WriteGuard
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    question, _ = QuestionStore(
+        vault,
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    ).create_question(
+        text="Should deleted notes leave the projection?",
+        scope="work",
+        registered_via="explicit",
+    )
+    question_path = vault / "questions" / f"{question['question_id']}.md"
+    snapshot_path = vault / ".state.json"
+    save_snapshot(snapshot_path, {f"questions/{question['question_id']}.md": question_path.stat().st_mtime})
+    question_path.unlink()
+    outbox = tmp_path / "events.jsonl"
+    projections: list[str] = []
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    monkeypatch.setattr(watcher_module, "runtime_database_is_named", lambda _env: True)
+    monkeypatch.setattr(
+        "app.instance.compatibility_binding.compatibility_binding_for_root",
+        lambda _root: "binding-1",
+    )
+    monkeypatch.setattr(watcher_module, "delete_note", lambda _path: True)
+    monkeypatch.setattr(
+        "app.standing_questions.projection.rebuild_standing_questions_projection",
+        lambda _root, *, vault_binding_id: projections.append(vault_binding_id)
+        or SimpleNamespace(inserted=0),
+    )
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+
+    assert summary["changed"] == 0
+    assert summary["deleted_purged"] == 1
+    assert projections == ["binding-1"]
+
+
 def test_watcher_retries_blocked_standing_questions_before_advancing_snapshot(
     tmp_path: Path, monkeypatch
 ) -> None:
