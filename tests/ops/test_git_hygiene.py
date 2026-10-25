@@ -6741,6 +6741,21 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     pytest.param(r"<pre><code>Dedicated worktree /tmp/old is still dirty</code></pre> \<?sample. ?> on branch old at head {sha}", id="markup-nested-control"),
     "<code>Dedicated worktree /tmp/old is still dirty<p></p></code> on branch old at head {sha}",
     "<code>Dedicated worktree /tmp/old is still dirty</code></p> on branch old at head {sha}",
+
+    pytest.param('&lt;!-- sample --&gt;. Note: Dedi<br>cated worktree /tmp/old is still dirty on branch old at head {sha}\n\n<code>Dedicated worktree /tmp/example</code>', id="canonical-lineage-regression-0"),
+    pytest.param('&lt;!-- sample --&gt;. Note: Dedicated wor<br>ktree /tmp/old is still dirty on branch old at head {sha}\n\n<code>Dedicated worktree /tmp/example</code>', id="canonical-lineage-regression-1"),
+    pytest.param('&lt;!-- sample --&gt;. Note: Dedicated worktree /tmp/old is st<br>ill dirty on branch old at head {sha}\n\n<code>Dedicated worktree /tmp/example</code>', id="canonical-lineage-regression-2"),
+    pytest.param('&lt;!-- sample --&gt;. Note: Dedicated\nworktree /tmp/old is still dirty on branch old at head {sha}\n\n<code>Dedicated worktree /tmp/example</code>', id="canonical-lineage-regression-3"),
+    pytest.param('<code>Dedicated worktree /tmp/example</code>\n\n| note | receipt |\n|---|---|\n| &lt;!-- sample --&gt; | Dedi<br>cated worktree /tmp/old is still dirty on branch old at head {sha} |', id="canonical-lineage-regression-4"),
+    pytest.param('<code>Dedicated worktree /tmp/example</code>\n\n&lt;!-- sample --&gt;. Note: Dedi<br>cated worktree /tmp/old is still dirty on branch old at head {sha}', id="canonical-lineage-regression-5"),
+    pytest.param('| note | receipt |\n|---|---|\n| &lt;!-- sample --&gt; | Dedi<br>cated worktree /tmp/old is still dirty on branch old at head {sha} |\n\n<code>Dedicated worktree /tmp/example</code>', id="canonical-lineage-regression-6"),
+    pytest.param('&lt;!-- sample --&gt;. Note: Dedi<br>cated worktree /tmp/old is still dirty on branch old at head {sha}\n\n<code>Dedicated worktree /tmp/example</code>', id="canonical-lineage-regression-7"),
+    pytest.param('<code>Dedicated worktree /tmp/example</code>\n\n| note | receipt |\n|---|---|\n| &lt;!-- sample --&gt; | Dedicated wor<br>ktree /tmp/old is still dirty on branch old at head {sha} |', id="canonical-lineage-regression-8"),
+    pytest.param('<code>Dedicated worktree /tmp/example</code>\n\n&lt;!-- sample --&gt;. Note: Dedicated wor<br>ktree /tmp/old is still dirty on branch old at head {sha}', id="canonical-lineage-regression-9"),
+    pytest.param('| note | receipt |\n|---|---|\n| &lt;!-- sample --&gt; | Dedicated wor<br>ktree /tmp/old is still dirty on branch old at head {sha} |\n\n<code>Dedicated worktree /tmp/example</code>', id="canonical-lineage-regression-10"),
+    pytest.param('&lt;!-- sample --&gt;. Note: Dedicated wor<br>ktree /tmp/old is still dirty on branch old at head {sha}\n\n<code>Dedicated worktree /tmp/example</code>', id="canonical-lineage-regression-11"),
+    pytest.param('<code>Dedicated worktree /tmp/example</code>\n\n&lt;!-- sample --&gt;. Note: Dedicated\nworktree /tmp/old is still dirty on branch old at head {sha}', id="canonical-lineage-regression-12"),
+    pytest.param('&lt;!-- sample --&gt;. Note: Dedicated\nworktree /tmp/old is still dirty on branch old at head {sha}\n\n<code>Dedicated worktree /tmp/example</code>', id="canonical-lineage-regression-13"),
 ] + [
     prefix + "<code>" + snippet + "</code>" + continuation
     for prefix in ["", "DISPATCHER&#95;CODE_EXAMPLE_VISIBILITY\n\n", "DISPATCHER_CODE_EXAMPLE_VISIBI\u200bLITY\n\n"]
@@ -6814,19 +6829,24 @@ def test_local_retirement_preserves_intent_around_partial_html_code(
     "Dedicated\nworktree /tmp/old is still dirty on branch old at head {sha}",
 ])
 @pytest.mark.parametrize("example_first", [False, True])
+@pytest.mark.parametrize("separate_comments", [False, True])
 def test_local_retirement_preserves_receipt_hidden_by_literal_projection(
-    tmp_path, monkeypatch, receipt, example_first
+    tmp_path, monkeypatch, receipt, example_first, separate_comments
 ):
     repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
     example = "<code>Dedicated worktree /tmp/example</code>"
     hidden_receipt = "&lt;!-- sample --&gt;. " + receipt.format(sha=sha)
     body = example + " " + hidden_receipt if example_first else hidden_receipt + "\n\n" + example
+    comments = [{"body": body}]
+    if separate_comments:
+        parts = [example, hidden_receipt] if example_first else [hidden_receipt, example]
+        comments = [{"body": part} for part in parts]
     monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [{
         "kind": "task", "record": {
             "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
             "repo": "RasmusTho/agentic-pkm-mvp", "issue_number": 5258,
             "status": "blocked", "linked_pr": None, "source_anchor_refs": "[]",
-            "sync_state": json.dumps({"comments": [{"body": body}]}),
+            "sync_state": json.dumps({"comments": comments}),
         },
     }])
     try:

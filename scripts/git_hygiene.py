@@ -2784,6 +2784,26 @@ def _dispatcher_example_scan_source(body: str) -> str:
             or _DISPATCHER_HEAD_BINDING_RE.search(normalized)
         )
 
+    def partial_html_example(text: str) -> bool:
+        return any(
+            _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE.search(part)
+            or re.search(
+                rf"^\s*{_DISPATCHER_DEDICATED_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
+                rf"{_DISPATCHER_WORKTREE_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
+                rf"`?/[^\s;`,]+`?(?:\s+{_DISPATCHER_IS_KEYWORD}(?:\s+{_DISPATCHER_STILL_KEYWORD})?)?\s*$",
+                part,
+                re.IGNORECASE,
+            )
+            or _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.search(part)
+            or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(part)
+            or _DISPATCHER_PRESERVED_WORKTREE_RE.search(part)
+            or (
+                _DISPATCHER_PICKUP_RECEIPT_RE.search(part)
+                and _DISPATCHER_WORKTREE_BINDING_RE.search(part)
+            )
+            for part in (text, *text.splitlines())
+        )
+
     # Paragraphs are independent unless the existing renderer consumed a
     # pending HTML comment across the block boundary. Do not reconstruct this
     # provenance from the flattened newline string.
@@ -2814,6 +2834,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
         previous.barriers.extend((position + shift, origin) for position, origin in block.barriers)
 
     source_intact_required = any(block.source_intact_required for block in groups)
+    lost_intent = False
     partial_masked = False
     for block in groups:
         removed = [match.span() for match in _DISPATCHER_DEFAULT_IGNORABLE_RE.finditer(block.text)]
@@ -2853,6 +2874,9 @@ def _dispatcher_example_scan_source(body: str) -> str:
                     )
                 )
         literal_ranges = [(a, b) for a, b, _, _ in block.literals]
+        narrative_ranges = [
+            (a, b) for a, b, _, _ in block.literals if receipt_example(block.text[a:b])
+        ]
         literal_stack: list[_DispatcherExampleEvent] = []
         for event in block.events:
             if not event.closing:
@@ -2867,28 +2891,37 @@ def _dispatcher_example_scan_source(body: str) -> str:
                     None,
                 )
                 if matching is not None:
-                    literal_ranges.append((literal_stack[matching].position, event.position))
+                    start = literal_stack[matching].position
+                    literal_ranges.append((start, event.position))
+                    text = block.text[start:event.position]
+                    if receipt_example(text) or partial_html_example(text):
+                        narrative_ranges.append((start, event.position))
                     del literal_stack[matching:]
         literal_ranges.extend((event.position, len(block.text)) for event in literal_stack)
         if block.literal_projection_changed:
-            dedicated_fragments = re.compile(
-                rf"(?:^\s*|[.!?]\s+|while\s+the\s+){_DISPATCHER_DEDICATED_KEYWORD}"
-                rf"{_DISPATCHER_RETENTION_SEPARATOR}{_DISPATCHER_WORKTREE_KEYWORD}\b",
-                re.IGNORECASE | re.MULTILINE,
-            )
-            matches = list(dedicated_fragments.finditer(block.text))
-            for index, match in enumerate(matches):
-                word = re.search(_DISPATCHER_DEDICATED_KEYWORD, match.group(0), re.IGNORECASE)
-                position = match.start() + (word.start() if word else 0)
-                end = matches[index + 1].start() if index + 1 < len(matches) else len(block.text)
-                candidate = block.text[position:end]
-                declaration = _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.search(
-                    candidate
-                ) or _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE.search(candidate)
-                if declaration and not any(
-                    a <= position and position + declaration.end() <= b for a, b in literal_ranges
+            offset = 0
+            for segment in _dispatcher_split_scan_segments(block.text):
+                for pattern, complete_intent in (
+                    (_DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE, True),
+                    (_DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE, False),
                 ):
-                    source_intact_required = True
+                    cursor = 0
+                    while (match := pattern.search(segment, cursor)) is not None:
+                        word = re.search(_DISPATCHER_DEDICATED_KEYWORD, match.group(0), re.IGNORECASE)
+                        position = offset + match.start() + (word.start() if word else 0)
+                        end = offset + match.end()
+                        excluded = (
+                            any(a <= position < b for a, b in narrative_ranges)
+                            if complete_intent else
+                            any(a <= position and end <= b for a, b in literal_ranges)
+                        )
+                        if not excluded:
+                            lost_intent = True
+                            break
+                        # A skipped literal can have matched across a later
+                        # real marker. Resume after its keyword, not its match.
+                        cursor = position - offset + 1
+                offset += len(segment) + 1
             offset = 0
             for line in block.text.splitlines(keepends=True):
                 for pattern, keyword in (
@@ -2899,7 +2932,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
                         word = re.search(keyword, match.group(0), re.IGNORECASE)
                         position = offset + match.start() + (word.start() if word else 0)
                         if not any(a <= position < b for a, b in literal_ranges):
-                            source_intact_required = True
+                            lost_intent = True
                 offset += len(line)
         for start, stop, raw_start, raw_stop in block.literals:
             if receipt_example(block.text[start:stop]):
@@ -2922,24 +2955,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
                 block.text[opening.position : event.position]
             )
             complete = receipt_example(text)
-            partial = any(
-                _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE.search(part)
-                or re.search(
-                    rf"^\s*{_DISPATCHER_DEDICATED_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
-                    rf"{_DISPATCHER_WORKTREE_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
-                    rf"`?/[^\s;`,]+`?(?:\s+{_DISPATCHER_IS_KEYWORD}(?:\s+{_DISPATCHER_STILL_KEYWORD})?)?\s*$",
-                    part,
-                    re.IGNORECASE,
-                )
-                or _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.search(part)
-                or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(part)
-                or _DISPATCHER_PRESERVED_WORKTREE_RE.search(part)
-                or (
-                    _DISPATCHER_PICKUP_RECEIPT_RE.search(part)
-                    and _DISPATCHER_WORKTREE_BINDING_RE.search(part)
-                )
-                for part in (text, *text.splitlines())
-            )
+            partial = partial_html_example(text)
             if not complete and not partial:
                 continue
             if partial and not complete:
@@ -3056,6 +3072,8 @@ def _dispatcher_example_scan_source(body: str) -> str:
                     # their strict source parser cannot assemble HTML fields.
                     raise RuntimeError("dispatcher_activity_invalid")
             spans.append((opening.source_start, event.source_stop))
+    if lost_intent:
+        raise RuntimeError("dispatcher_activity_invalid")
     if partial_masked and source_intact_required:
         return source
     masked = list(source)
