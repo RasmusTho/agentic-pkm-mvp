@@ -258,3 +258,41 @@ def test_expiry_is_revalidated_after_binding_lease_before_effect(tmp_path, monke
     assert result.status_code == 409, result.text
     assert note.read_bytes() == before
     assert not (tmp_path / "outbox.jsonl").exists()
+
+
+def test_unexpected_optional_classifier_failure_preserves_main_authority_receipt(tmp_path, monkeypatch):
+    import json
+    from app.components.llm.question_intent_classifier import QuestionIntentClassifierCognition
+    from app.instance.binding_effect_lease import BindingEffectLeaseManager
+    from app.model_access.executor_network_policy import ExecutorNetworkConfigurationError
+
+    real_offer = capture._offer_question_registration_proposal
+    runtime, first, _, _, headers = setup_capture(tmp_path, monkeypatch)
+    monkeypatch.setattr(capture, "_offer_question_registration_proposal", real_offer)
+    leases = BindingEffectLeaseManager.for_runtime(
+        registry_store=runtime.registry, ownership_root=runtime.ledger.root,
+        state_root=runtime.layout.root / "binding-effect-leases",
+    )
+    observed = []
+
+    def unavailable(self, **kwargs):
+        outbox = tmp_path / "outbox.jsonl"
+        events = [json.loads(line) for line in outbox.read_text().splitlines()] if outbox.exists() else []
+        receipts = [event["payload"]["governed_write"]["authority_receipt"]
+                    for event in events if event.get("event") == "capture.inbox.appended"]
+        observed.append((leases.observe(first.vault_binding_id).shared_count, receipts))
+        raise ExecutorNetworkConfigurationError("path_configuration_missing")
+
+    monkeypatch.setattr(QuestionIntentClassifierCognition, "classify", unavailable)
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/api/companion/capture/scoped", headers=headers,
+        json={"text": "Accountable before optional classification", "target_binding_id": first.vault_binding_id},
+    )
+    assert response.status_code == 500  # Existing unexpected-failure response, no false acknowledgement.
+    assert len(observed) == 1 and observed[0][0] == 1
+    assert len(observed[0][1]) == 1
+    authority = observed[0][1][0]
+    assert authority["outcome"] == "applied"
+    assert authority["target_binding_id"] == first.vault_binding_id
+    assert authority["active_context"]["source_bindings"][0]["vault_binding_id"] == first.vault_binding_id
+    assert "Accountable before optional classification" in Path(first.path, "Inbox/inbox.md").read_text()

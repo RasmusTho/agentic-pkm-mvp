@@ -53,6 +53,8 @@ Immediately before effect, GOV validates actor, action, write class, resource, e
 selected target. The production window holds principal read authority, the host ownership fence
 and the target binding's cross-process shared effect lease through the append, optional
 same-note registration proposal, mutation/authority receipts, and durable event persistence.
+The main append's AuthorityReceipt/event are durable before optional cognition starts, so an
+unexpected classifier failure cannot bypass accountability for the already-applied capture.
 The canonical locator's nearest initialized vault boundary must be the target root, including at
 the state-owner append and proposal seams. Registered and unregistered nested children therefore
 require their own selected binding and authority. Revocation/rotation and exclusive binding changes

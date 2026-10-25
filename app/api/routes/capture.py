@@ -459,21 +459,6 @@ def _capture_to_inbox(
                 _compose_append_entry(note_rel, text, captured_at, vault_root=vault_root),
                 vault_root=vault_root,
             )
-            # Legacy direct producer calls have no ASGI app and retain full behavior.
-            text_scope = getattr(getattr(request.scope.get('app'), 'state', None), 'activation_scope', 'full') == 'text-capture'
-            registration = None if text_scope else _offer_question_registration_proposal(
-                vault_root=vault_root, note_rel=note_rel, trace_id=trace_id
-            )
-            registration_state: Literal["proposal_pending", "not_qualified", "degraded", "unavailable"]
-            if text_scope:
-                registration_state = 'unavailable'
-            elif registration is None or not registration.classification.classified:
-                registration_state = "degraded"
-            elif registration.proposal_id is not None:
-                registration_state = "proposal_pending"
-            else:
-                registration_state = "not_qualified"
-
             authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
                 decision_token=grant.decision_token,
                 mutation_receipt=receipt,
@@ -509,6 +494,24 @@ def _capture_to_inbox(
                         "trace_id": trace_id,
                     },
                 ) from exc
+
+            # Main append accountability is durable before optional cognition.
+            # Its failure must not erase an already applied capture's receipt;
+            # secondary same-note writes still hold this exact effect window.
+            # Legacy direct producer calls have no ASGI app and retain full behavior.
+            text_scope = getattr(getattr(request.scope.get('app'), 'state', None), 'activation_scope', 'full') == 'text-capture'
+            registration = None if text_scope else _offer_question_registration_proposal(
+                vault_root=vault_root, note_rel=note_rel, trace_id=trace_id
+            )
+            registration_state: Literal["proposal_pending", "not_qualified", "degraded", "unavailable"]
+            if text_scope:
+                registration_state = 'unavailable'
+            elif registration is None or not registration.classification.classified:
+                registration_state = "degraded"
+            elif registration.proposal_id is not None:
+                registration_state = "proposal_pending"
+            else:
+                registration_state = "not_qualified"
 
     except (InvalidDecisionTokenError, ContextBoundReadError) as exc:
         raise HTTPException(status_code=409, detail="active_context_write_unavailable") from exc

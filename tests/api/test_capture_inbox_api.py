@@ -317,7 +317,6 @@ def test_capture_writeguard_block_takes_precedence_over_vault_resolution(
 def test_capture_withholds_success_when_authority_receipt_event_is_not_persisted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    mock_product_api_routes,
 ) -> None:
     vault, outbox = _setup_vault(tmp_path, monkeypatch)
     monkeypatch.setenv("STORE_BACKEND", "pg")
