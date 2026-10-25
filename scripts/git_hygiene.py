@@ -2437,11 +2437,20 @@ def _dispatcher_example_scan_source(body: str) -> str:
             for match in _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.finditer(normalized + bounded)
         ):
             return False
+        # Syntax around adjacent fields does not make dirty-worktree intent
+        # narrative. Do not search arbitrary later prose for bindings: a new
+        # receipt or historical delivery sentence is an independent statement.
+        prefix = regex.match(
+            r"^[\s\p{P}\p{S}]*(?:(?:and|with)\b[\s\p{P}\p{S}]+)*",
+            continuation,
+            regex.IGNORECASE,
+        )
+        adjacent = continuation[prefix.end():] if prefix else continuation
         return not re.search(
             r"^\s*(?:is(?:\s+still)?\s*$|is\s+still\s+dirty\b|still\s+dirty\b"
             r"|dirty\b|on\s+branch\b|at\s+head\b"
             r"|[;,]?\s*(?:branch|(?:base\s+)?head)\s*[:=])",
-            continuation,
+            adjacent,
             re.IGNORECASE,
         )
 

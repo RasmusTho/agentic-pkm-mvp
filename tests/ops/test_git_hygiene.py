@@ -6631,12 +6631,14 @@ def test_local_retirement_ignores_embedded_code_receipt_examples(
     "<code>\n{snippet}\n</code>", "<pre>\n{snippet}\n</pre>",
     "Example. <CODE class='example'>{snippet}</CODE> is only an example.",
     "| example | details |\n| --- | --- |\n| <code>{snippet}</code> | sample |",
+    "<pre>{snippet}</pre>\n\nChild delivery receipt at head `{sha}`.",
+    "Example. <code>{snippet}</code>. Child delivery receipt at head `{sha}`.",
 ])
 def test_local_retirement_ignores_partial_html_receipt_examples(
     tmp_path, monkeypatch, snippet, wrapper
 ):
     repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
-    body = wrapper.format(snippet=snippet)
+    body = wrapper.format(snippet=snippet, sha=sha)
     monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [{
         "kind": "task", "record": {
             "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
@@ -6671,6 +6673,16 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     "<div><code>Dedicated worktree /tmp/old is still</code><!-- outer\n\n--> dirty on branch old at head {sha}</div>",
     '<div><code>Dedicated worktree /tmp/old</code><!-- outer\n\n--><div title="<!--. is still dirty on branch old at head {sha}',
     "<code>Dedicated worktree /tmp/old</code> remains paused and is still dirty on branch old at head {sha}",
+] + [
+    "<code>Dedicated worktree /tmp/old is still dirty</code> " + opening + fields + closing
+    for opening, closing in [
+        ("(", ")"), ("[", "]"), ("{{", "}}"), ("«", "»"),
+        ("— ", ""), ("：", ""), ("and ", ""), ("with ", ""),
+        ("🔒 ", ""), ("and (with ", ")"),
+    ]
+    for fields in [
+        "on branch old at head {sha}", "branch: old; HEAD: {sha}", "at head {sha}",
+    ]
 ])
 def test_local_retirement_preserves_intent_around_partial_html_code(
     tmp_path, monkeypatch, body
