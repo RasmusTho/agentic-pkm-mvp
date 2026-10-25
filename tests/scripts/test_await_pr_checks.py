@@ -219,11 +219,11 @@ def test_target_repo_profile_prevents_hub_fallback(tmp_path: Path) -> None:
     result = _run_merge_gating(
         tmp_path,
         "head_required_present_green.json",
-        repo="RasmusTho/bifrost",
+        repo="example/constituent-repo",
         required_checks=("Swift lint + package + app builds",),
     )
     assert result.returncode == 7, result.stdout + result.stderr
-    assert "required checks (caller-profile:RasmusTho/bifrost)" in result.stdout
+    assert "required checks (caller-profile:example/constituent-repo)" in result.stdout
     assert "Swift lint + package + app builds" in result.stderr
     assert "Unit tests (not pg)" not in result.stdout + result.stderr
     assert "all required checks passed" not in result.stdout
@@ -242,7 +242,7 @@ def test_missing_foreign_repo_profile_fails_closed(tmp_path: Path) -> None:
     result = _run_merge_gating(
         tmp_path,
         "head_required_present_green.json",
-        repo="RasmusTho/bifrost",
+        repo="example/constituent-repo",
     )
     assert result.returncode == 64, result.stdout + result.stderr
     assert "required-check configuration unavailable" in result.stderr
@@ -255,7 +255,7 @@ def test_invalid_foreign_repo_profile_fails_closed(tmp_path: Path) -> None:
     result = _run_merge_gating(
         tmp_path,
         "head_required_present_green.json",
-        repo="RasmusTho/bifrost",
+        repo="example/constituent-repo",
         required_checks=("   ",),
     )
     assert result.returncode == 64, result.stdout + result.stderr
@@ -268,7 +268,7 @@ def test_foreign_repo_sha_mode_remains_diagnostic_without_profile(tmp_path: Path
     result = _run_merge_gating(
         tmp_path,
         "head_only_unrelated_green.json",
-        repo="RasmusTho/bifrost",
+        repo="example/constituent-repo",
         pinned_sha=FAKE_SHA,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -281,7 +281,7 @@ def test_live_branch_protection_overrides_foreign_repo_profile(tmp_path: Path) -
     result = _run_merge_gating(
         tmp_path,
         "head_required_present_green.json",
-        repo="RasmusTho/bifrost",
+        repo="example/constituent-repo",
         required_checks=("Unit tests (not pg)",),
         protection_json='{"contexts":["Swift required"],"checks":[]}',
     )
