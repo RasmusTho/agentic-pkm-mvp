@@ -266,6 +266,12 @@ its path must be absolute and its branch/HEAD must be valid, or the line remains
 fail-closed. Cross-line fragments and missing or malformed task identity, status,
 JSON, or explicit binding evidence fail closed before any CAS.
 
+Closed HTML `code`/`pre` examples remain narrative when their receipt text is
+partial. A code-formatted fragment does not make visible retention intent
+outside its container narrative; incomplete or malformed assembled intent
+still refuses retirement. Separate receipts and historical delivery statements
+retain their own source boundaries.
+
 
 ## Rescue-backed serial maintenance policy
 
