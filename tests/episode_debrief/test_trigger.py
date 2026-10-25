@@ -98,16 +98,55 @@ def test_active_registry_closure_reconciles_compatibility_projection(debrief_db,
     assert len(debrief_db.triggers()) == 1
 
 
+def test_scalar_tick_reconciles_native_bound_projection(debrief_db, monkeypatch) -> None:
+    first, _ = _active_native_runtime(debrief_db, monkeypatch)
+    debrief_db.root = Path(first.path)
+    # A producer that writes the native namespace must not be silently missed
+    # by the scalar consumer while its closure frontier is acknowledged.
+    episode = debrief_db.episode(binding=first.vault_binding_id, scope="private")
+    debrief_db.closure(episode, binding=first.vault_binding_id)
+    summary = debrief_db.tick()
+    assert summary["triggered"] == [debrief_id_for_episode(episode)]
+    assert [payload["scope"] for payload in debrief_db.triggers()] == ["private"]
+    assert store.get_cursor(vault_binding_id=first.vault_binding_id) is not None
+
+
+def test_emission_failure_does_not_suppress_unrelated_healthy_trigger(debrief_db, monkeypatch) -> None:
+    from app.episode_debrief import trigger as trigger_module
+
+    bad = debrief_db.episode(episode_id="ep-00000000-0000-4000-8000-000000000001")
+    good = debrief_db.episode(episode_id="ep-00000000-0000-4000-8000-000000000002", scope="private")
+    frontier = debrief_db.closure(good)
+    real_write = trigger_module.write_outbox_event
+
+    def refusing_write(event, **kwargs):
+        if event.payload["episode_id"] == bad:
+            from app.events.topic_schema_registry import TopicSchemaViolation
+            raise TopicSchemaViolation(topic="debrief.trigger.created",
+                                       schema_ref="debrief.trigger.created.v1", reason="schema refusal")
+        return real_write(event, **kwargs)
+
+    monkeypatch.setattr(trigger_module, "write_outbox_event", refusing_write)
+    with pytest.raises(DebriefReconciliationError, match="emission failed"):
+        debrief_db.tick()
+    assert store.get_cursor() is None
+    assert [payload["episode_id"] for payload in debrief_db.triggers()] == [good]
+    monkeypatch.setattr(trigger_module, "write_outbox_event", real_write)
+    debrief_db.tick()
+    assert store.get_cursor().row_id == frontier
+
+
 def test_explicit_native_projection_uses_selected_root_effect_context(debrief_db, monkeypatch) -> None:
     _, (second,) = _active_native_runtime(debrief_db, monkeypatch, extra_roots=("two",))
     debrief_db.root = Path(second.path)
     episode = debrief_db.episode(binding=second.vault_binding_id, scope="private")
-    debrief_db.episode(episode_id=episode, count=0, scope="work")
+    # An eligible same-id compatibility row proves the projections are not unioned.
+    debrief_db.episode(episode_id=episode, scope="work")
     # Reconcile a selected native replay namespace without borrowing ambient
     # root authority or unioning the compatibility projection.
     summary = debrief_db.tick(vault_binding_id=second.vault_binding_id)
     assert summary["triggered"] == [debrief_id_for_episode(episode)]
-    assert debrief_db.triggers()[0]["scope"] == "private"
+    assert [payload["scope"] for payload in debrief_db.triggers()] == ["private"]
     assert debrief_db.execute("SELECT vault_binding_id, payload->'meta'->>'vault_root' FROM outbox "
                               "WHERE topic='debrief.trigger.created'") == [(second.vault_binding_id, second.path)]
 

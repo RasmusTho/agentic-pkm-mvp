@@ -57,10 +57,14 @@ def get_cursor(*, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> CursorPos
     if isinstance(value, str):
         value = json.loads(value)
     # Corrupt durable state is a refusal, never an implicit rewind.
-    created = datetime.fromisoformat(value["created_at"])
+    try:
+        created = datetime.fromisoformat(value["created_at"])
+        row_id = str(UUID(value["id"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("episode debrief cursor is corrupt") from exc
     if created.tzinfo is None:
         raise ValueError("episode debrief cursor requires an aware timestamp")
-    return CursorPosition(created.astimezone(timezone.utc), str(UUID(value["id"])))
+    return CursorPosition(created.astimezone(timezone.utc), row_id)
 
 
 def read_closures(

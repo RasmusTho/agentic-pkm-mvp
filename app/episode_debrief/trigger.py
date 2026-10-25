@@ -10,6 +10,7 @@ from typing import Any, Final
 
 from app.events.models import new_event
 from app.events.types import DEBRIEF_TRIGGER_CREATED
+from app.events.topic_schema_registry import TopicSchemaViolation
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 from app.services.outbox import derive_idempotency_key, write_outbox_event
@@ -122,19 +123,37 @@ def run_debrief_tick(
     runtime = resolve_scalar_binding_runtime(requested_binding_id=vault_binding_id, vault_root=root)
     binding_id = runtime.vault_binding_id if runtime is not None else vault_binding_id
     # Closures, cursor and triggers follow the resolved runtime binding. The
-    # scalar request reads the compatibility projection the current ERE
-    # producers still write; an explicit native binding reads only its own.
-    projection_binding_id = (
-        COMPATIBILITY_BINDING_ID if vault_binding_id == COMPATIBILITY_BINDING_ID else binding_id
-    )
+    # scalar request reads its runtime projection plus the compatibility one
+    # the current ERE producers still write, so either producer posture
+    # converges; an explicit native binding reads only its own projection.
+    if vault_binding_id != COMPATIBILITY_BINDING_ID:
+        projection_binding_ids: tuple[str, ...] = (binding_id,)
+    elif binding_id == COMPATIBILITY_BINDING_ID:
+        projection_binding_ids = (COMPATIBILITY_BINDING_ID,)
+    else:
+        projection_binding_ids = (binding_id, COMPATIBILITY_BINDING_ID)
     write_guard.assert_writes_allowed(TRIGGER_WRITE_ACTION)
     # Freeze the selected root so nested outbox writes never borrow ambient
     # scalar root authority.
     with current_binding_effect_window(runtime) if runtime is not None else nullcontext():
-        return _reconcile(root, binding_id, projection_binding_id, limit)
+        return _reconcile(root, binding_id, projection_binding_ids, limit)
 
 
-def _reconcile(root: Path, binding_id: str, projection_binding_id: str, limit: int) -> dict[str, Any]:
+def _closed_episodes(projection_binding_ids: tuple[str, ...]) -> list[store.EpisodeRow]:
+    # The first namespace wins for an episode present in more than one.
+    seen: set[str] = set()
+    episodes: list[store.EpisodeRow] = []
+    for projection_binding_id in projection_binding_ids:
+        for episode in store.closed_episodes(vault_binding_id=projection_binding_id):
+            if episode.episode_id not in seen:
+                seen.add(episode.episode_id)
+                episodes.append(episode)
+    return episodes
+
+
+def _reconcile(
+    root: Path, binding_id: str, projection_binding_ids: tuple[str, ...], limit: int
+) -> dict[str, Any]:
     rows = store.read_closures(vault_binding_id=binding_id, limit=limit)
     summary: dict[str, Any] = {
         "triggered": [], "pending_debrief": [], "consumed": len(rows),
@@ -142,7 +161,7 @@ def _reconcile(root: Path, binding_id: str, projection_binding_id: str, limit: i
         "skipped_ineligible": 0, "skipped_already_debriefed": 0, "skipped_open": 0,
     }
     failures: list[str] = []
-    for episode in store.closed_episodes(vault_binding_id=projection_binding_id):
+    for episode in _closed_episodes(projection_binding_ids):
         if episode.bound_artifact_count < EPISODE_DEBRIEF_MIN_ARTIFACT_COUNT:
             summary["skipped_ineligible"] += 1
             continue
@@ -163,17 +182,23 @@ def _reconcile(root: Path, binding_id: str, projection_binding_id: str, limit: i
             continue
         scope = fields["scope"]  # Exact SoR value: no normalization or fallback.
         summary["pending_debrief"].append(debrief_id)
-        event = new_event(
-            event_type=DEBRIEF_TRIGGER_CREATED, source="episode_debrief.trigger",
-            payload={"episode_id": episode.episode_id, "debrief_id": debrief_id,
-                     "scope": scope, "bound_artifact_count": episode.bound_artifact_count},
-            context_dimensions={"scope": scope, "sphere_memberships": [], "situated_identity": None},
-        )
-        inserted = write_outbox_event(
-            event, idempotency_key=derive_idempotency_key(
-                DEBRIEF_TRIGGER_CREATED, episode.episode_id, _CONTENT_FINGERPRINT,
-            ), vault_binding_id=binding_id, required_db=True,
-        )
+        try:
+            event = new_event(
+                event_type=DEBRIEF_TRIGGER_CREATED, source="episode_debrief.trigger",
+                payload={"episode_id": episode.episode_id, "debrief_id": debrief_id,
+                         "scope": scope, "bound_artifact_count": episode.bound_artifact_count},
+                context_dimensions={"scope": scope, "sphere_memberships": [], "situated_identity": None},
+            )
+            inserted = write_outbox_event(
+                event, idempotency_key=derive_idempotency_key(
+                    DEBRIEF_TRIGGER_CREATED, episode.episode_id, _CONTENT_FINGERPRINT,
+                ), vault_binding_id=binding_id, required_db=True,
+            )
+        except (TopicSchemaViolation, ValueError) as exc:
+            # A deterministic per-item payload refusal must not suppress healthy
+            # episodes; transport/process failures still propagate unchanged.
+            failures.append(f"debrief trigger emission failed: {episode.episode_id}: {type(exc).__name__}")
+            continue
         if inserted:
             summary["triggered"].append(debrief_id)
     if failures:
