@@ -398,6 +398,7 @@ def test_scoped_deploy_ci_repair_shape_avoids_full_suite_self_validation() -> No
             ".github/workflows/ci-smoke.yaml",
             "docs/development/TEST_STRATEGY_HOT_PATH.md",
             "scripts/run_scoped_test_partitions.py",
+            "scripts/plan_full_suite_node_shards.py",
             "scripts/select_pr_tests.py",
             "tests/ops/test_ci_workflow.py",
             "tests/scripts/test_select_pr_tests.py",
