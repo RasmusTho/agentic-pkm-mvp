@@ -629,6 +629,18 @@ def test_release_channels_module_change_has_a_ci_owner() -> None:
     assert "tests/release_channels/test_channel_isolation_preflight.py" in selection.targets
 
 
+def test_model_access_rollback_contract_has_release_channels_owner() -> None:
+    selection = select_tests(["tests/release/test_model_access_router_rollback_plan.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("release_channels",)
+    assert selection.unowned_paths == ()
+    assert selection.reason == "test modules and their static consumers"
+    assert "tests/release/test_model_access_router_rollback_plan.py" in selection.targets
+    assert "tests/scripts/test_select_pr_tests.py" in selection.targets
+    assert "tests/ci" in selection.targets
+
+
 def test_release_channels_sibling_modules_are_owned() -> None:
     # The other five app/release_channels/ modules (cutover_readiness,
     # fleet_model_fitness, prepare_promotion, prod_ref_fitness,
