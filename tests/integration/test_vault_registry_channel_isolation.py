@@ -274,7 +274,7 @@ def _mechanically_reactivate_binding(
     return registration
 
 
-def test_dormant_runtime_api_exports_no_caller_constructible_activation_seam() -> None:
+def test_runtime_api_exports_only_coordinator_owned_transfer_activation() -> None:
     assert runtime_module.__all__ == ["InstanceRegistryRuntime"]
     assert not hasattr(runtime_module, "LifecycleActivationProof")
     assert not hasattr(runtime_module, "TransferActivationProof")
@@ -288,8 +288,6 @@ def test_dormant_runtime_api_exports_no_caller_constructible_activation_seam() -
         assert forbidden_primitive not in runtime_source
     for method_name in (
         "prepare_nested_registration",
-        "transfer_to",
-        "recover_transfer",
         "relocate",
         "remove",
         "reactivate_removed",
@@ -303,6 +301,14 @@ def test_dormant_runtime_api_exports_no_caller_constructible_activation_seam() -
         assert "CapabilityNotReadyError" in method_source
         assert "self.registry" not in method_source
         assert "self.ledger" not in method_source
+    for method_name in ("transfer_to", "recover_transfer"):
+        method = getattr(InstanceRegistryRuntime, method_name)
+        parameters = inspect.signature(method).parameters
+        assert "proof" not in parameters and "crash_after" not in parameters
+        assert "lifecycle" not in parameters
+        method_source = inspect.getsource(method)
+        assert "ChannelTransferCoordinator" in method_source
+        assert "self.registry" not in method_source and "self.ledger" not in method_source
 
 
 def test_store_and_ledger_mutators_reject_uncapable_callers(tmp_path) -> None:
@@ -545,7 +551,7 @@ def test_same_channel_nested_vaults_preserve_child_boundary(tmp_path) -> None:
         _mechanically_register_nested_binding(runtime, child.resolve())
 
 
-def test_transfer_is_dormant_until_foreground_ownership_floor(tmp_path) -> None:
+def test_transfer_refuses_without_source_stopped_window(tmp_path) -> None:
     host_global = tmp_path / "host-global"
     source = _runtime(tmp_path, "dev", host_global)
     destination = _runtime(tmp_path, "test", host_global)
@@ -556,12 +562,12 @@ def test_transfer_is_dormant_until_foreground_ownership_floor(tmp_path) -> None:
     )
     registration = source.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
 
-    with pytest.raises(CapabilityNotReadyError, match="MVR-05C foreground ownership floor"):
+    with pytest.raises(CapabilityNotReadyError, match="source stopped-window lifecycle is required before transfer"):
         source.transfer_to(destination, registration.vault_binding_id)
     assert source.ledger.active_owner(registration.vault_binding_id).channel_id == "dev"
 
 
-def test_direct_or_forged_transfer_call_cannot_mutate_dormant_protocol(tmp_path) -> None:
+def test_direct_or_forged_transfer_call_cannot_skip_source_stopped_window(tmp_path) -> None:
     host_global = tmp_path / "host-global"
     source = _runtime(tmp_path, "dev", host_global)
     destination = _runtime(tmp_path, "test", host_global)
@@ -569,10 +575,11 @@ def test_direct_or_forged_transfer_call_cannot_mutate_dormant_protocol(tmp_path)
     root.mkdir()
     registration = source.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
     destination.registry.load()
+    (source.layout.root / "channel-transfer.lock").touch(mode=0o600)
     before = _runtime_state_bytes(tmp_path, source, destination)
     ledger_before = source.ledger.load()
 
-    with pytest.raises(CapabilityNotReadyError, match="MVR-05C foreground ownership floor"):
+    with pytest.raises(CapabilityNotReadyError, match="source stopped-window lifecycle is required before transfer"):
         source.transfer_to(destination, registration.vault_binding_id)
 
     with pytest.raises(TypeError, match="unexpected keyword argument 'proof'"):
@@ -594,10 +601,12 @@ def test_direct_transfer_recovery_cannot_retire_source_or_activate_destination(t
         destination,
         registration.vault_binding_id,
     )
+    (source.layout.root / "channel-transfer.lock").touch(mode=0o600)
     before = _runtime_state_bytes(tmp_path, source, destination)
     ledger_before = source.ledger.load()
 
-    with pytest.raises(CapabilityNotReadyError, match="MVR-05C foreground ownership floor"):
+    # Storage-only fixtures cannot manufacture the source-owned coordinator intent.
+    with pytest.raises(FileNotFoundError, match="channel-transfer.json"):
         source.recover_transfer(destination)
 
     assert _runtime_state_bytes(tmp_path, source, destination) == before
