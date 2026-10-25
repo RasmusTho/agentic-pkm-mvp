@@ -5,7 +5,7 @@ Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
-Last reviewed: 2026-10-24 UTC (strict CI contract scope and PR latency evaluation)
+Last reviewed: 2026-10-25 UTC (exact BWS helper source contract scope)
 Last verified against: `scripts/dev_delivery_liveness.py`, `tests/governance/test_dev_delivery_liveness_workflow.py`, `tests/scripts/test_select_pr_tests.py::test_liveness_checker_source_selects_its_contract_tests`, `.github/workflows/ci-smoke.yaml`, `.github/workflows/import-linter.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py`, `tests/governance/test_governed_vault_profile_contract.py`, `tests/governance/test_governed_vault_profile_proposals.py`, `tests/agents/test_reviewer.py`, `tests/agents/test_reviewer_single_note.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`, `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`, Issue #5820 / PR #5838 candidate selector coverage and `tests/scripts/test_select_pr_tests.py::test_product_embedding_adapters_select_their_regression_coverage`
 Last verified against (reasoning_expansion UAT selector): Issue #6293, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py::test_expansion_uat_paths_are_owned`, and the scoped Expansion runner suite; selector routing verified, live TEST remains opt-in and separate.
 
@@ -95,6 +95,29 @@ or direct-reader-test-only change has no app type-check requirement. Any unrelat
 source, other BuilderOps, dispatcher or script source, dependency, shared fixture, deploy input,
 workflow, test outside both the explicit reader list and existing CI contract paths, or unknown path
 disqualifies the scope and restores normal owner routing.
+
+### Exact BWS control installation source scope
+
+A change to `app/ops/bws_control_installation.py` may use its complete
+`tests/ops/test_bws_control_installation.py` module plus `ALWAYS_TARGETS`, including CI integrity
+and the common architecture checks. The only admitted co-changes are that test module and
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`. The helper and its test must both exist as tracked
+regular files; changed owner docs must also exist. This route retains the `ops` owner and
+`runtime_checks=true`, including the normal type/runtime gates. It avoids the unrelated Ops sibling
+suite while the helper has no operational caller; it does not classify arbitrary source as isolated.
+
+The selector reuses its static Python dependency census to check consumers of both the helper and
+its test fixtures. Imports, literal dynamic imports, bare/relative imports and literal file readers
+outside the selected module and common CI/architecture surfaces restore normal owner coverage.
+Plain selector and selector-regression literal path data do not count as execution consumers;
+actual imports, file readers and opaque code in those files still restore coverage. Only complete
+file/directory targets establish consumer coverage; a static collectability node does not cover
+other tests in its module. File-reference matching normalizes an explicit `./` prefix. Missing files,
+renames, unrelated co-changes, failed inventory/read/parse checks, or opaque known consumers also
+restore normal routing. Test-only and docs-only changes keep their existing route. Static analysis
+cannot establish every computed dependency; broad nightly/manual coverage remains the backstop.
+`tests/scripts/test_select_pr_tests.py::test_bws_control_source_contract_keeps_ops_runtime_and_complete_proof`
+and its consumer/refusal regressions cover this exact boundary.
 
 ## Test-only scope
 

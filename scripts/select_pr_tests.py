@@ -263,6 +263,16 @@ PR_INTAKE_CONTRACT_TARGETS = (
     "tests/scripts/test_publication.py",
 )
 
+# This filesystem-only helper has one direct test contract and no tracked
+# operational caller. New consumers restore ordinary Ops ownership below.
+BWS_CONTROL_INSTALLATION_SOURCE = "app/ops/bws_control_installation.py"
+BWS_CONTROL_INSTALLATION_TEST = "tests/ops/test_bws_control_installation.py"
+BWS_CONTROL_INSTALLATION_PATHS = frozenset({
+    BWS_CONTROL_INSTALLATION_SOURCE,
+    BWS_CONTROL_INSTALLATION_TEST,
+    "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+})
+
 # Test-only edits to these unconsumed modules need representative harness proof.
 # Product/shared-fixture co-changes and nightly retain their complete matrices.
 ISOLATED_TEST_MODULES = {
@@ -1578,14 +1588,39 @@ def _is_test_only(paths: tuple[str, ...]) -> bool:
 
 
 @lru_cache(maxsize=4096)
-def _module_dependencies(path: Path, module: str, _mtime: int, _size: int) -> tuple[frozenset[str], bool, bool]:
-    """Cache parsed imports only within this process, keyed by the source stat."""
+def _module_dependencies(
+    path: Path, module: str, _mtime: int, _size: int, *, strict: bool = False,
+    metadata_literals: bool = False,
+) -> tuple[frozenset[str], bool, bool]:
+    """Cache parsed imports by source stat; strict censuses reject unreadable/invalid sources."""
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, SyntaxError):
+        if strict:
+            raise
         return frozenset(), True, False
     package = module.removesuffix(".__init__") if module.endswith(".__init__") else module.rpartition(".")[0]
     imports: set[str] = set()
+    if metadata_literals:
+        # Plain selector path data is not a consumer. Keep imports, literals in
+        # executable calls, and simple literal bindings passed to consumers.
+        bindings: dict[str, set[str]] = {}  # Reassignment cannot erase a possible consumer.
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                for target in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                    if isinstance(target, ast.Name):
+                        bindings.setdefault(target.id, set()).add(node.value.value)
+        literal_uses = set()
+        for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+            name = call.func.id if isinstance(call.func, ast.Name) else call.func.attr if isinstance(call.func, ast.Attribute) else ""
+            if name in {"select_tests", "requires_runtime_checks", "_pr_targets", "Selection", "frozenset", "set"}:
+                continue  # Known selector data construction, not a reader.
+            literal_uses.update(id(node) for node in ast.walk(call) if isinstance(node, ast.Constant))
+            imports.update(
+                value for argument in [*call.args, *(keyword.value for keyword in call.keywords)]
+                for node in ast.walk(argument) if isinstance(node, ast.Name) and node.id in bindings
+                for value in bindings[node.id]
+            )
     has_tests = any(
         isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
         or isinstance(node, ast.ClassDef) and (
@@ -1615,11 +1650,15 @@ def _module_dependencies(path: Path, module: str, _mtime: int, _size: int) -> tu
             try:
                 base = importlib.util.resolve_name("." * node.level + (node.module or ""), package)
             except (ImportError, ValueError):
+                if strict:
+                    raise
                 return frozenset(), True, has_tests
             imports.add(base)
             imports.update(f"{base}.{alias.name}" for alias in node.names)
             opaque |= any(alias.name == "*" for alias in node.names)
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if metadata_literals and id(node) not in literal_uses:
+                continue
             imports.add(node.value)  # Includes literal importlib module names.
             if node.value.startswith("."):
                 imports.add(node.value.lstrip("."))  # Relative literal importlib calls.
@@ -1632,6 +1671,67 @@ def _module_dependencies(path: Path, module: str, _mtime: int, _size: int) -> tu
                 if name in {"spec_from_file_location", "run_path", "exec", "eval"}:
                     opaque = True  # File/code loaders do not establish a module import edge.
     return frozenset(imports), opaque, has_tests
+
+
+def _is_bws_control_installation_contract_only(paths: tuple[str, ...]) -> bool:
+    """Admit the exact source contract only while every static consumer is covered."""
+    required = {BWS_CONTROL_INSTALLATION_SOURCE, BWS_CONTROL_INSTALLATION_TEST}
+    if BWS_CONTROL_INSTALLATION_SOURCE not in paths or not set(paths) <= BWS_CONTROL_INSTALLATION_PATHS:
+        return False
+    metadata_paths = {"scripts/select_pr_tests.py", STATIC_TARGET_COLLECTABILITY_FITNESS.split("::", 1)[0]}
+    try:
+        if any(not (REPO_ROOT / path).is_file() or (REPO_ROOT / path).is_symlink() for path in required | set(paths)):
+            return False
+        inventory = subprocess.run(
+            ["git", "ls-files", "-z", "--", "*.py"], cwd=REPO_ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.split("\0")
+        modules = {path.removesuffix(".py").replace("/", "."): path for path in inventory if path}
+        selected = {path.removesuffix(".py").replace("/", ".") for path in required}
+        if not selected <= modules.keys():
+            return False
+        dependencies = {}
+        for module, relative in modules.items():
+            file = REPO_ROOT / relative
+            if file.is_symlink():
+                return False
+            stat = file.stat()
+            dependencies[module] = _module_dependencies(
+                file, module, stat.st_mtime_ns, stat.st_size, strict=True,
+                metadata_literals=relative in metadata_paths,
+            )
+    except (OSError, UnicodeError, SyntaxError, ImportError, ValueError, subprocess.SubprocessError):
+        return False
+    if any(dependencies[module][1] for module in selected) or not dependencies[
+        BWS_CONTROL_INSTALLATION_TEST.removesuffix(".py").replace("/", ".")
+    ][2]:
+        return False
+    if any(opaque for module, (_, opaque, _) in dependencies.items() if modules[module] in metadata_paths):
+        return False
+    # A single collected node does not cover another consumer in that file.
+    covered_paths = tuple(target for target in ALWAYS_TARGETS if "::" not in target)
+    while True:
+        aliases = selected | {module.rsplit(".", 1)[-1] for module in selected}
+        for module in selected:
+            relative = modules[module]
+            aliases.update({relative, Path(relative).name, str(REPO_ROOT / relative)})
+        consumers = {
+            module for module, (imports, _, _) in dependencies.items()
+            if any(
+                reference in aliases
+                or reference.startswith("./") and Path(reference.split("::", 1)[0]).as_posix() in aliases
+                for reference in imports
+            )
+        }
+        added = consumers - selected
+        if not added:
+            return True
+        if any(
+            not _within_target_dirs(modules[module], covered_paths) or dependencies[module][1]
+            for module in added
+        ):
+            return False
+        selected.update(added)
 
 
 def _test_module_targets(paths: tuple[str, ...]) -> tuple[str, ...] | None:
@@ -1968,6 +2068,11 @@ def select_tests(changed_files: list[str]) -> Selection:
     pr_intake_contract_only = _is_pr_intake_contract_only(paths)
     test_only = _is_test_only(paths)
     if not (ci_contract_only or pr_intake_contract_only or test_only):
+        if _is_bws_control_installation_contract_only(paths):
+            return Selection(
+                False, ("ops",), _pr_targets([*ALWAYS_TARGETS, BWS_CONTROL_INSTALLATION_TEST]),
+                "BWS control installation contract PR",
+            )
         test_modules = _test_module_targets(paths)
         if test_modules is not None:
             owners = _dedupe([
