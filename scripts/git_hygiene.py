@@ -30,6 +30,7 @@ from typing import Any, TypeGuard
 from markdown_it import MarkdownIt
 from markdown_it.common.html_blocks import block_names
 from markdown_it.rules_inline import backtick, html_inline
+from markdown_it.token import Token
 import regex
 
 if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocation.
@@ -1879,11 +1880,15 @@ def _dispatcher_protect_escaped_html_comments(
                 backslashes += 1
                 end += 1
             if backslashes % 2 and end < len(content) and content[end] == ">":
-                protected.append(
-                    "--" + _DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER
-                )
+                protected.append("--" + _DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER)
                 if source_offsets is not None:
-                    offsets.extend((source_offsets[cursor], source_offsets[cursor + 1], source_offsets[cursor + 2]))
+                    offsets.extend(
+                        (
+                            source_offsets[cursor],
+                            source_offsets[cursor + 1],
+                            source_offsets[cursor + 2],
+                        )
+                    )
                 cursor = end + 1
                 continue
         protected.append(content[cursor])
@@ -1896,21 +1901,22 @@ def _dispatcher_protect_escaped_html_comments(
 
 
 def _dispatcher_render_text_token(
-    content: str, *, mask_comment_closers: bool = False
+    content: str,
+    *,
+    mask_comment_closers: bool = False,
+    preserve_literal_comments: bool = False,
 ) -> str:
     # Markdown leaves a completed pending comment's unfinished-tag suffix in
     # a text token. Only an actual pending HTML comment may hide its opener;
     # a literal opener in the parser's unfinished tag buffer remains visible.
-    if _DISPATCHER_HTML_COMMENT_OPEN_RE.search(content):
+    if not preserve_literal_comments and _DISPATCHER_HTML_COMMENT_OPEN_RE.search(content):
         parser = _DispatcherHTMLBlockTextParser()
         parser.feed(content)
         if not _DISPATCHER_HTML_TAG_NAME_RE.match(parser.rawdata):
             content = _DISPATCHER_HTML_COMMENT_OPEN_RE.sub("", content)
     content = content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
     if not mask_comment_closers:
-        content = content.replace(
-            _DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER, "-->"
-        )
+        content = content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER, "-->")
     return content
 
 
@@ -1942,7 +1948,9 @@ class _DispatcherHTMLBlockTextParser(HTMLParser):
             self.parts.append("\n")
 
     def handle_startendtag(
-        self, tag: str, attrs: list[tuple[str, str | None]],
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
     ) -> None:
         normalized_tag = tag.lower()
         if normalized_tag in {"tr", "td", "th"}:
@@ -1971,8 +1979,26 @@ def _dispatcher_html_comment_is_unclosed(content: str) -> bool:
     return content.rfind("<!--") > content.rfind("-->")
 
 
+def _dispatcher_cell_text_tokens(tokens: Sequence[Any]) -> Iterator[Any]:
+    """Keep source-cell annotations semantically identical to ordinary text."""
+    group: list[Any] = []
+    for token in (*tokens, None):
+        if token is not None and token.type in {"text", "dispatcher_cell"}:
+            group.append(token)
+            continue
+        if any(item.type == "dispatcher_cell" for item in group):
+            text_token = Token("text", "", 0)
+            text_token.content = "".join(item.content for item in group)
+            yield text_token
+        else:
+            yield from group
+        group = []
+        if token is not None:
+            yield token
+
+
 def _dispatcher_inline_html_comment_is_unclosed(token: Any) -> bool:
-    children = token.children or []
+    children = _dispatcher_cell_text_tokens(token.children or [])
     return bool(
         any(
             child.type in {"text", "html_inline"}
@@ -2013,11 +2039,15 @@ def _dispatcher_strip_default_ignorables(text: str) -> str:
 
 
 def _dispatcher_render_inline_tokens(
-    tokens: Sequence[Any], *, strip_task_prefix: bool, mask_comment_closers: bool = False,
+    tokens: Sequence[Any],
+    *,
+    strip_task_prefix: bool,
+    mask_comment_closers: bool = False,
     mask_code_inline: bool = False,
+    preserve_literal_comments: bool = False,
 ) -> str:
     parts: list[str] = []
-    for token in tokens:
+    for token in _dispatcher_cell_text_tokens(tokens):
         token_type = token.type
         if token_type in {"softbreak", "hardbreak"}:
             parts.append("\n")
@@ -2025,27 +2055,38 @@ def _dispatcher_render_inline_tokens(
             code = token.content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
             if mask_comment_closers:
                 code = code.replace("-->", _DISPATCHER_HTML_COMMENT_CLOSER_MASK)
-            if mask_code_inline and not _DISPATCHER_CODED_ABSOLUTE_PATH_RE.fullmatch(
-                code.strip()
-            ):
+            if mask_code_inline and not _DISPATCHER_CODED_ABSOLUTE_PATH_RE.fullmatch(code.strip()):
                 parts.append(_dispatcher_mask_code_block(code))
             else:
                 parts.append(code)
         elif token_type == "text":
             parts.append(
                 _dispatcher_render_text_token(
-                    token.content, mask_comment_closers=mask_comment_closers
+                    token.content,
+                    mask_comment_closers=mask_comment_closers,
+                    preserve_literal_comments=preserve_literal_comments
+                    and token.meta.get("literal_comment_text", True),
                 )
             )
         elif token_type in {"html_inline", "html_block"}:
             if mask_comment_closers:
-                content = token.content.replace(
-                    _DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--"
-                )
+                content = token.content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
                 parts.append(_dispatcher_render_pending_html_inline_token(content))
             else:
                 parts.append(_dispatcher_render_html_token(token.content))
-        elif token_type in {"link_open", "link_close", "image", "em_open", "em_close", "strong_open", "strong_close", "s_open", "s_close", "del_open", "del_close"}:
+        elif token_type in {
+            "link_open",
+            "link_close",
+            "image",
+            "em_open",
+            "em_close",
+            "strong_open",
+            "strong_close",
+            "s_open",
+            "s_close",
+            "del_open",
+            "del_close",
+        }:
             if token_type == "image":
                 parts.append(token.content)
         elif token.children:
@@ -2055,6 +2096,7 @@ def _dispatcher_render_inline_tokens(
                     strip_task_prefix=False,
                     mask_comment_closers=mask_comment_closers,
                     mask_code_inline=mask_code_inline,
+                    preserve_literal_comments=preserve_literal_comments,
                 )
             )
         elif token.content:
@@ -2067,12 +2109,12 @@ def _dispatcher_render_inline_tokens(
 
 def _dispatcher_inline_comment_source(tokens: Sequence[Any]) -> str:
     parts: list[str] = []
-    for token in tokens:
+    for token in _dispatcher_cell_text_tokens(tokens):
         if token.type == "code_inline":
             code = token.content.replace("<!--", _DISPATCHER_ESCAPED_HTML_COMMENT_MARKER)
             code = code.replace("-->", _DISPATCHER_HTML_COMMENT_CLOSER_MASK)
             parts.append(code)
-        elif token.type in {"text", "html_inline", "html_block"}:
+        elif token.type in {"text", "html_inline", "html_block", "dispatcher_cell"}:
             parts.append(token.content)
         elif token.type in {"softbreak", "hardbreak"}:
             parts.append("\n")
@@ -2088,7 +2130,8 @@ def _dispatcher_inline_comment_reopens_after_close(token: Any) -> bool:
 
 
 def _dispatcher_normalize_gfm_table_pipes(
-    body: str, source_offsets: list[int] | None = None,
+    body: str,
+    source_offsets: list[int] | None = None,
 ) -> str:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
@@ -2101,7 +2144,9 @@ def _dispatcher_normalize_gfm_table_pipes(
     offsets: list[int] = []
     cursor = 0
     for index, line in enumerate(lines):
-        line_offsets = source_offsets[cursor:cursor + len(line)] if source_offsets is not None else []
+        line_offsets = (
+            source_offsets[cursor : cursor + len(line)] if source_offsets is not None else []
+        )
         cursor += len(line)
         if index not in table_lines:
             rendered_lines.append(line)
@@ -2290,7 +2335,8 @@ def _dispatcher_cross_line_scan_body(
             html_comment_open = True
         if trace is not None:
             trace.bridge = comment_before
-            trace.text = rendered
+            if token.type != "inline" or comment_before:
+                trace.text = rendered
             example_blocks.append(trace)
         if normalize_default_ignorables:
             rendered = _dispatcher_strip_default_ignorables(rendered)
@@ -2469,6 +2515,8 @@ class _DispatcherExampleBlock:
     literals: list[tuple[int, int, int, int]] = dataclass_field(default_factory=list)
     barriers: list[tuple[int, int]] = dataclass_field(default_factory=list)
     bridge: bool = False
+    literal_projection_changed: bool = False
+    source_intact_required: bool = False
 
 
 def _dispatcher_project_example_positions(
@@ -2502,6 +2550,59 @@ def _dispatcher_example_block(
     block = _DispatcherExampleBlock(rendered)
     if token.type not in {"inline", "html_block"} or token.map is None:
         return block
+    if token.type == "inline":
+        children = token.children or []
+        full_literal_rendered = _dispatcher_render_inline_tokens(
+            children,
+            strip_task_prefix=token.level > 1,
+            mask_comment_closers=pending,
+            preserve_literal_comments=True,
+        )
+        for index, child in enumerate(children):
+            if child.type != "text":
+                continue
+            lower = max(
+                (
+                    item.meta["source_span"][1]
+                    for item in children[:index]
+                    if "source_span" in item.meta
+                ),
+                default=0,
+            )
+            upper = min(
+                (
+                    item.meta["source_span"][0]
+                    for item in children[index + 1 :]
+                    if "source_span" in item.meta
+                ),
+                default=len(token.content),
+            )
+            raw_gap = token.content[lower:upper]
+            # A raw source comment remains canonical. Only decoded literal
+            # comments may be recovered in this private classification view.
+            child.meta["literal_comment_text"] = "<!--" not in raw_gap
+            if "<!--" in raw_gap and raw_gap != child.content and full_literal_rendered != rendered:
+                block.source_intact_required = True
+        literal_rendered = _dispatcher_render_inline_tokens(
+            children,
+            strip_task_prefix=token.level > 1,
+            mask_comment_closers=pending,
+            preserve_literal_comments=True,
+        )
+        if not pending:
+            block.text = literal_rendered
+            block.literal_projection_changed = literal_rendered != rendered
+        elif full_literal_rendered != rendered:
+            comment_source = list(token.content)
+            for child in children:
+                extent = child.meta.get("source_span")
+                if child.type == "code_inline" and extent is not None:
+                    a, b = extent
+                    comment_source[a:b] = " " * (b - a)
+            raw_source = "".join(comment_source)
+            if "-->" in raw_source:
+                suffix = raw_source.partition("-->")[2]
+                block.source_intact_required |= bool(_dispatcher_render_html_block(suffix).strip())
     if not _DISPATCHER_EXAMPLE_TAG_RE.search(token.content) and not any(
         child.type == "code_inline" for child in token.children or []
     ):
@@ -2592,6 +2693,7 @@ def _dispatcher_example_block(
                     children[:index],
                     strip_task_prefix=False,
                     mask_comment_closers=pending,
+                    preserve_literal_comments=not pending,
                 )
             )
             if child.type == "dispatcher_cell":
@@ -2610,6 +2712,7 @@ def _dispatcher_example_block(
                     [child],
                     strip_task_prefix=False,
                     mask_comment_closers=pending,
+                    preserve_literal_comments=not pending,
                 )
                 block.literals.append(
                     (position, position + len(literal), offsets[start], offsets[stop - 1] + 1)
@@ -2701,6 +2804,8 @@ def _dispatcher_example_scan_source(body: str) -> str:
             previous.text += "\n\n"
         shift = len(previous.text)
         previous.text += block.text
+        previous.literal_projection_changed |= block.literal_projection_changed
+        previous.source_intact_required |= block.source_intact_required
         for event in (*block.events, *block.structures):
             event.position += shift
         previous.events.extend(block.events)
@@ -2708,6 +2813,8 @@ def _dispatcher_example_scan_source(body: str) -> str:
         previous.literals.extend((a + shift, b + shift, c, d) for a, b, c, d in block.literals)
         previous.barriers.extend((position + shift, origin) for position, origin in block.barriers)
 
+    source_intact_required = any(block.source_intact_required for block in groups)
+    partial_masked = False
     for block in groups:
         removed = [match.span() for match in _DISPATCHER_DEFAULT_IGNORABLE_RE.finditer(block.text)]
         _dispatcher_project_example_positions(block, removed)
@@ -2763,6 +2870,40 @@ def _dispatcher_example_scan_source(body: str) -> str:
                     literal_ranges.append((literal_stack[matching].position, event.position))
                     del literal_stack[matching:]
         literal_ranges.extend((event.position, len(block.text)) for event in literal_stack)
+        if block.literal_projection_changed:
+            offset = 0
+            dedicated_fragments = re.compile(
+                rf"(?:^\s*|[.!?]\s+|while\s+the\s+){_DISPATCHER_DEDICATED_KEYWORD}"
+                rf"{_DISPATCHER_RETENTION_SEPARATOR}{_DISPATCHER_WORKTREE_KEYWORD}\b",
+                re.IGNORECASE,
+            )
+            for line in block.text.splitlines(keepends=True):
+                for pattern, keyword in (
+                    (_DISPATCHER_PICKUP_RECEIPT_RE, r"pickup"),
+                    (_DISPATCHER_PRESERVED_WORKTREE_MARKER_RE, r"preserved"),
+                    (dedicated_fragments, _DISPATCHER_DEDICATED_KEYWORD),
+                ):
+                    matches = list(pattern.finditer(line))
+                    for index, match in enumerate(matches):
+                        word = re.search(keyword, match.group(0), re.IGNORECASE)
+                        local_position = match.start() + (word.start() if word else 0)
+                        position = offset + local_position
+                        if any(a <= position < b for a, b in literal_ranges):
+                            continue
+                        if pattern is dedicated_fragments:
+                            end = (
+                                matches[index + 1].start()
+                                if index + 1 < len(matches)
+                                else len(line)
+                            )
+                            candidate = line[local_position:end]
+                            if not (
+                                _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.search(candidate)
+                                or _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE.search(candidate)
+                            ):
+                                continue
+                        source_intact_required = True
+                offset += len(line)
         for start, stop, raw_start, raw_stop in block.literals:
             if receipt_example(block.text[start:stop]):
                 spans.append((raw_start, raw_stop))
@@ -2805,6 +2946,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
             if not complete and not partial:
                 continue
             if partial and not complete:
+                partial_masked = True
                 # An owner may surround or be disjoint from an example, but
                 # crossing its source interval makes the opacity indeterminate.
                 if any(
@@ -2917,6 +3059,8 @@ def _dispatcher_example_scan_source(body: str) -> str:
                     # their strict source parser cannot assemble HTML fields.
                     raise RuntimeError("dispatcher_activity_invalid")
             spans.append((opening.source_start, event.source_stop))
+    if partial_masked and source_intact_required:
+        return source
     masked = list(source)
     for start, stop in spans:
         for index in range(start, stop):

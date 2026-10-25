@@ -6656,6 +6656,12 @@ def test_local_retirement_ignores_embedded_code_receipt_examples(
     pytest.param("- <code>{snippet}</code>\n  [ `] <div>` task-example", id="task-prefix-literal-html"),
     "<code>{snippet}</code>.\u200b At head {sha}, child delivered.",
     "<code>{snippet}</code>. Child delivery at head {sha} with &lt;div",
+    "<code>{snippet}</code> &lt;!-- sample --&gt;",
+    pytest.param("<code>{snippet}</code> &lt;!-- sample --&gt; <!-- hidden -->", id="mixed-closed-comment-after"),
+    pytest.param("<code>{snippet}</code> <!-- hidden --> &lt;!-- sample --&gt;", id="mixed-closed-comment-before"),
+    pytest.param("<code>{snippet}</code><!-- outer\n\n&lt;!-- sample --&gt;\n-->", id="hidden-entity-comment-control"),
+    "<code>{snippet}</code> &lt;!-- sample. --&gt;. Child delivery at head {sha}",
+    "<code>{snippet}</code>. Child delivery at head {sha} with &lt;!-- sample --&gt;",
     "<pre>{snippet}</pre>. Child delivery at head {sha} with &lt;div",
     r"<pre>{snippet}</pre> \<!-- sample. -->. Child delivery at head {sha}",
     '<code>{snippet}</code> &lt;\u200bdiv title="sample. value"&gt;. At head {sha}, child delivered.',
@@ -6728,6 +6734,9 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     '<pre>Dedicated worktree /tmp/old is still dirty</pre> <\ufeffdiv title="sample. on branch old at head {sha}',
     '- <code>Dedicated worktree /tmp/old is still dirty</code> <\u2060div title="sample. on branch old at head {sha}',
     pytest.param(r"<pre>Dedicated worktree /tmp/old is still dirty</pre> \<!-- sample. --> on branch old at head {sha}", id="markup-pre-control"),
+    pytest.param("<code>Dedicated worktree /tmp/old is still dirty</code><!-- outer\n\n-->&lt;!-- sample --&gt; on branch old at head {sha}", id="lossy-pending-entity-control"),
+    pytest.param("<code>Dedicated worktree /tmp/example</code> <!-- pending --&gt;\n\n<code>Dedicated worktree /tmp/old is still dirty</code>", id="decoded-source-comment-closer-control"),
+    pytest.param("<code>Dedicated worktree /tmp/old is still dirty</code> &lt;!-- sample --&gt; on branch old at head {sha} <!-- pending", id="mixed-source-comment-control"),
     pytest.param(r"<pre><code>Dedicated worktree /tmp/old is still dirty</code></pre> \<?sample. ?> on branch old at head {sha}", id="markup-nested-control"),
     "<code>Dedicated worktree /tmp/old is still dirty<p></p></code> on branch old at head {sha}",
     "<code>Dedicated worktree /tmp/old is still dirty</code></p> on branch old at head {sha}",
@@ -6755,6 +6764,8 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     for snippet in ["Dedicated worktree /tmp/old is still dirty", "Pickup intent receipt: worktree: /tmp/old", "Preserved worktree: /tmp/old"]
     for suffix in [
         r"\<!-- sample. --> on branch old at head {sha}",
+        "&lt;!-- sample --&gt; on branch old at head {sha}",
+        "&lt;!-- sample. --&gt; on branch old at head {sha}",
         r"\<!-- sample! --> on branch old at head {sha}",
         r"\<!-- sample? --> on branch old at head {sha}",
         r"\<!DOCTYPE sample. > on branch old at head {sha}",
@@ -6790,6 +6801,36 @@ def test_local_retirement_preserves_intent_around_partial_html_code(
             repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
             owner_discard="preserve fixture with visible or malformed retention intent",
         )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+@pytest.mark.parametrize("receipt", [
+    "Dedicated worktree /tmp/old is still dirty on branch old at head {sha}",
+    "Preserved worktree: /tmp/old; branch: old; base HEAD: {sha}",
+])
+def test_local_retirement_preserves_receipt_hidden_by_literal_projection(
+    tmp_path, monkeypatch, receipt
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    body = "<code>Dedicated worktree /tmp/example</code> &lt;!-- sample --&gt;. " + receipt.format(sha=sha)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [{
+        "kind": "task", "record": {
+            "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+            "repo": "RasmusTho/agentic-pkm-mvp", "issue_number": 5258,
+            "status": "blocked", "linked_pr": None, "source_anchor_refs": "[]",
+            "sync_state": json.dumps({"comments": [{"body": body}]}),
+        },
+    }])
+    try:
+        result = git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="preserve disposable fixture when visibility loses an exterior receipt",
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "dispatcher_activity_invalid"
+    else:
+        assert result["deleted"] == 0
+        assert result["retained"][ref] == "live_or_resumable_activity"
     assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
 
 
