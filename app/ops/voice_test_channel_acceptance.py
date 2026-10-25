@@ -120,6 +120,14 @@ class VoiceAcceptanceRefusal(Exception):
         self.reason = reason
 
 
+class _TurnFailure(Exception):
+    """One language turn failed; ``reason`` is a stable, secret-free code."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class Transport(Protocol):
     def get(self, path: str, query: Mapping[str, str] | None = None) -> tuple[int, str, bytes]: ...
 
@@ -264,12 +272,13 @@ def deployment_identity(path: Path, candidate: Mapping[str, str]) -> dict[str, s
 
     try:
         topology = load_and_validate_product_tars_channel_topology(path)
-    except ProductTarsChannelTopologyError as exc:
+    except (ProductTarsChannelTopologyError, OSError, UnicodeError, ValueError) as exc:
         raise VoiceAcceptanceRefusal("deployment_identity_unavailable") from exc
     entry = next(x for x in topology["channels"] if x["channel"] == CHANNEL)
     _require(not entry["refusals"], "deployment_identity_refused")
     _require(all(entry[k] != "unknown" for k in ("vm_identity", "engine_identity", "source_image_identity",
-                                                  "health_version")), "deployment_identity_unverified")
+                                                  "health_version", "ingress_auth_class")),
+             "deployment_identity_unverified")
     image = entry["source_image_identity"]
     _require(image != "unknown" and image.endswith("@" + candidate["image_digest"]), "deployment_image_mismatch")
     version = entry["health_version"].removeprefix("version:").lower()
@@ -301,6 +310,7 @@ def observe_candidate(q: Mapping[str, Any], transport: Transport) -> dict[str, A
         raise
     except Exception as exc:
         raise VoiceAcceptanceRefusal("target_unavailable") from exc
+    _require(health.get("full_channel_qualified") is not False, "channel_not_fully_qualified")
     environment = str(health.get("environment") or "").strip().lower()
     _require(environment != "prod", "prod_target_refused")
     _require(environment == CHANNEL, "channel_mismatch")
@@ -340,13 +350,13 @@ def _audio_metadata(raw: bytes) -> dict[str, Any]:
             width = audio.getsampwidth()
             channels = audio.getnchannels()
     except (EOFError, wave.Error, struct.error, ValueError, MemoryError, OverflowError) as exc:
-        raise AssertionError("audio_not_decodable_wav") from exc
+        raise _TurnFailure("audio_not_decodable_wav") from exc
     if frames <= 0 or rate <= 0 or compressed or not pcm:
-        raise AssertionError("audio_empty_or_silent")
+        raise _TurnFailure("audio_empty_or_silent")
     if len(pcm) != frames * width * channels:
-        raise AssertionError("audio_truncated")
+        raise _TurnFailure("audio_truncated")
     if width not in _PCM_CODES:
-        raise AssertionError("audio_sample_width_unsupported")
+        raise _TurnFailure("audio_sample_width_unsupported")
     samples = array(_PCM_CODES[width])
     samples.frombytes(pcm[: len(pcm) - len(pcm) % width])
     centre, full_scale = (128, 128) if width == 1 else (0, 2 ** (8 * width - 1))
@@ -358,7 +368,7 @@ def _audio_metadata(raw: bytes) -> dict[str, Any]:
             if audible >= needed:
                 break
     if audible < needed:
-        raise AssertionError("audio_empty_or_silent")
+        raise _TurnFailure("audio_empty_or_silent")
     return {"format": "audio/wav", "sha256": _sha256(raw), "bytes": len(raw), "frames": frames,
             "sample_rate": rate, "duration_ms": int(frames * 1000 / rate)}
 
@@ -378,26 +388,25 @@ def _citations(sources: Any) -> list[dict[str, str | None]]:
     return [{"uuid": _safe(s.get("uuid")), "path": _safe(s.get("path"))} for s in sources if isinstance(s, Mapping)]
 
 
-def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -> dict[str, Any]:
-    """One synthetic voice turn. Returns a secret-free outcome; never raises AssertionError."""
+def verify_language(q: Mapping[str, Any], language: str, transport: Transport, audio: bytes) -> dict[str, Any]:
+    """One synthetic voice turn on pre-verified fixture bytes; returns a secret-free outcome."""
 
     fixture = q["fixtures"][language]
     route = q["routes"]["tts"][language]
     outcome: dict[str, Any] = {"status": "failed", "reason": None, "fixture_sha256": fixture["audio_sha256"]}
     try:
-        audio = _read_fixture(fixture)
         fields = {"end_session": "true"}
         if q.get("scope"):
             fields["scope"] = q["scope"]
         status, _, raw = transport.post_voice(audio, "audio/wav", fields)
         if status != 200:
-            raise AssertionError(f"voice_http_{int(status)}")
+            raise _TurnFailure(f"voice_http_{int(status)}")
         try:
             body = json.loads(raw)
         except ValueError as exc:
-            raise AssertionError("voice_response_invalid") from exc
+            raise _TurnFailure("voice_response_invalid") from exc
         if not isinstance(body, dict):
-            raise AssertionError("voice_response_invalid")
+            raise _TurnFailure("voice_response_invalid")
         outcome["trace_id"] = _safe(body.get("trace_id"))
         detected = str(body.get("detected_language") or "").lower()[:16]
         outcome["detected_language"] = _safe(detected)
@@ -416,25 +425,27 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
         session_error = body.get("session_error")
         outcome["session_transcript"] = "unavailable" if session_error else "recorded"
         if not outcome["transcript_present"]:
-            raise AssertionError("transcript_missing")
+            raise _TurnFailure("transcript_missing")
         if not detected.startswith(language):
-            raise AssertionError("detected_language_mismatch")
+            raise _TurnFailure("detected_language_mismatch")
         if body.get("reason") in DEGRADED_REASONS or (
             body.get("degraded") is True and body.get("reason") != TRANSCRIPT_BEST_EFFORT
         ):
-            raise AssertionError("voice_degraded_" + re.sub(r"[^a-z0-9_]", "", str(body.get("reason") or "unknown"))[:48])
+            raise _TurnFailure("voice_degraded_" + re.sub(r"[^a-z0-9_]", "", str(body.get("reason") or "unknown"))[:48])
         if not outcome["answer_present"] or str(body.get("answer")).strip() == NO_ANSWER_FALLBACK:
-            raise AssertionError("grounded_answer_missing")
+            raise _TurnFailure("grounded_answer_missing")
         matched = sorted({_safe(str(x.get(k))) or "" for x in sources if synthetic(x)
                           for k in ("uuid", "path") if str(x.get(k) or "") in expected_ids})
         outcome["expected_citations_matched"] = matched
         if not sources:
-            raise AssertionError("grounded_citation_missing")
+            raise _TurnFailure("grounded_citation_missing")
         if not matched:
-            raise AssertionError("citation_not_from_synthetic_source")
+            raise _TurnFailure("citation_not_from_synthetic_source")
+        if outcome["other_citation_count"]:
+            raise _TurnFailure("non_synthetic_citation_present")
         plan = body.get("speech_plan")
         if not isinstance(plan, dict):
-            raise AssertionError("speech_plan_missing")
+            raise _TurnFailure("speech_plan_missing")
         raw_segments = plan.get("segments")
         segments: list[Any] = raw_segments if isinstance(raw_segments, list) else []
         outcome["tts"] = {"provider": _safe(plan.get("provider")), "voice_id": _safe(plan.get("voice_id")),
@@ -444,10 +455,10 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
         # synthesize, so a stale WAV cannot stand in for the live TTS route.
         outcome["tts"]["cached"] = plan.get("cached")
         if plan.get("cached") is not False:
-            raise AssertionError("tts_not_freshly_synthesized")
+            raise _TurnFailure("tts_not_freshly_synthesized")
         if (plan.get("enabled") is not True or plan.get("local_only") is not True
                 or plan.get("allow_cloud_fallback") is not False or plan.get("allow_browser_fallback") is not False):
-            raise AssertionError("tts_route_not_local_qualified")
+            raise _TurnFailure("tts_route_not_local_qualified")
         # Each sentence segment must use the qualified voice for its own language
         # (a mixed sv/en answer is legitimate); the plan voice is the turn's language.
         def qualified(segment: Any) -> bool:
@@ -459,20 +470,20 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
 
         if (not segments or not all(qualified(s) for s in segments)
                 or plan.get("provider") != route["provider"] or plan.get("voice_id") != route["voice_id"]):
-            raise AssertionError("tts_route_mismatch")
+            raise _TurnFailure("tts_route_mismatch")
         audio_url = str(body.get("audio_url") or "")
         match = AUDIO_PATH.fullmatch(audio_url)
         if match is None or audio_url != plan.get("audio_url") or match.group(1) != plan.get("cache_key"):
-            raise AssertionError("audio_unavailable")
+            raise _TurnFailure("audio_unavailable")
         audio_status, content_type, audio_raw = transport.get(audio_url)
         if audio_status != 200 or not content_type.lower().startswith("audio/wav"):
-            raise AssertionError("audio_unavailable")
+            raise _TurnFailure("audio_unavailable")
         outcome["audio"] = _audio_metadata(audio_raw)
         outcome["status"] = "passed"
     except VoiceAcceptanceRefusal as exc:
         outcome["reason"] = exc.reason
-    except AssertionError as exc:
-        outcome["reason"] = str(exc)
+    except _TurnFailure as exc:
+        outcome["reason"] = exc.reason
     except Exception:  # transport/network failure is a failed language, not a pass
         outcome["reason"] = "voice_turn_unavailable"
     return outcome
@@ -539,14 +550,15 @@ def run_acceptance(payload: Any, transport: Transport, *, base_dir: Path | None 
     except VoiceAcceptanceRefusal as exc:
         receipt["refusal"] = exc.reason  # refused before any voice turn
         return _finish(receipt)
+    audio: dict[str, bytes] = {}
     for language in LANGUAGES:
         try:
-            _read_fixture(q["fixtures"][language])
+            audio[language] = _read_fixture(q["fixtures"][language])
         except VoiceAcceptanceRefusal as exc:
             receipt["refusal"] = f"{exc.reason}_{language}"  # refused before any voice turn
             return _finish(receipt)
     for language in LANGUAGES:
-        receipt["languages"][language] = verify_language(q, language, transport)
+        receipt["languages"][language] = verify_language(q, language, transport, audio[language])
     try:
         receipt["observed_after"] = observe_candidate(q, transport)
     except VoiceAcceptanceRefusal as exc:
@@ -634,7 +646,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--qualification", type=Path, required=True,
                         help=f"{QUALIFICATION_SCHEMA} JSON (private file)")
     parser.add_argument("--out", type=Path, help="write the receipt here (refuses to overwrite)")
-    parser.epilog = "exit codes: 0 passed, 1 failed, 2 refused, 3 --out already exists (nothing sent)"
+    parser.epilog = "exit codes: 0 passed, 1 failed, 2 refused, 3 --out unusable (nothing sent)"
     args = parser.parse_args(argv)
     try:
         payload = json.loads(args.qualification.read_text(encoding="utf-8"))
@@ -647,8 +659,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.out is not None:
         try:
             out = os.fdopen(os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8")
-        except FileExistsError:
-            print("receipt path already exists; no voice turn was sent", file=sys.stderr)
+        except OSError as exc:
+            print(f"receipt path unusable ({type(exc).__name__}); no voice turn was sent", file=sys.stderr)
             return 3
     base_dir = args.qualification.resolve().parent
     try:

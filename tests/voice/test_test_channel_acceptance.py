@@ -295,6 +295,11 @@ def test_candidate_and_channel_must_match_qualification(
     other.reported = "sha256:" + "0" * 64
     assert _run(tmp_path, other)["refusal"] == "candidate_mismatch" and not other.voice_turns
 
+    # A text-capture-only activation is not a fully qualified channel.
+    partial = FakeTestChannel()
+    partial.health_override = {"full_channel_qualified": False}
+    assert _run(tmp_path, partial)["refusal"] == "channel_not_fully_qualified" and not partial.voice_turns
+
     # Health must report the same SHA; a missing version is not a match.
     no_version = FakeTestChannel()
     no_version.health_override = {"version": None}
@@ -366,16 +371,17 @@ def test_receipt_is_candidate_bound_and_secret_free(tmp_path: Path, monkeypatch:
     odd = FakeTestChannel()
     odd.sources_override = [{"uuid": "u", "path": SOURCES["sv"]}, {"uuid": "token=abc123", "path": "notes/sk-ref.md"}]
     odd_receipt = _run(tmp_path, odd)
-    assert odd_receipt["languages"]["sv"]["status"] == "passed"
+    assert odd_receipt["languages"]["sv"]["reason"] == "non_synthetic_citation_present"
     assert "abc123" not in json.dumps(odd_receipt) and "sk-ref" not in json.dumps(odd_receipt)
 
-    # A non-synthetic citation is counted by hash, never named in the receipt.
+    # A non-synthetic citation fails the turn and is only counted, never named in the receipt.
     mixed = FakeTestChannel()
     mixed.sources_override = [{"uuid": "u", "path": SOURCES["sv"]},
                               {"uuid": "real-uuid-1", "path": "journal/2026-10-private.md"}]
     mixed_receipt = _run(tmp_path, mixed)
     sv = mixed_receipt["languages"]["sv"]
-    assert sv["status"] == "passed" and sv["citations"] == [{"uuid": "u", "path": SOURCES["sv"]}]
+    assert sv["reason"] == "non_synthetic_citation_present"
+    assert sv["citations"] == [{"uuid": "u", "path": SOURCES["sv"]}]
     assert sv["other_citation_count"] == 1
     assert "private.md" not in json.dumps(mixed_receipt) and "real-uuid-1" not in json.dumps(mixed_receipt)
 
@@ -414,6 +420,7 @@ def test_receipt_is_candidate_bound_and_secret_free(tmp_path: Path, monkeypatch:
     # An existing --out path is refused before any voice turn is sent.
     seen.clear()
     assert vta.main(["--qualification", str(path), "--out", str(out)]) == 3
+    assert vta.main(["--qualification", str(path), "--out", str(tmp_path / "missing" / "r.json")]) == 3
     assert seen == []
 
     # An invalid input is refused with its own reason before any transport carries the bearer.
