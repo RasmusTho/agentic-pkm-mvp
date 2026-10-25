@@ -33,6 +33,19 @@ TARGET = DIRECTORY / 'builderops-discord.cred'
 RECEIPTS = Path('/opt/builderops/receipts')
 LOCK = Path('/tmp/agentic-pkm-mvp-builderops-lock/deployment.lock')
 
+class DurabilityError(OSError):
+    pass
+
+def sync_directory(path):
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        os.fsync(descriptor)
+    except OSError:
+        raise DurabilityError() from None
+    finally:
+        if descriptor is not None: os.close(descriptor)
+
 def private(path, directory=False):
     info = path.lstat()
     if (info.st_uid != 0 or info.st_mode & 0o022
@@ -71,9 +84,7 @@ def replace(path, raw, mode):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(name, path)
-        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try: os.fsync(descriptor)
-        finally: os.close(descriptor)
+        sync_directory(path.parent)
     finally:
         if os.path.exists(name): os.unlink(name)
 
@@ -88,7 +99,17 @@ def main():
     receipt = RECEIPTS / ('builderops-alerts-' + operation_id + '.json')
     if action == 'receipt':
         private(receipt)
-        print(receipt.read_text())
+        # A prior acknowledgement can be lost during the receipt directory sync.
+        # Re-establish durability before this read can become terminal evidence.
+        descriptor = os.open(receipt, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            raw = os.read(descriptor, 2049)
+            if len(raw) > 2048: raise ValueError()
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        sync_directory(RECEIPTS)
+        print(raw.decode())
         return
     if action != 'apply' or receipt.exists() or receipt.is_symlink():
         raise ValueError()
@@ -121,15 +142,21 @@ def main():
             subprocess.run(['/usr/bin/systemd-creds', 'decrypt',
                 '--name=builderops-discord', '-', '/dev/null'], input=encrypted,
                 check=True, capture_output=True, timeout=20)
-            if not DIRECTORY.exists(): DIRECTORY.mkdir(mode=0o700)
+            if not DIRECTORY.exists():
+                DIRECTORY.mkdir(mode=0o700)
+                sync_directory(DIRECTORY.parent)
             changed = True
             replace(TARGET, encrypted, 0o600)
             private(TARGET)
             committed = True
-        except Exception:
+        except Exception as error:
             if changed:
-                if previous is None: TARGET.unlink()
+                if previous is None:
+                    TARGET.unlink(missing_ok=True)
+                    sync_directory(DIRECTORY)
                 else: replace(TARGET, previous, 0o600)
+            if isinstance(error, DurabilityError):
+                raise
         result = dict(schema='builderops_alert_handoff.v1', operation_id=operation_id,
             kind='deploy', target='bob-1', result='committed' if committed else 'aborted',
             source='remote-terminal', engine_id=ENGINE, consumer='heimdal-builderops-alerts')

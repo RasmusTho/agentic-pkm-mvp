@@ -223,7 +223,7 @@ def test_assembled_receiver_persists_ciphertext_and_operation_bound_receipt(rece
     assert WEBHOOK not in str(capsys.readouterr())
 
 
-def test_assembled_receiver_compensates_replace_then_sync_failure(receiver, capsys):
+def test_assembled_receiver_compensates_postreplacement_failure(receiver, capsys):
     namespace, operation_id, _ = receiver
     target = namespace['TARGET']
     target.write_bytes(b'previous-encrypted-source')
@@ -235,7 +235,7 @@ def test_assembled_receiver_compensates_replace_then_sync_failure(receiver, caps
         actual_replace(path, raw, mode)
         if path == target and not attempted:
             attempted = True
-            raise OSError('injected directory-sync failure')
+            raise OSError('injected postreplacement validation failure')
 
     namespace['replace'] = fail_after_target_replacement
     namespace['main']()
@@ -243,3 +243,70 @@ def test_assembled_receiver_compensates_replace_then_sync_failure(receiver, caps
     stored = json.loads((namespace['RECEIPTS'] / f'builderops-alerts-{operation_id}.json').read_text())
     assert stored == receipt(operation_id, 'aborted')
     assert WEBHOOK not in str(capsys.readouterr())
+
+
+def test_assembled_receiver_syncs_new_credential_directory_before_terminal_receipt(receiver):
+    namespace, operation_id, _ = receiver
+    namespace['DIRECTORY'].rmdir()
+    synced = []
+    original = namespace['sync_directory']
+
+    def observe(path):
+        synced.append(path)
+        original(path)
+
+    namespace['sync_directory'] = observe
+    namespace['main']()
+    assert synced == [namespace['DIRECTORY'].parent, namespace['DIRECTORY'], namespace['RECEIPTS']]
+    assert (namespace['RECEIPTS'] / f'builderops-alerts-{operation_id}.json').exists()
+
+
+def test_first_install_compensation_syncs_removal_before_aborted_receipt(receiver):
+    namespace, operation_id, _ = receiver
+    actual = namespace['replace']
+    events = []
+    sync = namespace['sync_directory']
+
+    def observe_sync(path):
+        events.append(('sync', path, namespace['TARGET'].exists()))
+        sync(path)
+
+    def fail_after_target_replacement(path, raw, mode):
+        actual(path, raw, mode)
+        if path == namespace['TARGET']:
+            raise ValueError('injected post-replacement validation refusal')
+        events.append(('receipt', path, namespace['TARGET'].exists()))
+
+    namespace.update(replace=fail_after_target_replacement, sync_directory=observe_sync)
+    namespace['main']()
+    assert not namespace['TARGET'].exists()
+    assert ('sync', namespace['DIRECTORY'], False) in events
+    assert events.index(('sync', namespace['DIRECTORY'], False)) < len(events) - 1
+    data = json.loads((namespace['RECEIPTS'] / f'builderops-alerts-{operation_id}.json').read_text())
+    assert data['result'] == 'aborted'
+
+
+@pytest.mark.parametrize('point', ['created-directory', 'removed-credential'])
+def test_failed_namespace_durability_cannot_write_terminal_receipt(receiver, point):
+    namespace, operation_id, _ = receiver
+    target = namespace['TARGET']
+    actual_replace = namespace['replace']
+    actual_sync = namespace['sync_directory']
+    if point == 'created-directory':
+        namespace['DIRECTORY'].rmdir()
+    else:
+        def fail_after_target(path, raw, mode):
+            actual_replace(path, raw, mode)
+            if path == target: raise ValueError('compensate first install')
+        namespace['replace'] = fail_after_target
+
+    def fail_sync(path):
+        if ((point == 'created-directory' and path == namespace['DIRECTORY'].parent)
+            or (point == 'removed-credential' and path == namespace['DIRECTORY'] and not target.exists())):
+            raise namespace['DurabilityError']()
+        actual_sync(path)
+
+    namespace['sync_directory'] = fail_sync
+    with pytest.raises(namespace['DurabilityError']):
+        namespace['main']()
+    assert not (namespace['RECEIPTS'] / f'builderops-alerts-{operation_id}.json').exists()
