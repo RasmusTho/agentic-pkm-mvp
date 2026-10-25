@@ -269,6 +269,11 @@ def test_startup_and_capture_scope_is_explicit_and_default_full(tmp_path, monkey
     with TestClient(api._create_app()) as client:
         assert client.post('/api/companion/capture', json={'text': 'ordinary intake'}).status_code == 200
     assert calls == ['index', 'warm', 'classify']
+    from starlette.requests import Request
+
+    direct = Request({'type': 'http', 'method': 'POST', 'path': '/api/companion/capture', 'headers': []})
+    assert capture.capture_to_inbox(capture.CaptureRequest(text='legacy direct intake'), direct).governed_write
+    assert calls == ['index', 'warm', 'classify', 'classify']
     for scope, channel in [('unknown', 'dev'), ('', 'test'), ('text-capture', 'prod')]:
         monkeypatch.setenv('PKM_ACTIVATION_SCOPE', scope)
         monkeypatch.setenv('PKM_ENVIRONMENT', channel)

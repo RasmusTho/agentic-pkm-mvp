@@ -440,7 +440,8 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
             },
         ) from exc
 
-    text_scope = getattr(request.app.state, 'activation_scope', 'full') == 'text-capture'
+    # Legacy direct producer calls have no ASGI app and retain full behavior.
+    text_scope = getattr(getattr(request.scope.get('app'), 'state', None), 'activation_scope', 'full') == 'text-capture'
     registration = None if text_scope else _offer_question_registration_proposal(
         vault_root=vault_root, note_rel=note_rel, trace_id=trace_id
     )

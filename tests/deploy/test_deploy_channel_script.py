@@ -335,8 +335,9 @@ def test_health_gate_requires_liveness_readiness_and_functional_health() -> None
     assert "isinstance(data, dict)" in text
     assert 'run_postmutation_gate "health gate failed"' in text
     run_block = text.split('echo "deploy plan:', 1)[1]
+    full_run_block = run_block.split('elif [ "${activation_scope}" = text-capture ]; then', 1)[1].split('\nelse\n', 1)[1]
     assert run_block.index("recreate_channel_services") < run_block.index("health_gate")
-    assert run_block.index("health_gate") < run_block.index("version_gate")
+    assert full_run_block.index("health_gate") < full_run_block.index("version_gate")
 
 
 def test_embedding_rebuild_path_preserves_deferred_readiness_exception() -> None:
@@ -765,9 +766,10 @@ def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
     assert '"fleet_model_fitness"' in text
 
     run_block = text.split('echo "deploy plan:', 1)[1]
-    assert run_block.index("health_gate") < run_block.index("version_gate")
-    assert run_block.index("version_gate") < run_block.index("fleet_model_fitness_gate")
-    assert run_block.index("fleet_model_fitness_gate") < run_block.index("record_receipt")
+    full_run_block = run_block.split('elif [ "${activation_scope}" = text-capture ]; then', 1)[1].split('\nelse\n', 1)[1]
+    assert full_run_block.index("health_gate") < full_run_block.index("version_gate")
+    assert full_run_block.index("version_gate") < full_run_block.index("fleet_model_fitness_gate")
+    assert full_run_block.index("fleet_model_fitness_gate") < full_run_block.index("record_receipt")
 
 
 def _seed_previous_pin(root: Path, previous_sha: str, *, channel: str = "dev") -> Path:
@@ -9393,7 +9395,7 @@ def test_native_source_embedding_preflight_failures_are_finitely_attributed(tmp_
         gate = script[script.index('native_source_failure() {'):script.index('native_source_projection_gate() {')]
         payload = '{"provider":"BAD", "model":"hostile-child-canary"}'
         operation = 'invalid' if fault == 'context' else env['BWS_DEPLOY_OPERATION_ID']
-        command = (gate + '\naction=deploy\ntarget_sha=' + sha
+        command = (gate + '\naction=deploy\nactivation_scope=full\ntarget_sha=' + sha
                    + '\nBWS_DEPLOY_OPERATION_ID=' + operation
                    + '\ncompose() { printf \'%s\\n\' \' ' + payload + '\'; }\n'
                    + 'native_source_embedding_preflight_gate\nrc=$?\n'
@@ -9455,7 +9457,7 @@ def test_native_embedding_probe_guard_refusal_is_distinct_from_probe_failures(tm
     script = SCRIPT.read_text()
     gate = script[script.index('native_source_failure() {'):script.index('native_source_projection_gate() {')]
     show_failure = '    *ollama\\ show*) return 1 ;;\n' if guarded_call == 'pull' else ''
-    command = ('set -euo pipefail\n' + gate + '\naction=deploy\ntarget_sha=' + sha
+    command = ('set -euo pipefail\n' + gate + '\naction=deploy\nactivation_scope=full\ntarget_sha=' + sha
                + '\nBWS_DEPLOY_OPERATION_ID=' + env['BWS_DEPLOY_OPERATION_ID']
                + '\nHOST_SECRET_RUNTIME_ENV_FILE_API=' + env['HOST_SECRET_RUNTIME_ENV_FILE_API']
                + '''\ncompose() {
@@ -9504,7 +9506,7 @@ def test_native_embedding_probe_unmarked_status_120_uses_generic_failure(tmp_pat
     root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
     script = SCRIPT.read_text()
     gate = script[script.index('native_source_failure() {'):script.index('native_source_projection_gate() {')]
-    command = (gate + '\naction=deploy\ntarget_sha=' + sha
+    command = (gate + '\naction=deploy\nactivation_scope=full\ntarget_sha=' + sha
                + '\nBWS_DEPLOY_OPERATION_ID=' + env['BWS_DEPLOY_OPERATION_ID']
                + '\nHOST_SECRET_RUNTIME_ENV_FILE_API=' + env['HOST_SECRET_RUNTIME_ENV_FILE_API']
                + '''\ncompose() {
