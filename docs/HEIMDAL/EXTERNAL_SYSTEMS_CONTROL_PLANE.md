@@ -98,7 +98,7 @@ this document. They require the bounded delivery work tracked by the observabili
 redacted live drill receipt.
 
 The bounded bob-1 BuilderOps host binding under #6347 is
-`heimdal-builderops-alerts`. Demerzel's existing BWS controller resolves only the
+`heimdal-builderops-alerts`. The existing administrator-host BWS controller resolves only the
 existing `non-prod` / `shared/discord.webhook` identity and sends it to a fixed
 receiver on bob-1. The existing systemd encrypted credential facility supplies
 only the BuilderOps probe's private temporary runtime handoff. The

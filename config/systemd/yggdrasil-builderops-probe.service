@@ -19,7 +19,7 @@ StateDirectory=yggdrasil-builderops-probe
 StateDirectoryMode=0700
 RuntimeDirectory=yggdrasil-builderops-probe
 RuntimeDirectoryMode=0700
-# Heimdal's fixed Demerzel controller owns the encrypted source; this service
+# Heimdal's fixed administrator controller owns the encrypted source; this service
 # materializes only its one credential and removes the runtime handoff on exit.
 RuntimeDirectoryPreserve=yes
 TimeoutStartSec=45

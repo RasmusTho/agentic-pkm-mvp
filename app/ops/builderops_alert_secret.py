@@ -1,6 +1,6 @@
 """Fixed Heimdal/BWS handoff to bob-1's existing systemd credential facility.
 
-The administrator remains on Demerzel. No reader account or Product consumer is
+The administrator remains on the designated Mac controller. No reader account or Product consumer is
 installed on bob-1. Values travel only in process memory and SSH standard input.
 """
 from __future__ import annotations
