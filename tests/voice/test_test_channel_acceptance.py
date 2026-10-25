@@ -135,7 +135,7 @@ class FakeTestChannel:
             "sources": sources, "audio_url": url, "session_id": "voice-1", "session_error": None,
             "trace_id": f"trace-{language}", "degraded": False, "reason": None,
             "speech_plan": {"enabled": True, "local_only": True, "allow_cloud_fallback": False,
-                            "allow_browser_fallback": False, "normalized_text": ANSWER, "cache_key": key,
+                            "allow_browser_fallback": False, "normalized_text": ANSWER, "cache_key": key, "cached": False,
                             "audio_url": url, "provider_available": True, **route,
                             "segments": [{"index": 0, "language": language, "text": ANSWER,
                                           "provider_available": True, **route}]},
@@ -206,6 +206,22 @@ def test_swedish_and_english_use_qualified_routes_and_return_audio(tmp_path: Pat
             return super().get(path, query)
 
     assert _run(tmp_path / "n", NearSilent())["languages"]["sv"]["reason"] == "audio_empty_or_silent"
+
+    # The route's no-answer fallback is not a grounded answer, even with retrieval hits.
+    fallback = FakeTestChannel()
+    fallback.body_override = {"answer": "No results found."}
+    assert _run(tmp_path / "a", fallback)["languages"]["sv"]["reason"] == "grounded_answer_missing"
+
+    # A cache hit means this turn did not synthesize; stale audio is not live TTS proof.
+    class Cached(FakeTestChannel):
+        def post_voice(self, audio: bytes, content_type: str, fields: Mapping[str, str]) -> tuple[int, str, bytes]:
+            status, kind, raw = super().post_voice(audio, content_type, fields)
+            body = json.loads(raw)
+            body["speech_plan"]["cached"] = True
+            return status, kind, json.dumps(body).encode()
+
+    cached = _run(tmp_path / "c", Cached())["languages"]["en"]
+    assert cached["reason"] == "tts_not_freshly_synthesized" and cached["tts"]["cached"] is True
 
     class Truncated(FakeTestChannel):
         def get(self, path: str, query: Mapping[str, str] | None = None) -> tuple[int, str, bytes]:
@@ -296,6 +312,22 @@ def test_candidate_and_channel_must_match_qualification(
         assert vta.run_acceptance(payload, fresh, base_dir=tmp_path / "t")["refusal"] == expected
         assert fresh.calls == []
 
+    # Unresolved TEST identity fields cannot bind the digest.
+    unknown_vm = _topology()
+    unknown_vm["channels"][1] = {**unknown_vm["channels"][1], "vm_identity": "unknown"}
+    probe = FakeTestChannel()
+    assert vta.run_acceptance(_qualification(tmp_path / "v", topology=unknown_vm), probe,
+                              base_dir=tmp_path / "v")["refusal"] == "deployment_identity_unverified"
+    assert probe.calls == []
+
+    # An unusable fixture for either language is refused before the first voice turn.
+    payload = _qualification(tmp_path / "o")
+    (tmp_path / "o" / "en.wav").write_bytes(b"RIFF" + b"\x00" * (vta.MAX_FIXTURE_BYTES + 1))
+    oversized = FakeTestChannel()
+    result = vta.run_acceptance(payload, oversized, base_dir=tmp_path / "o")
+    assert result["outcome"] == "refused" and result["refusal"] == "fixture_unavailable_en"
+    assert not oversized.voice_turns
+
     # Evidence channel casing is normalized like the top-level channel.
     upper = _qualification(tmp_path, channel="TEST")
     upper["qualification"]["route"]["channel"] = "TEST"
@@ -344,7 +376,7 @@ def test_receipt_is_candidate_bound_and_secret_free(tmp_path: Path, monkeypatch:
     mixed_receipt = _run(tmp_path, mixed)
     sv = mixed_receipt["languages"]["sv"]
     assert sv["status"] == "passed" and sv["citations"] == [{"uuid": "u", "path": SOURCES["sv"]}]
-    assert len(sv["other_citations"]) == 1
+    assert sv["other_citation_count"] == 1
     assert "private.md" not in json.dumps(mixed_receipt) and "real-uuid-1" not in json.dumps(mixed_receipt)
 
     # A credential-bearing qualification input is refused, and the CLI never records the token.

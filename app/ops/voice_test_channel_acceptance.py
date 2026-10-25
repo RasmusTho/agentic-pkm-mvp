@@ -28,6 +28,10 @@ Boundaries (fail closed):
   reported verbatim so the parent reviewer can check it against the referenced
   receipts. Public ``/api/health`` deliberately neutralizes LLM route identity,
   and the topology carries no ingress host, so those bindings are not re-observed.
+* A turn passes only when this turn freshly synthesized its audio
+  (``speech_plan.cached`` is false) and the answer is not the route's
+  no-answer fallback. A rerun whose answer is byte-identical reuses the TTS
+  cache and fails closed, so reruns should use fresh synthetic question fixtures.
 * ``/api/ask/voice`` has no actor or route-identity field. The synthetic actor
   is therefore a reference to the TEST channel's qualified synthetic actor and
   source binding, and the ASR/ASK route identities and image digest are bound
@@ -79,7 +83,10 @@ AUDIO_PATH = re.compile(r"/api/companion/tts/audio/([a-f0-9]{64})\.wav")
 ALLOWED_GET = frozenset({VERSION_PATH, HEALTH_PATH})
 ALLOWED_POST = frozenset({VOICE_PATH})
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
-MAX_FIXTURE_BYTES = 8 * 1024 * 1024
+# Matches the route's VOICE_ASK_MAX_AUDIO_BYTES so an oversized fixture is refused before any turn.
+MAX_FIXTURE_BYTES = 5 * 1024 * 1024
+# ``ask_voice`` substitutes this text when the graph produced no answer; it is not grounded.
+NO_ANSWER_FALLBACK = "No results found."
 DEGRADED_REASONS = frozenset({"tts_unavailable", "capture_intent_surfaced"})
 # The voice-session transcript is best effort (INV-VOICE-A); its absence is
 # reported in the receipt but does not negate an audible grounded answer.
@@ -261,6 +268,8 @@ def deployment_identity(path: Path, candidate: Mapping[str, str]) -> dict[str, s
         raise VoiceAcceptanceRefusal("deployment_identity_unavailable") from exc
     entry = next(x for x in topology["channels"] if x["channel"] == CHANNEL)
     _require(not entry["refusals"], "deployment_identity_refused")
+    _require(all(entry[k] != "unknown" for k in ("vm_identity", "engine_identity", "source_image_identity",
+                                                  "health_version")), "deployment_identity_unverified")
     image = entry["source_image_identity"]
     _require(image != "unknown" and image.endswith("@" + candidate["image_digest"]), "deployment_image_mismatch")
     version = entry["health_version"].removeprefix("version:").lower()
@@ -394,14 +403,16 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
         outcome["detected_language"] = _safe(detected)
         outcome["transcript_present"] = bool(str(body.get("transcript") or "").strip())
         outcome["answer_present"] = bool(str(body.get("answer") or "").strip())
-        citations = _citations(body.get("sources"))
+        sources = [x for x in (body.get("sources") or []) if isinstance(x, Mapping)]
         expected_ids = set(fixture["expected_source_ids"])
-        # Non-synthetic citations are counted and hashed, never named, so a stray
-        # real note cannot leak its path or UUID into the parent-Issue receipt.
-        outcome["citations"] = [c for c in citations if c["uuid"] in expected_ids or c["path"] in expected_ids]
-        outcome["other_citations"] = sorted(
-            _sha256(json.dumps(c, sort_keys=True).encode())
-            for c in citations if not (c["uuid"] in expected_ids or c["path"] in expected_ids))
+
+        def synthetic(source: Mapping[str, Any]) -> bool:
+            return str(source.get("uuid") or "") in expected_ids or str(source.get("path") or "") in expected_ids
+
+        # Only admitted synthetic citations are named. Any other citation is only
+        # counted: no path, UUID or guessable hash of a stray real note is recorded.
+        outcome["citations"] = _citations([x for x in sources if synthetic(x)])
+        outcome["other_citation_count"] = sum(1 for x in sources if not synthetic(x))
         session_error = body.get("session_error")
         outcome["session_transcript"] = "unavailable" if session_error else "recorded"
         if not outcome["transcript_present"]:
@@ -412,14 +423,12 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
             body.get("degraded") is True and body.get("reason") != TRANSCRIPT_BEST_EFFORT
         ):
             raise AssertionError("voice_degraded_" + re.sub(r"[^a-z0-9_]", "", str(body.get("reason") or "unknown"))[:48])
-        if not outcome["answer_present"]:
-            raise AssertionError("answer_missing")
-        expected = set(fixture["expected_source_ids"])
-        raw_ids = [str(s.get(k)) for s in (body.get("sources") or []) if isinstance(s, Mapping)
-                   for k in ("uuid", "path") if s.get(k)]
-        matched = sorted({_safe(v) or "" for v in raw_ids if v in expected})
+        if not outcome["answer_present"] or str(body.get("answer")).strip() == NO_ANSWER_FALLBACK:
+            raise AssertionError("grounded_answer_missing")
+        matched = sorted({_safe(str(x.get(k))) or "" for x in sources if synthetic(x)
+                          for k in ("uuid", "path") if str(x.get(k) or "") in expected_ids})
         outcome["expected_citations_matched"] = matched
-        if not citations:
+        if not sources:
             raise AssertionError("grounded_citation_missing")
         if not matched:
             raise AssertionError("citation_not_from_synthetic_source")
@@ -431,6 +440,11 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
         outcome["tts"] = {"provider": _safe(plan.get("provider")), "voice_id": _safe(plan.get("voice_id")),
                           "segments": [{k: _safe(s.get(k)) for k in ("language", "provider", "voice_id")}
                                        for s in segments if isinstance(s, dict)]}
+        # The plan is built before synthesis: cached=True means this turn did not
+        # synthesize, so a stale WAV cannot stand in for the live TTS route.
+        outcome["tts"]["cached"] = plan.get("cached")
+        if plan.get("cached") is not False:
+            raise AssertionError("tts_not_freshly_synthesized")
         if (plan.get("enabled") is not True or plan.get("local_only") is not True
                 or plan.get("allow_cloud_fallback") is not False or plan.get("allow_browser_fallback") is not False):
             raise AssertionError("tts_route_not_local_qualified")
@@ -526,6 +540,12 @@ def run_acceptance(payload: Any, transport: Transport, *, base_dir: Path | None 
         receipt["refusal"] = exc.reason  # refused before any voice turn
         return _finish(receipt)
     for language in LANGUAGES:
+        try:
+            _read_fixture(q["fixtures"][language])
+        except VoiceAcceptanceRefusal as exc:
+            receipt["refusal"] = f"{exc.reason}_{language}"  # refused before any voice turn
+            return _finish(receipt)
+    for language in LANGUAGES:
         receipt["languages"][language] = verify_language(q, language, transport)
     try:
         receipt["observed_after"] = observe_candidate(q, transport)
@@ -546,7 +566,8 @@ def _finish(receipt: dict[str, Any]) -> dict[str, Any]:
     except VoiceAcceptanceRefusal as exc:
         # Never emit, and never crash on, a receipt that fails the secret scan.
         return {"schema": RECEIPT_SCHEMA, "run_id": receipt["run_id"], "channel": CHANNEL,
-                "passed": False, "outcome": "failed", "refusal": exc.reason,
+                "passed": False, "outcome": "refused" if receipt["outcome"] == "refused" else "failed",
+                "refusal": exc.reason,
                 "started_at": receipt["started_at"], "finished_at": receipt["finished_at"],
                 "languages": {x: {"status": receipt["languages"][x]["status"], "reason": None}
                               for x in LANGUAGES}}
