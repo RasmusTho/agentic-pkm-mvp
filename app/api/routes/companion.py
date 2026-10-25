@@ -1718,7 +1718,7 @@ def initialize_companion_vault(
     request: Request,
     api_key: str | None = Depends(api_key_header),
 ) -> VaultInitializeResponse:
-    target = Path(req.path).expanduser().resolve(strict=False) if req.scoped_selection else Path(req.path)
+    target = Path(req.path)
     # Personal-vault-write guard (#2518): initializing writes the settings
     # scaffold INTO the chosen folder. When that folder is already populated
     # (an existing personal Obsidian vault resolves to ``uninitialized`` and is
@@ -1740,6 +1740,15 @@ def initialize_companion_vault(
         if registry_path is None:
             raise HTTPException(status_code=503, detail="instance registry is not bound")
         _authenticated_principal_id(request, api_key, registry_path)
+        from app.instance.filesystem_identity import FilesystemIdentityError, resolve_filesystem_root_identity
+
+        try:
+            target = Path(resolve_filesystem_root_identity(target).canonical_path)
+        except FilesystemIdentityError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="reselection_required: initialization root identity cannot be established",
+            ) from exc
 
     if runtime is not None and registry_path is not None:
         snapshot = runtime.registry.load()

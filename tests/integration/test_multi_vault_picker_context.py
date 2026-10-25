@@ -1631,3 +1631,30 @@ console.log(JSON.stringify({status:written.status,data:await written.json(),visi
         assert result['data']['detail']['error'] == 'capability_not_ready'
         assert len(writes) == len(rebound) == 1
     assert sum(path.endswith('/notes/scoped') for _method,path,_headers,_body in calls) == 2
+
+
+def test_scoped_initialize_refuses_non_directory_before_effects(tmp_path, monkeypatch):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    runtime, _roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    before = runtime.registry.load()
+    target = tmp_path / 'ordinary-file.md'
+    target.write_text('human content\n')
+    manager = companion_module.get_vault_manager()
+    context = manager.context
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f'''
+var response=await fetch('/api/companion/vault/initialize',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{path:{json.dumps(str(target))},confirm:true}})}});
+console.log(JSON.stringify({{status:response.status,body:await response.json(),visible:!visible.hidden,cookie}}));
+''')
+    assert result['status'] == 409
+    assert 'reselection_required' in json.dumps(result['body'])
+    assert result['visible'] is True
+    assert 'companion_context_session=' not in result['cookie']
+    assert target.read_text() == 'human content\n'
+    assert manager.context == context
+    assert runtime.registry.load() == before
+    assert [(method, path) for method, path, _headers, _body in calls] == [
+        ('POST', '/api/companion/vault/initialize')
+    ]
