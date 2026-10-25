@@ -97,7 +97,7 @@ def _registry_store() -> VaultRegistryStore | None:
     return VaultRegistryStore(path)
 
 
-def resolve_cli_vault_context(
+def _resolve_cli_vault_context(
     explicit: Path | str | None = None,
     *,
     env_policy: CliEnvPolicy = "channel",
@@ -176,6 +176,21 @@ def resolve_cli_vault_context(
     if default_path is not None:
         return VaultCarrier(source="compatibility", root=default_path, provenance="cli_default_path")
     return VaultCarrier(source="no_vault", root=None, provenance="no_vault")
+
+
+def resolve_cli_vault_context(
+    explicit: Path | str | None = None, *, env_policy: CliEnvPolicy = "channel",
+    use_process_selection: bool = False, default_path: Path | None = None,
+) -> VaultCarrier:
+    carrier = _resolve_cli_vault_context(explicit, env_policy=env_policy,
+        use_process_selection=use_process_selection, default_path=default_path)
+    if carrier.root is not None:
+        from app.instance.channel_transfer import require_source_root_ingress
+        try:
+            require_source_root_ingress(carrier.root)
+        except RuntimeError as exc:
+            raise CliVaultContextError(str(exc)) from exc
+    return carrier
 
 
 def carrier_vault_context(carrier: VaultCarrier) -> VaultContext:

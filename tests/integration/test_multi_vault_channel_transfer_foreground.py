@@ -98,3 +98,99 @@ def _assert_migrated_companion_reads_fenced_after_transfer(tmp_path: Path, monke
         assert stale.status_code == 409, stale.text
         assert stale.json()["detail"] == "active_context_read_unavailable"
         assert "source.md" not in stale.text
+
+
+def test_source_restart_cannot_write_after_channel_lease_transfer(tmp_path, monkeypatch):
+    from tests._mvr05c_transfer_harness import transfer_pair, reopen
+    from app.instance.channel_transfer import require_source_ingress
+    source, destination, original, lifecycle = transfer_pair(tmp_path, monkeypatch)
+    target = source.transfer_to(destination, original.vault_binding_id, stop_and_prove=lifecycle)
+    source = reopen(source)
+    with pytest.raises(RuntimeError, match="ingress is closed"):
+        require_source_ingress(source.registry, original.vault_binding_id)
+    leases = BindingEffectLeaseManager.for_runtime(registry_store=source.registry, ownership_root=source.ledger.root,
+        state_root=source.layout.root / "binding-effect-leases")
+    with pytest.raises(LedgerError):
+        with leases.shared_effect(original.vault_binding_id, channel_id=source.layout.channel_id, root=Path(original.path)):
+            pytest.fail("stale source writer acquired authority")
+    assert target != original.vault_binding_id
+
+
+def test_destination_uses_minted_binding_and_transfer_lineage(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.api.app import app
+    from app.api.routes import active_context_selection as selections
+    from app.api.routes import capture
+    from tests._mvr05c_transfer_harness import transfer_pair
+    source, destination, original, lifecycle = transfer_pair(tmp_path, monkeypatch)
+    target = source.transfer_to(destination, original.vault_binding_id, stop_and_prove=lifecycle)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(destination.registry.path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", destination.layout.channel_id)
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "destination-events.jsonl"))
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
+    monkeypatch.setattr(capture, "_offer_question_registration_proposal", lambda **_: None)
+    selections.reset_selection_store_for_tests()
+    client = TestClient(app)
+    old = client.post("/api/companion/active-context/selection", json={"vault_binding_ids": [original.vault_binding_id]})
+    assert old.status_code in (403, 404, 409), old.text
+    selected = client.post("/api/companion/active-context/selection", json={"vault_binding_ids": [target]})
+    assert selected.status_code == 201, selected.text
+    headers = {"X-Active-Context-Session": selected.json()["context_selection_id"]}
+    written = client.post("/api/companion/capture/scoped", headers=headers, json={"text": "Destination capture", "target_binding_id": target})
+    assert written.status_code == 200, written.text
+    assert written.json()["governed_write"]["authority_receipt"]["target_binding_id"] == target
+    assert destination.registry.load().transfer_lineage[-1].source_binding_id == original.vault_binding_id
+
+
+@pytest.mark.parametrize("stage", ["ingress_closed", "complete"])
+def test_source_cli_cannot_mutate_retiring_root(tmp_path, monkeypatch, stage):
+    from click.testing import CliRunner
+    from app.cli import cli
+    from app.instance import channel_transfer
+    from tests._mvr05c_transfer_harness import transfer_pair, reopen
+    source, destination, original, stop = transfer_pair(tmp_path, monkeypatch)
+    class Crash(BaseException):
+        pass
+    def crash(phase):
+        if phase == stage:
+            raise Crash()
+    monkeypatch.setattr(channel_transfer, "_fault_point", crash)
+    with pytest.raises(Crash):
+        source.transfer_to(destination, original.vault_binding_id, stop_and_prove=stop)
+    # Exercise the real Click producer after reconstructing source state.
+    source = reopen(source)
+    before = {str(p.relative_to(original.path)): p.read_bytes() for p in Path(original.path).rglob("*") if p.is_file()}
+    result = CliRunner().invoke(cli, ["canvas", "open", "note.md", "--vault-root", original.path])
+    assert result.exit_code != 0
+    assert "source binding ingress is closed" in result.output
+    after = {str(p.relative_to(original.path)): p.read_bytes() for p in Path(original.path).rglob("*") if p.is_file()}
+    assert before == after
+
+
+def test_cached_filesystem_port_cannot_bypass_retired_source_admission(tmp_path, monkeypatch):
+    from app.knowledge.adapters import FsVaultAdapter
+    from app.knowledge.locators import make_note_locator
+    from tests._mvr05c_transfer_harness import transfer_pair
+    source, destination, original, stop = transfer_pair(tmp_path, monkeypatch)
+    cached = FsVaultAdapter(original.path)
+    source.transfer_to(destination, original.vault_binding_id, stop_and_prove=stop)
+    with pytest.raises(RuntimeError, match="source binding ingress is closed"):
+        cached.write_note(make_note_locator("forbidden.md"), "source must not write")
+    assert not Path(original.path, "forbidden.md").exists()
+
+
+def test_real_channel_startup_refuses_retired_source_and_admits_destination(tmp_path, monkeypatch):
+    from app.instance.runtime import _preflight_runtime
+    from tests._mvr05c_transfer_harness import transfer_pair
+    source, destination, original, stop = transfer_pair(tmp_path, monkeypatch)
+    target = source.transfer_to(destination, original.vault_binding_id, stop_and_prove=stop)
+    monkeypatch.setenv("VAULT_ROOT", original.path)
+    monkeypatch.setenv("WATCHER_VAULT_PATH", original.path)
+    with pytest.raises(RuntimeError, match="restart-fenced"):
+        _preflight_runtime(channel=source.layout.channel_id, instance_state_root=source.layout.root.parent,
+            host_global_root=source.ledger.root, consumer="api")
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(destination.registry.path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", destination.layout.channel_id)
+    assert _preflight_runtime(channel=destination.layout.channel_id, instance_state_root=destination.layout.root.parent,
+        host_global_root=destination.ledger.root, consumer="api") == 0
+    assert destination.registry.lookup(target).local_instance_id == original.local_instance_id

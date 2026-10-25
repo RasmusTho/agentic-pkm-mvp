@@ -1525,3 +1525,55 @@ def test_authenticated_legacy_identity_completion_is_value_free_and_metadata_onl
     assert "vault-retained-source" not in str(exc.value)
     assert _runtime_state_bytes(tmp_path, runtime) == before
     assert _source_and_owner_bytes(runtime, root) == source_before
+
+
+def test_transfer_repairs_source_default_and_dimensions_before_retirement(tmp_path, monkeypatch):
+    from tests._mvr05c_transfer_harness import transfer_pair
+    from app.instance.vault_dimensions import VaultDimensionService
+    source, destination, original, lifecycle = transfer_pair(tmp_path, monkeypatch)
+    source.default_vault_service().set(original.vault_binding_id)
+    dimensions = VaultDimensionService(source.registry, capability=STORAGE_MUTATION_CAPABILITY)
+    dimensions.create("source-group", display_name="Source", members=(original.vault_binding_id,))
+    target = source.transfer_to(destination, original.vault_binding_id, stop_and_prove=lifecycle)
+    snapshot = source.registry.load()
+    assert snapshot.default_vault_binding_id is None
+    assert dimensions.inspect("source-group").members == ()
+    assert original.vault_binding_id in snapshot.removal_tombstones
+    assert destination.registry.load().default_vault_binding_id is None
+    assert destination.registry.load().extensions.get("dimensions", {}).get("source-group") is None
+    assert snapshot.transfer_lineage[-1].destination_binding_id == target
+
+
+def test_transfer_drains_source_bound_rows_before_destination_id_activation(tmp_path, monkeypatch):
+    from tests._mvr05c_transfer_harness import transfer_pair
+    from app.workers import outbox_worker as worker
+    from app.services import outbox
+    from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
+    from app.workers.outbox_binding_gate import required_worker_binding_stamp
+    from app.events.models import new_event
+    source, destination, original, lifecycle = transfer_pair(tmp_path, monkeypatch)
+    pending = [{"id": "source-row", "vault_binding_id": original.vault_binding_id,
+                "payload": {"idempotency_key": "original-operation"}}]
+    monkeypatch.setattr(outbox, "pending_transfer_rows", lambda *_args, **_kwargs: list(pending))
+    def poll(**kwargs):
+        if not pending:
+            return None
+        runtime = resolve_scalar_binding_runtime(vault_root=Path(original.path))
+        event = new_event(event_type="test.source.effect", payload=pending[0]["payload"],
+                          meta=dict(required_worker_binding_stamp(runtime)))
+        return {**pending[0], "topic": "test.source.effect", "event": event}
+    monkeypatch.setattr(worker, "poll_outbox_one", poll)
+    effects = []
+    def effect(*args, **kwargs):
+        assert source.ledger.active_owner(original.vault_binding_id) is not None
+        message = kwargs["message"]
+        assert message["vault_binding_id"] == original.vault_binding_id
+        assert message["payload"]["idempotency_key"] == "original-operation"
+        effects.append(message["id"])
+    monkeypatch.setattr(worker, "_dispatch_topic", effect)
+    monkeypatch.setattr(worker, "ack_outbox", lambda row_id: pending.clear() or True)
+    target = source.transfer_to(destination, original.vault_binding_id, stop_and_prove=lifecycle)
+    intent = json.loads((source.layout.root / "channel-transfer.json").read_text())
+    assert intent["drain_receipt"]["terminal_row_ids"] == ["source-row"]
+    assert effects == ["source-row"] and not pending
+    assert source.ledger.active_owner(target).channel_id == destination.layout.channel_id

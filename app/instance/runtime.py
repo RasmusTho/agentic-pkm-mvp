@@ -915,16 +915,15 @@ class InstanceRegistryRuntime:
         )
 
     def transfer_to(
-        self,
-        destination: InstanceRegistryRuntime,
-        vault_binding_id: str,
+        self, destination: InstanceRegistryRuntime, vault_binding_id: str,
+        *, stop_and_prove: Callable[[], DeploymentQuiescenceProof] | None = None,
     ) -> str:
-        del destination, vault_binding_id
-        raise CapabilityNotReadyError("MVR-05C foreground ownership floor is required")
+        from app.instance.channel_transfer import ChannelTransferCoordinator
+        return ChannelTransferCoordinator(self, destination, stop_and_prove).transfer(vault_binding_id)
 
-    def recover_transfer(self, destination: InstanceRegistryRuntime) -> str:
-        del destination
-        raise CapabilityNotReadyError("MVR-05C foreground ownership floor is required")
+    def recover_transfer(self, destination: InstanceRegistryRuntime, *, stop_and_prove: Callable[[], DeploymentQuiescenceProof] | None = None) -> str:
+        from app.instance.channel_transfer import ChannelTransferCoordinator
+        return ChannelTransferCoordinator(self, destination, stop_and_prove).recover()
 
     def relocate(
         self,
@@ -1251,6 +1250,17 @@ def _preflight_runtime(
         layout.registry_path,
         [Path(value) for value in configured_roots] + known_roots,
     )
+    transfer_path = layout.root / "channel-transfer.json"
+    if transfer_path.exists():
+        from app.instance.instance_state import _read_private_json
+        transfer = _read_private_json(transfer_path)
+        source_record = transfer.get("source")
+        retired_root = source_record.get("path") if isinstance(source_record, dict) else None
+        if retired_root and any(
+            same_filesystem_root(resolve_filesystem_root_identity(value), resolve_filesystem_root_identity(retired_root))
+            for value in configured_roots
+        ):
+            raise RegistryError("retiring source binding is restart-fenced; select another binding explicitly")
     if configured_roots:
         watcher_root = os.getenv("WATCHER_VAULT_PATH", "").strip() or configured_roots[0]
         registration = runtime.bootstrap_env_binding(
@@ -1297,6 +1307,9 @@ def _require_runtime_floor(snapshot: RegistrySnapshot, *, scalar_runtime: bool) 
             "minimum runtime principal blocks a credential-only scalar image; use a "
             "compatible roll-forward image instead of scalar rollback"
         )
+    foreground_floor = floors.get("minimumForegroundOwnership")
+    if foreground_floor is not None and (foreground_floor != "mvr05c.v1" or scalar_runtime):
+        raise CapabilityNotReadyError("foreground ownership floor requires a compatible runtime")
     settings_rebind_floor = str(
         floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY) or ""
     ).strip()

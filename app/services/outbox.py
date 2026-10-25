@@ -1329,6 +1329,32 @@ def bump_outbox_attempts(*args, **kwargs) -> int:
             conn.close()
 
 
+def pending_transfer_rows(binding_id: str, *, include_compatibility: bool = False) -> list[dict[str, Any]]:
+    """All unsettled source rows, including stale/quarantined envelope rows.
+
+    An absent configured DB is distinct from an unavailable configured DB.
+    The latter propagates rather than becoming an empty/drained queue.
+    """
+    if not _self_owned_database_is_named() and (os.getenv("STORE_BACKEND") or "").lower() != "pg":
+        return []
+    conn, close = _use_conn(None)
+    try:
+        ids = (binding_id, COMPATIBILITY_BINDING_ID) if include_compatibility else (binding_id,)
+        placeholders = ", ".join("%s" for _ in ids)
+        cur = _exec(conn,
+            "select id, topic, payload, vault_binding_id from outbox where delivered_at is null "
+            f"and (vault_binding_id in ({placeholders}) or payload #>> '{{meta,vault_binding_id}}' = %s)",
+            (*ids, binding_id))
+        return [{"id": str(_row_value(row, 0, "id")),
+                 "topic": _row_value(row, 1, "topic"),
+                 "payload": _row_value(row, 2, "payload"),
+                 "vault_binding_id": _row_value(row, 3, "vault_binding_id")}
+                for row in cur.fetchall()]
+    finally:
+        if close:
+            conn.close()
+
+
 def ack_outbox(*args, **kwargs) -> bool:
     """
     Stödjer:

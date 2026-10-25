@@ -1,11 +1,11 @@
-State: Target-state contract stub; current WriteGuard/receipt paths are transitional implementation evidence, not full contract implementation.
-Doc role: Contract stub
+State: Partial runtime implementation: context-bound capture and selected-binding effect fencing are shipped; the wider governed-effect contract remains target state.
+Doc role: Contract
 Authority: Owns the target governed-write protocol for GOV.
 Owner subsystem: GOV - Governance, Policy, Authority & Receipts
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-21
+Last reviewed: 2026-10-25
 
 # GovernedWriteProtocol
 
@@ -30,6 +30,51 @@ admissible before it occurs and accountable after its outcome is known.
   effects.
 - AuthorityReceipt after the state-owner mutation or EXE effect outcome.
 - Denial or review-required reason.
+
+## Context-bound capture and ownership transfer (MVR-05C)
+
+The production scoped capture endpoint is `POST /api/companion/capture/scoped`. Its bearer selects
+one immutable `ActiveContextSetV1`; its `target_binding_id` must name exactly one member of that
+selected set. Registration, ownership, or an independent GOV allow cannot widen the selection.
+A batch gate requires a nonempty subset without duplicates. Client paths are never authority.
+The existing carrier-free capture and compatibility endpoint preserve their request/response
+journeys and translate their sealed sole target into an ephemeral server-derived context.
+
+`DecisionToken` and `AuthorityReceipt` add `active_context` and `target_binding_id`. The frozen
+context carries principal identity/kind/revision, instance identity, context ID/generation,
+workspace or explicit no-workspace, scope, spheres, situated identity, dimension provenance,
+selection capability digest, the complete selected binding set with each revision/authorization
+epoch, registry revision, posture, and expiry. The raw bearer is absent. Other existing effect
+producers serialize explicit nulls for these additive fields; retained non-context EXE receipts
+have a bounded null-field migration. An unbound/legacy-shaped token cannot authorize a
+context-bound vault write, and EXE cannot borrow a scoped capture token.
+
+Immediately before effect, GOV validates actor, action, write class, resource, exact context and
+selected target. The production window holds principal read authority, the host ownership fence
+and the target binding's cross-process shared effect lease through the append, optional
+same-note registration proposal, mutation/authority receipts, and durable event persistence.
+The canonical locator's nearest initialized vault boundary must be the target root, including at
+the state-owner append and proposal seams. Registered and unregistered nested children therefore
+require their own selected binding and authority. Revocation/rotation and exclusive binding changes
+wait for the existing authorized window or invalidate it before I/O. Removal and relocation retain
+their later-slice capability refusals.
+
+`InstanceRegistryRuntime.transfer_to` and `recover_transfer` own the source-channel transfer
+journal. They close source ingress, drain original-source queue rows through the real worker,
+repair compatibility through `settings_rebind.v1`, consume the production-derived stopped-window
+inventory/restart fence, drain final shutdown emissions, and only then advance the foreground
+ownership floor together with the qualified registry schema (`agentic-pkm.instance-vault-registry.v2`).
+Pre-05C images reject that schema at their existing reader gate; bootstrap and retained compatibility
+producers remain on v1 until activation. The host can supply the process-stop/proof port; it cannot replace authority,
+inventory, drain, reference repair, or release logic. Missing, stale, or forged proof leaves
+ownership unchanged. Source retirement atomically repairs default/dimension membership and
+records its tombstone/lineage. Destination registration uses a minted destination-local binding;
+no default, dimension, or watcher selection is inferred. The ledger activates one destination
+owner, retaining the original source identity and immutable lineage. Recovery reuses those IDs
+and refuses source-state drift instead of reinstalling a captured registration. After activation,
+only that transfer's temporary stopped window is released; the retired source root remains fenced
+against restart and foreground use. A retired scalar rollback target remains historical lineage
+and cannot be used by an older image.
 
 ## Commands
 

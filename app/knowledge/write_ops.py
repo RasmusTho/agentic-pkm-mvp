@@ -4613,6 +4613,8 @@ def append_note_relative(
 
     guard = write_guard or DEFAULT_WRITE_GUARD
     guard.assert_writes_allowed(action)
+    from app.instance.context_bound_write import require_effect_locator
+    require_effect_locator(Path(vault_root), note_rel_path)
     locator = make_note_locator(note_rel_path)
     if _atomic_transform is not None:
         if _atomic_authority is not None:

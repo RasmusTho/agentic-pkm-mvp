@@ -64,7 +64,7 @@ def guard_receipt(binding_id: str, root: Path):
     )
 
 
-def deployment_authority(runtime: InstanceRegistryRuntime, legacy_path: Path):
+def deployment_authority(runtime: InstanceRegistryRuntime, legacy_path: Path, *, other_runtimes=()):
     controller = {"pid": os.getpid(), "start_token": "linux:" + "0" * 64}
     _begin_instance_state_deployment(
         channel=runtime.layout.channel_id,
@@ -99,11 +99,16 @@ def deployment_authority(runtime: InstanceRegistryRuntime, legacy_path: Path):
         host_global_root=runtime.ledger.root,
         inventory_path=quiescence_inventory,
     )
+    known_registrations = {
+        binding_id: registration
+        for participant in (runtime, *other_runtimes)
+        for binding_id, registration in participant.registry.load().registrations.items()
+    }
     owners = [
         {
             "channel_id": lease.channel_id,
             "vault_binding_id": binding_id,
-            "root": runtime.registry.load().registrations[binding_id].path,
+            "root": known_registrations[binding_id].path,
         }
         for binding_id, lease in runtime.ledger.load().leases.items()
     ]
@@ -156,10 +161,10 @@ def deployment_authority(runtime: InstanceRegistryRuntime, legacy_path: Path):
     return bound, owner_inventory
 
 
-def activate(runtime: InstanceRegistryRuntime, first, tmp_path: Path) -> None:
+def activate(runtime: InstanceRegistryRuntime, first, tmp_path: Path, *, other_runtimes=()) -> None:
     """Run the MVR-01C authority cutover for an already-registered binding."""
 
-    proof, inventory = deployment_authority(runtime, tmp_path / "missing-legacy.md")
+    proof, inventory = deployment_authority(runtime, tmp_path / "missing-legacy.md", other_runtimes=other_runtimes)
     runtime.activate_authority(
         guard_receipt=guard_receipt(first.vault_binding_id, Path(first.path)),
         inventory_path=inventory,

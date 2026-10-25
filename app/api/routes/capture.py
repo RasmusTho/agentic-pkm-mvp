@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import nullcontext
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +56,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.routes.ingest_binding import ingest_binding_status
+from app.api.request_governed_write import governed_context_write, require_capture_context
+from app.instance.context_bound_write import context_bound_write_window, require_selected_targets
+from app.instance.context_bound_read import ContextBoundReadError, resolve_context_read_roots
+from app.instance.vault_registry import VaultRegistryStore
+from app.vault.active_context_v1 import ActiveContextSetV1
+from app.governance.governed_write import InvalidDecisionTokenError
 from app.api.compatibility_mutation import (
     reject_scoped_vault_mutation,
     require_compatibility_mutation,
@@ -116,6 +123,7 @@ class CaptureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=1)
+    target_binding_id: str | None = None
 
 
 class CaptureResponse(BaseModel):
@@ -293,11 +301,15 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
     return [CAPTURE_APPENDED_EVENT]
 
 
-@router.post("/capture", response_model=CaptureResponse)
-def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse | JSONResponse:
+def _capture_to_inbox(
+    req: CaptureRequest, request: Request, context: ActiveContextSetV1 | None = None,
+) -> CaptureResponse | JSONResponse:
     """Append a capture to the vault inbox note through the governed pipeline."""
     trace_id = getattr(request.state, "trace_id", None) or new_trace_id()
-    reject_scoped_vault_mutation(request)
+    if context is None:
+        reject_scoped_vault_mutation(request)
+        if req.target_binding_id is not None:
+            raise HTTPException(status_code=409, detail="active_context_required")
 
     # Validation — never silently drop text: whitespace-only is an explicit,
     # named rejection (schema validation already rejected missing/empty text
@@ -327,12 +339,41 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
 
     # vault-inbox note convention — resolution failures are explicit, the text is
     # never silently dropped.
-    vault_root = compatibility_vault_root_or_selection_required(require_initialized=True)
-    if isinstance(vault_root, JSONResponse):
-        return vault_root
-    # Pre-05C seal: the resolved write target must be the sealed compatibility
-    # binding (and, on the compatibility route, the precondition's binding).
-    require_compatibility_write_root(request, vault_root)
+    registry = None
+    if context is not None:
+        try:
+            require_selected_targets(context, (req.target_binding_id or "",))
+            registry = VaultRegistryStore(Path(os.environ["INSTANCE_VAULT_REGISTRY_PATH"]))
+            roots = resolve_context_read_roots(context, registry_store=registry)
+            vault_root = next(r.root for r in roots if r.vault_binding_id == req.target_binding_id)
+            registration = registry.load().registrations[req.target_binding_id or ""]
+            if registration.extensions.get("status") != "initialized":
+                raise InvalidDecisionTokenError("write target is not initialized")
+        except (InvalidDecisionTokenError, ContextBoundReadError) as exc:
+            raise HTTPException(status_code=409, detail="active_context_write_unavailable") from exc
+    else:
+        vault_root = compatibility_vault_root_or_selection_required(require_initialized=True)
+        if isinstance(vault_root, JSONResponse):
+            return vault_root
+        require_compatibility_write_root(request, vault_root)
+        registry_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+        if registry_path:
+            from app.api.routes.active_context_selection import build_selection_service, get_selection_store
+            from app.auth import resolve_auth_subject
+            registry = VaultRegistryStore(Path(registry_path))
+            from app.instance.filesystem_identity import resolve_filesystem_root_identity, same_filesystem_root
+            selected_identity = resolve_filesystem_root_identity(vault_root)
+            matches = [registration.vault_binding_id for registration in registry.load().registrations.values()
+                       if same_filesystem_root(resolve_filesystem_root_identity(registration.path), selected_identity)]
+            if len(matches) != 1:
+                raise HTTPException(status_code=409, detail="active_context_write_unavailable")
+            vault_root = Path(registry.load().registrations[matches[0]].path).resolve()
+            service = build_selection_service(get_selection_store())
+            credential = request.headers.get("X-API-Key")
+            derived = service.derive(resolve_auth_subject(request, credential), presented_credential=credential)
+            context = service.resolve_compatibility_write_context(derived=derived, binding_id=matches[0],
+                action=_WRITE_GUARD_ACTION, write_class=_WRITE_CLASS, required_permission="write").snapshot
+            req = req.model_copy(update={"target_binding_id": matches[0]})
     try:
         note_rel = _capture_note_rel(vault_root)
     except Exception as exc:
@@ -394,66 +435,83 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
             detail=_writeguard_blocked_detail(exc),
         ) from exc
 
+    if context is not None:
+        grant = _GOVERNED_WRITE_ADAPTER.bind_context(
+            grant, context=context, target_binding_id=req.target_binding_id or "",
+        )
+
     # Deterministic writer — the governed append; its WriteReceipt is the
     # runtime acknowledgement.
-    captured_at = (
-        datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    effect_window = (
+        context_bound_write_window(
+            context, target_binding_id=req.target_binding_id or "", token=grant.decision_token,
+            registry_store=registry, action=_WRITE_GUARD_ACTION, write_class=_WRITE_CLASS,
+            actor=_EVENT_SOURCE, resource=note_rel,
+        ) if context is not None and registry is not None else nullcontext(vault_root)
     )
-    receipt = append_note_relative(
-        note_rel,
-        _compose_append_entry(note_rel, text, captured_at, vault_root=vault_root),
-        vault_root=vault_root,
-    )
-    authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
-        decision_token=grant.decision_token,
-        mutation_receipt=receipt,
-        state_owner=_STATE_OWNER,
-        trace_id=trace_id,
-    )
-    governed_write = _governed_write_payload(grant, authority_receipt)
-
-    # Event pipeline — record the applied append (metadata only).
     try:
-        events_emitted = _emit_capture_event(
-            {
-                "note_path": receipt.locator.path,
-                "operation": receipt.operation,
-                "adapter": receipt.adapter,
-                "captured_at": captured_at,
-                "decision_token_id": grant.decision_token.token_id,
-                "authority_receipt_id": authority_receipt.receipt_id,
-                "governed_write": governed_write,
-            },
-            trace_id=trace_id,
-        )
-    except CaptureEventPersistenceError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "authority_receipt_persistence_failed",
-                "state": "not_acknowledged",
-                "message": (
-                    "The capture was written, but its AuthorityReceipt could "
-                    "not be persisted; success acknowledgement was withheld."
-                ),
-                "trace_id": trace_id,
-            },
-        ) from exc
+        with effect_window:
+            captured_at = (
+                datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            )
+            receipt = append_note_relative(
+                note_rel,
+                _compose_append_entry(note_rel, text, captured_at, vault_root=vault_root),
+                vault_root=vault_root,
+            )
+            # Legacy direct producer calls have no ASGI app and retain full behavior.
+            text_scope = getattr(getattr(request.scope.get('app'), 'state', None), 'activation_scope', 'full') == 'text-capture'
+            registration = None if text_scope else _offer_question_registration_proposal(
+                vault_root=vault_root, note_rel=note_rel, trace_id=trace_id
+            )
+            registration_state: Literal["proposal_pending", "not_qualified", "degraded", "unavailable"]
+            if text_scope:
+                registration_state = 'unavailable'
+            elif registration is None or not registration.classification.classified:
+                registration_state = "degraded"
+            elif registration.proposal_id is not None:
+                registration_state = "proposal_pending"
+            else:
+                registration_state = "not_qualified"
 
-    # Legacy direct producer calls have no ASGI app and retain full behavior.
-    text_scope = getattr(getattr(request.scope.get('app'), 'state', None), 'activation_scope', 'full') == 'text-capture'
-    registration = None if text_scope else _offer_question_registration_proposal(
-        vault_root=vault_root, note_rel=note_rel, trace_id=trace_id
-    )
-    registration_state: Literal["proposal_pending", "not_qualified", "degraded", "unavailable"]
-    if text_scope:
-        registration_state = 'unavailable'
-    elif registration is None or not registration.classification.classified:
-        registration_state = "degraded"
-    elif registration.proposal_id is not None:
-        registration_state = "proposal_pending"
-    else:
-        registration_state = "not_qualified"
+            authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
+                decision_token=grant.decision_token,
+                mutation_receipt=receipt,
+                state_owner=_STATE_OWNER,
+                trace_id=trace_id,
+            )
+            governed_write = _governed_write_payload(grant, authority_receipt)
+
+            # Event pipeline — record the applied append (metadata only).
+            try:
+                events_emitted = _emit_capture_event(
+                    {
+                        "note_path": receipt.locator.path,
+                        "operation": receipt.operation,
+                        "adapter": receipt.adapter,
+                        "captured_at": captured_at,
+                        "decision_token_id": grant.decision_token.token_id,
+                        "authority_receipt_id": authority_receipt.receipt_id,
+                        "governed_write": governed_write,
+                    },
+                    trace_id=trace_id,
+                )
+            except CaptureEventPersistenceError as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "authority_receipt_persistence_failed",
+                        "state": "not_acknowledged",
+                        "message": (
+                            "The capture was written, but its AuthorityReceipt could "
+                            "not be persisted; success acknowledgement was withheld."
+                        ),
+                        "trace_id": trace_id,
+                    },
+                ) from exc
+
+    except (InvalidDecisionTokenError, ContextBoundReadError) as exc:
+        raise HTTPException(status_code=409, detail="active_context_write_unavailable") from exc
 
     # Ingest-binding visibility (#3119) — the write above already succeeded;
     # this only decides whether to accompany "written" with a warning that the
@@ -480,6 +538,20 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
         registration_state=registration_state,
         registration_proposal_id=registration.proposal_id if registration else None,
     )
+
+
+@router.post("/capture", response_model=CaptureResponse)
+def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse | JSONResponse:
+    return _capture_to_inbox(req, request)
+
+
+@router.post("/capture/scoped", response_model=CaptureResponse)
+@governed_context_write
+def capture_to_inbox_scoped(
+    req: CaptureRequest, request: Request,
+    context: ActiveContextSetV1 = Depends(require_capture_context),
+) -> CaptureResponse | JSONResponse:
+    return _capture_to_inbox(req, request, context)
 
 
 @router.post(

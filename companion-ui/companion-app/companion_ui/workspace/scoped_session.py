@@ -5,6 +5,7 @@ mismatched handoff an explicit refusal instead of a new default journey.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 from http.cookies import CookieError, SimpleCookie
@@ -74,6 +75,7 @@ def scoped_session_script(compatibility_precondition: str | None = None, *, scop
   var handoffPending = false;
   var documentWriteProof = __DOCUMENT_WRITE_PROOF__;
   var scopedDocument = __SCOPED_DOCUMENT__;
+  var documentTargetBinding = __DOCUMENT_TARGET_BINDING__;
   function refusal(message, status) {
     return new Response(JSON.stringify({detail:{error:'reselection_required',message:message}}), {
       status:status || 409, headers:{'Content-Type':'application/json'}
@@ -181,6 +183,12 @@ def scoped_session_script(compatibility_precondition: str | None = None, *, scop
       // proof. A stale rendered A document must never obtain B write intent.
       return send(scopedDocument ? '/api/companion/active-context/selection' : '/api/companion/vault/notes', {method:'GET'}).then(function(inspected) {
         if (!inspected.ok) return inspected;
+        if (scopedDocument && path === '/api/companion/capture') {
+          if (!documentTargetBinding) return refusal('Reload the selected vault before capturing.');
+          var capture = JSON.parse(options.body || '{}');
+          capture.target_binding_id = documentTargetBinding;
+          return send('/api/companion/capture/scoped', jsonOptions(options, capture));
+        }
         var headers = new Headers(options.headers || {});
         headers.set('X-Compatibility-Write-Precondition', documentWriteProof);
         return send(path + '/compatibility', Object.assign({}, options, {headers:headers}));
@@ -192,4 +200,15 @@ def scoped_session_script(compatibility_precondition: str | None = None, *, scop
 </script>
 """
     encoded = json.dumps(compatibility_precondition, ensure_ascii=True).replace("<", chr(92) + "u003c")
-    return script.replace("__DOCUMENT_WRITE_PROOF__", encoded).replace("__SCOPED_DOCUMENT__", json.dumps(scoped_document))
+    # The rendered document's target is an untrusted selector, never authority.
+    # GOV still checks the bearer snapshot and target membership on every write.
+    target = None
+    if compatibility_precondition:
+        try:
+            body = compatibility_precondition.split(".", 1)[0]
+            target = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))).get("binding")
+        except (ValueError, TypeError, json.JSONDecodeError):
+            pass
+    return (script.replace("__DOCUMENT_WRITE_PROOF__", encoded)
+            .replace("__SCOPED_DOCUMENT__", json.dumps(scoped_document))
+            .replace("__DOCUMENT_TARGET_BINDING__", json.dumps(target)))

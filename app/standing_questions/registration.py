@@ -241,6 +241,8 @@ def propose_question_registration(
             extracted_text=extracted,
             label=label,
         )
+    from app.instance.context_bound_write import require_effect_locator
+    require_effect_locator(resolved_root, capture_path.relative_to(resolved_root).as_posix())
     capture_path.write_text(updated, encoding="utf-8")
     return RegistrationProposalResult(
         classification=classification,

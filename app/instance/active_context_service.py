@@ -25,7 +25,10 @@ projection the client authors, and it changes none of the derivations above.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import hashlib
+import time
+from uuid import uuid4
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -445,6 +448,36 @@ class ActiveContextSelectionService:
             required_permission=required_permission,
             default_binding_id=snapshot.default_vault_binding_id,
         )
+
+    def resolve_compatibility_write_context(
+        self, *, derived: DerivedContext, binding_id: str,
+        action: str, write_class: str, required_permission: str,
+    ) -> ResolutionResult:
+        """Translate one already-sealed legacy target without consulting a default.
+
+        This ephemeral request snapshot has no bearer and cannot change any
+        session. It preserves every server-derived cognitive input.
+        """
+        snapshot = self._registry.load()
+        now = time.time()
+        context_id = f"ctx_compatibility_{uuid4().hex}"
+        selection = ContextSelectionRecord(
+            context_id=context_id, generation=1,
+            selection_capability_digest=hashlib.sha256(context_id.encode()).hexdigest(),
+            principal=derived.principal, instance_identity=derived.instance_identity,
+            workspace=derived.workspace, scope=derived.scope,
+            sphere_memberships=derived.sphere_memberships,
+            situated_identity=derived.situated_identity, binding_ids=(binding_id,),
+            created_at=now, expires_at=now + 60,
+        )
+        result = ActiveContextSelectionResolver(
+            binding_facts=lambda: binding_facts(self._registry.load()),
+            registry_revision=lambda: self._registry.load().revision,
+            authorizer=_LiveRegistryAuthorizer(self._registry),
+            instance_identity=snapshot.app_install_id,
+        ).resolve(selection=selection, principal=derived.principal, action=action,
+                  write_class=write_class, required_permission=required_permission)
+        return replace(result, snapshot=replace(result.snapshot, selection_provenance="compatibility_write"))
 
     def clear(self, raw_selection_id: str, *, derived: DerivedContext) -> None:
         self._selections.clear(

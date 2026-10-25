@@ -1976,3 +1976,28 @@ def test_unselected_compatibility_bridge_preserves_read_without_write_proof(tmp_
     assert response.status_code == 200, response.text
     assert 'X-Compatibility-Write-Precondition' not in response.headers
     assert runtime.registry.read_existing() == before
+
+
+def test_scoped_picker_governed_write_targets_selected_binding(tmp_path, monkeypatch):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+    runtime, roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    for binding_id in (binding_a, binding_b):
+        registration = runtime.registry.lookup(binding_id)
+        runtime.complete_initialization(binding_id, vault_id="vault-" + binding_id,
+            local_instance_id=registration.local_instance_id)
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "capture-events.jsonl"))
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
+    with picker_browser(monkeypatch) as (run, calls):
+        result = run(f'''
+await choose({json.dumps(str(roots[1]))});
+var response=await fetch('/api/companion/capture',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{text:'Scoped picker capture'}})}});
+console.log(JSON.stringify({{status:response.status,payload:await response.json()}}));
+''')
+    assert result["status"] == 200, result
+    assert result["payload"]["governed_write"]["authority_receipt"]["target_binding_id"] == binding_b
+    assert "Scoped picker capture" in (roots[1] / "Inbox/inbox.md").read_text()
+    assert not (roots[0] / "Inbox/inbox.md").exists()
+    call = next(call for call in calls if call[1] == "/api/companion/capture/scoped")
+    assert call[2]["X-Active-Context-Session"]
+    assert call[3]["target_binding_id"] == binding_b
