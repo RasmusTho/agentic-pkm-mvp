@@ -23,6 +23,11 @@ Boundaries (fail closed):
 * The receipt never contains audio bytes, prompts, transcript/answer text or
   credential values. An optional bearer token is read from the environment
   variable named by ``AUTH_TOKEN_ENV`` and is never recorded.
+* ``/api/ask/voice`` has no actor or route-identity field. The synthetic actor
+  is therefore a reference to the TEST channel's qualified synthetic actor and
+  source binding, and the ASR/ASK route identities and image digest are bound
+  through the qualification evidence; the TTS provider/voice per segment and
+  the running git SHA are observed directly.
 
 Run (operator/coordinator, after #5977 and #6190 qualification evidence)::
 
@@ -34,6 +39,7 @@ Run (operator/coordinator, after #5977 and #6190 qualification evidence)::
 from __future__ import annotations
 
 import argparse
+from array import array
 from datetime import UTC, datetime
 import hashlib
 import io
@@ -45,7 +51,7 @@ import sys
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 import uuid
 import wave
 
@@ -63,6 +69,9 @@ ALLOWED_POST = frozenset({VOICE_PATH})
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_FIXTURE_BYTES = 8 * 1024 * 1024
 DEGRADED_REASONS = frozenset({"tts_unavailable", "capture_intent_surfaced"})
+AUDIBLE_PEAK_FRACTION = 0.01
+_PCM_CODES = {1: "B", 2: "h", 4: "i"}
+_PROD_HOST_TOKENS = frozenset({"prod", "production", "prd", "stable"})
 
 _SHA = re.compile(r"[0-9a-f]{40}")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
@@ -145,7 +154,8 @@ def validate_qualification(payload: Any, *, base_dir: Path | None = None) -> dic
     _require(parsed.scheme in {"http", "https"} and bool(parsed.hostname), "api_url_invalid")
     _require(not (parsed.username or parsed.password or parsed.query or parsed.fragment), "api_url_invalid")
     _require(parsed.path in {"", "/"}, "api_url_invalid")
-    _require("prod" not in re.split(r"[^a-z0-9]+", (parsed.hostname or "").lower()), "prod_target_refused")
+    host_tokens = set(re.split(r"[^a-z0-9]+", (parsed.hostname or "").lower()))
+    _require(host_tokens.isdisjoint(_PROD_HOST_TOKENS), "prod_target_refused")
 
     candidate = payload["candidate"]
     _require(isinstance(candidate, Mapping) and set(candidate) == {"source_sha", "image_digest"},
@@ -167,7 +177,7 @@ def validate_qualification(payload: Any, *, base_dir: Path | None = None) -> dic
         _require(isinstance(item["receipt_sha256"], str) and bool(_HEX64.fullmatch(item["receipt_sha256"])),
                  "qualification_evidence_invalid")
         _require(item["status"] == "qualified", "route_or_instance_unqualified")
-        _require(item["channel"] == CHANNEL, "qualification_channel_mismatch")
+        _require(str(item["channel"]).strip().lower() == CHANNEL, "qualification_channel_mismatch")
         _require(item["source_sha"] == candidate["source_sha"] and item["image_digest"] == candidate["image_digest"],
                  "qualification_candidate_mismatch")
 
@@ -242,7 +252,14 @@ def observe_candidate(q: Mapping[str, Any], transport: Transport) -> dict[str, s
     _require(running == q["candidate"]["source_sha"], "candidate_mismatch")
     health_sha = str(health.get("version") or running).strip().lower()
     _require(health_sha == running, "candidate_mismatch")
-    return {"channel": environment, "source_sha": running}
+    # The Product /version surface exposes only the git SHA today. A digest is
+    # compared whenever the target reports one; otherwise the digest binding is
+    # the qualification evidence (route and instance must name the same digest).
+    digest = version.get("image_digest")
+    if digest is not None:
+        _require(str(digest).strip().lower() == q["candidate"]["image_digest"], "candidate_mismatch")
+    return {"channel": environment, "source_sha": running,
+            "image_digest_source": "observed" if digest is not None else "qualification_evidence"}
 
 
 def _read_fixture(fixture: Mapping[str, Any]) -> bytes:
@@ -264,19 +281,37 @@ def _audio_metadata(raw: bytes) -> dict[str, Any]:
             frames, rate = audio.getnframes(), audio.getframerate()
             pcm = audio.readframes(frames)
             compressed = audio.getcomptype() != "NONE"
+            width = audio.getsampwidth()
     except (EOFError, wave.Error) as exc:
         raise AssertionError("audio_not_decodable_wav") from exc
-    if frames <= 0 or rate <= 0 or compressed or not pcm or not any(pcm):
+    if frames <= 0 or rate <= 0 or compressed or not pcm:
+        raise AssertionError("audio_empty_or_silent")
+    if width not in _PCM_CODES:
+        raise AssertionError("audio_sample_width_unsupported")
+    samples = array(_PCM_CODES[width])
+    samples.frombytes(pcm[: len(pcm) - len(pcm) % width])
+    centre, full_scale = (128, 128) if width == 1 else (0, 2 ** (8 * width - 1))
+    threshold = full_scale * AUDIBLE_PEAK_FRACTION
+    audible = sum(1 for x in samples if abs(x - centre) >= threshold)
+    if audible < max(10, len(samples) // 1000):
         raise AssertionError("audio_empty_or_silent")
     return {"format": "audio/wav", "sha256": _sha256(raw), "bytes": len(raw), "frames": frames,
             "sample_rate": rate, "duration_ms": int(frames * 1000 / rate)}
 
 
+def _safe(value: Any) -> str | None:
+    """A server-supplied identifier, hashed if it resembles secret material."""
+
+    if value is None or value == "":
+        return None
+    text = str(value)[:512]
+    return "sha256:" + _sha256(text.encode()) if _SENSITIVE_VALUE.search(text) else text
+
+
 def _citations(sources: Any) -> list[dict[str, str | None]]:
     if not isinstance(sources, list):
         return []
-    return [{"uuid": str(s.get("uuid") or "") or None, "path": (str(s["path"]) if s.get("path") else None)}
-            for s in sources if isinstance(s, Mapping)]
+    return [{"uuid": _safe(s.get("uuid")), "path": _safe(s.get("path"))} for s in sources if isinstance(s, Mapping)]
 
 
 def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -> dict[str, Any]:
@@ -299,9 +334,9 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
             raise AssertionError("voice_response_invalid") from exc
         if not isinstance(body, dict):
             raise AssertionError("voice_response_invalid")
-        outcome["trace_id"] = str(body.get("trace_id") or "") or None
-        detected = str(body.get("detected_language") or "").lower()
-        outcome["detected_language"] = detected or None
+        outcome["trace_id"] = _safe(body.get("trace_id"))
+        detected = str(body.get("detected_language") or "").lower()[:16]
+        outcome["detected_language"] = _safe(detected)
         outcome["transcript_present"] = bool(str(body.get("transcript") or "").strip())
         outcome["answer_present"] = bool(str(body.get("answer") or "").strip())
         citations = _citations(body.get("sources"))
@@ -317,7 +352,9 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
         if not outcome["answer_present"]:
             raise AssertionError("answer_missing")
         expected = set(fixture["expected_source_ids"])
-        matched = sorted({v for c in citations for v in (c["uuid"], c["path"]) if v is not None and v in expected})
+        raw_ids = [str(s.get(k)) for s in (body.get("sources") or []) if isinstance(s, Mapping)
+                   for k in ("uuid", "path") if s.get(k)]
+        matched = sorted({_safe(v) or "" for v in raw_ids if v in expected})
         outcome["expected_citations_matched"] = matched
         if not citations:
             raise AssertionError("grounded_citation_missing")
@@ -328,8 +365,8 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
             raise AssertionError("speech_plan_missing")
         raw_segments = plan.get("segments")
         segments: list[Any] = raw_segments if isinstance(raw_segments, list) else []
-        outcome["tts"] = {"provider": plan.get("provider"), "voice_id": plan.get("voice_id"),
-                          "segments": [{k: s.get(k) for k in ("language", "provider", "voice_id")}
+        outcome["tts"] = {"provider": _safe(plan.get("provider")), "voice_id": _safe(plan.get("voice_id")),
+                          "segments": [{k: _safe(s.get(k)) for k in ("language", "provider", "voice_id")}
                                        for s in segments if isinstance(s, dict)]}
         if (plan.get("enabled") is not True or plan.get("local_only") is not True
                 or plan.get("allow_cloud_fallback") is not False or plan.get("allow_browser_fallback") is not False):
@@ -418,25 +455,38 @@ def run_acceptance(payload: Any, transport: Transport, *, base_dir: Path | None 
     except VoiceAcceptanceRefusal as exc:
         receipt = _base_receipt(None)
         receipt["refusal"] = exc.reason
-        receipt["finished_at"] = datetime.now(UTC).isoformat()
-        assert_receipt_secret_free(receipt)
-        return receipt
+        return _finish(receipt)
     receipt = _base_receipt(q)
     try:
         receipt["observed_before"] = observe_candidate(q, transport)
-        for language in LANGUAGES:
-            receipt["languages"][language] = verify_language(q, language, transport)
+    except VoiceAcceptanceRefusal as exc:
+        receipt["refusal"] = exc.reason  # refused before any voice turn
+        return _finish(receipt)
+    for language in LANGUAGES:
+        receipt["languages"][language] = verify_language(q, language, transport)
+    try:
         receipt["observed_after"] = observe_candidate(q, transport)
     except VoiceAcceptanceRefusal as exc:
-        reason = exc.reason
-        if "observed_before" in receipt and reason == "candidate_mismatch":
-            reason = "candidate_drift"
-        receipt["refusal"] = reason
-    else:
-        receipt["passed"] = all(receipt["languages"][x]["status"] == "passed" for x in LANGUAGES)
-        receipt["outcome"] = "passed" if receipt["passed"] else "failed"
+        # Voice turns already ran: this is a failed run, never a pre-turn refusal.
+        receipt["outcome"] = "failed"
+        receipt["refusal"] = "candidate_drift" if exc.reason == "candidate_mismatch" else "post_run_" + exc.reason
+        return _finish(receipt)
+    receipt["passed"] = all(receipt["languages"][x]["status"] == "passed" for x in LANGUAGES)
+    receipt["outcome"] = "passed" if receipt["passed"] else "failed"
+    return _finish(receipt)
+
+
+def _finish(receipt: dict[str, Any]) -> dict[str, Any]:
     receipt["finished_at"] = datetime.now(UTC).isoformat()
-    assert_receipt_secret_free(receipt)
+    try:
+        assert_receipt_secret_free(receipt)
+    except VoiceAcceptanceRefusal as exc:
+        # Never emit, and never crash on, a receipt that fails the secret scan.
+        return {"schema": RECEIPT_SCHEMA, "run_id": receipt["run_id"], "channel": CHANNEL,
+                "passed": False, "outcome": "failed", "refusal": exc.reason,
+                "started_at": receipt["started_at"], "finished_at": receipt["finished_at"],
+                "languages": {x: {"status": receipt["languages"][x]["status"], "reason": None}
+                              for x in LANGUAGES}}
     return receipt
 
 
@@ -453,7 +503,8 @@ class HttpTransport:
         self._origin = origin.rstrip("/")
         self._token = token
         self._timeout = timeout
-        self._open = opener or build_opener(_NoRedirect()).open
+        # An empty ProxyHandler keeps the request (and any bearer) off HTTP(S)_PROXY.
+        self._open = opener or build_opener(ProxyHandler({}), _NoRedirect()).open
 
     def _send(self, method: str, path: str, body: bytes | None = None, headers: dict[str, str] | None = None,
               query: Mapping[str, str] | None = None) -> tuple[int, str, bytes]:
@@ -504,13 +555,20 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError):
         payload = None
     origin = _origin(payload["api_url"]) if isinstance(payload, dict) and isinstance(payload.get("api_url"), str) else ""
-    transport = HttpTransport(origin, token=os.environ.get(AUTH_TOKEN_ENV) or None)
-    receipt = run_acceptance(payload, transport, base_dir=args.qualification.resolve().parent)
-    text = json.dumps(receipt, indent=2, sort_keys=True)
-    if args.out is not None:
-        with open(args.out, "x", encoding="utf-8") as stream:
-            os.fchmod(stream.fileno(), 0o600)
-            stream.write(text + "\n")
+    # Reserve the receipt path before any voice turn so a collision cannot discard
+    # evidence of turns that already ran (and tempt a replay).
+    out = open(args.out, "x", encoding="utf-8") if args.out is not None else None
+    try:
+        if out is not None:
+            os.fchmod(out.fileno(), 0o600)
+        transport = HttpTransport(origin, token=os.environ.get(AUTH_TOKEN_ENV) or None)
+        receipt = run_acceptance(payload, transport, base_dir=args.qualification.resolve().parent)
+        text = json.dumps(receipt, indent=2, sort_keys=True)
+        if out is not None:
+            out.write(text + "\n")
+    finally:
+        if out is not None:
+            out.close()
     print(text)
     return 0 if receipt["passed"] else (2 if receipt["outcome"] == "refused" else 1)
 
