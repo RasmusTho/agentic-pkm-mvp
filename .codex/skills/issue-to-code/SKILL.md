@@ -338,9 +338,11 @@ dispatcher-backed pickup receipt.
 
 For same-owner recovery of an expired dispatcher lease on an already active Issue, use the explicit
 `--takeover-stale` wrapper option. This path requires an open Issue with exactly `agent:in-progress`
-and a strictly valid contract, an expired unreleased lease for the exact task held by the same
-`--agent`, and an active worktree registration owned by the current `--session`. It heartbeats that
-same worktree registration, invokes the dispatcher's atomic
+and a strictly valid contract, the canonical repo-qualified task id and matching task repository for
+the selected Issue, an expired unreleased lease for that exact task held by the same `--agent`, and
+an active worktree registration owned by the current `--session`. It checks the repository binding
+again in the post-claim task/lease/event readback. It heartbeats that same worktree registration,
+invokes the dispatcher's atomic
 `claim --takeover-stale --expected-lease-id <observed-id>`, verifies the claim event against that
 exact predecessor, and re-reads the Issue. If the command result is ambiguous, the wrapper accepts
 only an exact task/lease/event readback; it never releases a lease acquired by stale takeover on an

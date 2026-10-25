@@ -715,8 +715,10 @@ expired lease is rejected without changing its task or lease state.
 
 The mandatory `scripts/issue_pickup_claim.sh` exposes this recovery only as same-owner self-resume:
 pass `--takeover-stale` for an Issue that is still open with exactly `agent:in-progress`. The wrapper
-also requires the exact task's expired unreleased lease to belong to the same `--agent`, and it
-heartbeats the active target-worktree registration using the supplied `--session` before claiming.
+requires the canonical repo-qualified task id and a task repository matching the selected repository
+and Issue, then checks that repository binding again in the post-claim readback. It also requires the
+exact task's expired unreleased lease to belong to the same `--agent`, and heartbeats the active
+target-worktree registration using the supplied `--session` before claiming.
 It validates the Issue contract both before and after the claim, passes the exact observed lease id
 as `--expected-lease-id`, and verifies the new lease and the `task.claimed` event's predecessor
 fields. The dispatcher compares the expected id with the task's currently referenced lease inside

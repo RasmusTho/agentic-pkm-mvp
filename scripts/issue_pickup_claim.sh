@@ -203,13 +203,15 @@ if [[ "$REPO" != */* ]]; then
   exit 2
 fi
 
-# The default task id is derived from the single Python source
+# The task id is derived from the single Python source
 # (app/dispatcher/sync_github.py::github_issue_task_id), so this wrapper can
-# never drift from the id `dispatcher pull` assigns (INV-DG-2). python3 is
-# already a hard dependency of every wrapper path via JSON parsing.
-if [[ -z "$TASK_ID" ]]; then
+# never drift from the id `dispatcher pull` assigns (INV-DG-2). A stale
+# takeover is always bound to this repo-qualified id, even when --task-id was
+# explicitly supplied. python3 is already a hard dependency of every wrapper
+# path via JSON parsing.
+if [[ -z "$TASK_ID" || "$TAKEOVER_STALE" -eq 1 ]]; then
   script_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  if ! TASK_ID="$(
+  if ! CANONICAL_TASK_ID="$(
     TASK_ID_REPO="$REPO" \
     TASK_ID_ISSUE="$ISSUE_NUMBER" \
     TASK_ID_REPO_ROOT="$script_repo_root" \
@@ -225,6 +227,12 @@ print(github_issue_task_id(os.environ["TASK_ID_REPO"], int(os.environ["TASK_ID_I
 PY
   )"; then
     echo "could not derive task_id via app.dispatcher.sync_github.github_issue_task_id; pass --task-id explicitly" >&2
+    exit 2
+  fi
+  if [[ -z "$TASK_ID" ]]; then
+    TASK_ID="$CANONICAL_TASK_ID"
+  elif [[ "$TAKEOVER_STALE" -eq 1 && "$TASK_ID" != "$CANONICAL_TASK_ID" ]]; then
+    echo "stale takeover refused: task id does not match the selected repository and Issue" >&2
     exit 2
   fi
 fi
@@ -599,6 +607,7 @@ read_stale_dispatcher_lease() {
   fi
   DISPATCHER_STATE_JSON="$state_json" \
   EXPECTED_TASK_ID="$TASK_ID" \
+  EXPECTED_REPO="$REPO" \
   EXPECTED_ISSUE_NUMBER="$ISSUE_NUMBER" \
   EXPECTED_AGENT_ID="$AGENT_ID" \
   "$JSON_PYTHON_BIN" - <<'PY'
@@ -625,6 +634,7 @@ except ValueError:
     expires_at = None
 checks = {
     "task id": task.get("task_id") == os.environ["EXPECTED_TASK_ID"],
+    "task repository": task.get("repo") == os.environ["EXPECTED_REPO"],
     "issue number": task.get("issue_number") == int(os.environ["EXPECTED_ISSUE_NUMBER"]),
     "eligible task status": task.get("status") in {"claimed", "ready"},
     "task holder": task.get("claimed_by") == os.environ["EXPECTED_AGENT_ID"],
@@ -652,6 +662,7 @@ verify_stale_takeover_readback() {
   local old_expires_at="$3"
   DISPATCHER_STATE_JSON="$state_json" \
   EXPECTED_TASK_ID="$TASK_ID" \
+  EXPECTED_REPO="$REPO" \
   EXPECTED_ISSUE_NUMBER="$ISSUE_NUMBER" \
   EXPECTED_AGENT_ID="$AGENT_ID" \
   PREVIOUS_LEASE_ID="$old_lease_id" \
@@ -686,6 +697,7 @@ except ValueError:
     expires_at = None
 checks = {
     "task id": task.get("task_id") == expected_task,
+    "task repository": task.get("repo") == os.environ["EXPECTED_REPO"],
     "issue number": task.get("issue_number") == int(os.environ["EXPECTED_ISSUE_NUMBER"]),
     "task status": task.get("status") in {"claimed", "in_progress"},
     "task holder": task.get("claimed_by") == expected_agent,
@@ -734,6 +746,7 @@ describe_stale_takeover_claim_state() {
   local state_json="$1"
   DISPATCHER_STATE_JSON="$state_json" \
   EXPECTED_TASK_ID="$TASK_ID" \
+  EXPECTED_REPO="$REPO" \
   EXPECTED_ISSUE_NUMBER="$ISSUE_NUMBER" \
   EXPECTED_AGENT_ID="$AGENT_ID" \
   "$JSON_PYTHON_BIN" - <<'PY'
@@ -761,6 +774,7 @@ retained = (
     and isinstance(lease, dict)
     and payload.get("ok") is True
     and task.get("task_id") == os.environ["EXPECTED_TASK_ID"]
+    and task.get("repo") == os.environ["EXPECTED_REPO"]
     and task.get("issue_number") == int(os.environ["EXPECTED_ISSUE_NUMBER"])
     and task.get("status") in {"claimed", "in_progress"}
     and task.get("claimed_by") == os.environ["EXPECTED_AGENT_ID"]
