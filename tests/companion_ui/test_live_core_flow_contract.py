@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from datetime import datetime, timezone
+import importlib.util
 import io
 import json
 import os
@@ -81,6 +82,14 @@ class _Page:
         self.d, self.wrong_sha, self.url = d, wrong_sha, d["ui_url"]
         self.request = self
         self.navigations: list[str] = []
+        self.health = {
+            "environment": d["channel"],
+            "ok": False,
+            "checks": {"llm_access": {"required": True, "ok": False}},
+        }
+        self.liveness = {"ok": True}
+        self.liveness_headers: dict[str, str] = {}
+        self.liveness_status = 200
 
     def set_default_navigation_timeout(self, value: int) -> None:
         pass
@@ -89,14 +98,14 @@ class _Page:
         pass
 
     def get(self, url: str, **kwargs: Any) -> Any:
+        headers: dict[str, str] = {}
+        status = 200
         if url.endswith("/version"):
             payload = {"git_sha": "b" * 40 if self.wrong_sha else self.d["expected_sha"]}
         elif url.endswith("/api/operator/health"):
-            payload = {
-                "environment": self.d["channel"],
-                "ok": False,
-                "checks": {"llm_access": {"required": True, "ok": False}},
-            }
+            payload = self.health
+        elif url.endswith("/healthz"):
+            payload, headers, status = self.liveness, self.liveness_headers, self.liveness_status
         else:
             payload = {
                 "status": "selected",
@@ -105,7 +114,7 @@ class _Page:
             }
             if url.endswith("/api/companion/vault/settings"):
                 payload = {"context": payload}
-        return SimpleNamespace(ok=True, status=200, url=url, json=lambda: payload)
+        return SimpleNamespace(ok=status == 200, status=status, url=url, headers=headers, json=lambda: payload)
 
     def goto(self, url: str, **kwargs: Any) -> Any:
         self.navigations.append(url)
@@ -135,8 +144,10 @@ class _Browser:
         )
 
 
-def _runner(tmp_path: Path, *, wrong_sha: bool = False) -> CoreFlow:
+def _runner(tmp_path: Path, *, wrong_sha: bool = False, channel: str = "dev") -> CoreFlow:
     d = _manifest(tmp_path)
+    if channel == "test":
+        d.update(channel="test", ui_url="http://127.0.0.1:8112/", api_url="http://127.0.0.1:18002/")
     return CoreFlow(
         d,
         _Browser(d, wrong_sha=wrong_sha),
@@ -180,6 +191,187 @@ def test_health_failure_does_not_hide_independent_steps(
     assert report["steps"][0]["reason"] == "required_health_failed:llm_access"
     assert len(visits) == 7 and all(x["status"] == "passed" for x in report["steps"][1:])
     assert not report["passed"]
+
+
+def _text_capture_runner(tmp_path: Path, channel: str = "dev") -> CoreFlow:
+    runner = _runner(tmp_path, channel=channel)
+    runner.d.update(capture_only=True, allow_ask=False)
+    runner.page.health.update(
+        required_ok=False, activation_scope="text-capture", full_channel_qualified=False
+    )
+    runner.page.liveness_headers.update({
+        "x-pkm-activation-scope": "text-capture",
+        "x-pkm-full-channel-qualified": "false",
+    })
+    return runner
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_capture_only_accepts_scoped_liveness_without_hiding_global_health(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, channel: str
+) -> None:
+    runner = _text_capture_runner(tmp_path, channel)
+    visits: list[str] = []
+    _independent_steps(runner, monkeypatch, visits)
+
+    # Exercise actual PW01, native-admission/binding calls and aggregate writer;
+    # only the browser/HTTP/native ports and unrelated subsequent actions are fixtures.
+    report = runner.run()
+
+    assert report["passed"] is True
+    assert [step["status"] for step in report["steps"]] == ["passed"] * 4
+    assert len(visits) == 3
+    assert report["global_health"] == {
+        "ok": False,
+        "required_ok": False,
+        "failed_required_checks": ["llm_access"],
+        "activation_scope": "text-capture",
+        "full_channel_qualified": False,
+    }
+    assert json.loads((runner.output / "report.json").read_text())["global_health"] == report["global_health"]
+    assert report["real_ask_actions"] == 0
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("fault,reason", [
+    ("missing_scope", "required_health_failed:llm_access"),
+    ("unknown_scope", "capture_activation_scope_invalid"),
+    ("full_qualified", "text_capture_health_scope_mismatch"),
+    ("missing_full_qualified", "text_capture_health_scope_mismatch"),
+    ("missing_header", "text_capture_scope_mismatch"),
+    ("wrong_header", "text_capture_scope_mismatch"),
+    ("wrong_qualified_header", "text_capture_scope_mismatch"),
+    ("not_live", "text_capture_liveness_failed"),
+    ("unreachable", "endpoint_http_503"),
+    ("wrong_sha", "backend_revision_mismatch"),
+    ("wrong_channel", "backend_channel_mismatch"),
+])
+def test_capture_only_refuses_unqualified_scope_before_navigation_or_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, channel: str, fault: str, reason: str
+) -> None:
+    runner = _text_capture_runner(tmp_path, channel)
+    page = runner.page
+    if fault == "missing_scope":
+        page.health.pop("activation_scope")
+    elif fault == "unknown_scope":
+        page.health["activation_scope"] = "unknown"
+    elif fault == "full_qualified":
+        page.health["full_channel_qualified"] = True
+    elif fault == "missing_full_qualified":
+        page.health.pop("full_channel_qualified")
+    elif fault == "missing_header":
+        page.liveness_headers.pop("x-pkm-activation-scope")
+    elif fault == "wrong_header":
+        page.liveness_headers["x-pkm-activation-scope"] = "full"
+    elif fault == "wrong_qualified_header":
+        page.liveness_headers["x-pkm-full-channel-qualified"] = "true"
+    elif fault == "not_live":
+        page.liveness["ok"] = False
+    elif fault == "unreachable":
+        page.liveness_status = 503
+    elif fault == "wrong_sha":
+        page.wrong_sha = True
+    elif fault == "wrong_channel":
+        page.health["environment"] = "test" if channel == "dev" else "dev"
+    visits: list[str] = []
+    _independent_steps(runner, monkeypatch, visits)
+
+    report = runner.run()
+
+    assert report["steps"][0]["reason"] == reason
+    assert report["passed"] is False
+    assert not visits and not page.navigations and not runner.identity_ok
+    assert report["capture_posts"] == report["real_ask_actions"] == 0
+    assert all(step["status"] == "blocked" for step in report["steps"][1:])
+
+
+def test_capture_only_preserves_healthy_full_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _runner(tmp_path)
+    runner.d.update(capture_only=True, allow_ask=False)
+    runner.page.health.update(ok=True, checks={})
+    _independent_steps(runner, monkeypatch, [])
+    assert runner.run()["passed"] is True
+
+
+def _selected_capture_assertion(monkeypatch: pytest.MonkeyPatch) -> Any:
+    # Import the actual selected test, never execute its live fixture.
+    monkeypatch.setenv("COMPANION_UI_LIVE_CORE_FLOW", "1")
+    monkeypatch.setattr(
+        "tests.companion_ui.live_core_flow.execute_manifest",
+        lambda *_: pytest.fail("contract test attempted live execution"),
+    )
+    path = Path(__file__).with_name("test_companion_ui_live_core_flow.py")
+    spec = importlib.util.spec_from_file_location("isolated_live_assertions", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.test_04_capture_survives_new_browser_context
+
+
+@pytest.mark.parametrize("failed_step", [1, 2, 3, None])
+def test_selected_capture_test_requires_all_four_steps_and_aggregate(
+    monkeypatch: pytest.MonkeyPatch, failed_step: int | None
+) -> None:
+    selected = _selected_capture_assertion(monkeypatch)
+    report = {
+        "execution_mode": "capture_only",
+        "passed": False,
+        "steps": [
+            {"id": f"PW-{number:02}", "status": "failed" if number == failed_step else "passed", "reason": "fixture"}
+            for number in range(1, 5)
+        ],
+    }
+    with pytest.raises(AssertionError):
+        selected(report)
+    # A forged green aggregate cannot hide an actual failed earlier step.
+    if failed_step is not None:
+        report["passed"] = True
+        with pytest.raises(AssertionError):
+            selected(report)
+
+
+def test_selected_capture_test_accepts_complete_scoped_report_without_changing_full_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected = _selected_capture_assertion(monkeypatch)
+    report = {
+        "execution_mode": "capture_only",
+        "passed": True,
+        "steps": [
+            {"id": f"PW-{number:02}", "status": "passed", "reason": None}
+            for number in range(1, 5)
+        ],
+    }
+    selected(report)
+    report["execution_mode"] = "full_core_flow"
+    report["passed"] = False
+    report["steps"][0]["status"] = "failed"
+    selected(report)  # Full mode keeps one result per selected step.
+
+
+@pytest.mark.parametrize("fault", ["missing", "duplicate", "blocked", "skipped"])
+def test_selected_capture_test_rejects_partial_or_nonpassing_report(
+    monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    selected = _selected_capture_assertion(monkeypatch)
+    report = {
+        "execution_mode": "capture_only",
+        "passed": True,
+        "steps": [
+            {"id": f"PW-{number:02}", "status": "passed", "reason": None}
+            for number in range(1, 5)
+        ],
+    }
+    if fault == "missing":
+        report["steps"].pop(0)
+    elif fault == "duplicate":
+        report["steps"][0]["id"] = "PW-02"
+    else:
+        report["steps"][0]["status"] = fault
+    with pytest.raises(AssertionError):
+        selected(report)
 
 
 def test_identity_mismatch_blocks_capture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

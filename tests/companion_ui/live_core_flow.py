@@ -516,6 +516,7 @@ class CoreFlow:
         self.capture_posts = self.ask_posts = 0
         self.capture_armed = self.ask_armed = False
         self.ack: dict[str, Any] | None = None
+        self.global_health: dict[str, Any] | None = None
         self.results: list[dict[str, Any]] = []
         self.marker = "PW-" + d["channel"] + "-" + d["run_id"]
         token = hashlib.sha256(self.marker.encode()).hexdigest()
@@ -558,7 +559,9 @@ class CoreFlow:
         else:
             route.abort("blockedbyclient")
 
-    def _get(self, url: str, *, page: Any | None = None) -> dict[str, Any]:
+    def _get(
+        self, url: str, *, page: Any | None = None, require_text_capture: bool = False
+    ) -> dict[str, Any]:
         try:
             request_page = page or self.page
             response = request_page.request.get(
@@ -570,6 +573,11 @@ class CoreFlow:
             raise Blocked("endpoint_http_" + str(response.status))
         if _origin(response.url) != _origin(url):
             raise AssertionError("read_origin_changed")
+        if require_text_capture and (
+            response.headers.get("x-pkm-activation-scope") != "text-capture"
+            or response.headers.get("x-pkm-full-channel-qualified") != "false"
+        ):
+            raise AssertionError("text_capture_scope_mismatch")
         return response.json()
 
     def _binding(self) -> dict[str, Any]:
@@ -613,10 +621,43 @@ class CoreFlow:
         if version.get("git_sha") != self.d["expected_sha"]:
             raise AssertionError("backend_revision_mismatch")
         health = self._get(urljoin(self.d["ui_url"], "/api/operator/health"))
+        checks = health.get("checks", {})
+        failed = [
+            k
+            for k, v in (checks.items() if isinstance(checks, dict) else ())
+            if isinstance(v, dict) and v.get("required") is True and v.get("ok") is not True
+        ]
+        scope = health.get("activation_scope")
+        # Keep truthful, bounded diagnostics, not the raw health body (which can
+        # contain private endpoint details). Scoped success is never full health.
+        self.global_health = {
+            "ok": health.get("ok") if type(health.get("ok")) is bool else None,
+            "required_ok": health.get("required_ok") if type(health.get("required_ok")) is bool else None,
+            "failed_required_checks": failed,
+            "activation_scope": scope if scope in (None, "full", "text-capture") else "unknown",
+            "full_channel_qualified": health.get("full_channel_qualified")
+            if type(health.get("full_channel_qualified")) is bool else None,
+        }
         try:
             assert_operator_channel(health, expected_channel=self.d["channel"])
         except AssertionError as exc:
             raise AssertionError("backend_channel_mismatch") from exc
+        text_capture = self.d.get("capture_only", False) and scope == "text-capture"
+        if self.d.get("capture_only", False):
+            if scope not in (None, "full", "text-capture"):
+                raise AssertionError("capture_activation_scope_invalid")
+            if text_capture:
+                if health.get("full_channel_qualified") is not False:
+                    raise AssertionError("text_capture_health_scope_mismatch")
+                liveness = self._get(
+                    urljoin(self.d["api_url"], "/healthz"), require_text_capture=True
+                )
+                if liveness.get("ok") is not True:
+                    raise AssertionError("text_capture_liveness_failed")
+            elif health.get("ok") is not True:
+                # No authenticated text scope: do not consume a capture after
+                # an already-known scoped-admission failure.
+                raise AssertionError("required_health_failed:" + ",".join(failed))
         response = self.page.goto(self.d["ui_url"], wait_until="domcontentloaded")
         if response is None or not response.ok:
             raise AssertionError("gateway_page_unavailable")
@@ -641,12 +682,7 @@ class CoreFlow:
         ):
             if self.page.get_by_test_id(name).count():
                 raise AssertionError("gateway_error_entry_state")
-        if health.get("ok") is not True:
-            failed = [
-                k
-                for k, v in health.get("checks", {}).items()
-                if isinstance(v, dict) and v.get("required") is True and v.get("ok") is not True
-            ]
+        if health.get("ok") is not True and not text_capture:
             raise AssertionError("required_health_failed:" + ",".join(failed))
 
     def _open_note(self, page: Any, path: str) -> None:
@@ -1105,6 +1141,7 @@ class CoreFlow:
             "capture_acknowledgement": self.ack,
             "capture_write_observed": self.capture_written,
             "capture_verified": self.capture_verified,
+            "global_health": self.global_health,
             "execution_mode": "capture_only" if self.d.get("capture_only", False) else "full_core_flow",
             "passed": bool(self.results)
             and len(self.results) == (4 if self.d.get("capture_only", False) else 8)
