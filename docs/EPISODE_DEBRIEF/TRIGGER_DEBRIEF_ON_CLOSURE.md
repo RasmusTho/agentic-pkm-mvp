@@ -12,7 +12,7 @@ can_parallelize_with: []
 # Trigger Debrief on Closure
 
 Implementation: `app/episode_debrief/trigger.py`; PostgreSQL adapter:
-`app/stores/episode_debrief.py`; CLI: `app/cli/episode_debrief.py`. The existing
+`app/episode_debrief/store.py`; CLI: `app/cli/episode_debrief.py`. The existing
 binding-scoped `episode_engine_state` table stores only this consumer's position; no new schema
 or private queue is introduced. `debrief_id` is `debrief-` followed by SHA-256 of `episode_id`.
 The versioned output schema is `schemas/events/debrief.trigger.created.v1.schema.json`.

@@ -15,7 +15,7 @@ Review cadence: event-driven (ERE prerequisite merges, task merges, parent-issue
 Source of truth: this directory + the governing ERE/Create-engine docs; GitHub issues (#3331–#3334) are
 execution artifacts, this spec is the contract
 Last reviewed: 2026-10-14
-Last verified against: `app/episode_debrief/trigger.py`, `app/stores/episode_debrief.py`,
+Last verified against: `app/episode_debrief/trigger.py`, `app/episode_debrief/store.py`,
 `tests/episode_debrief/test_trigger.py`; repository fixtures, not a deployed-channel receipt.
 
 # Episode Debrief — Specification

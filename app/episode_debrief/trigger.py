@@ -14,7 +14,7 @@ from app.events.topic_schema_registry import TopicSchemaViolation
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 from app.services.outbox import derive_idempotency_key, write_outbox_event
-from app.stores import episode_debrief as store
+from app.episode_debrief import store
 from app.workers.outbox_binding_gate import current_binding_effect_window
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import load_frontmatter

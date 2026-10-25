@@ -15,7 +15,7 @@ import pytest
 
 from app.episode_debrief import trigger
 from app.episode_debrief.trigger import DebriefReconciliationError, debrief_id_for_episode
-from app.stores import episode_debrief as store
+from app.episode_debrief import store
 
 pytestmark = pytest.mark.pg
 

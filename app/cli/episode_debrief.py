@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from app.config.paths import resolve_vault_root
+from app.cli.vault_context import CliVaultContextError, resolve_cli_vault_context
 from app.episode_debrief.trigger import run_debrief_tick
 
 
@@ -20,7 +20,14 @@ def episode_debrief_group() -> None:
 @click.option("--vault-root", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None)
 @click.option("--json", "as_json", is_flag=True, default=False)
 def tick(vault_root: Path | None, as_json: bool) -> None:
-    summary = run_debrief_tick(vault_root=resolve_vault_root(vault_root))
+    try:
+        carrier = resolve_cli_vault_context(vault_root, env_policy="channel")
+    except CliVaultContextError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if carrier.root is None:
+        # A bound instance registry selected no vault; never guess a root.
+        raise click.ClickException("no vault is selected: pass --vault-root or set an instance default vault")
+    summary = run_debrief_tick(vault_root=carrier.root)
     if as_json:
         click.echo(json.dumps(summary))
     else:
