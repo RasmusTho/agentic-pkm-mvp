@@ -1053,6 +1053,9 @@ def test_static_selector_targets_are_collectable() -> None:
     ) + selector.STATIC_SELECTOR_NODE_ID_TARGETS + tuple(
         target for smoke_targets in selector.ISOLATED_TEST_MODULES.values() for target in smoke_targets
     )
+    # The guarded source route may land before its helper/test. Its future test
+    # must not become an unconditional missing target in this static census.
+    assert selector.BWS_CONTROL_INSTALLATION_TEST not in targets
 
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", *targets],
@@ -2128,6 +2131,223 @@ def test_module_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return create
 
 
+@pytest.fixture
+def bws_control_repository(test_module_repository):
+    def create(extra: dict[str, str] | None = None) -> Path:
+        return test_module_repository({
+            selector.BWS_CONTROL_INSTALLATION_SOURCE: "def install_file(): pass\n",
+            selector.BWS_CONTROL_INSTALLATION_TEST: (
+                "from app.ops.bws_control_installation import install_file\n"
+                "shared_fixture = 1\ndef test_installation(): pass\n"
+            ),
+            "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md": "Deployment owner contract.\n",
+            **(extra or {}),
+        })
+    return create
+
+
+@pytest.mark.parametrize("cochanges", [
+    [],
+    [selector.BWS_CONTROL_INSTALLATION_TEST],
+    [selector.BWS_CONTROL_INSTALLATION_TEST, "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md"],
+])
+def test_bws_control_source_contract_keeps_ops_runtime_and_complete_proof(
+    bws_control_repository, cochanges: list[str],
+) -> None:
+    bws_control_repository()
+    paths = [selector.BWS_CONTROL_INSTALLATION_SOURCE, *cochanges]
+    selection = select_tests(paths)
+
+    assert selection.reason == "BWS control installation contract PR"
+    assert selection.subsystems == ("ops",)
+    assert selection.full_suite is False
+    assert selection.unowned_paths == selection.deferred_targets == ()
+    assert set(selection.targets) == {*selector.ALWAYS_TARGETS, selector.BWS_CONTROL_INSTALLATION_TEST}
+    assert selector.requires_runtime_checks(paths) is True
+    assert "tests/ops" not in selection.targets
+
+
+def test_bws_control_source_contract_allows_covered_consumers_and_selector_metadata(bws_control_repository) -> None:
+    source = selector.BWS_CONTROL_INSTALLATION_SOURCE
+    test = selector.BWS_CONTROL_INSTALLATION_TEST
+    bws_control_repository({
+        "scripts/select_pr_tests.py": f"SOURCE = {source!r}\nTEST = {test!r}\n",
+        "tests/scripts/test_select_pr_tests.py": f"TEST = {test!r}\nselect_tests([{source!r}, {test!r}])\n",
+        "tests/ci/test_bws_contract.py": "from app.ops.bws_control_installation import install_file\n",
+        "tests/architecture/test_outbox_producer_durability.py": "from tests.ci.test_bws_contract import install_file\n",
+    })
+
+    assert select_tests([source, test]).reason == "BWS control installation contract PR"
+
+
+@pytest.mark.parametrize("metadata", ["scripts/select_pr_tests.py", "tests/scripts/test_select_pr_tests.py"])
+@pytest.mark.parametrize("statement", [
+    "from app.ops.bws_control_installation import install_file",
+    "from tests.ops.test_bws_control_installation import shared_fixture",
+    "import importlib\nimportlib.import_module('app.ops.bws_control_installation')",
+    "from pathlib import Path\nPath('app/ops/bws_control_installation.py').read_text()",
+    "from pathlib import Path\nSOURCE = 'app/ops/bws_control_installation.py'\nPath(SOURCE).read_text()",
+    "from pathlib import Path\nSOURCE = 'app/ops/bws_control_installation.py'\nPath(SOURCE).read_text()\nSOURCE = 'unrelated'",
+    "from pathlib import Path as File\nSOURCE = 'app/ops/bws_control_installation.py'\nFile(SOURCE).read_text()",
+    "SOURCE = 'app/ops/bws_control_installation.py'\nimport importlib\nimportlib.import_module(module_name)",
+])
+def test_bws_control_metadata_execution_consumers_restore_ops_coverage(
+    bws_control_repository, metadata: str, statement: str,
+) -> None:
+    bws_control_repository({metadata: statement + "\n"})
+
+    assert "tests/ops" in select_tests([selector.BWS_CONTROL_INSTALLATION_SOURCE]).targets
+
+
+def test_bws_control_metadata_test_consumer_requires_complete_file_coverage(
+    bws_control_repository, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    consumer = selector.STATIC_TARGET_COLLECTABILITY_FITNESS.split("::", 1)[0]
+    bws_control_repository({consumer: "from app.ops.bws_control_installation import install_file\n"})
+    assert "tests/ops" in select_tests([selector.BWS_CONTROL_INSTALLATION_SOURCE]).targets
+
+    monkeypatch.setattr(selector, "ALWAYS_TARGETS", (*selector.ALWAYS_TARGETS, consumer))
+    selection = select_tests([selector.BWS_CONTROL_INSTALLATION_SOURCE])
+    assert selection.reason == "BWS control installation contract PR"
+    assert consumer in selection.targets
+
+
+@pytest.mark.parametrize("consumer,statement", [
+    ("app/ops/caller.py", "import app.ops.bws_control_installation"),
+    ("app/ops/caller.py", "from .bws_control_installation import install_file"),
+    ("tests/ops/test_caller.py", "from app.ops import bws_control_installation"),
+    ("tests/ops/test_caller.py", "from bws_control_installation import install_file"),
+    ("tests/ops/test_caller.py", "import importlib\nimportlib.import_module('app.ops.bws_control_installation')"),
+    ("tests/ops/test_caller.py", "import importlib\nimportlib.import_module('.bws_control_installation', package='app.ops')"),
+    ("tests/ops/test_caller.py", "from .test_bws_control_installation import shared_fixture"),
+    ("tests/ops/test_caller.py", "from test_bws_control_installation import shared_fixture"),
+    ("scripts/read_control.py", "from pathlib import Path\nPath('app/ops/bws_control_installation.py').read_text()"),
+    ("scripts/read_control.py", "from pathlib import Path\nPath('tests/ops/test_bws_control_installation.py').read_text()"),
+    ("scripts/read_control.py", "from pathlib import Path\nPath('bws_control_installation.py').read_text()"),
+    ("scripts/read_control.py", "from pathlib import Path\nPath('./app/ops/bws_control_installation.py').read_text()"),
+    ("scripts/read_control.py", "from pathlib import Path\nPath('./tests/ops/test_bws_control_installation.py').read_text()"),
+])
+def test_bws_control_outside_source_or_fixture_consumers_restore_ops_coverage(
+    bws_control_repository, consumer: str, statement: str,
+) -> None:
+    bws_control_repository({consumer: statement + "\n"})
+    selection = select_tests([selector.BWS_CONTROL_INSTALLATION_SOURCE, selector.BWS_CONTROL_INSTALLATION_TEST])
+
+    assert selection.reason == "matched subsystem SoI"
+    assert "tests/ops" in selection.targets
+    assert selector.requires_runtime_checks([selector.BWS_CONTROL_INSTALLATION_SOURCE]) is True
+
+
+def test_bws_control_transitive_consumer_of_covered_ci_fixture_restores_ops_coverage(bws_control_repository) -> None:
+    bws_control_repository({
+        "tests/ci/test_control.py": "from app.ops.bws_control_installation import install_file\n",
+        "tests/ops/test_caller.py": "from tests.ci.test_control import install_file\n",
+    })
+
+    assert "tests/ops" in select_tests([selector.BWS_CONTROL_INSTALLATION_SOURCE]).targets
+
+
+@pytest.mark.parametrize("path,content", [
+    (selector.BWS_CONTROL_INSTALLATION_SOURCE, "def invalid(:\n"),
+    (selector.BWS_CONTROL_INSTALLATION_SOURCE, "from ...unknown import install_file\n"),
+    (selector.BWS_CONTROL_INSTALLATION_SOURCE, "import importlib\nimportlib.import_module(module_name)\n"),
+    (selector.BWS_CONTROL_INSTALLATION_TEST, "shared_fixture = 1\n"),
+    (selector.BWS_CONTROL_INSTALLATION_TEST, "def pytest_configure(config): pass\ndef test_installation(): pass\n"),
+    ("app/ops/unrelated.py", "def invalid(:\n"),
+    ("tests/ci/test_control.py", "from app.ops.bws_control_installation import install_file\nexec('generated_code')\n"),
+])
+def test_bws_control_uncertain_source_or_consumer_restores_ops_coverage(
+    bws_control_repository, path: str, content: str,
+) -> None:
+    bws_control_repository({path: content})
+
+    assert "tests/ops" in select_tests([selector.BWS_CONTROL_INSTALLATION_SOURCE]).targets
+
+
+@pytest.mark.parametrize("missing", sorted(selector.BWS_CONTROL_INSTALLATION_PATHS))
+def test_bws_control_deleted_files_restore_ops_coverage(bws_control_repository, missing: str) -> None:
+    root = bws_control_repository()
+    (root / missing).unlink()
+
+    assert "tests/ops" in select_tests(sorted(selector.BWS_CONTROL_INSTALLATION_PATHS)).targets
+
+
+@pytest.mark.parametrize("path", [selector.BWS_CONTROL_INSTALLATION_SOURCE, selector.BWS_CONTROL_INSTALLATION_TEST])
+@pytest.mark.parametrize("failure", ["untracked", "symlink"])
+def test_bws_control_untracked_or_symlink_contract_restores_ops_coverage(
+    bws_control_repository, path: str, failure: str,
+) -> None:
+    root = bws_control_repository()
+    if failure == "untracked":
+        subprocess.run(["git", "-C", str(root), "rm", "--cached", "--", path], check=True, capture_output=True)
+    else:
+        target = root / path
+        saved = target.with_suffix(".saved")
+        target.rename(saved)
+        target.symlink_to(saved.name)
+    assert "tests/ops" in select_tests([selector.BWS_CONTROL_INSTALLATION_SOURCE]).targets
+
+
+@pytest.mark.parametrize("old", [selector.BWS_CONTROL_INSTALLATION_SOURCE, selector.BWS_CONTROL_INSTALLATION_TEST])
+def test_bws_control_renamed_contract_restores_ops_coverage(bws_control_repository, old: str) -> None:
+    root = bws_control_repository()
+    new = str(Path(old).with_stem(Path(old).stem + "_renamed"))
+    (root / old).rename(root / new)
+
+    assert "tests/ops" in select_tests([selector.BWS_CONTROL_INSTALLATION_SOURCE, old, new]).targets
+
+
+@pytest.mark.parametrize("extra", [
+    "app/ops/postgres_deploy_linux.py", "tests/ops/test_other.py", "tests/ops/conftest.py",
+    "scripts/select_pr_tests.py", "docs/deployment/OTHER.md", "requirements.txt",
+])
+def test_bws_control_mixed_changes_keep_normal_owners(bws_control_repository, extra: str) -> None:
+    bws_control_repository({extra: ""})
+    paths = [selector.BWS_CONTROL_INSTALLATION_SOURCE, extra]
+    selection = select_tests(paths)
+
+    assert selection.reason != "BWS control installation contract PR"
+    assert selection.full_suite or "tests/ops" in selection.targets
+    assert selector.requires_runtime_checks(paths) is True
+
+
+@pytest.mark.parametrize("failure", ["inventory", "read", "encoding", "symlink"])
+def test_bws_control_census_uncertainty_restores_ops_coverage(
+    bws_control_repository, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    unrelated = "app/ops/unrelated.py"
+    root = bws_control_repository({unrelated: "value = 1\n"})
+    if failure == "inventory":
+        def failed_inventory(*args, **kwargs):
+            raise subprocess.CalledProcessError(1, args[0])
+        monkeypatch.setattr(selector.subprocess, "run", failed_inventory)
+    elif failure == "read":
+        read_text = Path.read_text
+        def failed_read(path, *args, **kwargs):
+            if path == root / unrelated:
+                raise OSError("fixture read failure")
+            return read_text(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "read_text", failed_read)
+    elif failure == "encoding":
+        (root / unrelated).write_bytes(b"\xff")
+    else:
+        (root / unrelated).unlink()
+        (root / unrelated).symlink_to("missing.py")
+
+    assert "tests/ops" in select_tests([selector.BWS_CONTROL_INSTALLATION_SOURCE]).targets
+
+
+def test_bws_control_doc_and_test_only_changes_keep_existing_routes(bws_control_repository) -> None:
+    bws_control_repository()
+
+    assert select_tests(["docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md"]).reason == "docs-only PR"
+    assert select_tests([selector.BWS_CONTROL_INSTALLATION_TEST]).reason == "test modules and their static consumers"
+    assert select_tests(["scripts/select_pr_tests.py"]).reason == "CI contract-only PR"
+    assert select_tests(["app/builderops/publication.py"]).reason == "PR intake/publication contract PR"
+    isolated = next(iter(selector.ISOLATED_TEST_MODULES))
+    assert select_tests([isolated]).reason == "isolated test-only smoke; exhaustive matrix deferred"
+
+
 def test_deploy_test_only_change_keeps_real_consumers_without_sibling_suites() -> None:
     paths = ["tests/deploy/test_postmerge_pg_acceptance.py", "tests/deploy/test_postmerge_dev_test.py"]
     selection = select_tests(paths)
@@ -2143,6 +2363,30 @@ def test_deploy_test_only_change_keeps_real_consumers_without_sibling_suites() -
     } <= set(selection.targets)
     assert not {"tests/ops", "tests/scripts", "tests/deploy", *selector.ALWAYS_TARGETS[2:]} & set(selection.targets)
     assert selector.requires_runtime_checks(paths) is True
+
+
+def test_docs_test_module_selects_its_import_consumers_and_ci_integrity_targets(
+    test_module_repository,
+) -> None:
+    test_module_repository({
+        "tests/docs/test_seed.py": "shared = 1\ndef test_seed(): pass\n",
+        "tests/docs/test_consumer.py": (
+            "from tests.docs.test_seed import shared\ndef test_consumer(): pass\n"
+        ),
+        "tests/docs/test_unrelated.py": "def test_unrelated(): pass\n",
+    })
+
+    selection = select_tests(["tests/docs/test_seed.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("docs",)
+    assert selection.unowned_paths == ()
+    assert selection.reason == "test modules and their static consumers"
+    assert set(selection.targets) == {
+        *selector.CI_INTEGRITY_TARGETS,
+        "tests/docs/test_seed.py",
+        "tests/docs/test_consumer.py",
+    }
 
 
 @pytest.mark.parametrize("statement", [
