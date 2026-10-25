@@ -148,6 +148,94 @@ def test_accept_projects_checkbox_and_flips_status_atomically(
     assert replay.receipt["idempotent_replay"] is True
 
 
+def test_accept_refuses_candidate_edit_after_checkbox_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.routes import panel as panel_route
+    from app.expansion import accept as accept_module
+    from app.panel import checkbox_projection as checkbox_projection_module
+    from fastapi import HTTPException
+
+    vault, draft_path, outbox, store, question, version = _stage_candidate(tmp_path)
+    request = _acceptance_request(
+        draft_path, vault=vault, question=question, question_version=version
+    )
+    service = CheckboxProjectionService(write_guard=_guard())
+    monkeypatch.setattr(checkbox_projection_module, "resolve_optional_vault_root", lambda: vault)
+    monkeypatch.setattr(panel_route.checkbox_projection_module, "_service", service)
+    monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
+    load_draft = accept_module._load_draft
+
+    def edit_before_exp4_load(path: Path, **kwargs: Any):
+        current = draft_path.read_text(encoding="utf-8")
+        draft_path.write_text(current + "\nA manual edit after the approval click.\n", encoding="utf-8")
+        return load_draft(path, **kwargs)
+
+    monkeypatch.setattr(accept_module, "_load_draft", edit_before_exp4_load)
+
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(panel_route.panel_checkbox_projection(request, _panel_request(vault)))
+
+    current, _ = store.read_question_with_version(question["question_id"])
+    assert refused.value.detail["error"] == "stale_acceptance_control"
+    assert current["status"] == "open"
+    assert current["candidate_answer_ref"] == question["candidate_answer_ref"]
+    assert draft_path.exists()
+    assert "A manual edit after the approval click." in draft_path.read_text(encoding="utf-8")
+    assert not any(
+        record.get("event") == "expansion.create.accepted"
+        for record in (
+            json.loads(line)
+            for line in outbox.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    )
+
+
+def test_accept_refuses_candidate_owned_by_nested_child_vault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.standing_questions.review import QuestionReviewError
+
+    vault, draft_path, outbox, store, question, version = _stage_candidate(tmp_path)
+    child = vault / "private-child"
+    marker = child / "settings" / "vault.md"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("id: private-child\n", encoding="utf-8")
+    child_draft = child / draft_path.name
+    child_draft.write_bytes(draft_path.read_bytes())
+    draft_path.unlink()
+    current, current_version = store.read_question_with_version(question["question_id"])
+    store.update_system_fields_if_unchanged(
+        question["question_id"],
+        current,
+        {"candidate_answer_ref": f"vault://private-child/{child_draft.name}"},
+        expected_version=current_version,
+    )
+    updated_question, updated_version = store.read_question_with_version(question["question_id"])
+    request = _acceptance_request(
+        child_draft, vault=vault, question=updated_question, question_version=updated_version
+    )
+    monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
+
+    with pytest.raises(QuestionReviewError) as accept_refused:
+        review_module.prepare_question_acceptance(request, vault_root=vault)
+    with pytest.raises(QuestionReviewError) as dismiss_refused:
+        dismiss_question_candidate(
+            question["question_id"],
+            vault_root=vault,
+            expected_question_version=updated_version,
+            write_guard=_guard(),
+        )
+
+    still_open, _ = store.read_question_with_version(question["question_id"])
+    assert accept_refused.value.detail["error"] == "candidate_outside_vault"
+    assert dismiss_refused.value.detail["error"] == "candidate_outside_vault"
+    assert still_open["status"] == "open"
+    assert still_open["candidate_answer_ref"] == f"vault://private-child/{child_draft.name}"
+    assert child_draft.exists()
+
+
 def test_accept_refuses_without_a_sealed_vault_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -582,7 +670,9 @@ def test_dismiss_declines_without_closing_question(
     assert not ledger.is_declined("materially-different-future-draft")
 
 
+@pytest.mark.parametrize("failure_kind", ["conflict", "io"])
 def test_dismiss_surfaces_indeterminate_after_durable_decline_if_question_cas_fails(
+    failure_kind: str,
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.knowledge.errors import KnowledgeWriteConflict
@@ -593,7 +683,9 @@ def test_dismiss_surfaces_indeterminate_after_durable_decline_if_question_cas_fa
     monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
 
     def fail_question_ack(*_args: object, **_kwargs: object) -> object:
-        raise KnowledgeWriteConflict("injected post-decline Question CAS failure")
+        if failure_kind == "conflict":
+            raise KnowledgeWriteConflict("injected post-decline Question CAS failure")
+        raise OSError("injected post-decline Question write failure")
 
     monkeypatch.setattr(QuestionStore, "update_review_fields_if_unchanged", fail_question_ack)
 

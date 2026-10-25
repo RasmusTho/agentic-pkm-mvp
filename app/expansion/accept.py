@@ -138,6 +138,10 @@ class DraftNotAcceptedError(AcceptError):
     """
 
 
+class DraftContentChangedError(AcceptError):
+    """The loaded staged draft does not match the bytes a caller approved."""
+
+
 class ModifyExistingRequiresAskError(AcceptError):
     """The resolved destination is an existing canonical note.
 
@@ -481,13 +485,25 @@ class _LoadedDraft:
     checked: bool
 
 
-def _load_draft(draft_path: Path) -> _LoadedDraft:
+def _load_draft(
+    draft_path: Path,
+    *,
+    expected_content_sha256: str | None = None,
+) -> _LoadedDraft:
     from scripts.yaml_roundtrip import load_frontmatter
 
     try:
-        raw_text = draft_path.read_text(encoding="utf-8")
+        raw_bytes = draft_path.read_bytes()
     except OSError as exc:
         raise DraftNotFoundError(f"staged draft {draft_path} is not readable: {exc}") from exc
+    if (
+        expected_content_sha256 is not None
+        and hashlib.sha256(raw_bytes).hexdigest() != expected_content_sha256
+    ):
+        raise DraftContentChangedError(
+            f"staged draft {draft_path} changed after its human approval control was loaded"
+        )
+    raw_text = raw_bytes.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     frontmatter, body = load_frontmatter(raw_text)
     frontmatter = frontmatter or {}
     draft_id = str(frontmatter.get("uuid") or draft_path.stem)
@@ -980,6 +996,7 @@ def accept_draft(
     outbox_path: Path,
     destination: str | None = None,
     live_source_ids: set[str] | None = None,
+    expected_draft_content_sha256: str | None = None,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     now: datetime | None = None,
 ) -> AcceptResult:
@@ -996,6 +1013,11 @@ def accept_draft(
     ``live_source_ids`` — when given, the set of source object ids that still
     resolve; a cited source outside it blocks acceptance loudly. When None, the
     caller asserts the draft's source set is unchanged since EXP-3 validated it.
+
+    ``expected_draft_content_sha256`` — when given by a source-bound human review
+    flow, pins the exact UTF-8 bytes loaded for EXP-4 to the bytes that flow
+    preflighted. A concurrent edit before this load refuses materialization; an
+    edit after this load cannot change the immutable content EXP-4 materializes.
     """
     now = now or _now()
     vault_root = Path(vault_root).expanduser().resolve()
@@ -1003,7 +1025,10 @@ def accept_draft(
     if not draft_path.is_absolute():
         draft_path = (vault_root / draft_path).resolve()
 
-    loaded = _load_draft(draft_path)
+    loaded = _load_draft(
+        draft_path,
+        expected_content_sha256=expected_draft_content_sha256,
+    )
     draft_id = _draft_id_of(loaded)
 
     # Idempotency: an already-accepted draft never double-materializes.

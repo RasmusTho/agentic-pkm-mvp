@@ -13,6 +13,7 @@ from app.expansion.accept import (
     AcceptanceReconciliationError,
     AcceptError,
     CREATE_ACCEPTED_EVENT,
+    DraftContentChangedError,
     DraftNotFoundError,
     accept_draft,
     decline_draft,
@@ -21,6 +22,7 @@ from app.expansion.create import standing_question_acceptance_option_id
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.panel.checkbox_projection import (
     CheckboxProjectionRequest,
+    _project_checked,
     extract_panel_selectable_options,
 )
 from app.runtime.runtime_loop import resolve_outbox_path
@@ -36,6 +38,7 @@ from app.standing_questions.question_store import (
     question_note_path,
 )
 from app.text.helpers import content_hash
+from app.vault.manager import nearest_enclosing_vault_root
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -56,6 +59,7 @@ class QuestionAcceptancePreflight:
     question_version: str
     draft_path: Path
     request: CheckboxProjectionRequest
+    expected_projected_content_hash: str
     already_projected: bool = False
 
 
@@ -68,6 +72,12 @@ def _candidate_path(vault_root: Path, reference: object) -> Path:
         raise QuestionReviewError(409, "candidate_unreadable", "The candidate answer cannot be inspected safely.") from exc
     if path is None:
         raise QuestionReviewError(409, "candidate_missing", "The pending candidate answer is no longer available.")
+    if nearest_enclosing_vault_root(path, search_root=vault_root) != vault_root.resolve():
+        raise QuestionReviewError(
+            409,
+            "candidate_outside_vault",
+            "The candidate answer belongs to a nested child vault.",
+        )
     return path
 
 
@@ -76,6 +86,15 @@ def _relative_path(vault_root: Path, path: Path) -> str:
         return path.resolve().relative_to(vault_root.resolve()).as_posix()
     except (OSError, RuntimeError, ValueError) as exc:
         raise QuestionReviewError(409, "candidate_outside_vault", "The candidate answer is outside the selected vault.") from exc
+
+
+def _projected_acceptance_content_hash(normalized: str, option: Any) -> str | None:
+    """Pin the exact checked note bytes the human control projects."""
+
+    if option.checked:
+        return content_hash(normalized)
+    checked = _project_checked(normalized, line_index=option.source_range.start_line)
+    return content_hash(checked) if checked is not None else None
 
 
 def prepare_question_acceptance(
@@ -172,6 +191,12 @@ def prepare_question_acceptance(
     if not control_matches or (option is not None and option.checked and not already_projected):
         raise QuestionReviewError(409, "stale_acceptance_control", "The acceptance control changed. Reload the question before accepting it.")
 
+    if option is None:
+        raise QuestionReviewError(409, "stale_acceptance_control", "The acceptance control changed. Reload the question before accepting it.")
+    expected_projected_content_hash = _projected_acceptance_content_hash(normalized, option)
+    if expected_projected_content_hash is None:
+        raise QuestionReviewError(409, "stale_acceptance_control", "The acceptance control changed. Reload the question before accepting it.")
+
     if frontmatter.get("create_kind") != "create.answer_note" or frontmatter.get("authority_state") != "proposal":
         raise QuestionReviewError(409, "candidate_not_acceptance_draft", "This candidate is not a staged EXP-4 answer draft.")
 
@@ -182,6 +207,7 @@ def prepare_question_acceptance(
         draft_path=draft_path,
         request=request,
         already_projected=already_projected,
+        expected_projected_content_hash=expected_projected_content_hash,
     )
 
 
@@ -210,11 +236,34 @@ def complete_question_acceptance(
             raise QuestionReviewError(409, "question_unavailable", "The question changed before acceptance could be recorded.") from exc
         if current_version != preflight.question_version or current != preflight.question:
             raise QuestionReviewError(409, "stale_question", "The question changed after its acceptance control was loaded.")
+        if nearest_enclosing_vault_root(preflight.draft_path, search_root=vault_root) != vault_root:
+            raise QuestionReviewError(
+                409,
+                "candidate_outside_vault",
+                "The candidate answer belongs to a nested child vault.",
+            )
+        try:
+            projected_bytes = preflight.draft_path.read_bytes()
+            projected_draft = projected_bytes.decode("utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise QuestionReviewError(
+                409,
+                "candidate_unreadable",
+                "The candidate answer changed before acceptance could be completed.",
+            ) from exc
+        normalized_draft = projected_draft.replace("\r\n", "\n").replace("\r", "\n")
+        if content_hash(normalized_draft) != preflight.expected_projected_content_hash:
+            raise QuestionReviewError(
+                409,
+                "stale_acceptance_control",
+                "The candidate changed after its acceptance control was loaded. Reload it before accepting.",
+            )
         try:
             result = accept_draft(
                 preflight.draft_path,
                 vault_root=vault_root,
                 outbox_path=outbox_path,
+                expected_draft_content_sha256=sha256(projected_bytes).hexdigest(),
                 write_guard=write_guard,
             )
         except DraftNotFoundError as exc:
@@ -232,6 +281,12 @@ def complete_question_acceptance(
                 "EXP-4 materialized an answer, but its acceptance receipt could not be reconciled safely.",
                 state="acknowledgement_indeterminate",
                 draft_id=request.artifact_id,
+            ) from exc
+        except DraftContentChangedError as exc:
+            raise QuestionReviewError(
+                409,
+                "stale_acceptance_control",
+                "The candidate changed between approval validation and EXP-4 loading. Reload it before accepting.",
             ) from exc
         except AcceptError as exc:
             raise QuestionReviewError(409, "acceptance_blocked", str(exc), state="blocked") from exc
@@ -373,6 +428,15 @@ def dismiss_question_candidate(
                 expected_version=version,
             )
         except (KnowledgeWriteConflict, InvalidQuestionReviewTransition, WritesBlockedError) as exc:
+            raise QuestionReviewError(
+                409,
+                "acknowledgement_indeterminate",
+                "The decline was recorded, but the Question pointer could not be cleared.",
+                state="acknowledgement_indeterminate",
+                draft_id=draft_id,
+                decline_receipt_id=receipt_id,
+            ) from exc
+        except Exception as exc:
             raise QuestionReviewError(
                 409,
                 "acknowledgement_indeterminate",
