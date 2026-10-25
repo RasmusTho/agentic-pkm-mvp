@@ -5,12 +5,14 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-10-11
+Infrastructure reference review: 2026-10-21 (status ownership and stale October 3 paragraph only)
+Last reviewed: 2026-10-23 (#6228 promotion admission and recovery binding, repository-only; existing TEST preparation, native acquisition and credential gates retained; other sections were not re-audited)
 Last live runtime verification: 2026-10-11 UTC (accepted native DEV/TEST activation, health/version/UI and isolated PostgreSQL verification under #5675; the earlier read-only route checks remain separate, and `prod` was not queried)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903); Issue #5868 and the existing-secret deployment Verify targets, which establish repository behavior only.
 Verification update (2026-10-10): repository support includes post-merge image admission and private-host dev/test orchestration under #5922. Deterministic verification establishes the orchestration, digest and migration boundaries; live activation and functional channel acceptance are recorded separately under #5675.
 Verification update (2026-10-11): the accepted full controller flow committed DEV and TEST at one immutable candidate from `main` at `216ef75e9a2ea009e547e96497a0bb2532b9a379`, each 547/547 selected PG tests, with the current shared profile, health/version/UI, matching native/stream envelopes and exact owned cleanup/lock readback. The [actual receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) establishes the PG coverage handoff. Permanent controller installed/loaded source, runtime and checkpoint are recorded separately on #5675 after reviewed-main installation; native PG/smoke does not establish production eligibility.
-Verification update (2026-09-29): BWS-03/#5679's encrypted reader-token push command was delivered by PR #5732 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`). This establishes repository support only; live VM installation and qualification remain separate gates under #5667.
+Verification update (2026-09-29): BWS-03/#5679's encrypted reader-token push command was delivered by PR #5732 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`). At that point this established repository support only; see the 2026-10-15 #5667 update below for the later component-specific live receipts and the remaining integrated acceptance gate.
+Verification update (2026-10-15): #5667 comments [#6114638077](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114638077) and [#6114724380](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114724380) verify the current Free-plan entitlement, both existing reader tokens' access to both projects, active encrypted reader services and matching receipts on ygg-dev, ygg-test, and ygg-prod, the exact MARR non-prod binding, and retirement of the unused generic helper/token. Comment [#6114787299](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) accepts the Demerzel normal-writer model and same-user bearer residual. These component receipts do not establish the complete target/action-bound DEV/TEST/PROD deployment/runtime acceptance; #5667 remains open for that parent gate.
 
 ## Why this document exists
 
@@ -36,6 +38,13 @@ headroom, and Linux alert installation belong in a deployment profile such as
 `docs/deployment/profiles/TARS_PROXMOX.md`; they are not generic deployment facts.
 
 ## Complete Dev System placement and admission
+
+The separately owner-authorized [bounded manual DevUI component promotion](../BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#bounded-manual-devui-component-promotion)
+in #6105 installs only the existing read-only DevUI component through its fixed engine/project,
+attestation, image/config, rollback and browser-smoke boundary. It never runs Product channel
+promotion, control-plane migrations or source/credential provisioning, and its component record
+cannot satisfy complete-system qualification or owner acceptance. The full-system contract below
+is unchanged; a component installation is reported with its exact limits.
 
 The portable deployment contract admits a selected setup profile; it does not choose a host. The
 TARS/Proxmox profile selects TARS VM `bob-1` (VM ID `102`, formerly referred to as `vm102`) as the
@@ -125,25 +134,21 @@ separate authority boundaries.
 Provider and model selection is resolved by capability configuration. Neither this placement profile
 nor the topology qualification input encodes a provider, model, or Codex-only runtime architecture.
 
-## Current live runtime posture
+## Current infrastructure status
 
-The latest read-only check from Demerzel (2026-10-03 UTC) reached `ygg-dev` and `ygg-test` over VLAN;
-it was not a deployment run. `ygg-dev` runs image
-`8cb453986944b98b7dac483973aae67e8c5e64e7`, reports `required_ok=true`, and enforces
-`ollama/llama3.2:3b`; its current health response still checks Ollama and does not yet report
-`llm_access`. `ygg-test` runs `dev-local`, reports unknown application SHA and `required_ok=false`,
-uses `LLM_PROVIDER=mock`, and has only API and DB containers (no worker or watcher). Product
-containers on both channels lack the Model Access VLAN caller settings. The existing test checkout
-was stale and dirty and was left untouched.
+[yggdrasil-infra — Current local infrastructure](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md) owns the dated observed host, VM-role,
+engine, network, storage and service inventory. Its 2026-10-21 read-only pass includes the three
+Product guests and BOB-1's dedicated BuilderOps engine; it is not a deployment, qualification,
+functional-acceptance or promotion receipt. Builder Vault holds the sanitized handoff and private
+host-local evidence locator. The October 3 runtime paragraph formerly here is superseded as current
+status, including its absent-worker and unknown-TEST-image claims.
 
-The accepted MARR-06 receipt proves one Luna completion through the active, loopback-bound Mac mini
-Codex CLI executor over VLAN mTLS; it does not prove persistent Product routing. The merged candidate
-is not running on either channel, and its pending migrations have not been applied. The read-only SSH
-path does not establish the qualified deployment executor or Linux caller-secret qualification
-tracked by #5667. No candidate-bound backup or staged-rollout receipt was created. Do not use the old
-local Compose projects or matrix below as evidence for the new-host runtime. The remaining authorized
-sequence is exact candidate identity and backup/migration review → dev deployment and verification →
-test deployment and verification. Production was not contacted and remains out of scope.
+This document retains the physical application deployment procedure, managed-unit topology,
+migration and health gates. The dated successful native DEV/TEST flow recorded above remains
+historical acceptance for its exact candidate; it does not establish today's channel health.
+Infrastructure observations neither alter the remaining qualification/credential gates nor grant
+production action. Local Compose projects remain fallback resources rather than evidence for the
+Linux channel deployment.
 
 ### CI deployment automation posture
 
@@ -152,17 +157,54 @@ build, `.github/workflows/postmerge-dev-test.yml` admits its exact source-run im
 Actions permissions. The private macOS controller in `scripts/postmerge_dev_test.py` polls that same
 proof and calls the existing native host boundary for `dev` then `test`, using one immutable digest.
 The existing health, version, fleet-image and UI smoke gates plus the fixed isolated PG acceptance
-profile must pass on dev before test starts. Each stage runs its own PG profile at the same digest.
+profile must pass on dev before test starts. The exact dev operation must also pass fixed heavy
+qualification (#6227); a red candidate is held while later builds proceed. Each stage runs its own
+PG profile at the same digest.
 Actions receives no deployment credentials; there is no extra human approval between ordinary stages.
 
-`scripts/install_postmerge_controller.py` installs the host-local LaunchAgent from a retained, clean,
-reviewed-main tooling checkout. Install the updated native VM runtime once through the existing
-deployment installer before enabling the poller. Future automatic candidates fetch their exact Git
+`scripts/install_postmerge_controller.py` installs the host-local LaunchAgent from a clean,
+reviewed-main tooling checkout. It archives the exact reviewed SHA into
+`postmerge/tooling/<sha>/source` under the existing private controller state directory and creates a
+separate `runtime` with copied Python executables. It copies the existing host SDK closure
+(`bitwarden-sdk`, `python-dateutil`, `six`) at the exact versions owned by
+`requirements-bws-deploy.txt` from the supplied qualified Python into the private pin. Distribution
+versions and copied-file hashes are checked, with no package download or candidate dependency.
+The supplied `--python` must expose those exact distributions in its isolated environment; missing,
+wrong-version or incomplete packages refuse setup before LaunchAgent replacement. The LaunchAgent runs
+that pin with `-I -S`; its stdlib startup wrapper checks the pinned interpreter identity and the real
+controller/native/lazy receipt imports and the real unauthenticated SDK factory before polling. Native host children load that same source
+explicitly, independent of candidate working directory or Python environment. A broken pin exits 78
+and reports a failed startup heartbeat through the existing Actions-write liveness workflow. The
+stdlib reporter reads the existing checkpoint sequence and time together under the existing lock;
+its `after_sequence` frontier never allocates or changes activity, native operation IDs, pause or
+last-green state. It floors the diagnostic time at that checkpoint time, preserving history
+pagination safety after host-clock correction and delayed signal admission. Failure at frontier
+`k` outranks activity through `k`; only a later actual activity supersedes it. A fresh DEV verdict
+alone cannot clear the failure, and a later active pause stays red with its existing expiry rules.
+The reader follows first-parent main history through diagnostic-only commits; only actual sequenced
+activity supplies a pagination clock floor. This relies on the existing single-host authority and
+ordinary append-only main progression. Missing, invalid or busy private state refuses reporting
+without initializing it. The writer keeps its zero-future/two-hour admission window: a future or
+stale report refuses, never lowers its saved time. Dispatch is asynchronous; `sent` records dispatch
+acceptance, not successful status admission. State/clock/transport refusal remains observable through
+the bounded startup log, failed signal workflow or scheduled missing/stale-heartbeat check. A failed new
+installation preserves the existing LaunchAgent and checkpoint; select a fresh reviewed tooling SHA
+for upgrades or recovery. An existing corrupt pin refuses reuse rather than being overwritten. Candidates never update the tooling pin. This is repository support
+(#6225), with host activation still under #6170 and release acceptance under #3347. Install the updated
+native VM runtime once through the existing deployment installer before enabling the poller. Future automatic candidates fetch their exact Git
 objects from the public repository under the native channel lock, without moving the retained
 checkout or passing credentials. A private atomic checkpoint deduplicates build attempts. Stable
 candidate/channel operation IDs resume an interrupted call through the existing native journals,
 including a terminal result written before the checkpoint; unknown outcomes are retried with that
-same ID and never silently treated as completed. A failed candidate does not veto later candidates.
+same ID and never silently treated as completed. A pending checkpoint may be retired as
+`superseded_before_deployment` only when a read-only, exact candidate/channel/operation-bound probe
+proves that the operation ID never entered the append-only host admission history and that the native
+channel has no matching journal, request, worker, or lock footprint. The probe crosses the host
+boundary with fixed content-free fields only, then appends a durable same-ID retirement fence while
+the host admission lock is still held; a crash before the local checkpoint write reuses that fence,
+and the fenced ID can never enter deployment admission. A timeout, malformed or mismatched proof, active native
+footprint, nonterminal evidence, or any ambiguity preserves the pending checkpoint and its same-ID
+recovery path. A failed candidate does not veto later candidates.
 
 Automatic deployment uses existing secrets only and follows the ordinary dev/test migration policy:
 forward-only work is classified and recorded without requiring operator acknowledgement. Native
@@ -173,6 +215,62 @@ not live enablement. Coordinate an ongoing frozen acceptance run before loading 
 PG PR coverage transfers to the shared isolated native profile only after actual equivalent dev/test
 execution is verified under #5675. Non-PG PR and bounded nightly checks remain; production promotion
 is separately governed.
+
+Repository support for an explicit deploy-machinery pause is provided by #6224. Use it only when
+the deployer itself is unsafe. After the required owner OK is recorded on the governing host-change
+Issue, invoke the reviewed controller tooling with the same private state directory as the LaunchAgent:
+
+```bash
+<reviewed-python> <reviewed-tooling>/scripts/postmerge_dev_test.py --pause \
+  --state-directory "$HOME/.local/state/yggdrasil/secret-controller/postmerge" \
+  --issue <deploy-machinery-issue-number> --until <future-ISO-8601-time-with-timezone>
+```
+
+Both a positive Issue number in this repository and a future timezone-aware expiry are required.
+The local receipt links that operator-supplied Issue; this command neither checks Issue contents nor
+requests additional host API permissions. It atomically stores the pause in the existing private
+`postmerge-dev-test.json`, under the existing controller lock, without changing a retained candidate
+or its native operation ID. A busy controller lock refuses the command; it does not interrupt an
+already admitted native operation. Retry after the active tick reaches its recorded boundary.
+
+While active, the controller skips candidate lookup, deployment, pending-operation recovery, and
+heavy-test dispatch. Its existing heartbeat carries the pause to the liveness workflow, which reports
+red `paused (#N, until T)` even when a recent dev verdict exists. Expiry is evaluated on every tick:
+at or after the deadline the pause no longer blocks work, the next heartbeat omits the active pause,
+and normal liveness checks apply. If `main` advances before another heartbeat arrives, the checker
+reads the existing status history along at most 100 first-parent commits, including commits without
+an admitted build. Incomplete, malformed, or inaccessible history reports red instead of assuming
+that an earlier pause ended. A later normal heartbeat supersedes the earlier pause; delayed status
+writes cannot refresh or extend their embedded observation and expiry. The expired receipt remains
+in the checkpoint for traceability.
+
+The existing private checkpoint also retains a heartbeat sequence and UTC clock floor. Each tick
+persists them before dispatch or native work; delayed retries carry that same observation. Pause
+replacement may shorten or extend its expiry, and the later sequence wins. A backwards host clock
+refuses the command before effects instead of manufacturing a fresh timestamp. The checker rejects
+conflicting sequences and reads across ambiguous same-second status pages; bounded incomplete
+history stays red. A fresh installer or first invocation in a new private state directory creates
+this metadata atomically. Valid legacy candidate checkpoints adopt it in place, preserving pending
+operation IDs and last-green history. The released legacy protocol has normal heartbeats only;
+unsequenced pause evidence is refused.
+
+Retain the authoritative state directory when updating controller tooling. An existing lock without
+its checkpoint refuses both installation and controller work, including after an interrupted initial
+write. Recover the current authoritative checkpoint; do not delete state or restore an older copy to
+reset the sequence. Loss or rollback of the entire authority directory cannot be distinguished from
+a new installation locally and is not supported recovery. It requires reconciliation by the live
+runtime owner under the existing activation authority, without granting the host new API scopes.
+The manual mutating `--source-run N` path also requires `--state-directory` and obeys the same pause;
+read-only `--source-run N --admit-only` remains usable without host state or deployment credentials.
+Unloading or stopping the LaunchAgent is not a supported pause. A pause never gates or reverts a
+`main` merge, grants production authority, or changes the no-database-rollback rule. Repository proof
+does not activate this command on a live host or release the existing #6170/#3347 gates.
+
+Target flow: [ADR-0068](../adr/ADR-0068-continuous-dev-delivery-flow.md) (owner-directed 2026-10-18,
+parent #6207) keeps this controller running through deploy problems. A red candidate files a rolling
+channel bug Issue and the next candidate proceeds. A hold pins the `dev` ref or engages a kill switch
+with an Issue and an expiry. The supported pause above enacts D5 at repository level; the other
+slices retain their own enactment and live-activation gates. An absent controller remains an alert.
 
 RCA on 2026-06-29 (BuilderOps LearningSignal `lrn_20260629093241_59713bc1`) found that the system had **no deployment source-of-truth**. The observed reality:
 
@@ -264,7 +362,7 @@ grant setup or migration authority. The existing explicit forward-only acknowled
 applicable, remains a separate operator input and is never inferred from cutover selection.
 
 Before effects, native admission checks the configured pin/runtime source, actual existing
-API/worker/watcher and applicable Heimdal/migration writer mounts, channel instance-state volume,
+API/worker/watcher and applicable Heimdal writer mounts, channel instance-state volume,
 initialized registry identities and authenticated physical ownership. The public instance runtime
 readiness facade reads existing registry and ownership state with read-only locks, without
 initialization, restoration, key recovery or permission changes. Missing, conflicting, pending or uninitialized
@@ -274,6 +372,15 @@ worker prepares. Each inherited Compose guard rechecks the request and selected 
 Native workers discard ambient MVR-01C binding/root variables and supply only the frozen request
 to the existing public stopped-window producer. That producer retains the actual all-owner
 inventory, drained-writer proof, rollback guards, deployment lease and finalization order.
+
+Docker optional unset environment entries may be bare valid keys; duplicates, malformed entries,
+and missing or conflicting required channel/source selectors refuse. Stopped content writers receive
+identical proof. The canonical SQL/representation-only `migrate` producer is excluded from content
+mount proof only when its migration-runner ownership, exact `run_migrations.sh` command, working
+directory and absent entrypoint match, with no mounts except the optional managed read-only database
+password file. A changed command, code/content/registry mount or foreign secret mount refuses rather
+than gaining an exemption by service name or container state. This classification leaves the later
+complete owner inventory and writer drain unchanged.
 
 Qualification accepts the existing same-path content mount and the legacy `/app/vault` alias only
 when each writer's selectors match its actual mount of that exact host source. It does not rebind
@@ -326,6 +433,92 @@ selected explicitly by the deploy wrapper and uses a Compose-owned compatibility
 start only when neither the host-global lease nor any channel restart fence exists. Current images
 always run the full authenticated runtime preflight; module absence outside explicit rollback fails
 closed.
+
+#### Explicit TEST dormant ownership preparation
+
+The explicit TEST preparation-only entrypoint `prepare_test_dormant_ownership_window` reuses this
+producer's owner baseline, two-pass stopped-writer inventory and database no-client fence. It
+refuses foreign owners before any stop and returns after `deployment-bind-owner-proof`, retaining
+the actual controller, lease and restart fence. It does not select principal/scalar cutover, the
+MVR-05 floor, migration, finalization or startup. Ordinary deploy/start callers keep their existing
+mode and never select ownership initialization.
+
+This future operator route requires one exact clean native source revision and existing native
+interpreter, matching runtime UID/GID, accessible existing private instance/host roots, actual live
+controller start identity, and correlated native process/filesystem namespace. The read-only
+`deployment-qualify-native` facade refuses a dirty/shadowed source, missing dependency, wrong user,
+dead/zombie controller or unavailable view. A default image, code-only mount or visible numeric PID
+is not qualification; this route installs nothing and grants no namespace or access privilege.
+Native proof paths are produced directly, not rewritten from container proofs.
+
+Qualification emits only a redacted context digest. Native begin consumes that original digest;
+the existing private lease, restart fence, inventory, proof and owner binding retain the exact
+source/root/revision/module origins and launcher/resolved-interpreter identity. Every later native
+authority command revalidates that original context, including the separate initializer's lock-held
+fresh and reserved-retry checks and guarded release. Missing, stripped, replaced or changed evidence
+refuses without clearing the pending epoch or fence. The authenticated backup retains the original
+proof bytes so interrupted cleanup cannot replace the qualified context after unlinking its live copy.
+Native begin requires the same persisted context on every existing-claim path, including root-only
+crash retry, and cannot upgrade an ordinary claim. Only a genuinely fresh begin with all lease,
+compatibility, restart-fence, pending-reservation and canonical-proof evidence absent may retire a
+validated private prior-window census; its directory is fsynced before the first new blocker.
+Once claimed, missing or changed census/proof nonce or context refuses and preserves safety state.
+If begin completes interrupted cleanup, it revalidates the original context and repeats fresh
+admission/retirement under the same admission lock before creating a new nonce or root blocker.
+The original context is checked again after retirement's fsync. Native prove/release/inventory
+commands normalize expected private-input and durability errors to fixed redacted refusals, even
+when one safety mirror is damaged or cleanup removes the last mirror. This changes error
+presentation only, preserves remaining evidence, and leaves ordinary CLI errors unchanged.
+
+Within that held window, the separate explicit `deployment-initialize-dormant-ownership` command
+requires `--channel test`, existing `--instance-state-root` and `--host-global-root`, retained
+`--vault-binding-id`, `--expected-registry-sha256`, canonical `--owner-receipt-path` and its current
+`--expected-owner-receipt-sha256`, canonical `--quiescence-proof-path`, a disjoint private
+`--backup-root`, and `--acknowledge-new-ownership-epoch`. It admits exactly one initialized dormant
+registration with no ownership pair, under deployment → producer → ledger → registry locks. The
+private existing-format backup package binds its absent before-image, prepared key/ledger and
+acknowledged epoch; existing lease/restart-fence reservation evidence prevents a second backup
+destination from minting another epoch. Partial reservations, missing packages and failed directory
+barriers remain fenced, and exact retries repeat the publication/key/ledger durability barriers.
+Ordinary begin, release, cleanup and finalization cannot erase a pending or indeterminate epoch;
+generic restore and rotation reject the operation-specific package. Public results are redacted.
+
+After the exact pair is authenticated durable, guarded `deployment-release` completes only this
+preparation window. A separately authorized ordinary B47 producer must create its own compatible
+proof; no manual state edit, migration retarget, B47 completion, live TEST repair or activation is
+inferred. This source preparation does not itself authorize the future live operation or owner ACK.
+
+#### TEST source-recovery instance-state preservation and explicit reconstruction
+
+The TEST source-projection recovery reset preserves `pkm-test_instance-state`. It removes only
+the managed `pgdata` and runtime-temporary projection volumes, because the instance registry and
+host-global ownership ledger are durable authority rather than rebuildable runtime state. A
+missing or corrupt registry remains a fail-closed consumer-preflight error; the normal deploy and
+startup paths never create it as a side effect.
+
+For the already-observed TEST total-loss case, the host controller exposes the explicit
+`--reconstruct-missing-test-instance-state` operation. It binds the terminal failed successor and
+completed source-recovery disposition as distinct operation identities, then binds both to a fresh
+owner-inventory receipt and two-pass stopped-writer proof, the exact selected TEST authority tuple,
+the existing host-global key/ledger, and the new candidate revision/image digest. The owner
+inventory must cover the complete active TEST lease set exactly. A read-only native preflight
+authenticates that set and its ledger digest before the recovery receipt or named-volume permission
+step. It also re-observes the proof's native controller PID, start token, and execution namespace;
+an exited, reused, or otherwise changed controller refuses without mutation. The mounted runtime
+producer revalidates the same proof and ledger digest before any instance-state write, but does not
+pretend that its container PID/mount namespace is the native controller namespace or require a
+content-root mount. Physical root matching stays in the host preflight; the producer consumes its
+proof-bound identity evidence,
+then uses the canonical deployment-admission -> producer-transition ->
+ownership-ledger -> registry-store order and the existing registry snapshot, checksum, and
+legacy-export writers to materialize only receipt/ledger-proven dormant registrations. The result
+is inactive-fenced and does not activate runtime authority or alter vault/source/database bytes.
+The request receipt and result are byte-bound for crash-safe retries; changed candidate, source or
+successor operation, disposition, owner evidence, proof, ledger digest, binding, root, channel, or
+lock evidence refuses without mutation. Both recovery one-shots execute the request's immutable
+candidate image selector rather than an ambient channel pin. A successful reconstruction is still
+only a stopped-window producer: a separate fresh normal TEST deployment and the parent acceptance
+gates remain required.
 
 #### Legacy owner root namespace authority (#4539)
 
@@ -511,8 +704,8 @@ first attempt produced the image.
 
 The existing private macOS host controller runs `scripts/postmerge_dev_test.py --latest` every
 60 seconds. It independently revalidates the latest build and its artifact, then calls the native
-existing-secrets-only boundary for `dev` followed by `test`, with the same SHA and image-index
-digest. No new human approval, Actions environment or self-hosted PR runner is required. Deployment
+existing-secrets-only boundary for `dev`, qualifies that exact dev operation with the heavy profile,
+then promotes to `test` only on a pass, with the same SHA and image-index digest. No new human approval, Actions environment or self-hosted PR runner is required. Deployment
 retains the existing host-controller and VM channel locks, supervised worker, request journal,
 health/readiness/version, fleet and browser UI gates. Before `committed`, the native worker enters
 `verifying` and runs `app.ops.pg_acceptance` with the retained acceptance selection transferred
@@ -581,6 +774,116 @@ restart. An interrupted stage uses native same-request terminal reconciliation; 
 mismatched evidence cannot start a fresh operation or advance the candidate. Failures emit bounded
 SHA/digest/run/channel/result JSON in the private controller log. A newer candidate can supersede
 an older one before deployment begins; a started chain completes with its original identity.
+
+Terminal native `dev` and `test` verdicts also dispatch
+`.github/workflows/postmerge-channel-bug.yml` with the exact SHA, digest, build attempt, operation
+receipt, gate, and previous green SHA (#6223). The existing private checkpoint retains per-channel
+last-green SHAs and records dispatch intent before calling Actions. An unknown or failed dispatch
+is reported as such and is not replayed after restart; later candidates still proceed. A retained
+checkpoint with no prior green records an explicit unknown baseline instead of inventing a range.
+The controller's approved client still needs only Actions read/write, Contents read and Metadata
+read. Its outbound boundary validates the closed public receipt before dispatch; unrecognized
+retained fields fail reporting without transmission. The main-only workflow uses its own short-lived
+`GITHUB_TOKEN` for Issue writes; it never receives deployment credentials or runs candidate code.
+
+The workflow validates main ancestry, the exact successful admitted workflow attempt and receipt identity,
+serializes its consumers across both channels, and opens or comments on one bot-owned, channel-marked rolling bug. Later
+green evidence comments and closes that Issue; a later failure reopens the same Issue. Candidate ordering and successful
+workflow receipts reject delayed red/green events. A terminal-evidence fingerprint in workflow
+metadata also rejects conflicting replays after a first green before any bug exists. Successful
+earlier reporting attempts remain authoritative after a failed or running rerun; unreadable or
+incomplete attempt history refuses Issue mutation.
+Human-authored or other-channel Issues are not mutation targets. Generated bugs are failure intake;
+readiness requires a bounded repair contract. Actions failures remain visible in their workflow run
+and never gate main merges or replay deployment. This is repository support; live activation and
+qualification retain #6170 and #3347's operator gates.
+
+Channel-ref repository support (#6226) reuses that trusted-main workflow, with a separate
+`record-channel-ref` job. The Issue job retains Contents read; only the ref job has Contents write,
+alongside Actions read and Issues read. The ref consumer admits only the repository owner's
+main-branch dispatch and reads back its exact workflow identity. It reuses the source loader to
+authenticate the candidate's successful historical build attempt, selected image job, digest and
+artifact. Candidate code, deployment credentials and a host Contents-write permission do not enter
+this boundary. The host client's approved scope remains Actions read/write, Contents read and
+Metadata read.
+
+A green dev verdict creates an absent `dev` ref or advances it with `force: false`. A green native
+test deployment may do the same for `test` only with a retained, digest-checked artifact containing
+that exact candidate's green dev receipt from a successful workflow attempt. The current dev
+acceptance validator applies to that receipt, including its heavy-test evidence. The single Actions
+concurrency group prevents simultaneous consumer effects, but does not promise dispatch order:
+reordered, cancelled or replaced requests cannot substitute for the artifact. Successful earlier
+attempts remain valid after later reporting reruns. A stale candidate, non-fast-forward move,
+foreign receipt, missing/expired evidence or incomplete history refuses the affected operation.
+`main` and `stable` are never mutation targets.
+
+For a deliberate dev-ref hold, the repository owner opens a linked Issue whose body starts with
+this exact marker and the current full `dev` SHA, followed by the technical reason:
+
+````text
+<!-- postmerge-dev-hold:v1 -->
+```json
+{"sha":"<current 40-character dev SHA>"}
+```
+Technical reason and release condition.
+````
+
+The request becomes active when a ref job reports `channel_ref: held`, the matching SHA and the
+Issue URL. If an earlier ref move wins during activation, the mismatched pin fails loudly; reconcile
+the Issue's documented pin against the actual ref before relying on the hold. An absent dev ref,
+malformed or ambiguous hold, failed Issue read or incomplete listing also refuses advancement.
+While the acknowledged hold Issue remains open, later candidates and their verdict artifacts are
+still recorded and deployments continue; this is distinct from the expiring machinery pause.
+Close the linked Issue to release the hold. The next green dev request, or a rerun of the latest
+held dev workflow, can advance the ref by fast-forward.
+
+Every ref effect requires exact readback. If a ref write succeeds before its response or receipt
+upload is lost, rerun that same Actions workflow: the exact SHA is idempotent and its green artifact
+can be published without a native deployment replay. If test ran before dev evidence was published,
+rerun the corresponding test workflow after the dev workflow succeeds. These failures remain visible
+in Actions and never gate main merges or stop newer candidates. The canonical tests execute the
+real poller, dispatch argv, CLI consumers and historical image/receipt loaders over fake GitHub/native
+transports; they establish repository support, not live ref movement or host activation. Existing
+#6170/#3347 activation and release gates remain.
+
+After a candidate's `dev` deployment commits, the repository controller runs the fixed post-merge
+heavy-test profile once: `qualify-heavy dev <operation-id>` through the same
+`yggdrasil-bws-deploy` launcher (#6227; allowlist from #6205). It reads only the committed DEV receipt
+and its PG proof, takes no channel lock and touches no channel resource; an operation-owned
+network-none container from the admitted image runs the selector's heavy targets against a scratch
+depth-1 checkout of the exact candidate SHA, with the host Docker CLI mounted read-only and no socket.
+Only a passing heavy result completes the dev verdict, advances its last-green history, and permits
+that exact candidate's test deployment. A red/refused result holds this candidate without replay;
+later admitted builds proceed to dev. A terminal dev deployment failure dispatches a persisted,
+one-time `refused` verdict with reason `dev_deploy_failed`.
+
+The controller dispatches `.github/workflows/post-merge-heavy-tests.yml` once with the bounded
+verdict, using the existing Actions read/write, Contents read, Metadata read client only. A durable
+intent precedes the heavy run and the dispatch: a crash during the run is conservatively refused,
+and an uncertain dispatch is not retried after restart. A failed dispatch never invalidates a local
+passing heavy result or stalls later candidates; the workflow's missing-verdict watchdog exposes it.
+Legacy terminal test-VM checkpoints are retained without replay. The alert uses "bug: dev verification
+is red on main" and reuses an open alert with the legacy heavy-tests title. The VM tooling must
+contain `qualify-heavy`. This repository delivery does not activate the host or accept a live channel;
+#6170 and #3347 remain the activation/qualification gates. See
+`docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`.
+
+The repository liveness path (#6222) uses a separate
+`.github/workflows/dev-delivery-liveness.yml` dispatch for timestamped heartbeats and terminal dev
+verdicts. It requires the existing owner-provisioned repository client to authenticate as the
+repository owner (`RasmusTho`), with Actions read/write, Contents read and Metadata read only;
+the controller never needs Commit statuses write. The main-branch Actions job checks the actor,
+protocol, main ancestry, exact successful build/artifact identity and dev operation before writing
+only its two liveness status contexts. Heartbeats rotate hourly, and terminal signals use separate
+run queues from heartbeats and heavy verdicts. The checker uses the original observation time, so
+queued or replayed signals cannot renew liveness. A terminal verdict retires only earlier admitted
+builds; skipped intermediate builds do not stay overdue after newer progress.
+
+These are repository implementation preconditions, not a host-activation receipt. Client
+provisioning is tracked in #6170; controller release and live acceptance retain #6227 and #3347's
+operator gates. A dispatch failure leaves native
+progress running and is exposed by the liveness watchdog; the signal is best effort with bounded
+transport retries, not a durable delivery queue.
 
 Install from a clean retained tooling checkout contained in reviewed `main` of
 `RasmusTho/agentic-pkm-mvp`, with its own working Python environment and the existing `gh` read
@@ -880,7 +1183,154 @@ does not establish a usable answer path.
 
 The deploy procedure is the same shape for every channel; only the pin target and the migration-ack posture differ (`prod` is the strictest). It assumes the build-once/promote model above.
 
-For BWS deploys, the target image's native-source embedding dependency is preflighted before the
+### Explicit native principal cutover (DEV/TEST)
+
+The native BWS host entrypoint accepts `--principal-cutover` for an explicitly initiated
+DEV or TEST deployment with an exact commit SHA, immutable `--image-digest`, and
+`--existing-secrets-only`. For example, after the native owner has separately admitted the
+candidate, installed tooling, selected state and effect window:
+
+```sh
+python -m app.ops.postgres_deploy_host dev <exact-40-character-sha> \
+  --image-digest sha256:<exact-image-index-digest> --existing-secrets-only \
+  --operation-id <fresh-operation-uuid> --principal-cutover --automatic
+```
+
+`--automatic` is optional here: it runs the PG profile, not the separate required controller heavy gate after the committed DEV receipt. Both verification stages use this
+same activation, SHA, digest and operation, without requesting a second activation. It does
+not authorize unattended principal migration: the postmerge producer remains unchanged and
+does not supply `--principal-cutover`. Neither DEV nor TEST inherits PROD's forward-only
+acknowledgement merely because a migration is classified forward-only. The automatic profile
+still rejects that acknowledgement, bootstrap and PROD.
+
+The boolean is default-off and omitted from default/legacy serialized payloads. The host
+controller and native supervisor retain the opt-in in the exact durable deployment request;
+consumer selection cannot drop it, and changing it under the same operation ID refuses.
+Older closed request receivers reject the unsupported field. Upgrade/qualify the receiver
+before admission; do not reinterpret or rewrite an already accepted request.
+The native environment discards ambient `MVR03_PRINCIPAL_CUTOVER`, including installed runtime
+environment input, and sets `1` only on the actual activation child for the bound request.
+The ordinary wrapper still runs `inherited_worker_guard`: the held owner descriptor/inode/flock,
+activating journal, candidate, runtime/secret and consumer bindings remain mandatory. Prefixing
+the supervisor or directly invoking the shell option does not supply this native admission.
+
+The option cannot combine with PROD, bootstrap, MVR-01C authority cutover, promotion or source
+recovery/persistence modes, and adds no principal/credential/root/identity input. It invokes the
+existing [MVR-03 principal cutover](#minimum-runtime-principal-floor-mvr-03-shipped) inside its stopped-consumer lease,
+twice-proved complete writer inventory and Product floor transaction. The channel-pinned
+listener posture and server-derived authentication remain unchanged. Only its authenticated
+clean pre-role failure receipt can compensate a newly advanced floor and release that stopped
+window; ambiguous or post-role failures retain the restart fence. A lost native activation
+result stays pending: process loss or later quiescence is not proof of a clean cutover and
+cannot authorize recovery replay. Terminal requests return retained evidence without repeating
+the effect. Inspect and repair the existing governed state before any fresh operation; never
+delete the lease, rewrite the request or clear the compatibility floor to force a retry.
+
+These are repository-supported request and failure contracts, not proof of installed host
+convergence, live principal/floor mutation, native source/client acceptance or same-image TEST
+acceptance. Those require the native owner's separate exact-candidate review and effect
+admission. The existing MVR-03 rollback/floor authority below, release-channel promotion policy
+and security exposure boundaries remain in force.
+
+### Native source preflight and recovery
+
+The native deployment request supports an explicit DEV/TEST-only
+`--activation-scope text-capture` on the existing automatic, existing-secrets-only
+host command. The default is `full`; its retained request representation and
+semantic readiness requirements are unchanged. Unknown scopes, PROD, bootstrap,
+authority/principal cutover, source-repair operations, and same-operation scope
+changes refuse. This is source support for a separately authorized operation;
+it grants no installation, credential, DB, service or deployment authority.
+
+Scope travels in `DeployPlan` through host serialization, supervisor admission,
+the private immutable request/journal, worker argv, the inherited worker guard,
+the channel pin and the API-only Compose override. Ambient scope variables cannot
+opt a deployment into it. The worker and shell refuse propagation disagreement;
+an unknown, empty or duplicate active pin scope refuses. A full deployment clears
+the text pin, and the previous pin preserves scope for governed rollback. The API
+factory also rejects an unknown scope and text scope outside DEV/TEST, including
+the ordinary default-to-PROD environment posture.
+The text source-bootstrap selector is explicitly `dev|test:<SHA>:text-capture`.
+It must agree with runtime scope. Older images reject that strict selector before
+API migration/bootstrap, source replay or runtime entry; an environment variable
+alone never asks an older bootstrap to perform a relaxed deployment. Full retains
+the existing `channel:<SHA>` selector.
+
+Text activation still authenticates existing secrets and the real PostgreSQL
+backend, selected existing root, instance ownership, principal and runtime floors,
+restart fences, writer exclusion, migration inventory/execution and rollback
+constraints. It runs the ordinary source-bootstrap preflight and settings check
+after migrations. It omits embedding/model probing, selected-source replay,
+legacy identity reconciliation, vector repair and strict derived-index readiness.
+Only API and the managed Companion gateway are recreated; worker, watcher and
+capture-watch remain stopped. API startup omits index/cache warming, and capture
+omits the optional standing-question classifier/proposal (`registration_state:
+unavailable`). Capture append, WriteGuard/context refusal, governed-write receipt
+and event persistence retain their existing paths.
+Workspace reads omit the optional missing-UUID heal and preserve original bytes;
+a missing persisted identity stays visibly unresolved.
+
+The app assembly enforces a finite method/path boundary: GET orientation,
+vault-browser, workspace, vault-link-index, vault/notes and vault-related under
+`/api/companion`, plus GET active-context/selection and vault/notes/scoped for an
+already selected session. GET vault/context retains the existing proof harness's
+exact selected-root/vault-ID diagnostic. POST capture and capture/compatibility preserve the
+served client's existing document-bound write transport. Read-only briefing/today
+and existing health/status/version/metrics diagnostics remain. The session reads
+retain their real principal/context guards; compatibility capture retains its
+document write precondition and WriteGuard. Other routes and methods, including
+ASK/search, Canvas, TTS, first-contact generation, picker mutations and note-save
+mutations, return `activation_scope_unavailable` before dependencies or handlers.
+Health uses cached model observations and retains its actual readiness failures.
+
+The active API reports scope in response headers and health diagnostics; scoped
+health and the deployment receipt explicitly carry `full_channel_qualified:
+false`. The native terminal receipt binds `activation_scope`, and cannot satisfy
+a full-scope request. Text completion checks liveness, scope and exact version;
+it is not full health, heavy/journaling acceptance, a signed TEST promotion PASS,
+or PROD qualification. Source/CI delivery is separate from admitted DEV/TEST
+capture/find/open proof under #6321 and native effects under #3347. Their fixture,
+current-day-briefing-or-disabled-producer and consumed-operation no-replay
+preconditions remain mandatory.
+The browser proof harness recognizes only the plain and compatibility capture
+paths, sharing one armed, durably consumed capture budget across both. Its
+response interception and offline abort follow those same exact paths.
+
+Repository-only public-file transaction support (#6331) is available in
+`app.ops.bws_control_installation`. Its callable `install_public_files` consumes an exact
+finite reviewed manifest, replacement bytes and authenticated application/control/launcher/backup
+root identities. It accepts Python files below `app/`, the application's separately loaded
+`config/secrets/host_secret_contract.json`, and the fixed `yggdrasil-bws-deploy` launcher only.
+It validates no-follow ancestor/file identities, ownership, single-link regular files, exact
+before hashes/modes or absence, and after hashes. Source/JSON replacements are mode `0644`;
+the launcher is mode `0755`. Already-matching targets retain their inode and timestamps.
+
+Before replacing a target, the component saves actual before bytes and supported modes (or an
+absence marker), fsyncs each backup and publishes a manifest inside an exclusively created
+mode-`0700` bundle. The bundle directory is never renamed over another pathname. Its live
+descriptor and every created backup inode remain held through publication/readback, so an
+exception after fsync cannot authorize adoption of a foreign same-byte bundle or claim success.
+Any existing bundle name refuses reuse; incomplete/published bundles and historical pins are
+retained. A partial install compensates only exact inodes written by that invocation, restoring
+actual before bytes/modes or removing its own newly created target. Foreign/drifted targets and
+missing, malformed or substituted backup material refuse compensation without overwrite.
+Explicit compensation raises a typed refusal with its live handle and per-target outcomes on
+any failure; invalid backup material refuses even when every target was already matching.
+The invocation-local handle exposes refusal/compensation outcomes and must be closed to release
+descriptors; it is not a persisted restart authority. Explicit compensation is one-shot, and
+there is no retry/adoption/replay loader, CLI, automatic post-merge hook or live-success receipt.
+
+These are **file mechanics only**, proved with temporary-filesystem tests. The caller must
+already hold authenticated exclusion of other writers for the complete handle lifetime;
+component directory flocks serialize cooperating component calls only, not native admission.
+They do not discharge the parent #3347 gates: actual native preflight, admission exclusion,
+old/new BWS generation, whole ExecStopPost no-write proof, complete imported Python and
+independent JSON closure, service stop/reload, one-use native effect decision, candidate
+admission, or same-final-image DEV/TEST acceptance. No boolean assertion replaces those
+prerequisites. #3347 remains open; repository delivery is neither an assembled installation
+packet nor permission to operate it.
+
+For full-scope BWS deploys, the target image's native-source embedding dependency is preflighted before the
 migration writer drain. A strict Product embedding route selects the current provider/model; the
 redacted Compose handoff exposes only those two fields. If Ollama is selected, the deploy starts the
 existing channel Ollama service, verifies or pulls that exact model, and probes the Product
@@ -892,6 +1342,24 @@ compensation fails, the deploy exits closed while preserving recovery snapshots 
 marker. The Ollama service may remain running and its model cache may remain populated. This
 preflight leaves the source-backed
 repair operation below unchanged; that operation still runs after migrations.
+
+The probe's fixed child exit statuses 114–118 map respectively to
+`embedding_probe_client_failed`, `embedding_probe_identity_mismatch`,
+`embedding_probe_generation_failed`, `embedding_probe_vector_invalid`, and
+`embedding_probe_cleanup_failed`; unknown exits (including 119) retain `embedding_probe_failed`.
+Status 120 maps to `embedding_guard_refused` and is reserved by the supervised Compose wrapper when the
+inherited BWS guard refuses before Docker executes; the receipt retains no checkpoint, status,
+or other private guard payload.
+This probe-only status namespace is separate from source-worker checkpoints: worker exits
+114–119 or other unsupported statuses retain generic worker failure, never probe attribution.
+Only these allowlisted reasons cross the supervised wrapper into the native operation journal,
+same-operation reconciliation and post-merge controller checkpoint. Cleanup is attempted for an
+acquired client, with the original failure taking precedence. Child output, exceptions, responses,
+endpoints, paths, credentials, source identity and probe content remain private.
+There is no provider substitution or identity fallback, no replay of terminal operations, and no
+authorization to start TEST/journaling acceptance or mutate Product/vector/vault data.
+The remote Product client requests checked network-router cleanup only for this probe; normal
+best-effort close behavior and existing vector acceptance/conversion rules remain unchanged.
 
 Repository support for native BWS source recovery (#5918) adds one fixed API-consumer one-shot
 after instance-state finalization and migrations, before ordinary API/worker/watcher/capture/UI
@@ -923,15 +1391,357 @@ errors/malformed/locked/invalid counts must be zero. A fresh Product readiness c
 existing strict index doctor must then pass with zero missing vectors. Other index problems remain
 blocking and do not trigger an unrelated source replay. Missing summaries, partial work, refused
 context or an unready index fail the operation; child streams stay private.
+After retained-source replay, a fresh non-strict doctor may identify a remaining vector-only gap
+outside that inventory. The same supervised, stopped-writer SourceAction then invokes
+`index repair-missing --json` across canonical ObjectStore rows in the selected binding. Only
+provenance-complete admitted vault notes with canonical text are eligible: vault origin, a retained
+replay recipe/generation matching stored meaning, non-draft review state, and supported existing
+trust metadata are preserved, not upgraded. Candidate-only, untrusted, malformed and incomplete
+rows remain absent and refuse the operation. The repair uses the configured embedding identity,
+locks and rechecks the source snapshot, and inserts vector plus provenance atomically with
+`ON CONFLICT DO NOTHING`. It never resets, overwrites or deletes an existing vector or Product
+object. Embedding/write failures retain only the existing finite redacted failure classes; the
+strict final doctor still proves whole-binding coverage before any service activation. Repository
+delivery does not substitute for parent-owned live DEV/TEST acceptance.
+Admission also requires the complete source frontmatter captured by canonical producers; negative
+markers at every persisted level remain binding. Legacy rows lacking that snapshot fail closed,
+even when body replay provenance is complete. Missing-only repair cannot invent omitted authority
+or read raw sources to fill it. Before that repair, stopped-writer native recovery invokes the
+separate `index reconcile-legacy --json` stage. It resolves only the stored locator beneath the
+active vault through the hardened source adapter, re-proves current profile/source admission and
+unambiguous canonical identity, and checks every applicable canonical producer inventory. An alpha-selected source
+prepares its evidence-complete vault-alpha projection without source, companion or outbox writes;
+embedding generation precedes atomic compare-and-swap Product replacement plus absent-only vector
+insertion. A currently excluded source may instead retire only its exact stale rebuildable mirror,
+with derived vector state absent; source files, canonical objects, receipts and accepted history
+remain untouched. Producer applicability uses the same strict configuration and inventory reader as
+the default native registry and optional legacy entrypoints, not an assumption that the registry is
+alpha-gated. Native registry activation, selected root, configured event specs and effective scope
+come from its ordinary loader's read-only mode: persisted vault identities are required and the
+normal settings identity-heal seam is denied. That read-only loader also requires the canonical
+settings-rebind bootstrap owner to have provisioned the existing mode-`0600`, single-link ingress
+lock. It opens that inode read-only and takes only the shared fence; missing, linked, malformed or
+foreign-owned lock authority refuses without creation, repair, transaction recovery or registry
+mutation. Recovery drains its actual incremental scanner using memory-only
+state and prepares claimed sources through the ordinary registry worker/indexer payload factories.
+No source heal, companion, event or ordinary store-write path is invoked. The supported native
+Compose graph shares the governed runtime-env and selected-root binding across API/worker/watcher;
+no environment synthesis is used as applicability evidence. Missing, unknown, contradictory or
+drifting enabled-producer configuration refuses the legacy transition. Registry claims use the
+native recipe; otherwise applicable alpha or optional filesystem recipes remain available.
+For the optional `scripts/fs_watcher.py` entrypoint, `FS_WATCHER_ENABLE` unset/false means disabled;
+true requires an explicit absolute existing `VAULT_DIR`, matching the active root when overlapping.
+No default path or presence of `VAULT_DIR` enables that writer. Enabled filesystem sources prepare
+only when their existing UUID form is preserved by the actual filesystem adapter; id-only or
+encoded UUIDs refuse without healing. Uniqueness covers the union of enabled producer inventories,
+including nested-vault files in the legacy filesystem inventory. Applicable filesystem sources
+use vault-sync's canonical payload path; excluded sources are not laundered through alpha.
+An enabled filesystem root different from the active root (nested, parent or disjoint) refuses
+recovery rather than implying Product isolation: vault-sync still owns the compatibility binding.
+Native registry claims also prove identity preservation against the ordinary worker's inbox-heal
+selector; an id-only inbox source refuses without healing or borrowing another producer's recipe.
+For sources excluded from every producer, exact retirement also accepts an already persisted
+valid companion UUID matching both the legacy row and canonical Product mapping. Hardened source
+and companion snapshots, unique source claims (excluding only metadata sidecars outside every
+producer inventory), including actual producer-emitted deterministic/fallback identities as
+duplicate-denial claims only, unambiguous companion
+evidence and all existing profile/history/relation/CAS fences remain mandatory.
+The persisted companion observation must bind the exact current source in the active root;
+hash/title discovery alone cannot authorize a moved/reused or foreign source observation.
+Replacement still requires explicit producer-preserved frontmatter identity. Invalid declarations and unpersisted
+path/fingerprint-only fallbacks never authorize retirement or replacement. No source healing,
+identity synthesis/normalization, metadata write or acceptance authority is introduced.
+Identity refusals retain five finite remediation classes: `legacy_identity_persistence_refused`,
+`legacy_identity_mismatch_refused`, `legacy_identity_ambiguous_refused`,
+`legacy_identity_producer_refused` and `legacy_identity_canonical_refused` (worker exits 109–113).
+They distinguish absent/invalid persistence, stored/source mismatch, duplicate/ambiguous claims,
+producer preservation/heal mismatch and canonical Product disagreement respectively. The private
+CLI, bootstrap, deploy diagnostic and operation journal preserve only those fixed classes through
+cleanup and same-operation terminal reconciliation; unexpected/private failures remain generic
+and fail closed. The legacy generic identity class remains accepted for older worker evidence.
+
+An invalid scalar representation of an otherwise already-established identity is not repaired by
+the ordinary producer. The separately reviewed DEV-only operator restoration surface uses a
+distinct host/channel owner, exact immutable helper authority, the existing writer fencing and a
+fixed content-free request/attempt/terminal lineage. It permits at most one expected-version CAS
+that changes only the UUID scalar representation. The attempt marker is durable before dispatch;
+after staging, dispatch, failure or uncertainty, the operation is cleanup-only even when the worker
+reports `not_written`. It never starts a producer or deployment and is unavailable to TEST and PROD.
+When its native terminal remains `unknown` with an indeterminate write phase after exact cleanup has
+completed, the native classification remains unchanged. A separate same-ID host reconciliation may
+append the distinct `reconciled-unknown` host projection only after re-reading the unchanged native
+request/attempt/worker/terminal lineage, proving the exact worker and channel lock absent, proving the
+request-recorded writers and fingerprints restored, and refusing every foreign or incomplete state.
+This projection is neither committed nor failed and cannot replay the command, worker or CAS. Before
+an ordinary source-persistence caller allocates a new UUID, it must use the value-free host admission
+preflight and stop when any host operation remains pending; the authoritative operation lock still
+rechecks admission after UUID allocation.
+
+`legacy_identity_persistence_refused` is cleared only through the explicit supervised ordinary-
+producer operation, never inside source-backed recovery. The host command uses
+`postgres_deploy_host <dev|test> <reviewed-helper-sha> --automatic --existing-secrets-only
+--persist-source-identity --operation-id <uuid> --image-digest <sha256:digest>` together with the
+already-qualified selected vault binding/root/ownership arguments. The digest must be the exact
+successful build for that separately reviewed helper revision. Host admission, the native supervisor and the channel
+lock bind that UUID to the selected source authority, the unchanged installed writer/provider/model
+configuration, and the reviewed helper in that exact immutable candidate image; the candidate is
+used only for the bounded one-shot and is not deployed or admitted. The operation stops only the
+actually running channel write-capable application services, mounts the selected root through the
+canonical full-host overlay when its container root equals the selected host root, or retains the
+reviewed `/app/vault` compatibility overlay when the installed binding uses that legacy container
+path; TEST appends its channel activation overlay in either case. It then runs the ordinary
+`vault-alpha` producer as the configured non-root UID and configured primary GID, without
+`--source-backed-rebuild`. That exact primary group is the intended-reader half of the existing
+`root:<configured gid>` mode `0440` PostgreSQL password-file contract; the source worker does not
+gain root, supplementary groups, or permission-changing fallbacks. The operation performs a fresh
+complete selected-inventory persisted-identity
+readback with stable source/root snapshots, starts the same existing stopped containers without
+recreation, and terminalizes only after its exact owner fence is retired. A crash after producer
+completion resumes cleanup from the fixed private producer receipt without rerunning the producer.
+PROD, candidate admission,
+provider/model replacement and automatic deploy chaining are refused. Child output and source
+evidence stay private; the durable `native-source-identity-persistence.v1` receipt contains only
+operation/channel/revision, terminal state, bounded counts, eligibility, and one allowlisted fixed
+reason. A committed receipt does not prove legacy-row convergence or authorize replay: canonical
+mapping and atomic legacy reconciliation remain separate mandatory gates, and the no-progress
+classifier must be reapplied before a fresh current-main candidate is admitted.
+
+An explicit `--source-producer-kind registry` selects the separately versioned registry-producer
+receipt. It freezes the enabled canonical registry configuration and complete fresh real-scanner
+inventory under the current vault binding/GOV shared-effect lease. Every admitted source runs the
+same UUID/companion metadata phase used by the ordinary registry handler; the ordinary handler then
+continues through its unchanged Product projection, while this supervised mode stops before durable
+outbox enqueue, Product projection, vector/indexing, or model work. The phase retains the existing
+WriteGuard, provenance, expected-version/CAS, never-overwrite and companion-write boundaries. A
+second fresh policy/inventory and persisted UUID+companion readback is mandatory: phase return or a
+derived UUID alone is not eligibility. Registry receipts use
+`native-source-identity-persistence.v2`, add only the fixed `producer_kind=registry` discriminator,
+and otherwise retain the same content-free counters/reasons, exact same-ID cleanup-only replay, and
+mandatory delivery-classifier reapplication. Omitting the flag preserves the existing
+`vault-alpha` request and v1 receipt byte shape.
+
+Issue #6316 adds a separate, explicit current-state source-operation route for DEV/TEST when
+protected MVR authority is intact but an installed watcher is exited and no prior deployment
+channel owner remains. This is repository support, not evidence of live #3347/#6300 completion.
+It does not reconstruct a departed operation, adopt historical cleanup, initialize ownership,
+or start the watcher. The default persistence entry still requires all core writers running.
+
+The read-only invocation is `postgres_deploy_host <dev|test> <reviewed-helper-sha> --automatic
+--existing-secrets-only --current-state-source --diagnose-source-identity --operation-id <uuid>
+--image-digest <sha256:digest>`, with the existing selected binding/root/ownership arguments.
+The host-operation lock, supervisor mutex and channel lock enclose the canonical retained-authority
+reader and complete effective Compose census. Registry/ledger/key/lock corruption, pending
+authority work, unknown/duplicate services, created/paused/restarting containers, active or
+start-capable one-shots, and exact image/configuration/mount/user/population drift refuse. Installed
+roles, actually running writers, and retained stopped identities are recorded separately and
+revalidated at the worker boundary. The result is the existing aggregate diagnostic, not a
+transferable admission boolean.
+The predecessor's canonical bound-request reader preserves its stored bootstrap flag: a completed
+first initialization may supply terminal lineage, but source admission never performs bootstrap.
+
+Source prepare/finalize actors remain read-only and network-none without database credentials.
+The separate volume-free witness reads only the verified existing channel password source through
+the explicitly declared `postgres-source-witness` consumer. A bounded channel/revision/digest-bound
+private stdin envelope delivers it only to that actor. Its existing `/tmp` tmpfs holds a mode-0600
+file used by the canonical no-follow resolver; read-only PGOPTIONS and positive
+`SHOW default_transaction_read_only` are both required. Every exit unlinks the file; token-owned
+container removal retires remaining tmpfs after interruption. Missing source, conflicting credential
+carriers, malformed/oversized frames, unlink/transport ambiguity or incomplete cleanup cannot
+produce success or replay. No password is placed in environment values, command arguments,
+rendered Compose, receipts or persistent plaintext storage; there are no additional mounts.
+This closes a source-verified credential-delivery gap, not a claim that an earlier live diagnostic
+had authenticated successfully.
+The witness overrides both DSN aliases with the admitted application's credential-free target,
+clears inherited password carriers, and verifies its effective target against the private envelope
+before connecting. A channel pin cannot silently leave the witness on a stale runtime-file target.
+
+After concrete source remediation, a separately authorized invocation selects
+`--current-state-source --persist-source-identity --source-producer-kind registry` with a fresh UUID
+and the same normal authority/candidate inputs. It rechecks the complete fixed source selection and
+policy under the existing current-binding effect fence before any ordinary metadata producer call.
+Invalid, ambiguous, conflicting, protected or drifting input refuses; missing UUID/companion data
+uses only the existing strict ordinary creation contract. It stops/restores the proved prior running
+set only (empty sets issue no stop/start), preserves every retained stopped identity and provider/model,
+and requires full eligible persisted readback. The actual channel lock accepts exactly the legacy
+source marker or its registry variant with `producer_kind=registry`; unknown fields/discriminators
+remain refused. Attempted or uncertain same-ID continuation is cleanup-only, never producer replay.
+For a retained own one-shot, cleanup authenticates the immutable request, exact channel fence,
+candidate image and operation/token before removal, then repeats the complete authority/census
+postproof before restoring writers. Foreign resources cannot borrow this cleanup ordering.
+Complete source admission reuses the strict producer's pure input guards before the first selected
+source can be changed: UUID spelling, protected source, companion storage and existing companion
+type/parse/identity/overwrite rules. Missing companions are distinct from malformed existing files;
+the producer repeats its evidence guard immediately before writing.
+
+The continuation is diagnostic and #6300 remediation, then freshly admitted ordinary registry
+persistence, exact cleanup plus eligible readback, delivery-classifier reapplication, and a
+**separately authorized ordinary deployment**. Neither source result allocates or starts a deploy.
+Only that deployment's existing instance preparation, migration, source projection and service
+recreation chain activates the qualified watcher. Live host convergence and same-candidate DEV/TEST
+acceptance remain parent-owned, with separate effect clearance; consumed historical operations and
+the full RSC-06/MVR-06 recovery boundaries are unchanged.
+
+Supervision failures retain only a closed content-free stage reason. A worker context/preflight
+refusal returns a validated failed receipt rather than disappearing behind a transport exit, while
+unexpected worker failure remains a fixed generic worker reason. The native supervisor separately
+classifies exact-owner lock acquisition, locked runtime guard, writer stop, worker transport,
+owned-worker quiescence, worker receipt validation, producer-receipt publication, writer restore,
+and exact-owner lock retirement failures. It never retains child output, exception text, source
+identity or paths, environment or mount values, or credentials. A valid worker/producer receipt is
+preserved unchanged in its producer entry; if restore or retirement later fails, the final terminal
+instead records that cleanup failure and retains the exact same-ID cleanup authority. These reasons
+are diagnostic evidence only. They do not create source eligibility, admit a candidate, authorize
+deployment, or permit an operation replay.
+
+The installed Docker environment snapshot distinguishes a bare `NAME` from `NAME=`: a syntactically
+valid bare optional name is an unset and is omitted from the helper environment, while an explicit
+empty or assigned value is preserved exactly. No unset may inherit an ambient host value, a Compose
+default, or a candidate-image value. Duplicate names across bare/assigned forms, malformed,
+non-string or NUL-bearing entries, bare required channel/topology/provider/store selectors, and any
+`BWS_ACCESS_TOKEN` key presence refuse before the request or ordinary producer can run. This is
+repository support only; it is not DEV/TEST deployment or acceptance evidence.
+When semantic unsets are present, the source-persistence preflight also refuses one when a
+value-free structured Compose presence query over the explicit channel `--env-file` reports that
+name, or the exact authenticated candidate image bakes it into `Config.Env`; those two Docker
+Compose lookup sources are checked before writers stop or the producer starts. The presence query
+uses Compose interpolation and fixed sentinels so it covers every accepted project-environment
+grammar, including multiline values, without a parallel dotenv parser; project-environment values
+are never retained or emitted.
+Assigned-only snapshots and retained cleanup do not acquire this unset-specific lookup dependency.
+
+Canonical source-identity helper acquisition retains a finite `image_pull_failure` on
+`PostgresDeployError` only when its Compose `pull api` child completes nonzero. The outward refusal
+text stays generic. Complete supported public daemon/registry errors map to `registry_unauthorized`,
+`registry_denied`, `registry_manifest_unknown` or `registry_rate_limited`; these are observed error
+classes, not proved authentication, configuration or host causes. The vocabulary follows the
+[OCI Distribution error contract](https://specs.opencontainers.org/distribution-spec/?v=v1.1.0).
+Classification accepts only the exact fixed message and optional matching API pull-progress lines,
+empty stdout, and at most 16 KiB of combined captured text. Extra/private lines, conflicting or
+duplicate errors, unknown messages, malformed text and oversized evidence yield `unclassified`.
+No child data, command arguments, endpoint, path, value, identifier, numeric exit status or exception
+text is retained in the diagnostic field or emitted. Other commands and source-projection diagnostics
+keep their existing contracts. Timeout and pre-pull/qualification refusals remain generic.
+Failed pulls stop before image qualification or writer work; success still requires the exact
+revision/digest and installed-unset checks. These labels do not change cleanup precedence, diagnose
+the previous live failure, authorize a retry/new effect, or establish DEV/TEST acceptance. Live host
+diagnosis and subsequent acquisition remain separately governed by the parent operation contract.
+
+The installed-writer fingerprint treats Docker's `Mounts` collection as an unordered set of
+complete supported bind/volume records. Partial records and unsupported mount types refuse. Future
+requests sort the full serialized records before hashing; no mount field
+is dropped or normalized, and environment ordering plus every non-mount container field remains
+exact. An earlier order-sensitive request may still use the original exact guard when its digest
+equals the current raw Docker order; this preserves ordinary terminal producer cleanup without
+weakening any field. If that exact raw guard does not match, a retained request may enter only the
+existing failed/ineligible same-operation cleanup path when its exact digest is found in a pre-bounded cross-product
+of cyclic rotations of the current complete mount lists. Duplicate records, a rotation-product over
+the finite cap, a non-cyclic legacy order, no exact digest match, or any changed mount/non-mount
+field refuses. This compatibility proof never rewrites the request or terminal receipt, reruns the
+producer, establishes eligibility, or crosses the never-admitted absence boundary. Post-merge host
+convergence must bind the installed Linux helper and every imported support module to the exact
+reviewed source hashes before that proof is used; installing one helper file is not dependency
+convergence. Repository tests and CI are not live cleanup or DEV/TEST acceptance evidence.
+
+If the host has durably marked a source-persistence operation `sent` but the selected native
+channel refuses before creating any request, producer receipt, terminal receipt, owned one-shot,
+or channel owner fence, the same ID may be retired only through
+`--prove-source-persistence-never-admitted`. The existing-secrets-only DEV/TEST command obtains a
+fixed-field proof from that exact channel and records `failed/native-absence-proof` under the host lock;
+any partial, terminal, locked, owned-container, malformed, foreign, or ambiguous native state
+refuses. This recovery never runs the producer, retargets the operation, deploys a candidate, or
+continues automatically. A corrected channel requires a fresh operation UUID and all ordinary
+source-persistence admission checks.
+For current-state diagnostic or registry operations, retain the exact current-state/kind flags and
+normal candidate/selection arguments and add `--prove-source-operation-never-admitted` (an alias of
+the existing proof flag). Its closed RPC proof binds that kind, mode and exact candidate/selection
+request, checks both source-operation artifact namespaces, and refuses actual attempts, retained
+workers or a channel fence under the existing host lock and supervisor mutex. Before returning, it
+requires the request fingerprint recorded by the host before its first dispatch, then
+durably writes and reads back a typed absence-retirement record in that kind's existing attempt file.
+This consumes the ID even for a delayed original RPC after supervisor restart; it is neither an
+actual diagnostic/producer attempt nor a success receipt. Only the byte-equivalent typed retirement
+may be reconciled again. Ambiguous writes/transport remain pending; request drift refuses.
+It retires only an already-sent host operation as failed; it cannot adopt another request or turn
+an admission refusal into source authority.
+A fresh-ID invocation must independently satisfy every ordinary current-state gate.
+
+Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
+History dependencies, candidate/staging or untrusted material, changed sources,
+redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again
+alongside forward/reverse canonical identity and binding-wide canonical source-locator checks,
+inside the transaction, including after writes, so partial writes roll back; existing vectors
+never get overwritten. Only finite counts/refusal classes cross the private CLI boundary. Missing-only
+repair, fresh Product readiness and the strict whole-binding final doctor still follow, before service activation. This is
+repository support, not a claim that legacy live DEV/TEST gaps or parent acceptance have converged.
 Source-backed replay counts a vector-producer exception as an error, not an ingested note,
 and returns a nonzero result with numeric counters. The private native consumer validates
-that bounded result and retains only the fixed `vector_projection_failed` reason (exit 79);
-the deploy producer reports `source_projection` with that reason after exact-operation cleanup.
+that bounded result and retains only the fixed `embedding_generation_failed` (exit 80),
+`vector_index_write_failed` (exit 81), or legacy/mixed `vector_projection_failed` (exit 79)
+reason. Generation uses the configured document-embedding route; recovery resolves the durable
+index without the ordinary no-op compatibility fallback. Its binding must match the object
+producer, and the upsert still enforces provider/model/dimension/normalization identity and stamps
+provenance in the same vector write. The deploy producer reports `source_projection` with that
+reason after exact-operation cleanup; the real supervised wrapper validates the single exact
+allowlisted marker and sends only that finite class to the native journal. Missing, malformed,
+duplicate, unknown or injected markers retain `command_failed` (ambiguous stages remain `unknown`).
 No exception text, source path, note content or child stream is forwarded. Ordinary ingest
 retains its existing best-effort vector behavior. A retry uses the same configured embedding
 identity and full selected inventory; the final strict doctor must independently prove zero
 missing vectors before candidate activation. This repository repair does not establish live
 DEV or TEST acceptance.
+Native source diagnostics also classify embedding context, identity availability/validation,
+service availability/readiness, configured-model availability/readiness and the fixed probe as
+`embedding_context_invalid`, `embedding_identity_unavailable`, `embedding_identity_invalid`,
+`embedding_service_unavailable`, `embedding_service_not_ready`, `embedding_model_unavailable`,
+`embedding_model_not_ready` and `embedding_probe_failed`. The private bootstrap maps fixed
+exit codes 82–89 to `source_preflight_failed`, `source_readiness_failed`, `source_command_failed`,
+`source_summary_invalid`, `source_post_rebuild_failed`, `source_doctor_failed`,
+`source_settings_failed` and `source_worker_failed`. Writer-stop and exact-operation cleanup
+failures are `source_writer_stop_failed` and `source_quiescence_failed`. Supervised timeouts
+and TERM/INT are distinct `source_worker_timeout` and `source_worker_terminated`; an exact owned
+container's validated Docker `OOMKilled=true` is `source_worker_oom`. Other unknown nonzero
+exits remain `source_worker_failed`; exit 137 alone does not establish OOM.
+Observer result codes 96–98 are not worker evidence: a raw worker exit in that range remains
+unknown. A validated stopped worker checkpoint takes precedence over a generic Compose transport
+failure; only supervised timeout/INT/TERM retain transport precedence. Unexpected observer-process
+exits never prove quiescence or admit runtime-writer restart.
+The source one-shot is not auto-removed. Under the inherited current-operation lock/guard,
+the wrapper validates its exact name, Compose labels, operation and revision, proves stoppage,
+reads only bounded exit status and OOM boolean, and durably fsyncs the fixed `source_failure`
+on the existing operation journal before removal. An evidence-write or cleanup failure preserves
+the container/admission rather than declaring successful cleanup. The field survives failed-state
+reconciliation and same-ID reads without worker replay; old receipts without it remain valid.
+The DEV-to-TEST controller accepts only an allowlisted failed-receipt class and preserves it in
+fresh and resumed failure outcomes/checkpoints; malformed or success-attached metadata refuses.
+Missing container state never turns a zero status into success. Foreign, drifted or ambiguous
+resources remain untouched. No Docker error text, logs or untrusted metadata is retained.
+The supervisor accepts these reasons only with one exact `source_projection` stage and one
+exact allowlisted reason marker. Other stages or malformed, duplicate, injected or unknown
+markers retain `command_failed`. These content-free reasons identify checkpoints, not root
+causes or repair authority: they never authorize source replay, semantic fallback, data/vector
+mutation or candidate activation. Raw stdout/stderr suppression, candidate/operation binding,
+compensation and no-replay semantics are unchanged.
+Repository tests establish attribution only. Parent #3347 owns the fresh exact-main DEV-to-TEST
+retry and TEST journaling acceptance after reviewed host convergence; these classifications neither
+identify the previous live root cause nor establish that acceptance.
+Legacy reconciliation additionally preserves the finite classes `legacy_producer_policy_refused`
+(exit 90), `legacy_source_refused` (91), `legacy_admission_refused` (92),
+`legacy_identity_refused` (93), `legacy_race_refused` (94), and `legacy_write_failed` (95).
+Remediation-specific legacy admission reasons use fixed native exits 99–108, respectively:
+`legacy_candidate_refused`, `legacy_authority_refused`, `legacy_trust_refused`,
+`legacy_origin_refused`, `legacy_payload_shape_refused`, `legacy_system_path_refused`,
+`legacy_profile_refused`, `legacy_dependency_shape_refused`, `legacy_retained_history_refused`,
+and `legacy_relation_retention_refused`. Their meanings are owned by
+[embedding operational guardrails](../EMBEDDINGS.md#operational-guardrails).
+Each survives operation-bound journal retention, cleanup and same-operation terminal reconciliation;
+unexpected/private failures retain the generic fail-closed classification. These diagnostics grant
+no repair, admission, retirement or acceptance authority, and cannot authorize rewriting protected
+history or replaying a failed operation. Parent-owned fresh DEV-to-TEST acceptance remains separate.
+The CLI's private exit remains 79 with an allowlisted JSON reason; bootstrap maps that reason to
+the fixed native code, and the deploy wrapper/supervisor retains only its exact allowlisted marker.
+Provider generation retains `embedding_generation_failed`. These classifications expose no source
+paths, IDs, content, metadata values, embeddings or provider diagnostics. Fresh Product readiness
+and strict index doctor remain mandatory after reconciliation and missing-only repair, before activation.
 Ordinary service recreation and the existing final Data health, version, UI and receipt gates
 still follow this step. Ordinary API startup clears the selector and retains migration→uvicorn.
 
@@ -942,6 +1752,73 @@ native operation guard and proves absence or stoppage of the exact API one-shot,
 name, project, service, one-off flag, operation ID and target SHA before termination. Unknown
 ownership or quiescence retains the target pin and pending operation. Same-ID reconciliation
 also checks daemon-owned one-offs omitted by `compose ps`; it never replays activation.
+When a source-projection refusal reaches startup compensation, restoring the previous pin is
+not sufficient by itself: the rollback gate must observe the API, worker, and watcher as a
+complete running service set before treating the runtime as restored. An API/UI-only recreate,
+an exited worker, or an unavailable service census leaves the operation pending; it cannot be
+reported as a healthy rollback or as candidate acceptance. The explicit, host/controller-owned
+TEST recovery path is:
+
+```text
+python3 -m app.ops.postgres_deploy_host test <candidate-revision> \
+  --automatic --image-digest sha256:<published-image-index> --existing-secrets-only \
+  --recover-test-source --failed-operation-id <failed-operation-uuid> \
+  --authority-cutover-binding <qualified-binding-id> \
+  --authority-cutover-root <qualified-existing-source-root> \
+  --authority-cutover-ownership-root <qualified-existing-ownership-root>
+```
+
+It accepts only the authenticated pending TEST deployment operation, the exact candidate
+revision/digest, and the qualified authority tuple. The retained failed plan is reconstructed
+from that operation's private journal binding: it must be a non-automatic TEST authority-cutover
+plan whose revision, services, and consumers match the separately authenticated automatic successor
+plan. The automatic successor always carries its authenticated image digest; a retained failed
+cutover may omit a digest, while any retained digest must match that successor. Its forward-only acknowledgement remains an authorization on that retained failed
+cutover; the automatic successor keeps acknowledgement disabled. The successor is a distinct automatic
+plan without an embedded authority cutover; the failed cutover is never replayed as the fresh
+deployment. The VM-side reset refuses PROD/DEV, candidate/operation/authority/ownership/journal/
+lock drift, and concurrent or non-quiescent writers; after the journal is terminalized as failed,
+it removes only the derived TEST volumes.
+Embedding identity/model preflight refusals that occur before writer drain are not reset-eligible;
+they remain ordinary admission failures.
+The external `pkm-test_pgdata` volume is recreated as an empty, exact managed volume and
+qualified against the configured data directory before the reset is marked complete; the
+instance-state authority volume is preserved, and only the derived `pkm-test_runtime-tmp` volume
+is removed for normal Compose recreation. For the historical total-loss case, the explicit
+`--reconstruct-missing-instance-state` flag runs after that exact reset and before the fresh
+successor: it authenticates the completed original reset and the distinct terminal failed automatic
+successor, allocates a third operation ID for the new candidate, and consumes the existing
+host-global ownership ledger/key plus proof-bound owner inventory. That inventory must cover the
+exact active TEST lease set. A read-only runtime-UID preflight authenticates the complete ledger and
+records its digest before any receipt, volume, or Compose effect; later boundaries recheck strict
+stopped-writer state and the same digest before writing only dormant, inactive-fenced registry state.
+A controller proof is live authority only while its native PID, start token, and execution namespace
+still match; the preflight re-observes all three and refuses stale controller evidence without mutation.
+A pending ownership-key rotation refuses byte-for-byte at this preflight; it is never recovered or
+deleted by the read-only path. The
+VM's single-slot native request journal authenticates only the current terminal failed successor;
+reconstruction does not require it to retain the original reset binding after rollover. Instead,
+the private completed reset disposition must match the host recovery marker's retained reset
+request by source operation ID, revision, image digest, authority tuple, and runtime surface before
+the successor-bound journal can authorize the new candidate.
+container receives the host ownership directory through the fixed `/app/instance-ownership` bind
+mount; the host ownership path remains part of the authenticated authority tuple and is never
+replaced by path inference. The host recovery marker carries separate reset and reconstruction
+evidence, so an older source-reset-only `ready` marker cannot skip this producer. The host writes
+its recovery marker only after the VM has accepted and completed the exact reset; therefore a
+failed-plan/successor mismatch leaves no misleading local marker. A retry may repeat the remote
+read/repair because the VM disposition and failed operation are idempotent; a retry with a registry
+transaction journal uses the canonical store recovery path before validating the byte-identical
+result. On a genuinely new named volume, the producer first runs the existing root-owned
+permission-only one-shot only after that preflight, then drops to the configured runtime UID. Both
+permission and producer one-shots pin `APP_IMAGE_TAG`/`APP_IMAGE_DIGEST_SUFFIX` to the authenticated
+new candidate rather than the ambient channel image. The supervisor validates the authenticated ownership directory against that runtime UID
+and accepts only the root-to-runtime private recovery-receipt handoff, keeping a retry readable after
+permission preparation without broadening the checkpoint's authority. The same command then
+runs the normal candidate deployment gates. It never resets the source vault, identity,
+ownership authority, or production state, and local reset scripts, direct host repair, source
+healing, and direct SQL remain invalid substitutes. This repository support and its deterministic
+tests do not establish live TEST recovery; parent-owned live qualification remains separate.
 Existing migration markers, forward-only target retention and rollback floors still apply.
 This is repository support and deterministic proof; live DEV/TEST/PROD corpus qualification
 and functional acceptance remain separate operator work.
@@ -973,6 +1850,9 @@ and requires the already-mounted, identity-verified volume before any prod mutat
 malformed or unreadable channel config is also fail-closed and is never treated as absence. Archive
 operations themselves continue to fail closed without a verified binding.
 
+The numbered procedure below describes full activation. The explicit text scope
+above retains foundational steps 1–3 and uses its bounded startup/observations.
+
 1. **Pin the ref.** Resolve the commit SHA to deploy and its already-built image tag (`ghcr.io/<owner>/pkm-app:<sha>`). For `prod`, the SHA must be the one authorized by the promotion-plan contract in `docs/RELEASE_CHANNELS/README.md` (the `stable`-ref decision; see also #2527). Update the channel's deploy-pin file to that tag.
 2. **Migration gate (classification for every channel; operator acknowledgment for prod).** Diff the migrations between the currently-running SHA and the target SHA and classify each per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`. Record reversible and forward-only migrations in the deploy receipt for every channel. A forward-only classification describes recovery behavior; it does not by itself require an operator decision for `dev` or `test`. On every PROD deploy, a read-only pre-writer-stop probe runs the resolved candidate image's migration graph against `pkm-prod/app`; an explicit, target-bound operator acknowledgment is required before writer stop only when that live database has a pending forward-only migration. Changed classification metadata for an already-applied migration remains in the receipt but does not by itself require an acknowledgment. Reversible migrations proceed under the standard gate. DEV/TEST retain their channel-scoped migration and recovery behavior without inheriting PROD's acknowledgment gate.
 3. **Quiesce/finalize instance state, then execute changed migrations.** Pull the pinned image. For a deploy, `scripts/deploy_channel.sh` runs the instance-state deployment producer before migration execution: it holds the host-global fence and derives the stop set from every enabled Compose service with `depends_on: db`, excluding only the unique `run_migrations.sh` authority. The same host-wide inventory also detects native DB/outbox processes. Before ledger migration, floor admission validates the derived fence plan and any existing floor receipt. On a retained host whose authenticated ownership ledger is still schema-v1, admission uses the proved host inventory and existing registry-consistency seam before writing the floor. For a populated registry, the complete owner inventory must exactly match the registered bindings and authenticated ledger fields; missing, extra, or mismatched owners fail closed before the ledger or registry is changed. When the schema-v1 ledger contains retired bindings, the quiescence-bound receipt also carries host-captured root and ancestor identities. Each row must match its registry tombstone or authenticated transfer lineage; missing, replaced, extra, or mismatched retired roots stop before migration. The receipt digest and stable two-probe comparison cover these rows. An exact match may converge the ledger to the current schema, and this operation never activates registry authority. If interrupted after redundant v1-journal cleanup but before the atomic v2 write, the original v1 ledger remains retryable under the same fences. If interrupted after the v2 write and journal cleanup but before floor recording, retry still requires a fresh quiescence proof and digest-bound live-owner inventory. Current v2 inventory need not reconstruct historical retired roots, but registry tombstone paths and any transfer lineage must still match the authenticated ledger. A committed v2 ledger with a surviving v1 rotation journal is checked against the current registry and complete owner inventory before that journal is consumed; an unmatched journal remains fail-closed. The procedure then records the irreversible `minimumRuntimeSchema: mvr-05` floor and its fence receipt before finalizing the protected instance-state boundary, stops every runtime writer again, and runs the target image's one-shot migration service before any target runtime is recreated. When the migration diff is non-empty, the executor writes a durable pending-migration marker before mutating the pin. If the live PROD probe finds pending forward-only work with an empty diff, it also writes the marker and runs the explicit migrator so the same-target retry path retains that migration epoch. The marker binds the source SHA (or explicit no-baseline sentinel), target SHA, and forward-only acknowledgement; it is removed only after the migration service reports success.
@@ -994,8 +1874,10 @@ The empty-data exception is bound to the effective managed `db:5432` target and 
 BWS-04 adds a governed Linux adapter around the existing channel deploy, migration, writer, and
 pin machinery. It does not authorize a live deploy or replace promotion/migration acknowledgement.
 Mac Keychain deployment remains unchanged. BWS-03 / #5679's repository token-push command was
-delivered by PR #5732; parent #5667 stays open for live VM installation, existing-host migration,
-and channel qualification. The [2026-10-11 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) separately accepts
+delivered by PR #5732; the #5667 receipts #6114638077 and #6114724380 verify active encrypted
+reader credentials and matching receipts on all three channel VMs and retirement of the unused
+generic helper/token. Parent #5667 stays open for complete integrated channel deployment/runtime
+acceptance. Any future existing-host migration requires separate authorization. The [2026-10-11 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) separately accepts
 Demerzel login Keychain admin-token custody plus `scripts/secrets` as the sole supported normal
 writer, with human Organization Owner break-glass and deliberate same-user bearer use as an accepted
 residual. No separate writer daemon or shared fencing is required for this one-owner setup; reassess
@@ -1009,17 +1891,18 @@ prove BWS permissions, token installation, host cleanup, deployment, or live cha
 
 | Journey stage | Actual producer / entrypoint | Required preconditions and coupling | Checked-in evidence and remaining gap |
 | --- | --- | --- | --- |
-| Identity and selected-consumer preflight | `scripts/secrets check <dev\|test> --consumer <name>`; `python3 -m app.ops.host_secret_bootstrap --provider bws --check --channel <dev\|test> --consumer <name>` | Explicit channel and provider; `config/secrets/host_secret_contract.json` allowlist; reader credential at the declared systemd credential path; selected project/consumer binding; no child command for `--check`. | `tests/ops/test_secret_admin.py` selected-set/optional/malformed checks and `tests/ops/test_host_secret_bootstrap.py` scoped identity, token-file, redaction, and lock tests. Live reader permissions and MARR binding remain #5667. |
+| Identity and selected-consumer preflight | `scripts/secrets check <dev\|test> --consumer <name>`; `python3 -m app.ops.host_secret_bootstrap --provider bws --check --channel <dev\|test> --consumer <name>` | Explicit channel and provider; `config/secrets/host_secret_contract.json` allowlist; reader credential at the declared systemd credential path; selected project/consumer binding; no child command for `--check`. | `tests/ops/test_secret_admin.py` selected-set/optional/malformed checks and `tests/ops/test_host_secret_bootstrap.py` scoped identity, token-file, redaction, and lock tests. The live receipt #6114638077 verifies both existing reader scopes and the exact MARR binding; integrated channel acceptance remains #5667. |
 | Normal writer / missing-copy recovery | `scripts/secrets import <channel> <secret> --stdin`; `SecretAdmin.import_stdin` through `HostSecretController` | Value arrives only on stdin; the controller lock is held; both project pre-states or absence tombstones and the prepared operation record are fsynced before the first provider write; shared values are read back before terminal commit. | `tests/ops/test_secret_admin.py` stdin, parity, history, partial-failure, and unknown-outcome tests. The normal-writer and human break-glass model is accepted by the 2026-10-11 #5667 owner receipt; operation-specific live evidence remains required. |
-| VM reader-token recovery | `scripts/secrets push-token <vm>`; the `bws_token_push` actions (`token-push-inspect`, `token-push`, `token-push-worker`, `token-push-status`) via the installed `yggdrasil-bws-deploy` launcher | Existing target mapping; root-owned supervised launcher and systemd credential contract; stdin-only token handoff; same operation ID, generation, per-channel lock, and durable remote terminal receipt; no SSH-session ownership assumption. | `tests/deploy/test_secret_token_push.py` covers stdin/redaction, generation, lock, worker, systemd binding, and terminality. Live encrypted credential installation and VM qualification remain #5667. |
+| VM reader-token recovery | `scripts/secrets push-token <vm>`; the `bws_token_push` actions (`token-push-inspect`, `token-push`, `token-push-worker`, `token-push-status`) via the installed `yggdrasil-bws-deploy` launcher | Existing target mapping; root-owned supervised launcher and systemd credential contract; stdin-only token handoff; same operation ID, generation, per-channel lock, and durable remote terminal receipt; no SSH-session ownership assumption. | `tests/deploy/test_secret_token_push.py` covers stdin/redaction, generation, lock, worker, systemd binding, and terminality. The live receipt #6114638077 verifies active encrypted reader services and matching pointers on all three channel VMs; integrated deployment/runtime acceptance remains #5667. |
 | Existing-password dev/test deployment | `python3 -m app.ops.postgres_deploy_host <channel> <revision> --existing-secrets-only` | Existing selected PostgreSQL password must pass host and VM checks before remote or local mutation; request mode is journal-bound before RPC; no BWS bootstrap is allowed; promotion/migration acknowledgement and target identity still come from this document and release-channel owners. | `tests/deploy/test_deploy_channel_script.py` and `tests/deploy/test_deploy_channel.py` cover preflight ordering, file-backed secret use, and target coupling. Live VM/Compose readiness remains #4913 and #5667. |
 | Interrupted existing-secrets-only deployment | `python3 -m app.ops.postgres_deploy_host <channel> <exact-request-revision> --existing-secrets-only --reconcile-pending [--ack-forward-only]` | Use the revision and forward-only acknowledgement from the exact persisted request. The authenticated same-ID RPC refuses a live worker, mismatched request or receipt, held channel lock, malformed lock state, or non-quiescent Compose state, including a still-running `migrate` or `instance-state-init` one-shot. It records `failed` only after the worker ended and the existing lock is acquired; reconciliation changes no pin, migration marker, container, database, vault, or BWS value. | `tests/deploy/test_deploy_channel_script.py::test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescence`, `::test_failed_bws_activation_reconciliation_preserves_ambiguous_state`, `::test_linux_quiescence_waits_for_one_shot_compose_services`, and `::test_host_reconciles_matching_failed_bws_deploy_receipt` cover the receipt and refusal boundaries. |
 | First initialization / recovery | The same host entrypoint without `--existing-secrets-only`, supervised by `scripts/postgres_deploy_service.py` and `app.ops.postgres_deploy_linux` | Only an actually empty managed database directory qualifies; agent-host and VM locks are acquired in order; absence tombstone and prepared ID are durable; one generated value is written and marker/readback verified before deployment-state mutation. The host config JSON is opened as a root-owned regular `0600` file with `O_NOFOLLOW` and a single-link check; its configured runtime-env reference must be absolute and regular. Pending-marker parsing rejects symlinked, non-regular, unreadable, or malformed markers on the Linux preflight, while an absent marker is the documented no-pending baseline. Generated runtime env is published through a private temporary file and rename. The managed root/data paths must be absolute and non-symlinked; the source directory must be an absolute root-owned `0700` tmpfs path, and the password source must be root-owned `0440` with the configured service group; the file-backed consumer map must match. | `tests/deploy/test_deploy_channel.py::test_postgres_secret_source_uses_root_only_tmpfs_and_service_gid`, `::test_postgres_secret_is_readable_by_configured_non_root_service_user`, `::test_bws_runtime_export_produces_only_credential_free_database_defaults`, and `tests/ops/test_host_secret_bootstrap.py::test_runtime_secret_reader_rejects_unsafe_files` cover related source/runtime-file protections; `::test_missing_bws_access_token_file_fails_before_provider_request` covers token-file fail-closed behavior. No focused test currently exercises the Linux host-config JSON, pending-marker symlink branches, or atomic runtime-env publication; that qualification gap remains with #5667/#4913. |
 | Channel wrapper / end-to-end acceptance | `scripts/deploy_channel.sh <channel>` with `scripts/export_runtime_env.sh` and the BWS guard | Request-bound candidate and migration acknowledgement; explicit channel environment; `/etc/yggdrasil/bws-deploy/<channel>.json`; selected capture-watch/raw-migration consumers; BWS guard before temporary state, pin, or Docker mutation; first healthy release and rollback receipts remain authoritative. | `tests/deploy/test_deploy_channel_script.py` and `tests/deploy/test_deploy_channel.py` cover ordering and failure isolation. Startup receipt and immutable target coupling remain #4913; TARS host/executor qualification remains #5052. |
 
-The concrete qualification follow-ups are therefore existing authorities: #5667 owns BWS
-entitlement, live permissions, the accepted normal-writer residual and reassessment triggers, VM token installation, and
-channel qualification; #4913 owns startup/target receipt gating and first-healthy-release/rollback
+The concrete qualification follow-ups are therefore existing authorities: #5667 owns the remaining
+integrated channel deployment/runtime acceptance and reassessment of the accepted normal-writer
+residual; its receipts already verify entitlement, existing reader scopes, MARR binding, and active
+VM reader credentials. #4913 owns startup/target receipt gating and first-healthy-release/rollback
 acceptance; #5052 owns the TARS host and Linux executor boundary. No new registry, dashboard, or
 duplicate implementation issue is needed. The request-bound migration acknowledgment at
 `816cb6f3a3569e145d28701851fc2b067cf7c627` remains a prerequisite and is not replaced by this map.
@@ -1208,13 +2091,40 @@ checkout mode versus pinned-image mode and, after a channel's cutover receipt ex
 execution through `scripts/deploy_channel.sh` so this document remains the owner of pin bump,
 migration gate, recreate, health gate, UI smoke, and deploy/rollback receipt semantics.
 
+Normal production advancement (#6228) requires exact current green TEST source C and immutable
+image D, a durable signed functional PASS, and explicit approval of the concrete plan. Protected
+stable merge M records only the approved transition from S: its PR head is C, parents are `[S, C]`
+and tree equals C. It does not qualify a new image or runtime version. The existing STARTUP v2
+validator may retain signed baseline S after merge only by reauthenticating that transition and
+the verified local S/C/M objects; its trust, signature, freshness and revocation rules are unchanged.
+
+`scripts/deploy_channel.sh deploy prod <C> --image-digest <D> --promotion-plan <absolute-plan>` and
+`make deploy-prod SHA=<C> IMAGE_DIGEST=<D> PROMOTION_PLAN=<absolute-plan>` use that admission.
+The native host CLI forwards the target-host absolute plan handle in its existing DeployPlan;
+supervised preparation (including first-init bootstrap) and Linux preflight admit it before
+selecting or reading secrets, and activation forwards the
+same C/D/plan to the script. The host must retain the approved plan and signed receipt inputs.
+Normal checkout promotion refuses before the stable PR because generated M is unqualified;
+actual pinned-image cutover evidence remains required. Ordinary restart and governed previous-good
+rollback keep their existing contracts and do not borrow normal forward eligibility.
+
+Admission reads GitHub through the existing operator production `gh` context: Contents read for
+refs/ancestry/commit objects, Actions read for exact build and green evidence, full branch-protection
+Administration read, and PR read (or the endpoint's supported Contents-read permission). Missing
+tools, denied metadata or incomplete required protection refuse before secrets/effects. The
+controller's existing Actions-write/Contents-read/Metadata-read client is not assumed to provide
+production approval or Administration read. No client is provisioned or broadened by source adoption.
+The native runtime manifest includes the signed validator's complete dependencies from existing
+application pins; installation probes those actual imports before launcher publication. Existing
+pinned-tooling manifest, exact distribution versions and SDK RECORD qualification remain required.
+
 ## Rollback procedure
 
 Rollback reuses the deploy mechanism in reverse, against the previous known-good pin.
 
-1. **Resolve previous-good pin.** Identify the channel's previous known-good image tag (the prior deploy-pin value; for `prod`, the previous `stable` SHA per `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).
+1. **Resolve previous-good pin.** Identify the recorded previous-good source/image digest from the prior deploy pin or approved plan. For prod, retain `stable-prev` as the separate ref-restoration anchor per `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`; a generated rollback merge is not a qualified image.
 2. **Migration reversal (reversible only).** Reverse only migrations classified reversible. **Forward-only migrations are not auto-reversed** — if the failed deploy applied a forward-only migration, rollback of code can still proceed, but the schema state and any data implications are an operator decision (this is exactly why step 2 of the deploy gates on forward-only ack). Vault content is immutable across rollback.
-3. **Recreate against the previous pin.** Bump the channel pin back to the previous tag and recreate API + gateway (same mechanism as deploy step 3). No rebuild — the previous image already exists in the registry.
+3. **Recreate against the previous pin.** Use `scripts/deploy_channel.sh rollback prod <previous-good-sha>` (or `make rollback-prod SHA=<previous-good-sha>`) for prod. It restores the recorded previous pin/digest and recreates API + gateway. No rebuild — the previous image already exists in the registry. Forward-promotion admission is not recovery authority; existing migration and runtime-floor gates still apply.
 4. **Health gate + record.** Re-run the §Deploy liveness/readiness gate, confirm `/readyz` passes and `/api/health.required_ok` is `true`, and confirm `/version` now reports the rolled-back SHA. Record the rollback receipt.
 
 Rollback is a tag-bump + recreate because images are immutable and retained in the registry — the same property that makes promotion cheap makes rollback cheap.
@@ -1414,7 +2324,7 @@ inside-container peer-loopback inference enters that exception.
 ## What this supersedes
 
 - **`docs/ENVIRONMENTS.md` §Deployment.** That document remains the SoT for environment *selection* and *path scoping*; its deployment subsection now points here for *how a deploy happens*. The current-reality matrix and the ad-hoc startup wrappers described there are superseded by the build-once/promote + managed-units model in this document.
-- **The narrow scope of #2527.** #2527 ("prod runs dirty `main`, not `stable`") is the *symptom-level* reconciliation: it records the promotion-ref decision and flags a dirty/diverged prod tree. This spec is the *systemic* fix it pointed at — the bind-mounted-checkout model (the reason a "dirty prod tree" was even possible) is replaced by pinned images, so prod stops running an editable, divergent working tree. #2527's promotion-ref decision is consumed by the §Deploy step-1 pin and by `docs/RELEASE_CHANNELS/README.md`; this document does not re-decide it.
+- **The narrow scope of #2527.** Its dirty/diverged checkout finding remains the reproducibility constraint. #6228 adopts protected stable source authority through `docs/RELEASE_CHANNELS/README.md`, superseding ADR-0040 §1–§2. After actual pinned-image cutover, this document supplies the physical mechanism for the approved C/D, rather than an editable checkout. It does not independently select promotion authority or establish running-prod state.
 - **The `nohup` gateway launch** in `scripts/lib/companion_ui_startup.sh` is superseded by §Gateways as managed units.
 
 This document does **not** supersede `docs/RELEASE_CHANNELS/README.md` (channel identity, per-channel DB, promotion-plan/rollback/migration-classification contracts) — it implements the physical deploy beneath those contracts and references them rather than restating them.

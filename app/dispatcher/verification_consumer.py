@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -76,6 +77,7 @@ from app.dispatcher.verified_merge import (
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
     verified_merge_body_matches_digest,
+    valid_post_effect_authority,
 )
 
 
@@ -151,13 +153,56 @@ _COORDINATOR_OPTIONAL_ENVIRONMENT = (
     "TMPDIR",
 )
 
+_LINUX_USER_RUNTIME_BASE = Path("/run/user")
+_LINUX_RUNTIME_ROOT_UID = 0
+
+
+def _linux_keyring_environment(base: Mapping[str, str]) -> dict[str, str]:
+    """Bind only the current uid's private, canonical local user bus on Linux.
+
+    The environment is metadata, not authentication. Never forward arbitrary
+    D-Bus addresses or another user's runtime directory into a privileged review.
+    An absent backend retains the existing keyring-only auth refusal downstream.
+    """
+    if sys.platform != "linux":
+        return {}
+    uid = os.geteuid()
+    runtime = _LINUX_USER_RUNTIME_BASE / str(uid)
+    selected = {"XDG_RUNTIME_DIR": str(runtime),
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus"}
+    error = "verification coordinator native keyring environment unavailable"
+    if any(base.get(key) and base[key] != value for key, value in selected.items()):
+        raise RuntimeError(error)
+    try:
+        directory = runtime.lstat()
+        endpoint = (runtime / "bus").lstat()
+    except FileNotFoundError as exc:
+        if any(base.get(key) for key in selected):
+            raise RuntimeError(error) from exc
+        return {}
+    except OSError as exc:
+        raise RuntimeError(error) from exc
+    try:
+        parents = [_LINUX_USER_RUNTIME_BASE.lstat(), _LINUX_USER_RUNTIME_BASE.parent.lstat()]
+    except OSError as exc:
+        raise RuntimeError(error) from exc
+    if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != uid
+            or stat.S_IMODE(directory.st_mode) != 0o700
+            or not stat.S_ISSOCK(endpoint.st_mode) or endpoint.st_uid != uid
+            or endpoint.st_nlink != 1
+            or any(not stat.S_ISDIR(parent.st_mode)
+                   or parent.st_uid != _LINUX_RUNTIME_ROOT_UID
+                   or stat.S_IMODE(parent.st_mode) & 0o022 for parent in parents)):
+        raise RuntimeError(error)
+    return selected
+
 
 def _coordinator_environment(base: Mapping[str, str]) -> dict[str, str]:
     """Return the non-secret runtime environment allowed into Codex children."""
 
     if any(not base.get(key) for key in _COORDINATOR_REQUIRED_ENVIRONMENT):
         raise RuntimeError("verification coordinator required environment unavailable")
-    return {
+    result = {
         key: base[key]
         for key in (
             *_COORDINATOR_REQUIRED_ENVIRONMENT,
@@ -165,6 +210,8 @@ def _coordinator_environment(base: Mapping[str, str]) -> dict[str, str]:
         )
         if base.get(key)
     }
+    result.update(_linux_keyring_environment(base))
+    return result
 
 CANONICAL_RECEIPT_SCHEMA_PATH = (
     Path(__file__).resolve().parent
@@ -1354,6 +1401,15 @@ class GhCliVerificationSource:
         if not isinstance(payload, Mapping):
             raise RuntimeError("malformed GitHub pull request response")
         return payload
+
+    def issue_contract(self, repository: str, number: int) -> Mapping[str, object]:
+        issue = self._json(f"repos/{repository}/issues/{number}", max_response_bytes=1_048_576)
+        if (not isinstance(issue, Mapping) or issue.get("number") != number
+                or issue.get("repository_url") != f"https://api.github.com/repos/{repository}"
+                or issue.get("pull_request") is not None or not isinstance(issue.get("body"), str)):
+            raise RuntimeError("native governing Issue identity is malformed")
+        return {"number": number, "repository": repository, "state": issue.get("state"),
+                "body_sha256": hashlib.sha256(issue["body"].encode()).hexdigest()}
 
     def current_body_edit(
         self, repository: str, pr_number: int
@@ -3799,6 +3855,7 @@ def delivered_live_truth_rejection(
     *,
     expected_head_sha: str,
     expected_repair_budget: Mapping[str, object],
+    native_admission: Callable[[VerificationRun, Mapping[str, object], Mapping[str, object]], bool] | None = None,
 ) -> str | None:
     """Validate exact post-merge truth for a coordinator-delivered receipt."""
 
@@ -3846,25 +3903,22 @@ def delivered_live_truth_rejection(
         expected_run_id=run.run_id,
         expected_repair_budget=expected_repair_budget,
     )
+    native_accepted = False
     if authority_receipt is None:
-        return "merge_authority_missing"
-    receipt_closing = cast(Sequence[int], authority_receipt["closing_issues"])
-    receipt_supporting = cast(
-        Sequence[int], authority_receipt["authenticated_supporting_issues"]
-    )
-    if (
-        tuple(receipt_closing) != run.closing_authority
-        or tuple(receipt_supporting) != run.supporting_authority
-    ):
-        return "merge_authority_mismatch"
-    phase = resolve_verified_merge_phase(
-        [comment for comment in comments if isinstance(comment, Mapping)],
-        authority_receipt=authority_receipt,
-        pr=pr,
-    )
-    if (phase is None or phase.get("phase") != "restored"
-            or phase.get("contract") != "verified_issue_set_merge_phase.v2"):
-        return "merge_phase_incomplete"
+        if native_admission is None or not isinstance(delivery_evidence.get("native_merge"), Mapping):
+            return "merge_authority_missing"
+        if not native_admission(run, pr, delivery_evidence):
+            return "native_merge_authority_missing"
+        native_accepted = True
+    else:
+        receipt_closing = cast(Sequence[int], authority_receipt["closing_issues"])
+        receipt_supporting = cast(Sequence[int], authority_receipt["authenticated_supporting_issues"])
+        if tuple(receipt_closing) != run.closing_authority or tuple(receipt_supporting) != run.supporting_authority:
+            return "merge_authority_mismatch"
+        phase = resolve_verified_merge_phase(comments, authority_receipt=authority_receipt, pr=pr)
+        if (phase is None or phase.get("phase") != "restored"
+                or phase.get("contract") != "verified_issue_set_merge_phase.v2"):
+            return "merge_phase_incomplete"
     if delivery_evidence.get("closure_scan_complete") is not True:
         return "closure_evidence_incomplete"
     observed = delivery_evidence.get("observed_closing_issues")
@@ -3899,6 +3953,8 @@ def delivered_live_truth_rejection(
         issue = evidence_by_number[number]
         if issue.get("state") != "closed" or issue.get("closed_by_delivery") is not True:
             return "authenticated_issue_not_closed"
+        if native_accepted and issue.get("closed_by_pull_requests") != [run.pr_number]:
+            return "native_issue_closure_not_attributed"
     if set(observed) != set(run.closing_authority):
         return "unauthorized_closure"
     return _checks_rejection(checks, expected_head_sha=expected_head_sha)
@@ -4327,6 +4383,24 @@ class VerificationConsumer:
         self.host_fenced_merge = callable(
             getattr(ledger, "mark_merge_ready", None)
         )
+        self._native_conflict_recovery: (
+            Callable[[VerificationRun], object] | None
+        ) = None
+
+    def bind_native_conflict_recovery(
+        self,
+        recovery: Callable[[VerificationRun], object],
+    ) -> None:
+        """Bind the one same-ledger executor recovery path used after merge."""
+
+        if not callable(recovery):
+            raise ValueError("native conflict recovery callback is unavailable")
+        if (
+            self._native_conflict_recovery is not None
+            and self._native_conflict_recovery != recovery
+        ):
+            raise ValueError("native conflict recovery callback is already bound")
+        self._native_conflict_recovery = recovery
 
     @staticmethod
     def _lease_is_live(run: VerificationRun) -> bool:
@@ -4371,6 +4445,74 @@ class VerificationConsumer:
         unit = match.group(2)[0]
         return f"{match.group(1)}{unit}"
 
+    def _native_delivery_authority(self, run: VerificationRun, pr: Mapping[str, object]) -> Mapping[str, object] | None:
+        """Read native authority only from authenticated task/outbox and live GitHub ports."""
+        from app.dispatcher.verification_merge import verification_authority_digest
+        pending_reader = getattr(self.ledger, "pending_effect_binding", None)
+        pending = pending_reader(run.run_id) if callable(pending_reader) else None
+        payload = pending.get("payload") if isinstance(pending, Mapping) else None
+        gate = payload.get("verified_merge_prepared") if isinstance(payload, Mapping) else None
+        if not isinstance(gate, Mapping) or gate.get("contract") != "native_single_closer_gate.v1":
+            return None
+        assert isinstance(pending, Mapping)
+        assert isinstance(payload, Mapping)
+        marker_reader = getattr(self.ledger, "merge_ready_receipt", None)
+        marker = marker_reader(run.run_id) if callable(marker_reader) else None
+        operation_key = pending.get("operation_key")
+        outbox = pending.get("outbox_intent")
+        if (not self.host_fenced_merge or not isinstance(marker, Mapping) or not self.ledger.closure_ready(run.run_id)
+                or run.request.get("contract_version") != "verification_dispatch_request.v3"
+                or run.closing_authority != (run.request.get("linked_issue"),) or run.supporting_authority
+                or pending.get("task_id") != run.run_id or pending.get("effect_type") != "github.merge"
+                or pending.get("head_sha") != run.current_head_sha or not isinstance(operation_key, str)
+                or pending.get("native_merge_identity_conflict") is not False
+                or pending.get("native_merge_response_sha") != pr.get("merge_commit_sha")
+                or not isinstance(outbox, Mapping) or outbox.get("task_id") != run.run_id
+                or outbox.get("operation_key") != operation_key or outbox.get("payload") != payload
+                or payload.get("review_authority_sha256") != verification_authority_digest(marker)
+                or payload.get("repository") != run.repository.lower() or payload.get("pr_number") != run.pr_number
+                or payload.get("head_sha") != run.current_head_sha):
+            raise ValueError("native delivery task/outbox/review authority is incomplete")
+        body = pr.get("body")
+        if (gate.get("repository") != run.repository or gate.get("run_id") != run.run_id
+                or gate.get("pr_number") != run.pr_number or gate.get("head_sha") != run.current_head_sha
+                or gate.get("base_sha") != _nested(pr, "base", "sha") or gate.get("title") != pr.get("title")
+                or not isinstance(body, str) or gate.get("body_sha256") != hashlib.sha256(body.encode()).hexdigest()
+                or gate.get("governing_issue") != run.request.get("linked_issue")
+                or gate.get("closing_issues") != list(run.closing_authority)
+                or gate.get("final_review_rounds") != run.request.get("final_review_rounds")):
+            raise ValueError("native frozen PR/Issue authority drifted")
+        reader = getattr(self.ledger, "post_effect_authority", None)
+        if not callable(reader):
+            raise ValueError("native post-effect authority reader is unavailable")
+        post_effect = reader(operation_key, run_id=run.run_id)
+        if (not valid_post_effect_authority(post_effect, {"repository": run.repository, "run_id": run.run_id,
+                "pr_number": run.pr_number, "head_sha": run.current_head_sha}, pr.get("merge_commit_sha"))
+                or post_effect.get("operation_key") != operation_key
+                or post_effect.get("deployment") != gate.get("post_effect_deployment")):
+            raise ValueError("native exact reconciled post-effect authority is missing")
+        issue_reader = getattr(self.truth, "issue_contract", None)
+        if not callable(issue_reader):
+            raise ValueError("native Issue contract reader is unavailable")
+        issue = issue_reader(run.repository, run.closing_authority[0])
+        if (issue.get("number") != run.closing_authority[0] or issue.get("repository") != run.repository
+                or issue.get("state") != "closed" or issue.get("body_sha256") != gate.get("issue_body_sha256")):
+            raise ValueError("native governing Issue contract changed")
+        owner_comments = self.truth.pull_request_comments(run.repository, run.closing_authority[0])
+        prefix = f"post-merge owner-doc check: PR #{run.pr_number};"
+        owner_receipt = any(comment.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
+            and any(line.startswith(prefix) for line in str(comment.get("body", "")).splitlines())
+            for comment in owner_comments)
+        return {"gate": dict(gate), "operation_key": operation_key, "post_effect_authority": dict(post_effect),
+                "owner_doc_receipt": owner_receipt, "issue_contract": dict(issue)}
+
+    def _native_delivery_admitted(self, run: VerificationRun, pr: Mapping[str, object], evidence: Mapping[str, object]) -> bool:
+        try:
+            native = self._native_delivery_authority(run, pr)
+        except (ValueError, RuntimeError):
+            return False
+        return bool(native is not None and native.get("owner_doc_receipt") is True and evidence.get("native_merge") == native)
+
     def _read_delivery_evidence(
         self,
         run: VerificationRun,
@@ -4404,6 +4546,12 @@ class VerificationConsumer:
             run.repository, merge_commit_sha, merge_commit
         ):
             return evidence
+        native = self._native_delivery_authority(run, pr)
+        if native is not None:
+            closure = self.truth.issue_set_closure_evidence(run.repository, run.pr_number,
+                issue_numbers=run.closing_authority, observed_issue_numbers=[], merged_at=merged_at,
+                merge_commit_sha=merge_commit_sha, actor_login=actor_login)
+            return {**evidence, **dict(closure), "native_merge": dict(native)}
         authority = resolve_verified_merge_authority_receipt(
             comments,
             pr=pr,
@@ -4433,6 +4581,105 @@ class VerificationConsumer:
             actor_login=actor_login,
         )
         return {**evidence, **dict(closure)}
+
+    @staticmethod
+    def _late_native_closure_targets(
+        run: VerificationRun,
+        evidence: Mapping[str, object],
+    ) -> tuple[int, ...]:
+        """Return only exact-PR unexpected closures eligible for compensation."""
+
+        if (
+            not isinstance(evidence.get("native_merge"), Mapping)
+            or evidence.get("closure_scan_complete") is not True
+        ):
+            return ()
+        observed = evidence.get("observed_closing_issues")
+        issue_evidence = evidence.get("issue_evidence")
+        if not isinstance(observed, list) or not isinstance(issue_evidence, list):
+            return ()
+        rows = [item for item in issue_evidence if isinstance(item, Mapping)]
+        try:
+            reconciliation = plan_post_merge_reconciliation(
+                pr_number=run.pr_number,
+                authenticated_closing_issues=run.closing_authority,
+                observed_closing_issues=observed,
+                issue_evidence=rows,
+            )
+        except ValueError:
+            # Malformed or incomplete evidence keeps the existing rejection
+            # path but cannot acquire compensation authority.
+            return ()
+        targets = reconciliation["reopen_unauthorized"]
+        by_number = {item.get("number"): item for item in rows}
+        if any(
+            by_number[number].get("state") != "closed"
+            or by_number[number].get("closed_by_delivery") is not True
+            or by_number[number].get("closed_by_pull_requests")
+            != [run.pr_number]
+            for number in targets
+        ):
+            raise ValueError(
+                "native closure compensation attribution is incomplete"
+            )
+        return tuple(targets)
+
+    def _refuse_late_native_closure(
+        self,
+        run: VerificationRun,
+        evidence: Mapping[str, object],
+    ) -> tuple[tuple[int, ...], str | None]:
+        """Persist refusal before delegating bounded compensation to recovery."""
+
+        targets = self._late_native_closure_targets(run, evidence)
+        if not targets:
+            return (), None
+        native = evidence.get("native_merge")
+        operation_key = (
+            native.get("operation_key")
+            if isinstance(native, Mapping)
+            else None
+        )
+        if (
+            not isinstance(operation_key, str)
+            or not run.claimed_by
+            or not run.lease_id
+        ):
+            raise ValueError(
+                "late native closure lacks current operation ownership"
+            )
+        writer = getattr(self.ledger, "record_native_merge_conflict", None)
+        if not callable(writer):
+            raise ValueError("native refusal writer is unavailable")
+        writer(
+            run.run_id,
+            operation_key,
+            holder=run.claimed_by,
+            lease_id=run.lease_id,
+        )
+        pending_reader = getattr(self.ledger, "pending_effect_binding", None)
+        pending = (
+            pending_reader(run.run_id)
+            if callable(pending_reader)
+            else None
+        )
+        if (
+            not isinstance(pending, Mapping)
+            or pending.get("operation_key") != operation_key
+            or pending.get("native_merge_identity_conflict") is not True
+        ):
+            raise ValueError("late native closure refusal was not durable")
+
+        if self._native_conflict_recovery is None:
+            return targets, "native_conflict_recovery_unavailable"
+        try:
+            # The executor recovery path reauthenticates the complete retained
+            # operation, performs a fresh database-clock/version-bound task CAS
+            # before credential resolution and every PATCH, and never replays PUT.
+            self._native_conflict_recovery(run)
+        except Exception as exc:
+            return targets, type(exc).__name__
+        return targets, "native_conflict_recovery_returned"
 
     def _merged_recovery_pack(
         self,
@@ -4473,6 +4720,14 @@ class VerificationConsumer:
                 f"{commit_rejection}"
             )
         current_repair_budget = self.ledger.repair_budget_projection(run.run_id)
+        native = self._native_delivery_authority(run, pr)
+        if native is not None:
+            native_issue_authority = resolve_issue_authority(pr.get("body"))
+            if native_issue_authority is None:
+                raise ValueError("native merged recovery authority is malformed")
+            return {**_context_pack_from_authority(run, native_issue_authority, repair_budget=current_repair_budget),
+                    "merge_recovery": {"body_state": "canonical-native", "phase": "reconciled",
+                        "merge_commit_sha": merge_commit_sha, "merged_at": pr["merged_at"]}}, dict(current_repair_budget)
         comments = list(
             self.truth.pull_request_comments(run.repository, run.pr_number)
         )
@@ -4710,6 +4965,50 @@ class VerificationConsumer:
         pack, authority_repair_budget = self._merged_recovery_pack(
             run, pr, checks
         )
+        if _nested(pack, "merge_recovery", "body_state") == "canonical-native":
+            native = self._native_delivery_authority(run, pr)
+            if native is None or native.get("owner_doc_receipt") is not True:
+                raise ValueError("native recovery requires Issue-target owner-doc receipt")
+            if not self.auth.check().ok:
+                raise ValueError("verification auth preflight failed")
+            claimed = self.ledger.claim(run.run_id, self.holder)
+            # A claim is a new fence: none of the pre-claim GitHub/API observations
+            # grant terminal authority until they are read again under that owner.
+            live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
+            live_checks = self.truth.checks(claimed.repository, claimed.current_head_sha)
+            evidence = self._read_delivery_evidence(claimed, live_pr,
+                expected_repair_budget=self.ledger.repair_budget_projection(claimed.run_id))
+            late_targets, recovery_result = self._refuse_late_native_closure(
+                claimed,
+                evidence,
+            )
+            if late_targets:
+                return self.ledger.backoff(
+                    claimed.run_id,
+                    {
+                        "outcome": "blocked",
+                        "reason": "unauthorized_closure",
+                        "native_merge_identity_conflict": True,
+                        "reopen_unauthorized": list(late_targets),
+                        "native_conflict_recovery": recovery_result,
+                    },
+                    _retry_at(),
+                    holder=self.holder,
+                    lease_id=claimed.lease_id or "",
+                )
+            rejection = delivered_live_truth_rejection(claimed, live_pr, live_checks, evidence,
+                expected_head_sha=claimed.current_head_sha,
+                expected_repair_budget=authority_repair_budget, native_admission=self._native_delivery_admitted)
+            if rejection:
+                return self.ledger.backoff(claimed.run_id, {"outcome": "blocked", "reason": rejection},
+                    _retry_at(), holder=self.holder, lease_id=claimed.lease_id or "")
+            marker = getattr(self.ledger, "merge_ready_receipt")(claimed.run_id)
+            if not isinstance(marker, Mapping) or not isinstance(marker.get("coordinator_receipt"), Mapping):
+                raise ValueError("native completion lacks authenticated coordinator receipt")
+            terminal_receipt = {**marker["coordinator_receipt"], "verdict": "delivered",
+                "operation_key": native["operation_key"], "merge_commit_sha": live_pr["merge_commit_sha"]}
+            return self.ledger.terminal(claimed.run_id, "completed", terminal_receipt,
+                holder=self.holder, lease_id=claimed.lease_id or "")
         if not self.auth.check().ok:
             raise ValueError("verification auth preflight failed")
         claimed = self.ledger.claim(run.run_id, self.holder)

@@ -75,6 +75,7 @@ from scripts.yaml_roundtrip import load_frontmatter
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 DEFAULT_SCOPE_GLOB = "*.md,**/*.md"
+DEFAULT_REGISTRY_CONFIG_PATH = Path("configs/watchers.yaml")
 
 MIN_TICK_SLEEP_SECONDS = 0.05
 BRIEFING_TICK_INTERVAL_SECONDS = 15 * 60
@@ -130,12 +131,46 @@ def _hash_file(path: Path) -> tuple[str, int] | None:
     return hashlib.sha256(data).hexdigest(), len(data)
 
 
+@dataclass(frozen=True)
+class RegistryIngestObservation:
+    """One complete, private ordinary-registry source observation."""
+
+    path: Path
+    relative_path: Path
+    mtime: float
+    content_hash: str
+    watcher: str
+
+
+def ingest_vault_changed_payload(
+    *, vault_root: Path, relative_path: Path, mtime: float,
+    content_hash: str | None, watcher: str,
+) -> dict[str, object]:
+    """Build the canonical registry watcher payload without emitting it."""
+    return {
+        "vault_path": str(vault_root / relative_path),
+        "relative_path": str(relative_path),
+        "mtime": mtime,
+        "hash": content_hash,
+        "watcher": watcher,
+    }
+
+
 def _matches_scope(rel_path: Path, scope_glob: str) -> bool:
     return matches_scope(rel_path, scope_glob)
 
 
 def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
     return derive_scope_roots(vault_root, scope_glob)[0]
+
+
+def registry_scan_roots(vault_root: Path, scope_glob: str) -> list[Path]:
+    roots = derive_scope_roots(vault_root, scope_glob)
+    for name in (SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name):
+        source_root = vault_root / name
+        if source_root.exists():
+            roots = [*roots, source_root]
+    return roots
 
 
 def _scan_markdown_many(
@@ -380,13 +415,15 @@ def _single_registry_writer(func: Callable[..., Any]) -> Callable[..., Any]:
 @contextmanager
 def _compatibility_watcher_window(
     reconciler: DormantSettingsRebindReconciler | None,
+    *,
+    read_only: bool = False,
 ) -> Iterator[None]:
     """Fence the complete watcher tick against foreground compatibility commit."""
 
     if reconciler is None:
         yield
         return
-    with compatibility_ingress_window(reconciler.registry):
+    with compatibility_ingress_window(reconciler.registry, read_only=read_only):
         yield
 
 
@@ -663,8 +700,9 @@ class RegistryConfig:
     watcher_run_log: Path = field(default_factory=lambda: Path("tmp/watcher_run.jsonl"))
 
     @classmethod
-    def from_env(cls, specs: list[WatcherSpec], config_path: Path) -> "RegistryConfig":
-        enable = _as_bool(env_str("WATCHER_ENABLE"))
+    def from_env(cls, specs: list[WatcherSpec], config_path: Path, *, read_only: bool = False) -> "RegistryConfig":
+        from app.ingest.producer_policy import parse_producer_activation
+        enable = parse_producer_activation(env_str("WATCHER_ENABLE"))
         vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
         if enable and not vault_raw:
             # No vault bound — idle until one is opened instead of raising
@@ -673,8 +711,33 @@ class RegistryConfig:
             logger.info("watcher registry idling: WATCHER_ENABLE=1 but no vault bound")
             enable = False
         vault_path = Path(vault_raw or ".").expanduser()
-        if enable and not _validate_registry_vault(vault_path):
-            enable = False
+        watcher_settings = load_watcher_settings(vault_path)
+        state_dir = Path(os.getenv("WATCHER_STATE_DIR") or watcher_settings.paths.watcher_state.parent).expanduser()
+        if enable:
+            registry_value = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+            reconciler = (
+                DormantSettingsRebindReconciler(
+                    registry_path=Path(registry_value).expanduser(),
+                    state_dir=state_dir,
+                )
+                if registry_value
+                else None
+            )
+            # Configuration admission precedes the scan boundary. Fence its
+            # identity-healing choice against foreground commits as well.
+            with _compatibility_watcher_window(reconciler, read_only=read_only):
+                observation_only = (
+                    reconciler is not None
+                    and reconciler.requires_observation_only_validation(
+                        read_only=read_only,
+                    )
+                )
+                if not _validate_registry_vault(
+                    vault_path,
+                    read_only=read_only,
+                    heal_identity=not observation_only,
+                ):
+                    enable = False
         scope_glob, scope_source, inbox_source = _resolve_scope_glob(vault_path)
         logger.info(
             "watcher scope resolved vault_path=%s scope_glob=%s provenance=%s inbox_source=%s",
@@ -695,10 +758,8 @@ class RegistryConfig:
             parser=_parse_int_factory(fallback=30),
             logger=logger,
         )
-        watcher_settings = load_watcher_settings(vault_path)
         outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH") or watcher_settings.paths.index_outbox)
         watcher_run_log = Path(os.getenv("WATCHER_RUN_LOG_PATH") or watcher_settings.paths.watcher_run_log)
-        state_dir = Path(os.getenv("WATCHER_STATE_DIR") or watcher_settings.paths.watcher_state.parent).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)
         stop_file = Path(os.getenv("WATCHER_STOP_FILE") or watcher_settings.paths.watcher_stop_file).expanduser()
@@ -835,7 +896,7 @@ def _expand_env_values(value: object) -> object:
     return value
 
 
-def load_registry_config(config_path: Path) -> RegistryConfig:
+def load_registry_config(config_path: Path, *, read_only: bool = False) -> RegistryConfig:
     config_path = config_path.expanduser()
     if not config_path.exists():
         raise FileNotFoundError(f"watcher config not found: {config_path}")
@@ -846,7 +907,7 @@ def load_registry_config(config_path: Path) -> RegistryConfig:
     specs = [WatcherSpec.from_dict(_expand_env_values(entry or {})) for entry in watchers_raw]
     if not specs:
         raise ValueError("watchers config is empty")
-    return RegistryConfig.from_env(specs, config_path=config_path)
+    return RegistryConfig.from_env(specs, config_path=config_path, read_only=read_only)
 
 
 def _adopt_idle_selected_binding(
@@ -1024,7 +1085,12 @@ def _auto_exec_enabled(vault_root: Path) -> bool:
 _IDLE_VAULT_STATUSES = {"none", "uninitialized"}
 
 
-def _validate_registry_vault(vault_path: Path) -> bool:
+def _validate_registry_vault(
+    vault_path: Path,
+    *,
+    read_only: bool = False,
+    heal_identity: bool = True,
+) -> bool:
     """Return True when the registry should run; False when it should idle.
 
     Raises only for a *loud* misconfiguration (set-but-missing or invalid vault
@@ -1032,8 +1098,21 @@ def _validate_registry_vault(vault_path: Path) -> bool:
     uninitialized vault returns False so the caller builds an idle runtime.
     """
 
-    manager = VaultManager()
-    context = manager.validate_vault(vault_path)
+    if read_only:
+        from app.write_guard import WriteGuard
+        # Recovery inspects the canonical configuration but must never perform
+        # the normal registry loader's missing-identity heal transition.
+        guard = WriteGuard(lambda: {"state": "safe_mode"}, bootstrap_actions=())
+        manager = VaultManager(write_guard=guard)
+        for name, key in (("vault.md", "vaultId"), ("local.md", "localInstanceId")):
+            document = manager.markdown_store.read(vault_path / "settings" / name)
+            if not str(document.frontmatter.get(key) or "").strip():
+                raise ValueError("watcher registry requires persisted vault identities")
+    else:
+        manager = VaultManager()
+    context = manager.validate_vault(
+        vault_path, heal_identity=heal_identity and not read_only
+    )
     if context.status in _IDLE_VAULT_STATUSES:
         logger.info(
             "watcher registry idling: no usable vault bound (status=%s path=%s)",
@@ -1567,6 +1646,95 @@ def _next_incremental_markdown(
     return None, True
 
 
+def source_backed_registry_inventory(cfg: RegistryConfig) -> frozenset[Path]:
+    """Drain the real scanner privately with memory-only state and no effects.
+
+    Recovery must not infer exclusion from a parallel approximation of nested
+    vaults, settings roots, hidden paths, companions, conflicts or scope rules.
+    No observation sidecar, event, source heal, checkpoint or tick is opened.
+    """
+    paths: set[Path] = set()
+    root = cfg.vault_path.resolve(strict=True)
+    for spec in cfg.specs:
+        if spec.emit_event != INGEST_VAULT_CHANGED:
+            continue
+        state = WatcherState()
+        roots = _normalized_scan_roots(root, registry_scan_roots(root, spec.scope_glob), state=state)
+        _begin_or_resume_scan(state, vault_root=root, scan_roots=roots, scope_glob=spec.scope_glob)
+        cache: dict[str, tuple[list[str], list[Path]]] = {}
+        while True:
+            entry, complete = _next_incremental_markdown(
+                vault_root=root, scan_roots=roots, scope_glob=spec.scope_glob,
+                state=state, summary={}, deadline=float("inf"), directory_cache=cache,
+            )
+            if entry is not None:
+                paths.add(entry[2])
+            if complete:
+                break
+        if state.errors or state.scan_generation_had_error:
+            raise ValueError("producer inventory ambiguous")
+    return frozenset(paths)
+
+
+def source_backed_registry_observations(
+    cfg: RegistryConfig,
+) -> tuple[RegistryIngestObservation, ...]:
+    """Read the exact ordinary ingest inventory as stable private observations.
+
+    The supervised source-persistence operation uses this read-only adapter to
+    invoke the existing worker handler without opening watcher state or an
+    unrelated durable outbox queue.  A path claimed by more than one ingest
+    specification is ambiguous and therefore refused instead of being run
+    twice.
+    """
+    root = cfg.vault_path.resolve(strict=True)
+    observations: dict[Path, RegistryIngestObservation] = {}
+    system_dir = resolve_vault_system_dir_rel_or_default(root)
+    for spec in cfg.specs:
+        if spec.emit_event != INGEST_VAULT_CHANGED:
+            continue
+        state = WatcherState()
+        roots = _normalized_scan_roots(
+            root, registry_scan_roots(root, spec.scope_glob), state=state,
+        )
+        _begin_or_resume_scan(
+            state, vault_root=root, scan_roots=roots, scope_glob=spec.scope_glob,
+        )
+        cache: dict[str, tuple[list[str], list[Path]]] = {}
+        while True:
+            entry, complete = _next_incremental_markdown(
+                vault_root=root,
+                scan_roots=roots,
+                scope_glob=spec.scope_glob,
+                state=state,
+                summary={},
+                deadline=float("inf"),
+                directory_cache=cache,
+            )
+            if entry is not None:
+                relative, mtime, path = entry
+                if not is_settings_control_path(
+                    relative, configured_system_dir=system_dir,
+                ):
+                    hashed = _hash_file(path)
+                    if hashed is None:
+                        raise ValueError("producer inventory ambiguous")
+                    digest, _size = hashed
+                    if path in observations:
+                        raise ValueError("producer inventory ambiguous")
+                    observations[path] = RegistryIngestObservation(
+                        path, relative, mtime, digest, spec.name,
+                    )
+            if complete:
+                break
+        if state.errors or state.scan_generation_had_error:
+            raise ValueError("producer inventory ambiguous")
+    return tuple(
+        observations[path]
+        for path in sorted(observations, key=lambda item: item.relative_to(root).as_posix())
+    )
+
+
 def _capture_settings_source_snapshot(
     *,
     vault_root: Path,
@@ -1618,6 +1786,7 @@ def _collect_changed_entries(
     states: Mapping[str, WatcherState],
     handled_settings_sources: set[Path] | None = None,
     settings_source_reload_results: dict[str, object] | None = None,
+    observation_only: bool = False,
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
@@ -1682,7 +1851,10 @@ def _collect_changed_entries(
             and last_mtime == mtime
             and not is_runtime_gating_owner_path(rel)
         ):
-            state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
+            if observation_only:
+                state.mark_scan_generation_seen(rel_str)
+            else:
+                state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
             continue
         hashed = _hash_file(path)
         if hashed is None:
@@ -1690,14 +1862,32 @@ def _collect_changed_entries(
             # was observed. Mark it in this generation so deletion
             # reconciliation cannot misclassify it as removed.
             _record_scan_error(state)
-            state.update_file_state(rel_str)
+            if observation_only:
+                state.mark_scan_generation_seen(rel_str)
+            else:
+                state.update_file_state(rel_str)
             _mark_scan_incomplete(summary, reason="hash")
             continue
         digest, read_bytes = hashed
         summary["hashed_files"] = int(summary["hashed_files"]) + 1
         summary["bytes_read"] = int(summary["bytes_read"]) + read_bytes
         if previous_hash is not None and previous_hash == digest:
-            state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            if observation_only:
+                state.mark_scan_generation_seen(rel_str)
+            else:
+                state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            continue
+        if observation_only:
+            # Recovery establishes only filesystem presence.  In particular,
+            # do not route settings deltas or source events here: their
+            # accepted state and delivery cursor must remain available to the
+            # first stable ordinary tick.
+            state.mark_scan_generation_seen(rel_str)
+            if not is_settings_source_path(rel) and not is_settings_control_path(
+                rel,
+                configured_system_dir=system_dir,
+            ):
+                changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
             continue
         settings_delta = handle_settings_detected_delta(
             vault_root=cfg.vault_path,
@@ -1879,6 +2069,7 @@ def _emit_changed_entry(
     panel_auto_exec_enabled: bool,
     action_mappings: Mapping[str, PanelActionMapping],
     process_panel_notes_inline: bool,
+    allow_source_writeback: bool = True,
 ) -> str | None:
     rel_path = str(entry.rel_path)
     previous_file_state = state.file_entry(rel_path)
@@ -1913,7 +2104,7 @@ def _emit_changed_entry(
         return None
     current_mtime = entry.mtime
     current_digest = entry.digest
-    if spec.emit_event == INGEST_VAULT_CHANGED:
+    if spec.emit_event == INGEST_VAULT_CHANGED and allow_source_writeback:
         current_mtime, current_digest = _maybe_heal_ingest_uuid(
             cfg, state, entry.rel_path, current_mtime, current_digest
         )
@@ -1955,7 +2146,11 @@ def _emit_changed_entry(
         emitted_at=now,
         trace_id=trace_id,
     )
-    if spec.emit_event == PANEL_SCAN_REQUESTED and process_panel_notes_inline:
+    if (
+        spec.emit_event == PANEL_SCAN_REQUESTED
+        and process_panel_notes_inline
+        and allow_source_writeback
+    ):
         _process_panel_note(
             vault_root=cfg.vault_path,
             rel_path=entry.rel_path,
@@ -2027,13 +2222,13 @@ def _emit_watch_event(
         return trace_id
 
     trace_id = uuid4().hex
-    payload = {
-        "vault_path": str(vault_root / rel_path),
-        "relative_path": str(rel_path),
-        "mtime": mtime,
-        "hash": content_hash,
-        "watcher": spec.name,
-    }
+    payload = ingest_vault_changed_payload(
+        vault_root=vault_root,
+        relative_path=rel_path,
+        mtime=mtime,
+        content_hash=content_hash,
+        watcher=spec.name,
+    )
     event = {
         "event": spec.emit_event,
         "event_id": uuid4().hex,
@@ -2088,9 +2283,11 @@ def _run_spec_tick(
     now: float,
     states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
+    allow_source_writeback: bool = True,
     handled_settings_sources: set[Path] | None = None,
     settings_source_reload_results: dict[str, object] | None = None,
     retain_unemitted_observations: int | None = None,
+    observation_only: bool = False,
 ) -> dict[str, object]:
     tick_start = now
     handled_settings_sources = handled_settings_sources if handled_settings_sources is not None else set()
@@ -2150,11 +2347,7 @@ def _run_spec_tick(
         raise FileNotFoundError(f"Vault path not found: {cfg.vault_path}")
 
     try:
-        scan_roots = derive_scope_roots(cfg.vault_path, spec.scope_glob)
-        for source_name in (SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name):
-            settings_sources_root = cfg.vault_path / source_name
-            if settings_sources_root.exists():
-                scan_roots = [*scan_roots, settings_sources_root]
+        scan_roots = registry_scan_roots(cfg.vault_path, spec.scope_glob)
     except FileNotFoundError as exc:
         # Static scope-prefix directory does not exist under the bound vault
         # (e.g. an env scope glob naming a folder the vault does not have).
@@ -2197,6 +2390,7 @@ def _run_spec_tick(
         states=active_states,
         handled_settings_sources=handled_settings_sources,
         settings_source_reload_results=settings_source_reload_results,
+        observation_only=observation_only,
     )
     if state.scan_generation_had_error:
         _mark_scan_incomplete(summary, reason="scan")
@@ -2242,7 +2436,7 @@ def _run_spec_tick(
         if is_runtime_gating_owner_path(Path(path))
     )
     pending_runtime_gating_deletions: set[str] = set()
-    if removed_runtime_gating_owner_files:
+    if removed_runtime_gating_owner_files and not observation_only:
         summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
         for rel_path in removed_runtime_gating_owner_files:
             rel_str = str(rel_path)
@@ -2280,7 +2474,7 @@ def _run_spec_tick(
         if is_settings_source_path(Path(path))
     )
     pending_settings_source_deletions: set[str] = set()
-    if removed_settings_sources:
+    if removed_settings_sources and not observation_only:
         summary["settings_source_deletions_in_tick"] = len(
             removed_settings_sources
         )
@@ -2359,6 +2553,9 @@ def _run_spec_tick(
     committed_observations: dict[str, dict[str, dict[str, Any] | None]] = {}
     for entry in changed_entries:
         rel_path = str(entry.rel_path)
+        if observation_only:
+            state.mark_scan_generation_seen(rel_path)
+            continue
         previous_file_state_raw = state.file_entry(rel_path)
         previous_file_state = (
             dict(previous_file_state_raw)
@@ -2376,6 +2573,7 @@ def _run_spec_tick(
                 panel_auto_exec_enabled=panel_auto_exec_enabled,
                 action_mappings=action_mappings,
                 process_panel_notes_inline=process_panel_notes_inline,
+                allow_source_writeback=allow_source_writeback,
             )
             committed_observations[str(entry.rel_path)] = {
                 name: (
@@ -2488,7 +2686,10 @@ def _run_spec_tick(
         # this recovery tick still cannot reconcile rows from the discarded
         # checkpoint. Permit reconciliation only on the next clean generation.
         state.checkpoint_load_error = False
-    if scan_completed and scan_clean and not delivery_failed:
+    if scan_completed and scan_clean and not delivery_failed and not observation_only:
+        # Observation-only recovery must retain absent rows as well as the
+        # delivery cursor of present files. Only an ordinary generation can
+        # deliver pending removals and then authorize their cleanup.
         # Delivery and guardrail bookkeeping can take long enough for the
         # selected vault to be replaced. Revalidate immediately before prune;
         # the earlier check only authorizes deriving the deletion candidates.
@@ -2518,23 +2719,23 @@ def _run_spec_tick(
         scan_clean = (
             state.errors == errors_before and not state.scan_generation_had_error
         )
-    if scan_completed and scan_clean and not delivery_failed:
-        if state._observation_store is not None:
-            # Excluded historical companion rows are observations only.
-            # Prune them here, never via a source-delete/UUID purge: the note
-            # and its continuity file deliberately share identity.
-            state.prune_unseen_generation(
-                retain=pending_runtime_gating_deletions
-                | pending_settings_source_deletions
-            )
-        else:
-            state.prune_files(
-                [
-                    *scanned_paths,
-                    *pending_runtime_gating_deletions,
-                    *pending_settings_source_deletions,
-                ]
-            )
+        if scan_clean:
+            if state._observation_store is not None:
+                # Excluded historical companion rows are observations only.
+                # Prune them here, never via a source-delete/UUID purge: the note
+                # and its continuity file deliberately share identity.
+                state.prune_unseen_generation(
+                    retain=pending_runtime_gating_deletions
+                    | pending_settings_source_deletions
+                )
+            else:
+                state.prune_files(
+                    [
+                        *scanned_paths,
+                        *pending_runtime_gating_deletions,
+                        *pending_settings_source_deletions,
+                    ]
+                )
 
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 
@@ -2556,6 +2757,29 @@ def _run_registry_cycle(
     with _compatibility_watcher_window(reconciler):
         _adopt_idle_selected_binding(cfg, reconciler)
         rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+        recovery_mode = rebind_cycle is not None and rebind_cycle.mode == "recovery"
+        if recovery_mode:
+            # A missing receipt admits one new configured-root scan only. Do not
+            # let a checkpoint left by an interrupted prior tick turn that
+            # scan into a continuation of historical work; retain observations
+            # for idempotent event comparison while restarting the traversal.
+            for state in states.values():
+                if (
+                    state.scan_in_progress
+                    and state.continuation_reason == "first_adoption_recovery"
+                ):
+                    # The fresh recovery generation may span several bounded
+                    # ticks; continue that generation until one complete scan
+                    # can produce the typed receipt.
+                    continue
+                state.scan_in_progress = False
+                state.scan_root_index = 0
+                state.scan_stack = []
+                state.scan_scope_matched_files = 0
+                state.scan_generation_had_error = False
+                state.continuation_reason = None
+                state.scope_status = "ok"
+                state.observation_status = "healthy-idle"
         if rebind_cycle is not None and rebind_cycle.mode == "stable":
             if rebind_cycle.record.candidate_binding_id is None:
                 cfg.enable = False
@@ -2576,24 +2800,60 @@ def _run_registry_cycle(
                 states[spec.name],
                 now=now,
                 states=states,
-                process_panel_notes_inline=process_panel_notes_inline,
+                process_panel_notes_inline=(
+                    process_panel_notes_inline and not recovery_mode
+                ),
+                allow_source_writeback=(
+                    not recovery_mode
+                ),
+                observation_only=recovery_mode,
                 handled_settings_sources=handled_settings_sources,
                 settings_source_reload_results=settings_source_reload_results,
                 retain_unemitted_observations=rebind_observation_revision,
             )
             for spec in cfg.specs
         }
-        summaries["briefing"] = _run_briefing_tick(
-            cfg,
-            now=now,
-            cadence=briefing_cadence,
-        )
-        summaries["youtube_sync"] = _run_youtube_sync_tick(
-            cfg,
-            now=now,
-            cadence=sync_cadence,
-        )
-        summaries["journal_review"] = _run_journal_review_tick(cfg)
+        if rebind_cycle is not None and rebind_cycle.mode == "recovery":
+            for spec in cfg.specs:
+                state = states[spec.name]
+                if state.scan_in_progress:
+                    # Persist a recovery-generation marker after the scanner
+                    # starts so a bounded incomplete tick can resume this new
+                    # generation without being reset on the next tick.
+                    state.continuation_reason = "first_adoption_recovery"
+                    state.save(_state_path(cfg.state_dir, spec.name))
+        if recovery_mode:
+            # A first-adoption recovery is deliberately observation-only.  A
+            # sparse hook may materialize or enqueue source work, and queued
+            # consumers can mutate the vault after this process returns.  Keep
+            # every hook deferred until the first stable ordinary cycle.
+            deferred_reason = "first_adoption_recovery_observation_only"
+            summaries["briefing"] = {
+                "triggered": False,
+                "reason": deferred_reason,
+            }
+            summaries["youtube_sync"] = {
+                "triggered": False,
+                "reason": deferred_reason,
+            }
+            summaries["journal_review"] = {
+                "scanned": 0,
+                "materialized": 0,
+                "pending": 0,
+                "reason": deferred_reason,
+            }
+        else:
+            summaries["briefing"] = _run_briefing_tick(
+                cfg,
+                now=now,
+                cadence=briefing_cadence,
+            )
+            summaries["youtube_sync"] = _run_youtube_sync_tick(
+                cfg,
+                now=now,
+                cadence=sync_cadence,
+            )
+            summaries["journal_review"] = _run_journal_review_tick(cfg)
         if reconciler is not None and rebind_cycle is not None:
             receipt = reconciler.finish_cycle(
                 rebind_cycle,
@@ -2604,7 +2864,10 @@ def _run_registry_cycle(
                 if rebind_cycle.record.candidate_binding_id is None:
                     cfg.enable = False
                 else:
-                    cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
+                    cfg.vault_path = reconciler.candidate_vault_path(
+                        rebind_cycle.record,
+                        heal_identity=not recovery_mode,
+                    )
         return summaries
 
 
@@ -2653,6 +2916,7 @@ def run_registry_forever(
 ) -> None:
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
+    idle_without_binding = False
     with _compatibility_watcher_window(reconciler):
         _adopt_idle_selected_binding(cfg, reconciler)
         startup_rebind_cycle = (
@@ -2664,20 +2928,34 @@ def run_registry_forever(
             # ingestion or the first scan, so restart cannot observe old-root work.
             if startup_rebind_cycle.record.candidate_binding_id is None:
                 cfg.enable = False
+                idle_without_binding = True
             else:
                 cfg.vault_path = reconciler.candidate_vault_path(startup_rebind_cycle.record)
+        elif (
+            startup_rebind_cycle is not None
+            and startup_rebind_cycle.mode == "refused"
+            and reconciler is not None
+            and reconciler.cleared_before(startup_rebind_cycle.record)
+        ):
+            # A restart during a post-CLEAR selection of another root: the boot env root
+            # is the cleared vault, so stay idle exactly like the long-lived loop.
+            cfg.enable = False
+            idle_without_binding = True
         # `watcher run` is the production entrypoint.  Compile its bound vault at
         # boot just as API and worker do; the registry config is authoritative for
         # this process and need not depend on VAULT_ROOT being set separately.
-        try:
-            from app.settings.ingestion import ingest_settings
+        # A durably cleared binding has no vault to compile: the boot env root is
+        # the cleared vault, so recompiling it would resurrect its settings.
+        if not idle_without_binding:
+            try:
+                from app.settings.ingestion import ingest_settings
 
-            ingest_settings(
-                reason="registry_watcher_startup",
-                vault_root=cfg.vault_path,
-            )
-        except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
-            logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)
+                ingest_settings(
+                    reason="registry_watcher_startup",
+                    vault_root=cfg.vault_path,
+                )
+            except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
+                logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)
     states = {
         spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
         for spec in cfg.specs

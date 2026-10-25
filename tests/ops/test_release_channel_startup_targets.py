@@ -40,8 +40,8 @@ def _git(repo: Path, *args: str) -> str:
     ).stdout
 
 
-def _init_repo_on_main(repo: Path) -> str:
-    """Initialise a throwaway git repo with one commit on a ``main`` branch.
+def _init_repo_on_stable(repo: Path) -> str:
+    """Initialise a throwaway git repo with one commit on a ``stable`` branch.
 
     Returns the HEAD sha. No network, no shared identity required.
     """
@@ -52,7 +52,7 @@ def _init_repo_on_main(repo: Path) -> str:
     (repo / "tracked.txt").write_text("baseline\n", encoding="utf-8")
     _git(repo, "add", "tracked.txt")
     _git(repo, "commit", "-q", "-m", "baseline")
-    _git(repo, "branch", "-M", "main")
+    _git(repo, "branch", "-M", "stable")
     return _git(repo, "rev-parse", "HEAD").strip()
 
 
@@ -818,7 +818,7 @@ def test_test_start_full_uses_tmp_test_runtime_artifact_paths(tmp_path: Path) ->
 
 def test_prod_head_matches_promotion_ref_and_clean(tmp_path: Path) -> None:
     """The prod-ref fitness guard must flag a prod checkout that diverges from
-    the agreed promotion ref (``main``, ADR-0040) or runs a dirty working tree,
+    the agreed promotion ref (``stable``, ADR-0068 D4) or runs a dirty working tree,
     and pass a clean checkout that is on the ref.
 
     This backs the #2527 reproducibility invariant — prod must be
@@ -830,13 +830,13 @@ def test_prod_head_matches_promotion_ref_and_clean(tmp_path: Path) -> None:
     """
     # --- clean checkout, on the promotion ref -> OK ------------------------
     repo = tmp_path / "prod-clean"
-    head_sha = _init_repo_on_main(repo)
+    head_sha = _init_repo_on_stable(repo)
 
     result = check_prod_head_matches_promotion_ref_and_clean(repo)
-    assert result.ok, f"clean main checkout should pass, got: {result.violations}"
+    assert result.ok, f"clean stable checkout should pass, got: {result.violations}"
     assert result.is_clean is True
     assert result.on_promotion_ref is True
-    assert result.current_branch == "main"
+    assert result.current_branch == "stable"
     assert result.head_sha == head_sha
     assert result.violations == []
 
@@ -853,13 +853,13 @@ def test_prod_head_matches_promotion_ref_and_clean(tmp_path: Path) -> None:
 
     # --- wrong branch (not the promotion ref) -> violation ----------------
     feature_repo = tmp_path / "prod-feature"
-    _init_repo_on_main(feature_repo)
+    _init_repo_on_stable(feature_repo)
     _git(feature_repo, "checkout", "-q", "-b", "feature/x")
 
     wrong_branch = check_prod_head_matches_promotion_ref_and_clean(feature_repo)
     assert not wrong_branch.ok, "a checkout off the promotion ref must be flagged"
     assert wrong_branch.on_promotion_ref is False
-    assert any("feature/x" in v and "main" in v for v in wrong_branch.violations), (
+    assert any("feature/x" in v and "stable" in v for v in wrong_branch.violations), (
         wrong_branch.violations
     )
 
@@ -871,15 +871,15 @@ def test_prod_head_matches_promotion_ref_and_clean(tmp_path: Path) -> None:
 
     # --- explicit divergence against an already-known ref -> violation ----
     diverge_repo = tmp_path / "prod-diverge"
-    base_sha = _init_repo_on_main(diverge_repo)
+    base_sha = _init_repo_on_stable(diverge_repo)
     # Record a comparison ref at the current commit, then advance HEAD past it.
-    _git(diverge_repo, "update-ref", "refs/remotes/origin/main", base_sha)
+    _git(diverge_repo, "update-ref", "refs/remotes/origin/stable", base_sha)
     (diverge_repo / "tracked.txt").write_text("advanced\n", encoding="utf-8")
     _git(diverge_repo, "add", "tracked.txt")
-    _git(diverge_repo, "commit", "-q", "-m", "advance past origin/main")
+    _git(diverge_repo, "commit", "-q", "-m", "advance past origin/stable")
 
     diverged = check_prod_head_matches_promotion_ref_and_clean(
-        diverge_repo, compare_to_ref="origin/main"
+        diverge_repo, compare_to_ref="origin/stable"
     )
     assert not diverged.ok, "HEAD ahead of the compared promotion ref must be flagged"
     assert diverged.matches_compare_ref is False
@@ -891,7 +891,7 @@ def test_prod_head_matches_promotion_ref_and_clean(tmp_path: Path) -> None:
     # not silence the clean-tree receipt: the #2527 finding included untracked dirs
     # in the prod tree. The guard forces --untracked-files=all.
     hidden_repo = tmp_path / "prod-hidden-untracked"
-    _init_repo_on_main(hidden_repo)
+    _init_repo_on_stable(hidden_repo)
     _git(hidden_repo, "config", "status.showUntrackedFiles", "no")
     (hidden_repo / "machine_local.txt").write_text("local-only\n", encoding="utf-8")
     # Sanity: with showUntrackedFiles=no a plain porcelain status hides it...

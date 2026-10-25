@@ -17,7 +17,10 @@ from typing import Any, Mapping, Protocol, Sequence
 from app.dispatcher.verification_contract import (
     MAX_CLOSING_ISSUES,
     has_closing_issue_attempt,
-    resolve_issue_authority,
+    has_issue_lifecycle_marker,
+)
+from scripts.pr_body_generator import (
+    PRBodyGeneratorError, _validate_pickup_receipt, resolve_native_issue_authority,
 )
 
 
@@ -215,7 +218,10 @@ def build_publication_plan(
         set(closing_numbers) | ({request.governing_issue} if request.governing_issue else set())
     ):
         issues[number] = _read_issue(runner, actual_worktree, request.repository, number)
-        _require_publishable_issue(issues[number], number, claimed=number in closing_numbers)
+        _require_publishable_issue(
+            issues[number], number,
+            claimed=number in closing_numbers or request.pr_body_inputs.get("non_closing") is True,
+        )
     issue = issues.get(request.governing_issue) if request.governing_issue is not None else None
     remote_head = _read_remote_head(runner, actual_worktree, request.branch)
     if request.existing_pr_number is None and remote_head is not None:
@@ -297,6 +303,12 @@ def apply_publication_plan(
     runner = executor or SubprocessExecutor()
     normalized = _validated_plan(plan, expected_plan_sha256)
     worktree = Path(normalized["worktree"])
+    admitted_body = _generate_pr_body(runner, worktree, normalized["pr"]["body_inputs"])
+    if (
+        admitted_body != normalized["pr"]["body"]
+        or _sha256_text(admitted_body) != normalized["pr"]["body_sha256"]
+    ):
+        raise PublicationRefusal("drift", "generated PR body drifted from the plan")
     authority = _assert_authority_unchanged(runner, worktree, normalized)
     local_state, commit_sha = _observe_local_state(runner, worktree, normalized)
     _assert_issue_unchanged(runner, worktree, normalized)
@@ -591,14 +603,35 @@ def _validate_pr_body_inputs(request: PublicationRequest, values: Mapping[str, A
         raise PublicationRefusal("drift", "PR body lane does not match publication lane")
     if values.get("issue_number") != request.governing_issue:
         raise PublicationRefusal("drift", "PR body Issue does not match governing Issue")
+    pickup_receipt = values.get("pickup_receipt")
+    if request.governing_issue is None:
+        if pickup_receipt is not None:
+            raise PublicationRefusal(
+                "drift", "issue-free publication must not carry a pickup receipt"
+            )
+    elif not isinstance(pickup_receipt, str) or not pickup_receipt.strip():
+        raise PublicationRefusal(
+            "drift", "issue-backed publication requires a pickup receipt"
+        )
+    else:
+        try:
+            _validate_pickup_receipt(pickup_receipt, request.governing_issue, _closing_numbers(request))
+        except PRBodyGeneratorError as exc:
+            raise PublicationRefusal("drift", f"invalid pickup receipt: {exc}") from exc
     if values.get("final_review_rounds", 0) not in {0, 1}:
         raise PublicationRefusal(
             "unsupported", "native publication supports Final-Review-Rounds 0 or 1"
         )
     supplied = values.get("closing_issues")
+    if values.get("non_closing", False) is not False and values.get("non_closing") is not True:
+        raise PublicationRefusal("drift", "non_closing must be an explicit boolean")
+    if values.get("non_closing") is True and (
+        request.closing_issues != () or supplied != [] or request.governing_issue is None
+    ):
+        raise PublicationRefusal("drift", "non-closing publication requires an explicit empty closing set")
     if supplied is not None and (
         not isinstance(supplied, (list, tuple))
-        or not supplied
+        or (not supplied and values.get("non_closing") is not True)
         or len(supplied) > MAX_CLOSING_ISSUES
         or any(type(number) is not int or number <= 0 for number in supplied)
         or len(set(supplied)) != len(supplied)
@@ -611,6 +644,8 @@ def _validate_pr_body_inputs(request: PublicationRequest, values: Mapping[str, A
 
 def _closing_numbers(request: PublicationRequest) -> tuple[int, ...]:
     numbers = request.closing_issues
+    if numbers == () and request.governing_issue is not None and request.pr_body_inputs.get("non_closing") is True:
+        return ()
     if numbers is None:
         return (request.governing_issue,) if request.governing_issue is not None else ()
     if (
@@ -715,9 +750,9 @@ def _require_existing_pr(
     }
     if selected_lanes != ({request.lane} if request.lane != "implementation" else set()):
         raise PublicationRefusal("drift", "existing PR lane does not match publication lane")
-    authority = resolve_issue_authority(body)
+    authority = resolve_native_issue_authority(body)
     if request.governing_issue is None:
-        if authority is not None or has_closing_issue_attempt(body) or "Governing-Issue:" in body:
+        if authority is not None or has_closing_issue_attempt(body) or has_issue_lifecycle_marker(body) or "Governing-Issue:" in body:
             raise PublicationRefusal(
                 "drift", "existing PR Issue authority does not match issue-free scope"
             )
@@ -1044,6 +1079,7 @@ def _assert_issue_unchanged(executor: CommandExecutor, cwd: Path, plan: Mapping[
             )
         _require_publishable_issue(
             issue, number, claimed=any(item["number"] == number for item in closing)
+            or plan["pr"]["body_inputs"].get("non_closing") is True,
         )
 
 
@@ -1110,6 +1146,8 @@ def _generate_pr_body(executor: CommandExecutor, cwd: Path, values: Mapping[str,
         argv.extend(["--issue-number", str(values["issue_number"])])
     for number in values.get("closing_issues", ()):
         argv.extend(["--closing-issue", str(number)])
+    if values.get("non_closing") is True:
+        argv.append("--non-closing")
     summary = values.get("summary", [])
     if isinstance(summary, str):
         summary = [summary]
@@ -1129,15 +1167,17 @@ def _generate_pr_body(executor: CommandExecutor, cwd: Path, values: Mapping[str,
         argv.extend(["--builderops-reason", str(values["builderops_reason"])])
     if values.get("notes") is not None:
         argv.extend(["--notes", str(values["notes"])])
+    if values.get("pickup_receipt") is not None:
+        argv.extend(["--pickup-receipt", str(values["pickup_receipt"])])
     return _checked(executor, argv, cwd).stdout
 
 
 def _validate_generated_authority(
     body: str, governing: int | None, closing: tuple[int, ...]
 ) -> None:
-    authority = resolve_issue_authority(body)
+    authority = resolve_native_issue_authority(body)
     if governing is None:
-        if authority is not None or has_closing_issue_attempt(body) or "Governing-Issue:" in body:
+        if authority is not None or has_closing_issue_attempt(body) or has_issue_lifecycle_marker(body) or "Governing-Issue:" in body:
             raise PublicationRefusal("drift", "generated body contains undeclared Issue authority")
     elif (
         authority is None
@@ -1229,7 +1269,7 @@ def _validated_plan(plan: Mapping[str, Any], expected_hash: str) -> dict[str, An
         commit_message=normalized["commit"]["message"],
         pr_title=pr["title"],
         pr_body_inputs=pr["body_inputs"],
-        closing_issues=tuple(item["number"] for item in closing) if closing else None,
+        closing_issues=tuple(item["number"] for item in closing) if governing else None,
         existing_pr_number=pr["existing"]["number"] if pr.get("existing") else None,
     )
     _validate_request(request)
@@ -1529,7 +1569,9 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--risk-assessment-complete", action="store_true")
     plan.add_argument("--review-gate-complete", action="store_true")
     plan.add_argument("--governing-issue", type=int)
-    plan.add_argument("--closing-issue", type=int, action="append")
+    closing = plan.add_mutually_exclusive_group()
+    closing.add_argument("--closing-issue", type=int, action="append")
+    closing.add_argument("--non-closing", action="count", default=0)
     plan.add_argument("--existing-pr-number", type=int)
     plan.add_argument("--commit-message", required=True)
     plan.add_argument("--pr-title", required=True)
@@ -1545,7 +1587,10 @@ def cli_main(
     *,
     executor: CommandExecutor | None = None,
 ) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.command == "plan" and args.non_closing > 1:
+        parser.error("--non-closing must be declared once")
     try:
         if args.command == "plan":
             body_inputs = json.loads(args.pr_body_input_json.read_text(encoding="utf-8"))
@@ -1567,7 +1612,7 @@ def cli_main(
                     pr_body_inputs=body_inputs,
                     closing_issues=tuple(args.closing_issue)
                     if args.closing_issue is not None
-                    else None,
+                    else (() if args.non_closing else None),
                     existing_pr_number=args.existing_pr_number,
                 ),
                 executor=executor,

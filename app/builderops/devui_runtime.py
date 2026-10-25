@@ -29,6 +29,11 @@ from app.builderops.devui_assets import (
     validate_packaged_assets,
 )
 from app.builderops.devui_composition import compose_owner_snapshot
+from app.builderops.devui_ckm_snapshot import read_private_ckm
+from app.builderops.devui_control import (
+    ControlInputError, read_system_control, render_system_control,
+    validate_control_destination, validate_return_subject,
+)
 from app.builderops.devui_focus import FocusContractError, compose_focus_view
 from app.builderops.devui_focus_inputs import FocusInputError
 from app.builderops.devui_overview import compose_overview_view
@@ -58,6 +63,8 @@ class RuntimeConfiguration:
     config_fingerprint: str
     receipt_dir: Path
     sources: SourceConfiguration
+    diagnostic_origin: str | None = None
+    ckm_overview_url: str | None = None
 
 
 def load_configuration(environment: Mapping[str, str]) -> RuntimeConfiguration:
@@ -106,7 +113,13 @@ def load_configuration(environment: Mapping[str, str]) -> RuntimeConfiguration:
         )
     except SourceConfigurationError as exc:
         raise RuntimeConfigurationError("managed source configuration is invalid") from exc
-    return RuntimeConfiguration(values[0], values[1], values[2], receipt_dir=path, sources=sources)
+    try:
+        origin = validate_control_destination(environment.get("DEVUI_DIAGNOSTIC_ORIGIN"), origin_only=True)
+        ckm_url = validate_control_destination(environment.get("DEVUI_CKM_OVERVIEW_URL"), origin_only=False)
+    except ControlInputError as exc:
+        raise RuntimeConfigurationError("diagnostic navigation configuration is invalid") from exc
+    return RuntimeConfiguration(values[0], values[1], values[2], receipt_dir=path, sources=sources,
+                                diagnostic_origin=origin, ckm_overview_url=ckm_url)
 
 
 def _unavailable_provider() -> Any:
@@ -234,6 +247,8 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
             *ROUTES,
             "/api/devui/overview",
             "/api/devui/focus",
+            "/devui/builder-system-control",
+            "/api/devui/builder-system-control",
             "/version",
             "/healthz",
         }:
@@ -260,11 +275,20 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
                     ):
                         raise ValueError()
                     request.state.subject = pairs[0][1]
+                elif request.url.path in {"/devui/builder-system-control", "/api/devui/builder-system-control"}:
+                    request.state.return_subject = None
+                    if query:
+                        if re.search(r"%(?![0-9a-fA-F]{2})", query):
+                            raise ValueError()
+                        pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, errors="strict")
+                        if len(pairs) != 1 or pairs[0][0] != "return_subject":
+                            raise ValueError()
+                        request.state.return_subject = validate_return_subject(pairs[0][1], configuration.sources.repository)
                 elif query:
                     raise ValueError()
             except (ValueError, UnicodeError):
                 response = JSONResponse(
-                    {"detail": "One typed Focus subject is required; other routes accept no query"},
+                    {"detail": "One typed Focus subject or BSC return_subject is required; other routes accept no query"},
                     status_code=400,
                 )
             else:
@@ -319,13 +343,21 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
                 {"detail": "DevUI Focus subject is unavailable or unsupported"}, status_code=404
             )
 
-    @app.get("/api/devui/overview")
-    def overview(request: Request) -> dict[str, Any]:
+    def owner_snapshot() -> dict[str, Any]:
+        ckm = read_private_ckm(configuration.receipt_dir, repository=configuration.sources.repository)
         snapshot = compose_owner_snapshot(
             cockpit_reader=lambda: read_managed_cockpit(configuration.sources),
-            ckm_reader=_unavailable_provider,
+            ckm_reader=lambda: ckm.result,
             receipt_reader=receipt_provider,
         )
+        provider = snapshot["providers"]["capabilities"]
+        if ckm.transfer is not None and provider["status"] == "available":
+            provider["completeness"] = {**provider["completeness"], "private_transfer": ckm.transfer}
+        return snapshot
+
+    @app.get("/api/devui/overview")
+    def overview(request: Request) -> dict[str, Any]:
+        snapshot = owner_snapshot()
         owner_facts = read_owner_fact_transport(repository=configuration.sources.repository,
             environment=configuration.sources.api_environment, authority_epoch=configuration.sources.authority_epoch)
         snapshot["providers"]["owner_facts"] = owner_fact_trust(owner_facts, snapshot["captured_at"])
@@ -338,6 +370,30 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
         return compose_overview_view(
             composition=snapshot, candidates=bind_visual_focus_targets(inputs)
         )
+
+    def system_control_projection(request: Request) -> dict[str, Any]:
+        if configuration.sources.repository is None:
+            raise ControlInputError("Builder System Control requires an explicit repository binding")
+        snapshot = owner_snapshot()
+        return read_system_control(
+            configuration.sources, snapshot, return_subject=request.state.return_subject,
+            diagnostic_origin=configuration.diagnostic_origin, ckm_overview_url=configuration.ckm_overview_url,
+        )
+
+    @app.get("/api/devui/builder-system-control")
+    def system_control_api(request: Request) -> Any:
+        try:
+            return system_control_projection(request)
+        except ControlInputError:
+            return JSONResponse({"detail": "Builder System Control scope is unavailable"}, status_code=503)
+
+    @app.get("/devui/builder-system-control")
+    def system_control_page(request: Request) -> Response:
+        try:
+            payload = system_control_projection(request)
+        except ControlInputError:
+            return JSONResponse({"detail": "Builder System Control scope is unavailable"}, status_code=503)
+        return Response(render_system_control(payload, request.state.assets["control.html"]), media_type="text/html")
 
     @app.get("/version")
     def version() -> dict[str, str]:

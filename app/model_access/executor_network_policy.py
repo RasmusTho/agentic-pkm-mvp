@@ -622,11 +622,12 @@ class ExecutorNetworkPathRouter:
             selected_path_profile=path_id,
         )
 
-    def close(self) -> None:
+    def close(self, *, require_success: bool = False) -> None:
         with self._receipt_lock:
             self._pending_receipts.clear()
             self._pending_product_receipts.clear()
         closed: set[int] = set()
+        failed = False
         for transport in self._transports.values():
             if id(transport) in closed:
                 continue
@@ -634,7 +635,9 @@ class ExecutorNetworkPathRouter:
             try:
                 transport.close()
             except Exception:
-                continue
+                failed = True
+        if failed and require_success:
+            raise RuntimeError("executor_path_cleanup_failed") from None
 
 
 __all__ = [

@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Sequence, Set, Tuple
+from typing import Callable, Iterable, List, Sequence, Set, Tuple
 
 import click
 
@@ -18,9 +18,9 @@ from app.agents.panel.writeback import strip_ai_status_block
 from app.ingest.config import resolve_ingest_config
 from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.index.outbox import append_jsonl
-from app.observability.ingest_meta import record_ingest_run
+from app.observability.ingest_meta import ingest_binding_for_root, record_ingest_run
 from app.observability.log import with_trace_id
-from app.search.service import ingest_object as index_ingest_object
+from app.search.service import VectorProjectionFailure, ingest_object as index_ingest_object
 from app.settings.runtime import get_settings_bundle
 from app.services.companion_eligibility import (
     check_companion_eligibility,
@@ -47,6 +47,7 @@ from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel
 from app.vault.manager import iter_vault_markdown_files
 from app.write_guard import SOURCE_BACKED_REBUILD_ACTION
+from app.rebuildability.product_total_loss import capture_source_frontmatter
 
 #: Sentinel written to created_by_instance when runtime identity is unavailable.
 _UNKNOWN_INSTANCE = "unknown"
@@ -93,10 +94,15 @@ class VaultAlphaSummary:
     invalid_examples: List[str] = field(default_factory=list)
     invalid_report_path: str | None = None
     vector_projection_errors: int = 0
+    vector_projection_failure_counts: dict[str, int] = field(default_factory=dict)
 
 
 class SourceVectorProjectionError(RuntimeError):
     """Content-free failure of the required source-backed vector producer."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
 
 
 _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
@@ -597,6 +603,7 @@ def _ingest_single(
     raw_text: str | None = None,
     write_companion_record: bool = True,
     reconcile_existing_projection: bool = False,
+    projection_sink: Callable[[dict], None] | None = None,
 ) -> str:
     rel_path = path.relative_to(vault_root)
     if raw_text is None:
@@ -705,6 +712,7 @@ def _ingest_single(
 
     payload = {
         "core6": core6,
+        "frontmatter": capture_source_frontmatter(raw_text),
         "raw_text": stripped_text,
         "text": stripped_text,
         "replay_text_kind": "extracted_body",
@@ -737,6 +745,7 @@ def _ingest_single(
         object_uuid = uuid.uuid4()
 
     store_payload = {
+        "frontmatter": capture_source_frontmatter(raw_text),
         "artifact_id": str(object_uuid),
         "stable_id": str(object_uuid),
         "title": title,
@@ -759,6 +768,14 @@ def _ingest_single(
         **producer_fields,
         "replay": replay,
     }
+
+    if projection_sink is not None:
+        # Recovery prepares exactly the canonical producer payload, but owns
+        # the object/vector transaction and must emit no companion/outbox work.
+        if write_companion_record or not reconcile_existing_projection:
+            raise ValueError("invalid projection preparation")
+        projection_sink(store_payload)
+        return canonical_object_id
 
     object_store = get_object_store()
     reconcile = getattr(object_store, "put_and_reconcile_source_backed", None)
@@ -811,10 +828,14 @@ def _ingest_single(
             source_ref=str(path),
             payload=store_payload,
             text=stripped_text,
+            **({"source_backed_rebuild": True,
+                "expected_vault_binding_id": getattr(object_store, "vault_binding_id", None)}
+               if reconcile_existing_projection else {}),
         )
-    except Exception:
+    except Exception as exc:
         if reconcile_existing_projection:
-            raise SourceVectorProjectionError("vector_projection_failed") from None
+            reason = exc.reason if isinstance(exc, VectorProjectionFailure) else "vector_projection_failed"
+            raise SourceVectorProjectionError(reason) from None
 
     normalize_payload = {
         "event": "ingest.normalize",
@@ -980,6 +1001,7 @@ def _ingest_candidates(
     invalid_examples: List[str] = []
     invalid_report_path = _invalid_files_log_path()
     vector_projection_errors = 0
+    vector_projection_failure_counts: dict[str, int] = {}
     _reset_invalid_files_log()
 
     def _record_locked(rel_display: str) -> None:
@@ -1124,8 +1146,9 @@ def _ingest_candidates(
                 _ingest_single(path, vault_root=vault_root, trace_id=trace_id)
             ingested += 1
             processed.add(rel_display)
-        except SourceVectorProjectionError:
+        except SourceVectorProjectionError as exc:
             vector_projection_errors += 1
+            vector_projection_failure_counts[exc.reason] = vector_projection_failure_counts.get(exc.reason, 0) + 1
             errors.append(rel_display)
             continue
         except OSError as exc:
@@ -1163,6 +1186,7 @@ def _ingest_candidates(
         invalid_examples=invalid_examples,
         invalid_report_path=str(invalid_report_path) if skipped_invalid > 0 else None,
         vector_projection_errors=vector_projection_errors,
+        vector_projection_failure_counts=vector_projection_failure_counts,
     )
     if skipped_locked > 0:
         example = locked_examples[0] if locked_examples else "-"
@@ -1179,6 +1203,7 @@ def _ingest_candidates(
             malformed=summary.malformed,
             ok=summary.errors == 0,
             message=None if summary.errors == 0 else "ingest errors",
+            vault_binding_id=ingest_binding_for_root(vault_root) or "",
         )
     except Exception:
         pass

@@ -100,8 +100,8 @@ def test_ci_smoke_gates_heavy_pytest_for_docs_only_prs() -> None:
 
     assert "dorny/paths-filter@v3" in workflow
     assert "heavy_smoke:" in workflow
-    assert "Skip heavy pytest smoke for docs-only PR" in workflow
-    assert "github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'" in workflow
+    assert "Skip unrelated runtime smoke for contract-only PR" in workflow
+    assert "steps.runtime-scope.outputs.runtime_checks != 'false'" in workflow
 
 
 def test_full_ci_smoke_excludes_pr_metadata_edits_but_keeps_code_events() -> None:

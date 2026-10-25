@@ -81,6 +81,62 @@ SELECTORS = (
     'tests/builderops/test_issue_delivery_readback.py',
     'tests/builderops/test_standalone_consumer_conformance.py',
 )
+# Preserve the bounded nightly inventory independently of the native profile.
+# Both fixed invocations use RequiredResults; optional developer pytest is unchanged.
+NIGHTLY_SELECTORS = (
+    'tests/int/test_pg_backend.py',
+    'tests/api/test_status_store_pg.py',
+    'tests/indexer/test_outbox_roundtrip_pg.py',
+    'tests/indexer/test_mixed_identity_detection.py',
+    'tests/cli/test_index_doctor_mixed.py',
+    'tests/cli/test_index_rebuild_cli.py',
+    'tests/cli/test_index_reconcile.py',
+    'tests/index/test_identity_migration.py',
+    'tests/index/test_provenance_stamp.py',
+    'tests/knowledge_acquisition/test_source_registry_pg.py::test_pg_backend_contract',
+    'tests/heimdal/test_entity_review_operation_journal.py',
+    'tests/migrations/test_entity_review_operation_journal_schema_parity.py',
+    'tests/migrations/test_file_state_adoption.py',
+    'tests/migrations/test_objects_adoption.py',
+    'tests/heimdal/test_trigger_ownership_pg.py',
+    'tests/migrations/test_heimdal_raw_representation_migration.py',
+    'tests/migrations/test_legacy_objects_fk_migration.py',
+    'tests/migrations/test_store_schema_parity.py',
+    'tests/migrations/test_multi_vault_ingest_projection_keys.py',
+    'tests/store/test_membership_store.py',
+    'tests/migrations/test_ingest_schema_parity.py',
+    'tests/migrations/test_multi_vault_replay_projection_backfill.py',
+    'tests/migrations/test_replay_schema_parity.py',
+    'tests/migrations/test_mvr05a_residual_binding_keys.py',
+    'tests/migrations/test_decisions_fk_set_null.py',
+    'tests/integration/test_decisions_rebuild_from_log_only.py',
+    'tests/integration/test_multi_vault_projection_isolation.py',
+    'tests/episodes/test_episode_projection.py',
+    'tests/integration/test_vault_sync_atomicity.py',
+    'tests/ingest/test_vault_root_ingest_pg.py',
+    'tests/invariants/test_retrieval_spine_invariants.py',
+    'tests/jobs/test_decisions_export.py',
+    'tests/jobs/test_decisions_projection_rebuild.py',
+    'tests/jobs/test_multi_vault_decisions_rebuild_scope.py',
+    'tests/jobs/test_calibration_projection_rebuild.py',
+    'tests/integration/test_calibration_rebuild_from_log_only.py',
+    'tests/stores/test_decisions_fk_semantics.py',
+    'tests/stores/test_ensure_tables_assert_only.py',
+    'tests/stores/test_multi_vault_store_reset_scope.py',
+    'tests/stores/test_pg_truncate_reset.py',
+    'tests/stores/test_pg_vector_index.py',
+    'tests/stores/test_store_contract_pg.py',
+    'tests/stores/test_vector_generation_identity.py',
+    'tests/services/test_audit_writer.py',
+    'tests/migrations/test_outbox_schema_parity.py',
+    'tests/migrations/test_multi_vault_outbox_upgrade.py',
+    'tests/services/test_multi_vault_outbox_dual_key_dedup.py',
+    'tests/migrations/test_yss01_source_registry_schema_parity.py::test_yss01_migration_bootstrap_parity_and_legacy_repair',
+    'tests/services/test_outbox_bootstrap_assert_only.py',
+    'tests/instance/test_file_state_binding_key.py',
+    'tests/services/test_vault_sync_binding_scope.py',
+    'tests/integration/test_single_vault_compatibility.py',
+)
 MINIMUM_SELECTED = len(SELECTORS)
 SELECTION_HASH = hashlib.sha256(json.dumps(
     [PROFILE_VERSION, SELECTORS, 'pg', TEST_TIMEOUT, 'thread', MINIMUM_SELECTED, POSTGRES_IMAGE, PROFILE_DEADLINE],
@@ -120,15 +176,18 @@ def require_pass(result: Any, sha: str, digest: str, channel: str, operation_id:
         raise PgAcceptanceError()
 
 
-def pytest_arguments() -> list[str]:
-    return ['-vv', '--durations=20', '-m', 'pg', *SELECTORS, '--tb=short',
+def pytest_arguments(*, nightly: bool = False) -> list[str]:
+    selectors = NIGHTLY_SELECTORS if nightly else SELECTORS
+    config = ['-c', '/dev/null', '--rootdir=.'] if nightly else []
+    return [*config, '-vv', '--durations=20', '-m', 'pg', *selectors, '--tb=short',
             '-p', 'timeout', '--timeout=' + str(TEST_TIMEOUT), '--timeout-method=thread',
             '-o', 'cache_dir=/tmp/pg-acceptance-cache']
 
 
 class RequiredResults:
     """No empty/missing selector, skip, xfail, collection error or timeout is a pass."""
-    def __init__(self) -> None:
+    def __init__(self, *, selectors: tuple[str, ...] | None = None) -> None:
+        self.selectors = SELECTORS if selectors is None else selectors
         self.nodes: set[str] = set()
         self.passed: set[str] = set()
         self.bad = False
@@ -136,10 +195,11 @@ class RequiredResults:
     def pytest_collection_finish(self, session: Any) -> None:
         import pytest
         self.nodes = {item.nodeid for item in session.items}
-        if (len(self.nodes) < MINIMUM_SELECTED or len(self.nodes) != len(session.items)
+        if (not self.selectors or len(self.nodes) < len(self.selectors)
+            or len(self.nodes) != len(session.items)
             or any(not any(node == selector or node.startswith(selector + '::')
                            or node.startswith(selector + '[') for node in self.nodes)
-                   for selector in SELECTORS)
+                   for selector in self.selectors)
             or session.config.getoption('timeout') != TEST_TIMEOUT
             or session.config.getoption('timeout_method') != 'thread'):
             raise pytest.UsageError('required PG selection or watchdog is missing')
@@ -175,24 +235,29 @@ def verify_resources(manifest: dict[str, Any], *, root: Path = Path('/app')) -> 
         raise PgAcceptanceError()
 
 
-def run_pytest() -> dict[str, Any]:
+def run_pytest(*, nightly: bool = False) -> dict[str, Any]:
     import pytest
-    plugin = RequiredResults()
-    return plugin.summary(int(pytest.main(pytest_arguments(), plugins=[plugin])))
+    selectors = NIGHTLY_SELECTORS if nightly else SELECTORS
+    plugin = RequiredResults(selectors=selectors)
+    summary = plugin.summary(int(pytest.main(pytest_arguments(nightly=nightly), plugins=[plugin])))
+    if nightly:
+        summary.update(required_selectors=list(selectors), passed_nodeids=sorted(plugin.passed))
+    return summary
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--ci', action='store_true')
+    parser.add_argument('--nightly', action='store_true')
     parser.add_argument('--manifest', type=Path)
     args = parser.parse_args(argv)
     try:
         if args.ci:
             if args.manifest is not None:
                 raise PgAcceptanceError()
-            summary = run_pytest()
+            summary = run_pytest(nightly=args.nightly)
         else:
-            if args.manifest is None:
+            if args.manifest is None or args.nightly:
                 raise PgAcceptanceError()
             manifest = json.loads(args.manifest.read_text())
             expected = identity(manifest['source_sha'], manifest['image_digest'],

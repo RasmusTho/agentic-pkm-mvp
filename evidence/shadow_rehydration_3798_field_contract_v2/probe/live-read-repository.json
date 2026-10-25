@@ -1,0 +1,15 @@
+{
+  "schema_name": "epic_rehydration_live_read",
+  "schema_version": 2,
+  "probe_id": "shadow_rehydration_3798_field_contract",
+  "kind": "repository",
+  "target": {
+    "repository": "RasmusTho/agentic-pkm-mvp",
+    "issue_number": 3798,
+    "pr_number": 3803
+  },
+  "observed_at": "2026-10-17T21:52:26Z",
+  "availability": "unavailable",
+  "payload": "unknown",
+  "unavailable_reason": "git ls-remote origin refs/heads/main failed twice with exit 128: Could not resolve host: github.com. The permitted local diagnostic git rev-parse origin/main returned 7517008c49086e9b2acdc03d753785fced944661; local origin/main is not a substitute for the failed remote read."
+}

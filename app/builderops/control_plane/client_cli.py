@@ -53,7 +53,9 @@ _MUTATING_COMMANDS = frozenset(
         "task-claim",
         "task-heartbeat",
         "task-complete",
+        "task-correct-payload-status",
         "lease-claim",
+        "lease-release",
         "attempt",
         "promotion",
     }
@@ -182,10 +184,22 @@ def build_parser() -> argparse.ArgumentParser:
         f"ttl_seconds if routing is engaged, else {_DEFAULT_TTL_SECONDS}.",
     )
 
+    correction = sub.add_parser("task-correct-payload-status", help="Correct one terminal GitHub task status.")
+    _add_envelope_arguments(correction)
+    for field in ("task-id", "lease", "idempotency-key", "expected-state", "expected-updated-at",
+                  "expected-payload-sha256", "proposal-sha256", "proposal-ref"):
+        correction.add_argument(f"--{field}", required=True)
+    correction.add_argument("--expected-version", type=int, required=True)
+
     task_complete = sub.add_parser("task-complete", help="Complete a claimed task.")
     _add_envelope_arguments(task_complete)
     task_complete.add_argument("--lease", required=True, help="JSON lease object from claim.")
     task_complete.add_argument("--idempotency-key", required=True)
+
+    lease_release = sub.add_parser("lease-release", help="Release an exact generic fenced lease.")
+    _add_envelope_arguments(lease_release)
+    lease_release.add_argument("--lease", required=True, help="Full JSON generic lease from claim.")
+    lease_release.add_argument("--idempotency-key", required=True)
 
     lease_claim = sub.add_parser("lease-claim", help="Claim a generic fenced lease.")
     _add_envelope_arguments(lease_claim)
@@ -272,10 +286,23 @@ def _dispatch(
             idempotency_key=args.idempotency_key,
             ttl_seconds=args.ttl_seconds,
         )
+    if command == "task-correct-payload-status":
+        return client.correct_task_payload_status(
+            envelope=_envelope(args), task_id=args.task_id, lease=_json_payload(args.lease),
+            idempotency_key=args.idempotency_key, expected_state=args.expected_state,
+            expected_version=args.expected_version, expected_updated_at=args.expected_updated_at,
+            expected_payload_sha256=args.expected_payload_sha256,
+            proposal_sha256=args.proposal_sha256, proposal_ref=args.proposal_ref,
+        )
     if command == "task-complete":
         return client.complete_task(
             envelope=_envelope(args),
             lease=_json_payload(args.lease),
+            idempotency_key=args.idempotency_key,
+        )
+    if command == "lease-release":
+        return client.release_lease(
+            envelope=_envelope(args), lease=_json_payload(args.lease),
             idempotency_key=args.idempotency_key,
         )
     if command == "lease-claim":

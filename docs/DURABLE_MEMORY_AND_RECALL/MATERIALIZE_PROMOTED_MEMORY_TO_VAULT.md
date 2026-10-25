@@ -20,16 +20,20 @@ rather than living only as a hidden machine record. This implements the owner's 
 
 ## What This Task Does
 
-On a promote-to-semantic decision, builds a governed write-proposal and routes it through the
-existing authority path: `proposal → WriteGuard → receipt → vault artifact`. The materialized note:
+On a promote-to-semantic decision, the persisted human review authorizes MEM to request a GOV
+PolicyDecision and DecisionToken bound to the reviewer, materialization action, write class, and
+exact HKA target. The production authority path is `human review → GOV token → WriteGuard → HKA
+create-once write and mutation receipt → promotion receipt → GOV AuthorityReceipt → terminal
+decision`. The materialized note:
 
 - is written through `app/write_guard.py` (a vault-internal write, consistent with the owner's
   "all vault-internal writes pass WriteGuard" rule) and the companion-note / knowledge write path;
 - carries provenance frontmatter (source_refs, generated_by, promoted-from candidate id, decided_by)
   plus the candidate's explicit `scope_id` binding;
 - is labeled as agent-promoted material, distinct from and never overriding human-authored notes;
-- has a corresponding promotion receipt (`app/receipts/promotion_receipts.py`) — the receipt is the
-  accountability record, the note is the durable semantic surface.
+- has a corresponding promotion receipt (`app/receipts/promotion_receipts.py`) as transition
+  evidence, while HKA's mutation receipt remains the state-owner fact and GOV's distinct
+  AuthorityReceipt remains the accountability record.
 
 Episodic/working/preference promotions that the contract does NOT treat as semantic knowledge are
 out of scope for materialization; only semantic promotion materializes a vault artifact.
@@ -49,8 +53,9 @@ transition receipt is written. It serializes the persisted `PROMOTE` decision fr
 through a durable `materializing` reservation, note and receipt creation, and the terminal
 transition. The reservation binds the immutable scope, candidate digest, and original reviewer
 authority; once it exists, reject/revise cannot replace the decision after an indeterminate external
-write. This allows one successful materializer and prevents a revoked, changed, repeated, or
-competing materializer from writing. The persisted binding is
+write. The candidate-bound note identity is checked before selecting any new target, while HKA's
+create-once operation protects the exact chosen path. This allows one successful materializer and
+prevents a revoked, changed, repeated, or competing materializer from writing. The persisted binding is
 written to both note and receipt; legacy unscoped artifacts remain unchanged. Bound recall denies
 unscoped artifacts fail closed and requires scope, candidate, artifact UUID, and selected vault to
 match the applied receipt; unbound recall retains its existing behavior.
@@ -61,17 +66,43 @@ pending queue entry (including removal of any speculative revision) before retur
 
 Late failures are resumed idempotently. The materialization identity is stable per
 vault/channel/candidate. A retry validates and reuses an existing applied receipt plus its
-candidate-bound note, or an unreceipted candidate-bound note when receipt append was interrupted.
-Conflicting or multiple recovery artifacts fail closed instead of producing another note or receipt.
+candidate-bound note and governed mutation facts. Before HKA runs, the owned receipt-source
+continuity marker durably reserves the exact candidate/materialization target. The reservation is
+cleared only after the applied promotion receipt is durably appended. An interrupted attempt whose
+reservation remains therefore fails closed for explicit remediation independently of mutable note
+frontmatter; it never selects a suffixed target or invokes HKA a second time. An unreceipted
+candidate-bound note likewise cannot be treated as durable authority. Conflicting or multiple
+recovery artifacts fail closed instead of producing another note or receipt.
+
+The owned receipt source carries a continuity marker. Upgrade initialization backfills a missing
+marker only for legacy history that has no persisted source binding and whose complete owned receipt
+chains are present. A legacy marker version without an exact-target reservation map may be upgraded
+only during initialization after every required owned receipt chain is complete; the active marker
+version requires that map, so field loss fails closed. Once a source binding is persisted, a missing
+or empty marker is continuity loss and cannot be backfilled automatically. A nonterminal decision
+cannot retain that binding while omitting or clearing its `materializing` reservation; this
+inconsistent state is rejected before receipt-source initialization, GOV, or HKA. If the source is
+absent while the review store already
+contains an in-progress materialization, a terminal semantic promotion, or legacy promotion history
+whose memory type is unavailable, materialization refuses to create a fresh empty history and
+requires explicit remediation. A known non-semantic terminal promotion does not imply materialization
+receipt history. Source loss after the marker exists likewise fails closed.
+Structured promotion and AuthorityReceipt envelopes must also carry one unambiguous event identity:
+JSONL `event`/`event_type`/`topic` aliases and the authoritative DB row topic may not disagree. A
+conflict or malformed nested structured payload makes that source unavailable before HKA and during
+terminal reconciliation.
 
 ## Concretely
 
 ```
 promote(candidate, target_class=SEMANTIC, decided_by="companion-ui:reviewer")
-  -> governed write-proposal
+  -> GOV PolicyDecision + DecisionToken bound to reviewer/action/write class/exact target
   -> DEFAULT_WRITE_GUARD.assert_writes_allowed("memory.materialize")
-  -> write vault note (provenance frontmatter; agent-promoted label)
-  -> PromotionReceipt{vault_id, channel, artifact_path, candidate_id, decided_by, decided_at}
+  -> HKA create-once vault note + mutation receipt
+  -> PromotionReceipt{vault_id, channel, artifact_path, candidate_id, decided_by, decided_at,
+                      policy_decision, decision_token, state_owner_receipt}
+  -> GOV AuthorityReceipt{decision_token_id, source_receipt_ref, state_owner=HKA}
+  -> terminal promotion decision
 
 # blocked path:
 # health state == safe_mode/unhealthy
@@ -111,7 +142,7 @@ receipt → durable artifact, never silent persistence") and the writing-surface
   Verify: `tests/agent_memory/test_memory_materialization.py::test_materialization_refuses_intervening_same_scope_rejection`
   Verify: `tests/agent_memory/test_memory_materialization.py::test_duplicate_materializer_refuses_after_terminal_success`
   Verify: `tests/agent_memory/test_memory_materialization.py::test_retry_reconciles_applied_receipt_after_late_query_failure`
-  Verify: `tests/agent_memory/test_memory_materialization.py::test_retry_reuses_candidate_note_after_receipt_append_failure`
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_retry_refuses_candidate_note_without_governed_receipt_after_append_failure`
 - [ ] Non-semantic promotions (episodic/working/preference) do not materialize a vault artifact.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_non_semantic_promotion_does_not_materialize`
 

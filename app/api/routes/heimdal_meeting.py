@@ -34,11 +34,17 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.api.compatibility_mutation import require_compatibility_write_root, seal_vault_mutation
+from app.api.request_active_context import (
+    current_scoped_route_read,
+    resolve_optional_scoped_read_context,
+    scoped_route_read,
+)
 from app.api.routes.heimdal_capture import _assert_lan_posture, _trace_id
 from app.events.schema import make_outbox_event
 from app.events.types import HEIMDAL_MEETING_USER_NOTE_WRITTEN
@@ -50,7 +56,15 @@ from app.heimdal.meeting_ledger import MeetingSession, MeetingSessionNotFoundErr
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/heimdal/meeting", tags=["heimdal"])
+# MVR-05B3: meeting writes carry the pre-05C mutation seal. The session, segment
+# and projection reads stay on the explicitly-global meeting ledger (MVR-05B4c6);
+# only the projection's finalization receipt is binding-scoped, read for the
+# request binding. A presented carrier is always validated fail-closed.
+router = APIRouter(
+    prefix="/api/heimdal/meeting",
+    tags=["heimdal"],
+    dependencies=[Depends(seal_vault_mutation)],
+)
 
 
 class OpenSessionRequest(BaseModel):
@@ -154,6 +168,14 @@ def close_session(
     """Close a session; a re-post replays the recorded close outcome."""
     trace_id = _trace_id(request)
     _assert_lan_posture(request, trace_id)
+    # Close triggers finalization into HEIMDAL_MEETING_VAULT_ROOT, which need not be
+    # the sealed compatibility binding: prove it before the close or any vault effect.
+    try:
+        meeting_root = meeting_finalization.configured_meeting_vault_root()
+    except meeting_finalization.MeetingFinalizationError:
+        meeting_root = None  # finalization reports its own misconfiguration
+    if meeting_root is not None:
+        require_compatibility_write_root(request, meeting_root)
     try:
         session, newly_closed = meeting_ledger.close_meeting_session(
             session_id=session_id, final_seq_count=body.final_seq_count
@@ -478,6 +500,7 @@ def _resolve_note_outbox_path() -> Path:
 
 
 @router.get("/{session_id}/projection")
+@scoped_route_read
 def projection(request: Request, session_id: str) -> Dict[str, Any]:
     """The iPad's poll target (CDLM-06): transcript + analysis projections.
 
@@ -490,7 +513,7 @@ def projection(request: Request, session_id: str) -> Dict[str, Any]:
     _assert_lan_posture(request, trace_id)
     try:
         report = meeting_projection.build_projection(session_id)
-        report["finalization"] = meeting_finalization.latest_receipt(session_id)
+        report["finalization"] = _request_finalization(session_id)
     except MeetingSessionNotFoundError as exc:
         raise _session_unknown(session_id, trace_id) from exc
     except Exception as exc:
@@ -499,7 +522,26 @@ def projection(request: Request, session_id: str) -> Dict[str, Any]:
     return report
 
 
-@router.get("/{session_id}/segments")
+def _request_finalization(session_id: str) -> Dict[str, Any] | None:
+    """The finalization receipt of the request's binding only.
+
+    A scoped read reads its own binding's row of the binding-scoped receipt table
+    (a zero-binding selection has none); a carrier-free read is unchanged.
+    """
+    scoped = current_scoped_route_read()
+    if scoped is None:
+        return meeting_finalization.latest_receipt(session_id)
+    if scoped.vault_binding_id is None:
+        return None
+    return meeting_finalization.latest_receipt_for_binding(
+        session_id, vault_binding_id=scoped.vault_binding_id
+    )
+
+
+@router.get(
+    "/{session_id}/segments",
+    dependencies=[Depends(resolve_optional_scoped_read_context)],
+)
 def gap_report(request: Request, session_id: str) -> Dict[str, Any]:
     """The gap report: what the hub durably holds for this session (INV-CDLM-9)."""
     trace_id = _trace_id(request)

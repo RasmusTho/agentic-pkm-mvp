@@ -1,0 +1,44 @@
+# Crossing B independent review receipt
+
+- Project: [CAL-03 Decision calibration card](https://claude.ai/design/p/e07ff019-f51e-40ab-89f3-438bf5ea95cc)
+- Project ID: `e07ff019-f51e-40ab-89f3-438bf5ea95cc`
+- Design system: `Yggdrasil Design System`
+- Design-system ID: `f2b13410-af14-4875-8029-445352123f57`
+- Exact token-sheet SHA-256: `edbc81c77209b5274b26b5e827191f95595f20d6bc5a97a17f7dd8751a774ba2`
+- Reviewed payload SHA-256: `086543c84ee24997220aadf4874c5a4771e776fa78d7e79edc36c1747381b6bd`
+- Historical prior reviewed payload SHA-256: `8efac4fa45fc4984ca0440b4afb8e021a0a2be0d54e54788b1450797a75e8b29`
+- Payload digest command: `find . -type f ! -name CROSSING_B_REVIEW.md -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256`
+- Payload scope: the ten generated files present before this receipt was added; this receipt and archive-index entry are excluded from the payload digest.
+- Reviewer identity: `Codex /root/cal03_crossing_b_review`
+- Independent from author: yes
+- Independence basis: fresh read-only security-delta review with browser execution; no package or project edits
+- Reviewed at: `2026-10-17T19:19:51Z`
+- Verdict: pass
+- Crossing: B / PROMOTE
+- Findings: none
+- Supersedes payload SHA-256: `d63b0489154fb3c2d32ac6d9ae0055e0f224abaa0ab8f2d3f7198c8a39e14349`
+
+## Security delta
+
+After the independent receipt above, CodeQL alert #154 (`js/xss-through-dom`, high) identified
+the prototype's generated-markup sink and a DOM-derived focus selector. The prototype now builds
+the same card and gallery with DOM APIs and `textContent`, and focuses outcome controls by
+comparing their static `data-outcome` attributes rather than constructing a CSS selector from
+the submitter value. No visual states, routes, authority boundaries, or token inputs changed.
+The reviewed digest above is recomputed with the receipt excluded. The independent replacement
+review executed the security delta in a browser and confirmed no missing `aria-describedby`
+targets, the `<strong>` recorded-outcome label, write-failure focus retention, unchanged failure
+copy, and no dynamic HTML sinks or selectors. This replacement receipt supersedes the rejected
+candidate `d63b0489154fb3c2d32ac6d9ae0055e0f224abaa0ab8f2d3f7198c8a39e14349` and is authoritative
+for Crossing B / PROMOTE.
+
+The historical review recorded nine files byte-identical to its prior reviewed payload; only
+`state-gallery.md` changed. The replacement reviewer independently recomputed the current digest
+after the bounded security and accessibility delta without changing scope, authority, states, or
+interaction contracts.
+
+Independent execution evidence covered desktop, 360px narrow layout, effective
+200% reflow, keyboard order and focus, accessible names and optional-note
+semantics, reduced motion, print, JavaScript-off forms, degraded and absent
+states, and answer/dismiss write-failure variants. Browser CDP observed only the
+same-origin no-egress token stylesheet and zero cross-origin requests.

@@ -61,8 +61,8 @@ jobs:
 
   full-suite:
     runs-on: ubuntu-latest
-    # Leave installation, the bounded 35-minute batch, and artifact upload room.
-    timeout-minutes: 45
+    # Reserve setup and upload time around the measured full-suite envelope.
+    timeout-minutes: 60
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -74,6 +74,9 @@ jobs:
             experimental: true
     env:
       PYTHONPATH: ${{ github.workspace }}
+      # Keep nested Make/bootstrap producers on the matrix interpreter.  The
+      # Makefile otherwise prefers a host-installed python3.12 on 3.13 runs.
+      PYTHON: python
       STORE_BACKEND: memory
       LLM_PROVIDER: mock
       REASONING_PROVIDER: mock
@@ -87,6 +90,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Provenance, promotion-fixture and review-gate tests inspect the
+          # candidate's historical objects and parent; shallow tips cannot
+          # provide that evidence.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -115,12 +123,19 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
 
+      - name: Install standalone sidecar test dependencies
+        run: |
+          pip install --requirement mimer-mcp-sidecar/requirements.txt
+          pip install --no-deps --editable mimer-mcp-sidecar
+
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
       - name: Full test suite (memory, not pg)
-        # Match the existing PR batch margin; this is not a speedup claim.
-        timeout-minutes: 35
+        # Complete current-source runs take about 40 minutes; retain finite
+        # headroom for runner variability without relaxing the test watchdog.
+        # Timeout or incomplete results remain failed full-suite evidence.
+        timeout-minutes: 50
         continue-on-error: ${{ matrix.experimental }}
         shell: bash
         env:
@@ -128,7 +143,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          marker='not pg and not alpha_llm'
+          marker='not pg and not alpha_llm and not eval'
           # Reuse the PR process-isolation pattern, retaining nightly E2E and
           # its original marker selection. Partial logs outlive a cancelled step.
           shard_root="$RUNNER_TEMP/pytest-nightly-shards"
@@ -141,6 +156,7 @@ jobs:
           find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print |
             while IFS= read -r path; do
               case "$path" in
+                tests/deploy/*) printf '%s\n' "$path" ;;
                 tests/*/*)
                   relative="${path#tests/}"
                   printf 'tests/%s\n' "${relative%%/*}"
@@ -151,7 +167,17 @@ jobs:
             LC_ALL=C sort -u |
             while IFS= read -r shard; do
               [[ "$shard" == tests/ops ]] || printf '%s\n' "$shard"
-            done > "$shard_list"
+            done |
+            # This measured long-running file starts with the first workers.
+            # It remains in the same discovered inventory as every other file.
+            awk '
+              $0 == "tests/deploy/test_deploy_channel_script.py" { first = $0; next }
+              { remaining[++count] = $0 }
+              END {
+                if (first != "") print first
+                for (i = 1; i <= count; i++) print remaining[i]
+              }
+            ' > "$shard_list"
           if [[ ! -s "$shard_list" ]]; then
             echo "No collectible nightly process shards discovered" >&2
             exit 1
@@ -270,8 +296,12 @@ jobs:
             tests/fitness/test_runtime_contract.py
 
       - name: Fitness report
+        shell: bash
         run: |
-          python -m app.fitness.report | tee tmp/ci_summary.log
+          set -euo pipefail
+          python -m pytest -q -s -m "not pg" \
+            tests/fitness/test_ci_fitness.py::test_ci_report_entrypoint_uses_scoped_product_gateway_fixture \
+            2>&1 | tee tmp/ci_summary.log
 
       - name: Verify CI gates
         run: |
@@ -296,6 +326,7 @@ jobs:
           name: nightly-pytest-log-py${{ matrix.python-version }}
           path: |
             tmp/nightly-pytest.log
+            tmp/ci_summary.log
             ${{ runner.temp }}/pytest-nightly-shards/
 
   pg-contracts:
@@ -358,61 +389,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          pytest -c /dev/null --rootdir=. -q \
-            tests/int/test_pg_backend.py \
-            tests/api/test_status_store_pg.py \
-            tests/indexer/test_outbox_roundtrip_pg.py \
-            tests/indexer/test_mixed_identity_detection.py \
-            tests/cli/test_index_doctor_mixed.py \
-            tests/cli/test_index_rebuild_cli.py \
-            tests/cli/test_index_reconcile.py \
-            tests/index/test_identity_migration.py \
-            tests/index/test_provenance_stamp.py \
-            tests/knowledge_acquisition/test_source_registry_pg.py::test_pg_backend_contract \
-            tests/heimdal/test_entity_review_operation_journal.py \
-            tests/migrations/test_entity_review_operation_journal_schema_parity.py \
-            tests/migrations/test_file_state_adoption.py \
-            tests/migrations/test_objects_adoption.py \
-            tests/heimdal/test_trigger_ownership_pg.py \
-            tests/migrations/test_heimdal_raw_representation_migration.py \
-            tests/migrations/test_legacy_objects_fk_migration.py \
-            tests/migrations/test_store_schema_parity.py \
-            tests/migrations/test_multi_vault_ingest_projection_keys.py \
-            tests/store/test_membership_store.py \
-            tests/migrations/test_ingest_schema_parity.py \
-            tests/migrations/test_multi_vault_replay_projection_backfill.py \
-            tests/migrations/test_replay_schema_parity.py \
-            tests/migrations/test_mvr05a_residual_binding_keys.py \
-            tests/migrations/test_decisions_fk_set_null.py \
-            tests/integration/test_decisions_rebuild_from_log_only.py \
-            tests/integration/test_multi_vault_projection_isolation.py \
-            tests/episodes/test_episode_projection.py \
-            tests/integration/test_vault_sync_atomicity.py \
-            tests/ingest/test_vault_root_ingest_pg.py \
-            tests/invariants/test_retrieval_spine_invariants.py \
-            tests/jobs/test_decisions_export.py \
-            tests/jobs/test_decisions_projection_rebuild.py \
-            tests/jobs/test_multi_vault_decisions_rebuild_scope.py \
-            tests/jobs/test_calibration_projection_rebuild.py \
-            tests/integration/test_calibration_rebuild_from_log_only.py \
-            tests/stores/test_decisions_fk_semantics.py \
-            tests/stores/test_ensure_tables_assert_only.py \
-            tests/stores/test_multi_vault_store_reset_scope.py \
-            tests/stores/test_pg_truncate_reset.py \
-            tests/stores/test_pg_vector_index.py \
-            tests/stores/test_store_contract_pg.py \
-            tests/stores/test_vector_generation_identity.py \
-            tests/services/test_audit_writer.py \
-            tests/migrations/test_outbox_schema_parity.py \
-            tests/migrations/test_multi_vault_outbox_upgrade.py \
-            tests/services/test_multi_vault_outbox_dual_key_dedup.py \
-            tests/migrations/test_yss01_source_registry_schema_parity.py::test_yss01_migration_bootstrap_parity_and_legacy_repair \
-            tests/services/test_outbox_bootstrap_assert_only.py \
-            tests/instance/test_file_state_binding_key.py \
-            tests/services/test_vault_sync_binding_scope.py \
-            tests/integration/test_single_vault_compatibility.py \
-            -m "pg" \
-            --tb=short \
+          python -m app.ops.pg_acceptance --ci --nightly \
             | tee tmp/nightly-pg-contracts.log
 
       - name: Upload PG lane log

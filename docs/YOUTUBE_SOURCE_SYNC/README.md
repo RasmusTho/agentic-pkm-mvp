@@ -1,4 +1,10 @@
-State: Pragmatic YouTube Source Sync V1 with the bounded YSS-06 continuation (#3921 / PR #5616). Delivered foundations provide the registry, OAuth, Data API client, acquisition queue, and one manual Inbox sync route. The owner reprioritization of 2026-09-22 adds discovery scheduling, a durable lease, pause, backoff, and restart reconciliation for the supported one-account Inbox path. Acquisition draining remains operator-invoked; multi-source expansion, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain deferred.
+State: Pragmatic YouTube Source Sync V1 with the bounded YSS-06 continuation (#3921 / PR #5616)
+and bounded YSS-07 internal capability (#3922). Delivered foundations provide the registry, OAuth,
+Data API client, acquisition queue, and one manual Inbox sync route. YSS-06 adds discovery scheduling,
+a durable lease, pause, backoff, and restart reconciliation for the supported one-account Inbox path;
+acquisition draining remains operator-invoked. YSS-07 adds internal Takeout registry import and
+per-channel RSS discovery with conservative policies, without a subscription UI or additional
+scheduler. Backfill, analytics, broad CLI/UI, and full-media work remain deferred.
 Doc role: Capability specification directory
 Authority: Owns the YouTube source-sync capability design — account binding, source registry, continuous discovery, durable acquisition requests, scheduling, and the setup/status surfaces. Subordinate to `docs/KNOWLEDGE_ACQUISITION/README.md` (platform boundary), `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md` (plugin interface), `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` (stages), `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` (triage), `docs/EVENTS.md` (event envelope/outbox), and `docs/SECURITY.md` (secret baseline). It revises `docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md` §Discovery by owner directive (see §Decision record).
 Owner: Architecture / knowledge acquisition
@@ -26,8 +32,9 @@ YouTube playlist discovery
 The production acquisition drain also accepts the `candidate_metadata_only` policy for durable
 metadata-only requests. That path performs one logged-out metadata fetch, preserves immutable raw
 and normalized lineage, and writes a review-required metadata candidate without transcript,
-media, or extractor work. Issue #5722 supplies this producer prerequisite for the deferred
-subscription/RSS slice; it does not deliver YSS-07 or change its discovery and scheduling scope.
+media, or extractor work. Issue #5722 delivered this producer prerequisite; #3922 delivers the
+bounded YSS-07 Takeout import and RSS discovery path. Scheduling (YSS-06), gap repair (YSS-08),
+and wider setup/status surfaces remain separate work.
 
 **The playlist is only a user-friendly intent surface — never knowledge authority.** Discovery
 creates a durable request; KAP produces a review-required candidate; only Mimer's governed human
@@ -64,13 +71,14 @@ The wider data shapes remain future-facing compatibility vocabulary, not shipped
 The owner decision recorded by #5324 on 2026-09-07 retained YSS-06 through YSS-11 as deferred
 portfolio scope. The 2026-09-22 `continue-slice` receipt on #3921 lifts that deferral for YSS-06
 only: discovery scheduling on the existing watcher loop, with acquisition kept outside the tick.
-Siblings #3922-#3926 remain deferred. Their continuation still requires a bounded contract,
-dependency order, and Verify targets; this slice changes no credential, cookie/scraping, media
-retention, or automatic-promotion authority.
+The owner's explicit reprioritization recorded on #3922 on 2026-09-29 then continues YSS-07 with
+the bounded contract and Verify targets in that issue. YSS-08 through YSS-11 remain deferred.
+These continuations change no credential, cookie/scraping, media-retention, automatic-promotion,
+or wider product-surface authority.
 
-The owner-reprioritized continuation in #5722 is limited to the metadata-only acquisition producer
-and its replay, failure, and write-guard behavior. YSS-07 remains a separate deferred discovery
-slice whose Takeout/RSS work may consume this producer only after its own contract is activated.
+The owner-reprioritized continuation in #5722 was limited to the metadata-only acquisition producer
+and its replay, failure, and write-guard behavior. YSS-07 consumes that producer only through the
+explicitly authorized subscription discovery path; its default remains `discover_only`.
 
 ## Capability boundary
 
@@ -137,13 +145,13 @@ it. The operator path (GCP/OAuth setup, first sync, troubleshooting, live accept
 | 2a | [Bind YouTube account with OAuth](BIND_YOUTUBE_ACCOUNT_WITH_OAUTH.md) | YSS-02 | YSS-01 | **Delivered V1 foundation:** encrypted local token authority, connect/status/disconnect degradation |
 | 2b | [Establish durable acquisition requests](ESTABLISH_DURABLE_ACQUISITION_REQUESTS.md) | YSS-04 | YSS-01 | **Delivered V1 foundation:** source-agnostic request queue + review-required acquisition drain |
 | 3a | [Build YouTube Data API client](BUILD_YOUTUBE_DATA_API_CLIENT.md) | YSS-03 | YSS-02 (token provider interface only — stubbable) | **Delivered V1 foundation:** bounded read-only API client, ETag, quota accounting, host allowlist |
-| 3b | [Sync subscriptions from Takeout and RSS](SYNC_SUBSCRIPTIONS_FROM_TAKEOUT_AND_RSS.md) | YSS-07 | YSS-01, YSS-04 | Takeout adoption (operator WIP baseline), channel-RSS incremental discovery, policy modes |
+| 3b | [Sync subscriptions from Takeout and RSS](SYNC_SUBSCRIPTIONS_FROM_TAKEOUT_AND_RSS.md) | YSS-07 | YSS-01, YSS-04, metadata-only producer | **Bounded implementation (#3922):** Takeout registry import, channel-RSS incremental discovery, four policy modes, and per-source receipts; no scheduler or backfill |
 | 4 | [Sync one YouTube Inbox playlist](DISCOVER_PLAYLIST_ITEMS_CONTINUOUSLY.md) | YSS-05 | YSS-01, YSS-03, YSS-04 | **V1:** exactly one Inbox, manual production poll, sanitized status, review-required candidate |
 | 5 | [Schedule and operate continuous sync](SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md) | YSS-06 | YSS-04, YSS-05 | per-source discovery scheduling, single-run lease, pause, offline/restart reconciliation, backoff (draining, and with it safe shutdown, stays out of the tick) |
 | 6a | [Repair gaps with previewed backfill](REPAIR_GAPS_WITH_PREVIEWED_BACKFILL.md) | YSS-08 | YSS-05, YSS-07 | weekly reconcile + historical backfill with preview receipt and explicit confirmation gate |
 | 6b | [Surface sync health, status, and receipts](SURFACE_SYNC_HEALTH_STATUS_AND_RECEIPTS.md) | YSS-09 | YSS-02, YSS-04, YSS-06 | doctor/health checks, degraded-reason taxonomy, receipt projection answering the audit questions |
 | 6c | [Operate sync from the CLI](OPERATE_SYNC_FROM_CLI.md) | YSS-10 | YSS-02, YSS-06 | scriptable `--json` commands: auth connect/status/disconnect, sources list/configure, sync run/status/pause, doctor |
-| 7 | [Set up YouTube sync in Companion UI](SET_UP_YOUTUBE_SYNC_IN_COMPANION_UI.md) | YSS-11 | YSS-02, YSS-05, YSS-06, YSS-09 | guided setup flow + status card (cold/connected/degraded/paused/offline), preview-before-backfill, Sync now/Pause/Reconnect/Change inbox/Disconnect |
+| 7 | [Set up YouTube sync in Companion UI](SET_UP_YOUTUBE_SYNC_IN_COMPANION_UI.md) | YSS-11 | YSS-02, YSS-05, YSS-06, YSS-07, YSS-08, YSS-09 | guided setup flow + status card (cold/connected/degraded/paused/offline), preview-before-backfill, Sync now/Pause/Reconnect/Change inbox/Disconnect |
 
 Parallel lanes after YSS-01: {YSS-02, YSS-04} → {YSS-03, YSS-07} → YSS-05 → YSS-06 → {YSS-08,
 YSS-09, YSS-10} → YSS-11. The final child (YSS-11) includes the parent-closure handoff.
@@ -227,6 +235,7 @@ remains deferred to a future bounded-background-drain slice.
 
 ## Relationship to GitHub issues
 
-Parent #3915 is the pragmatic V1 validation hub. Issue #3990 supplies the final OAuth safety floor
-and #3920 supplies the one-Inbox manual sync route. Deferred children and follow-ups remain
-separate backlog contracts; this V1 does not claim or close them.
+Parent #3915 remains the pragmatic V1 validation hub. Issue #3990 supplies the final OAuth safety
+floor and #3920 supplies the one-Inbox manual sync route. YSS-07's bounded implementation is a
+separate internal capability continuation; it does not widen the parent product outcome. YSS-08
+through YSS-11 remain separate deferred backlog contracts.

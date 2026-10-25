@@ -12,12 +12,86 @@ from app.vault.manager import nearest_enclosing_vault_root
 from tests.helpers.vault_settings import initialize_test_vault
 
 
-def test_provisional_uninitialized_parent_reads_stop_at_initialized_child(tmp_path: Path) -> None:
-    parent, child = tmp_path / "parent", tmp_path / "parent" / "child"
+def _scoped_client(runtime, monkeypatch) -> TestClient:
+    import app.vault.manager as vault_manager_module
+
+    monkeypatch.setattr(vault_manager_module, "_GLOBAL_MANAGER", None)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
+    selection_routes.reset_selection_store_for_tests()
+    return TestClient(app)
+
+
+def _tree_snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _select(client: TestClient, binding_id: str) -> dict[str, str]:
+    selection = client.post(
+        "/api/companion/active-context/selection",
+        json={"vault_binding_ids": [binding_id]},
+    )
+    assert selection.status_code == 201, selection.text
+    return {"X-Active-Context-Session": selection.json()["context_selection_id"]}
+
+
+def test_provisional_uninitialized_parent_reads_stop_at_initialized_child(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The production read-before-initialize journey: a registered, still
+    # uninitialized (provisional) binding is readable through the migrated
+    # companion read routes, stops at an initialized nested child, and stays
+    # write-sealed.
+    runtime, first, _extra, _record = provisioned_instance(tmp_path)
+    parent = Path(first.path)
+    child = parent / "child"
     child.mkdir(parents=True)
     (parent / "parent.md").write_text("# Parent", encoding="utf-8")
     (child / "child.md").write_text("# Child", encoding="utf-8")
     initialize_test_vault(child)
+
+    client = _scoped_client(runtime, monkeypatch)
+    headers = _select(client, first.vault_binding_id)
+    before = _tree_snapshot(parent)
+
+    context = client.get("/api/companion/vault/context", headers=headers)
+    assert context.status_code == 200, context.text
+    assert context.json()["status"] == "uninitialized"
+    assert context.json()["active_vault_path"] == str(parent.resolve())
+
+    notes = client.get("/api/companion/vault/notes", headers=headers)
+    assert notes.status_code == 200, notes.text
+    listed = [note["path"] for note in notes.json()["notes"]]
+    assert "parent.md" in listed
+    assert all(not path.startswith("child/") for path in listed)
+
+    parent_note = client.get(
+        "/api/companion/workspace", params={"note_path": "parent.md"}, headers=headers
+    )
+    assert parent_note.status_code == 200, parent_note.text
+    child_note = client.get(
+        "/api/companion/workspace", params={"note_path": "child/child.md"}, headers=headers
+    )
+    assert child_note.status_code == 404, child_note.text
+    orientation = client.get("/api/companion/orientation", headers=headers)
+    assert orientation.status_code == 200, orientation.text
+    assert orientation.json()["reason"] == "uninitialized"
+    # Every scoped read above was write-free inside the provisional root.
+    assert _tree_snapshot(parent) == before
+
+    sealed = client.post(
+        "/api/companion/workspace/body",
+        json={"note_path": "parent.md", "body": "# Changed"},
+        headers=headers,
+    )
+    assert sealed.status_code == 409, sealed.text
+    assert sealed.json()["detail"]["error"] == "capability_not_ready"
+    assert (parent / "parent.md").read_text(encoding="utf-8") == "# Parent"
 
     parent_notes = [relative for _path, relative in _iter_vault_note_files(parent)]
 
@@ -76,6 +150,37 @@ def test_parent_authority_cannot_read_registered_child_vault(tmp_path: Path, mon
         and note["vault_binding_id"] == child_registration.vault_binding_id
         for note in child_read.json()["notes"]
     )
+
+    # MVR-05B2: the migrated companion read routes enforce the same boundary.
+    parent_headers = {
+        "X-Active-Context-Session": parent_selection.json()["context_selection_id"]
+    }
+    child_headers = {
+        "X-Active-Context-Session": child_selection.json()["context_selection_id"]
+    }
+    migrated_parent = client.get("/api/companion/vault/notes", headers=parent_headers)
+    assert migrated_parent.status_code == 200, migrated_parent.text
+    assert all(
+        not note["path"].startswith("child/") for note in migrated_parent.json()["notes"]
+    )
+    crossing = client.get(
+        "/api/companion/workspace",
+        params={"note_path": "child/secret.md"},
+        headers=parent_headers,
+    )
+    assert crossing.status_code == 404, crossing.text
+    link_index = client.get("/api/companion/vault-link-index", headers=parent_headers)
+    assert link_index.status_code == 200, link_index.text
+    assert all(not path.startswith("child/") for path in link_index.json()["note_paths"])
+    child_note = client.get(
+        "/api/companion/workspace",
+        params={"note_path": "secret.md"},
+        headers=child_headers,
+    )
+    assert child_note.status_code == 200, child_note.text
+    child_context = client.get("/api/companion/vault/context", headers=child_headers)
+    assert child_context.status_code == 200, child_context.text
+    assert child_context.json()["active_vault_path"] == str(child.resolve())
 
     parent_notes = [relative for _path, relative in _iter_vault_note_files(parent)]
     child_notes = [relative for _path, relative in _iter_vault_note_files(child)]

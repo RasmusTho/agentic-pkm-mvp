@@ -1,19 +1,24 @@
-State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6.0 seams are shipped in bounded form and broader v6.1+ consumption remains planned. The Product Runtime placement contract uses TARS-hosted Linux with private Linux/Tailscale ingress for dev, test, and prod; the Mac mini is a control, development, client, and operator computer, not Product Runtime placement. Latest dated environment evidence is recorded in `docs/ENVIRONMENTS.md` and is not a fresh host readback from this workstation.
+State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6.0 seams are shipped in bounded form and broader v6.1+ consumption remains planned. The Product Runtime placement contract uses TARS-hosted Linux guests for dev, test and prod; the Mac mini provides control, client and model-execution services. The infrastructure repository's current-status view owns dated physical host and service observations; environment and deployment contracts remain separate.
 Doc role: Core SoT
 Authority: Top-level operator guidance for the current runtime; delegates specialized operational detail to linked companion docs but remains the main operational entrypoint.
 Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-14 (native MVR-01C entry for #6056, native BWS embedding preflight for #6069, and fixed native TEST journaling entry for #6050, repository-only; prior #5969 web qualification, #5993 placement and other section reviews retained; no new live host or service verification)
-Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
+Last reviewed: 2026-10-24 (#6316 current-state source admission; #6228 and prior repository support retained; no new live host or service verification)
+Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; this is not a new deployment, release or functional-acceptance receipt.
+Infrastructure reference review: 2026-10-21; other sections retain their individual verification dates.
+Local Colima startup entry reviewed 2026-10-24 against scripts/start_full_system.sh, tests/ops/test_colima_runtime_readiness.py and the isolated/default runtime receipts on Issue #4899; no TARS verification or placement change.
 BWS child-runtime repository evidence: requirements-bws-deploy.txt; scripts/install_bws_deploy_runtime.sh; tests/deploy/test_deploy_channel.py::test_bws_runtime_setup_covers_mandatory_browser_smoke and tests/deploy/test_deploy_channel_script.py::test_managed_deploy_child_uses_declared_supervisor_interpreter; Issue #5905 / PR #5906 (repository validation only; no live host installation or channel acceptance).
 Native web entry repository evidence (2026-10-12): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_web, app/ops/native_web_acceptance_runner.py::NativeWebRunner, and tests/ops/test_native_web_acceptance.py; runtime pilot qualification remains with #2443/#3314.
 Native journaling entry repository evidence (2026-10-14): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_journaling, app/ops/native_journaling_acceptance_runner.py::NativeJournalingRunner, and tests/ops/test_native_journaling_acceptance.py; actual-image/provider TEST acceptance remains with #3347.
 Native authority-cutover repository evidence (2026-10-14): app/ops/postgres_deploy.py::DeployPlan, app/ops/postgres_deploy_linux.py::DeploymentSupervisor and tests/deploy/test_postgres_deploy_authority_cutover.py; live nonprod qualification remains with #3367.
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/KARAKEEP_MIMER_ACQUISITION/README.md, docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md, docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md, config/secrets/host_secret_contract.json, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, app/ops/native_source_bootstrap.py, scripts/deploy_channel.sh, tests/deploy/test_deploy_channel_script.py::test_native_deploy_rebuilds_source_projection_before_health_gate, tests/deploy/test_deploy_channel_script.py::test_native_api_source_selector_refuses_before_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_unbound_api_preserves_idle_without_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_prepares_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_refuses_unavailable_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_preserves_selected_embedding_identity, Issue #6069 candidate containing origin/main 8ec709f (repository-only; no live channel verification), tests/ops/test_ci_workflow.py::test_scoped_not_pg_step_has_room_for_multi-subsystem_selection, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-14
+TEST dormant-ownership section reviewed and verified against repository-only #5937 evidence (2026-10-16): app/instance/legacy_owner_recovery.py::initialize_dormant_ownership and tests/ops/test_dormant_ownership_initialization.py; no live authority, channel or service verification.
+Current-state source admission section last verified against repository-only #6316 evidence (2026-10-24): app/ops/native_source_admission.py, app/ops/postgres_deploy_linux.py::LinuxEffects.persist_source_identity and tests/ops/test_native_source_diagnostic_admission.py; actual source and same-candidate DEV/TEST acceptance remain with #3347/#6300.
+Last verified against: scripts/postmerge_channel_bug.py::advance_channel_ref, .github/workflows/postmerge-channel-bug.yml and tests/deploy/test_postmerge_dev_test.py::test_channel_refs_advance_only_on_green_verdicts / ::test_dev_hold_pins_ref_and_records_candidates (#6226 repository-only ref/hold proof); scripts/postmerge_dev_test.py and tests/deploy/test_postmerge_dev_test.py::test_test_promotion_requires_passing_dev_heavy_verdict (#6227 repository-only dev-heavy gate evidence); requirements-bws-deploy.txt (host SDK closure), scripts/install_postmerge_controller.py, scripts/postmerge_controller.py, scripts/postmerge_dev_test.py, scripts/dev_delivery_liveness.py and tests/deploy/test_postmerge_dev_test.py::test_controller_runs_from_pinned_tooling / ::test_controller_self_check_fails_loud (#6225 repository-only pinned tooling and startup proof); scripts/postmerge_dev_test.py::engage_pause and tests/deploy/test_postmerge_dev_test.py::test_kill_switch_pauses_until_expiry (#6224 repository-only pause evidence); scripts/dev_delivery_liveness.py and tests/governance/test_dev_delivery_liveness_workflow.py (#6222 repository-only liveness evidence); scripts/postmerge_dev_test.py, scripts/postmerge_channel_bug.py and tests/deploy/test_postmerge_dev_test.py (#6223 repository-only rolling channel-bug evidence); scripts/companion_ui_postdeploy_smoke.sh::preflight and tests/companion_ui/test_gateway_postdeploy_smoke.py::test_collection_preflight_classifies_captured_output_without_pipe_race (#6079 repository-only evidence), docs/MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md, app/api/routes/ask.py::ask_voice, app/chat/voice_session.py::VoiceSessions, tests/voice/test_session_transcript.py::test_only_write_is_appendonly_transcript (VOICE-04 repository evidence), docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/KARAKEEP_MIMER_ACQUISITION/README.md, docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md, docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md, config/secrets/host_secret_contract.json, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, app/ops/native_source_bootstrap.py, scripts/deploy_channel.sh, tests/deploy/test_deploy_channel_script.py::test_native_deploy_rebuilds_source_projection_before_health_gate, tests/deploy/test_deploy_channel_script.py::test_native_api_source_selector_refuses_before_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_unbound_api_preserves_idle_without_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_prepares_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_refuses_unavailable_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_preserves_selected_embedding_identity, Issue #6069 candidate containing origin/main 8ec709f (repository-only; no live channel verification), tests/ops/test_ci_workflow.py::test_not_pg_steps_have_room_for_selected_coverage, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-14
 TypeSafe credential boundary evidence: config/secrets/host_secret_contract.json; tests/ops/test_host_secret_contract.py::test_typesafe_key_uses_non_prod_project_and_marr_only_consumer, tests/ops/test_secret_admin.py::test_typesafe_import_targets_non_prod_and_rejects_other_channels, and tests/architecture/test_typesafe_runtime_boundary.py::test_runtime_key_stays_on_marr_and_callers_keep_separate_policy; Issue #5808 follows Issue #5801 / PR #5803 on 2026-10-07. Repository-only fake/injected-source evidence; no live BWS permission or host/provider verification.
 TypeSafe Builder CKM repository evidence: app/builderops/ckm/judgment.py, app/model_access/ckm_judgment_executor.py, tests/builderops/ckm/test_semantic_typesafe.py, and Issue #5768 on 2026-10-05; fake-provider proofs only, with runtime disabled and no live host or provider verification.
+TypeSafe DEV actual-consumer evidence: the [2026-10-21 Product receipt and external cleanup](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6288#issuecomment-6309809365) and [preserved Builder receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5764#issuecomment-6203507688) verify the separate synthetic calls. Both allowances are consumed, temporary listeners/processes are absent, and ordinary routes remain disabled; broader #5667 and TEST/PROD activation keep their separate gates.
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -21,7 +26,8 @@ Use this document as the operator-facing starting point for runtime operations.
 Specialized companion documents:
 - `docs/HEALTH.md` - health CLI behavior and runtime health contract
 - `docs/OBSERVABILITY.md` - runtime observability signals, counters, and span/log contracts
-- `docs/INFRASTRUCTURE.md` - local runtime stack, Docker/Colima setup, and local observability stack
+- `docs/INFRASTRUCTURE.md` - application Compose fallback and local observability reference
+- [yggdrasil-infra current status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md) - dated Macs, TARS/VMs, Docker engines, network, storage and related-service observations; Builder Vault carries the operational handoff and private evidence locator
 - `docs/SECURITY_ARCHITECTURE.md` - security review routing, threat-model tiers, and security invariants
 - `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` - target ownership boundary for the
   ecosystem operational platform; this playbook remains the current operator entrypoint and runbook
@@ -47,6 +53,86 @@ CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
 - Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
 - Canvas note: `python -m app.cli canvas ...` and `/api/canvas/*` now exist as bounded session surfaces behind `CANVAS_ENABLED`; they are materially supported for bounded co-authoring, but still not part of the default production operator surface.
+
+### Native source-persistence failure receipts
+
+Supervised DEV/TEST source persistence records only fixed, content-free failure stages for worker
+context, lock/guard, writer stop, worker transport/quiescence/receipt validation, producer-receipt
+publication, writer restoration, and exact-owner lock retirement. Do not treat one of these reasons as
+source eligibility or deployment acceptance. A valid producer receipt remains unchanged in its
+producer entry; a later cleanup failure is recorded separately in the final terminal and permits only
+the exact same-ID cleanup route. Child output, exception text, source identity or paths, environment
+or mount values, and credentials must never be copied into receipts or operator notes. See
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` for the detailed stage and cleanup contract.
+
+For intact protected authority with a retained stopped writer, use the explicit DEV/TEST
+current-state flow in the [deployment procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure):
+fresh read-only diagnosis, separately authorized ordinary registry persistence, exact prior-running-set
+restoration and full eligible readback, then separately authorized ordinary deployment. Source
+operations do not start the retained watcher or adopt missing historical ownership; default persistence
+still requires all required writers running. Malformed retained operation entries are refused, not
+replaced. An authenticated never-admitted proof consumes only its exact sent operation ID and is not
+a producer attempt, successful admission or permission to replay. These are repository-supported
+operations, not live source qualification or closure of #3347/#6300.
+
+The exact supportable source-identity repair module is an inert DEV library, not an operator CLI or
+standing recovery route. A separately governed native owner must supply one reviewed 23+26 private
+batch whose revision, image, selection, target-set digest, and physical vault identity match fresh
+host authority inside one owned fence. The library performs no discovery, producer allocation,
+controller load, deployment, inference, or promotion. Do not replay partial/indeterminate outcomes;
+reconcile only against retained exact hashes. Rollback is permitted only for a validated batch
+member whose current bytes equal its admitted candidate and must run under the same pre/post fence.
+No raw path, UUID, content, or exception text belongs in its public count-only receipt.
+
+### #6300 fixed-selection reconciliation (historical, count-only)
+
+The accepted V7 summary is the fixed selection of 651 items: 12 persisted, 544 missing, 95 invalid,
+0 ambiguous, and 0 producer errors. Its qualified summary SHA-256 is
+`72c7899ef09adb4151a4d78feb014e3bb612abe148f738a5670949d4dfa26360`. This is historical aggregate
+evidence, not a new source read, current eligibility, source/deployment acceptance, or permission to
+replay or broaden the selection. The [V7 receipt history](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6300#issuecomment-6330659322)
+retains the exact receipt lineage. The [#3347 accepted V5 receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3347#issuecomment-6384608390)
+leaves source/deployment eligibility unassessed, admits no DEV candidate, and sets the remaining
+native-observation allowance to zero; this reconciliation does not change that boundary.
+
+| Historical class | Count | Static disposition and bounded route |
+|---|---:|---|
+| Snapshot/parse | 55 | Unsupported unless checked-in code establishes a specific registered parser/owner class. The accepted split is 54 non-title mapping-value cases and 1 `ParserOther`; a title preview proves no semantic rewrite authority. |
+| Malformed explicit UUID | 17 | Unsupported unless source, provenance, or companion identity authority was already established. Product/database identity alone never grants admission. |
+| Companion `source_ref` conflict | 23 | Non-admitted until a separately authorized gate proves unique same-UUID, canonical-body-hash, and source-claim continuity. The inert proposal changes only the companion locator, content hash, and bounded history; source bytes, UUID, and unrelated companion fields remain unchanged. |
+| Read-only-derived artifacts | 26 (25 historical, 1 current Daily Briefing) | Use only the registered composer’s identity-only migration, preserving the stored schema and section order through exact-version compare-and-swap with retained-original recovery. Generic registry repair refuses these; damaged, unreadable, unowned, profile-bound, or stale artifacts remain excluded. |
+| Other missing cases | 518 (504 ordinary no-identity, 14 companion-absent) | Deferred while any unsupported or conflicting class remains; the fixed selection is ineligible. |
+
+The previously exact-hash-reviewed inert proposal receipts remain unchanged: [supportable companion/composer proposals](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6300#issuecomment-6328572614),
+[parser and identity refinement](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6300#issuecomment-6329905079),
+and [static authority partition](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6300#issuecomment-6330819033).
+They are repair design evidence only; no source or host predicate in this table is claimed to have
+passed a live observation.
+
+### Mimer voice sessions (VOICE-04)
+
+`POST /api/ask/voice` returns a `session_id` when a question turn opens a transcript
+on an initialized selected vault. Pass that id for follow-ups; `end_session=true`
+closes the transcript and retires the live context. Context and pointers are
+process-local: restart, another API worker, a changed vault/scope or an already
+closed id returns `409 voice_session_context_lost`. Start a new session and
+restate the missing context; the durable transcript is never replayed as live memory.
+
+A process-local window on the actual shared vault manager keeps selection stable
+through context lookup, ASK retrieval and transcript create/append/close. A
+concurrent legacy select or lazy selection load waits for those effects; derived
+TTS runs after release. This is not a persistent lease or cross-worker recovery.
+
+Voice persistence uses the existing guarded `SessionLogWriter` only under
+`.chats/voice/`, with per-turn UTC timestamps. It creates no human-note anchor,
+UUID repair or `.canvas-sessions` pointer. Logging refusal/failure preserves the
+grounded answer and reports `session_error: session_transcript_unavailable`,
+independently of TTS degradation. Capture-intent suggestions perform no write.
+See [the client contract](contracts/MIMER_CLIENT_CONTRACT.md#43-post-apiaskvoice)
+and [the session owner spec](MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md)
+for semantics and production-path verification. These are repository contracts;
+parent #3335 retains qualified TARS TEST voice/UI acceptance, and ERE
+`chat.sessions` consumption remains planned.
 
 ### Heimdal raw-store capacity receipt
 
@@ -94,6 +180,15 @@ See `docs/EPISODE_RESOLUTION_ENGINE/README.md` for the owner contract.
   (preflight, smoke test, soak, rollback rehearsal, and receipt), use
   `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`. Treat release channels as an operator-governed
   capability with outstanding feature acceptance, not as a fully accepted baseline workflow.
+
+  Normal production promotion uses protected `stable` authority (#6228): the exact current green
+  TEST source C and immutable image D, a signed functional PASS, and explicit approval of the
+  concrete plan. `make deploy-prod SHA=<C> IMAGE_DIGEST=<D> PROMOTION_PLAN=<absolute-path>` and the
+  native host adapter enforce admission before effects. Protected merge M is authority evidence;
+  the running version remains C/D. The operator's read context must supply full required stable
+  protection and Actions evidence on the execution host; controller credentials do not imply
+  those production permissions. Ordinary restart and governed previous-good rollback retain their
+  contracts. Repository support establishes no running-prod or cutover observation.
 
 ### Read-only ordinary-boot doctor (STARTUP-03)
 
@@ -213,6 +308,12 @@ operators can use the explicit, stopped-window [DEV legacy-owner re-attestation]
 command. It requires a fresh authority decision and verified private recovery evidence; normal
 startup remains fail-closed and activation remains a separate deployment step. Missing or
 inconsistent registry backup artifacts are refused without being repaired during admission.
+
+For a retained populated dormant TEST registry with both protected ownership artifacts absent,
+the explicit [TEST dormant ownership preparation](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#explicit-test-dormant-ownership-preparation)
+seam requires a separately acknowledged new epoch and a qualified native stopped window. It leaves
+the registry dormant and writers fenced; ordinary startup still refuses the missing pair. Repository
+support and isolated fixtures do not authorize a live invocation, B47 retry or activation.
 
 ## Environment posture
 
@@ -488,8 +589,9 @@ Companion docs:
   path references through the four-key allowlist. Missing or invalid optional input keeps legacy
   empty bindings; see [Rollback posture](RELEASE_CHANNELS/README.md#rollback-posture) for the
   configuration and modern-caller limits.
-- A failed supervised deploy child reports only an allowlisted advisory gate stage and
-  `command_failed` class directly to the existing native journal socket, with `unknown` for absent
+- A failed supervised deploy child reports only an allowlisted advisory gate stage and the finite
+  class defined in the [Deploy procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure)
+  directly to the existing native journal socket, retaining `unknown`/`command_failed` for absent
   or ambiguous markers. One nonblocking datagram carries only the finite message and fixed priority
   and identifier; both raw service streams remain null. An unavailable or full socket loses only
   the advisory diagnostic. This diagnostic does not establish a terminal result or live
@@ -497,8 +599,12 @@ Companion docs:
 - Before a Linux BWS deployment, operator setup must qualify the complete isolated host runtime,
   including Python helpers, Chromium headless payload, exact browser-smoke collection and tuning
   imports. Follow [Linux channel secret provisioning](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#linux-channel-secret-provisioning)
-  for the setup/runtime binding and infrastructure-owned OS prerequisites. Missing dependencies or
-  an unavailable browser refuse setup before launcher replacement; application-image selection,
+  for the setup/runtime binding and infrastructure-owned OS prerequisites. The offline collection
+  preflight accepts exit 0 or exit 5 with its intentional `SKIPPED` marker, checking captured output
+  without a short-circuiting pipe; missing-marker and other-error outcomes still refuse setup.
+  Repository regression checks cover this classification without establishing live host or channel
+  qualification. Missing dependencies or an unavailable browser refuse setup before launcher
+  replacement; application-image selection,
   credential/grant and migration authority remain with their existing operator gates.
 - Fixed native `qualify-web` uses an already committed dev/test operation/image and its exact
   native lock/resource admission. Disposable baked API/UI services bootstrap canonical sources
@@ -518,8 +624,59 @@ Companion docs:
   retire unknown cleanup. Retry the owning qualifier, not the other journey.
   Follow the same linked deployment/testing contracts above. Repository delivery of #6050 is
   not actual TEST PASS or parent #3347 acceptance.
+- Fixed `qualify-heavy dev <committed-operation-uuid>` (admitted by the installed launcher's action allowlist from #6205) runs the post-merge heavy test targets
+  (`postmerge-heavy.v1`, #6158) for the committed DEV candidate. The repository controller (#6227)
+  calls it after native DEV/PG acceptance and dispatches the bounded verdict to
+  `post-merge-heavy-tests.yml`. Only a passing exact DEV verdict permits TEST promotion. Red candidates
+  are held without replay while later builds continue; interrupted heavy runs and uncertain dispatches
+  are not replayed on restart. It takes no channel lock, and its operation-owned container and work tree
+  are removed after every completed run. Legacy TEST receipts remain readable. Manual qualification
+  does not grant controller promotion authority. Live activation stays #6170/#3347. See
+  [Post-merge heavy tests](development/TEST_STRATEGY_HOT_PATH.md#post-merge-heavy-tests).
+- GitHub-visible DEV delivery liveness (#6222) runs in `dev-delivery-liveness.yml` on a schedule.
+  Inspect the checker JSON `reason` and its signal workflow runs: the default missed-progress
+  deadline is six hours, and the controller activity window is two hours. A fresh terminal DEV
+  verdict records activity even when deployment failed; later progress retires skipped older builds.
+  The [CI deployment automation posture](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1)
+  owns the signal admission and recovery limits. Repository proof does not release the controller
+  or establish live channel acceptance; those operator gates remain with #6170 and #3347.
+- Native dev/test rolling channel-bug repository support (#6223) follows the
+  [CI deployment automation posture](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1).
+  Its main-only Actions writer opens or updates red bugs and closes them on later green evidence,
+  while subsequent candidates continue. Live activation and channel qualification remain with #6170/#3347.
+- Green channel-ref repository support (#6226) uses the existing trusted-main verdict workflow's
+  separate ref job. It advances only `dev`/`test` by non-force fast-forward; test requires an exact
+  retained dev-green receipt. A linked owner Issue pins dev after the workflow confirms `held`,
+  while later candidates and deployments continue. Follow the
+  [deployment owner's hold format, activation readback and workflow-rerun recovery](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1).
+  The host client keeps Contents read. Repository proof does not activate the host or move live refs;
+  #6170/#3347 retain those operator gates.
+- Pinned post-merge controller tooling (#6225) is installed as a reviewed-SHA source snapshot and
+  private isolated Python runtime under the existing postmerge state directory. The LaunchAgent uses
+  isolated Python startup and a fixed pin; neither its imports nor the native host child imports use
+  a candidate checkout or ambient Python configuration. Startup checks the runtime identity and real
+  controller/native imports and unauthenticated SDK construction before polling. The SDK closure
+  reuses the existing BWS manifest pins and is copied and hashed inside the installation. A failed
+  check exits 78 and snapshots existing checkpoint order without changing it before dispatching a
+  failed heartbeat. A fresh DEV verdict cannot mask that failure; later actual controller activity
+  supersedes it, with active-pause and expiry behavior preserved. Invalid checkpoint state, clock admission
+  refusal or unavailable transport uses the bounded log and scheduled missing/stale-heartbeat path. Select a fresh reviewed tooling SHA to
+  upgrade or recover a broken pin; candidate deployment never refreshes it. Follow the linked deployment
+  posture for installation. Repository support does not activate the host (#6170) or accept a
+  release (#3347).
+- Controller pause repository support (#6224) uses the existing private checkpoint and lock. Only an
+  explicit linked-Issue pause with a future expiry is supported; the liveness check reports
+  `paused (#N, until T)` and work resumes automatically at expiry. Follow the
+  [deployment owner's command and authority](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture).
+  Keep the LaunchAgent loaded; live host changes require owner OK on #6224, and existing #6170/#3347
+  activation/qualification gates remain.
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
+- Local Colima startup verifies its explicit resource profile, context/socket binding, persistent
+  substrate, containerd readiness and exact durable container inventory before BuilderOps helpers,
+  flight recording or Compose can run. Disk refusal still runs first. Use the
+  [Colima startup procedure](runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md#colima-persistent-substrate-readiness)
+  for installation, cold-start authorization and recovery; Product channels retain their TARS placement.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.
 - Companion UI channel launchers (`make dev-ui`, `make test-ui`, `make prod-ui`) bind the browser
   UI to `127.0.0.1` by default. Set `CUI_BIND_LAN=1` to explicitly opt a channel into a
@@ -527,35 +684,35 @@ Companion docs:
 - The Companion UI proxy pins `/api/companion/*` to the same runtime origin so browser UAT does not
   cross providers or devices accidentally. Runtime-unreachable and wrong-device states are distinct
   operator-visible failures rather than generic vault setup prompts.
-- Companion TTS is a local-first runtime surface: configured local voices can be selected for clean
-  Markdown read-back, mixed-language segments may route to different voices, and production
-  deployment depends on an explicitly configured, Tailscale-reachable external Ollama endpoint; the
-  Mac mini is model-serving infrastructure only.
-- Repository-side Model Access Router work may add a bounded Codex CLI adapter, but that adapter is
-  not a host activation or Product route. Until the separate designated-host and Tailscale
-  acceptance is complete, the Mac mini remains Ollama/model-serving only; no Product inference is
-  routed through Codex CLI, and no host login, CLI profile, service, or tailnet grant is implied by
-  a merged code change.
+- Companion TTS remains a local-first runtime surface with configured voices for Markdown
+  read-back. Ollama embedding identity and any selected remote endpoint are governed by
+  [the environment topology contract](ENVIRONMENTS.md#prod-ollama-topology); this playbook does not
+  establish a Tailscale prerequisite for the Model Access text route.
+- The accepted Model Access route uses VLAN mTLS to the loopback-bound Mac mini Codex CLI
+  executor. See [the dated infrastructure status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+  for installed and observed services. A merged adapter or running listener does not establish
+  persistent Product routing, inference qualification or release acceptance.
 - The repository resolves the MARR-only `typesafe.api-key` binding from the exact
   `dev/typesafe.api-key` identity in the existing `non-prod` BWS project through the existing
   read-only `non-prod-reader` account (#5801 / #5808). Its BWS reader token remains a
-  separate Mac Keychain bootstrap credential. The existing admin writer may access this project only
-  through the designated controller after #5667 qualification. Product and Builder callers receive no
+  separate Mac Keychain bootstrap credential. The #5667 receipts #6114638077 and #6114787299 verify
+  the current entitlement, existing reader scopes, exact MARR binding, and accepted Demerzel normal
+  writer with its same-user residual. Product and Builder callers receive no
   provider key; Linux reader identities retain accepted store-level access to the existing projects,
   while the application code-level MARR grant remains the sole runtime binding. Codex and Claude
-  receive no code-level provider-key grant. Fake-backed repository proofs do not establish
-  live entitlement or permissions. Verify the BWS entitlement and sole-writer boundary under #5667,
-  then the existing MARR host and separate caller bindings under #5764. The already-authorized
-  synthetic Product and Builder attempts remain single-shot and require separate redacted acceptance
-  receipts before either route is activated. Follow `docs/LOCAL_SECRET_PROVISIONING/README.md`
+  receive no code-level provider-key grant. Fake-backed repository proofs do not establish the broader
+  integrated channel deployment/runtime acceptance, which remains open under #5667. Product/Builder
+  actual-consumer DEV receipts are now verified separately on #5764, as linked above. Both
+  allowances are consumed; the historical Builder call and used MARR check were not repeated.
+  Ordinary route activation remains separately gated. Follow `docs/LOCAL_SECRET_PROVISIONING/README.md`
   (`Declared identifier contract`) and `docs/TYPESAFE_SYSTEM_ONE/README.md`
   (`Data and Credential Boundary`) for the details.
-- Builder CKM association has dormant repository support through its own authenticated
-  `/v1/ckm-judgment` MARR operation and pinned Builder profile. Derived evidence remains
-  candidate-only under the existing explicit confirmation and rebuild rules. The concrete
-  actual-consumer synthetic call and redacted receipt plan live in
-  `docs/TYPESAFE_SYSTEM_ONE/MIGRATE_BUILDER_CKM_ASSOCIATION.md :: Development Acceptance Gate`;
-  the separate operator gates above must be satisfied before runtime activation.
+- Builder CKM association has repository support through its own authenticated
+  `/v1/ckm-judgment` MARR operation and pinned Builder profile. The preserved actual-consumer DEV
+  receipt above verifies its completed call, with a below-floor result and zero candidate or
+  confirmed edges. Derived evidence remains candidate-only under the existing explicit confirmation
+  and rebuild rules. `docs/TYPESAFE_SYSTEM_ONE/MIGRATE_BUILDER_CKM_ASSOCIATION.md :: Development Acceptance Gate`
+  retains the acceptance contract; ordinary runtime activation remains separately gated.
 - Governed channel deploys obtain `TTS_ENABLED` and `TTS_HOST_ROOT` only from the selected generated
   runtime-env snapshot. The canonical exporter publishes that file atomically; deploy preflight
   fail-closes unreadable, malformed, duplicate, or invalid enabled configuration before migration,
@@ -611,6 +768,16 @@ remote continuation/transport, recovery control action, live Start or human acce
 See [FCA-ID-HOST-CANDIDATE](BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-host-candidate--protected-candidate-and-continuation-contract).
 Repository-only proof does not update the live-runtime verification date or close parent #5399.
 
+### DevUI GitHub token rotation on BOB-1
+
+Use `scripts/secrets devui rotate` from an up-to-date checkout on Demerzel to
+replace DevUI's dedicated GitHub credential through Bitwarden and hidden local
+terminal input. The fixed `bob-1-builder-system` SSH handoff needs no VM password
+and verifies reads inside the actual DevUI container. Preserve the existing
+read-only token settings; this binding does not update `shared/github.token`.
+The [DevUI secret procedure](CLOUD_SECRET_PROVISIONING/README.md#bob-1-devui-github-token)
+owns interpreter setup, preflight, exact paths, durable receipts, and recovery.
+
 ### BuilderOps cockpit live GitHub plane (#4484)
 - The cockpit's `github-live` source reads GitHub REST from **inside the `api` container** via the
   `gh` CLI, which the runtime image installs (`Dockerfile`, runtime-stage apt layer) alongside
@@ -649,6 +816,20 @@ Repository-only proof does not update the live-runtime verification date or clos
 - Check it with `curl -s localhost:18001/api/cockpit/registry | jq '.sources[] |
   select(.name=="github-live")'`. Full path and rationale:
   `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
+
+### Prepared BuilderOps Linux health probe
+
+Issue #6336 adds a plan-only bob-1 monitoring path, distinct from the Product
+`test`/`prod` probe installer. The prepared probe checks the qualified engine/project,
+authenticated loopback readiness and expected schema/epoch, explicit worker freshness,
+database container health (including local disk/WAL guardrails), and outbox degradation.
+It reuses the shared notification adapter through a separately admitted host-secret
+handoff and retains private engine/epoch-bound outage state. This is repository support,
+not installed monitoring or a client/authority cutover. Installation, a live alert drill,
+and retirement of the Mac duplicate remain separately authorized host work; see the
+[deployment owner contract](BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#prepared-linux-builderops-monitoring).
+Backup/restore is not a readiness gate, and bob-1 power-off detection requires an
+outside observer.
 
 ### BuilderOps VM102 failure-domain preflight
 
@@ -1077,6 +1258,17 @@ Quick issue routing:
 - Watcher/panel manual walkthrough -> `docs/runbooks/UAT_PANEL_WATCHER.md`
 - Go-live/startup diagnostics -> `docs/runbooks/RUNBOOK_GO_LIVE.md`
 - Prod go-live acceptance (preflight through soak, rollback rehearsal, receipt) -> `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`
+
+Native source-identity database diagnostics are opt-in and fail closed. Run the
+`app.ops.native_source_identity_diagnostics coordinate` entrypoint only with an
+immutable image and the accepted runtime's exact host source root plus exact
+container source root. The coordinator reproduces the canonical non-database
+registry settings, keeps source observation on `--network none`, and uses the
+separate volume-free read-only database witness from the
+`native-source-diagnostics` Compose profile. A diagnostic refusal never
+authorizes retry, source repair, controller loading, deployment, TEST, or PROD.
+See `docs/ENVIRONMENTS.md :: Native source-identity database diagnostics` for
+the boundary contract.
 
 ## Companion UI Entry Surfaces
 

@@ -29,15 +29,19 @@ Extend evidence coverage to artifacts no mechanical rule can place (a doc that d
   `POST /v1/ckm-judgment`. The server validates its Builder-owned pinned model profile and resolves
   `dev/typesafe.api-key` from the existing `non-prod` BWS project through the existing read-only
   MARR account. The BWS reader token remains in the MARR host Keychain. CKM receives neither
-  credential. TSO-07/#5801 repository support was delivered by PR #5803; live BWS permission
-  qualification remains pending under #5667. Product policy/client/profile,
+  credential. TSO-07/#5801 repository support was delivered by PR #5803 and the existing
+  non-prod route was corrected by #5808. The existing reader and MARR binding have a
+  [live BWS qualification receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114638077);
+  broader channel acceptance remains owned by #5667. Product policy/client/profile,
   Model Inquiry's subscription, and degraded routes are not fallback paths. Supported model swaps
   change the Builder profile configuration; SDK changes stay inside the neutral adapter and its
   conformance proof.
 - TSO-04/#5768 supplies repository implementation and fake-backed production-path proof. The
-  runtime route remains disabled pending its separate approved synthetic dev acceptance on #5764,
-  including confirmed rotation and scoped host installation. Current unavailable behavior is a
-  visible zero-edge skip; repository tests do not claim a live call or enable test/prod access.
+  [preserved actual-consumer Builder dev receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5764#issuecomment-6203507688)
+  verifies one real CKM association call with matching selected/returned provider and model. Its
+  below-floor result wrote zero candidate and confirmed edges; the consumed marker is preserved
+  without replay. Ordinary runtime routing remains disabled, unavailable judgments remain visible
+  zero-edge skips, and TEST/PROD activation retains its separate gates.
 - Every proposed edge is written with `extraction_method=inferred`, lifecycle `candidate` (OD-K5 / INV-CKM-3), model+provider provenance, and the rationale as `basis`.
 - Threshold discipline: any answer under the configurable confidence floor (default 0.6), including
   an uncertain abstention in a mixed batch, rejects the whole batch. No edges or watermark are

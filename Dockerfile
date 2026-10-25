@@ -123,6 +123,9 @@ COPY scripts/start_api.sh scripts/run_migrations.sh \
      scripts/prepare_instance_state_permissions.sh \
      scripts/__init__.py scripts/yaml_roundtrip.py scripts/compose_env.py \
      scripts/validate_issue_readiness.py scripts/validate_source_anchors.py \
+     scripts/pr_body_generator.py \
+     scripts/postmerge_channel_bug.py scripts/postmerge_dev_test.py \
+     scripts/postmerge_controller.py \
      ./scripts/
 RUN chmod +x scripts/start_api.sh scripts/run_migrations.sh \
     scripts/prepare_instance_state_permissions.sh

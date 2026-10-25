@@ -69,6 +69,12 @@ scripts
 !scripts/__init__.py
 !scripts/yaml_roundtrip.py
 !scripts/compose_env.py
+!scripts/pr_body_generator.py
+# Production promotion reuses the existing image/channel proof readers and
+# their controller dependency; keep the import closure in the curated image.
+!scripts/postmerge_channel_bug.py
+!scripts/postmerge_dev_test.py
+!scripts/postmerge_controller.py
 !scripts/validate_issue_readiness.py
 !scripts/validate_source_anchors.py
 # The BuilderOps PostgreSQL image has one independent bootstrap entrypoint.

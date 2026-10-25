@@ -505,10 +505,10 @@ def test_operation_protocol_authenticates_every_control_verb(tmp_path, monkeypat
         "--approved-operation-stdin",
         "--operation-readback-stdin",
     ):
-        graph.destination.client._config = ClientConfig("http://testserver", "writer-fixture")
+        graph.destination.client._config = ClientConfig("https://testserver.invalid", "writer-fixture")
         with pytest.raises(ControlPlaneClientError):
             graph.destination.control(verb, envelope)
-        graph.destination.client._config = ClientConfig("http://testserver", "destination-fixture")
+        graph.destination.client._config = ClientConfig("https://testserver.invalid", "destination-fixture")
         forged = deepcopy(approved)
         forged["approved_at"] = NOW.isoformat()
         forged["approval_manifest_hash"] = canonical_hash(
@@ -516,7 +516,7 @@ def test_operation_protocol_authenticates_every_control_verb(tmp_path, monkeypat
         )
         with pytest.raises(ControlPlaneClientError):
             graph.destination.control(verb, {**envelope, "approval": forged})
-    graph.destination.client._config = ClientConfig("http://testserver", "reader-fixture")
+    graph.destination.client._config = ClientConfig("https://testserver.invalid", "reader-fixture")
     assert graph.destination.control("--operation-readback-stdin", envelope)["state"] == "reserved"
     with pytest.raises(ControlPlaneClientError):
         graph.destination.control("--operation-attempt-stdin", envelope)

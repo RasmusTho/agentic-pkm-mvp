@@ -1,21 +1,23 @@
-# Yggdrasil Ollama host setup
+# Legacy optional Ollama host setup
 
 State: Legacy host-setup reference; product runtime deployment is owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`.
 
-**Current boundary (2026-08-22): the Mac mini is Ollama-only.** Do not install or run the Yggdrasil
-API, database, worker, watcher, Companion UI, or gateway on it. Product runtime belongs on the new
-Linux/Tailscale `ygg-dev`, `ygg-test`, and `ygg-prod` hosts. The playbooks below predate that split and
-must not be treated as a live deployment procedure until they are reconciled with the new host handoff.
+Reference review: 2026-10-21. [The infrastructure repository's current status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+owns observed host roles and services. The old Ollama-only description of the entire Mac is
+superseded; Demerzel also provides model execution, control and client services. These legacy
+playbooks retain only their bounded optional-Ollama setup scope. They do not install or activate
+the Product API, database, worker, watcher, Companion UI or gateway. Product channel deployment
+remains governed by the application deployment contract.
 
-The remaining supported purpose of this setup is to provide optional Ollama capacity to the product
-runtime over the private Tailscale network.
+The purpose of this legacy setup is optional Ollama capacity over its explicitly configured
+private route. It is not the current Model Access VLAN mTLS setup or a complete host inventory.
 
 ```
             Tailscale (private, MagicDNS)
   MacBook Air ──────── ygg-dev / ygg-test / ygg-prod
   thin client          Linux product runtime hosts
        │                         │
-       └──── Tailscale ──── Mac mini Ollama-only
+       └──── Tailscale ──── optional Mac mini Ollama service
                               (optional Gaming PC Ollama)
 ```
 
@@ -43,9 +45,24 @@ deployed and verified through the governed deployment handoff.
 
 | Machine | Role | Installs |
 |---|---|---|
-| `mac-mini/` | Ollama-only model host | Ollama (`nomic-embed-text` + `llama3.1:8b`); no product runtime or gateway |
+| `mac-mini/` | Legacy optional Ollama setup scope | Ollama (`nomic-embed-text` + `llama3.1:8b`); this playbook installs no product runtime or gateway |
 | `gaming-pc/` | burst inference | Ollama (`gpt-oss:20b`), `gpu-warden` (Scheduled Task) |
 | `macbook-air/` | thin client | nothing — Tailscale + Screen Sharing / Moonlight |
+
+### BuilderOps Linux probe preparation
+
+`scripts/plan_builderops_probe.py --expected-engine-id <qualified-id>
+--expected-epoch <qualified-epoch> --expected-schema-version <qualified-schema>`
+prints a bob-1-only plan and configuration without contacting or changing a host.
+There is no `--apply` mode. The prepared systemd service/timer are repository artifacts;
+copying them or enabling a service is a separate operator action, not part of this command.
+The plan lists the exact source package, private configuration/token/handoff paths and
+unmet activation prerequisites. Use the
+[BuilderOps monitoring contract](../../docs/BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#prepared-linux-builderops-monitoring)
+for identity, worker/database/disk/WAL checks and private transition-state semantics.
+The existing Product probe installer accepts only `test`/`prod` and must not be used
+to impersonate a BuilderOps alert consumer. No Mac LaunchAgent is loaded or unloaded
+by this preparation, and no notification is sent.
 
 ### Mac mini scheduled host jobs
 
@@ -109,11 +126,46 @@ status rather than bare shell assertions.
 Keep both the non-restorable audit copy and the authenticated safe recovery copy
 until the change receipt is accepted.
 
+## Colima persistent substrate readiness
+
+Colima on the Mac mini is a local Docker/helper environment, not the TARS Product runtime.
+Issue #4899 owns its fail-closed startup mechanism. The installer is
+`ops/host-setup/mac-mini/install_colima_runtime_readiness.sh`; the profile template is
+`ops/host-setup/mac-mini/colima/runtime-profile.env.example`. Do not infer a live installation from
+the presence of these repository artifacts.
+
+Use `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md :: Colima persistent substrate readiness` for
+isolated proof, activation, receipts, and rollback. The installer refuses mutation by default,
+requires a reviewed literal profile, and requires all three guest units (Docker, Docker socket,
+containerd) to be inactive. It persistently masks Docker/socket/containerd before replacing managed files, verifies their
+hashes, and reloads definitions without starting services. Masks remain until an explicit activation
+pass verifies the complete manifest; interrupted installation therefore retains the off state. Its approval flags attest preconditions
+established by that runbook; they are not evidence or permission by themselves.
+
+The guest image must already provide Python 3.9 or newer for the read-only inventory parser; the installer verifies it before writing or unmasking units and refuses an unsupported image. The guest resolves the data filesystem by UUID/LABEL/PARTUUID and verifies its filesystem type,
+read-write status, and exact `/docker` and `/containerd` bind roots. It never repairs or edits
+container metadata. The `docker.socket` drop-in keeps the API socket root-only during startup; the
+helper opens Docker-group access only after the post-start check matches every required persisted ID
+with the daemon inventory and records the post-restore containerd PID. A mismatch/failed start
+leaves the socket root-only and queues socket activation to stop; normal service stops and restarts
+propagate to the socket unit, and a service start pulls that unit in again.
+Review resource allocation and usernet timeout with the actual host profile; do not apply example
+values as host authority. Required inventory includes stopped durable identities; terminal AutoRemove
+residue is separately accounted for only under the strict lifecycle and named-volume proof in the
+runbook. Malformed records refuse readiness. Reconcile the expected required persisted inventory when an
+intentional container creation/removal changes it, before another cold start.
+
+The target storage is a persistent ext4 data filesystem backed directly by native host APFS
+storage, avoiding nested images on interchange filesystems. Storage migration is outside this
+installer. Until migration, Git/common-dir bulk operations and Colima cold start/restore require a
+serialized host window. Preserve all worktrees and channel volumes. Never use prune/recreate,
+filesystem repair, weakened barriers/fsync, or upgrades as readiness recovery.
+
 ## How the routing works
 
-- The current Linux/Tailscale runtime binds to one explicit Ollama endpoint. The
-  dedicated Ollama host provides model service only; it does not run the Yggdrasil
-  API, watcher, or an `llm-gateway`.
+- This legacy optional-Ollama setup uses one explicit endpoint. Its model-service scope does not
+  describe all services currently running on the Mac; use the infrastructure status view above.
+  It does not install the Product API, watcher or an `llm-gateway`.
 - Keep the embedding model identity stable. A runtime change of embedding provider
   or model requires the repository's explicit index-rebuild decision; it is not an
   automatic routing fallback.

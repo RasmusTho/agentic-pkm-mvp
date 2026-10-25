@@ -816,3 +816,99 @@ def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(readiness, "_target_has_existing_file_path", unexpected_file_read)
     assert issue_source_task(source, repository="rasmustho/agentic-pkm-mvp", number=501,
                              observed_at=source["updated_at"], authority_epoch=1)["title"] == source["title"]
+
+
+def test_terminal_payload_status_correction_cli_binds_exact_request(tmp_path, monkeypatch, capsys):
+    class CorrectionClient(_RecordingClient):
+        def correct_task_payload_status(self, **values):
+            self.calls.append(("correct", values))
+            return {
+                "result": {"state": "completed", "replayed": False},
+                "correction": {"after_version": 4},
+            }
+
+    created = []
+
+    def factory(config):
+        client = CorrectionClient(config)
+        created.append(client)
+        return client
+
+    manifest = _manifest_dir(tmp_path)
+    lease = {
+        "repository": "rasmustho/agentic-pkm-mvp",
+        "holder": "fixture-writer",
+        "resource_id": "payload-status-correction:fixture-task",
+        "lease_kind": "generic",
+        "fencing_token": 1,
+        "expires_at": "2026-10-17T20:00:00Z",
+    }
+    argv = [
+        "--delivery-manifest-dir",
+        str(manifest),
+        "--task-class",
+        "implementation",
+        "task-correct-payload-status",
+        "--repository",
+        "RasmusTho/agentic-pkm-mvp",
+        "--scope",
+        "issue:6175",
+        "--stack",
+        "builderops-control-plane",
+        "--source-ref",
+        "github:issue:6175",
+        "--task-id",
+        "fixture-task",
+        "--lease",
+        json.dumps(lease),
+        "--idempotency-key",
+        "fixture-correction",
+        "--expected-state",
+        "completed",
+        "--expected-version",
+        "3",
+        "--expected-updated-at",
+        "2026-10-10T00:36:11Z",
+        "--expected-payload-sha256",
+        "sha256:" + "a" * 64,
+        "--proposal-sha256",
+        "sha256:" + "b" * 64,
+        "--proposal-ref",
+        "github:issue:5181",
+    ]
+    assert main(argv, client_factory=factory) == 0
+    call = created[0].calls[-1]
+    assert call[0] == "correct"
+    assert call[1]["expected_version"] == 3 and call[1]["lease"] == lease
+    assert call[1]["proposal_ref"] == "github:issue:5181"
+    assert json.loads(capsys.readouterr().out)["correction"]["after_version"]==4
+
+
+def test_generic_lease_release_cli(tmp_path, capsys):
+    class ReleaseClient(_RecordingClient):
+        def release_lease(self, **values):
+            self.calls.append(('release', values))
+            return {'result': {'state': 'lease.released'}}
+
+    created = []
+    def factory(config):
+        client = ReleaseClient(config)
+        created.append(client)
+        return client
+
+    lease = {'repository': 'rasmustho/agentic-pkm-mvp', 'resource_id': 'maintenance-fixture',
+             'holder': 'client:macbook', 'lease_kind': 'generic', 'fencing_token': 3,
+             'expires_at': '2026-10-18T09:00:00Z'}
+    command = ['lease-release', '--repository', 'RasmusTho/agentic-pkm-mvp',
+        '--scope', 'issue:6198', '--stack', 'builderops-control-plane',
+        '--source-ref', 'github:issue:6198', '--lease', json.dumps(lease),
+        '--idempotency-key', 'release-fixture']
+    assert main(command, client_factory=factory) != 0
+    assert not created
+    assert main(['--delivery-manifest-dir', str(_manifest_dir(tmp_path)),
+                 '--task-class', 'implementation', *command], client_factory=factory) == 0
+    assert created[0].calls[-1] == ('release', {'envelope': {
+        'repository': 'rasmustho/agentic-pkm-mvp', 'scope': 'issue:6198',
+        'stack': 'builderops-control-plane', 'source_refs': ['github:issue:6198']},
+        'lease': lease, 'idempotency_key': 'release-fixture'})
+    assert json.loads(capsys.readouterr().out)['result']['state'] == 'lease.released'

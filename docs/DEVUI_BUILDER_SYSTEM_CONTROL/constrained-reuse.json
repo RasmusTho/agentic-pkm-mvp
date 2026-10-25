@@ -1,0 +1,1057 @@
+{
+  "payload_sha256": "sha256:af175f5ab82133c16887a3a87d0779bbfcbb33f10f8611da35222c61f51b8db2",
+  "provenance_payload": {
+    "contract_version": "yggdrasil-constrained-reuse.v1",
+    "repository_commit": "d95ef7f9d831f4dba6146e0f173f4242a0496e95",
+    "authorship": {
+      "author_identity": "codex:devui-source-repair-20261018",
+      "created_at": "2026-10-18T07:43:52.396142+00:00"
+    },
+    "authority_claims": {
+      "live_design_system_selection": "not_claimed",
+      "live_mcp_system_id": "not_claimed",
+      "live_project": "not_claimed",
+      "live_token_parity": "not_claimed"
+    },
+    "sources": [
+      {
+        "source_id": "focus-shell",
+        "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html",
+        "stable_ref": "claim header, focus-grid, .surface/.limitations, native .btn.btn-out and aria-labelledby",
+        "source_role": "component",
+        "content_sha256": "sha256:464e2f2ee5ba59268177261ac6f8f9464cb024caac567d8054e13c058a3a753e"
+      },
+      {
+        "source_id": "overview-shell",
+        "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html",
+        "stable_ref": "Overview claim and noscript fallback",
+        "source_role": "component",
+        "content_sha256": "sha256:6e0b20cf2aca808d1330bc6033994e9f9acb7b17c9cf46d3f61479995fa7b2b5"
+      },
+      {
+        "source_id": "focus-rows",
+        "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
+        "stable_ref": "ownerRows/rows/renderEntry: owner-summary/owner-fact, focus-entry, details/summary/rungs; exact subject encodeURIComponent binding",
+        "source_role": "pattern",
+        "content_sha256": "sha256:47454f62ab51cde497741504669903f235eee3e131380ea7692f0bcc78d25f0b"
+      },
+      {
+        "source_id": "overview-links",
+        "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
+        "stable_ref": "native button .btn.btn-out source-bound navigation; typed same-origin href binding",
+        "source_role": "pattern",
+        "content_sha256": "sha256:873c9de9bbc8eb85410f0f6450b477cfc52346ff42a921588d8d33494581b4b2"
+      },
+      {
+        "source_id": "managed-style",
+        "source_path": "app/builderops/devui_managed.css",
+        "stable_ref": "unchanged complete accepted stylesheet, existing responsive/container rules and local font overrides",
+        "source_role": "pattern",
+        "content_sha256": "sha256:04f248ebed67ed91cf4356a280d90eac05ea6f811faa3323c1370537de7661ce"
+      },
+      {
+        "source_id": "token-sheet",
+        "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css",
+        "stable_ref": "unchanged generated tokens-only v2.2.1 stylesheet, no external imports",
+        "source_role": "pattern",
+        "content_sha256": "sha256:1cffbb6d4226a1ad593902b7b72ec54fb76a39f071ae64bd74bc1176331a203b"
+      }
+    ],
+    "tokens": {
+      "source_path": "companion-ui/companion-app/colors_and_type.css",
+      "content_sha256": "sha256:edbc81c77209b5274b26b5e827191f95595f20d6bc5a97a17f7dd8751a774ba2",
+      "declarations": [
+        {
+          "token_id": "--accent",
+          "declaration": "--accent: #d4a843;",
+          "declaration_sha256": "sha256:cd04033283cb5326744c2766ffb650af11e1d5311156bdb17774f017e7f97ae9"
+        },
+        {
+          "token_id": "--bg-base",
+          "declaration": "--bg-base: #070b12;",
+          "declaration_sha256": "sha256:dd985c7783d06261936863f478cbdeabaec57ca1f860c8864758f6d3aadf01db"
+        },
+        {
+          "token_id": "--bg-overlay",
+          "declaration": "--bg-overlay: #162038;",
+          "declaration_sha256": "sha256:0628444c43faa208e0ccaffdbc2c08a0da1d07fe6d1aedfa2de70b32a3ba7f97"
+        },
+        {
+          "token_id": "--bg-raised",
+          "declaration": "--bg-raised: #111a2e;",
+          "declaration_sha256": "sha256:de92701ce77d2db519893e45d62dfbccad82a12bcdaed1b3ccb17b942ef82f8a"
+        },
+        {
+          "token_id": "--bg-surface",
+          "declaration": "--bg-surface: #0c1220;",
+          "declaration_sha256": "sha256:1c378d6a89a2456f4615362c0ec623b47ca079c7c58fab70374074ef8c0e818b"
+        },
+        {
+          "token_id": "--border",
+          "declaration": "--border: #152030;",
+          "declaration_sha256": "sha256:a7427229b04d3b8e817fd9fc554aa4be83926275f5e76e3a4a8a84877b1e3702"
+        },
+        {
+          "token_id": "--border-strong",
+          "declaration": "--border-strong: #1e3050;",
+          "declaration_sha256": "sha256:a2caa67382031eef64dae617545b477876adb4ca40f888e99a5d0c6787ee8dba"
+        },
+        {
+          "token_id": "--cyan",
+          "declaration": "--cyan: #00d4e8;",
+          "declaration_sha256": "sha256:facd4b88fb8cba1f0306543dd1b5b738226a100f8b982fa1ec1bb550124fdccf"
+        },
+        {
+          "token_id": "--cyan-glow",
+          "declaration": "--cyan-glow: 0 0 12px rgba(0,212,232,0.35), 0 0 4px rgba(0,212,232,0.5);",
+          "declaration_sha256": "sha256:349e8a4c170531ae99b13cf13bba452be2405dc5041f11c09584fe4298840786"
+        },
+        {
+          "token_id": "--destructive",
+          "declaration": "--destructive: #ff3d3d;",
+          "declaration_sha256": "sha256:4e021bafcbb19fd5d36e12b0b60a4a93d45f38ecbc8a8508af37822518b8ecd7"
+        },
+        {
+          "token_id": "--destructive-muted",
+          "declaration": "--destructive-muted: #160404;",
+          "declaration_sha256": "sha256:5832b6c075c7bc18d3148b08a63f9ba411c88bf500d76b587702aa869e78c22e"
+        },
+        {
+          "token_id": "--fg-1",
+          "declaration": "--fg-1: #dce8f0;",
+          "declaration_sha256": "sha256:a6386d3918e0852d518fed0b55f836333d9ff52f80260440ef412e2d338fbd5f"
+        },
+        {
+          "token_id": "--fg-2",
+          "declaration": "--fg-2: #7a9ab8;",
+          "declaration_sha256": "sha256:9e7723815e36ebd91c3cb4c9e1f04d76e109dd9b971d7a717e6605a80e22b9e5"
+        },
+        {
+          "token_id": "--font-display",
+          "declaration": "--font-display: 'EB Garamond', Georgia, serif;",
+          "declaration_sha256": "sha256:4f89560f0f0611c8127c328bdfde4a578c57a75719d058fd4751f1b5cbee28d7"
+        },
+        {
+          "token_id": "--font-mono",
+          "declaration": "--font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;",
+          "declaration_sha256": "sha256:443c4792b5cbe2e584c3a71111e3ad6aa8406e8bf141093c228c06984e011210"
+        },
+        {
+          "token_id": "--font-ui",
+          "declaration": "--font-ui: 'Space Grotesk', system-ui, sans-serif;",
+          "declaration_sha256": "sha256:7fe509e33134046dd3912852da1912e537c067aadf8b369c538cd2bf6f3096e1"
+        },
+        {
+          "token_id": "--leading-snug",
+          "declaration": "--leading-snug: 1.4;",
+          "declaration_sha256": "sha256:07176b080b5610232cea0ccbb86abc67bc8ad42a5b2386ff5668465a579ff20f"
+        },
+        {
+          "token_id": "--radius-md",
+          "declaration": "--radius-md: 4px;",
+          "declaration_sha256": "sha256:51d9dfcd8ace53dcb996e696be0cb099775a281fd1689195f4ab825a099c000a"
+        },
+        {
+          "token_id": "--radius-sm",
+          "declaration": "--radius-sm: 2px;",
+          "declaration_sha256": "sha256:b04c86821bb9e3cafb2d9818f520a3d6cfdf919fc8988ff315a8e6eeaa43b21d"
+        },
+        {
+          "token_id": "--space-10",
+          "declaration": "--space-10: 40px;",
+          "declaration_sha256": "sha256:b28c740e020425b8799010bb65d3e5df0f152dcb265859814c212da9c35a7d42"
+        },
+        {
+          "token_id": "--space-12",
+          "declaration": "--space-12: 48px;",
+          "declaration_sha256": "sha256:7f4fe53e528d265baf7a163fa0b2f86170c44e4723c642688bc5210f0b3ac41a"
+        },
+        {
+          "token_id": "--space-16",
+          "declaration": "--space-16: 64px;",
+          "declaration_sha256": "sha256:32cf2c5d195fb8220f9cd86d2e8b1e7412e5f1883036aeb38ebdc7238b078564"
+        },
+        {
+          "token_id": "--space-2",
+          "declaration": "--space-2: 8px;",
+          "declaration_sha256": "sha256:7e7a8be6e44016eada5998d37a9f1c624ff57a2d56b922eedcdf7f816fee8b12"
+        },
+        {
+          "token_id": "--space-3",
+          "declaration": "--space-3: 12px;",
+          "declaration_sha256": "sha256:a7bfec952f1b612545f1f6082939712e9815cc05c5421c0a21249b1896605238"
+        },
+        {
+          "token_id": "--space-4",
+          "declaration": "--space-4: 16px;",
+          "declaration_sha256": "sha256:aa794550c5017155b83803c505d42c0bb4b6ca02637ccd2f7dea3e7dfb7bac50"
+        },
+        {
+          "token_id": "--space-5",
+          "declaration": "--space-5: 20px;",
+          "declaration_sha256": "sha256:7821197743603e6979f7e4a8b04da83755f3e83c0514cf50751fe19e630e621d"
+        },
+        {
+          "token_id": "--space-6",
+          "declaration": "--space-6: 24px;",
+          "declaration_sha256": "sha256:6a7ee531eae7c8f6803d51dd7b2be2942de42f25286689cb940e771a6fcecc9f"
+        },
+        {
+          "token_id": "--space-8",
+          "declaration": "--space-8: 32px;",
+          "declaration_sha256": "sha256:ba65635c05ff2cbb135e3ecfb681e44e6013d2a91dd9b40dc05d5e0e16e9289a"
+        },
+        {
+          "token_id": "--text-2xl",
+          "declaration": "--text-2xl: 2rem;",
+          "declaration_sha256": "sha256:71c776ac1734d596c7ef89edffd9246cb7a0214b88d00098f3449fc248741e16"
+        },
+        {
+          "token_id": "--text-base",
+          "declaration": "--text-base: 0.9375rem;",
+          "declaration_sha256": "sha256:197c0c9031d9c9eccc79bba9bebe4e951200e62623544a9b22cc2fe0cfeea1ea"
+        },
+        {
+          "token_id": "--text-md",
+          "declaration": "--text-md: 1.0625rem;",
+          "declaration_sha256": "sha256:66d9ba8cb9011af89bebf8634b6884a31c1bf3a50776642de5267d94348afa85"
+        },
+        {
+          "token_id": "--text-sm",
+          "declaration": "--text-sm: 0.8125rem;",
+          "declaration_sha256": "sha256:f529fc0a445e6e1607b1c11b05139214f5aa69143f5cfea7085a46c5d51e7e88"
+        },
+        {
+          "token_id": "--text-xl",
+          "declaration": "--text-xl: 1.5rem;",
+          "declaration_sha256": "sha256:d7b75a57e4973aa114def844c15f690728a45fe9719a4cac4a317593231a05ff"
+        },
+        {
+          "token_id": "--text-xs",
+          "declaration": "--text-xs: 0.6875rem;",
+          "declaration_sha256": "sha256:545792712bfe041b7c40e92f5f09d88b2a04cb045410d0b9810d2d8a9f6da99c"
+        },
+        {
+          "token_id": "--tracking-tight",
+          "declaration": "--tracking-tight: -0.02em;",
+          "declaration_sha256": "sha256:34ec5a544a9ad169b2396e1cb4857bc22978d2cc614fecce2a31118a8a7b1134"
+        },
+        {
+          "token_id": "--tracking-wide",
+          "declaration": "--tracking-wide: 0.04em;",
+          "declaration_sha256": "sha256:6c6f1f21b746eabee21fbe6282b41a4cb2c5ee4368240dadfbd05a01f987f7d6"
+        },
+        {
+          "token_id": "--tracking-wider",
+          "declaration": "--tracking-wider: 0.08em;",
+          "declaration_sha256": "sha256:156599cafbce2dd6bca8b01990aebb4f4f987111d00f654b356fb11fb5623351"
+        },
+        {
+          "token_id": "--vault",
+          "declaration": "--vault: #39e87d;",
+          "declaration_sha256": "sha256:0e54d20edf0395336aac625a7f4d332008f4e686ac02977077a8d72b5316ab4b"
+        },
+        {
+          "token_id": "--weight-medium",
+          "declaration": "--weight-medium: 500;",
+          "declaration_sha256": "sha256:d6b4eaed667b0f54435dfb1a8e4f3165fb07797a9a5fe912e6b61983bdf81f38"
+        }
+      ]
+    },
+    "allowed_transformations": [
+      {
+        "transformation_id": "content",
+        "kind": "content_binding",
+        "source_ids": [
+          "focus-shell",
+          "focus-rows",
+          "overview-shell"
+        ],
+        "exact_rule": "Replace only escaped server-declared text/scalars and semantic IDs for builder_system, five BSC orientation maps, Inspect and limitations; empty supplied arrays stay unread/unlinked, never healthy or measured empty. No browser classification."
+      },
+      {
+        "transformation_id": "links",
+        "kind": "interaction_binding",
+        "source_ids": [
+          "focus-shell",
+          "focus-rows",
+          "overview-links"
+        ],
+        "exact_rule": "Reuse native .btn.btn-out anchors for system entry, encoded same-repository prior Issue Focus return, and finite source/diagnostic outlinks. Prior subject is return navigation only. Inspect anchors open a separate tab with noopener noreferrer; no fetch/probe, credential, command or mutation. Native disclosure is unchanged."
+      },
+      {
+        "transformation_id": "layout",
+        "kind": "layout_reflow",
+        "source_ids": [
+          "focus-shell",
+          "managed-style"
+        ],
+        "exact_rule": "Reuse the unchanged two-column focus-grid, claim and surface sequence with five BSC maps plus Inspect and limitations; remove unrelated Focus regions and scripts from BSC. No new geometry, selector or CSS."
+      },
+      {
+        "transformation_id": "fonts",
+        "kind": "local_system_font_no_egress_normalization",
+        "source_ids": [
+          "managed-style",
+          "token-sheet"
+        ],
+        "exact_rule": "Preserve the already shipped managed local-system-font overrides, generated token sheet and CSP; no new import, font, typography or CSP relaxation."
+      }
+    ],
+    "decision_inventory": [
+      {
+        "decision_id": "header",
+        "target_ref": "separate BSC identity/header; preserved Overview/Focus claim headers",
+        "source_ids": [
+          "focus-shell",
+          "overview-shell"
+        ],
+        "token_ids": [
+          "--accent",
+          "--bg-base",
+          "--bg-overlay",
+          "--bg-raised",
+          "--bg-surface",
+          "--border",
+          "--border-strong",
+          "--cyan",
+          "--cyan-glow",
+          "--destructive",
+          "--destructive-muted",
+          "--fg-1",
+          "--fg-2",
+          "--font-display",
+          "--font-mono",
+          "--font-ui",
+          "--leading-snug",
+          "--radius-md",
+          "--radius-sm",
+          "--space-10",
+          "--space-12",
+          "--space-16",
+          "--space-2",
+          "--space-3",
+          "--space-4",
+          "--space-5",
+          "--space-6",
+          "--space-8",
+          "--text-2xl",
+          "--text-base",
+          "--text-md",
+          "--text-sm",
+          "--text-xl",
+          "--text-xs",
+          "--tracking-tight",
+          "--tracking-wide",
+          "--tracking-wider",
+          "--vault",
+          "--weight-medium"
+        ],
+        "transformation_ids": [
+          "content"
+        ]
+      },
+      {
+        "decision_id": "maps",
+        "target_ref": "five orientation surfaces and limitations in existing focus-grid",
+        "source_ids": [
+          "focus-shell",
+          "managed-style"
+        ],
+        "token_ids": [
+          "--accent",
+          "--bg-base",
+          "--bg-overlay",
+          "--bg-raised",
+          "--bg-surface",
+          "--border",
+          "--border-strong",
+          "--cyan",
+          "--cyan-glow",
+          "--destructive",
+          "--destructive-muted",
+          "--fg-1",
+          "--fg-2",
+          "--font-display",
+          "--font-mono",
+          "--font-ui",
+          "--leading-snug",
+          "--radius-md",
+          "--radius-sm",
+          "--space-10",
+          "--space-12",
+          "--space-16",
+          "--space-2",
+          "--space-3",
+          "--space-4",
+          "--space-5",
+          "--space-6",
+          "--space-8",
+          "--text-2xl",
+          "--text-base",
+          "--text-md",
+          "--text-sm",
+          "--text-xl",
+          "--text-xs",
+          "--tracking-tight",
+          "--tracking-wide",
+          "--tracking-wider",
+          "--vault",
+          "--weight-medium"
+        ],
+        "transformation_ids": [
+          "layout",
+          "content"
+        ]
+      },
+      {
+        "decision_id": "source-rows",
+        "target_ref": "source-specific literal role/owner/state/limit values in owner-summary/owner-fact",
+        "source_ids": [
+          "focus-rows",
+          "managed-style"
+        ],
+        "token_ids": [
+          "--accent",
+          "--bg-base",
+          "--bg-overlay",
+          "--bg-raised",
+          "--bg-surface",
+          "--border",
+          "--border-strong",
+          "--cyan",
+          "--cyan-glow",
+          "--destructive",
+          "--destructive-muted",
+          "--fg-1",
+          "--fg-2",
+          "--font-display",
+          "--font-mono",
+          "--font-ui",
+          "--leading-snug",
+          "--radius-md",
+          "--radius-sm",
+          "--space-10",
+          "--space-12",
+          "--space-16",
+          "--space-2",
+          "--space-3",
+          "--space-4",
+          "--space-5",
+          "--space-6",
+          "--space-8",
+          "--text-2xl",
+          "--text-base",
+          "--text-md",
+          "--text-sm",
+          "--text-xl",
+          "--text-xs",
+          "--tracking-tight",
+          "--tracking-wide",
+          "--tracking-wider",
+          "--vault",
+          "--weight-medium"
+        ],
+        "transformation_ids": [
+          "content"
+        ]
+      },
+      {
+        "decision_id": "disclosure",
+        "target_ref": "native details/summary with escaped source refs/axes in rungs",
+        "source_ids": [
+          "focus-rows",
+          "managed-style"
+        ],
+        "token_ids": [
+          "--accent",
+          "--bg-base",
+          "--bg-overlay",
+          "--bg-raised",
+          "--bg-surface",
+          "--border",
+          "--border-strong",
+          "--cyan",
+          "--cyan-glow",
+          "--destructive",
+          "--destructive-muted",
+          "--fg-1",
+          "--fg-2",
+          "--font-display",
+          "--font-mono",
+          "--font-ui",
+          "--leading-snug",
+          "--radius-md",
+          "--radius-sm",
+          "--space-10",
+          "--space-12",
+          "--space-16",
+          "--space-2",
+          "--space-3",
+          "--space-4",
+          "--space-5",
+          "--space-6",
+          "--space-8",
+          "--text-2xl",
+          "--text-base",
+          "--text-md",
+          "--text-sm",
+          "--text-xl",
+          "--text-xs",
+          "--tracking-tight",
+          "--tracking-wide",
+          "--tracking-wider",
+          "--vault",
+          "--weight-medium"
+        ],
+        "transformation_ids": [
+          "content"
+        ]
+      },
+      {
+        "decision_id": "navigation",
+        "target_ref": "system entry, typed prior Issue Focus return, finite native source/Inspect anchors",
+        "source_ids": [
+          "focus-shell",
+          "overview-links",
+          "focus-rows"
+        ],
+        "token_ids": [
+          "--accent",
+          "--bg-base",
+          "--bg-overlay",
+          "--bg-raised",
+          "--bg-surface",
+          "--border",
+          "--border-strong",
+          "--cyan",
+          "--cyan-glow",
+          "--destructive",
+          "--destructive-muted",
+          "--fg-1",
+          "--fg-2",
+          "--font-display",
+          "--font-mono",
+          "--font-ui",
+          "--leading-snug",
+          "--radius-md",
+          "--radius-sm",
+          "--space-10",
+          "--space-12",
+          "--space-16",
+          "--space-2",
+          "--space-3",
+          "--space-4",
+          "--space-5",
+          "--space-6",
+          "--space-8",
+          "--text-2xl",
+          "--text-base",
+          "--text-md",
+          "--text-sm",
+          "--text-xl",
+          "--text-xs",
+          "--tracking-tight",
+          "--tracking-wide",
+          "--tracking-wider",
+          "--vault",
+          "--weight-medium"
+        ],
+        "transformation_ids": [
+          "links"
+        ]
+      },
+      {
+        "decision_id": "source-states",
+        "target_ref": "server-declared fresh/stale/refused/unavailable/unread/missing/unlinked values; no health inference",
+        "source_ids": [
+          "focus-rows",
+          "managed-style"
+        ],
+        "token_ids": [
+          "--accent",
+          "--bg-base",
+          "--bg-overlay",
+          "--bg-raised",
+          "--bg-surface",
+          "--border",
+          "--border-strong",
+          "--cyan",
+          "--cyan-glow",
+          "--destructive",
+          "--destructive-muted",
+          "--fg-1",
+          "--fg-2",
+          "--font-display",
+          "--font-mono",
+          "--font-ui",
+          "--leading-snug",
+          "--radius-md",
+          "--radius-sm",
+          "--space-10",
+          "--space-12",
+          "--space-16",
+          "--space-2",
+          "--space-3",
+          "--space-4",
+          "--space-5",
+          "--space-6",
+          "--space-8",
+          "--text-2xl",
+          "--text-base",
+          "--text-md",
+          "--text-sm",
+          "--text-xl",
+          "--text-xs",
+          "--tracking-tight",
+          "--tracking-wide",
+          "--tracking-wider",
+          "--vault",
+          "--weight-medium"
+        ],
+        "transformation_ids": [
+          "content"
+        ]
+      },
+      {
+        "decision_id": "accessibility",
+        "target_ref": "semantic headings, native anchor/disclosure keyboard behavior, narrow/zoom/print/JS-off BSC",
+        "source_ids": [
+          "focus-shell",
+          "focus-rows",
+          "managed-style"
+        ],
+        "token_ids": [
+          "--accent",
+          "--bg-base",
+          "--bg-overlay",
+          "--bg-raised",
+          "--bg-surface",
+          "--border",
+          "--border-strong",
+          "--cyan",
+          "--cyan-glow",
+          "--destructive",
+          "--destructive-muted",
+          "--fg-1",
+          "--fg-2",
+          "--font-display",
+          "--font-mono",
+          "--font-ui",
+          "--leading-snug",
+          "--radius-md",
+          "--radius-sm",
+          "--space-10",
+          "--space-12",
+          "--space-16",
+          "--space-2",
+          "--space-3",
+          "--space-4",
+          "--space-5",
+          "--space-6",
+          "--space-8",
+          "--text-2xl",
+          "--text-base",
+          "--text-md",
+          "--text-sm",
+          "--text-xl",
+          "--text-xs",
+          "--tracking-tight",
+          "--tracking-wide",
+          "--tracking-wider",
+          "--vault",
+          "--weight-medium"
+        ],
+        "transformation_ids": [
+          "layout",
+          "content",
+          "links"
+        ]
+      },
+      {
+        "decision_id": "tokens-fonts",
+        "target_ref": "unchanged accepted token/stylesheet language and local fonts; no egress or motion",
+        "source_ids": [
+          "managed-style",
+          "token-sheet"
+        ],
+        "token_ids": [
+          "--accent",
+          "--bg-base",
+          "--bg-overlay",
+          "--bg-raised",
+          "--bg-surface",
+          "--border",
+          "--border-strong",
+          "--cyan",
+          "--cyan-glow",
+          "--destructive",
+          "--destructive-muted",
+          "--fg-1",
+          "--fg-2",
+          "--font-display",
+          "--font-mono",
+          "--font-ui",
+          "--leading-snug",
+          "--radius-md",
+          "--radius-sm",
+          "--space-10",
+          "--space-12",
+          "--space-16",
+          "--space-2",
+          "--space-3",
+          "--space-4",
+          "--space-5",
+          "--space-6",
+          "--space-8",
+          "--text-2xl",
+          "--text-base",
+          "--text-md",
+          "--text-sm",
+          "--text-xl",
+          "--text-xs",
+          "--tracking-tight",
+          "--tracking-wide",
+          "--tracking-wider",
+          "--vault",
+          "--weight-medium"
+        ],
+        "transformation_ids": [
+          "fonts"
+        ]
+      }
+    ],
+    "target_artifacts": [
+      {
+        "target_path": "devui-candidate/assets/control.html",
+        "content_sha256": "sha256:f6f2496dbaecdd042255fa4aa568cd8d5a32c0a1b1ed7542ed8a86316a8a245f"
+      },
+      {
+        "target_path": "devui-candidate/assets/devui.css",
+        "content_sha256": "sha256:04f248ebed67ed91cf4356a280d90eac05ea6f811faa3323c1370537de7661ce"
+      },
+      {
+        "target_path": "devui-candidate/assets/focus.html",
+        "content_sha256": "sha256:34fefea890511220d74c458a26fa2a71008ccb9529c71192466dbbf4c70a2081"
+      },
+      {
+        "target_path": "devui-candidate/assets/focus.js",
+        "content_sha256": "sha256:199c9c47b92232dcf584472de38a3a0370eca9f90992f48e50f8dcc5ec291053"
+      },
+      {
+        "target_path": "devui-candidate/assets/overview.html",
+        "content_sha256": "sha256:950402b8c8bea8443f9fe40e1402f393a3a6ba210366a74adf2a6013961ee6c1"
+      },
+      {
+        "target_path": "devui-candidate/assets/overview.js",
+        "content_sha256": "sha256:873c9de9bbc8eb85410f0f6450b477cfc52346ff42a921588d8d33494581b4b2"
+      },
+      {
+        "target_path": "devui-candidate/assets/yggdrasil.css",
+        "content_sha256": "sha256:1cffbb6d4226a1ad593902b7b72ec54fb76a39f071ae64bd74bc1176331a203b"
+      },
+      {
+        "target_path": "app/builderops/devui_control.html",
+        "content_sha256": "sha256:f6f2496dbaecdd042255fa4aa568cd8d5a32c0a1b1ed7542ed8a86316a8a245f"
+      },
+      {
+        "target_path": "app/builderops/devui_control.py",
+        "content_sha256": "sha256:f1208c924ea839ce52b756b10f839d0cdb41692f90ffd3aab5315b1b95dcb2de"
+      },
+      {
+        "target_path": "app/builderops/devui_runtime.py",
+        "content_sha256": "sha256:3d54b67a5d18083967e11f4fddb1f6a88bf0c7c55d29e7cea4232445d56a9327"
+      }
+    ],
+    "zero_novel_visual_language": {
+      "asserted": true,
+      "new_components": [],
+      "new_geometry_systems": [],
+      "new_tokens": [],
+      "new_typography_sources": [],
+      "new_motion_languages": [],
+      "new_icon_languages": [],
+      "new_interaction_classes": [],
+      "new_authority_affordances": []
+    },
+    "no_egress": {
+      "external_font_imports_removed": [],
+      "font_normalization": {
+        "mode": "local_system_only",
+        "mappings": [
+          {
+            "source_token_id": "--font-ui",
+            "source_declaration_sha256": "sha256:7fe509e33134046dd3912852da1912e537c067aadf8b369c538cd2bf6f3096e1",
+            "normalized_declaration": "--font-ui:system-ui,-apple-system,\"Segoe UI\",sans-serif;",
+            "normalized_declaration_sha256": "sha256:2dc7a9d49841c8b424f979dff6aa7ef015e3df785656a9a6fc1e743d22578361"
+          },
+          {
+            "source_token_id": "--font-display",
+            "source_declaration_sha256": "sha256:4f89560f0f0611c8127c328bdfde4a578c57a75719d058fd4751f1b5cbee28d7",
+            "normalized_declaration": "--font-display:Georgia,\"Times New Roman\",serif;",
+            "normalized_declaration_sha256": "sha256:9f3c1ec2d4ce11fea774865ced8db0e357470b29fd5f9df4e10000de5ecae4ee"
+          },
+          {
+            "source_token_id": "--font-mono",
+            "source_declaration_sha256": "sha256:443c4792b5cbe2e584c3a71111e3ad6aa8406e8bf141093c228c06984e011210",
+            "normalized_declaration": "--font-mono:ui-monospace,\"SFMono-Regular\",Consolas,monospace",
+            "normalized_declaration_sha256": "sha256:d0b521578cf2f65ba619110c51366404a48bdd7064090931e4d51fda92743f13"
+          }
+        ]
+      },
+      "local_asset_refs": [
+        "/devui/assets/yggdrasil.css",
+        "/devui/assets/devui.css"
+      ],
+      "cross_origin_request_count": 0,
+      "network_evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+      "network_evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e",
+      "csp_relaxations": []
+    },
+    "state_matrix": [
+      {
+        "state_id": "fresh",
+        "fixture_ref": "tests/companion_ui/test_devui_builder_system_control_journeys.py::test_system_lens_accessibility_and_no_egress",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "expected_behavior": "The source-specific literal state survives the actual managed projection and rendered region. No failed source becomes health, measured-empty, acceptance or an effect.",
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "state_id": "stale",
+        "fixture_ref": "tests/companion_ui/test_devui_builder_system_control_journeys.py::test_system_lens_accessibility_and_no_egress",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "expected_behavior": "The source-specific literal state survives the actual managed projection and rendered region. No failed source becomes health, measured-empty, acceptance or an effect.",
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "state_id": "refused",
+        "fixture_ref": "tests/companion_ui/test_devui_builder_system_control_journeys.py::test_system_lens_accessibility_and_no_egress",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "expected_behavior": "The source-specific literal state survives the actual managed projection and rendered region. No failed source becomes health, measured-empty, acceptance or an effect.",
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "state_id": "unavailable",
+        "fixture_ref": "tests/companion_ui/test_devui_builder_system_control_journeys.py::test_system_lens_accessibility_and_no_egress",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "expected_behavior": "The source-specific literal state survives the actual managed projection and rendered region. No failed source becomes health, measured-empty, acceptance or an effect.",
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "state_id": "unread",
+        "fixture_ref": "tests/companion_ui/test_devui_builder_system_control_journeys.py::test_system_lens_accessibility_and_no_egress",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "expected_behavior": "The source-specific literal state survives the actual managed projection and rendered region. No failed source becomes health, measured-empty, acceptance or an effect.",
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "state_id": "missing",
+        "fixture_ref": "tests/companion_ui/test_devui_builder_system_control_journeys.py::test_system_lens_accessibility_and_no_egress",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "expected_behavior": "The source-specific literal state survives the actual managed projection and rendered region. No failed source becomes health, measured-empty, acceptance or an effect.",
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "state_id": "unlinked",
+        "fixture_ref": "tests/companion_ui/test_devui_builder_system_control_journeys.py::test_system_lens_accessibility_and_no_egress",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "expected_behavior": "The source-specific literal state survives the actual managed projection and rendered region. No failed source becomes health, measured-empty, acceptance or an effect.",
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      }
+    ],
+    "accessibility_matrix": [
+      {
+        "mode": "desktop",
+        "requirement": "Production-route proof of all named orientation headings, literal source states and native navigation. No overflow or pre-navigation cross-origin request. screen_reader is browser accessibility-tree naming, print is print-media visible DOM; no human AT/physical print trial is claimed. BSC works without JavaScript.",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "mode": "narrow",
+        "requirement": "Production-route proof of all named orientation headings, literal source states and native navigation. No overflow or pre-navigation cross-origin request. screen_reader is browser accessibility-tree naming, print is print-media visible DOM; no human AT/physical print trial is claimed. BSC works without JavaScript.",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "mode": "zoom_200",
+        "requirement": "Production-route proof of all named orientation headings, literal source states and native navigation. No overflow or pre-navigation cross-origin request. screen_reader is browser accessibility-tree naming, print is print-media visible DOM; no human AT/physical print trial is claimed. BSC works without JavaScript.",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "mode": "keyboard",
+        "requirement": "Production-route proof of all named orientation headings, literal source states and native navigation. No overflow or pre-navigation cross-origin request. screen_reader is browser accessibility-tree naming, print is print-media visible DOM; no human AT/physical print trial is claimed. BSC works without JavaScript.",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "mode": "screen_reader",
+        "requirement": "Production-route proof of all named orientation headings, literal source states and native navigation. No overflow or pre-navigation cross-origin request. screen_reader is browser accessibility-tree naming, print is print-media visible DOM; no human AT/physical print trial is claimed. BSC works without JavaScript.",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "mode": "print",
+        "requirement": "Production-route proof of all named orientation headings, literal source states and native navigation. No overflow or pre-navigation cross-origin request. screen_reader is browser accessibility-tree naming, print is print-media visible DOM; no human AT/physical print trial is claimed. BSC works without JavaScript.",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      },
+      {
+        "mode": "javascript_off",
+        "requirement": "Production-route proof of all named orientation headings, literal source states and native navigation. No overflow or pre-navigation cross-origin request. screen_reader is browser accessibility-tree naming, print is print-media visible DOM; no human AT/physical print trial is claimed. BSC works without JavaScript.",
+        "decision_ids": [
+          "header",
+          "maps",
+          "source-rows",
+          "disclosure",
+          "navigation",
+          "source-states",
+          "accessibility",
+          "tokens-fonts"
+        ],
+        "evidence_ref": "tests/fixtures/devui_builder_system_control/browser-proof.json",
+        "evidence_sha256": "sha256:b1beba346700e71fa9ba6e3eb3426974ac6517d57c082057fec64a9f28d2c07e"
+      }
+    ]
+  },
+  "independent_review": {
+    "reviewer_identity": "/root/devui_ci_repair_review",
+    "independent_from_author": true,
+    "independence_basis": "Separate read-only agent from the receipt author; independently verified exact payload bindings, unchanged visual envelope, and isolated receiver fixture.",
+    "reviewed_payload_sha256": "sha256:af175f5ab82133c16887a3a87d0779bbfcbb33f10f8611da35222c61f51b8db2",
+    "reviewed_at": "2026-10-18T07:45:59Z",
+    "verdict": "pass",
+    "findings": []
+  },
+  "receipt_sha256": "sha256:e57b52506e570ccd07f4aded02afdfd7298c5cf991dbc06a5d8da0b1ea64ebb0"
+}

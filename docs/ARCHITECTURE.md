@@ -124,8 +124,10 @@ In the current v5.5 baseline, the implemented center of gravity is still the Mim
 
 This subsection is **non-SBS-owned**: it is a current-reality infrastructure classification, not a
 boundary allocation, and it does not create a new allocation table. The Compose rows describe the
-local fallback; the live product runtime is the Linux/Tailscale host split recorded in
-`docs/ENVIRONMENTS.md`. It applies the four-class
+local fallback; `docs/ENVIRONMENTS.md` retains the application placement contract.
+[The infrastructure status view](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
+owns dated physical host and service observations. This table is not an inventory of all Mac or
+Linux guest services. It applies the four-class
 lifecycle-role rule from `docs/architecture/system-context-overlay.md` (SBI-1) — SoI component /
 COTS system element (deployed configuration) / enabling system / external system — to every
 `docker-compose.yaml` service and every host process listed in
@@ -139,7 +141,7 @@ ports, gateways) — this table references, and does not duplicate, either.
 | `app/`, `mimer_runtime/`, contracts/schemas, companion-note surface | in-repo runtime code | SoI component |
 | `db` (Postgres/pgvector, `docker-compose.yaml:2-14`) | compose service | COTS system element |
 | `ollama` (`docker-compose.yaml:16-31`) | local fallback compose service | COTS system element |
-| Dedicated Ollama host reached from the Linux runtime | Tailscale-reachable remote provider | External system |
+| Externally hosted Ollama provider, when selected | Environment contract owns endpoint and reachability; this row does not describe the whole model host | External system |
 | `api` (`docker-compose.yaml:37-99`) | compose service (SoI component runtime, containerized) | SoI component |
 | `worker` (`docker-compose.yaml:101-142`) | compose service (SoI component runtime, containerized) | SoI component |
 | `watcher` (`docker-compose.yaml:144-188`) | compose service (SoI component runtime, containerized) | SoI component |
@@ -159,8 +161,10 @@ above because they are two distinct bindings, never both at once for a given dep
 This table classifies lifecycle role only; it does not resolve the dual-role hazard (infrastructure
 as both enabling system and a domain of interest the SoI observes/actuates), which is deferred to
 the companion thread named in `docs/architecture/system-context-overlay.md`. The Compose entries are
-the local fallback classification; live new-host deployment remains unqualified until the authoritative
-deployment handoff, immutable artifact identity, and host isolation proofs exist.
+the local fallback classification. Candidate-specific native deployment receipts and remaining
+qualification gates belong to [the deployment owner](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
+Infrastructure observations alone do not establish immutable artifact identity, host isolation,
+or cutover acceptance.
 
 The host-global ownership ledger is an additional deployment-boundary guard:
 ledger schema v2 stores the selected vault's primary filesystem identity and
@@ -365,7 +369,7 @@ See also:
 - Settings tiering enforcement: watcher dev/lab tuning env vars are ignored in normal runtime (`PKM_SETTINGS_PROFILE=operator`) and require explicit `PKM_SETTINGS_PROFILE=lab`. See `docs/ENVIRONMENTS.md`; this current settings-profile split is a partial control mechanism, not the full environment contract.
 - Legacy snapshot watchers (`vault-watcher-run`, `vault-watcher-daemon`, runtime-loop) are dev-only, require `PKM_SETTINGS_PROFILE=lab`, and are not used in runtime start-system flows or as production surfaces.
 - Store object table is canonicalized to `store_objects`; legacy `objects` rows are best-effort backfilled when `store_objects` is empty so runtime reads/writes stay on one table.
-- Legacy `scripts/fs_watcher.py` note lifecycle operations route through `VaultPort` (`FilesystemVaultAdapter`) rather than direct sink/pass-through writes.
+- Legacy `scripts/fs_watcher.py` note lifecycle operations route through `VaultPort` (`FilesystemVaultAdapter`) rather than direct sink/pass-through writes. Its optional activation and inventory share the strict producer-policy reader used by guarded legacy recovery; a default vault path is not producer applicability. The configuration, canonical reprojection and refusal contract is owned by [Embedding operational guardrails](EMBEDDINGS.md#operational-guardrails).
 - DB outbox is canonical in runtime; JSONL outbox is audit/diagnostic only.
 
 ### Environment contract (current architecture reading)
@@ -373,6 +377,26 @@ See also:
 - Environment changes may affect runtime topology, provider choice, diagnostics, fixture data, and tuning, but they MUST NOT change artifact semantics, event contracts, provenance rules, or write-safety boundaries.
 - Vault surface, companion/system surface, runtime stores, and operational artifacts must remain separable by environment even when the underlying architecture is otherwise shared.
 - Production runtime must prefer conservative behavior, explicit gating, and recoverable failure over convenience.
+
+### Active context and vault bindings
+
+Production request ingress resolves one immutable `ActiveContextSet` before any vault-bound read or
+effect. The authenticated request/session carrier outranks the instance default; invalid, stale, or
+ambiguous selection fails closed and never falls back to `VAULT_ROOT`, compiled settings, or the
+compatibility watcher. The resolved binding IDs, registry generation, and authority snapshot travel
+through API, agent, MCP, CLI, retrieval, cache, and projection seams as request provenance.
+
+Nested and provisional bindings, channel-lease transfer, and authority changes are enforced at the
+effect boundary as well as at initial resolution. A request cannot cross-read a registered child,
+continue from a retired source binding, or widen its binding set after resolution. Retrieval cache
+identity includes binding provenance, and request-wide settings must agree across every selected
+binding before an effect begins.
+
+The existing picker remains a compatibility bridge: it creates or reuses a scoped selection while
+coordinating the single watcher/default rebind transaction. That bridge does not make process-global
+state authoritative for a scoped request. Until MVR-05C, vault-bound mutations presented through the
+scoped carrier remain sealed with `capability_not_ready`; MVR-06 owns retirement of the remaining
+single-watcher and global-resolution adapters.
 
 ### Architecture Statement: Bounded Agents on Shared Foundations
 - The architecture is expected to include multiple bounded agents with narrow responsibilities rather than one central general agent.
@@ -444,6 +468,12 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - See `docs/CONCURRENCY.md`, `docs/EVENTS.md`, and `app/promotion/consumer.py` for the enacted guardrails and testing strategy.
 
 ## Boundary Enforcement
+- Explicit DEV/TEST `text-capture` activation binds the native request to a finite
+  API method/path perimeter before route dependencies and handlers. It retains
+  foundational identity/write/migration admission while leaving semantic serving
+  and producers unavailable; default/full activation retains its existing gates.
+  This source support is not full-channel or live acceptance. The deployment
+  contract is owned by [Native source preflight and recovery](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery).
 - Current runtime retrieval uses `ASK_DOMAIN_SCOPE` and `bridge_domains` as compatibility labels
   for a narrower operational-scope filter and explicit inclusion mechanism.
 - The active scope is bound PER REQUEST (#2921): the ASK request carries it down to the retrieval
@@ -685,6 +715,12 @@ Historical topology, older runtime surfaces, and superseded architecture detail 
 ## GitHub Delivery Control Plane (development governance)
 
 GitHub delivery governance is a Builder System concern, not runtime architecture. `GitHub Issues / PRs / CI` remain durable delivery truth; `Dispatcher SQLite` is the volatile coordination primitive; the external BuilderOps Vault provides advisory material; and Project is an optional projection. `AGENTS.md` and `docs/development/` own the task-contract, claim, PR, CI, and verification workflow; their rules must not be inferred from this document.
+
+Native PR intake can explicitly retain an open governing Issue for post-merge proof; its input and
+receipt contract lives in `docs/development/PR_HOT_PATH.md :: PR Body Preparation`. This intake is
+separate from dispatched/fenced merge authority, whose closure resolvers still require closing Issues.
+Section reviewed 2026-10-24 against the native constructor/publication and production CI regressions
+in `tests/scripts/test_publication.py` and `tests/governance/test_issue_pr_governance.py`.
 
 ## BuilderOps Build Plane
 

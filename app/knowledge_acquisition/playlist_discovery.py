@@ -1,12 +1,13 @@
-"""YouTube Source Sync V1: one account, one enabled Inbox playlist.
+"""YouTube Source Sync's bounded one-account, one-Inbox product route.
 
 The adapter enumerates only through the delivered YSS-03 client, disposes
 each new Inbox playlist-item identity through the delivered YSS-04 request
 queue, and only then publishes the YSS-01 cursor. A failed API/auth/network
 poll never mutates cursor/known state and never emits an empty-success receipt.
-
-Owned/public/Liked playlists, scheduling, leases, backfill, and automatic
-knowledge promotion are deliberately absent from this V1 surface.
+YSS-06 adds gated discovery scheduling and a shared lease for this Inbox;
+acquisition draining remains operator-invoked. YSS-07 adds a separate internal
+Takeout/RSS subscription path without changing the Inbox route. Neither path
+promotes acquired material automatically into knowledge.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterator, NoReturn
 
 from app.knowledge_acquisition.acquisition_requests import (
+    AcquisitionRequestPolicyConflictError,
     DiscoveryTrigger,
     request_identity,
 )
@@ -50,6 +52,7 @@ SAFE_REASON_CODES = frozenset(
         "network_error",
         "source_gone",
         "policy_unsupported",
+        "policy_conflict",
         "paused_source",
         "inbox_missing",
     }
@@ -66,6 +69,7 @@ _SAFE_REASON_DETAILS: dict[str, str] = {
     "network_error": "The YouTube Data API could not be reached.",
     "source_gone": "The playlist is unavailable or the account cannot access it.",
     "policy_unsupported": "The configured acquisition policy cannot be enforced safely.",
+    "policy_conflict": "This video was discovered with a different acquisition policy; resolve the source policies before retrying.",
     "paused_source": "The source is disabled and was not polled.",
     "inbox_missing": "No YouTube Inbox playlist is configured for this account.",
 }
@@ -468,6 +472,14 @@ def poll_source(
         if item.playlist_item_id in known:
             continue
         discovered += 1
+        trigger = DiscoveryTrigger(
+            binding_id=binding.binding_id,
+            collection_kind=binding.collection_kind,
+            collection_ref=binding.collection_ref,
+            trigger="poll",
+            playlist_item_id=item.playlist_item_id,
+        )
+        policy_conflict = False
         try:
             policy_version = policy.get("policy_version", 1)
             existing = None
@@ -478,22 +490,25 @@ def poll_source(
                         request_identity("youtube_url", item.video_id, policy_version)
                     )
             with deadline_commit_guard() as conn:
-                requests.enqueue(
-                    source_kind="youtube_url",
-                    item_ref=item.video_id,
-                    source_ref=f"https://www.youtube.com/watch?v={item.video_id}",
-                    trigger=DiscoveryTrigger(
-                        binding_id=binding.binding_id,
-                        collection_kind=binding.collection_kind,
-                        collection_ref=binding.collection_ref,
-                        trigger="poll",
-                        playlist_item_id=item.playlist_item_id,
-                    ),
-                    priority=binding.priority,
-                    policy_snapshot=policy,
-                    trace_id=run_id,
-                    **({"transaction_conn": conn} if conn is not None else {}),
-                )
+                try:
+                    requests.enqueue(
+                        source_kind="youtube_url",
+                        item_ref=item.video_id,
+                        source_ref=f"https://www.youtube.com/watch?v={item.video_id}",
+                        trigger=trigger,
+                        priority=binding.priority,
+                        policy_snapshot=policy,
+                        trace_id=run_id,
+                        **({"transaction_conn": conn} if conn is not None else {}),
+                    )
+                except AcquisitionRequestPolicyConflictError:
+                    requests.record_discovery(
+                        item_ref=item.video_id,
+                        trigger=trigger,
+                        trace_id=run_id,
+                        **({"conn": conn} if conn is not None else {}),
+                    )
+                    policy_conflict = True
         except SyncLeaseLostError:
             raise
         except _PollDeadlineExceeded:
@@ -501,6 +516,14 @@ def poll_source(
         except Exception:
             persistence_failed = True
             break
+        if policy_conflict:
+            return degraded(
+                binding,
+                registry=registry,
+                run_id=run_id,
+                started=started,
+                reason_code="policy_conflict",
+            )
         if existing is None:
             enqueued += 1
             outcome = "request_enqueued"

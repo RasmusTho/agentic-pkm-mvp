@@ -641,6 +641,22 @@ class WatcherState:
         else:
             self.files[rel_path] = entry
 
+    def mark_scan_generation_seen(self, rel_path: str) -> None:
+        """Mark scan presence without advancing ordinary delivery state."""
+
+        entry = self.file_entry(rel_path)
+        if self._observation_store is not None:
+            self._pending_deletes.discard(rel_path)
+            self._pending_observations[rel_path] = (
+                dict(entry) if entry is not None else {},
+                self.scan_generation,
+            )
+            return
+        # Registry states use the sidecar. Preserve the same no-delivery
+        # semantics for an in-memory legacy state used by narrow callers/tests.
+        if entry is not None:
+            self.files[rel_path] = entry
+
     def invalidate_file_observation(
         self,
         rel_path: str,

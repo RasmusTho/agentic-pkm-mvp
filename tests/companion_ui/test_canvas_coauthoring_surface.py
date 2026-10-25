@@ -52,6 +52,7 @@ class _FakeResponse:
         self._payload = payload
         self.status_code = status_code
         self.text = ""
+        self.headers: dict[str, str] = {}
 
     def json(self) -> dict[str, Any]:
         return self._payload

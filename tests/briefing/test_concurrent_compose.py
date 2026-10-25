@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 import threading
 import time
+import hashlib
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -23,8 +25,11 @@ import pytest
 
 from app.briefing import compose as compose_module
 from app.briefing import load_briefing
-from app.briefing.compose import briefing_note_path
+from app.briefing.compose import briefing_note_path, migrate_briefing_identity
 from app.briefing.trigger import first_contact_briefing, scheduled_briefing_tick
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.profile_authority import ProfileIdentityRecord
+from app.knowledge.profile_authority_store import ProfileAuthorityStore
 from app.services import note_uuid as note_uuid_module
 from app.vault.manager import VaultContext
 from app.workers.outbox_worker import _ensure_uuid_with_backoff
@@ -130,6 +135,68 @@ def test_concurrent_first_contact_composes_one_readable_briefing(
     assert _conflict_copies(vault, TODAY) == []
 
 
+def test_daily_briefing_initial_create_preserves_concurrent_winner(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    original_write = compose_module.write_note_relative
+
+    def create_winner_at_publication(*args: object, **kwargs: object) -> object:
+        if kwargs.get("create_once") is True and kwargs.get("vault_root") == root:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("concurrent owner bytes\n", encoding="utf-8")
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(
+        compose_module,
+        "write_note_relative",
+        create_winner_at_publication,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="created concurrently"):
+        compose_module.compose_briefing(
+            vault_context=vault,
+            for_date=PAST,
+            write_guard=HEALTHY,
+        )
+
+    assert target.read_text(encoding="utf-8") == "concurrent owner bytes\n"
+
+
+def test_daily_briefing_initial_create_refuses_parent_alias_at_publication(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_write = compose_module.write_note_relative
+
+    def alias_parent_at_publication(*args: object, **kwargs: object) -> object:
+        if kwargs.get("create_once") is True and kwargs.get("vault_root") == root:
+            target.parent.parent.mkdir(parents=True, exist_ok=True)
+            target.parent.symlink_to(outside, target_is_directory=True)
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(
+        compose_module,
+        "write_note_relative",
+        alias_parent_at_publication,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="not eligible"):
+        compose_module.compose_briefing(
+            vault_context=vault,
+            for_date=PAST,
+            write_guard=HEALTHY,
+        )
+
+    assert target.parent.is_symlink()
+    assert not (outside / target.name).exists()
+
+
 def test_existing_past_briefing_is_not_recomposed(vault: VaultContext) -> None:
     compose_module.compose_briefing(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
     past = briefing_note_path(vault_context=vault, for_date=PAST)
@@ -161,3 +228,266 @@ def test_existing_past_briefing_is_not_recomposed(vault: VaultContext) -> None:
     assert _conflict_copies(vault, PAST) == []
     note = load_briefing(vault_context=vault, for_date=PAST)
     assert note is not None and note.briefing_date == PAST
+
+
+def test_daily_briefing_identity_migration_uses_cas_and_retains_original(
+    vault: VaultContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compose_module.compose_briefing(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    note = load_briefing(vault_context=vault, for_date=PAST)
+    assert note is not None and note.uuid is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    expected_version = hashlib.sha256(legacy.encode()).hexdigest()
+    observed_versions: list[object] = []
+    original_write = compose_module.write_note_relative
+
+    def capture_expected_version(*args: object, **kwargs: object) -> object:
+        if kwargs.get("vault_root") == Path(vault.active_vault_path or ""):
+            observed_versions.append(kwargs.get("expected_version"))
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(compose_module, "write_note_relative", capture_expected_version)
+    receipt = migrate_briefing_identity(
+        vault_context=vault,
+        for_date=PAST,
+        write_guard=HEALTHY,
+    )
+    assert receipt is not None and receipt.outcome == "written"
+    assert observed_versions == [expected_version]
+    retained = target.parent / "_conflicts"
+    assert any(
+        candidate.read_text(encoding="utf-8") == legacy
+        for candidate in retained.glob("*.md.conflict")
+    )
+
+    target.write_text(legacy, encoding="utf-8")
+
+    def edit_before_conditional_write(*args: object, **kwargs: object) -> object:
+        if kwargs.get("expected_version") is not None and kwargs.get("vault_root") == Path(
+            vault.active_vault_path or ""
+        ):
+            target.write_text(legacy + "\nowner edit\n", encoding="utf-8")
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(compose_module, "write_note_relative", edit_before_conditional_write)
+    with pytest.raises(KnowledgeWriteConflict):
+        migrate_briefing_identity(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+    assert target.read_text(encoding="utf-8").endswith("owner edit\n")
+
+
+@pytest.mark.parametrize("authority_drift", ["profile", "symlink"])
+def test_daily_briefing_identity_migration_revalidates_authority_at_write_seam(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+    authority_drift: str,
+) -> None:
+    compose_module.compose_briefing(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    note = load_briefing(vault_context=vault, for_date=PAST)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    proposal = compose_module.prepare_briefing_identity_migration(
+        vault_context=vault,
+        for_date=PAST,
+    )
+    assert proposal is not None
+    monkeypatch.setattr(
+        compose_module,
+        "prepare_briefing_identity_migration",
+        lambda **_kwargs: proposal,
+    )
+
+    foreign: Path | None = None
+    if authority_drift == "profile":
+        expected_uuid = note_uuid_module.resolve_read_only_derived_uuid(
+            target,
+            vault_root=root,
+        )
+        ProfileAuthorityStore(root, profile_note_id=expected_uuid).initialize(
+            ProfileIdentityRecord(
+                event_id="daily-briefing-profile-drift",
+                vault_id="test-vault",
+                profile_note_id=expected_uuid,
+                note_path=target.relative_to(root).as_posix(),
+                initial_content_digest=hashlib.sha256(legacy.encode()).hexdigest(),
+            )
+        )
+    else:
+        foreign = root / "foreign.md"
+        foreign.write_text(legacy, encoding="utf-8")
+        target.unlink()
+        target.symlink_to(foreign)
+
+    with pytest.raises(KnowledgeWriteConflict, match="not eligible"):
+        migrate_briefing_identity(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+
+    if foreign is None:
+        assert target.read_text(encoding="utf-8") == legacy
+    else:
+        assert foreign.read_text(encoding="utf-8") == legacy
+        assert target.is_symlink()
+
+
+def test_daily_briefing_identity_migration_fences_profile_authority_before_cas(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compose_module.compose_briefing(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    note = load_briefing(vault_context=vault, for_date=PAST)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    proposal = compose_module.prepare_briefing_identity_migration(
+        vault_context=vault,
+        for_date=PAST,
+    )
+    assert proposal is not None
+    monkeypatch.setattr(
+        compose_module,
+        "prepare_briefing_identity_migration",
+        lambda **_kwargs: proposal,
+    )
+
+    original_path_target = compose_module._briefing_path_target
+    calls = 0
+
+    def initialize_after_precheck(**kwargs: object) -> tuple[Path, str]:
+        nonlocal calls
+        resolved_target, expected_uuid = original_path_target(**kwargs)
+        calls += 1
+        if calls == 2:
+            ProfileAuthorityStore(root, profile_note_id=expected_uuid).initialize(
+                ProfileIdentityRecord(
+                    event_id="daily-briefing-profile-cas-race",
+                    vault_id="test-vault",
+                    profile_note_id=expected_uuid,
+                    note_path=target.relative_to(root).as_posix(),
+                    initial_content_digest=hashlib.sha256(legacy.encode()).hexdigest(),
+                )
+            )
+        return resolved_target, expected_uuid
+
+    monkeypatch.setattr(
+        compose_module,
+        "_briefing_path_target",
+        initialize_after_precheck,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="not eligible"):
+        migrate_briefing_identity(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+
+    assert calls == 3
+    assert target.read_text(encoding="utf-8") == legacy
+
+
+def test_daily_briefing_identity_migration_serializes_profile_initialization(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compose_module.compose_briefing(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    note = load_briefing(vault_context=vault, for_date=PAST)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    expected_uuid = note_uuid_module.resolve_read_only_derived_uuid(
+        target,
+        vault_root=root,
+    )
+    store = ProfileAuthorityStore(root, profile_note_id=expected_uuid)
+    original_write = compose_module.write_note_relative
+    initialization_started = threading.Event()
+    initialization_finished = threading.Event()
+    initialization_errors: list[BaseException] = []
+    initializer: threading.Thread | None = None
+
+    def initialize_profile() -> None:
+        initialization_started.set()
+        try:
+            store.initialize(
+                ProfileIdentityRecord(
+                    event_id="daily-briefing-profile-serialized",
+                    vault_id="test-vault",
+                    profile_note_id=expected_uuid,
+                    note_path=target.relative_to(root).as_posix(),
+                    initial_content_digest=hashlib.sha256(legacy.encode()).hexdigest(),
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            initialization_errors.append(exc)
+        finally:
+            initialization_finished.set()
+
+    def race_at_canonical_write(*args: object, **kwargs: object) -> object:
+        nonlocal initializer
+        if kwargs.get("expected_version") is not None and kwargs.get("vault_root") == root:
+            initializer = threading.Thread(target=initialize_profile)
+            initializer.start()
+            assert initialization_started.wait(timeout=1)
+            time.sleep(0.05)
+            assert not initialization_finished.is_set()
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(compose_module, "write_note_relative", race_at_canonical_write)
+    receipt = migrate_briefing_identity(
+        vault_context=vault,
+        for_date=PAST,
+        write_guard=HEALTHY,
+    )
+    assert receipt is not None and receipt.outcome == "written"
+    assert initializer is not None
+    initializer.join(timeout=1)
+    assert initialization_finished.is_set()
+    assert initialization_errors == []
+
+
+def test_daily_briefing_identity_migration_rejects_nonregular_authority_before_cas(
+    vault: VaultContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compose_module.compose_briefing(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+    root = Path(vault.active_vault_path or "")
+    target = briefing_note_path(vault_context=vault, for_date=PAST)
+    note = load_briefing(vault_context=vault, for_date=PAST)
+    assert note is not None
+    legacy = compose_module._render_note(replace(note, uuid=None))
+    target.write_text(legacy, encoding="utf-8")
+    proposal = compose_module.prepare_briefing_identity_migration(
+        vault_context=vault,
+        for_date=PAST,
+    )
+    assert proposal is not None
+    monkeypatch.setattr(
+        compose_module,
+        "prepare_briefing_identity_migration",
+        lambda **_kwargs: proposal,
+    )
+
+    original_path_target = compose_module._briefing_path_target
+    calls = 0
+
+    def replace_authority_before_fence(**kwargs: object) -> tuple[Path, str]:
+        nonlocal calls
+        resolved_target, expected_uuid = original_path_target(**kwargs)
+        calls += 1
+        if calls == 2:
+            store = ProfileAuthorityStore(root, profile_note_id=None)
+            os.mkfifo(store.path, mode=0o600)
+        return resolved_target, expected_uuid
+
+    monkeypatch.setattr(
+        compose_module,
+        "_briefing_path_target",
+        replace_authority_before_fence,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="not eligible"):
+        migrate_briefing_identity(vault_context=vault, for_date=PAST, write_guard=HEALTHY)
+
+    assert calls == 2
+    assert target.read_text(encoding="utf-8") == legacy

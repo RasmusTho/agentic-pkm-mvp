@@ -13,6 +13,10 @@ This skill only routes. The cited owner documents and skills own credential mean
 provisioning, handoff, rotation, and live qualification. Follow their current status and operator
 gates; a target-state plan or a successful local read does not prove live qualification.
 
+For a cross-owner architecture, access-policy, or lifecycle update, continue with
+`.codex/skills/secret-management/SKILL.md`. Its reusable update prompt is
+`.codex/skills/secret-management/UPDATE_PROMPT.md`.
+
 ## First identify the request
 
 Establish these facts from the request and repository state:
@@ -32,6 +36,7 @@ contains a genuine owner decision or the requested effect is outside its authori
 
 | Request | Use this path | Boundary to preserve |
 | --- | --- | --- |
+| Get the declared BWS project and identity for one host-contract consumer | `scripts/secrets route <channel> --consumer <consumer>` where implemented for that consumer; otherwise stop at the declared contract metadata | Metadata only: no provider call, value read, access grant, or live qualification. Read the owner document before any operation. |
 | Make one bounded Jev judgment during local development on the current Mac | Load the existing jev-direct skill for the active agent. | This is the local TSO-06 development tool. It does not configure Product, Builder, MARR, VM, or production routes. |
 | Use Jev from a Product or Builder runtime consumer | `docs/TYPESAFE_SYSTEM_ONE/README.md :: Initial Consumers` and `:: Data and Credential Boundary`, plus the consumer's owner contract. | Product and Builder call through MARR under separate caller policy and credentials; only the MARR server resolves the provider key. Runtime routes remain subject to their host-binding and acceptance gates. |
 | Read or provision a secret for a Mac-hosted Yggdrasil process | `docs/LOCAL_SECRET_PROVISIONING/README.md` and its declared consumer contract. | macOS Keychain is the current Mac-hosted source. Use the documented consumer binding and handoff; do not invent a second Keychain naming or lookup convention. |
@@ -39,6 +44,13 @@ contains a genuine owner decision or the requested effect is outside its authori
 | Operate an external helper credential such as a webhook or provider identity | `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md :: Credential boundary`. | Heimdal owns helper lifecycle. Secret values stay in the execution host's approved secure store; the repository and Builder Vault hold references and scope, not values. Follow the document's current enactment status. |
 | Use a Proxmox/OpenTofu provider credential or protect infrastructure state | The current Platform and Operations owner document and preparation issue [#5856](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5856), plus the current infrastructure implementation issue if one exists. | The preparation issue is not proof that a repository, provider token, backend, state object, or access path exists. Do not invent or provision one from the plan. Keep credentials out of Git and state outside Git under the selected, qualified backend and locking contract. |
 | Any other credential | Locate its owner through `docs/DOCS_INDEX.md` and the consumer's current owner contract. | Do not reuse or copy a credential across consumers or stores unless the owner contract explicitly declares that exact shared identity and scope. If no owner or approved path exists, report that exact gap and stop before handling the value. |
+
+The 2026-10-18 value-free review is
+`docs/audits/SYSTEM_WIDE_CREDENTIAL_ROUTES_2026-10-18.md`. It is a dated evidence map, not a grant
+or a replacement for current owner contracts. The current RasmusTho/yggdrasil-infra repository owns its
+provider and encrypted local-state contract; #5856 alone cannot establish its current state.
+Historical provider-login probes in the Mac agent playbook do not authorize Anthropic access or
+prove a usable current Codex session. Use the current Codex-only Model Inquiry contract.
 
 ## Handle the value safely
 

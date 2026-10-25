@@ -251,7 +251,7 @@ def test_manual_sync_honors_accepted_global_pause_before_registry_or_egress(
     monkeypatch.setattr(youtube_cli, "TokenProvider", _TokenProvider)
     monkeypatch.setattr(youtube_cli, "YouTubeApiClient", _ApiClient)
     monkeypatch.setattr(youtube_cli, "AcquisitionRequests", _Requests)
-    monkeypatch.setattr(youtube_cli, "get_vault_manager", lambda: _VaultManager())
+    monkeypatch.setattr(youtube_cli, "invocation_vault_context", lambda: _VaultManager().context())
     monkeypatch.setattr(
         SettingsService,
         "resolve_accepted_runtime_gating",
@@ -517,7 +517,7 @@ def _install_drain_doubles(
         youtube_cli, "AcquisitionRequests", type("Q", (), {"for_runtime": staticmethod(lambda: queue)})
     )
     monkeypatch.setattr(
-        youtube_cli, "get_vault_manager", lambda: _VaultManager(vault_context)
+        youtube_cli, "invocation_vault_context", lambda: _VaultManager(vault_context).context()
     )
     return drained
 

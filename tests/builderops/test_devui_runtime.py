@@ -172,7 +172,7 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
 
         def readiness(self):
             state.calls.append("status")
-            return {"schema_version": 1, "authority_epoch": state.epoch}
+            return {"schema_version": getattr(state, "schema_version", 1), "authority_epoch": state.epoch}
 
         def list_tasks(self, repository, **kwargs):
             state.calls.append(("list_tasks", repository))
@@ -199,6 +199,8 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
                 row["repository"] = "foreign/repository"
             if state.mode == "changed":
                 row["version"] += 1
+            if state.mode == "source_probe_snapshot_conflict":
+                row["state"] = "ready"
             if state.mode == "activity_changed":
                 row["lease"]["updated_at"] = stamp
             state.addressed_tasks.append(copy.deepcopy(row))
@@ -458,7 +460,7 @@ def _native_unprojected_tasks(source):
 
     with httpx.Client(base_url="http://fixture", transport=httpx.MockTransport(capture)) as http:
         with BuilderOpsControlPlaneClient(
-            ClientConfig(base_url="http://fixture", token="fixture-token"),
+            ClientConfig(base_url="https://fixture.invalid", token="fixture-token"),
             http_client=http,
         ) as client:
             _dispatch(
@@ -583,6 +585,27 @@ def test_managed_overview_reads_admitted_sources(managed_sources) -> None:
     assert calls and all(
         call[:1] == ["api"] and call[1].startswith("repos/example/fixture/") for call in calls
     )
+
+
+def test_managed_ckm_snapshot_reaches_overview_and_system_control(managed_sources, tmp_path) -> None:
+    from app.builderops.devui_ckm_snapshot import FILENAME
+    from tests.builderops.test_devui_ckm_snapshot import make_snapshot
+
+    source = managed_sources
+    value, _ = make_snapshot(tmp_path)
+    receipt_dir = Path(source.environment["DEVUI_VM102_RECEIPT_DIR"])
+    (receipt_dir / FILENAME).write_text(json.dumps(value))
+    with source.client() as client:
+        overview = client.get("/api/devui/overview")
+        control = client.get("/api/devui/builder-system-control")
+    assert overview.status_code == control.status_code == 200
+    provider = next(row for row in overview.json()["trust_frame"]["provider_states"]
+                    if row["role"] == "capabilities")
+    other = control.json()["composition"]["providers"]["capabilities"]
+    assert provider["status"] == other["status"] == "available"
+    assert provider["snapshot"] == other["snapshot"] == value["result"]["snapshot"]
+    assert provider["completeness"]["private_transfer"]["content_sha256"] == value["content_sha256"]
+    assert _managed_source(overview.json(), "github-live")["state"] == "fresh"
 
 
 def test_managed_overview_exposes_owner_work_context(managed_sources, monkeypatch) -> None:
@@ -1225,12 +1248,15 @@ def _package_managed_shell(root: Path) -> None:
     shutil.copytree(source, root / "assets", dirs_exist_ok=True)
     shutil.copyfile(ROOT / "app/builderops/devui_managed.css", root / "assets/devui.css")
     shutil.copyfile(ROOT / "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css", root / "assets/yggdrasil.css")
+    from app.builderops.devui_control import bind_managed_control_assets
+    from app.builderops.devui_assets import ASSET_SHA256
+    bind_managed_control_assets(root / "assets")
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["files"].update(
         {
             "assets/" + name: hashlib.sha256((root / "assets" / name).read_bytes()).hexdigest()
-            for name in MANAGED_ROUTES.values()
+            for name in ASSET_SHA256
         }
     )
     manifest_path.write_text(json.dumps(manifest))
@@ -1250,6 +1276,8 @@ def test_managed_journey_serves_exact_packaged_asset_allowlist(managed_sources) 
         assert {r.path for r in client.app.routes} == set(MANAGED_ROUTES) | {
             "/api/devui/overview",
             "/api/devui/focus",
+            "/devui/builder-system-control",
+            "/api/devui/builder-system-control",
             "/version",
             "/healthz",
         }
@@ -1697,3 +1725,88 @@ def test_first_read_observation_refuses_unbound_bounded_documents(
             source.addressed_tasks,
             source.gh_calls.read_text(),
         ) == baseline
+
+
+@pytest.mark.parametrize('case', ['valid', 'contradictory_task', 'revoked', 'epoch_changed', 'foreign', 'schema', 'snapshot_conflict'])
+def test_operator_source_binding_probe_uses_consumer_read_boundary(managed_sources, monkeypatch, capsys, case):
+    import copy
+    import sys
+    from scripts import devui_source_binding_probe as source_probe
+
+    state = managed_sources
+    state.schema_version = 5
+    state.epoch = 9
+    for key, value in state.environment.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv('BUILDEROPS_API_TOKEN', raising=False)
+    repo = state.environment['DEVUI_REPOSITORY'].lower()
+    if case == 'contradictory_task':
+        state.tasks[0]['state'] = 'completed'
+        state.tasks[0]['payload']['status'] = 'ready'
+    elif case == 'snapshot_conflict':
+        state.tasks[0]['state'] = 'completed'
+        state.tasks[0]['payload']['status'] = 'ready'
+        state.mode = 'source_probe_snapshot_conflict'
+    elif case == 'revoked':
+        state.credential['revoked'] = True
+        state.auth.write_text(json.dumps({'credentials': [state.credential]}))
+    elif case == 'epoch_changed':
+        state.mode = 'epoch_changed'
+    elif case == 'foreign':
+        repo = 'foreign/repository'
+    elif case == 'schema':
+        state.schema_version = 6
+    before = copy.deepcopy(state.tasks)
+    monkeypatch.setattr(sys, 'argv', ['source-probe', '--repository', repo, '--epoch', '9',
+                                    '--source-sha', state.environment['DEVUI_SOURCE_SHA']])
+    outcome = source_probe.main()
+    output = capsys.readouterr().out
+    assert 'fixture-secret-never-export' not in output
+    assert state.tasks == before
+    assert all(method == 'GET' for method, path in state.http_calls)
+    if case in {'valid', 'contradictory_task'}:
+        assert outcome == 0
+        packet = json.loads(output)
+        assert packet['target_epoch'] == 9
+        assert packet['installed_epoch'] == int(state.environment['DEVUI_BUILDEROPS_AUTHORITY_EPOCH'])
+        assert packet['data_outcome'] == ('refused' if case == 'contradictory_task' else 'available')
+        if case == 'contradictory_task':
+            assert packet['data_refusal'] == 'task_payload_invalid'
+        assert any(path.startswith('/v1/tasks/') for method, path in state.http_calls)
+    else:
+        assert outcome == 1
+        assert json.loads(output) == {'refusal': 'source_binding_probe_refused'}
+
+
+def test_terminal_payload_status_correction_preserves_source_refusal():
+    from app.builderops.devui_sources import _task, SourceReadRefusal
+
+    repository = "rasmustho/agentic-pkm-mvp"
+    task_id = "github-rasmustho--agentic-pkm-mvp-issue-5495"
+    row = {
+        "repository": repository,
+        "task_id": task_id,
+        "state": "completed",
+        "version": 4,
+        "updated_at": "2026-10-17T20:00:00Z",
+        "lease": None,
+        "authority_envelope": {"repository": repository},
+        "payload": {
+            "repo": repository,
+            "task_id": task_id,
+            "issue_number": 5495,
+            "title": "Delivered task",
+            "state": "completed",
+            "status": "ready",
+            "sync_state": {"state": "open", "authority_epoch": 1},
+        },
+    }
+    with pytest.raises(SourceReadRefusal, match="task_payload_invalid"):
+        _task(row, repository=repository)
+    original = json.loads(json.dumps(row))
+    row["payload"]["status"] = "completed"
+    result = _task(row, repository=repository)
+    assert result["status"] == "completed"
+    assert json.loads(result["sync_state"]) == original["payload"]["sync_state"]
+    row["payload"]["status"] = "ready"
+    assert row==original

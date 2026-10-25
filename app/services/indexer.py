@@ -5,7 +5,7 @@ import re
 import uuid as _uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, Mapping
 
 from app.components.embeddings import EmbeddingClientProtocol
 from app.components.llm.fabric import get_product_embedding_client
@@ -132,6 +132,7 @@ def _source_backed_projection_metadata(
         product_replay_for_vault_note,
     )
     from app.rebuildability import canonical_product_body_text, parse_bounded_frontmatter
+    from app.rebuildability.product_total_loss import capture_source_frontmatter
 
     frontmatter, body, parse_error = parse_bounded_frontmatter(source_snapshot)
     if parse_error is not None:
@@ -143,6 +144,7 @@ def _source_backed_projection_metadata(
     )
     return {
         "title": _frontmatter_title(frontmatter) or _derive_title(body, source_path),
+        "frontmatter": capture_source_frontmatter(source_snapshot),
         "review_state": normalized["review_state"],
         "maturity": normalized.get("maturity"),
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
@@ -152,6 +154,8 @@ def _source_backed_projection_metadata(
             source_text=source_snapshot,
         ),
         "content": canonical_product_body_text(body),
+        "origin": "vault",
+        "trust": normalized.get("trust", "unreviewed"),
     }
 
 
@@ -252,15 +256,32 @@ def _infer_dim_from_error(exc: Exception) -> int | None:
     return None
 
 
-def handle_ingest_object_created(
+def watched_note_ingest_object(
+    note_path: Path, frontmatter: dict[str, Any], body: str, *, note_uuid: str | None,
+    source_text: str, observation: Mapping[str, Any],
+) -> Dict[str, object]:
+    """The ordinary registry worker's event object, without heal/companion/store effects."""
+    from app.rebuildability import canonical_product_body_text
+    return {
+        "uuid": note_uuid, "content": canonical_product_body_text(body),
+        "title": frontmatter.get("title") or note_path.stem,
+        "review_state": frontmatter.get("review_state"),
+        "maturity": frontmatter.get("maturity") or None,
+        "trace_id": observation.get("trace_id"),
+        "payload": {"frontmatter": frontmatter, "raw_text": source_text,
+                    "hash": observation.get("hash"), "watcher": observation.get("watcher")},
+        "source_ref": str(note_path), "kind": "note",
+    }
+
+
+def prepare_ingest_projection(
     obj: Dict[str, object],
     *,
+    incoming_uuid: object,
     vault_root: Path | None = None,
     source_snapshot: str | None = None,
-) -> None:
-    incoming_uuid = resolve_event_object_id(obj)
-    object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
-
+) -> tuple[dict[str, Any], str, dict[str, object]]:
+    """Canonical indexer payload preparation shared by ordinary ingest and recovery."""
     content = str(obj.get("content") or "")
     obj_payload = obj.get("payload") or {}
     source_metadata = _source_backed_projection_metadata(
@@ -305,6 +326,20 @@ def handle_ingest_object_created(
     # object to the honest 'unbound' -- never clobbering a real binding with 'unbound'.
     if isinstance(frontmatter, dict):
         payload["episode_ref"] = episode_ref_from_frontmatter(frontmatter)
+    return payload, canonical_content, source_metadata
+
+
+def handle_ingest_object_created(
+    obj: Dict[str, object],
+    *,
+    vault_root: Path | None = None,
+    source_snapshot: str | None = None,
+) -> None:
+    incoming_uuid = resolve_event_object_id(obj)
+    object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
+    payload, canonical_content, source_metadata = prepare_ingest_projection(
+        obj, incoming_uuid=incoming_uuid, vault_root=vault_root, source_snapshot=source_snapshot,
+    )
     trace_id = obj.get("trace_id")
     store = ObjectStore()
     existing = store.get_object(object_uuid)
@@ -368,6 +403,10 @@ def handle_ingest_object_created(
             source_ref=source_ref,
             created_at=existing.created_at,
         )
+    if not isinstance(source_metadata.get("frontmatter"), dict):
+        # A failed source snapshot refresh cannot leave old admission evidence
+        # attached to a newly written projection, even when body hashes agree.
+        domain.payload.pop("frontmatter", None)
     domain.payload = build_indexed_unit_payload(
         object_id=domain.uuid,
         kind=domain.kind,

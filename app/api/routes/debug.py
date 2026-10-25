@@ -11,8 +11,16 @@ from fastapi.responses import JSONResponse
 _log = logging.getLogger(__name__)
 
 from app.agents.panel.parser import parse_panel
-from app.api.routes.vault_resolution import active_vault_root_or_selection_required
-from app.settings.panel_actions import get_panel_actions_diagnostics
+from app.api.request_active_context import (
+    current_scoped_route_read,
+    route_read_vault_root_or_selection_required,
+    scoped_note_path_owned_by_binding,
+    scoped_route_read,
+)
+from app.settings.panel_actions import (
+    get_panel_actions_diagnostics,
+    panel_actions_diagnostics_for_read,
+)
 
 router = APIRouter(prefix="/api/debug")
 
@@ -29,13 +37,25 @@ def _resolve_note_path(vault_root: Path, note_rel: str) -> Path:
 
 
 @router.get("/panel", response_model=None)
+@scoped_route_read
 def debug_panel(note_rel: str = Query(..., description="Vault-relative path to note")) -> dict[str, Any] | JSONResponse:
-    vault_root = active_vault_root_or_selection_required(
+    # MVR-05B3: a carrier-bearing request reads its own bound binding; only a
+    # carrier-free request resolves the legacy process selection.
+    vault_root = route_read_vault_root_or_selection_required(
         requested_note_path=note_rel,
     )
     if isinstance(vault_root, JSONResponse):
         return vault_root
+    scoped = current_scoped_route_read()
+    if scoped is not None:
+        # Contain against the real bound root, so a symlinked registry path
+        # cannot make an in-binding note look like an escape (or vice versa).
+        vault_root = vault_root.resolve()
     note_path = _resolve_note_path(vault_root, note_rel)
+    if scoped is not None and not scoped_note_path_owned_by_binding(scoped, note_path):
+        # A note owned by an initialized nested child vault is not served
+        # through the parent binding.
+        raise HTTPException(status_code=404, detail="note not found")
     if not note_path.exists():
         raise HTTPException(status_code=404, detail="note not found")
     try:
@@ -54,7 +74,14 @@ def debug_panel(note_rel: str = Query(..., description="Vault-relative path to n
         "note_rel": note_rel,
         "note_path": str(note_path),
         "parsed_actions": actions,
-        "panel_diagnostics": get_panel_actions_diagnostics(),
+        # The mapping root is process configuration. A scoped read (MVR-05B4c6)
+        # gets its own non-mutating probe: it never rewrites the process-wide
+        # last-error slot, nor reports an error another caller recorded there.
+        "panel_diagnostics": (
+            get_panel_actions_diagnostics()
+            if scoped is None
+            else panel_actions_diagnostics_for_read()
+        ),
     }
 
 

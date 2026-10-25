@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from contextlib import nullcontext
 from dataclasses import dataclass, asdict
-from typing import Iterable, List, Tuple
+from typing import Callable, Iterable, List, Tuple
 from uuid import UUID
 
 import psycopg
@@ -1140,6 +1141,115 @@ class PgObjectStore(ObjectStore):
                 )
         return str(resolved_object_id)
 
+    def reconcile_legacy_source(
+        self, expected: dict, *, vault_uuid: str, revalidate: Callable[[], None],
+        check_sources: Callable[[list[dict]], None],
+        replacement: dict | None = None, vector: dict | None = None,
+    ) -> None:
+        """CAS one legacy mirror; source proof and Product/vector effects commit together.
+
+        Canonical objects/history are never deleted. Existing vectors, duplicate
+        source claims and changed discovery rows refuse rather than being healed.
+        """
+        from app.write_guard import DEFAULT_WRITE_GUARD, SOURCE_BACKED_REBUILD_ACTION
+        from app.rebuildability.legacy_source import LegacySourceRefusal
+
+        DEFAULT_WRITE_GUARD.assert_writes_allowed(SOURCE_BACKED_REBUILD_ACTION)
+        oid = UUID(str(expected["object_id"]))
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                # Native recovery already owns stopped writers; this short DB
+                # fence also closes the absent-vector check/insert race.
+                cur.execute("LOCK TABLE store_vector_index IN SHARE ROW EXCLUSIVE MODE")
+                # Identity writers cannot insert/change an objects UUID mapping
+                # between the canonical lookup and this transaction's commit.
+                cur.execute("LOCK TABLE objects IN SHARE MODE")
+                cur.execute("LOCK TABLE store_objects IN SHARE ROW EXCLUSIVE MODE")
+                cur.execute(
+                    "SELECT object_id, kind, source_ref, payload, created_at FROM store_objects "
+                    "WHERE vault_binding_id = %s AND object_id = %s FOR UPDATE",
+                    (self.vault_binding_id, oid),
+                )
+                current = cur.fetchone()
+                if current != {key: expected[key] for key in ("object_id", "kind", "source_ref", "payload", "created_at")}:
+                    raise LegacySourceRefusal("legacy_race_refused")
+                try:
+                    retained_uuid = retained_vault_uuid_with_connection(
+                        conn, str(oid), vault_binding_id=self.vault_binding_id,
+                    )
+                    canonical = UUID(resolve_vault_uuid_with_connection(
+                        conn, vault_uuid, vault_binding_id=self.vault_binding_id,
+                    ))
+                except Exception:
+                    raise LegacySourceRefusal("legacy_identity_canonical_refused") from None
+                if retained_uuid is not None and UUID(retained_uuid) != UUID(vault_uuid):
+                    raise LegacySourceRefusal("legacy_identity_canonical_refused")
+                if canonical != oid:
+                    raise LegacySourceRefusal("legacy_identity_canonical_refused")
+                cur.execute("SELECT object_id, source_ref, payload FROM store_objects WHERE vault_binding_id = %s",
+                            (self.vault_binding_id,))
+                # The source adapter owns locator normalization; the table
+                # fence keeps that complete binding inventory stable here.
+                check_sources(cur.fetchall())
+                cur.execute(
+                    "SELECT object_id FROM store_vector_index WHERE vault_binding_id = %s AND object_id = %s",
+                    (self.vault_binding_id, oid),
+                )
+                if cur.fetchone() is not None:
+                    raise LegacySourceRefusal("legacy_race_refused")
+                revalidate()
+                if replacement is None:
+                    if vector is not None:
+                        raise ValueError("invalid retirement")
+                    # SET NULL/CASCADE must not rewrite receipts or accepted
+                    # history as an incidental effect of mirror retirement.
+                    cur.execute("""
+                        SELECT c.conrelid::regclass::text AS table_name,
+                               array_agg(a.attname ORDER BY k.ordinality) AS columns
+                        FROM pg_constraint c
+                        CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality)
+                        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+                        WHERE c.contype = 'f' AND c.confrelid = 'store_objects'::regclass
+                        GROUP BY c.oid, c.conrelid
+                    """)
+                    for dependency in cur.fetchall():
+                        table = dependency["table_name"]
+                        columns = dependency["columns"]
+                        if table in ("chunks", "embeddings"):
+                            continue
+                        if len(columns) != 2 or columns[0] != "vault_binding_id":
+                            raise LegacySourceRefusal("legacy_dependency_shape_refused")
+                        cur.execute(sql.SQL("SELECT 1 FROM {} WHERE {} = %s AND {} = %s LIMIT 1").format(
+                            sql.Identifier(*table.split(".")), sql.Identifier(columns[0]), sql.Identifier(columns[1]),
+                        ), (self.vault_binding_id, oid))
+                        if cur.fetchone() is not None:
+                            raise LegacySourceRefusal("legacy_retained_history_refused")
+                    cur.execute(
+                        "SELECT 1 FROM store_relations WHERE vault_binding_id = %s AND (src_id = %s OR dst_id = %s) "
+                        "UNION ALL SELECT 1 FROM store_relation_memberships WHERE vault_binding_id = %s "
+                        "AND src_id = %s LIMIT 1",
+                        (self.vault_binding_id, oid, oid, self.vault_binding_id, oid),
+                    )
+                    if cur.fetchone() is not None:
+                        raise LegacySourceRefusal("legacy_relation_retention_refused")
+                    cur.execute(
+                        "DELETE FROM store_objects WHERE vault_binding_id = %s AND object_id = %s",
+                        (self.vault_binding_id, oid),
+                    )
+                else:
+                    if vector is None:
+                        raise ValueError("missing replacement vector")
+                    put_object_with_connection(
+                        conn, object_id=oid, kind="note", source_ref=expected["source_ref"],
+                        payload=replacement, vault_binding_id=self.vault_binding_id,
+                    )
+                    PgVectorIndex(vault_binding_id=self.vault_binding_id).upsert(
+                        oid, _connection=conn, _require_insert=True,
+                        _missing_source={"kind": "note", "source_ref": expected["source_ref"], "payload": replacement},
+                        **vector,
+                    )
+                revalidate()
+
     def put_if_absent(self, object_id: UUID, *, kind: str, source_ref: str, payload: dict) -> bool:
         _ensure_tables()
         with _connect() as conn:
@@ -1262,6 +1372,9 @@ class PgVectorIndex(VectorIndex):
         model: str,
         identity: EmbeddingIdentity | None = None,
         reconcilable_fallback: bool = False,
+        _missing_source: dict | None = None,
+        _connection=None,
+        _require_insert: bool = False,
     ) -> None:
         _ensure_tables()
         embedding_floats = coerce_floats(embedding)
@@ -1275,8 +1388,19 @@ class PgVectorIndex(VectorIndex):
                 f"embedding model mismatch: stored={resolved_identity.model} provided={model}"
             )
         model_value = model or resolved_identity.model
-        with _connect() as conn:
+        with (nullcontext(_connection) if _connection is not None else _connect()) as conn:
             with conn.cursor() as cur:
+                if _missing_source is not None:
+                    # Lock the authoritative object through the insert. A stale
+                    # embedding must not become a projection of changed meaning.
+                    cur.execute(
+                        "SELECT kind, source_ref, payload FROM store_objects "
+                        "WHERE vault_binding_id = %s AND object_id = %s FOR SHARE",
+                        (self.vault_binding_id, object_id),
+                    )
+                    source = cur.fetchone()
+                    if source != _missing_source:
+                        raise ValueError("missing vector source changed")
                 # The index keeps a stable PRIMARY identity in vector_index_meta,
                 # used for queries and allow_create. An ordinary upsert must match
                 # that primary identity. A reconcilable fallback write may diverge in
@@ -1300,8 +1424,7 @@ class PgVectorIndex(VectorIndex):
                     embedding_values = l2_normalize(embedding_floats)
                 else:
                     embedding_values = embedding_floats
-                cur.execute(
-                    """
+                statement = """
                     INSERT INTO store_vector_index (
                         vault_binding_id, object_id, kind, source_ref, payload, embedding,
                         dim, model, provider, normalize, updated_at
@@ -1317,7 +1440,11 @@ class PgVectorIndex(VectorIndex):
                         provider = EXCLUDED.provider,
                         normalize = EXCLUDED.normalize,
                         updated_at = now()
-                    """,
+                    """
+                if _missing_source is not None:
+                    statement = statement[:statement.index("DO UPDATE")] + "DO NOTHING"
+                cur.execute(
+                    statement,
                     (
                         self.vault_binding_id,
                         object_id,
@@ -1331,6 +1458,25 @@ class PgVectorIndex(VectorIndex):
                         resolved_identity.normalize,
                     ),
                 )
+                if _require_insert and cur.rowcount != 1:
+                    raise ValueError("legacy vector raced")
+
+    def present_object_ids(self) -> set[str]:
+        """Include even malformed existing rows: missing repair never replaces one."""
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT object_id FROM store_vector_index WHERE vault_binding_id = %s",
+                    (self.vault_binding_id,),
+                )
+                return {str(row["object_id"]) for row in cur.fetchall()}
+
+    def insert_missing(self, object_id: UUID, *, source_payload: dict, **kwargs) -> None:
+        """Atomic insert-only projection, bound to an unchanged stored source."""
+        self.upsert(object_id, _missing_source={
+            "kind": kwargs["kind"], "source_ref": kwargs["source_ref"],
+            "payload": source_payload,
+        }, **kwargs)
 
     def search(
         self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None

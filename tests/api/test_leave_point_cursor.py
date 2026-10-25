@@ -171,7 +171,8 @@ def test_cursor_contains_references_only() -> None:
         "resurfacing_candidates",
     }
 
-    assert set(event) == ALLOWED_CURSOR_FIELDS
+    # ``vault_binding_id`` is present only on a binding-stamped capture (MVR-05B4c4).
+    assert set(event) == ALLOWED_CURSOR_FIELDS - {"vault_binding_id"}
     assert set(event["source_ref"]) == ALLOWED_SOURCE_REF_FIELDS
     assert not forbidden.intersection(event)
     assert all("/Users/" not in json.dumps(value) for value in event.values())

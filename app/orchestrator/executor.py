@@ -31,7 +31,12 @@ from app.governance.governed_write import (
     MissingDecisionTokenError,
     normalize_resource_ref,
 )
-from app.mcp.vault_tools import VaultToolError, append_note, get_vault_root
+from app.mcp.vault_tools import (
+    VAULT_CARRIER_SETTING,
+    VaultToolError,
+    append_note,
+    get_write_vault_root,
+)
 from app.orchestrator.agents import AgentPermissionError, _normalize_agent_target, resolve_agent_config, validate_agent_permissions
 from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
 from app.planner.tools import get_tool_descriptor
@@ -210,6 +215,10 @@ def _effect_metadata_with_authorization(
 
 def _has_configured_vault_root(settings: Mapping[str, Any] | None) -> bool:
     if settings:
+        if settings.get(VAULT_CARRIER_SETTING) is not None:
+            # An explicit carrier is the whole answer (MVR-05B4a); the
+            # environment below is only the carrier-free compatibility journey.
+            return True
         if any(settings.get(key) for key in ("vault_root", "root", "path")):
             return True
         nested = settings.get("vault")
@@ -229,7 +238,7 @@ def _resolve_effect_vault_root(settings: Mapping[str, Any] | None) -> Path | Non
     """
     if not _has_configured_vault_root(settings):
         return None
-    return get_vault_root(settings).expanduser().resolve()
+    return get_write_vault_root(settings).expanduser().resolve()
 
 
 def _effect_lock(effect_id: str, vault_root: Path | str | None) -> Lock:

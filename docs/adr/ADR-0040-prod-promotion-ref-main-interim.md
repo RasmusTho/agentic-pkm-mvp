@@ -1,10 +1,10 @@
-State: Accepted (operator decision, 2026-06-29). Records the interim prod promotion ref and the reproducibility invariant that backs it. The gated `stable` model in docs/RELEASE_CHANNELS/README.md §"Promotion contract" is unchanged and remains the target; this ADR does not relax it.
+State: Partially superseded by ADR-0068 D4 and Issue #6228 (2026-10-23): Decision §1–2 no longer govern repository promotion authority. The dated observations and decisions below are retained as history; §3 reproducibility and §4 operator-owned cleanup remain applicable.
 Applicability note (2026-08-22): this ADR remains the decision record for the legacy/local Compose
 promotion baseline. The observed move of runtime services toward new Linux/Tailscale hosts does not
 supersede it, because no authoritative remote deployment path, immutable artifact identity, or live
 test channel has been established yet. A new ADR is required when that promotion authority is chosen.
 Doc role: Decision record (ADR)
-Authority: Authoritative for the *decision* that prod tracks `main` as the interim promotion ref, that `origin/stable` is dormant and must not be treated as the prod source-of-truth until restored, and that the prod runtime must equal the promotion ref with a clean working tree (reproducible from git alone). Channel identity, isolation invariants, and the target four-phase gated promotion contract remain owned by `docs/RELEASE_CHANNELS/README.md`; this ADR reconciles that doc with prod reality and points at it, it does not redefine it.
+Authority: Historical for `main` promotion authority and dormant `stable`. Current authority is ADR-0068 D4 and `docs/RELEASE_CHANNELS/README.md :: Promotion model`: protected stable advancement requires the exact current green TEST candidate, durable functional PASS and concrete-plan human approval. Reproducibility and operator-owned cleanup remain binding. Repository policy adoption does not establish physical cutover or current running-prod identity; those observations belong to `RasmusTho/yggdrasil-infra/CURRENT_STATUS.md`.
 Owner: Release channels / deployment governance
 Temporal class: Durable decision (supersede via a new ADR when `stable` is restored as a gated ref; do not edit in place)
 Source of truth: This ADR plus `docs/RELEASE_CHANNELS/README.md` §"Promotion model".
@@ -12,7 +12,14 @@ Source of truth: This ADR plus `docs/RELEASE_CHANNELS/README.md` §"Promotion mo
 # ADR-0040: Prod promotion ref — `main` interim baseline; gated `stable` deferred
 
 **Date:** 2026-06-29
-**Status:** Accepted
+**Status:** Partially superseded (§1–2); §3–4 retained
+
+Supersession: both checkout and pinned-image promotion retain protected stable authority. A PR merge
+M is the stable transition record, while the tested source C and immutable digest D remain the
+deployment identity. A generated M is not qualified by equal tree alone. Normal forward checkout
+promotion refuses that mismatch before effects; the pinned-image path requires actual existing
+cutover evidence. This source adoption makes no claim that production moved or a live functional
+receipt was produced.
 
 ---
 

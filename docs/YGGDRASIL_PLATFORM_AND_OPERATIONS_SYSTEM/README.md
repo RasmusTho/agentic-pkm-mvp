@@ -5,7 +5,7 @@ Owner: Yggdrasil ecosystem architecture / operational platform
 Temporal class: strategic
 Review cadence: event-driven, when operational topology or an ownership boundary changes
 Source of truth: Owner decision 2026-08-15, grounded in `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, `docs/architecture/system-context-overlay.md`, `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, `docs/INFRASTRUCTURE.md`, and `docs/OPERATIONS.md`
-Last reviewed: 2026-08-15
+Last reviewed: 2026-10-21 (infrastructure-status reading path only; ownership boundaries unchanged)
 Last verified against: `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, `docs/architecture/system-context-overlay.md`, `docs/architecture/SBS_OPERATING_MODEL.md`, `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/README.md`, `docs/INFRASTRUCTURE.md`, `docs/HEALTH.md`, `docs/OBSERVABILITY.md`, `docs/SECURITY_ARCHITECTURE.md`, `docs/OPERATIONS.md`, `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md`, and `ops/host-setup/README.md`
 
 # Yggdrasil Platform and Operations System
@@ -113,7 +113,8 @@ current-state claims and procedures to the documents below.
 | `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` | Canonical current deployment and environment-topology contract | Owns how a deploy physically happens, the current/target deployment matrix, managed units, deploy/rollback procedure, and deployment gates. |
 | `docs/ENVIRONMENTS.md` | Environment selection and path scoping | Owns what data and configuration each channel touches. |
 | `docs/RELEASE_CHANNELS/README.md` | Channel identity, promotion contract, migration classification, and rollback semantics | Owns release-channel policy and evidence, not platform topology alone. |
-| `docs/INFRASTRUCTURE.md` | Current local Docker/Colima runtime description | Describes current local implementation details; update it when that reality changes. |
+| `yggdrasil-infra/CURRENT_STATUS.md` | Dated observed local infrastructure status | Descriptive Macs, TARS/guest, engine, network, storage and service inventory; not requirements or deployment acceptance. Private bindings stay outside Git and synchronized folders; Builder Vault holds the handoff and evidence references. |
+| `docs/INFRASTRUCTURE.md` | Application Docker/Colima fallback reference | Retains application-side local runtime detail and routes current physical inventory to the infrastructure repository. |
 | `docs/HEALTH.md` | Runtime health CLI behavior and health-contract meaning | Owns product/runtime health definitions and remediation meaning; platform handling starts only with the prerequisite signals below. |
 | `docs/OBSERVABILITY.md` | Runtime logs, counters, heartbeats, and status interpretation | Owns runtime observability signal definitions and interpretation; platform signals do not replace OEF/runtime observability. |
 | `docs/SECURITY_ARCHITECTURE.md` | Security framing, invariants, and review routing | Retains security-policy, credential, exposure, and proxy-trust authority while platform mechanisms implement approved topology. |
@@ -123,7 +124,11 @@ current-state claims and procedures to the documents below.
 
 ### Proposed separate infrastructure repository and disposable pilot (Issue #5856; preparation only)
 
-The repository split remains a proposal. This issue creates no repository, provider token, backend,
+The following preparation text records the proposal at #5856. Subsequent implementation now lives
+in `RasmusTho/yggdrasil-infra`; its current README and Issue #1 own the VM104-only credential,
+native encrypted local state/plan, and import-acceptance contract. Do not use this preparation
+proposal to infer that the repository or credential path is absent, or to require a remote backend.
+The repository split at the time of this preparation remained a proposal. This issue creates no repository, provider token, backend,
 state object, imported binding, VM, network, or deployment. If the owner approves the split, the
 private repository candidate is `yggdrasil-infra` (the final name is an owner decision). Its boundary
 is the Platform and Operations System and its first slice should be deliberately small:

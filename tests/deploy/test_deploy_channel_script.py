@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import errno
+import hashlib
 import socket
 import subprocess
 import sys
@@ -334,8 +335,9 @@ def test_health_gate_requires_liveness_readiness_and_functional_health() -> None
     assert "isinstance(data, dict)" in text
     assert 'run_postmutation_gate "health gate failed"' in text
     run_block = text.split('echo "deploy plan:', 1)[1]
+    full_run_block = run_block.split('elif [ "${activation_scope}" = text-capture ]; then', 1)[1].split('\nelse\n', 1)[1]
     assert run_block.index("recreate_channel_services") < run_block.index("health_gate")
-    assert run_block.index("health_gate") < run_block.index("version_gate")
+    assert full_run_block.index("health_gate") < full_run_block.index("version_gate")
 
 
 def test_embedding_rebuild_path_preserves_deferred_readiness_exception() -> None:
@@ -764,9 +766,10 @@ def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
     assert '"fleet_model_fitness"' in text
 
     run_block = text.split('echo "deploy plan:', 1)[1]
-    assert run_block.index("health_gate") < run_block.index("version_gate")
-    assert run_block.index("version_gate") < run_block.index("fleet_model_fitness_gate")
-    assert run_block.index("fleet_model_fitness_gate") < run_block.index("record_receipt")
+    full_run_block = run_block.split('elif [ "${activation_scope}" = text-capture ]; then', 1)[1].split('\nelse\n', 1)[1]
+    assert full_run_block.index("health_gate") < full_run_block.index("version_gate")
+    assert full_run_block.index("version_gate") < full_run_block.index("fleet_model_fitness_gate")
+    assert full_run_block.index("fleet_model_fitness_gate") < full_run_block.index("record_receipt")
 
 
 def _seed_previous_pin(root: Path, previous_sha: str, *, channel: str = "dev") -> Path:
@@ -2447,6 +2450,10 @@ class _BwsVmEffects:
     def select_active_plan(self, plan):
         return plan
 
+    def require_promotion_admission(self, plan):
+        # This fake represents only TEST; production admission uses real effects.
+        assert plan.channel == 'test'
+
     def preflight(self, plan):
         self.events.append('preflight:' + plan.channel)
         return 'fake-postgres-canary'
@@ -3350,7 +3357,8 @@ def test_managed_deploy_child_uses_declared_supervisor_interpreter(
     )
 
     if entrypoint in {'deploy', 'compose'}:
-        assert result.returncode == 78, result.stdout + result.stderr
+        expected_returncode = 120 if entrypoint == 'compose' else 78
+        assert result.returncode == expected_returncode, result.stdout + result.stderr
         assert 'database deployment refused; operation remains pending' in result.stderr
     else:
         assert result.returncode == 0, result.stdout + result.stderr
@@ -3836,6 +3844,1511 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
     assert captured[-1][1] is False
 
 
+def test_source_identity_persistence_operation_is_dev_test_authority_bound(
+    monkeypatch, tmp_path,
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+
+    operation_id = str(uuid4())
+    calls = []
+
+    class Controller:
+        directory = tmp_path
+
+        @contextmanager
+        def source_persistence_operation(self, channel, *, operation_id):
+            calls.append(("host-admit", channel, operation_id))
+            operation = SimpleNamespace(
+                operation_id=operation_id,
+                completed_result=None,
+                completed_source=None,
+                prepare_mutation=lambda: calls.append(("host-sent", channel, operation_id)),
+                finish=lambda evidence: calls.append(("host-finish", evidence)),
+            )
+            yield operation, False
+
+    class Remote:
+        def __init__(self, hostname):
+            calls.append(("remote", hostname))
+
+        def persist_source_identity(self, requested_id, revision, image_digest, selected):
+            calls.append(("persist", requested_id, revision, image_digest, selected))
+            return {
+                "contract": "native-source-identity-persistence.v1",
+                "operation_id": requested_id,
+                "channel": "dev",
+                "revision": revision,
+                "terminal_state": "committed",
+                "eligible": True,
+                "reason": None,
+                "selected_count": 1,
+                "persisted_count": 1,
+                "missing_count": 0,
+                "invalid_count": 0,
+                "ambiguous_count": 0,
+                "producer_error_count": 0,
+            }
+
+    monkeypatch.setattr(host, "HostSecretController", Controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    monkeypatch.setattr(
+        host, "deploy_from_host",
+        lambda *_args, **_kwargs: pytest.fail("source persistence must not start a deployment"),
+    )
+    args = [
+        "dev", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--persist-source-identity", "--operation-id", operation_id,
+        "--image-digest", "sha256:" + "1" * 64,
+        "--authority-cutover-binding", "vault-alpha",
+        "--authority-cutover-root", "/srv/vault-alpha",
+        "--authority-cutover-ownership-root", "/srv/instance-ownership",
+    ]
+    assert host.main(args) == 0
+    assert ("remote", "ygg-dev") in calls
+    assert any(call[0] == "persist" and call[1] == operation_id for call in calls)
+
+    without_digest = args[:]
+    digest_index = without_digest.index("--image-digest")
+    del without_digest[digest_index:digest_index + 2]
+    assert host.main(without_digest) == 78
+    assert host.main([value for value in args if value != "--existing-secrets-only"]) == 78
+    assert host.main(["prod", *args[1:]]) == 78
+    malformed = ["bad" if value == operation_id else value for value in args]
+    assert host.main(malformed) == 78
+
+
+def test_source_identity_persistence_accepts_optional_docker_unsets():
+    from app.ops import postgres_deploy_linux as linux
+
+    normalized, unset = linux._installed_container_environment([
+        "PKM_ENVIRONMENT=dev",
+        "VAULT_ROOT=/srv/vault-alpha",
+        "POSTGRES_PASSWORD",
+        "PGPASSWORD",
+        "OPTIONAL_PROVIDER",
+        "EXPLICIT_EMPTY=",
+        "VCS_REF",
+        "BUILT_AT",
+    ])
+    assert normalized == {
+        "PKM_ENVIRONMENT": "dev",
+        "VAULT_ROOT": "/srv/vault-alpha",
+        "EXPLICIT_EMPTY": "",
+    }
+    assert unset == ("OPTIONAL_PROVIDER", "PGPASSWORD", "POSTGRES_PASSWORD")
+
+
+def test_source_identity_unsets_preserve_closed_helper_environment(monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+
+    monkeypatch.setenv("OPTIONAL_PROVIDER", "ambient-must-not-cross-boundary")
+    installed, unset = linux._installed_container_environment([
+        "PKM_ENVIRONMENT=dev",
+        "VAULT_ROOT=/srv/vault-alpha",
+        "OPTIONAL_PROVIDER",
+        "EXPLICIT_EMPTY=",
+    ])
+    child = dict(linux._closed_source_helper_environment(installed, installed))
+    assert "OPTIONAL_PROVIDER" not in child
+    assert child["EXPLICIT_EMPTY"] == ""
+    assert child["PKM_ENVIRONMENT"] == "dev"
+    with pytest.raises(linux.PostgresDeployError):
+        linux._closed_source_helper_environment(
+            installed, {**installed, "OPTIONAL_PROVIDER": "env-file-value"},
+        )
+    snapshot = linux.SourceIdentityRuntimeSnapshot(
+        "c" * 64, "d" * 64, ("api", "watcher", "worker"),
+        ("api", "watcher", "worker"), "/srv/vault-alpha",
+        "docker-compose.full-host-vault.yml", tuple(child.items()), unset,
+    )
+    effects = linux.LinuxEffects(type("Config", (), {"channel": "dev", "root": Path("/")})())
+    captured = {}
+    monkeypatch.setattr(
+        effects, "environment", lambda *_args: {
+            "BWS_DATABASE_TARGET": "local",
+            "OPTIONAL_PROVIDER": "ambient-must-not-cross-boundary",
+        },
+    )
+    monkeypatch.setattr(
+        linux, "_command",
+        lambda argv, **kwargs: captured.update(argv=argv, env=kwargs["env"]) or "",
+    )
+    effects.compose("run", "-e", "OPTIONAL_PROVIDER", "api", source_snapshot=snapshot)
+    assert "OPTIONAL_PROVIDER" not in captured["env"]
+    assert captured["argv"][-3:] == ["-e", "OPTIONAL_PROVIDER", "api"]
+    legacy_payload = linux._source_identity_execution_payload(
+        files=[("runtime.env", "e" * 64)],
+        child_environment=(("PKM_ENVIRONMENT", "dev"),),
+        resolved_environment={"PKM_ENVIRONMENT": "dev"},
+        container_root="/srv/vault-alpha",
+        vault_overlay="docker-compose.full-host-vault.yml",
+        unset_environment=(),
+    )
+    assert legacy_payload == {
+        "files": [("runtime.env", "e" * 64)],
+        "child_environment": [("PKM_ENVIRONMENT", "dev")],
+        "resolved_service_environment": [("PKM_ENVIRONMENT", "dev")],
+        "container_root": "/srv/vault-alpha",
+        "vault_overlay": "docker-compose.full-host-vault.yml",
+    }
+    assert "unset_environment" not in legacy_payload
+
+
+@pytest.mark.parametrize("entries", [
+    ["OPTIONAL_PROVIDER", "OPTIONAL_PROVIDER=value"],
+    ["OPTIONAL_PROVIDER=value", "OPTIONAL_PROVIDER"],
+    ["OPTIONAL_PROVIDER", "OPTIONAL_PROVIDER"],
+    ["BAD KEY=value"],
+    [""],
+    [None],
+    ["OPTIONAL_PROVIDER=bad\x00value"],
+    {"OPTIONAL_PROVIDER": "value"},
+    ["PKM_ENVIRONMENT"],
+    ["VAULT_ROOT"],
+    ["LLM_PROVIDER"],
+    ["STORE_BACKEND"],
+    ["BWS_ACCESS_TOKEN"],
+    ["BWS_ACCESS_TOKEN="],
+    ["BWS_ACCESS_TOKEN=secret"],
+])
+def test_source_identity_environment_normalization_refuses_unsafe_entries(entries):
+    from app.ops import postgres_deploy_linux as linux
+
+    with pytest.raises(linux.PostgresDeployError):
+        linux._installed_container_environment(entries)
+
+
+def test_source_identity_absence_proof_retires_only_exact_pending_host_operation(
+    monkeypatch, tmp_path,
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+
+    operation_id = str(uuid4())
+    calls = []
+
+    class Controller:
+        directory = tmp_path
+
+        @contextmanager
+        def source_persistence_operation(self, channel, *, operation_id):
+            calls.append(("host-admit", channel, operation_id))
+            operation = SimpleNamespace(
+                operation_id=operation_id,
+                completed_result=None,
+                mutation_started=True,
+                finish=lambda evidence: calls.append(("host-finish", evidence)),
+            )
+            yield operation, True
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def prove_source_identity_absence(self, requested_id):
+            calls.append(("prove", requested_id))
+            return {
+                "contract": "native-source-identity-absence.v1",
+                "operation_id": requested_id,
+                "channel": "test",
+                "native_request_absent": True,
+                "native_producer_receipt_absent": True,
+                "native_terminal_receipt_absent": True,
+                "native_worker_absent": True,
+                "native_lock_absent": True,
+            }
+
+    monkeypatch.setattr(host, "HostSecretController", Controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    monkeypatch.setattr(
+        host, "deploy_from_host",
+        lambda *_args, **_kwargs: pytest.fail("absence proof must not deploy"),
+    )
+    args = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--prove-source-persistence-never-admitted", "--operation-id", operation_id,
+    ]
+    assert host.main(args) == 0
+    assert calls[:2] == [("host-admit", "test", operation_id), ("prove", operation_id)]
+    evidence = calls[-1][1]
+    assert (evidence.operation_id, evidence.kind, evidence.target, evidence.result) == (
+        operation_id, "source-persistence", "test", "failed",
+    )
+    assert host.main([*args, "--persist-source-identity"]) == 78
+
+
+def test_source_identity_retired_host_operation_never_replays_producer(
+    monkeypatch, tmp_path,
+):
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = str(uuid4())
+    with controller.source_persistence_operation(
+        "test", operation_id=operation_id,
+    ) as (operation, resumed):
+        assert resumed is False
+        operation.prepare_mutation()
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def prove_source_identity_absence(self, requested_id):
+            assert requested_id == operation_id
+            return {
+                "contract": "native-source-identity-absence.v1",
+                "operation_id": requested_id,
+                "channel": "test",
+                "native_request_absent": True,
+                "native_producer_receipt_absent": True,
+                "native_terminal_receipt_absent": True,
+                "native_worker_absent": True,
+                "native_lock_absent": True,
+            }
+
+        def persist_source_identity(self, *_args, **_kwargs):
+            pytest.fail("a retired host operation must never replay the producer")
+
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    base = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--operation-id", operation_id,
+    ]
+    assert host.main([*base, "--prove-source-persistence-never-admitted"]) == 0
+    assert host.main([*base, "--prove-source-persistence-never-admitted"]) == 0
+    persist = [
+        *base, "--persist-source-identity",
+        "--image-digest", "sha256:" + "1" * 64,
+        "--authority-cutover-binding", "vault-alpha",
+        "--authority-cutover-root", "/srv/vault-alpha",
+        "--authority-cutover-ownership-root", "/srv/instance-ownership",
+    ]
+    assert host.main(persist) == 78
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["prepared", "sent", "failed"]
+    assert records[-1]["source"] == "native-absence-proof"
+
+
+def test_source_identity_admitted_failed_operation_can_finish_retained_cleanup(
+    monkeypatch, tmp_path,
+):
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = str(uuid4())
+    lifecycle = {
+        "request": False,
+        "receipt": False,
+        "fence": False,
+        "producer_calls": 0,
+        "cleanup_calls": 0,
+    }
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def persist_source_identity(self, requested_id, revision, _digest, _selected):
+            assert requested_id == operation_id
+            if not lifecycle["receipt"]:
+                lifecycle.update({
+                    "request": True,
+                    "receipt": True,
+                    "fence": True,
+                    "producer_calls": lifecycle["producer_calls"] + 1,
+                })
+            else:
+                assert lifecycle["request"] and lifecycle["fence"]
+                lifecycle["cleanup_calls"] += 1
+                lifecycle["fence"] = False
+            return {
+                "contract": "native-source-identity-persistence.v1",
+                "operation_id": requested_id,
+                "channel": "test",
+                "revision": revision,
+                "terminal_state": "failed",
+                "eligible": False,
+                "reason": "source_operation_conflict",
+                "selected_count": 1,
+                "persisted_count": 0,
+                "missing_count": 0,
+                "invalid_count": 0,
+                "ambiguous_count": 0,
+                "producer_error_count": 1,
+            }
+
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    args = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--persist-source-identity", "--operation-id", operation_id,
+        "--image-digest", "sha256:" + "1" * 64,
+        "--authority-cutover-binding", "vault-alpha",
+        "--authority-cutover-root", "/srv/vault-alpha",
+        "--authority-cutover-ownership-root", "/srv/instance-ownership",
+    ]
+    assert host.main(args) == 78
+    assert lifecycle == {
+        "request": True,
+        "receipt": True,
+        "fence": True,
+        "producer_calls": 1,
+        "cleanup_calls": 0,
+    }
+    assert host.main(args) == 78
+    assert lifecycle == {
+        "request": True,
+        "receipt": True,
+        "fence": False,
+        "producer_calls": 1,
+        "cleanup_calls": 1,
+    }
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["prepared", "sent", "failed"]
+    assert records[-1]["source"] == "remote-terminal"
+
+
+def test_source_identity_absence_proof_holds_host_lock_across_remote_read(
+    monkeypatch, tmp_path,
+):
+    import threading
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    state = tmp_path / "host-state"
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(state)
+    operation_id = str(uuid4())
+    with controller.source_persistence_operation(
+        "test", operation_id=operation_id,
+    ) as (operation, _resumed):
+        operation.prepare_mutation()
+
+    proof_called = threading.Event()
+    native_request_present = threading.Event()
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == "ygg-test"
+
+        def prove_source_identity_absence(self, requested_id):
+            assert requested_id == operation_id
+            proof_called.set()
+            if native_request_present.is_set():
+                raise PostgresDeployError()
+            pytest.fail("proof ran before the competing host lock was released")
+
+    monkeypatch.setattr(host, "HostSecretController", lambda: controller)
+    monkeypatch.setattr(host, "SshDeployRemote", Remote)
+    args = [
+        "test", "a" * 40, "--automatic", "--existing-secrets-only",
+        "--prove-source-persistence-never-admitted", "--operation-id", operation_id,
+    ]
+    result = []
+    with controller.source_persistence_operation(
+        "test", operation_id=operation_id,
+    ):
+        thread = threading.Thread(target=lambda: result.append(host.main(args)))
+        thread.start()
+        assert proof_called.wait(0.2) is False
+        native_request_present.set()
+    thread.join(timeout=2)
+    assert thread.is_alive() is False
+    assert result == [78]
+    assert proof_called.is_set()
+    records = [json.loads(line) for line in (state / "operations.jsonl").read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["prepared", "sent"]
+
+
+def test_source_identity_absence_proof_refuses_partial_ambiguous_or_mismatched_state(
+    monkeypatch, tmp_path,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    operation_id = str(uuid4())
+    directory = tmp_path / "journal"
+    directory.mkdir()
+    terminal = SimpleNamespace(operation_id=str(uuid4()), terminal_result="failed")
+    config = SimpleNamespace(
+        channel="dev", journal=SimpleNamespace(directory=directory, read=lambda: terminal),
+    )
+    effects = object.__new__(linux.LinuxEffects)
+    effects.config = config
+    monkeypatch.setattr(effects, "channel_lock_owner", lambda: None)
+    monkeypatch.setattr(linux, "_command", lambda _args, **_kwargs: "")
+    proof = effects.prove_source_identity_absence(operation_id)
+    assert proof["native_request_absent"] is True
+
+    class RoutedEffects:
+        def __init__(self, selected):
+            assert selected is config
+
+        def prove_source_identity_absence(self, requested_id):
+            assert requested_id == operation_id
+            return proof
+
+    monkeypatch.setattr(linux, "LinuxEffects", RoutedEffects)
+    supervisor = linux.DeploymentSupervisor(config)
+    monkeypatch.setattr(supervisor, "_require_current_config", lambda: None)
+    assert supervisor.request({
+        "action": "source-identity-prove-absence", "operation_id": operation_id,
+    }) == {"source_identity_absence": proof}
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({
+            "action": "source-identity-prove-absence",
+            "operation_id": operation_id,
+            "unexpected": True,
+        })
+
+    request = directory / f"dev-source-identity-{operation_id}.request.json"
+    request.write_text("{}")
+    with pytest.raises(PostgresDeployError):
+        effects.prove_source_identity_absence(operation_id)
+    request.unlink()
+    monkeypatch.setattr(effects, "channel_lock_owner", lambda: b"foreign")
+    with pytest.raises(PostgresDeployError):
+        effects.prove_source_identity_absence(operation_id)
+    monkeypatch.setattr(effects, "channel_lock_owner", lambda: None)
+    monkeypatch.setattr(linux, "_command", lambda _args, **_kwargs: "a" * 64)
+    with pytest.raises(PostgresDeployError):
+        effects.prove_source_identity_absence(operation_id)
+
+
+def test_source_identity_absence_reconciliation_is_content_free_and_never_replays(
+    monkeypatch,
+):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    operation_id = str(uuid4())
+    expected = {
+        "contract": "native-source-identity-absence.v1",
+        "operation_id": operation_id,
+        "channel": "dev",
+        "native_request_absent": True,
+        "native_producer_receipt_absent": True,
+        "native_terminal_receipt_absent": True,
+        "native_worker_absent": True,
+        "native_lock_absent": True,
+    }
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, json.loads(kwargs["input"])))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"source_identity_absence": expected}),
+        )
+
+    monkeypatch.setattr(linux.subprocess, "run", run)
+    remote = linux.SshDeployRemote("ygg-dev")
+    assert remote.prove_source_identity_absence(operation_id) == expected
+    assert calls == [(
+        ["ssh", "-o", "BatchMode=yes", "--", "ygg-dev", "sudo", "-n",
+         "/usr/local/libexec/yggdrasil-bws-deploy", "rpc", "dev"],
+        {"action": "source-identity-prove-absence", "operation_id": operation_id},
+    )]
+    assert set(expected) == {
+        "contract", "operation_id", "channel", "native_request_absent",
+        "native_producer_receipt_absent", "native_terminal_receipt_absent",
+        "native_worker_absent", "native_lock_absent",
+    }
+    with pytest.raises(PostgresDeployError):
+        remote.prove_source_identity_absence("bad")
+    monkeypatch.setattr(
+        linux.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "source_identity_absence": {**expected, "private_path": "/forbidden"},
+            }),
+        ),
+    )
+    with pytest.raises(PostgresDeployError):
+        remote.prove_source_identity_absence(operation_id)
+
+    malformed_proofs = []
+    for numeric in (1, 1.0):
+        malformed_proofs.append({**expected, "native_request_absent": numeric})
+    missing = dict(expected)
+    missing.pop("native_lock_absent")
+    malformed_proofs.append(missing)
+    malformed_proofs.append({**expected, "extra": True})
+    malformed_proofs.append({
+        **expected,
+        "native_request_absent": 1,
+        "native_lock_absent": False,
+    })
+    for malformed_proof in malformed_proofs:
+        monkeypatch.setattr(
+            linux.subprocess,
+            "run",
+            lambda *_args, proof=malformed_proof, **_kwargs: SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"source_identity_absence": proof}),
+            ),
+        )
+        with pytest.raises(PostgresDeployError):
+            remote.prove_source_identity_absence(operation_id)
+
+
+def test_native_deploy_reports_source_projection_identity_refusal() -> None:
+    from app.ops.native_source_bootstrap import (
+        SOURCE_PROJECTION_FAILURE_CODES, source_terminal_reason,
+    )
+
+    status = SOURCE_PROJECTION_FAILURE_CODES["legacy_identity_persistence_refused"]
+    assert status == 109
+    assert source_terminal_reason(status) == "legacy_identity_persistence_refused"
+
+
+def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
+    )
+
+    failed_operation_id = str(uuid4())
+    digest = 'sha256:' + '1' * 64
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    controller = SimpleNamespace(directory=tmp_path)
+    recovered: list[TestRecoveryRequest] = []
+    deployed: list[tuple[DeployPlan, bool, str]] = []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def test_recovery_reset(self, request):
+            request.validate()
+            if request.plan != plan:
+                raise PostgresDeployError()
+            recovered.append(request)
+            return DeployReceipt(failed_operation_id, 'test', 'deploy', 'failed', 'failed')
+
+    class Operation:
+        completed_result = None
+
+        def finish(self, evidence):
+            assert evidence.operation_id == failed_operation_id
+            self.completed_result = evidence.result
+
+    @contextmanager
+    def deploy_operation(target, *, allow_bootstrap, operation_id):
+        assert (target, allow_bootstrap, operation_id) == ('test', False, failed_operation_id)
+        yield Operation(), True
+
+    def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap, operation_id):
+        qualified()
+        deployed.append((selected, allow_bootstrap, operation_id))
+        return DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
+
+    controller.deploy_operation = deploy_operation
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+
+    args = [
+        'test', plan.revision, '--automatic', '--image-digest', digest,
+        '--existing-secrets-only', '--recover-test-source',
+        '--failed-operation-id', failed_operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+    assert host.main(args) == 0
+    assert len(recovered) == 1
+    assert recovered[0] == TestRecoveryRequest(failed_operation_id, plan, authority)
+    assert len(deployed) == 1
+    assert deployed[0][:2] == (plan, False)
+    assert deployed[0][2] != failed_operation_id
+
+    # A changed candidate is a new request, never an alias for the failed operation.
+    assert host.main([*args[:1], 'b' * 40, *args[2:]]) == 78
+    assert len(recovered) == 1
+
+
+def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_starts_fresh_successor(monkeypatch, tmp_path, capsys):
+    from contextlib import contextmanager
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
+
+    failed_operation_id = str(uuid4())
+    digest = 'sha256:' + 'a' * 64
+    plan = DeployPlan(
+        'test', 'b' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    controller = SimpleNamespace(directory=tmp_path)
+    failed_successor_operation_id = str(uuid4())
+    class Operation:
+        completed_result = 'failed'
+
+        def finish(self, evidence):
+            self.completed_result = evidence.result
+
+    @contextmanager
+    def deploy_operation(target, *, allow_bootstrap, operation_id):
+        assert (target, allow_bootstrap, operation_id) == (
+            'test', False, failed_successor_operation_id,
+        )
+        yield Operation(), True
+
+    controller.deploy_operation = deploy_operation
+    calls: list[TestRecoveryRequest] = []
+    releases: list[TestRecoveryRequest] = []
+    release_successors: list[str] = []
+    events: list[str] = []
+    deployed: list[tuple[DeployPlan, str]] = []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def test_recovery_reset(self, request):
+            assert request.failed_operation_id == failed_operation_id
+            return host.DeployReceipt(
+                failed_operation_id, 'test', 'deploy', 'failed', 'failed'
+            )
+
+        def test_recovery_reconstruct_instance_state(self, request):
+            calls.append(request)
+            events.append('reconstruct')
+            return {
+                'schema': 'test-instance-state-recovery.v1',
+                'channel': 'test',
+                'activation': 'inactive_fenced',
+                'request': {'failed_operation_id': request.failed_operation_id},
+                'registry_revision': 1,
+                'registry_sha256': 'c' * 64,
+                'registered_bindings': ['test-binding'],
+            }
+
+        def test_recovery_release_instance_state(self, request, *, successor_operation_id):
+            releases.append(request)
+            release_successors.append(successor_operation_id)
+            events.append('release')
+            return {'channel': 'test', 'released': True, 'reason': 'abandoned-deployment'}
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+
+    def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap, operation_id):
+        qualified()
+        assert allow_bootstrap is False
+        events.append('deploy')
+        deployed.append((selected, operation_id))
+        return host.DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
+
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+    source_request = TestRecoveryRequest(
+        failed_operation_id,
+        replace(
+            plan, revision='a' * 40,
+            image_digest='sha256:' + 'd' * 64,
+        ),
+        authority,
+    )
+    marker = host._test_recovery_marker_path(controller, source_request)
+    marker.write_text(json.dumps({
+        'schema': host._TEST_RECOVERY_MARKER_SCHEMA,
+        'state': 'ready',
+        'request': source_request.payload(),
+        'fresh_operation_id': failed_successor_operation_id,
+    }, sort_keys=True) + '\n')
+    marker.chmod(0o600)
+    args = [
+        'test', plan.revision, '--automatic', '--image-digest', digest,
+        '--existing-secrets-only', '--reconstruct-missing-instance-state',
+        '--failed-operation-id', failed_operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+    assert host.main(args) == 0
+    expected_lineage = TestRecoveryRequest(
+        failed_successor_operation_id, plan, authority,
+        source_operation_id=failed_operation_id,
+        source_plan=source_request.plan,
+    )
+    assert calls == [expected_lineage]
+    assert releases == [expected_lineage]
+    assert release_successors == [deployed[0][1]]
+    assert events == ['reconstruct', 'release', 'deploy']
+    assert len(deployed) == 1
+    assert deployed[0][0] == plan
+    assert deployed[0][1] != failed_operation_id
+    assert capsys.readouterr().out
+
+    # The producer is never a general startup side effect and cannot be used
+    # for another channel or a non-automatic candidate.
+    assert host.main(['dev', plan.revision, '--reconstruct-missing-instance-state']) == 78
+
+
+def test_missing_instance_state_recovery_refuses_authority_drift_without_mutation(monkeypatch, tmp_path):
+    """The VM producer rejects a changed authority tuple before Compose."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError,
+        TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    source_operation_id = str(uuid4())
+    digest = 'sha256:' + 'b' * 64
+    plan = DeployPlan(
+        'test', 'c' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    ownership_root = tmp_path / 'ownership'
+    ownership_root.mkdir(mode=0o700)
+    (ownership_root / 'legacy-owner-inventory.json').write_text('{}\n')
+    (ownership_root / 'deployment-quiescence-proof.json').write_text('{}\n')
+    authority = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(ownership_root),
+    )
+    failed = plan
+    receipt = DeployReceipt(
+        operation_id, 'test', 'deploy', 'failed', 'failed',
+        source_failure='legacy_identity_persistence_refused',
+    )
+
+    class Journal:
+        directory = tmp_path / 'journal'
+        channel = 'test'
+
+        def read(self):
+            return receipt
+
+        def bound_plan(self, selected):
+            assert selected == operation_id
+            return failed
+
+    effects = linux.LinuxEffects(SimpleNamespace(
+        channel='test', root=tmp_path, journal=Journal(),
+        uid=os.geteuid(), gid=os.getegid(),
+    ))
+    effects.local_database = lambda: True
+    effects.recovery_quiescent = lambda: True
+    effects._read_test_recovery_disposition = lambda _request: {'state': 'complete'}
+    composed: list[object] = []
+    effects.compose = lambda *args: composed.append(args) or ''
+    drifted = AuthorityCutover('other-binding', authority.root, authority.ownership_root)
+    request = TestRecoveryRequest(
+        operation_id, plan, drifted,
+        source_operation_id=source_operation_id, source_plan=plan,
+    )
+    observed: list[AuthorityCutover] = []
+
+    def refuse_drift(selected, **_kwargs):
+        observed.append(selected.authority_cutover)
+        raise PostgresDeployError()
+
+    effects._validate_test_instance_state_recovery_authority = refuse_drift
+    with pytest.raises(PostgresDeployError):
+        effects.reconstruct_missing_test_instance_state(request)
+    assert observed == [drifted]
+    assert composed == []
+
+
+def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_path, capsys):
+    """A host retry reuses the durable successor checkpoint."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
+
+    operation_id = str(uuid4())
+    digest = 'sha256:' + 'd' * 64
+    plan = DeployPlan(
+        'test', 'e' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    controller = SimpleNamespace(directory=tmp_path)
+    failed_successor_operation_id = str(uuid4())
+    class Operation:
+        completed_result = 'failed'
+
+        def finish(self, evidence):
+            self.completed_result = evidence.result
+
+    @contextmanager
+    def deploy_operation(target, *, allow_bootstrap, operation_id):
+        assert (target, allow_bootstrap, operation_id) == (
+            'test', False, failed_successor_operation_id
+        )
+        yield Operation(), True
+
+    controller.deploy_operation = deploy_operation
+    reconstruct_calls: list[object] = []
+    release_calls: list[object] = []
+    release_successors: list[str] = []
+    deploy_calls: list[str] = []
+
+    class Remote:
+        def __init__(self, _hostname):
+            pass
+
+        def test_recovery_reset(self, request):
+            assert request.failed_operation_id == operation_id
+            return host.DeployReceipt(operation_id, 'test', 'deploy', 'failed', 'failed')
+
+        def test_recovery_reconstruct_instance_state(self, _request):
+            reconstruct_calls.append('reconstruct')
+            return {
+                'schema': 'test-instance-state-recovery.v1',
+                'channel': 'test',
+                'activation': 'inactive_fenced',
+                'request': {'failed_operation_id': operation_id},
+            }
+
+        def test_recovery_release_instance_state(self, request, *, successor_operation_id):
+            release_calls.append(request)
+            release_successors.append(successor_operation_id)
+            return {
+                'channel': 'test', 'released': False,
+                'reason': 'already-released-after-reconstruction',
+            }
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+
+    def deploy(_admin, _remote, _selected, *, qualified, allow_bootstrap, operation_id):
+        qualified()
+        deploy_calls.append(operation_id)
+        return host.DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
+
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+    args = [
+        'test', plan.revision, '--automatic', '--image-digest', digest,
+        '--existing-secrets-only', '--reconstruct-missing-instance-state',
+        '--failed-operation-id', operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+    # An older source-reset-only checkpoint is still a valid reset receipt, but
+    # it is not reconstruction evidence.  The explicit producer must run once
+    # and upgrade the marker before the successor deploy is admitted.
+    old_request = TestRecoveryRequest(operation_id, plan, authority)
+    old_marker = host._test_recovery_marker_path(controller, old_request)
+    old_marker.write_text(
+        json.dumps({
+            'schema': host._TEST_RECOVERY_MARKER_SCHEMA,
+            'state': 'ready',
+            'request': old_request.payload(),
+            'fresh_operation_id': failed_successor_operation_id,
+        }, sort_keys=True) + '\n',
+        encoding='utf-8',
+    )
+    old_marker.chmod(0o600)
+    assert host.main(args) == 0
+    assert host.main(args) == 0
+    assert reconstruct_calls == ['reconstruct']
+    assert len(release_calls) == 2
+    assert release_calls[0] == release_calls[1]
+    assert release_successors == deploy_calls
+    assert len(deploy_calls) == 2
+    assert deploy_calls[0] == deploy_calls[1]
+    capsys.readouterr()
+
+
+def test_test_recovery_accepts_exact_failed_cutover_plan_with_automatic_successor(tmp_path):
+    from contextlib import contextmanager
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    successor = DeployPlan(
+        'test', 'f' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'f' * 64, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    failed = replace(successor, automatic=False, ack_forward_only=True, image_digest=None,
+                     authority_cutover=authority)
+    receipt = DeployReceipt(
+        operation_id, 'test', 'deploy', 'failed', 'failed',
+        source_failure='legacy_identity_persistence_refused',
+    )
+
+    class Journal:
+        directory = tmp_path / 'journal'
+        channel = 'test'
+
+        def read(self):
+            return receipt
+
+        def bound_plan(self, selected):
+            assert selected == operation_id
+            return failed
+
+    effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path, journal=Journal()))
+    request = TestRecoveryRequest(operation_id, successor, authority)
+    qualified: list = []
+    observed: list = []
+    effects.local_database = lambda: True
+    effects.qualify_authority_cutover = lambda plan: qualified.append(plan)
+    effects.quiescent = lambda: True
+    effects.recover_source_terminal = lambda operation, plan: observed.append((operation, plan))
+    effects._read_test_recovery_disposition = lambda _request: {'state': 'complete'}
+    effects.retire_reconciled_channel_lock = lambda _handle: None
+    @contextmanager
+    def lock():
+        yield object()
+    effects.failed_reconciliation_lock = lock
+
+    result = effects.reset_test_source_projection(request)
+
+    assert result == receipt
+    assert qualified == []
+    assert observed == []
+    request.validate_failed_plan(failed)
+    with pytest.raises(PostgresDeployError):
+        request.validate_failed_plan(successor)
+
+
+def test_test_recovery_refuses_failed_cutover_plan_drift_without_mutation(tmp_path):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    successor = DeployPlan(
+        'test', 'e' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'e' * 64, True,
+    )
+    failed = replace(successor, automatic=False, authority_cutover=authority)
+    receipt = DeployReceipt(
+        operation_id, 'test', 'deploy', 'failed', 'failed',
+        source_failure='legacy_identity_persistence_refused',
+    )
+
+    class Journal:
+        directory = tmp_path / 'journal'
+        channel = 'test'
+
+        def read(self):
+            return receipt
+
+        def bound_plan(self, selected):
+            assert selected == operation_id
+            return failed
+
+    effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path, journal=Journal()))
+    effects.local_database = lambda: True
+    mutations: list[str] = []
+    effects.qualify_authority_cutover = lambda _plan: mutations.append('authority')
+    effects.quiescent = lambda: mutations.append('quiescent') or True
+    effects.compose = lambda *_args: mutations.append('compose')
+    effects._write_test_recovery_disposition = lambda *_args: mutations.append('disposition')
+    effects._test_recovery_remove_volume = lambda *_args: mutations.append('volume')
+    request = TestRecoveryRequest(operation_id, successor, authority)
+
+    drifts = (
+        replace(successor, revision='d' * 40),
+        replace(successor, image_digest='sha256:' + 'd' * 64),
+        replace(successor, services=('db', 'api')),
+    )
+    for candidate in drifts:
+        with pytest.raises(PostgresDeployError):
+            effects.reset_test_source_projection(replace(request, plan=candidate))
+    with pytest.raises(PostgresDeployError):
+        effects.reset_test_source_projection(replace(request, authority_cutover=replace(
+            authority, binding_id='other-binding')))
+    assert mutations == []
+
+
+def test_recover_test_source_rejects_plan_mismatch_before_host_marker(monkeypatch, tmp_path):
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import AuthorityCutover, PostgresDeployError
+    from uuid import uuid4
+
+    failed_operation_id = str(uuid4())
+    controller = HostSecretController(tmp_path / 'controller')
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def test_recovery_reset(self, _request):
+            raise PostgresDeployError()
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    args = [
+        'test', 'a' * 40, '--automatic', '--image-digest', 'sha256:' + 'a' * 64,
+        '--existing-secrets-only', '--recover-test-source',
+        '--failed-operation-id', failed_operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+
+    assert host.main(args) == 78
+    marker = controller.directory / ('test-source-recovery-' + failed_operation_id + '.json')
+    assert not marker.exists()
+
+
+def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monkeypatch, tmp_path):
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt,
+        TestRecoveryRequest,
+    )
+
+    controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert resumed is False
+        operation.prepare_mutation()
+    failed_operation_id = operation.operation_id
+    digest = 'sha256:' + '4' * 64
+    plan = DeployPlan(
+        'test', 'c' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    request = TestRecoveryRequest(failed_operation_id, plan, authority)
+    recovered: list[TestRecoveryRequest] = []
+    deployed: list[str] = []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def test_recovery_reset(self, selected):
+            selected.validate()
+            recovered.append(selected)
+            return DeployReceipt(failed_operation_id, 'test', 'deploy', 'failed', 'failed')
+
+    admin_attempts = 0
+
+    def configured_admin():
+        nonlocal admin_attempts
+        admin_attempts += 1
+        if admin_attempts == 1:
+            # Crash after reset/reconciliation but before fresh deployment.
+            raise RuntimeError('simulated host setup interruption')
+        return object()
+
+    def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap, operation_id):
+        qualified()
+        assert selected == plan
+        assert allow_bootstrap is False
+        deployed.append(operation_id)
+        return DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, '_configured_host_admin', configured_admin)
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+    args = [
+        'test', plan.revision, '--automatic', '--image-digest', digest,
+        '--existing-secrets-only', '--recover-test-source',
+        '--failed-operation-id', failed_operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+
+    assert host.main(args) == 78
+    marker = host._read_test_recovery_marker(controller, request)
+    assert marker is not None and marker['state'] == 'ready'
+    fresh_operation_id = marker['fresh_operation_id']
+    assert recovered == [request]
+    with controller._locked_journal() as descriptor:
+        assert controller._pending(descriptor) is None
+
+    assert host.main(args) == 0
+    assert recovered == [request]
+    assert deployed == [fresh_operation_id]
+
+
+def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch, tmp_path):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError,
+        TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    digest = 'sha256:' + '2' * 64
+    plan = DeployPlan(
+        'test', 'c' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    failed_plan = replace(plan, automatic=False, authority_cutover=authority)
+    receipt = DeployReceipt(
+        operation_id, 'test', 'deploy', 'activating', None,
+        source_failure='legacy_identity_persistence_refused',
+    )
+
+    class Journal:
+        directory = tmp_path / 'journal'
+        channel = 'test'
+
+        def read(self):
+            return receipt
+
+        def bound_plan(self, selected):
+            assert selected == operation_id
+            return failed_plan
+
+        def write(self, *_args, **_kwargs):
+            raise AssertionError('journal mutation must not occur on boundary drift')
+
+    cfg = SimpleNamespace(root=tmp_path, channel='test', journal=Journal())
+    effects = linux.LinuxEffects(cfg)
+    mutations: list[str] = []
+    effects.local_database = lambda: True
+    effects.qualify_authority_cutover = lambda _plan: mutations.append('authority')
+    effects.quiescent = lambda: mutations.append('quiescent') or True
+    effects.recover_source_terminal = lambda *_args: mutations.append('source')
+    effects.compose = lambda *_args: mutations.append('compose')
+    effects._write_test_recovery_disposition = lambda *_args: mutations.append('disposition')
+    effects._test_recovery_remove_volume = lambda *_args: mutations.append('volume')
+    request = TestRecoveryRequest(operation_id, plan, authority)
+
+    # Candidate and operation mismatches fail before authority qualification or effects.
+    for drifted in (
+        replace(request, plan=replace(plan, revision='d' * 40)),
+        replace(request, failed_operation_id=str(uuid4())),
+    ):
+        with pytest.raises(PostgresDeployError):
+            effects.reset_test_source_projection(drifted)
+    assert mutations == []
+
+    # A changed authority is admitted only through the live qualification gate;
+    # a refusal there is still before any source, journal, service, or volume effect.
+    effects.qualify_authority_cutover = lambda _plan: (_ for _ in ()).throw(PostgresDeployError())
+    with pytest.raises(PostgresDeployError):
+        effects.reset_test_source_projection(replace(request, authority_cutover=replace(
+            authority, binding_id='other-binding'
+        )))
+    assert mutations == []
+
+    # Embedding identity/model preflight runs before writer drain and is not
+    # evidence that a source projection was ever attempted.
+    monkeypatch.setattr(effects.config.journal, 'read', lambda: replace(
+        receipt, source_failure='embedding_identity_unavailable'
+    ))
+    with pytest.raises(PostgresDeployError):
+        effects.reset_test_source_projection(request)
+    assert mutations == []
+
+    # A non-TEST supervisor cannot route the canonical reset action at all.
+    non_test = SimpleNamespace(channel='dev', journal=Journal())
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: non_test)
+    supervisor = linux.DeploymentSupervisor(non_test)
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({'action': 'test-recovery-reset', **request.payload()})
+
+
+def test_test_recovery_reset_preserves_instance_state_authority(tmp_path):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployJournal, DeployPlan,
+        TestRecoveryRequest,
+    )
+
+    root = tmp_path / 'checkout'
+    lock_dir = root / 'config/deploy/test.env.lock'
+    lock_dir.mkdir(parents=True, mode=0o700)
+    (lock_dir / 'bws-owner').touch(mode=0o600)
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',), image_digest='sha256:' + '1' * 64,
+                      automatic=True)
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    failed_plan = replace(plan, automatic=False, authority_cutover=authority)
+    journal.bind_request(operation_id, failed_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    journal.record_source_failure(operation_id, plan.revision, 'legacy_identity_persistence_refused')
+    journal.write(operation_id, 'failed')
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    effects = linux.LinuxEffects(config)
+    request = TestRecoveryRequest(operation_id, plan, authority)
+    effects.local_database = lambda: True
+    disposition_states = ['prepared']
+    effects._read_test_recovery_disposition = lambda _request: {'state': disposition_states[-1]}
+    effects._write_test_recovery_disposition = lambda _request, state: disposition_states.append(state)
+    effects.qualify_authority_cutover = lambda _plan: (_ for _ in ()).throw(
+        AssertionError('prepared recovery must not re-qualify removed containers')
+    )
+    effects.recover_source_terminal = lambda *_args: (_ for _ in ()).throw(
+        AssertionError('prepared recovery must not replay the source one-shot')
+    )
+    effects.quiescent = lambda: True
+    composed: list[tuple[str, ...]] = []
+    effects.compose = lambda *args: composed.append(args) or ''
+    effects.initialized = lambda: False
+    removed: list[str] = []
+    effects._test_recovery_remove_volume = lambda name: removed.append(name)
+    recreated: list[str] = []
+    effects._test_recovery_recreate_empty_pgdata = lambda: recreated.append('pkm-test_pgdata')
+
+    receipt = effects.reset_test_source_projection(request)
+
+    assert receipt.terminal_result == 'failed'
+    assert removed == ['pkm-test_pgdata', 'pkm-test_runtime-tmp']
+    assert recreated == ['pkm-test_pgdata']
+    assert len(composed) == 2
+    assert disposition_states == ['prepared', 'complete']
+
+
+def test_test_recovery_recreates_empty_pgdata_before_completion(tmp_path, monkeypatch):
+    from dataclasses import replace
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployJournal, DeployPlan, TestRecoveryRequest,
+    )
+
+    root = tmp_path / 'checkout'
+    lock_dir = root / 'config/deploy/test.env.lock'
+    lock_dir.mkdir(parents=True, mode=0o700)
+    (lock_dir / 'bws-owner').touch(mode=0o600)
+    data_directory = tmp_path / 'pgdata'
+    data_directory.mkdir()
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',), image_digest='sha256:' + '2' * 64,
+                      automatic=True)
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    failed_plan = replace(plan, automatic=False, authority_cutover=authority)
+    journal.bind_request(operation_id, failed_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    journal.record_source_failure(operation_id, plan.revision, 'legacy_identity_persistence_refused')
+    journal.write(operation_id, 'failed')
+    config = SimpleNamespace(
+        channel='test', root=root, data_directory=data_directory, journal=journal,
+    )
+    effects = linux.LinuxEffects(config)
+    request = TestRecoveryRequest(operation_id, plan, authority)
+    expected_fields = {'host': 'db', 'port': '5432', 'user': 'app', 'dbname': 'app_test'}
+    def local_database():
+        effects.database_fields = expected_fields
+        return True
+    effects.local_database = local_database
+    disposition_states = ['prepared']
+    effects._read_test_recovery_disposition = lambda _request: {'state': disposition_states[-1]}
+    effects._write_test_recovery_disposition = lambda _request, state: disposition_states.append(state)
+    effects.quiescent = lambda: True
+    effects.compose = lambda *_args: ''
+    volume_rows = {
+        name: [{
+            'Name': name,
+            'Driver': 'local',
+            'Mountpoint': str(data_directory) if name == 'pkm-test_pgdata' else str(tmp_path / name),
+            'Labels': {
+                'com.docker.compose.project': 'pkm-test',
+                'com.docker.compose.volume': 'pgdata',
+            },
+        }]
+        for name in ('pkm-test_pgdata', 'pkm-test_instance-state', 'pkm-test_runtime-tmp')
+    }
+    commands: list[list[str]] = []
+
+    def command(argv, **_kwargs):
+        commands.append(argv)
+        if argv[1:3] == ['volume', 'ls']:
+            name = argv[-1].removeprefix('name=^').removesuffix('$')
+            return name
+        if argv[1:3] == ['volume', 'inspect']:
+            if '--format' in argv:
+                return str(data_directory)
+            return json.dumps(volume_rows[argv[-1]])
+        if argv[1:3] == ['volume', 'rm']:
+            return argv[-1]
+        if argv[1:3] == ['volume', 'create']:
+            return argv[-1]
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(linux, '_command', command)
+    receipt = effects.reset_test_source_projection(request)
+
+    assert receipt.terminal_result == 'failed'
+    assert any(
+        argv[:4] == ['docker', 'volume', 'create', '--driver'] and argv[-1] == 'pkm-test_pgdata'
+        for argv in commands
+    )
+    assert effects.database_fields == expected_fields
+
+    # The recreated external volume is now a valid empty local target: the
+    # normal production initializer may bootstrap it and Compose can inspect
+    # the external volume before starting db.
+    effects.local_database = lambda: True
+    effects.database_fields = {'host': 'db', 'port': '5432', 'user': 'app', 'dbname': 'app_test'}
+    effects.compose = lambda *args: '' if args == ('ps', '--all', '-q', 'db') else pytest.fail(args)
+    assert effects.initialized() is False
+
+
+def test_test_recovery_reset_refuses_external_database_before_mutation(tmp_path):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, PostgresDeployError, TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',), image_digest='sha256:' + '2' * 64,
+                      automatic=True)
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+
+    class Journal:
+        directory = tmp_path / 'journal'
+        channel = 'test'
+
+        def read(self):
+            raise AssertionError('external target must be refused before journal inspection')
+
+    effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path, journal=Journal()))
+    effects.local_database = lambda: False
+    request = TestRecoveryRequest(operation_id, plan, authority)
+    with pytest.raises(PostgresDeployError):
+        effects.reset_test_source_projection(request)
+    assert not effects._test_recovery_disposition_path(request).exists()
+
+
+def test_source_projection_refusal_retains_authenticated_recoverable_state(tmp_path, monkeypatch):
+    import threading
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+
+    root = tmp_path / 'checkout'
+    lock_dir = root / 'config/deploy/test.env.lock'
+    lock_dir.mkdir(parents=True, mode=0o700)
+    (lock_dir / 'bws-owner').touch(mode=0o600)
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'e' * 40, ('db',), ('postgres-db',))
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    supervisor = linux.DeploymentSupervisor(config)
+    not_ready = threading.Event()
+    supervisor.operation = SimpleNamespace(
+        operation_id=operation_id, plan=plan, bootstrap=False, failed=False,
+        finished=not_ready, thread=SimpleNamespace(is_alive=lambda: True),
+    )
+    request = {
+        'action': 'reconcile-failed', 'operation_id': operation_id,
+        'plan': asdict(plan), 'bootstrap': False,
+    }
+    with pytest.raises(PostgresDeployError):
+        supervisor.request(request)
+    assert journal.read().stage == 'activating'
+    assert journal.read().terminal_result is None
+    assert lock_dir.is_dir()
+
+
 def test_bws_supervisor_binds_forward_only_ack_and_refuses_changed_retry(tmp_path, monkeypatch):
     from dataclasses import asdict, replace
     import json
@@ -3895,6 +5408,11 @@ def test_bws_activation_uses_only_request_bound_forward_only_ack(tmp_path, monke
 
     journal = DeployJournal(tmp_path / 'journal', 'test')
     operation_id = str(uuid4())
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), ack_forward_only,
+    )
+    journal.bind_request(operation_id, plan, False, create=True)
     journal.write(operation_id, 'prepared')
     journal.write(operation_id, 'preflighted')
     journal.write(operation_id, 'materialized')
@@ -3912,10 +5430,6 @@ def test_bws_activation_uses_only_request_bound_forward_only_ack(tmp_path, monke
         'heimdal-api-ingress': {}, 'heimdal-capture-watch': {}, 'heimdal-raw-migrate': {},
     }
     effects.active_consumers = (*DATABASE_CONSUMERS, 'heimdal-api-ingress')
-    plan = DeployPlan(
-        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), ack_forward_only,
-    )
     calls = []
 
     def command(argv, **kwargs):
@@ -3931,6 +5445,8 @@ def test_bws_activation_uses_only_request_bound_forward_only_ack(tmp_path, monke
     argv, kwargs = calls[0]
     assert ('--ack-forward-only' in argv) is ack_forward_only
     assert 'DEPLOY_ACK_FORWARD_ONLY' not in kwargs['env']
+    kwargs['retain_source_failure']('embedding_probe_cleanup_failed')
+    assert journal.read().source_failure == 'embedding_probe_cleanup_failed'
     assert list(source.iterdir()) == []
 
 
@@ -4141,6 +5657,13 @@ def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescen
         'action': 'reconcile-failed', 'operation_id': operation_id,
         'plan': asdict(plan), 'bootstrap': False,
     }
+    def source_absent(argv, **kwargs):
+        assert argv == ['docker', 'ps', '--all', '--filter',
+                        f'name=^/pkm-test-source-bootstrap-{operation_id}$', '--format', '{{.ID}}']
+        assert kwargs == {'timeout': 15}
+        return ''
+
+    monkeypatch.setattr(linux, '_command', source_absent)
     original_retire = linux.LinuxEffects.retire_reconciled_channel_lock
 
     def interrupt_cleanup(_handle):
@@ -4372,6 +5895,45 @@ def test_ssh_reconcile_failed_sends_exact_same_id_and_existing_secrets_mode(monk
     }
 
 
+def test_ssh_test_recovery_reset_sends_exact_candidate_operation_authority(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, DeployReceipt, TestRecoveryRequest
+
+    operation_id = str(uuid4())
+    plan = DeployPlan(
+        'test', 'f' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + '3' * 64, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    request = TestRecoveryRequest(operation_id, plan, authority)
+    calls = []
+    response = {
+        'recovery': 'test-derived-reset-complete',
+        'receipt': {
+            **DeployReceipt(
+                operation_id, 'test', 'deploy', 'failed', 'failed',
+                source_failure='legacy_identity_persistence_refused',
+            ).payload(),
+        },
+    }
+
+    def ssh(argv, **kwargs):
+        calls.append((argv, json.loads(kwargs['input'])))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(response))
+
+    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    receipt = linux.SshDeployRemote('ygg-test').test_recovery_reset(request)
+    assert receipt.operation_id == operation_id
+    assert calls[0][0][-2:] == ['rpc', 'test']
+    assert calls[0][1] == json.loads(json.dumps({'action': 'test-recovery-reset', **request.payload()}))
+
+
 def test_vm_channel_lock_is_retained_until_matching_terminal_receipt(tmp_path):
     from types import SimpleNamespace
     from app.ops.postgres_deploy_linux import LinuxEffects
@@ -4396,6 +5958,422 @@ def test_vm_channel_lock_is_retained_until_matching_terminal_receipt(tmp_path):
     with effects.channel_lock():
         journal.write(identifier, 'aborted')
     assert not (other / 'config/deploy/test.env.lock').exists()
+
+
+def test_operator_identity_restoration_owner_is_dev_only_and_typed(tmp_path):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops.postgres_deploy import PostgresDeployError
+    from app.ops.postgres_deploy_linux import LinuxEffects
+
+    operation_id = str(uuid4())
+
+    def effects_for(channel: str, suffix: str):
+        root = tmp_path / suffix
+        (root / 'config/deploy').mkdir(parents=True)
+        journal = SimpleNamespace(channel=channel, directory=root / 'journal', read=lambda: None)
+        effects = LinuxEffects(SimpleNamespace(root=root, channel=channel, journal=journal))
+        effects.operation_id = operation_id
+        return effects, journal
+
+    effects, journal = effects_for('dev', 'accepted')
+    owner = {
+        'kind': 'operator-identity-restoration',
+        'channel': 'dev',
+        'operation_id': operation_id,
+    }
+    with effects.channel_lock(journal=journal, owner_marker=owner, retire_terminal=False):
+        assert effects.channel_lock_owner() == (json.dumps(owner, sort_keys=True) + '\n').encode()
+
+    for channel, marker in (
+        ('test', {**owner, 'channel': 'test'}),
+        ('dev', {**owner, 'kind': 'operator-identity-restoration-other'}),
+        ('dev', {**owner, 'unexpected': 'field'}),
+    ):
+        candidate, candidate_journal = effects_for(channel, channel + marker.get('kind', 'malformed'))
+        with pytest.raises(PostgresDeployError):
+            with candidate.channel_lock(
+                journal=candidate_journal, owner_marker=marker, retire_terminal=False,
+            ):
+                pass
+
+
+def _operator_restoration_effects(tmp_path, worker_receipt):
+    from types import SimpleNamespace
+
+    operation_id = worker_receipt['operation_id']
+    writers = ('api', 'watcher', 'worker')
+
+    class Effects:
+        def __init__(self):
+            directory = tmp_path / 'journal'
+            directory.mkdir(parents=True)
+            self.config = SimpleNamespace(
+                channel='dev', uid=1000, gid=1000,
+                journal=SimpleNamespace(directory=directory),
+            )
+            self.operation_id = None
+            self.owner = None
+            self.running = writers
+            self.calls = []
+
+        def qualify_source_identity_authority(self, *_args):
+            return SimpleNamespace()
+
+        def source_identity_runtime_snapshot(self, _selected, *, require_running_capture):
+            if require_running_capture and not self.running:
+                raise AssertionError('running writers required')
+            return SimpleNamespace(
+                installed_fingerprint='installed',
+                observed_installed_fingerprint='installed',
+                legacy_installed_fingerprints=frozenset(),
+                execution_fingerprint='execution',
+                existing_writers=writers,
+                running_writers=self.running,
+                container_root='/app/vault',
+                vault_overlay='docker-compose.full-host-vault.yml',
+                child_environment=(('DATABASE_URL_FILE', '/run/secrets/db'),),
+                unset_environment=('DATABASE_URL',),
+            )
+
+        def require_source_identity_candidate(self, *_args, **_kwargs):
+            return None
+
+        @contextmanager
+        def channel_lock(self, *, journal, owner_marker, retire_terminal):
+            assert journal is self.config.journal and retire_terminal is False
+            self.owner = (json.dumps(owner_marker, sort_keys=True) + '\n').encode()
+            yield
+
+        def channel_lock_owner(self):
+            return self.owner
+
+        @contextmanager
+        def failed_reconciliation_lock(self, *, expected_owner):
+            assert self.owner == (json.dumps(expected_owner, sort_keys=True) + '\n').encode()
+            yield object()
+
+        def retire_reconciled_channel_lock(self, _handle, *, expected_owner):
+            assert self.owner == (json.dumps(expected_owner, sort_keys=True) + '\n').encode()
+            self.owner = None
+
+        def compose(self, action, *args, input_text=None, **_kwargs):
+            self.calls.append((action, args, input_text))
+            if action == 'stop':
+                self.running = ()
+                return ''
+            if action == 'start':
+                self.running = writers
+                return ''
+            assert action == 'run'
+            attempt = self.config.journal.directory / (
+                f'dev-operator-identity-restoration-{operation_id}.attempt.json'
+            )
+            assert attempt.exists()
+            assert input_text is not None and 'target_rel' in json.loads(input_text)
+            return json.dumps(worker_receipt)
+
+    return Effects()
+
+
+def test_operator_identity_restoration_fences_and_restores_exact_writers(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import native_source_bootstrap
+    from app.ops.native_operator_identity_restoration import run_host_operation
+
+    operation_id = str(uuid4())
+    revision = 'a' * 40
+    worker = {
+        'contract': 'native-operator-identity-restoration.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'result': 'unknown', 'write_phase': 'written', 'cleanup': 'not_started',
+        'reason': None, 'automatic_producer_started': False,
+        'automatic_deployment_started': False,
+    }
+    effects = _operator_restoration_effects(tmp_path, worker)
+    monkeypatch.setattr(native_source_bootstrap, 'quiesce_owned_container', lambda *_args: True)
+    selected = SimpleNamespace(
+        binding_id='vault-alpha', root='/srv/vault', ownership_root='/srv/state',
+        validate=lambda: None,
+    )
+    receipt = run_host_operation(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest='sha256:' + '1' * 64, selected=selected,
+        command={
+            'target_rel': 'rewritten/target.md',
+            'expected_old_scalar': 'legacy-identity',
+            'replacement_uuid': str(uuid4()),
+        },
+    )
+    assert receipt['result'] == 'committed'
+    assert [call[0] for call in effects.calls] == ['stop', 'run', 'start']
+    assert effects.running == ('api', 'watcher', 'worker') and effects.owner is None
+    request = json.loads(next(effects.config.journal.directory.glob('*.request.json')).read_text())
+    assert 'command' not in request and len(request['command_sha256']) == 64
+
+
+def test_operator_identity_restoration_write_phase_and_cleanup_only_recovery(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import native_source_bootstrap
+    from app.ops.native_operator_identity_restoration import run_host_operation, validate_receipt
+
+    operation_id = str(uuid4())
+    revision = 'b' * 40
+    worker = {
+        'contract': 'native-operator-identity-restoration.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'result': 'unknown', 'write_phase': 'indeterminate', 'cleanup': 'not_started',
+        'reason': 'worker_transport_failed', 'automatic_producer_started': False,
+        'automatic_deployment_started': False,
+    }
+    effects = _operator_restoration_effects(tmp_path, worker)
+    monkeypatch.setattr(native_source_bootstrap, 'quiesce_owned_container', lambda *_args: True)
+    selected = SimpleNamespace(
+        binding_id='vault-alpha', root='/srv/vault', ownership_root='/srv/state',
+        validate=lambda: None,
+    )
+    command = {
+        'target_rel': 'rewritten/target.md',
+        'expected_old_scalar': 'legacy-identity',
+        'replacement_uuid': str(uuid4()),
+    }
+    first = run_host_operation(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest='sha256:' + '2' * 64, selected=selected, command=command,
+    )
+    assert first['write_phase'] == 'indeterminate' and first['result'] == 'unknown'
+    run_calls = sum(call[0] == 'run' for call in effects.calls)
+    second = run_host_operation(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest='sha256:' + '2' * 64, selected=selected, command=command,
+    )
+    assert second == first
+    assert sum(call[0] == 'run' for call in effects.calls) == run_calls
+    for phase in ('not_started', 'not_written', 'written', 'indeterminate'):
+        payload = {**worker, 'write_phase': phase}
+        if phase == 'written':
+            payload['reason'] = None
+        assert validate_receipt(payload)['write_phase'] == phase
+
+
+def test_operator_identity_restoration_request_only_crash_cleans_without_dispatch(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import native_source_bootstrap
+    from app.ops.native_operator_identity_restoration import run_host_operation
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    operation_id = str(uuid4())
+    revision = 'c' * 40
+    command = {
+        'target_rel': 'rewritten/target.md',
+        'expected_old_scalar': 'legacy-identity',
+        'replacement_uuid': str(uuid4()),
+    }
+    worker = {
+        'contract': 'native-operator-identity-restoration.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'result': 'unknown', 'write_phase': 'written', 'cleanup': 'not_started',
+        'reason': None, 'automatic_producer_started': False,
+        'automatic_deployment_started': False,
+    }
+    effects = _operator_restoration_effects(tmp_path, worker)
+    selected = SimpleNamespace(
+        binding_id='vault-alpha', root='/srv/vault', ownership_root='/srv/state',
+        validate=lambda: None,
+    )
+    command_hash = hashlib.sha256(
+        json.dumps(command, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()
+    request = {
+        'contract': 'native-operator-identity-restoration-request.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'image_digest': 'sha256:' + '3' * 64,
+        'authority_cutover': {
+            'binding_id': selected.binding_id, 'root': selected.root,
+            'ownership_root': selected.ownership_root,
+        },
+        'installed_fingerprint': 'installed',
+        'execution_fingerprint': 'execution',
+        'writers': ['api', 'watcher', 'worker'],
+        'container_root': '/app/vault',
+        'vault_overlay': 'docker-compose.full-host-vault.yml',
+        'command_sha256': command_hash,
+    }
+    request_path = effects.config.journal.directory / (
+        f'dev-operator-identity-restoration-{operation_id}.request.json'
+    )
+    request_path.write_text(json.dumps(request), encoding='utf-8')
+    request_path.chmod(0o600)
+    owner = {
+        'kind': 'operator-identity-restoration', 'channel': 'dev',
+        'operation_id': operation_id,
+    }
+    effects.owner = (json.dumps(owner, sort_keys=True) + '\n').encode()
+    monkeypatch.setattr(native_source_bootstrap, 'quiesce_owned_container', lambda *_args: True)
+    with pytest.raises(PostgresDeployError):
+        run_host_operation(
+            effects, operation_id=operation_id, revision=revision,
+            image_digest='sha256:' + '3' * 64, selected=selected, command=command,
+        )
+    assert [call[0] for call in effects.calls] == ['start']
+    assert effects.owner is None
+
+
+def test_operator_identity_restoration_written_evidence_commits_after_later_cleanup(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import native_source_bootstrap
+    from app.ops.native_operator_identity_restoration import run_host_operation
+
+    operation_id = str(uuid4())
+    revision = 'd' * 40
+    worker = {
+        'contract': 'native-operator-identity-restoration.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'result': 'unknown', 'write_phase': 'written', 'cleanup': 'not_started',
+        'reason': None, 'automatic_producer_started': False,
+        'automatic_deployment_started': False,
+    }
+    effects = _operator_restoration_effects(tmp_path, worker)
+    selected = SimpleNamespace(
+        binding_id='vault-alpha', root='/srv/vault', ownership_root='/srv/state',
+        validate=lambda: None,
+    )
+    command = {
+        'target_rel': 'rewritten/target.md',
+        'expected_old_scalar': 'legacy-identity',
+        'replacement_uuid': str(uuid4()),
+    }
+    quiesced = {'value': False}
+    monkeypatch.setattr(
+        native_source_bootstrap, 'quiesce_owned_container',
+        lambda *_args: quiesced['value'],
+    )
+    first = run_host_operation(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest='sha256:' + '4' * 64, selected=selected, command=command,
+    )
+    assert first['result'] == 'unknown' and first['cleanup'] == 'retained'
+    quiesced['value'] = True
+    second = run_host_operation(
+        effects, operation_id=operation_id, revision=revision,
+        image_digest='sha256:' + '4' * 64, selected=selected, command=command,
+    )
+    assert second['result'] == 'committed'
+    assert second['write_phase'] == 'written' and second['cleanup'] == 'complete'
+    assert sum(call[0] == 'run' for call in effects.calls) == 1
+
+
+def test_operator_identity_restoration_orphan_dangling_and_foreign_lineage_refuse(
+    tmp_path,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops.native_operator_identity_restoration import run_host_operation
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    operation_id = str(uuid4())
+    revision = 'e' * 40
+    command = {
+        'target_rel': 'rewritten/target.md',
+        'expected_old_scalar': 'legacy-identity',
+        'replacement_uuid': str(uuid4()),
+    }
+    worker = {
+        'contract': 'native-operator-identity-restoration.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'result': 'unknown', 'write_phase': 'not_written', 'cleanup': 'not_started',
+        'reason': 'worker_refused', 'automatic_producer_started': False,
+        'automatic_deployment_started': False,
+    }
+    selected = SimpleNamespace(
+        binding_id='vault-alpha', root='/srv/vault', ownership_root='/srv/state',
+        validate=lambda: None,
+    )
+
+    def invoke(effects):
+        return run_host_operation(
+            effects, operation_id=operation_id, revision=revision,
+            image_digest='sha256:' + '5' * 64, selected=selected, command=command,
+        )
+
+    orphan = _operator_restoration_effects(tmp_path / 'orphan', worker)
+    prefix = f'dev-operator-identity-restoration-{operation_id}'
+    for suffix, payload in (
+        ('.attempt.json', {
+            'contract': 'native-operator-identity-restoration-attempt.v1',
+            'operation_id': operation_id, 'dispatch_staged': True,
+        }),
+        ('.worker.json', worker),
+    ):
+        path = orphan.config.journal.directory / (prefix + suffix)
+        path.write_text(json.dumps(payload), encoding='utf-8')
+        path.chmod(0o600)
+    with pytest.raises(PostgresDeployError):
+        invoke(orphan)
+    assert orphan.calls == [] and orphan.owner is None
+
+    dangling = _operator_restoration_effects(tmp_path / 'dangling', worker)
+    (dangling.config.journal.directory / (prefix + '.request.json')).symlink_to(
+        dangling.config.journal.directory / 'missing-private-entry'
+    )
+    with pytest.raises(Exception):
+        invoke(dangling)
+    assert dangling.calls == [] and dangling.owner is None
+
+    foreign = _operator_restoration_effects(tmp_path / 'foreign', worker)
+    command_hash = hashlib.sha256(
+        json.dumps(command, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()
+    request = {
+        'contract': 'native-operator-identity-restoration-request.v1',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision,
+        'image_digest': 'sha256:' + '5' * 64,
+        'authority_cutover': {
+            'binding_id': selected.binding_id, 'root': selected.root,
+            'ownership_root': selected.ownership_root,
+        },
+        'installed_fingerprint': 'installed', 'execution_fingerprint': 'execution',
+        'writers': ['api', 'watcher', 'worker'], 'container_root': '/app/vault',
+        'vault_overlay': 'docker-compose.full-host-vault.yml',
+        'command_sha256': command_hash,
+    }
+    path = foreign.config.journal.directory / (prefix + '.request.json')
+    path.write_text(json.dumps(request), encoding='utf-8')
+    path.chmod(0o600)
+    foreign.owner = b'foreign-owner\n'
+    with pytest.raises(PostgresDeployError):
+        invoke(foreign)
+    assert foreign.calls == [] and foreign.owner == b'foreign-owner\n'
+
+    poison = _operator_restoration_effects(tmp_path / 'phase-poison', worker)
+    request_path = poison.config.journal.directory / (prefix + '.request.json')
+    request_path.write_text(json.dumps(request), encoding='utf-8')
+    request_path.chmod(0o600)
+    terminal = {**worker, 'write_phase': 'indeterminate', 'cleanup': 'retained'}
+    terminal_path = poison.config.journal.directory / (prefix + '.json')
+    terminal_path.write_text(json.dumps(terminal), encoding='utf-8')
+    terminal_path.chmod(0o600)
+    with pytest.raises(PostgresDeployError):
+        invoke(poison)
+    assert poison.calls == [] and poison.owner is None
 
 
 def test_deploy_does_not_create_plaintext_postgres_env_file(tmp_path, monkeypatch):
@@ -4499,6 +6477,640 @@ def test_linux_effects_authenticates_effective_compose_connection(tmp_path, monk
     assert len(compose_environments) == 1
 
 
+def test_linux_recovery_compose_binds_authenticated_cutover_ownership_root(tmp_path, monkeypatch):
+    """The recovery one-shot cannot inherit an ambient host-global root."""
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan
+
+    cfg = linux.LinuxConfig('test', tmp_path, tmp_path / 'data', 1000, 1000, '', '')
+    (tmp_path / 'config/deploy').mkdir(parents=True)
+    (tmp_path / 'config/deploy/test.env').write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    monkeypatch.delenv('INSTANCE_OWNERSHIP_HOST_STATE_DIR', raising=False)
+    commands, environments = [], []
+
+    def command(argv, **kwargs):
+        commands.append(argv)
+        environments.append(kwargs['env'])
+        return ''
+
+    monkeypatch.setattr(linux, '_command', command)
+    cutover = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
+    )
+    candidate = DeployPlan(
+        'test', 'b' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'c' * 64, True,
+    )
+    linux.LinuxEffects(cfg).compose(
+        'run', 'instance-state-init', cutover=cutover, candidate=candidate,
+    )
+
+    assert len(commands) == 1
+    assert environments[0]['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] == cutover.ownership_root
+    assert environments[0]['APP_IMAGE_TAG'] == candidate.revision
+    assert environments[0]['APP_IMAGE_DIGEST_SUFFIX'] == '@' + candidate.image_digest
+
+
+def test_linux_recovery_prepares_new_volume_before_runtime_uid(monkeypatch, tmp_path):
+    """A fresh named volume is permission-prepared before reconstruction."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
+
+    operation_id = str(uuid4())
+    source_operation_id = str(uuid4())
+    digest = 'sha256:' + 'a' * 64
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    cutover = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
+    )
+    request = TestRecoveryRequest(
+        operation_id, plan, cutover, source_operation_id=source_operation_id,
+        source_plan=plan,
+    )
+    config = SimpleNamespace(channel='test', root=tmp_path, uid=1000, journal=object())
+    effects = linux.LinuxEffects(config)
+    effects.local_database = lambda: True
+    effects._write_test_instance_state_recovery_receipt = lambda _request: (
+        tmp_path / 'receipt.json', 'a' * 64, 'b' * 64, 'c' * 64,
+    )
+    effects.recovery_quiescent = lambda: True
+    effects._validate_test_instance_state_recovery_authority = (
+        lambda *_args, **_kwargs: 'c' * 64
+    )
+    calls = []
+
+    def compose(*args, **kwargs):
+        calls.append((args, kwargs))
+        if '--user' in args:
+            return json.dumps({
+                'schema': 'test-instance-state-recovery.v2',
+                'channel': 'test',
+                'activation': 'inactive_fenced',
+                'request': {
+                    'source_operation_id': source_operation_id,
+                    'failed_successor_operation_id': operation_id,
+                },
+                'ledger_sha256': 'c' * 64,
+            })
+        return ''
+
+    effects.compose = compose
+    assert effects.reconstruct_missing_test_instance_state(request)['activation'] == 'inactive_fenced'
+
+    assert calls[0][0] == ('run', '--rm', '--no-deps', '-T', 'instance-state-init')
+    assert '--user' not in calls[0][0]
+    assert '--user' in calls[1][0]
+    assert calls[0][1]['cutover'] == cutover
+    assert calls[1][1]['cutover'] == cutover
+    assert calls[0][1]['candidate'] == plan
+    assert calls[1][1]['candidate'] == plan
+
+
+def test_linux_recovery_releases_authenticated_lease_after_durable_result(tmp_path):
+    """Lease handoff reuses the exact reconstruction evidence and controller."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
+
+    failed_operation_id = str(uuid4())
+    source_operation_id = str(uuid4())
+    ownership_root = tmp_path / 'ownership'
+    ownership_root.mkdir(mode=0o700)
+    public_root = ownership_root / 'deployment-public'
+    public_root.mkdir(mode=0o700)
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'b' * 64, True,
+    )
+    authority = AuthorityCutover('test-binding', str(tmp_path / 'vault'), str(ownership_root))
+    request = TestRecoveryRequest(
+        failed_operation_id, plan, authority,
+        source_operation_id=source_operation_id, source_plan=plan,
+    )
+    proof = {
+        'channel_id': 'test',
+        'nonce': 'n' * 32,
+        'controller': {'pid': 4242, 'start_token': 'linux:' + 'c' * 64},
+    }
+    proof_path = ownership_root / 'deployment-quiescence-proof.json'
+    proof_path.write_text(json.dumps(proof, sort_keys=True) + '\n', encoding='utf-8')
+    proof_path.chmod(0o600)
+    owner = {
+        'deployment_nonce': proof['nonce'],
+        'controller': proof['controller'],
+    }
+    owner_path = ownership_root / 'legacy-owner-inventory.json'
+    owner_path.write_text(json.dumps(owner, sort_keys=True) + '\n', encoding='utf-8')
+    owner_path.chmod(0o600)
+    receipt = {
+        'schema': 'test-instance-state-recovery.v2',
+        'channel': 'test',
+        'source_operation_id': source_operation_id,
+        'failed_successor_operation_id': failed_operation_id,
+        'candidate_revision': plan.revision,
+        'candidate_image_digest': plan.image_digest,
+        'authority_cutover': {
+            'binding_id': authority.binding_id,
+            'root': authority.root,
+            'ownership_root': authority.ownership_root,
+        },
+        'disposition': 'complete',
+        'owner_receipt_sha256': hashlib.sha256(owner_path.read_bytes()).hexdigest(),
+        'quiescence_proof_sha256': hashlib.sha256(proof_path.read_bytes()).hexdigest(),
+        'ledger_sha256': 'e' * 64,
+    }
+    receipt_path = ownership_root / (
+        'test-instance-state-recovery-' + failed_operation_id + '.json'
+    )
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + '\n', encoding='utf-8')
+    receipt_path.chmod(0o600)
+    result_path = ownership_root / (
+        'test-instance-state-recovery-result-' + failed_operation_id + '.json'
+    )
+    result_path.write_text(json.dumps({
+        'schema': 'test-instance-state-recovery.v2',
+        'channel': 'test',
+        'request': receipt,
+        'registry_revision': 1,
+        'registry_sha256': 'f' * 64,
+        'ledger_sha256': receipt['ledger_sha256'],
+        'activation': 'inactive_fenced',
+        'registered_bindings': [authority.binding_id],
+    }, sort_keys=True) + '\n', encoding='utf-8')
+    result_path.chmod(0o600)
+    (public_root / 'deployment-host-global-lease.json').write_text('{}\n')
+    (ownership_root / 'deployment-host-global-lease.json').write_text('{}\n')
+    (public_root / 'deployment-host-global-lease.json').chmod(0o600)
+    (ownership_root / 'deployment-host-global-lease.json').chmod(0o600)
+
+    config = SimpleNamespace(
+        channel='test', root=tmp_path, uid=os.geteuid(), gid=os.getegid(), journal=object(),
+    )
+    effects = linux.LinuxEffects(config)
+    effects.local_database = lambda: True
+    effects.recovery_quiescent = lambda: True
+    calls = []
+
+    def compose(*args, **kwargs):
+        calls.append((args, kwargs))
+        return json.dumps({
+            'channel': 'test', 'released': True,
+            'reason': 'abandoned-deployment',
+        })
+
+    effects.compose = compose
+    released = effects.release_test_instance_state_recovery_lease(request)
+
+    assert released['released'] is True
+    assert len(calls) == 1
+    assert calls[0][0][-4:] == (
+        '--controller-pid', '4242', '--controller-start-token', 'linux:' + 'c' * 64,
+    )
+    assert calls[0][1] == {'cutover': authority, 'candidate': plan}
+
+    cleanup_result = {
+        'channel': 'test', 'restart_fence_cleared': True, 'aborted': True,
+    }
+    controller = proof['controller']
+    public_cleanup = {
+        'schema': 'agentic-pkm.host-deployment-lease.v3',
+        'channel_id': 'test', 'nonce': 'n' * 32, 'phase': 'cleanup',
+        'controller': controller, 'result': cleanup_result,
+    }
+    root_cleanup = {
+        **public_cleanup,
+        'schema': 'agentic-pkm.host-deployment-compatibility-block.v1',
+        'compatibility_v3_nonce': 'n' * 32,
+    }
+    (public_root / 'deployment-host-global-lease.json').write_text(
+        json.dumps(public_cleanup) + '\n', encoding='utf-8',
+    )
+    (ownership_root / 'deployment-host-global-lease.json').write_text(
+        json.dumps(root_cleanup) + '\n', encoding='utf-8',
+    )
+    (public_root / 'deployment-host-global-lease.json').chmod(0o600)
+    (ownership_root / 'deployment-host-global-lease.json').chmod(0o600)
+    proof_path.unlink()
+    effects.compose = lambda *_args, **_kwargs: json.dumps({
+        **cleanup_result, 'released': True, 'reason': 'already-in-cleanup',
+    })
+    assert effects.release_test_instance_state_recovery_lease(request)['reason'] == (
+        'already-in-cleanup'
+    )
+
+    (public_root / 'deployment-host-global-lease.json').unlink()
+    assert effects.release_test_instance_state_recovery_lease(request)['reason'] == (
+        'already-in-cleanup'
+    )
+
+    foreign_cleanup = {
+        **public_cleanup,
+        'nonce': 'x' * 32,
+        'controller': {'pid': 4343, 'start_token': 'linux:' + 'f' * 64},
+    }
+    foreign_root_cleanup = {
+        **foreign_cleanup,
+        'schema': 'agentic-pkm.host-deployment-compatibility-block.v1',
+        'compatibility_v3_nonce': 'x' * 32,
+    }
+    (ownership_root / 'deployment-host-global-lease.json').write_text(
+        json.dumps(foreign_root_cleanup) + '\n', encoding='utf-8',
+    )
+    (ownership_root / 'deployment-host-global-lease.json').chmod(0o600)
+    effects.compose = lambda *_args, **_kwargs: pytest.fail(
+        'foreign root-only cleanup reached Compose'
+    )
+    with pytest.raises(linux.PostgresDeployError):
+        effects.release_test_instance_state_recovery_lease(request)
+
+    (public_root / 'deployment-host-global-lease.json').write_text(
+        json.dumps(foreign_cleanup) + '\n', encoding='utf-8',
+    )
+    (public_root / 'deployment-host-global-lease.json').chmod(0o600)
+    with pytest.raises(linux.PostgresDeployError):
+        effects.release_test_instance_state_recovery_lease(request)
+
+    (public_root / 'deployment-host-global-lease.json').unlink()
+    (ownership_root / 'deployment-host-global-lease.json').unlink()
+    effects.recovery_quiescent = lambda: False
+    effects.compose = lambda *_args, **_kwargs: pytest.fail('idempotent release called Compose')
+    assert effects.release_test_instance_state_recovery_lease(request) == {
+        'channel': 'test', 'released': False,
+        'reason': 'already-released-after-reconstruction',
+    }
+
+
+def test_linux_recovery_quiescence_rejects_running_state_writers(monkeypatch, tmp_path):
+    """Healthy long-lived services are still writers during reconstruction."""
+    from types import SimpleNamespace
+
+    from app.ops import postgres_deploy_linux as linux
+
+    effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path))
+    effects._running_one_shots = lambda: False
+    effects.compose = lambda *_args, **_kwargs: json.dumps([
+        {'Service': service, 'State': 'running', 'Health': 'healthy'}
+        for service in ('api', 'worker', 'watcher')
+    ])
+
+    assert effects.recovery_quiescent() is False
+
+
+def test_linux_recovery_refuses_before_first_effect_when_writers_are_live(tmp_path):
+    """The stopped-writer proof precedes receipt and Compose effects."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, PostgresDeployError, TestRecoveryRequest,
+    )
+
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'a' * 64, True,
+    )
+    authority = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'ownership'),
+    )
+    request = TestRecoveryRequest(
+        str(uuid4()), plan, authority, source_operation_id=str(uuid4()),
+        source_plan=plan,
+    )
+    effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path))
+    effects.local_database = lambda: True
+    effects.recovery_quiescent = lambda: False
+    mutations = []
+    effects._write_test_instance_state_recovery_receipt = (
+        lambda _request: mutations.append('receipt')
+    )
+    effects.compose = lambda *_args, **_kwargs: mutations.append('compose') or ''
+
+    with pytest.raises(PostgresDeployError):
+        effects.reconstruct_missing_test_instance_state(request)
+    assert mutations == []
+
+
+def test_linux_recovery_rejects_active_supervised_operation(monkeypatch, tmp_path):
+    """The reconstruction RPC cannot race a newly admitted deployment."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, PostgresDeployError
+
+    plan = DeployPlan(
+        'test', 'b' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'c' * 64, True,
+    )
+    authority = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
+    )
+    failed_operation_id = str(uuid4())
+    source_operation_id = str(uuid4())
+    config = SimpleNamespace(channel='test', root=tmp_path, journal=object())
+    supervisor = linux.DeploymentSupervisor(config)
+    active = linux.SupervisedOperation(
+        linux.LinuxEffects(config), failed_operation_id, plan, False,
+    )
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    monkeypatch.setattr(
+        linux.LinuxEffects,
+        'reconstruct_missing_test_instance_state',
+        lambda *_args: pytest.fail('active deployment must block reconstruction'),
+    )
+
+    request = {
+        'action': 'test-recovery-reconstruct-instance-state',
+        **{
+            'failed_operation_id': failed_operation_id,
+            'source_operation_id': source_operation_id,
+            'source_plan': plan.payload(),
+            'plan': plan.payload(),
+            'authority_cutover': {
+                'binding_id': authority.binding_id,
+                'root': authority.root,
+                'ownership_root': authority.ownership_root,
+            },
+        },
+    }
+    foreign = linux.SupervisedOperation(
+        linux.LinuxEffects(config), str(uuid4()), plan, False,
+    )
+    mismatched = linux.SupervisedOperation(
+        linux.LinuxEffects(config), failed_operation_id,
+        replace(plan, revision='d' * 40, image_digest='sha256:' + 'd' * 64), False,
+    )
+    for operation in (foreign, mismatched):
+        operation.failed = True
+        operation.finished.set()
+    for operation in (active, foreign, mismatched):
+        supervisor.operation = operation
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(request)
+
+
+def test_linux_recovery_accepts_runtime_owned_receipt_under_root_supervisor(monkeypatch, tmp_path):
+    """A retry accepts the runtime-owned checkpoint after permission preparation."""
+    import hashlib
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    source_operation_id = str(uuid4())
+    authority = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'authenticated-ownership'),
+    )
+    ownership_root = Path(authority.ownership_root)
+    ownership_root.mkdir(mode=0o700)
+    owner_bytes = b'{"owner":"runtime"}\n'
+    proof_bytes = b'{"proof":"quiescent"}\n'
+    (ownership_root / 'legacy-owner-inventory.json').write_bytes(owner_bytes)
+    (ownership_root / 'deployment-quiescence-proof.json').write_bytes(proof_bytes)
+    plan = DeployPlan(
+        'test', 'd' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'e' * 64, True,
+    )
+    request = TestRecoveryRequest(
+        operation_id, plan, authority, source_operation_id=source_operation_id,
+        source_plan=replace(plan, revision='c' * 40, image_digest='sha256:' + 'd' * 64),
+    )
+
+    class Journal:
+        def read(self):
+            return DeployReceipt(operation_id, 'test', 'deploy', 'failed', 'failed')
+
+        def bound_plan(self, selected):
+            assert selected == operation_id
+            return plan
+
+    config = SimpleNamespace(
+        channel='test', uid=os.geteuid(), gid=os.getegid(), journal=Journal(), root=tmp_path,
+    )
+    effects = linux.LinuxEffects(config)
+    monkeypatch.setattr(effects, '_read_test_recovery_disposition', lambda _request: {'state': 'complete'})
+    monkeypatch.setattr(
+        effects, '_validate_test_instance_state_recovery_authority',
+        lambda *_args, **_kwargs: 'f' * 64,
+    )
+    effects.recovery_quiescent = lambda: True
+    receipt_path = ownership_root / ('test-instance-state-recovery-' + operation_id + '.json')
+    payload = {
+        'schema': 'test-instance-state-recovery.v2',
+        'channel': 'test',
+        'source_operation_id': source_operation_id,
+        'failed_successor_operation_id': operation_id,
+        'candidate_revision': plan.revision,
+        'candidate_image_digest': plan.image_digest,
+        'authority_cutover': {
+            'binding_id': authority.binding_id,
+            'root': authority.root,
+            'ownership_root': authority.ownership_root,
+        },
+        'disposition': 'complete',
+        'owner_receipt_sha256': hashlib.sha256(owner_bytes).hexdigest(),
+        'quiescence_proof_sha256': hashlib.sha256(proof_bytes).hexdigest(),
+        'ledger_sha256': 'f' * 64,
+    }
+    receipt_path.write_text(json.dumps(payload, sort_keys=True) + '\n')
+    receipt_path.chmod(0o600)
+    monkeypatch.setattr(linux.os, 'geteuid', lambda: 0)
+
+    result = effects._write_test_instance_state_recovery_receipt(request)
+    assert result == (
+        receipt_path,
+        hashlib.sha256(owner_bytes).hexdigest(),
+        hashlib.sha256(proof_bytes).hexdigest(),
+        'f' * 64,
+    )
+    assert receipt_path.stat().st_uid == config.uid
+
+
+def test_linux_reconstruction_uses_retained_reset_request_after_journal_rollover(
+    monkeypatch, tmp_path,
+):
+    """The single-slot journal authenticates the failed successor, not history."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployJournal, DeployPlan, PostgresDeployError,
+        TestRecoveryRequest,
+    )
+
+    source_operation_id = str(uuid4())
+    failed_successor_operation_id = str(uuid4())
+    authority = AuthorityCutover(
+        'test-binding', str(tmp_path / 'vault'), str(tmp_path / 'ownership'),
+    )
+    source_request_plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + 'a' * 64, True,
+    )
+    source_cutover_plan = replace(
+        source_request_plan, automatic=False, image_digest=None,
+        ack_forward_only=True, authority_cutover=authority,
+    )
+    fresh_candidate = replace(
+        source_request_plan, revision='b' * 40,
+        image_digest='sha256:' + 'b' * 64,
+    )
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+
+    def fail_operation(operation_id, plan):
+        journal.bind_request(operation_id, plan, False, create=True)
+        for stage in ('prepared', 'preflighted', 'materialized', 'activating', 'failed'):
+            journal.write(operation_id, stage)
+
+    fail_operation(source_operation_id, source_cutover_plan)
+    config = SimpleNamespace(
+        channel='test', root=tmp_path, uid=os.geteuid(), gid=os.getegid(), journal=journal,
+    )
+    effects = linux.LinuxEffects(config)
+    source_request = TestRecoveryRequest(
+        source_operation_id, source_request_plan, authority,
+    )
+    effects._write_test_recovery_disposition(source_request, 'complete')
+    fail_operation(failed_successor_operation_id, source_request_plan)
+
+    with pytest.raises(PostgresDeployError):
+        journal.bound_plan(source_operation_id)
+    request = TestRecoveryRequest(
+        failed_successor_operation_id, fresh_candidate, authority,
+        source_operation_id=source_operation_id,
+        source_plan=source_request_plan,
+    )
+    ownership_root = Path(authority.ownership_root)
+    ownership_root.mkdir(mode=0o700)
+    (ownership_root / 'legacy-owner-inventory.json').write_text('{}\n')
+    (ownership_root / 'deployment-quiescence-proof.json').write_text('{}\n')
+    monkeypatch.setattr(
+        linux, '_private_json', lambda path: json.loads(path.read_text()),
+    )
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'local_database', lambda _self: True,
+    )
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'recovery_quiescent', lambda _self: True,
+    )
+    monkeypatch.setattr(
+        linux.LinuxEffects, '_validate_test_instance_state_recovery_authority',
+        lambda *_args, **_kwargs: 'c' * 64,
+    )
+
+    def compose(_self, *args, **_kwargs):
+        if '--user' not in args:
+            return ''
+        return json.dumps({
+            'schema': 'test-instance-state-recovery.v2',
+            'channel': 'test',
+            'activation': 'inactive_fenced',
+            'request': {
+                'source_operation_id': source_operation_id,
+                'failed_successor_operation_id': failed_successor_operation_id,
+            },
+            'ledger_sha256': 'c' * 64,
+        })
+
+    monkeypatch.setattr(linux.LinuxEffects, 'compose', compose)
+    supervisor = linux.DeploymentSupervisor(config)
+    retained = linux.SupervisedOperation(
+        linux.LinuxEffects(config), failed_successor_operation_id,
+        source_request_plan, False,
+    )
+    retained.failed = True
+    retained.finished.set()
+    supervisor.operation = retained
+
+    def run_rpc(_argv, **kwargs):
+        response = supervisor.request(json.loads(kwargs['input']))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(response))
+
+    monkeypatch.setattr(linux.subprocess, 'run', run_rpc)
+    result = linux.SshDeployRemote('ygg-test').test_recovery_reconstruct_instance_state(request)
+
+    receipt_path = ownership_root / (
+        'test-instance-state-recovery-' + failed_successor_operation_id + '.json'
+    )
+
+    payload = json.loads(receipt_path.read_text())
+    assert result['activation'] == 'inactive_fenced'
+    assert supervisor.operation is None
+    assert payload['source_operation_id'] == source_operation_id
+    assert payload['failed_successor_operation_id'] == failed_successor_operation_id
+    assert payload['candidate_revision'] == fresh_candidate.revision
+
+    # A normal same-plan successor remains as a terminal in-memory object.
+    # The identical recovery retry must still reach the evidence-bound,
+    # idempotent release instead of failing at the supervisor shell.
+    successor_operation_id = str(uuid4())
+    terminal = linux.SupervisedOperation(
+        linux.LinuxEffects(config), successor_operation_id, fresh_candidate, False,
+    )
+    terminal.finished.set()
+    supervisor.operation = terminal
+    release_calls = []
+
+    def release(_self, selected):
+        release_calls.append(selected)
+        return {
+            'channel': 'test', 'released': False,
+            'reason': 'already-released-after-reconstruction',
+        }
+
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'release_test_instance_state_recovery_lease', release,
+    )
+    with pytest.raises(PostgresDeployError):
+        linux.SshDeployRemote('ygg-test').test_recovery_release_instance_state(
+            request, successor_operation_id=str(uuid4()),
+        )
+    terminal.finished.clear()
+    with pytest.raises(PostgresDeployError):
+        linux.SshDeployRemote('ygg-test').test_recovery_release_instance_state(
+            request, successor_operation_id=successor_operation_id,
+        )
+    terminal.finished.set()
+    assert release_calls == []
+    released = linux.SshDeployRemote('ygg-test').test_recovery_release_instance_state(
+        request, successor_operation_id=successor_operation_id,
+    )
+    assert released['reason'] == 'already-released-after-reconstruction'
+    assert release_calls == [request]
+    assert supervisor.operation is terminal
+
+
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
 @pytest.mark.parametrize('reject_recheck', [False, True])
 def test_bws_full_deploy_raw_migration_uses_supervised_preflight(tmp_path, channel, reject_recheck):
@@ -4513,16 +7125,14 @@ def test_bws_full_deploy_raw_migration_uses_supervised_preflight(tmp_path, chann
         _configure_bws_retry_driver(tmp_path, env)
     # Fake only the VM credential/FD adapter; run the actual deployment shell and
     # its real pending-HAR classification, pin/migration and Compose branches.
-    (root / 'app/ops/postgres_deploy_linux.py').write_text('''
-import os,sys
-from pathlib import Path
-assert sys.argv[1] == 'guard'
-log = Path(os.environ['FAKE_DEPLOY_EVENT_LOG'])
-prior = log.read_text().count('bws-guard') if log.exists() else 0
-with log.open('a') as stream:
-    stream.write('bws-guard\\n')
-if os.environ.get('FAKE_BWS_REJECT_RECHECK') == '1' and prior == 1:
-    raise SystemExit(78)
+    _install_bws_identity_guard_fixture(root)
+    guard = root / 'app/ops/postgres_deploy_linux.py'
+    guard.write_text(guard.read_text() + '''
+if __name__ == '__main__':
+    from pathlib import Path
+    count = Path(os.environ['FAKE_DEPLOY_EVENT_LOG']).read_text().count('bws-guard')
+    if os.environ.get('FAKE_BWS_REJECT_RECHECK') == '1' and count == 2:
+        raise SystemExit(78)
 ''')
     handle = tmp_path / 'migration.env'
     handle.write_text('HEIMDAL_RAW_STORE_KEY=' + 'a' * 64 + '\n')
@@ -4675,7 +7285,7 @@ def test_bws_prod_retry_preflight_uses_file_connection_and_preserves_availabilit
         env['FAKE_OUTBOX_QUERY_UNAVAILABLE'] = '1'
     # Only the external worker credential/lock seam is fake. The shell, real
     # preflight/resolver, libpq parser and terminal-row classifier all run.
-    (root / 'app/ops/postgres_deploy_linux.py').write_text('import sys\nassert sys.argv[1] == "guard"\n')
+    _install_bws_identity_guard_fixture(root)
     pin = root / 'config/deploy/prod.env'
     before = pin.read_bytes() if pin.exists() else None
     result = _run_deploy(root, env, target, channel='prod')
@@ -4818,7 +7428,15 @@ def test_bws_prod_preflight_rejects_libpq_socket_and_default_targets_before_driv
 def _install_bws_identity_guard_fixture(root: Path) -> None:
     (root / "app/ops/postgres_deploy_linux.py").write_text(
         "import os, sys\n"
-        "assert sys.argv[1] == 'guard'\n"
+        "def record_source_terminal(channel, name, status):\n"
+        "    from app.ops.native_source_bootstrap import quiesce_owned_container, source_terminal_reason, SOURCE_PROJECTION_FAILURE_CODES\n"
+        "    if not quiesce_owned_container(channel, name, os.environ['BWS_DEPLOY_OPERATION_ID'], os.environ['BWS_DEPLOY_TARGET_REVISION']): return 78\n"
+        "    reason = source_terminal_reason(status)\n"
+        "    return SOURCE_PROJECTION_FAILURE_CODES[reason] if reason else 0\n"
+        "if __name__ == '__main__':\n"
+        "    assert sys.argv[1] == 'guard'\n"
+        "    if sys.argv[-1] == 'run' and os.environ.get('FAKE_BWS_COMPOSE_GUARD_RC', '0') != '0':\n"
+        "        raise SystemExit(int(os.environ['FAKE_BWS_COMPOSE_GUARD_RC']))\n"
         "with open(os.environ['FAKE_DEPLOY_EVENT_LOG'], 'a') as stream:\n"
         "    stream.write('bws-guard\\n')\n",
         encoding="utf-8",
@@ -5190,10 +7808,21 @@ if args[:1] == ["vault-alpha-ingest"]:
 elif args[:2] == ["index", "doctor"]:
     strict = "--strict" in args
     summary_name = "FAKE_SOURCE_INDEX_SUMMARY" if strict else "FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"
+    if not strict and Path(os.environ["FAKE_API_READY_FILE"]).exists():
+        events = Path(os.environ["FAKE_DEPLOY_EVENT_LOG"]).read_text().rsplit("api-cli settings validate --json\\n", 1)[-1]
+        if "source-rebuild\\n" in events:
+            summary_name = "FAKE_SOURCE_REPLAY_INDEX_SUMMARY"
     default_summary = '{"backend":"PgVectorIndex","issues":[],"rebuild_required":false,"unembedded_object_count":0,"non_vector_issue_count":0,"pg_state":{"rows":2}}'
     print(os.environ.get(summary_name, default_summary))
     rc_name = "FAKE_SOURCE_INDEX_RC" if strict else "FAKE_SOURCE_INDEX_PREFLIGHT_RC"
     raise SystemExit(int(os.environ.get(rc_name, "0")))
+elif args[:2] == ["index", "reconcile-legacy"]:
+    print(os.environ.get("FAKE_LEGACY_RECONCILIATION_SUMMARY", '{"processed":0}'))
+    raise SystemExit(int(os.environ.get("FAKE_LEGACY_RECONCILIATION_RC", "0")))
+elif args[:2] == ["index", "repair-missing"]:
+    print(os.environ.get("FAKE_MISSING_REPAIR_SUMMARY", '{"processed":1}'))
+    print("hostile-child-canary /private/vault password=do-not-leak", file=sys.stderr)
+    raise SystemExit(int(os.environ.get("FAKE_MISSING_REPAIR_RC", "0")))
 elif args[:2] == ["settings", "validate"]:
     print('{}')
     raise SystemExit(int(os.environ.get("FAKE_SOURCE_SETTINGS_RC", "0")))
@@ -5218,6 +7847,14 @@ else:
     text = text.replace(
         'case "$*" in\n',
         '''if [[ "$*" == *"NATIVE_SOURCE_BOOTSTRAP="* ]]; then
+  previous=""
+  for argument in "$@"; do
+    if [ "${previous}" = -f ] && [ -f "${argument}" ]; then
+      scope="$(awk '/PKM_ACTIVATION_SCOPE:/ {gsub(/"/, "", $2); print $2}' "${argument}")"
+      if [ -n "${scope}" ]; then export PKM_ACTIVATION_SCOPE="${scope}"; fi
+    fi
+    previous="${argument}"
+  done
   printf 'source-probe channel=%s image=%s api-context=%s\\n' \
     "${PKM_ENVIRONMENT:-unset}" "${APP_IMAGE_TAG:-unset}" \
     "${HOST_SECRET_RUNTIME_ENV_FILE_API:-unset}" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
@@ -5332,7 +7969,8 @@ def test_native_deploy_rebuilds_source_projection_before_health_gate(
     ]
     assert len(source_calls) == 1, events
     source_pos, command = source_calls[0]
-    assert "run --rm --no-deps -T" in command
+    assert "run --no-deps -T" in command
+    assert "--rm" not in command.split()
     assert f"NATIVE_SOURCE_BOOTSTRAP={channel}:{sha}" in command
     assert command.endswith(" api")
     assert "--entrypoint" not in command
@@ -5343,7 +7981,10 @@ def test_native_deploy_rebuilds_source_projection_before_health_gate(
         if "up -d --force-recreate api worker watcher" in event
     )
     final_readiness = next(i for i, event in enumerate(events) if "/readyz" in event)
-    assert source_pos < runtime_start < final_readiness
+    source_census = next(i for i, event in enumerate(events)
+                        if event.startswith('docker ps --all --filter name=^/pkm-')
+                        and 'source-bootstrap-' in event)
+    assert source_pos < source_census < runtime_start < final_readiness
     assert events.count("source-rebuild") == (0 if ready else 1)
     assert any("api-instance-preflight -m app.instance.runtime preflight" in event for event in events)
     assert events.count("api-migrations") == 1
@@ -5406,10 +8047,10 @@ def test_native_source_projection_prepares_ollama_before_stopping_services(
     ),
     [
         ("ollama", "nomic-embed-text:deployment-test", 3, 3, 0, True),
-        ("mock", "nomic-embed-text:deployment-test", 3, 3, 78, False),
-        ("ollama", "other-model", 3, 3, 78, False),
+        ("mock", "nomic-embed-text:deployment-test", 3, 3, 115, False),
+        ("ollama", "other-model", 3, 3, 115, False),
         ("ollama", "nomic-embed-text:deployment-test", 4, 4, 0, True),
-        ("ollama", "nomic-embed-text:deployment-test", 3, 2, 78, True),
+        ("ollama", "nomic-embed-text:deployment-test", 3, 2, 117, True),
     ],
 )
 def test_native_source_embedding_probe_checks_actual_identity_and_dimension(
@@ -5451,6 +8092,8 @@ IDENTITY = SimpleNamespace(
     model=os.environ["FAKE_ACTUAL_MODEL"],
     dim=int(os.environ["FAKE_ACTUAL_DIMENSION"]),
 )
+class RemoteEmbeddingIdentityError(Exception): pass
+class RemoteEmbeddingVectorError(Exception): pass
 
 class ProductEmbeddingClient:
     identity = IDENTITY
@@ -5677,6 +8320,229 @@ def test_native_source_projection_preserves_selected_embedding_identity(
     assert not list((root / "config/deploy").glob("dev.previous.env.preflight.*"))
 
 
+def _wire_real_missing_repair(root: Path, env: dict[str, str]) -> None:
+    # Exercise the real CLI, canonical-store consumer and PgVectorIndex insert.
+    # Only provider/database infrastructure is replaced by the focused SQL fixture.
+    (root / "app/ops/__init__.py").write_text("from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n")
+    site = root.parent / "api-python-fixture/sitecustomize.py"
+    site.write_text(site.read_text() + '''
+paths.resolve_optional_vault_root = lambda **kwargs: Path(os.environ["FAKE_API_VAULT"])
+from app.settings import runtime as settings_runtime
+from app.settings.models import SettingsBundle
+settings_runtime.get_settings_bundle = lambda: SettingsBundle()
+''')
+    stub = root / "app/cli.py"
+    stub.write_text(stub.read_text().replace(
+        'elif args[:2] == ["index", "repair-missing"]:',
+        '''elif args[:2] == ["index", "repair-missing"]:
+    import importlib.util, pytest
+    package = Path(os.environ["REAL_CLI_PACKAGE"])
+    spec = importlib.util.spec_from_file_location("app.cli", package / "__init__.py", submodule_search_locations=[str(package)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["app.cli"] = module
+    spec.loader.exec_module(module)
+    fixture_spec = importlib.util.spec_from_file_location("missing_repair_fixture", os.environ["REAL_REPAIR_FIXTURE"])
+    fixture = importlib.util.module_from_spec(fixture_spec)
+    fixture_spec.loader.exec_module(fixture)
+    patch = pytest.MonkeyPatch()
+    repair, state, identity = fixture._missing_repair_fixture(patch)
+    state.fail = os.environ.get("REAL_REPAIR_FAILURE")
+    if state.fail == "ineligible":
+        state.rows[0]["payload"]["candidate_only"] = True
+    module.cli()
+elif args[:2] == ["index", "repair-missing"]:'''))
+    env.update(REAL_CLI_PACKAGE=str(REPO_ROOT / "app/cli"),
+               REAL_REPAIR_FIXTURE=str(REPO_ROOT / "tests/cli/test_index_rebuild_cli.py"))
+
+
+def test_native_deploy_repairs_indexable_object_outside_selected_source_inventory(tmp_path: Path) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    missing = json.dumps(dict(backend="PgVectorIndex", issues=["missing vector"],
+        rebuild_required=True, unembedded_object_count=1, non_vector_issue_count=0,
+        pg_state={"rows": 79}))
+    env["FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"] = missing
+    env["FAKE_SOURCE_REPLAY_INDEX_SUMMARY"] = missing
+    _wire_real_missing_repair(root, env)
+    result = _run_deploy(root, env, sha, channel="dev")
+    assert result.returncode == 0, result.stderr
+    events = _deploy_events(env)
+    replay = events.index("source-rebuild")
+    repair = events.index("api-cli index repair-missing --json")
+    strict = events.index("api-cli index doctor --json --strict")
+    activation = next(i for i, event in enumerate(events)
+                      if "up -d --force-recreate api worker watcher" in event)
+    assert replay < repair < strict < activation
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("summary, rc, reason", [
+    ('{"reason":"legacy_producer_policy_refused"}', "79", "legacy_producer_policy_refused"),
+    ('{"reason":"legacy_source_refused"}', "79", "legacy_source_refused"),
+    ('{"reason":"legacy_admission_refused"}', "79", "legacy_admission_refused"),
+    ('{"reason":"legacy_identity_refused"}', "79", "legacy_identity_refused"),
+    ('{"reason":"legacy_race_refused"}', "79", "legacy_race_refused"),
+    ('{"reason":"legacy_write_failed"}', "79", "legacy_write_failed"),
+    ('{"reason":"source_post_rebuild_failed"}', "79", "source_post_rebuild_failed"),
+    ('{"processed":true}', "0", "source_summary_invalid"),
+    ('{"reason":"private-canary"}', "79", "source_summary_invalid"),
+])
+def test_native_legacy_reconciliation_refusal_is_private_and_blocks_activation(tmp_path, summary, rc, reason):
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    missing = json.dumps(dict(backend="PgVectorIndex", issues=["missing vector"],
+        rebuild_required=True, unembedded_object_count=1, non_vector_issue_count=0, pg_state={}))
+    env.update(FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY=missing, FAKE_SOURCE_REPLAY_INDEX_SUMMARY=missing,
+               FAKE_LEGACY_RECONCILIATION_SUMMARY=summary, FAKE_LEGACY_RECONCILIATION_RC=rc)
+    result = _run_deploy(root, env, sha, channel="dev")
+    assert result.returncode != 0
+    assert f"YGGDRASIL_DEPLOY_FAILURE_REASON={reason}" in result.stderr
+    assert "private-canary" not in result.stdout + result.stderr
+    events = _deploy_events(env)
+    assert "api-cli index repair-missing --json" not in events
+    assert not any("up -d --force-recreate api worker watcher" in event for event in events)
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("selected", [True, False])
+def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(tmp_path, monkeypatch, selected, *, broader=False, preserve_existing=False, registry_enabled=False):
+    """Native ordering reaches the real producer, PG CAS and strict doctor.
+
+    Retained replay is isolated here to leave one evidence-free
+    candidate for the new stage; all reconciliation and doctor SQL is real.
+    """
+    from types import SimpleNamespace
+    import psycopg
+    from click.testing import CliRunner
+    from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
+    from app.cli import cli
+    from app.cli import index_rebuild as repair
+    from app.index import doctor
+    from app.ops import native_source_bootstrap as native
+    from app.stores import pg
+    from app.db.dsn import resolve_dsn
+    from app.db.db import ensure_schema
+    from app.rebuildability.product_total_loss import evaluate_product_store_readiness
+
+    recovery, state, root, source, raw, original, _, _, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=selected)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1" if broader else "0")
+    monkeypatch.setenv("VAULT_DIR", str(root))
+    if registry_enabled:
+        from tests.rebuildability.test_legacy_source_reconciliation import _enable_registry
+        _enable_registry(monkeypatch, root)
+    pg._TABLES_READY = False
+    pg._ensure_tables()
+    pg.truncate_pg_tables()
+    store, index = pg.PgObjectStore(), pg.PgVectorIndex()
+    store.put(original["object_id"], kind="note", source_ref=str(source), payload=original["payload"])
+    healthy_id = None
+    healthy_payload = None
+    if preserve_existing:
+        from uuid import uuid4
+        from app.ingest.vault_alpha import _ingest_single
+        from app.index.artifact_metadata import build_indexed_unit_payload, canonicalize_indexable_text
+        healthy_id = uuid4()
+        healthy_source = root / "Notes" / "existing.md"
+        healthy_source.parent.mkdir(exist_ok=True)
+        healthy_raw = f"---\nuuid: {healthy_id}\ntrust: human\nreview_state: reviewed\n---\nPreserved retained note.\n"
+        healthy_source.write_text(healthy_raw)
+        prepared = []
+        _ingest_single(healthy_source, vault_root=root, trace_id="native-fixture",
+                      raw_text=healthy_raw, write_companion_record=False,
+                      reconcile_existing_projection=True, projection_sink=prepared.append)
+        healthy_payload = prepared[0]
+        store.put(healthy_id, kind="note", source_ref=str(healthy_source), payload=healthy_payload)
+        client = factory()
+        text = canonicalize_indexable_text(healthy_payload)
+        index.upsert(healthy_id, kind="note", source_ref=str(healthy_source),
+            payload=build_indexed_unit_payload(object_id=healthy_id, kind="note", source_ref=str(healthy_source),
+                payload=healthy_payload, text=text, embedding_identity=client.identity),
+            embedding=[2., 1.], model=client.identity.model, identity=client.identity)
+
+    def healthy_vector():
+        with psycopg.connect(resolve_dsn()) as conn:
+            return conn.execute("SELECT embedding::text, payload, model, provider, dim, normalize FROM store_vector_index "
+                "WHERE vault_binding_id = %s AND object_id = %s", (store.vault_binding_id, healthy_id)).fetchone()
+
+    protected_vector = healthy_vector() if healthy_id is not None else None
+    with psycopg.connect(resolve_dsn()) as conn:
+        ensure_schema(conn)
+        conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
+                     (original["object_id"], original["object_id"], store.vault_binding_id))
+        if healthy_id is not None:
+            conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
+                         (healthy_id, healthy_id, store.vault_binding_id))
+    binding = SimpleNamespace(backend="pg", store=store)
+    monkeypatch.setattr(repair.domain_objects, "resolve_object_store_port", lambda: binding)
+    monkeypatch.setattr(repair, "get_vector_index", lambda: index)
+    monkeypatch.setattr(repair, "get_product_embedding_client", factory)
+    monkeypatch.setattr(doctor, "get_vector_index", lambda: index)
+    monkeypatch.setattr(doctor, "get_embeddings_client", lambda *args, **kwargs: factory())
+    monkeypatch.setattr(native, "preflight", lambda selector: root)
+    events = []
+
+    def run(arguments):
+        events.append(arguments)
+        if arguments[0] == "settings":
+            return {}
+        if arguments[0] == "vault-alpha-ingest":
+            return dict(scanned=0, ingested=0, errors=0, malformed=0, skipped_locked=0, skipped_invalid=0)
+        result = CliRunner().invoke(cli, arguments)
+        assert result.exit_code == 0, result.output
+        return json.loads(result.output)
+
+    monkeypatch.setattr(native, "_run_json", run)
+    native.rebuild_if_needed("test:" + "a" * 40)
+    assert events.index(["index", "reconcile-legacy", "--json"]) < events.index(["index", "repair-missing", "--json"])
+    assert events[-1] == ["index", "doctor", "--json", "--strict"]
+    projected = store.get(original["object_id"])
+    if selected or broader or registry_enabled:
+        assert projected["payload"]["frontmatter"]["trust"] == "human"
+        assert projected["object_id"] == original["object_id"]
+        assert index.present_object_ids() == ({str(original["object_id"])} | ({str(healthy_id)} if healthy_id else set()))
+        assert state.embedded == [projected["payload"].get("content", "canonical body")]
+    else:
+        assert projected is None and index.present_object_ids() == ({str(healthy_id)} if healthy_id else set())
+        assert state.embedded == []
+    assert source.read_bytes() == raw
+    assert evaluate_product_store_readiness(root, store.list_objects(limit=None)).ready
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 0
+    if healthy_id is not None:
+        assert store.get(healthy_id)["payload"] == healthy_payload
+        assert healthy_vector() == protected_vector
+        assert healthy_source.read_text() == healthy_raw
+    pg.truncate_pg_tables()
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("producer_kind", ["disabled", "filesystem", "registry"])
+def test_native_legacy_reconciliation_reports_producer_policy_and_converges(tmp_path, monkeypatch, producer_kind):
+    test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(
+        tmp_path, monkeypatch, selected=False, broader=producer_kind == "filesystem", preserve_existing=True,
+        registry_enabled=producer_kind == "registry",
+    )
+
+
+@pytest.mark.parametrize("reason", ["source_post_rebuild_failed", "embedding_generation_failed",
+                                  "vector_index_write_failed"])
+def test_native_missing_vector_repair_refuses_ineligible_or_failed_rows(tmp_path: Path, reason) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    missing = json.dumps(dict(backend="PgVectorIndex", issues=["private-object-canary"],
+        rebuild_required=True, unembedded_object_count=1, non_vector_issue_count=0, pg_state={}))
+    env["FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"] = missing
+    env["FAKE_SOURCE_REPLAY_INDEX_SUMMARY"] = missing
+    _wire_real_missing_repair(root, env)
+    env["REAL_REPAIR_FAILURE"] = {"source_post_rebuild_failed": "ineligible",
+        "embedding_generation_failed": "embed", "vector_index_write_failed": "write"}[reason]
+    result = _run_deploy(root, env, sha, channel="dev")
+    assert result.returncode != 0
+    assert f"YGGDRASIL_DEPLOY_FAILURE_REASON={reason}" in result.stderr
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+    assert "private-object-canary" not in result.stdout + result.stderr
+    assert not any("up -d --force-recreate api worker watcher" in event
+                   for event in _deploy_events(env))
+    assert not list((root / "ops/deployments").glob("*.json"))
+
+
 def test_native_deploy_repairs_vector_only_gap_before_health_gate(tmp_path: Path) -> None:
     root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
     env["FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"] = json.dumps({
@@ -5719,6 +8585,73 @@ def test_native_deploy_reports_redacted_vector_projection_failure(tmp_path: Path
     assert ("YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed" in result.stderr) is (type(counter) is int and counter == 1)
     assert "hostile" not in result.stdout + result.stderr
     assert "/private/vault" not in result.stdout + result.stderr
+    assert not any("up -d --force-recreate api worker watcher" in event for event in _deploy_events(env))
+    assert not list((root / "ops/deployments").glob("*.json"))
+
+
+@pytest.mark.parametrize("reason,code", [("embedding_generation_failed", 80), ("vector_index_write_failed", 81)])
+def test_native_vector_write_failure_reaches_supervised_redacted_diagnostic(
+    tmp_path: Path, monkeypatch, reason: str, code: int,
+) -> None:
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    # Run the real CLI, note producer, and search projection. Only the
+    # infrastructure/provider seams are isolated, not a fabricated CLI summary.
+    (root / "app/ops/__init__.py").write_text("from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n")
+    note = root / "tmp" / "retained.md"
+    note.write_text("---\nuuid: 1c2428f2-0a13-498d-ae3a-12e5ce1bfd27\ntitle: Retained\n---\n\nFixture source body.\n")
+    cli_stub = root / "app/cli.py"
+    cli_stub.write_text(cli_stub.read_text().replace(
+        'if args[:1] == ["vault-alpha-ingest"]:',
+        '''if args[:1] == ["vault-alpha-ingest"]:
+    import importlib.util
+    package = Path(os.environ["REAL_CLI_PACKAGE"])
+    spec = importlib.util.spec_from_file_location("app.cli", package / "__init__.py", submodule_search_locations=[str(package)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["app.cli"] = module
+    spec.loader.exec_module(module)
+    module.cli()
+if args[:1] == ["vault-alpha-ingest"]:''',
+    ))
+    site = tmp_path / "api-python-fixture" / "sitecustomize.py"
+    site.write_text(site.read_text() + '''
+from app.ingest import vault_alpha
+from app.search import service
+from app import stores
+from app.components.embeddings import EmbeddingIdentity
+paths.resolve_optional_vault_root = lambda **kwargs: Path(os.environ["FAKE_API_VAULT"])
+from app.settings import runtime as settings_runtime
+from app.settings.models import SettingsBundle
+settings_runtime.get_settings_bundle = lambda: SettingsBundle()
+class RecoveryStore:
+    def put_and_reconcile_source_backed(self, object_id, **kwargs):
+        return str(object_id)
+class RefusedIndex:
+    def upsert(self, **kwargs):
+        raise RuntimeError("hostile-child-canary /private/vault password=do-not-leak")
+vault_alpha.get_object_store = lambda: RecoveryStore()
+vault_alpha._select_candidates = lambda *args, **kwargs: ([Path(os.environ["REAL_SOURCE_NOTE"])], ["."])
+vault_alpha.classify_run = lambda *args, **kwargs: {}
+stores.get_vector_index = lambda: RefusedIndex()
+def embed(texts):
+    if os.environ["REAL_SOURCE_FAILURE"] == "embedding_generation_failed":
+        raise RuntimeError("hostile-child-canary /private/vault password=do-not-leak")
+    return [[1.0, 0.0, 0.0]], EmbeddingIdentity(provider="mock", model="fixture", dim=3, normalize=True)
+service.embed_docs = embed
+''')
+    env.update(REAL_CLI_PACKAGE=str(REPO_ROOT / "app/cli"), REAL_SOURCE_NOTE=str(note),
+               REAL_SOURCE_FAILURE=reason, STORE_BACKEND="memory")
+    emitted: list[bytes] = []
+    monkeypatch.setattr(linux, "_emit_native_diagnostic", emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(["bash", str(root / "scripts/deploy_channel.sh"), "deploy", "dev", sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        "PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n"
+        f"MESSAGE=native deployment failure: stage=source_projection class={reason}\n"
+    ).encode("ascii")]
     assert not any("up -d --force-recreate api worker watcher" in event for event in _deploy_events(env))
     assert not list((root / "ops/deployments").glob("*.json"))
 
@@ -6032,6 +8965,49 @@ case "$*" in
     assert "hostile-child-canary" not in result.stdout + result.stderr
 
 
+@pytest.mark.parametrize(
+    ("worker_state", "expected_rc"),
+    [("running", 0), ("exited", 1)],
+)
+def test_source_projection_refusal_restores_complete_previous_runtime(
+    tmp_path: Path, worker_state: str, expected_rc: int
+) -> None:
+    """Compensation is healthy only when the complete runtime is running."""
+    script = SCRIPT.read_text(encoding="utf-8")
+    start = script.index("rollback_runtime_complete_gate()")
+    end = script.index("\nrollback_failed_startup()", start)
+    gate = script[start:end]
+    rows = json.dumps([
+        {"Service": "api", "State": "running", "Health": "healthy"},
+        {"Service": "worker", "State": worker_state, "Health": ""},
+        {"Service": "watcher", "State": "running", "Health": ""},
+    ])
+    compose = tmp_path / "compose"
+    compose.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"${FAKE_COMPOSE_ROWS:?}\"\n",
+        encoding="utf-8",
+    )
+    compose.chmod(0o755)
+    env = os.environ.copy()
+    env.update(COMPOSE_BIN=str(compose), FAKE_COMPOSE_ROWS=rows, PYTHON=sys.executable)
+    pin = tmp_path / 'channel.env'
+    pin.write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    result = subprocess.run(
+        ["bash", "-c", f'''source "$1"
+pin_file="$2"
+channel=dev
+compose() {{ "${{COMPOSE_BIN}}"; }}
+{gate}
+rollback_runtime_complete_gate''', '--', str(REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'), str(pin)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == expected_rc, result.stdout + result.stderr
+
+
 def test_native_source_timeout_terminates_descendants_even_when_parent_exits(tmp_path: Path) -> None:
     import time
     from app.ops.native_source_bootstrap import wait_for_owned_child
@@ -6209,6 +9185,8 @@ def test_native_source_api_oneoff_blocks_same_id_reconciliation(tmp_path: Path, 
         assert kwargs["timeout"] == 15
         commands.append(argv)
         if argv[:2] == ["docker", "ps"]:
+            if any(value.startswith('name=') for value in argv):
+                return ''
             inventories.append(argv)
             # A created/unknown one-off is absent from Docker's running-only
             # inventory. Exercise that omission through actual reconciliation.
@@ -6284,6 +9262,8 @@ def test_native_source_completed_oneoff_allows_same_id_reconciliation(tmp_path: 
         assert kwargs["timeout"] == 15
         commands.append(argv)
         if argv[:2] == ["docker", "ps"]:
+            if any(value.startswith('name=') for value in argv):
+                return ''
             assert "--all" in argv and "--no-trunc" in argv
             return container_id
         assert argv[:2] == ["docker", "inspect"]
@@ -6377,6 +9357,963 @@ def test_native_source_summary_unknown_is_not_empty_success(value) -> None:
     from app.ops.native_source_bootstrap import source_rebuild_counts
     with pytest.raises(ValueError):
         source_rebuild_counts(value)
+
+
+@pytest.mark.parametrize('fault,reason', [
+    ('identity', 'embedding_identity_unavailable'),
+    ('invalid_identity', 'embedding_identity_unavailable'),
+    ('service', 'embedding_service_unavailable'),
+    ('readiness', 'embedding_service_not_ready'),
+    ('pull', 'embedding_model_unavailable'),
+    ('model', 'embedding_model_not_ready'),
+    ('probe', 'embedding_probe_failed'),
+    ('context', 'embedding_context_invalid'),
+    ('host_identity', 'embedding_identity_invalid'),
+])
+def test_native_source_embedding_preflight_failures_are_finitely_attributed(tmp_path, monkeypatch, fault, reason):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
+    variables = {'identity': 'FAKE_EMBEDDING_IDENTITY_RC', 'service': 'FAKE_OLLAMA_UP_RC',
+                 'readiness': 'FAKE_OLLAMA_LIST_RC', 'pull': 'FAKE_OLLAMA_PULL_RC',
+                 'probe': 'FAKE_EMBEDDING_PROBE_RC'}
+    if fault in variables:
+        env[variables[fault]] = '42'
+    if fault in {'pull', 'model'}:
+        Path(env['FAKE_OLLAMA_MODEL_STATE_FILE']).unlink()
+    if fault == 'model':
+        docker = tmp_path / 'bin/docker'
+        docker.write_text(docker.read_text().replace(': > "${FAKE_OLLAMA_MODEL_STATE_FILE:?}"', ':'))
+    if fault == 'invalid_identity':
+        env['FAKE_EMBEDDING_IDENTITY_EXTRA_OUTPUT'] = 'hostile-child-canary /private/vault password=do-not-leak'
+    if fault in {'context', 'host_identity'}:
+        # These defensive branches sit behind earlier whole-deployment guards
+        # and Compose redaction. Execute the actual gate body with only that
+        # predecessor seam isolated, then use the real supervisor boundary.
+        script = SCRIPT.read_text()
+        gate = script[script.index('native_source_failure() {'):script.index('native_source_projection_gate() {')]
+        payload = '{"provider":"BAD", "model":"hostile-child-canary"}'
+        operation = 'invalid' if fault == 'context' else env['BWS_DEPLOY_OPERATION_ID']
+        command = (gate + '\naction=deploy\nactivation_scope=full\ntarget_sha=' + sha
+                   + '\nBWS_DEPLOY_OPERATION_ID=' + operation
+                   + '\ncompose() { printf \'%s\\n\' \' ' + payload + '\'; }\n'
+                   + 'native_source_embedding_preflight_gate\nrc=$?\n'
+                   + 'printf "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection\\n" >&2\nexit "$rc"\n')
+        emitted = []
+        monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+        with pytest.raises(PostgresDeployError):
+            linux._command(['bash', '-c', command], env=env, deploy_diagnostics=True)
+        assert emitted == [(
+            'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+            f'MESSAGE=native deployment failure: stage=source_projection class={reason}\n'
+        ).encode('ascii')]
+        return
+    if fault == 'readiness':
+        sleeper = tmp_path / 'bin/sleep'
+        sleeper.write_text('#!/bin/sh\nexit 0\n')
+        sleeper.chmod(0o755)
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        f'MESSAGE=native deployment failure: stage=source_projection class={reason}\n'
+    ).encode('ascii')]
+    assert 'source-rebuild' not in _deploy_events(env)
+    assert not list((root / 'ops/deployments').glob('*.json'))
+
+
+def test_supervised_compose_guard_refusal_has_reserved_status_before_docker(tmp_path):
+    root, env, sha = _native_source_harness(tmp_path, channel='dev', ready=True)
+    env['FAKE_BWS_COMPOSE_GUARD_RC'] = '42'
+    script = root / 'scripts/lib/deploy_channel_compose.sh'
+    result = subprocess.run(
+        ['bash', '-c', 'source "$1"; deploy_channel_compose "$2" dev docker-compose.dev.yml pkm-dev "$3" run',
+         'bash', str(script), str(root), str(root / 'config/deploy/dev.env')],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 120
+    assert not Path(env['FAKE_DEPLOY_EVENT_LOG']).exists()
+
+
+@pytest.mark.parametrize('guarded_call', [
+    'up',
+    'list',
+    'show',
+    'pull',
+    'NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER',
+])
+def test_native_embedding_probe_guard_refusal_is_distinct_from_probe_failures(tmp_path, monkeypatch, guarded_call):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
+    script = SCRIPT.read_text()
+    gate = script[script.index('native_source_failure() {'):script.index('native_source_projection_gate() {')]
+    show_failure = '    *ollama\\ show*) return 1 ;;\n' if guarded_call == 'pull' else ''
+    command = ('set -euo pipefail\n' + gate + '\naction=deploy\nactivation_scope=full\ntarget_sha=' + sha
+               + '\nBWS_DEPLOY_OPERATION_ID=' + env['BWS_DEPLOY_OPERATION_ID']
+               + '\nHOST_SECRET_RUNTIME_ENV_FILE_API=' + env['HOST_SECRET_RUNTIME_ENV_FILE_API']
+               + '''\ncompose() {
+  case "$*" in
+    *native-source-embedding-identity.v1*) printf '{"provider":"ollama","model":"nomic-embed-text:latest"}\\n' ;;
+    *''' + guarded_call + '''*) DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED=1; return 120 ;;
+''' + show_failure + '''
+    *) return 0 ;;
+  esac
+}\n'''
+               + 'if native_source_embedding_preflight_gate; then exit 0; else rc=$?; fi\n'
+               + 'printf "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection\\n" >&2\nexit "$rc"\n')
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', '-c', command], cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        'MESSAGE=native deployment failure: stage=source_projection class=embedding_guard_refused\n'
+    ).encode('ascii')]
+    assert not Path(env['FAKE_DEPLOY_EVENT_LOG']).exists()
+
+
+def test_native_embedding_identity_guard_refusal_is_distinct_from_probe_failures(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
+    env['FAKE_BWS_COMPOSE_GUARD_RC'] = '42'
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        'MESSAGE=native deployment failure: stage=source_projection class=embedding_guard_refused\n'
+    ).encode('ascii')]
+    assert 'source-rebuild' not in _deploy_events(env)
+
+
+def test_native_embedding_probe_unmarked_status_120_uses_generic_failure(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
+    script = SCRIPT.read_text()
+    gate = script[script.index('native_source_failure() {'):script.index('native_source_projection_gate() {')]
+    command = (gate + '\naction=deploy\nactivation_scope=full\ntarget_sha=' + sha
+               + '\nBWS_DEPLOY_OPERATION_ID=' + env['BWS_DEPLOY_OPERATION_ID']
+               + '\nHOST_SECRET_RUNTIME_ENV_FILE_API=' + env['HOST_SECRET_RUNTIME_ENV_FILE_API']
+               + '''\ncompose() {
+  case "$*" in
+    *native-source-embedding-identity.v1*) printf '{"provider":"ollama","model":"nomic-embed-text:latest"}\\n' ;;
+    *NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER*) return 120 ;;
+    *) return 0 ;;
+  esac
+}\n'''
+               + 'native_source_embedding_preflight_gate\nrc=$?\n'
+               + 'printf "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection\\n" >&2\nexit "$rc"\n')
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', '-c', command], cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        'MESSAGE=native deployment failure: stage=source_projection class=embedding_probe_failed\n'
+    ).encode('ascii')]
+
+
+@pytest.mark.parametrize('changes,ready,reason', [
+    ({'FAKE_API_CONTEXT_RC': '42'}, False, 'source_preflight_failed'),
+    ({'FAKE_SOURCE_SETTINGS_RC': '42'}, False, 'source_settings_failed'),
+    ({'FAKE_SOURCE_RC': '42'}, False, 'source_command_failed'),
+    ({'FAKE_SOURCE_SUMMARY': 'hostile-child-canary /private/vault password=do-not-leak'}, False, 'source_summary_invalid'),
+    ({'FAKE_SOURCE_SUMMARY': '{}'}, False, 'source_summary_invalid'),
+    ({'FAKE_SOURCE_PREADINESS': '0'}, False, 'source_post_rebuild_failed'),
+    ({'FAKE_SOURCE_INDEX_RC': '42'}, False, 'source_doctor_failed'),
+    ({'FAKE_SOURCE_INDEX_SUMMARY': '{}'}, False, 'source_doctor_failed'),
+    ({'FAKE_SOURCE_INDEX_PREFLIGHT_RC': '42'}, True, 'source_doctor_failed'),
+    ({'FAULT_READINESS': '1'}, False, 'source_readiness_failed'),
+    ({'FAULT_QUIESCENCE': '1'}, False, 'source_quiescence_failed'),
+    ({'FAULT_WORKER': '1'}, False, 'source_worker_failed'),
+])
+def test_native_source_bootstrap_generic_failures_are_finitely_attributed(tmp_path, monkeypatch, changes, ready, reason):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, sha = _native_source_harness(tmp_path, channel='dev', ready=ready)
+    env.update(changes)
+    if 'FAULT_READINESS' in changes:
+        site = tmp_path / 'api-python-fixture/sitecustomize.py'
+        site.write_text(site.read_text() + '\ndef fail_readiness(*args):\n    raise RuntimeError("hostile-child-canary /private/vault password=do-not-leak")\nrebuildability.evaluate_product_store_readiness = fail_readiness\n')
+    if 'FAULT_QUIESCENCE' in changes:
+        docker = tmp_path / 'bin/docker'
+        docker.write_text(docker.read_text().replace('case "$*" in\n', 'if [ "${1:-}" = ps ] && [[ "$*" == *source-bootstrap* ]]; then exit 42; fi\ncase "$*" in\n', 1))
+    if 'FAULT_WORKER' in changes:
+        bootstrap = root / 'app/ops/native_source_bootstrap.py'
+        bootstrap.write_text(bootstrap.read_text().replace('rebuild_if_needed(selector)', 'raise RuntimeError("hostile-child-canary /private/vault password=do-not-leak")'))
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        f'MESSAGE=native deployment failure: stage=source_projection class={reason}\n'
+    ).encode('ascii')]
+    assert not list((root / 'ops/deployments').glob('*.json'))
+
+
+@pytest.mark.parametrize('shape', ['valid', 'duplicate', 'injected', 'unknown', 'malformed', 'other_stage'])
+def test_supervised_source_projection_reasons_are_finite_and_fail_closed(monkeypatch, shape):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    for reason in linux._SOURCE_PROJECTION_FAILURE_REASONS:
+        stage = 'health' if shape == 'other_stage' else 'source_projection'
+        marker = f'YGGDRASIL_DEPLOY_FAILURE_REASON={reason}\n'
+        if shape == 'duplicate':
+            marker += marker
+        elif shape == 'injected':
+            marker = 'hostile-child-canary ' + marker
+        elif shape == 'unknown':
+            marker = 'YGGDRASIL_DEPLOY_FAILURE_REASON=hostile-child-canary\n'
+        elif shape == 'malformed':
+            marker = marker.rstrip() + ' /private/vault password=do-not-leak\n'
+        stderr = f'YGGDRASIL_DEPLOY_FAILURE_STAGE={stage}\n' + marker
+        monkeypatch.setattr(linux.subprocess, 'run', lambda *a, **kw: subprocess.CompletedProcess(a, 78, 'hostile stdout', stderr))
+        with pytest.raises(PostgresDeployError):
+            linux._command(['deployment'], deploy_diagnostics=True)
+        expected = reason if shape == 'valid' else 'command_failed'
+        assert emitted.pop() == (
+            'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+            f'MESSAGE=native deployment failure: stage={stage} class={expected}\n'
+        ).encode('ascii')
+
+
+@pytest.mark.parametrize('status,oom,reason', [
+    (82, False, 'source_preflight_failed'), (88, False, 'source_settings_failed'),
+    (83, False, 'source_readiness_failed'), (84, False, 'source_command_failed'),
+    (86, False, 'source_post_rebuild_failed'), (87, False, 'source_doctor_failed'),
+    (79, False, 'vector_projection_failed'), (124, False, 'source_worker_timeout'),
+    (143, False, 'source_worker_terminated'), (130, False, 'source_worker_terminated'),
+    (137, True, 'source_worker_oom'), (137, False, 'source_worker_failed'),
+    (96, False, 'source_worker_failed'), (97, False, 'source_worker_failed'),
+    (98, False, 'source_worker_failed'),
+    *[(status, False, 'source_worker_failed') for status in (114, 115, 116, 117, 118, 119, 255)],
+    (42, False, 'source_worker_failed'),
+])
+def test_native_source_worker_terminal_classes_survive_supervision(tmp_path, status, oom, reason, monkeypatch):
+    from app.ops import native_source_bootstrap as source, postgres_deploy_linux as linux
+    assert source.source_terminal_reason(status, oom_killed=oom) == reason
+    assert linux._deploy_failure_reason('YGGDRASIL_DEPLOY_FAILURE_REASON=' + reason, 'source_projection') == reason
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    removed = []
+    _source_terminal_docker(monkeypatch, journal, operation, plan.revision, status, oom, removed)
+    assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, status) == source.SOURCE_PROJECTION_FAILURE_CODES[reason]
+    assert removed == [reason]
+
+
+@pytest.mark.parametrize('changes,reason', [
+    ({'FAKE_API_CONTEXT_RC': '42'}, 'source_preflight_failed'),
+    ({'FAKE_SOURCE_SETTINGS_RC': '42'}, 'source_settings_failed'),
+    ({'FAKE_SOURCE_RC': '42'}, 'source_command_failed'),
+    ({'FAKE_SOURCE_PREADINESS': '0'}, 'source_post_rebuild_failed'),
+    ({'FAKE_SOURCE_INDEX_RC': '42'}, 'source_doctor_failed'),
+])
+def test_native_source_worker_checkpoint_failure_is_content_free_and_attributable(tmp_path, monkeypatch, changes, reason):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+    root, env, sha = _native_source_harness(tmp_path, channel='dev')
+    env.update(changes)
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert len(emitted) == 1 and ('class=' + reason).encode() in emitted[0]
+    assert b'hostile' not in b''.join(emitted) and b'/private' not in b''.join(emitted)
+
+
+def _source_terminal_journal(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal
+    operation = '03b3bb2f-6d85-499a-8b45-e397f56812e1'
+    _worker, _journal, plan, _operation = _bws_worker(tmp_path, _BwsVmEffects())
+    journal = DeployJournal(tmp_path / 'retained', 'test')
+    journal.bind_request(operation, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation, stage)
+    monkeypatch.setenv('BWS_DEPLOY_OPERATION_ID', operation)
+    monkeypatch.setenv('BWS_DEPLOY_TARGET_REVISION', plan.revision)
+    monkeypatch.setattr(linux, 'inherited_worker_guard', lambda channel: None)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda channel: SimpleNamespace(
+        journal=journal, channel='test', root=tmp_path / 'checkout'))
+    return journal, operation, plan
+
+
+def _source_terminal_docker(monkeypatch, journal, operation, revision, status, oom, removed, fault=None):
+    from app.ops import native_source_bootstrap as source
+    def docker(argv, **kwargs):
+        command = argv[1]
+        output = ''
+        if command == 'ps':
+            hidden_foreign = fault in {'project', 'service', 'oneoff'} and any(
+                value.startswith('label=com.docker.compose.') for value in argv)
+            output = '' if removed or hidden_foreign else '0123456789ab'
+        elif command == 'inspect':
+            if 'ExitCode' in argv[3]:
+                state = fault if fault in {'created', 'removing', 'unknown'} else 'exited'
+                output = f'{state} {status} {str(oom).lower()}' if fault != 'malformed' else 'private output'
+            else:
+                op = operation if fault != 'foreign' else '00000000-0000-4000-8000-000000000002'
+                project = 'pkm-foreign' if fault == 'project' else 'pkm-test'
+                service = 'worker' if fault == 'service' else 'api'
+                oneoff = 'False' if fault == 'oneoff' else 'True'
+                output = f'/pkm-test-source-bootstrap-{operation} {project} {service} {oneoff} {op} {revision} false'
+        elif command == 'rm':
+            removed.append(journal.read().source_failure)
+        else:
+            raise AssertionError(command)
+        return subprocess.CompletedProcess(argv, 0, output, '')
+    monkeypatch.setattr(source.subprocess, 'run', docker)
+    return docker
+
+
+@pytest.mark.parametrize('interrupted_before_observation', [False, True])
+@pytest.mark.parametrize('already_failed', [False, True])
+@pytest.mark.parametrize('worker_status,oom,reason', [(137, True, 'source_worker_oom'),
+    (96, False, 'source_worker_failed'), (97, False, 'source_worker_failed'),
+    (98, False, 'source_worker_failed'),
+    *[(status, False, 'source_worker_failed') for status in (114, 115, 116, 117, 118, 119, 255)]])
+def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliation(tmp_path, monkeypatch, interrupted_before_observation, already_failed, worker_status, oom, reason):
+    from dataclasses import asdict
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_CODES
+    from app.ops.postgres_deploy import PostgresDeployError
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    removed = []
+    docker = _source_terminal_docker(monkeypatch, journal, operation, plan.revision, worker_status, oom, removed)
+    if not interrupted_before_observation:
+        assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, worker_status) == SOURCE_PROJECTION_FAILURE_CODES[reason]
+        assert removed == [reason]
+    if already_failed:
+        journal.write(operation, 'failed')
+    config = linux.LinuxConfig.load('test')
+    lock = config.root / 'config/deploy/test.env.lock'
+    lock.mkdir(parents=True, mode=0o700)
+    (lock / 'bws-owner').touch(mode=0o600)
+    monkeypatch.setattr(linux.LinuxEffects, 'quiescent', lambda self: True)
+    monkeypatch.setattr(linux.LinuxEffects, 'activate', lambda *args: pytest.fail('must not replay'))
+    monkeypatch.setattr(linux, '_command', lambda argv, **kwargs: docker(argv, **kwargs).stdout)
+    supervisor = linux.DeploymentSupervisor(config)
+    request = {'action': 'reconcile-failed', 'operation_id': operation, 'plan': asdict(plan), 'bootstrap': False}
+    result = supervisor.request(request)
+    assert result['receipt']['source_failure'] == reason
+    assert removed == [reason] and not lock.exists()
+    assert supervisor.request({**request, 'action': 'join'}) == result
+    with pytest.raises(PostgresDeployError):
+        journal.record_source_failure(operation, 'f' * 40, 'source_worker_failed')
+    assert journal.read().source_failure == reason
+
+
+@pytest.mark.parametrize('reason', [
+    'legacy_candidate_refused', 'legacy_authority_refused', 'legacy_trust_refused',
+    'legacy_origin_refused', 'legacy_payload_shape_refused', 'legacy_system_path_refused',
+    'legacy_profile_refused', 'legacy_dependency_shape_refused',
+    'legacy_retained_history_refused', 'legacy_relation_retention_refused',
+])
+def test_native_legacy_admission_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, reason):
+    from dataclasses import asdict
+    from click.testing import CliRunner
+    from app.cli import cli, index_rebuild
+    from app.ops import native_source_bootstrap as native, postgres_deploy_linux as linux
+    from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
+
+    # Exercise the actual private CLI serialization, then send that exact
+    # summary through the native subprocess/bootstrap and shell wrapper path.
+    fixture = tmp_path / 'source'
+    fixture.mkdir()
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, fixture)
+    monkeypatch.setattr(index_rebuild.domain_objects, 'resolve_object_store_port', lambda: binding)
+    monkeypatch.setattr(index_rebuild, 'get_vector_index', lambda: index)
+    monkeypatch.setattr(index_rebuild, 'get_product_embedding_client', factory)
+
+    def refuse(*args, **kwargs):
+        raise recovery.LegacySourceRefusal(reason)
+
+    monkeypatch.setattr(recovery, 'reconcile_legacy_sources', refuse)
+    cli_result = CliRunner().invoke(cli, ['index', 'reconcile-legacy', '--json'])
+    assert cli_result.exit_code == 79 and json.loads(cli_result.output) == {'reason': reason}
+    harness = tmp_path / 'deploy'
+    harness.mkdir()
+    root, env, sha = _native_source_harness(harness, channel='dev', ready=True)
+    missing = json.dumps(dict(backend='PgVectorIndex', issues=['missing vector'], rebuild_required=True,
+        unembedded_object_count=1, non_vector_issue_count=0, pg_state={}))
+    env.update(FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY=missing, FAKE_SOURCE_REPLAY_INDEX_SUMMARY=missing,
+               FAKE_LEGACY_RECONCILIATION_SUMMARY=cli_result.output, FAKE_LEGACY_RECONCILIATION_RC='79')
+    diagnostics = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', diagnostics.append)
+    with pytest.raises(linux.PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert len(diagnostics) == 1 and ('class=' + reason).encode() in diagnostics[0]
+    assert b'hostile' not in b''.join(diagnostics) and b'/private' not in b''.join(diagnostics)
+    events = _deploy_events(env)
+    assert 'api-cli index repair-missing --json' not in events
+    assert not any('up -d --force-recreate api worker watcher' in event for event in events)
+
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    removed = []
+    status = native.SOURCE_PROJECTION_FAILURE_CODES[reason]
+    docker = _source_terminal_docker(monkeypatch, journal, operation, plan.revision, status, False, removed)
+    assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, status) == status
+    assert removed == [reason]  # Durable attribution precedes container removal.
+    journal.write(operation, 'failed')
+    config = linux.LinuxConfig.load('test')
+    lock = config.root / 'config/deploy/test.env.lock'
+    lock.mkdir(parents=True, mode=0o700)
+    (lock / 'bws-owner').touch(mode=0o600)
+    monkeypatch.setattr(linux.LinuxEffects, 'quiescent', lambda self: True)
+    monkeypatch.setattr(linux.LinuxEffects, 'activate', lambda *args: pytest.fail('must not replay'))
+    monkeypatch.setattr(linux, '_command', lambda argv, **kwargs: docker(argv, **kwargs).stdout)
+    supervisor = linux.DeploymentSupervisor(config)
+    request = {'action': 'reconcile-failed', 'operation_id': operation, 'plan': asdict(plan), 'bootstrap': False}
+    result = supervisor.request(request)
+    assert result['receipt']['source_failure'] == reason
+    assert supervisor.request({**request, 'action': 'join'}) == result
+    assert removed == [reason] and not lock.exists()
+
+
+@pytest.mark.parametrize('reason', [
+    'legacy_identity_persistence_refused', 'legacy_identity_mismatch_refused',
+    'legacy_identity_ambiguous_refused', 'legacy_identity_producer_refused',
+    'legacy_identity_canonical_refused',
+])
+def test_native_legacy_identity_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, reason):
+    test_native_legacy_admission_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, reason)
+
+
+def test_native_source_same_id_reply_keeps_locked_snapshot_after_admission_retirement(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    from app.ops import postgres_deploy_linux as linux
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    journal.record_source_failure(operation, plan.revision, 'source_worker_failed')
+    journal.write(operation, 'failed')
+    config = linux.LinuxConfig.load('test')
+    lock = config.root / 'config/deploy/test.env.lock'
+    lock.mkdir(parents=True, mode=0o700)
+    (lock / 'bws-owner').touch(mode=0o600)
+    monkeypatch.setattr(linux.LinuxEffects, 'quiescent', lambda self: True)
+    monkeypatch.setattr(linux, '_command', lambda *args, **kwargs: '')
+    retire = linux.LinuxEffects.retire_reconciled_channel_lock
+    replacement = '00000000-0000-4000-8000-000000000002'
+    def replace_after_retirement(handle):
+        retire(handle)
+        journal.bind_request(replacement, plan, False, create=True)
+        journal.write(replacement, 'prepared')
+    monkeypatch.setattr(linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(replace_after_retirement))
+    result = linux.DeploymentSupervisor(config).request({
+        'action': 'reconcile-failed', 'operation_id': operation, 'plan': asdict(plan), 'bootstrap': False,
+    })
+    assert result['receipt']['operation_id'] == operation
+    assert result['receipt']['source_failure'] == 'source_worker_failed'
+    assert journal.read().operation_id == replacement
+
+
+@pytest.mark.parametrize('fault', ['foreign', 'project', 'service', 'oneoff', 'malformed', 'created', 'removing', 'unknown', 'journal_unavailable'])
+def test_native_source_terminal_evidence_failure_preserves_container(tmp_path, monkeypatch, fault):
+    from app.ops import postgres_deploy_linux as linux
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    removed = []
+    _source_terminal_docker(monkeypatch, journal, operation, plan.revision, 137, True, removed, fault)
+    if fault == 'journal_unavailable':
+        def fail(*args):
+            raise OSError('private evidence path')
+        monkeypatch.setattr(journal, '_persist', fail)
+    with pytest.raises(Exception):
+        linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, 137)
+    assert removed == []
+    assert journal.read().source_failure is None
+
+
+def test_native_source_terminal_retry_reestablishes_durability_before_removal(tmp_path, monkeypatch):
+    import stat
+    from app.ops import postgres_deploy_linux as linux
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    removed = []
+    _source_terminal_docker(monkeypatch, journal, operation, plan.revision, 137, True, removed)
+    original_fsync = os.fsync
+    directory_identity = journal.directory.stat()
+    failed = False
+    directory_syncs = []
+    def fsync(descriptor):
+        nonlocal failed
+        renamed = json.loads((journal.directory / 'test.json').read_text()).get('source_failure') == 'source_worker_oom'
+        info = os.fstat(descriptor)
+        if (stat.S_ISDIR(info.st_mode) and renamed
+            and (info.st_dev, info.st_ino) == (directory_identity.st_dev, directory_identity.st_ino)):
+            if not failed:
+                failed = True
+                raise OSError('private sync diagnostic')
+            directory_syncs.append('synced')
+        return original_fsync(descriptor)
+    monkeypatch.setattr(os, 'fsync', fsync)
+    with pytest.raises(Exception):
+        linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, 137)
+    # Read bytes directly: journal.read itself re-fsyncs the directory, so using
+    # it here would repair the injected failure before the production retry.
+    assert json.loads((journal.directory / 'test.json').read_text())['source_failure'] == 'source_worker_oom'
+    assert removed == []
+    assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, 137) == 98
+    assert directory_syncs and removed == ['source_worker_oom']
+
+
+@pytest.mark.parametrize('compose_status,worker_status,reason', [
+    (1, 82, 'source_preflight_failed'), (1, 79, 'vector_projection_failed'),
+    (1, 0, 'source_worker_failed'), (124, 0, 'source_worker_timeout'),
+    (143, 0, 'source_worker_terminated'), (1, 98, 'source_worker_failed'),
+    *[(1, status, 'source_worker_failed') for status in (114, 115, 116, 117, 118, 119, 255)],
+])
+def test_native_source_docker_worker_state_survives_compose_transport_failure(tmp_path, monkeypatch, compose_status, worker_status, reason):
+    from app.ops import native_source_bootstrap as source, postgres_deploy_linux as linux
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    removed = []
+    _source_terminal_docker(monkeypatch, journal, operation, plan.revision, worker_status, False, removed)
+    assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, compose_status) == source.SOURCE_PROJECTION_FAILURE_CODES[reason]
+    assert removed == [reason]
+
+
+@pytest.mark.parametrize('helper_status', [1, 42, 78, 114, 115, 116, 117, 118, 119, 124, 130, 137, 143, 255])
+def test_native_source_unexpected_cleanup_helper_exit_never_admits_writer_restart(tmp_path, helper_status):
+    root, env, sha = _native_source_harness(tmp_path, channel='dev')
+    env['FAKE_SOURCE_RC'] = '42'
+    adapter = root / 'app/ops/postgres_deploy_linux.py'
+    adapter.write_text(adapter.read_text() + f'\ndef record_source_terminal(*args):\n    raise SystemExit({helper_status})\n')
+    result = _run_deploy(root, env, sha)
+    assert result.returncode == 78
+    assert 'YGGDRASIL_DEPLOY_FAILURE_REASON=source_quiescence_failed' in result.stderr
+    assert 'native source producer quiescence is unproven' in result.stderr
+    assert not any('up -d --force-recreate api' in event for event in _deploy_events(env))
+
+
+def test_native_source_foreign_exact_name_cannot_hide_behind_ownership_filters(tmp_path):
+    root, env, sha = _native_source_harness(tmp_path, channel='dev')
+    env['FAKE_SOURCE_RC'] = '42'
+    docker = tmp_path / 'bin/docker'
+    docker.write_text(docker.read_text().replace('case "$*" in\n', '''if [ "${1:-}" = ps ] && [[ "$*" == *source-bootstrap* ]]; then
+  if [[ "$*" != *label=com.docker.compose.* ]]; then printf '0123456789ab\\n'; fi
+  exit 0
+fi
+if [ "${1:-}" = inspect ] && [[ "$*" == *State.Running* ]]; then
+  printf '/pkm-dev-source-bootstrap-%s pkm-foreign api True %s %s false\\n' \\
+    "${BWS_DEPLOY_OPERATION_ID}" "${BWS_DEPLOY_OPERATION_ID}" "${BWS_DEPLOY_TARGET_REVISION}"
+  exit 0
+fi
+case "$*" in
+''', 1))
+    result = _run_deploy(root, env, sha)
+    assert result.returncode == 78
+    assert 'YGGDRASIL_DEPLOY_FAILURE_REASON=source_quiescence_failed' in result.stderr
+    assert 'native source producer quiescence is unproven' in result.stderr
+    assert not any('up -d --force-recreate api' in event for event in _deploy_events(env))
+
+
+def test_native_source_failure_after_embedding_progress_keeps_only_fixed_reason(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+    root, env, sha = _native_source_harness(tmp_path, channel='dev')
+    cli = root / 'app/cli.py'
+    cli.write_text(cli.read_text().replace(
+        'if args[:1] == ["vault-alpha-ingest"]:',
+        '''if args[:1] == ["vault-alpha-ingest"]:
+    def embedding_call():
+        with open(os.environ['FAKE_DEPLOY_EVENT_LOG'], 'a') as progress:
+            progress.write('embedding-success\\n')
+        return [0.1, 0.2]
+    for _ in range(400):
+        assert len(embedding_call()) == 2
+        print("private successful embedding payload /private/vault")
+    raise SystemExit(42)
+'''))
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert len(emitted) == 1 and b'class=source_command_failed' in emitted[0]
+    assert _deploy_events(env).count('embedding-success') == 400
+    assert b'private' not in b''.join(emitted) and b'payload' not in b''.join(emitted)
+
+
+_EMBEDDING_PROBE_REASONS = [
+    'embedding_probe_client_failed', 'embedding_probe_identity_mismatch',
+    'embedding_probe_generation_failed', 'embedding_probe_vector_invalid',
+    'embedding_probe_cleanup_failed',
+]
+
+
+@pytest.mark.parametrize('fault,status', [
+    ('client', 114), ('identity', 114), ('mismatch', 115), ('generation', 116),
+    ('dimension', 117), ('shape', 117), ('nan', 0), ('cleanup', 118),
+    ('generation_cleanup', 116), ('unexpected', 78), ('success', 0),
+])
+def test_native_embedding_probe_subreasons_cover_production_call_site(tmp_path, fault, status):
+    assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
+                      if line.strip().startswith("probe_command=$'"))
+    extracted = subprocess.run(['bash', '-c', assignment + '\nprintf "%s" "$probe_command"'],
+                               capture_output=True, text=True, check=True)
+    # Replace only the provider factory at the actual production import seam.
+    setup = '''import sys, types
+from types import SimpleNamespace
+fault = sys.argv[1]
+events = []
+def fail():
+    raise RuntimeError('private-provider-canary /private/vault credential=secret')
+class Client:
+    @property
+    def identity(self):
+        events.append('identity')
+        if fault == 'identity': fail()
+        return SimpleNamespace(provider='mock' if fault == 'mismatch' else 'ollama', model='selected', dim=2)
+    def embed_text(self, text):
+        events.append('embed')
+        assert text == 'Yggdrasil deployment preflight'
+        if fault in {'generation', 'generation_cleanup'}: fail()
+        if fault == 'unexpected': raise SystemExit(78)
+        return {'dimension': [0.0], 'shape': 'xx', 'nan': [float('nan'), 0.0]}.get(fault, [0.0, 1.0])
+    def close(self):
+        events.append('close')
+        if fault in {'cleanup', 'generation_cleanup'}: fail()
+def factory():
+    events.append('client')
+    if fault == 'client': fail()
+    return Client()
+module = types.ModuleType('app.components.llm.fabric')
+module.get_product_embedding_client = factory
+module.RemoteEmbeddingIdentityError = type('RemoteEmbeddingIdentityError', (Exception,), {})
+module.RemoteEmbeddingVectorError = type('RemoteEmbeddingVectorError', (Exception,), {})
+sys.modules['app.components.llm.fabric'] = module
+'''
+    # Even refusal must close an acquired client; no exception payload escapes.
+    wrapper = (setup + '\ntry:\n    exec(' + repr(extracted.stdout)
+               + ')\nfinally:\n    assert events.count("embed") <= 1\n'
+               + '    assert events.count("close") == (0 if fault == "client" else 1)\n')
+    result = subprocess.run([sys.executable, '-c', wrapper, fault], cwd=tmp_path,
+                            env={**os.environ, 'NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER': 'ollama',
+                                 'NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL': 'selected'},
+                            capture_output=True, text=True)
+    assert result.returncode == status
+    assert result.stdout == result.stderr == ''
+
+
+@pytest.mark.parametrize('status,reason', list(enumerate(_EMBEDDING_PROBE_REASONS, 114)) + [(42, 'embedding_probe_failed')])
+def test_native_embedding_probe_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, status, reason):
+    from dataclasses import asdict
+    from app.ops import postgres_deploy_linux as linux
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
+    journal, operation, plan = _source_terminal_journal(tmp_path / 'journal-test', monkeypatch)
+    env['FAKE_EMBEDDING_PROBE_RC'] = str(status)
+    diagnostics = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', diagnostics.append)
+    with pytest.raises(linux.PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True,
+                       retain_source_failure=lambda value: journal.record_source_failure(
+                           operation, plan.revision, value))
+    assert len(diagnostics) == 1 and ('class=' + reason + '\n').encode() in diagnostics[0]
+    assert 'source-rebuild' not in _deploy_events(env)
+    assert not any('stop' in event for event in _deploy_events(env))
+    # Journal exactly the supervised, allowlisted result; reconciliation cannot replay it.
+    assert journal.read().source_failure == reason
+    journal.write(operation, 'failed')
+    config = linux.LinuxConfig.load('test')
+    monkeypatch.setattr(linux.LinuxEffects, 'activate', lambda *args: pytest.fail('must not replay'))
+    supervisor = linux.DeploymentSupervisor(config)
+    result = supervisor.request({'action': 'join', 'operation_id': operation,
+                                 'plan': asdict(plan), 'bootstrap': False})
+    assert result['receipt']['source_failure'] == reason
+
+
+@pytest.mark.parametrize('boundary,fault,status', [
+    (boundary, fault, status) for boundary in ['fabric', 'transport']
+    for fault, status in [('model', 115), ('dimension', 117), ('shape', 117),
+        ('nonfinite', 117), ('cleanup', 118), ('model_cleanup', 115),
+        ('generation_cleanup', 116), ('success', 0)]
+] + [('transport', fault, status) for fault, status in [
+    ('bool_vector', 117), ('string_vector', 117), ('container', 117), ('nested', 117),
+    ('empty', 117), ('bool_dimension', 117), ('string_dimension', 117), ('zero_dimension', 117),
+    ('provider', 115), ('transport', 116), ('metadata', 116), ('extra', 116),
+    ('missing_vector', 116), ('malformed_json', 116), ('nan_json', 116), ('inf_json', 116),
+    ('integer_overflow', 116),
+]])
+def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, capsys, boundary, fault, status):
+    if boundary == 'fabric' and fault == 'nonfinite':
+        status = 0  # Preserve the existing custom-client policy; real wire transport refuses.
+    import httpx
+    from types import SimpleNamespace
+    from app.components.llm import fabric
+    from app.components.embeddings import EmbeddingIdentity
+    from app.model_access import executor_network_policy as network
+    from app.model_access.codex_remote_transport import (
+        CodexRemoteTransport, RemoteEmbeddingError, RemoteEmbeddingIdentityError, RemoteEmbeddingVectorError,
+    )
+    from app.model_access.remote_contract import ProductEmbeddingResponse
+
+    body = {'route': {'provider': 'ollama', 'model': 'other' if fault in {'model', 'model_cleanup'} else 'selected:latest',
+                     'transport_id': 'ollama_http', 'catalog_snapshot_ref': 'catalog.synthetic',
+                     'catalog_snapshot_hash': 'sha256:' + 'a' * 64},
+            'dimensions': 3 if fault == 'dimension' else 2,
+            'vector': [0.25] * (3 if fault == 'dimension' else 2)}
+    if fault == 'shape':
+        body['vector'] = [0.25]
+    if fault == 'nonfinite':
+        body['vector'] = [float('inf'), 0.25]
+    vector_faults = {'bool_vector': [True, 0.25], 'string_vector': ['0.25', 0.25],
+        'container': {'a': 0.25, 'b': 0.25}, 'nested': [[0.25], [0.25]], 'empty': [],
+        'integer_overflow': [10 ** 400, 0.25]}
+    if fault in vector_faults:
+        body['vector'] = vector_faults[fault]
+    if fault.endswith('_dimension'):
+        body['dimensions'] = {'bool_dimension': True, 'string_dimension': '2', 'zero_dimension': 0}[fault]
+    if fault == 'provider':
+        body['route'].update(provider='gemini', transport_id='gemini_api')
+    if fault == 'transport':
+        body['route']['transport_id'] = 'unknown'
+    if fault == 'metadata':
+        body['route']['catalog_snapshot_hash'] = 'private-provider-canary'
+    if fault == 'extra':
+        body['private-provider-canary'] = 'private payload'
+    if fault == 'missing_vector':
+        del body['vector']
+    requests, closed = [], []
+    def send(request):
+        requests.append(request)
+        if fault == 'generation_cleanup':
+            return httpx.Response(503, content='private-provider-canary /private/vault credential=secret')
+        if fault == 'malformed_json':
+            return httpx.Response(200, content='private-provider-canary not-json')
+        if fault in {'nan_json', 'inf_json'}:
+            return httpx.Response(200, content=json.dumps({**body, 'vector': [
+                float('nan') if fault == 'nan_json' else float('inf'), 0.25]}))
+        # JSON overflow is schema-valid in the existing response contract,
+        # unlike the explicit NaN/Infinity constants rejected by the decoder.
+        return httpx.Response(200, content=json.dumps(body).replace('Infinity', '1e400'))
+    if boundary == 'transport':
+        remote = CodexRemoteTransport(endpoint='https://synthetic-executor.test.ts.net',
+                                     transport=httpx.MockTransport(send))
+        embed = remote.embed_product
+    else:
+        def embed(request):
+            requests.append(request)
+            if fault == 'generation_cleanup':
+                raise RemoteEmbeddingError('embedding_http_503', indeterminate=True)
+            if fault == 'shape':
+                return SimpleNamespace(route=SimpleNamespace(**body['route']),
+                                       dimensions=body['dimensions'], vector=body['vector'])
+            return ProductEmbeddingResponse.model_validate({**body, 'vector': tuple(body['vector'])})
+    def close():
+        closed.append(True)
+        if boundary == 'transport':
+            remote.close()
+        if fault == 'cleanup' or fault.endswith('_cleanup'):
+            raise RuntimeError('private-cleanup-canary /private/vault credential=secret')
+    transport = SimpleNamespace(embed_product=embed, close=close)
+    monkeypatch.setattr(network, 'resolve_executor_paths', lambda *a, **kw: [
+        SimpleNamespace(path_profile='synthetic')])
+    router = network.ExecutorNetworkPathRouter(transport_factory=lambda path: transport)
+    identity = EmbeddingIdentity(provider='ollama', model='selected:latest', dim=2)
+    errors = []
+    original_embed = fabric._RemoteProductEmbeddingClient.embed_text
+    def observed_embed(self, text):
+        try:
+            return original_embed(self, text)
+        except RemoteEmbeddingError as exc:
+            errors.append(exc)
+            raise
+    monkeypatch.setattr(fabric._RemoteProductEmbeddingClient, 'embed_text', observed_embed)
+    def routed(intent):
+        assert intent.task_kind == 'embed' and intent.strict_identity_required
+        return SimpleNamespace(embedding_identity=identity)
+    monkeypatch.setattr(fabric, 'LLMRouter', lambda: SimpleNamespace(route=routed))
+    monkeypatch.setattr(fabric, 'load_models', lambda: {'selected': SimpleNamespace(
+        kind='embedding', provider='ollama', model='selected:latest', dims=2,
+        allowed_transports=('ollama_http',))})
+    monkeypatch.setattr(fabric, '_adapter_factory', lambda: SimpleNamespace(
+        adapter_id_for=lambda *a, **kw: 'ollama_http', describe=lambda *a, **kw: None))
+    monkeypatch.setattr(fabric, '_new_executor_path_router', lambda **kw: router)
+    monkeypatch.setenv('NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER', 'ollama')
+    monkeypatch.setenv('NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL', 'selected:latest')
+    assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
+                      if line.strip().startswith("probe_command=$'"))
+    probe = subprocess.run(['bash', '-c', assignment + '\nprintf "%s" "$probe_command"'],
+                           capture_output=True, text=True, check=True).stdout
+    with pytest.raises(SystemExit) as exit_info:
+        exec(probe, {})
+    assert exit_info.value.code == status
+    assert len(requests) == len(closed) == 1
+    assert fabric.RemoteEmbeddingError is RemoteEmbeddingError
+    if status in {115, 116, 117}:
+        assert len(errors) == 1 and errors[0].indeterminate
+        if status != 116:
+            assert isinstance(errors[0], RemoteEmbeddingIdentityError if status == 115 else RemoteEmbeddingVectorError)
+        assert str(errors[0]) == errors[0].code == (
+            'embedding_http_503' if fault == 'generation_cleanup'
+            else 'embedding_response_invalid' if boundary == 'transport' and (
+                fault == 'shape' or fault in vector_faults or fault.endswith('_dimension') or status == 116)
+            else 'embedding_route_or_dimension_mismatch')
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ''
+
+
+def test_native_embedding_probe_success_keeps_exact_identity_and_precedes_projection(tmp_path):
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path, ready=False)
+    result = _run_deploy(root, env, sha)
+    assert result.returncode == 0, result.stderr
+    events = _deploy_events(env)
+    probe = next(i for i, event in enumerate(events) if event.startswith('embedding-probe '))
+    assert probe < events.index('source-rebuild')
+
+
+@pytest.mark.parametrize('normalize', [False, True])
+@pytest.mark.parametrize('values,normal_status,raw_status', [
+    ([True, False], 0, 0), (['1.0', '2.0'], 0, 0), (['bad', '2.0'], 116, 0),
+    ([float('nan'), 1.0], 0, 0), ([float('inf'), 1.0], 0, 0),
+    ([0.25], 116, 116), ([], 116, 116), ('12', 0, 0), ([[], []], 116, 0),
+])
+def test_embedding_probe_preserves_profiled_factory_vector_policy(monkeypatch, normalize, values, normal_status, raw_status):
+    from types import SimpleNamespace
+    from app.components.llm import fabric
+    from app.components.embeddings.legacy import EmbeddingIdentity, _ProfiledEmbeddingClient
+    from app.llm import embeddings
+    identity = EmbeddingIdentity(provider='mock', model='mock-embedding', dim=2, normalize=normalize)
+    def route(intent):
+        assert intent.task_kind == 'embed' and intent.strict_identity_required
+        return SimpleNamespace(embedding_identity=identity)
+    monkeypatch.setattr(fabric, 'LLMRouter', lambda: SimpleNamespace(route=route))
+    monkeypatch.setattr(fabric, '_new_executor_path_router', lambda **kw: pytest.fail('legacy mock must stay local'))
+    calls = []
+    def adapter(text, **kwargs):
+        calls.append(text)
+        return values
+    monkeypatch.setitem(embeddings.PROVIDER_REGISTRY, 'mock', adapter)
+    monkeypatch.setenv('EMBED_MAX_INPUT_CHARS', '6000')
+    monkeypatch.setenv('NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER', 'mock')
+    monkeypatch.setenv('NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL', 'mock-embedding')
+    assert isinstance(fabric.get_product_embedding_client(), _ProfiledEmbeddingClient)
+    assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
+                      if line.strip().startswith("probe_command=$'"))
+    probe = subprocess.run(['bash', '-c', assignment + '\nprintf "%s" "$probe_command"'],
+                           capture_output=True, text=True, check=True).stdout
+    embeddings._embed_single.cache_clear()
+    try:
+        with pytest.raises(SystemExit) as exit_info:
+            exec(probe, {})
+        assert exit_info.value.code == (normal_status if normalize else raw_status)
+        assert calls == ['Yggdrasil deployment preflight']
+    finally:
+        embeddings._embed_single.cache_clear()
+
+
+@pytest.mark.parametrize('fault', ['identity', 'registry_dimension'])
+def test_embedding_probe_actual_factory_acquisition_refuses_before_transport(monkeypatch, fault):
+    from types import SimpleNamespace
+    from app.components.llm import fabric
+    from app.components.embeddings import EmbeddingIdentity
+    identity = EmbeddingIdentity(provider='ollama', model='selected:latest', dim=2)
+    def route(intent):
+        assert intent.task_kind == 'embed' and intent.strict_identity_required
+        return SimpleNamespace(embedding_identity=None if fault == 'identity' else identity)
+    monkeypatch.setattr(fabric, 'LLMRouter', lambda: SimpleNamespace(route=route))
+    monkeypatch.setattr(fabric, 'load_models', lambda: {'selected': SimpleNamespace(
+        kind='embedding', provider='ollama', model='selected:latest', dims=3)})
+    monkeypatch.setattr(fabric, '_new_executor_path_router', lambda **kw: pytest.fail('no transport before acquisition'))
+    assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
+                      if line.strip().startswith("probe_command=$'"))
+    probe = subprocess.run(['bash', '-c', assignment + '\nprintf "%s" "$probe_command"'],
+                           capture_output=True, text=True, check=True).stdout
+    with pytest.raises(SystemExit) as exit_info:
+        exec(probe, {})
+    assert exit_info.value.code == 114
+
+
+@pytest.mark.parametrize('checked', [False, True])
+def test_embedding_router_cleanup_keeps_normal_policy_and_checks_all_unique_transports(monkeypatch, checked):
+    from types import SimpleNamespace
+    from app.model_access import executor_network_policy as network
+    from app.components.llm.fabric import _RemoteProductEmbeddingClient
+    from app.components.embeddings import EmbeddingIdentity
+    closed = []
+    def fail():
+        closed.append('failed')
+        raise RuntimeError('private-cleanup-canary /private/vault credential=secret')
+    bad = SimpleNamespace(close=fail)
+    healthy = SimpleNamespace(close=lambda: closed.append('healthy'))
+    monkeypatch.setattr(network, 'resolve_executor_paths', lambda *a, **kw: [
+        SimpleNamespace(path_profile=path) for path in ('bad', 'duplicate', 'healthy')])
+    router = network.ExecutorNetworkPathRouter(transport_factory=lambda path:
+        healthy if path.path_profile == 'healthy' else bad)
+    client = _RemoteProductEmbeddingClient(
+        identity=EmbeddingIdentity(provider='ollama', model='selected:latest', dim=2),
+        request_model='selected:latest', expected_transport='ollama_http', remote_transport=router)
+    if checked:
+        with pytest.raises(RuntimeError, match='^executor_path_cleanup_failed$'):
+            client.close_for_preflight()
+    else:
+        assert client.close() is None
+    client.close()  # Finalizer already consumed: no replay of cleanup.
+    assert closed == ['failed', 'healthy']
+
+
+@pytest.mark.parametrize('marker', ['unknown', 'duplicate', 'other-stage', 'private'])
+def test_embedding_probe_untrusted_markers_cannot_reach_operation_journal(monkeypatch, marker):
+    from app.ops import native_source_bootstrap as source, postgres_deploy_linux as linux
+    codes = source.SOURCE_PROJECTION_FAILURE_CODES
+    assert len(codes) == len(set(codes.values()))
+    probes = source.EMBEDDING_PROBE_FAILURE_CODES
+    assert len(probes) == len(set(probes.values()))
+    assert not (codes.keys() & probes.keys()) and not (set(codes.values()) & set(probes.values()))
+    assert source.SOURCE_PROJECTION_FAILURE_REASONS == codes.keys() | probes.keys()
+    reason = 'embedding_probe_client_failed'
+    stage = 'health' if marker == 'other-stage' else 'source_projection'
+    line = 'YGGDRASIL_DEPLOY_FAILURE_REASON=' + (reason if marker != 'unknown' else 'unknown') + '\n'
+    if marker == 'duplicate':
+        line += line
+    if marker == 'private':
+        line = 'private-provider-canary /private/vault credential=secret ' + line
+    monkeypatch.setattr(linux.subprocess, 'run', lambda *a, **kw: subprocess.CompletedProcess(
+        a, 78, 'private-provider-canary', 'YGGDRASIL_DEPLOY_FAILURE_STAGE=' + stage + '\n' + line))
+    diagnostics, retained = [], []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', diagnostics.append)
+    with pytest.raises(linux.PostgresDeployError):
+        linux._command(['deployment'], deploy_diagnostics=True, retain_source_failure=retained.append)
+    assert not retained
+    assert len(diagnostics) == 1 and b'class=command_failed' in diagnostics[0]
+    assert b'private-provider-canary' not in diagnostics[0]
+
+
+def test_embedding_probe_status_namespace_never_decodes_as_worker_reason():
+    from app.ops import native_source_bootstrap as source
+    codes = source.SOURCE_PROJECTION_FAILURE_CODES
+    # Every worker byte status uses only worker checkpoint/observer semantics.
+    for status in range(256):
+        expected = (None if status == 0 else 'source_worker_timeout' if status == 124
+                    else 'source_worker_terminated' if status in {130, 143}
+                    else next((reason for reason, code in codes.items()
+                               if code == status and code not in {96, 97, 98}),
+                              'source_worker_failed'))
+        assert source.source_terminal_reason(status) == expected
+        assert source.source_terminal_reason(status, oom_killed=True) == 'source_worker_oom'
+    assert not (set(source.EMBEDDING_PROBE_FAILURE_CODES)
+                & {source.source_terminal_reason(status) for status in range(256)})
 
 
 def test_full_startup_uses_same_strict_source_summary_parser() -> None:

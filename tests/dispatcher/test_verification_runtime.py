@@ -71,6 +71,7 @@ def test_host_cycle_is_api_only_and_emits_terminal_dry_run_receipt() -> None:
     runtime = HostFencedVerificationCycle(
         ledger, consumer, executor, holder="verification-host"
     )
+    assert consumer._native_conflict_recovery == executor.recover
 
     receipt = runtime.run_dry_cycle(request())
 

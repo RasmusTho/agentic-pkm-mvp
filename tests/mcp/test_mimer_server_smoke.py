@@ -66,6 +66,33 @@ def _call(
     return json.loads(process.stdout.readline())
 
 
+def _read_initial_response(process: subprocess.Popen[str]) -> dict[str, object]:
+    assert process.stdout
+    raw = process.stdout.readline()
+    if not raw:
+        return_code = process.poll()
+        stderr = ""
+        if return_code is not None and process.stderr:
+            stderr = process.stderr.read(4000)
+        raise AssertionError(
+            "MCP child emitted no initialization response "
+            f"(returncode={return_code}, stderr={stderr[-4000:]!r})"
+        )
+    try:
+        response = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return_code = process.poll()
+        stderr = ""
+        if return_code is not None and process.stderr:
+            stderr = process.stderr.read(4000)
+        raise AssertionError(
+            "MCP child emitted invalid initialization JSON "
+            f"(returncode={return_code}, stdout={raw[:4000]!r}, stderr={stderr[-4000:]!r})"
+        ) from exc
+    assert isinstance(response, dict)
+    return response
+
+
 def _start(entrypoint: Path, base_url: str) -> subprocess.Popen[str]:
     env = os.environ.copy()
     python_path = str(entrypoint.parent.parent / "site-packages")
@@ -97,7 +124,7 @@ def _start(entrypoint: Path, base_url: str) -> subprocess.Popen[str]:
         + "\n"
     )
     process.stdin.flush()
-    assert json.loads(process.stdout.readline())["id"] == 1
+    assert _read_initial_response(process)["id"] == 1
     process.stdin.write(
         json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n"
     )

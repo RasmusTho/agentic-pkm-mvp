@@ -4,17 +4,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
+import tempfile
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.ops.bws_secret_admin import BwsAdminConfig, BwsSecretAdmin
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
 from app.ops.host_secret_controller import HostSecretController, TerminalEvidence
-from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, deploy_from_host
-from app.ops.postgres_deploy_linux import SshDeployRemote
+from app.ops.postgres_deploy import (
+    AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
+    deploy_from_host,
+)
+from app.ops.postgres_deploy_linux import SshDeployRemote, source_identity_request_fingerprint
 from app.ops.secret_admin import SecretAdmin
 
 
@@ -150,12 +156,224 @@ def require_qualification(controller: HostSecretController) -> None:
         raise PostgresDeployError()
 
 
+_TEST_RECOVERY_MARKER_SCHEMA = 'test-source-recovery-host.v1'
+_TEST_RECOVERY_REPAIR_MARKER_SCHEMA = 'test-source-recovery-host.v2'
+
+
+def _test_recovery_marker_path(controller: HostSecretController,
+                               request: TestRecoveryRequest) -> Path:
+    request.validate()
+    directory = controller.directory
+    if (not directory.is_absolute()
+            or any(parent.is_symlink() for parent in (directory, *directory.parents))):
+        raise PostgresDeployError()
+    source_operation_id = request.source_operation_id or request.failed_operation_id
+    return directory / ('test-source-recovery-' + source_operation_id + '.json')
+
+
+def _read_test_recovery_marker(controller: HostSecretController,
+                               request: TestRecoveryRequest) -> dict[str, Any] | None:
+    path = _test_recovery_marker_path(controller, request)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(descriptor, 'r', encoding='utf-8') as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                or info.st_size > 65536):
+            raise PostgresDeployError()
+        marker = json.load(source, object_pairs_hook=_unique_metadata_object)
+    v1_fields = (
+        {'schema', 'state', 'request', 'fresh_operation_id'},
+        {'schema', 'state', 'request', 'fresh_operation_id',
+         'instance_state_reconstructed'},
+    )
+    v2_fields = {
+        'schema', 'state', 'request', 'fresh_operation_id',
+        'instance_state_reconstructed', 'repair',
+    }
+    if (not isinstance(marker, dict)
+            or (marker.get('schema') == _TEST_RECOVERY_MARKER_SCHEMA
+                and set(marker) not in v1_fields)
+            or (marker.get('schema') == _TEST_RECOVERY_REPAIR_MARKER_SCHEMA
+                and set(marker) != v2_fields)
+            or marker.get('schema') not in {
+                _TEST_RECOVERY_MARKER_SCHEMA, _TEST_RECOVERY_REPAIR_MARKER_SCHEMA,
+            }
+            or marker['state'] not in {'resetting', 'ready'}
+            or ('instance_state_reconstructed' in marker
+                and type(marker['instance_state_reconstructed']) is not bool)):
+        raise PostgresDeployError()
+    try:
+        fresh_operation_id = _canonical_uuid(marker['fresh_operation_id'])
+    except Exception:
+        raise PostgresDeployError() from None
+    if fresh_operation_id != marker['fresh_operation_id']:
+        raise PostgresDeployError()
+    stored = TestRecoveryRequest.from_payload(marker['request'])
+    source_operation_id = request.source_operation_id or request.failed_operation_id
+    if (stored.source_operation_id is not None
+            or stored.failed_operation_id != source_operation_id
+            or stored.authority_cutover != request.authority_cutover
+            or (marker['state'] != 'ready' and stored != request)):
+        raise PostgresDeployError()
+    if marker['schema'] == _TEST_RECOVERY_REPAIR_MARKER_SCHEMA:
+        repair = marker.get('repair')
+        if (not isinstance(repair, dict)
+                or set(repair) != {
+                    'failed_successor_operation_id', 'candidate_plan',
+                    'next_operation_id',
+                }):
+            raise PostgresDeployError()
+        try:
+            failed_successor = _canonical_uuid(repair['failed_successor_operation_id'])
+            next_operation = _canonical_uuid(repair['next_operation_id'])
+            candidate_plan = DeployPlan.from_payload(repair['candidate_plan'])
+        except Exception:
+            raise PostgresDeployError() from None
+        if (failed_successor != marker['fresh_operation_id']
+                or failed_successor == next_operation
+                or candidate_plan.channel != 'test'
+                or not candidate_plan.automatic
+                or candidate_plan.authority_cutover is not None):
+            raise PostgresDeployError()
+        marker['repair'] = {
+            **repair,
+            'candidate_plan_object': candidate_plan,
+        }
+    # A marker written by the source-reset-only producer predates the explicit
+    # instance-state producer.  Treat it as an authenticated reset checkpoint,
+    # never as proof that reconstruction happened.
+    marker.setdefault('instance_state_reconstructed', False)
+    return marker
+
+
+def _write_test_recovery_repair_marker(
+    controller: HostSecretController, source_request: TestRecoveryRequest,
+    *, failed_successor_operation_id: str, candidate_plan: DeployPlan,
+    next_operation_id: str, instance_state_reconstructed: bool,
+) -> None:
+    failed_successor_operation_id = _canonical_uuid(failed_successor_operation_id)
+    next_operation_id = _canonical_uuid(next_operation_id)
+    if (failed_successor_operation_id == next_operation_id
+            or source_request.source_operation_id is not None):
+        raise PostgresDeployError()
+    candidate_plan.validate()
+    probe = TestRecoveryRequest(
+        failed_successor_operation_id, candidate_plan,
+        source_request.authority_cutover,
+        source_operation_id=source_request.failed_operation_id,
+        source_plan=source_request.plan,
+    )
+    probe.validate()
+    prior = _read_test_recovery_marker(controller, probe)
+    if prior is None or prior['state'] != 'ready':
+        raise PostgresDeployError()
+    repair = {
+        'failed_successor_operation_id': failed_successor_operation_id,
+        'candidate_plan': json.loads(json.dumps(candidate_plan.payload())),
+        'next_operation_id': next_operation_id,
+    }
+    if prior['schema'] == _TEST_RECOVERY_REPAIR_MARKER_SCHEMA:
+        normalized = dict(prior['repair'])
+        normalized.pop('candidate_plan_object', None)
+        if normalized != repair:
+            raise PostgresDeployError()
+        if prior['instance_state_reconstructed'] or not instance_state_reconstructed:
+            return
+    path = _test_recovery_marker_path(controller, source_request)
+    payload = {
+        'schema': _TEST_RECOVERY_REPAIR_MARKER_SCHEMA,
+        'state': 'ready',
+        'request': source_request.payload(),
+        'fresh_operation_id': failed_successor_operation_id,
+        'instance_state_reconstructed': instance_state_reconstructed,
+        'repair': repair,
+    }
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix='.' + path.name + '.', text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+            json.dump(payload, stream, sort_keys=True)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_test_recovery_marker(controller: HostSecretController,
+                                request: TestRecoveryRequest, state: str,
+                                fresh_operation_id: str,
+                                *, instance_state_reconstructed: bool = False) -> None:
+    if state not in {'resetting', 'ready'}:
+        raise PostgresDeployError()
+    fresh_operation_id = _canonical_uuid(fresh_operation_id)
+    path = _test_recovery_marker_path(controller, request)
+    directory = path.parent
+    try:
+        info = directory.stat()
+    except OSError:
+        raise PostgresDeployError() from None
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise PostgresDeployError()
+    prior = _read_test_recovery_marker(controller, request)
+    if prior is not None:
+        if prior['fresh_operation_id'] != fresh_operation_id:
+            raise PostgresDeployError()
+        if (prior['state'] == state
+                and (prior['instance_state_reconstructed'] or not instance_state_reconstructed)):
+            return
+    payload = {
+        'schema': _TEST_RECOVERY_MARKER_SCHEMA,
+        'state': state,
+        'request': request.payload(),
+        'fresh_operation_id': fresh_operation_id,
+        'instance_state_reconstructed': instance_state_reconstructed,
+    }
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=directory, prefix='.' + path.name + '.', text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+            json.dump(payload, stream, sort_keys=True)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
     parser.add_argument('revision')
     parser.add_argument('--image-digest', help='immutable published sha256 image-index digest')
+    parser.add_argument('--promotion-plan', help='absolute reviewed promotion-plan path on the target host (PROD only)')
     parser.add_argument('--automatic', action='store_true', help='non-production existing-secret delivery')
+    parser.add_argument('--activation-scope', choices=('full', 'text-capture'), default='full',
+                        help='explicit DEV/TEST text surface; no full-channel qualification')
+    parser.add_argument('--principal-cutover', action='store_true',
+                        help='explicit DEV/TEST MVR-03 cutover for this exact SHA/digest request')
     parser.add_argument('--operation-id', help='stable automatic candidate/channel operation UUID')
     parser.add_argument('--authority-cutover-binding', help='already-qualified nonprod binding')
     parser.add_argument('--authority-cutover-root', help='exact existing selected host root')
@@ -172,29 +390,577 @@ def main(argv: list[str] | None = None) -> int:
         '--reconcile-pending', action='store_true',
         help='reconcile this exact existing-secrets-only operation after remote terminal evidence',
     )
+    parser.add_argument(
+        '--prove-never-admitted', action='store_true',
+        help='prove this exact automatic operation left no host or native mutation footprint',
+    )
+    parser.add_argument(
+        '--persist-source-identity', action='store_true',
+        help='run one explicit DEV/TEST ordinary-producer identity persistence operation',
+    )
+    parser.add_argument(
+        '--source-producer-kind', choices=('vault-alpha', 'registry'),
+        default='vault-alpha',
+        help='explicit ordinary producer for --persist-source-identity',
+    )
+    parser.add_argument('--diagnose-source-identity', action='store_true',
+                        help='run the existing read-only source diagnostic under current authority')
+    parser.add_argument('--current-state-source', action='store_true',
+                        help='explicit DEV/TEST installed-state source admission; never start stopped writers')
+    parser.add_argument(
+        '--preflight-source-persistence-admission', action='store_true',
+        help='read exact value-free host admission before allocating a source operation ID',
+    )
+    parser.add_argument(
+        '--restore-operator-source-identity', action='store_true',
+        help='run the separately reviewed DEV-only established-identity restoration',
+    )
+    parser.add_argument(
+        '--resume-unattempted-operator-restoration', action='store_true',
+        help='resume only a positively undispatched restoration request',
+    )
+    parser.add_argument(
+        '--reconcile-operator-unknown-cleanup', action='store_true',
+        help='retire one exact host operator operation after qualified native unknown cleanup',
+    )
+    parser.add_argument(
+        '--prove-source-persistence-never-admitted', '--prove-source-operation-never-admitted',
+        dest='prove_source_persistence_never_admitted', action='store_true',
+        help='retire one exact host source operation only after fixed native absence proof',
+    )
+    parser.add_argument(
+        '--recover-test-source', action='store_true',
+        help='reset only the exact failed TEST source projection, then deploy this candidate',
+    )
+    parser.add_argument(
+        '--reconstruct-missing-instance-state', '--reconstruct-missing-test-instance-state',
+        dest='reconstruct_missing_instance_state', action='store_true',
+        help='reconstruct only the exact already-lost TEST instance-state authority',
+    )
+    parser.add_argument(
+        '--failed-operation-id',
+        help='exact failed TEST deployment operation authenticated by --recover-test-source',
+    )
     args = parser.parse_args(argv)
     try:
+        if args.activation_scope != 'full' and (
+            args.channel not in {'dev', 'test'} or not args.automatic or not args.existing_secrets_only
+            or args.principal_cutover or args.promotion_plan is not None
+            or any(value is not None for value in (args.authority_cutover_binding, args.authority_cutover_root,
+                                                   args.authority_cutover_ownership_root))
+            or args.persist_source_identity or args.diagnose_source_identity or args.current_state_source
+            or args.preflight_source_persistence_admission or args.restore_operator_source_identity
+            or args.resume_unattempted_operator_restoration or args.reconcile_operator_unknown_cleanup
+            or args.prove_source_persistence_never_admitted or args.recover_test_source
+            or args.reconstruct_missing_instance_state or args.failed_operation_id is not None
+        ):
+            raise PostgresDeployError()
+        if args.principal_cutover and (
+            args.channel not in {'dev', 'test'} or not args.existing_secrets_only
+            or args.image_digest is None or re.fullmatch(r'sha256:[0-9a-f]{64}', args.image_digest) is None
+            or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None or args.promotion_plan is not None
+            or any(value is not None for value in (args.authority_cutover_binding, args.authority_cutover_root,
+                                                   args.authority_cutover_ownership_root))
+            or args.prove_never_admitted or args.persist_source_identity or args.diagnose_source_identity
+            or args.current_state_source or args.preflight_source_persistence_admission
+            or args.restore_operator_source_identity or args.resume_unattempted_operator_restoration
+            or args.reconcile_operator_unknown_cleanup or args.prove_source_persistence_never_admitted
+            or args.recover_test_source or args.reconstruct_missing_instance_state
+            or args.failed_operation_id is not None or args.source_producer_kind != 'vault-alpha'
+        ):
+            raise PostgresDeployError()
+        if args.promotion_plan is not None and (args.channel != 'prod' or args.automatic):
+            raise PostgresDeployError()
         cutover = None
+        recovery_authority = None
         if any(value is not None for value in (args.authority_cutover_binding, args.authority_cutover_root,
                                                args.authority_cutover_ownership_root)):
             if (not args.authority_cutover_binding or not args.authority_cutover_root
                 or not args.authority_cutover_ownership_root or not args.existing_secrets_only):
                 raise PostgresDeployError()
-            cutover = AuthorityCutover(args.authority_cutover_binding, args.authority_cutover_root,
-                                       args.authority_cutover_ownership_root)
+            selected = AuthorityCutover(args.authority_cutover_binding, args.authority_cutover_root,
+                                        args.authority_cutover_ownership_root)
+            if args.recover_test_source or args.reconstruct_missing_instance_state:
+                recovery_authority = selected
+            else:
+                cutover = selected
+        if args.recover_test_source or args.reconstruct_missing_instance_state:
+            if (args.channel != 'test' or not args.automatic or not args.existing_secrets_only
+                or args.reconcile_pending or args.operation_id is not None
+                or args.failed_operation_id is None or recovery_authority is None
+                or (args.recover_test_source and args.reconstruct_missing_instance_state)):
+                raise PostgresDeployError()
+            if not isinstance(args.failed_operation_id, str) or str(UUID(args.failed_operation_id)) != args.failed_operation_id:
+                raise PostgresDeployError()
+        elif args.failed_operation_id is not None:
+            raise PostgresDeployError()
         if args.automatic and not args.existing_secrets_only:
             raise PostgresDeployError()
-        if args.operation_id is not None and (
-            not (args.automatic or cutover is not None) or str(UUID(args.operation_id)) != args.operation_id
+        if args.current_state_source or args.diagnose_source_identity:
+            if (
+                not args.current_state_source
+                or args.channel not in {'dev', 'test'}
+                or not args.automatic or not args.existing_secrets_only
+                or args.operation_id is None or cutover is None or args.image_digest is None
+                or (args.diagnose_source_identity == args.persist_source_identity)
+                or (args.persist_source_identity and args.source_producer_kind != 'registry')
+                or (args.diagnose_source_identity and args.source_producer_kind != 'vault-alpha')
+                or args.preflight_source_persistence_admission
+                or args.restore_operator_source_identity or args.resume_unattempted_operator_restoration
+                or args.reconcile_operator_unknown_cleanup
+                or args.reconcile_pending or args.prove_never_admitted
+                or args.recover_test_source or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None or args.ack_forward_only
+                or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None
+                or re.fullmatch(r'sha256:[0-9a-f]{64}', args.image_digest) is None
+            ):
+                raise PostgresDeployError()
+        if (
+            not (args.persist_source_identity or args.prove_source_persistence_never_admitted)
+            and args.source_producer_kind != 'vault-alpha'
         ):
             raise PostgresDeployError()
+        if args.operation_id is not None and (
+            not (args.automatic or cutover is not None or args.principal_cutover)
+            or str(UUID(args.operation_id)) != args.operation_id
+        ):
+            raise PostgresDeployError()
+        current_source_request = None
+        request_fingerprint = None
+        if args.current_state_source and cutover is not None:
+            current_source_request = {
+                'source_kind': 'source-diagnostic' if args.diagnose_source_identity else 'source-persistence',
+                'source_mode': 'current-state', 'revision': args.revision, 'image_digest': args.image_digest,
+                'authority_cutover': {'binding_id': cutover.binding_id, 'root': cutover.root,
+                                      'ownership_root': cutover.ownership_root},
+                **({'producer_kind': 'registry'} if args.persist_source_identity else {}),
+            }
+            request_fingerprint = source_identity_request_fingerprint(current_source_request)
         controller = HostSecretController()
+        if args.diagnose_source_identity and not args.prove_source_persistence_never_admitted:
+            if cutover is None:
+                raise PostgresDeployError()
+            remote = SshDeployRemote('ygg-' + args.channel)
+            with controller.source_diagnostic_operation(
+                args.channel, operation_id=args.operation_id,
+                request_fingerprint=request_fingerprint,
+            ) as (operation, resumed):
+                if operation.completed_source == 'native-absence-proof':
+                    raise PostgresDeployError()
+                if operation.completed_result is None:
+                    operation.prepare_mutation()
+                result = remote.diagnose_source_identity(
+                    operation.operation_id, args.revision, args.image_digest, cutover,
+                    cleanup_only=resumed,
+                )
+                terminal = 'committed' if result['terminal_state'] == 'observed' else 'failed'
+                operation.finish(TerminalEvidence(
+                    operation.operation_id, 'source-diagnostic', args.channel,
+                    terminal, 'remote-terminal',
+                ))
+            print(json.dumps(result, sort_keys=True))
+            return 0 if terminal == 'committed' else 78
+        if args.preflight_source_persistence_admission:
+            if (
+                args.channel not in {'dev', 'test'}
+                or not args.automatic
+                or not args.existing_secrets_only
+                or args.operation_id is not None
+                or cutover is not None
+                or args.persist_source_identity
+                or args.restore_operator_source_identity
+                or args.resume_unattempted_operator_restoration
+                or args.reconcile_operator_unknown_cleanup
+                or args.reconcile_pending
+                or args.prove_never_admitted
+                or args.prove_source_persistence_never_admitted
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None
+                or args.ack_forward_only
+            ):
+                raise PostgresDeployError()
+            preflight = controller.source_persistence_preflight(args.channel)
+            print(json.dumps(preflight, sort_keys=True))
+            return 0 if preflight['ready'] is True else 78
+        if args.reconcile_operator_unknown_cleanup:
+            if (
+                args.channel != 'dev'
+                or not args.automatic
+                or not args.existing_secrets_only
+                or args.operation_id is None
+                or cutover is None
+                or args.image_digest is None
+                or args.persist_source_identity
+                or args.restore_operator_source_identity
+                or args.resume_unattempted_operator_restoration
+                or args.reconcile_pending
+                or args.prove_never_admitted
+                or args.prove_source_persistence_never_admitted
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None
+                or args.ack_forward_only
+                or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None
+            ):
+                raise PostgresDeployError()
+            with controller.operator_identity_restoration_operation(
+                'dev', operation_id=args.operation_id,
+            ) as (operation, resumed):
+                if not resumed:
+                    raise PostgresDeployError()
+                if operation.completed_result == 'reconciled-unknown':
+                    print(json.dumps({
+                        'contract': 'operator-restoration-host-reconciliation.v1',
+                        'operation_id': operation.operation_id,
+                        'host_terminal_projection': 'reconciled-unknown',
+                        'idempotent_replay': True,
+                        'native_replayed': False,
+                    }, sort_keys=True))
+                    return 0
+                if operation.completed_result is not None or not operation.mutation_started:
+                    raise PostgresDeployError()
+                remote = SshDeployRemote('ygg-dev')
+                reconciliation = remote.reconcile_operator_identity_restoration_unknown(
+                    operation.operation_id, args.revision, args.image_digest, cutover,
+                )
+                operation.finish(TerminalEvidence(
+                    operation.operation_id, 'operator-identity-restoration', 'dev',
+                    'reconciled-unknown', 'remote-terminal-unknown-cleanup-complete',
+                ))
+            print(json.dumps({
+                **reconciliation,
+                'host_terminal_projection': 'reconciled-unknown',
+                'idempotent_replay': False,
+            }, sort_keys=True))
+            return 0
+        if args.prove_source_persistence_never_admitted:
+            if (
+                args.channel not in {'dev', 'test'}
+                or not args.automatic
+                or not args.existing_secrets_only
+                or args.operation_id is None
+                or (cutover is not None and not args.current_state_source)
+                or (args.persist_source_identity and not args.current_state_source)
+                or args.preflight_source_persistence_admission
+                or args.restore_operator_source_identity
+                or args.reconcile_operator_unknown_cleanup
+                or args.reconcile_pending
+                or args.prove_never_admitted
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None
+                or args.ack_forward_only
+            ):
+                raise PostgresDeployError()
+            source_operation = (
+                controller.source_diagnostic_operation(args.channel, operation_id=args.operation_id,
+                                                      request_fingerprint=request_fingerprint)
+                if args.diagnose_source_identity
+                else controller.source_persistence_operation(
+                    args.channel, operation_id=args.operation_id,
+                    producer_kind=args.source_producer_kind,
+                    **dict[str, Any]({'current_state': True, 'request_fingerprint': request_fingerprint}
+                                    if args.current_state_source else {}),
+                )
+                if args.source_producer_kind == 'registry'
+                else controller.source_persistence_operation(
+                    args.channel, operation_id=args.operation_id,
+                )
+            )
+            with source_operation as (operation, resumed):
+                if (
+                    not resumed
+                    or operation.completed_result not in {None, 'failed'}
+                    or (
+                        operation.completed_result is None
+                        and not operation.mutation_started
+                    )
+                ):
+                    raise PostgresDeployError()
+                remote = SshDeployRemote('ygg-' + args.channel)
+                source_kind = 'source-diagnostic' if args.diagnose_source_identity else 'source-persistence'
+                proof = remote.prove_source_identity_absence(
+                    args.operation_id,
+                    **({'source_request': current_source_request} if args.current_state_source else {}),
+                )
+                operation.finish(TerminalEvidence(
+                    operation.operation_id, source_kind, args.channel,
+                    'failed', 'native-absence-proof',
+                ))
+            result = {**{key: value for key, value in proof.items() if key != 'request_fingerprint'},
+                      'host_operation_retired': True}
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if args.restore_operator_source_identity:
+            if (
+                args.channel != 'dev'
+                or not args.automatic
+                or not args.existing_secrets_only
+                or args.operation_id is None
+                or cutover is None
+                or args.image_digest is None
+                or args.reconcile_pending
+                or args.prove_never_admitted
+                or args.prove_source_persistence_never_admitted
+                or args.persist_source_identity
+                or args.preflight_source_persistence_admission
+                or args.reconcile_operator_unknown_cleanup
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None
+                or args.ack_forward_only
+                or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None
+            ):
+                raise PostgresDeployError()
+            try:
+                command = json.load(sys.stdin, object_pairs_hook=_unique_metadata_object)
+            except Exception:
+                raise PostgresDeployError() from None
+            from app.ops.native_operator_identity_restoration import validate_command
+
+            command = validate_command(command)
+            remote = SshDeployRemote('ygg-dev')
+            with controller.operator_identity_restoration_operation(
+                'dev', operation_id=args.operation_id,
+            ) as (operation, resumed):
+                if operation.completed_result is None:
+                    if resumed and not args.resume_unattempted_operator_restoration:
+                        # Remote continuation remains cleanup-only by default.
+                        pass
+                    operation.prepare_mutation()
+                result = remote.restore_operator_source_identity(
+                    operation.operation_id, args.revision, args.image_digest,
+                    cutover, command,
+                    resume_unattempted=args.resume_unattempted_operator_restoration,
+                )
+                if result['cleanup'] != 'complete' or result['result'] == 'unknown':
+                    print(json.dumps(result, sort_keys=True))
+                    return 78
+                terminal = 'committed' if result['result'] == 'committed' else 'failed'
+                operation.finish(TerminalEvidence(
+                    operation.operation_id, 'operator-identity-restoration', 'dev',
+                    terminal, 'remote-terminal',
+                ))
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result['result'] == 'committed' else 78
+        if args.persist_source_identity:
+            if (
+                args.channel not in {'dev', 'test'}
+                or not args.automatic
+                or not args.existing_secrets_only
+                or args.operation_id is None
+                or cutover is None
+                or args.image_digest is None
+                or args.reconcile_pending
+                or args.prove_never_admitted
+                or args.prove_source_persistence_never_admitted
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.failed_operation_id is not None
+                or args.ack_forward_only
+                or args.restore_operator_source_identity
+                or args.resume_unattempted_operator_restoration
+                or args.preflight_source_persistence_admission
+                or args.reconcile_operator_unknown_cleanup
+                or re.fullmatch(r'[0-9a-f]{40}', args.revision) is None
+            ):
+                raise PostgresDeployError()
+            remote = SshDeployRemote('ygg-' + args.channel)
+            source_operation = (
+                controller.source_persistence_operation(
+                    args.channel, operation_id=args.operation_id,
+                    producer_kind=args.source_producer_kind,
+                    **dict[str, Any]({'current_state': True, 'request_fingerprint': request_fingerprint}
+                                    if args.current_state_source else {}),
+                )
+                if args.source_producer_kind == 'registry'
+                else controller.source_persistence_operation(
+                    args.channel, operation_id=args.operation_id,
+                )
+            )
+            with source_operation as (operation, _resumed):
+                if operation.completed_source == 'native-absence-proof':
+                    raise PostgresDeployError()
+                if operation.completed_result is None:
+                    operation.prepare_mutation()
+                result = (
+                    remote.persist_source_identity(
+                        operation.operation_id, args.revision, args.image_digest,
+                        cutover, args.source_producer_kind,
+                        **({'current_state': True, 'cleanup_only': _resumed}
+                           if args.current_state_source else {}),
+                    )
+                    if args.source_producer_kind == 'registry'
+                    else remote.persist_source_identity(
+                        operation.operation_id, args.revision, args.image_digest,
+                        cutover,
+                    )
+                )
+                terminal = result['terminal_state']
+                operation.finish(TerminalEvidence(
+                    operation.operation_id, 'source-persistence', args.channel,
+                    terminal, 'remote-terminal',
+                ))
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result['terminal_state'] == 'committed' else 78
+        if args.resume_unattempted_operator_restoration:
+            raise PostgresDeployError()
         # The controller can inspect DB credentials and the API's degrade-visibly
         # binding. VM-only consumers are selected from VM runtime/migration state.
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),
                           (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only,
-                          args.image_digest, args.automatic, cutover)
+                          args.image_digest, args.automatic, cutover, args.promotion_plan, args.principal_cutover,
+                          args.activation_scope)
+        recovery_request = None
+        if args.recover_test_source or args.reconstruct_missing_instance_state:
+            failed_operation_id = args.failed_operation_id
+            selected_authority = recovery_authority
+            if not isinstance(failed_operation_id, str) or selected_authority is None:
+                raise PostgresDeployError()
+            recovery_request = TestRecoveryRequest(failed_operation_id, plan, selected_authority)
+            recovery_request.validate()
         plan.validate()
+        if args.prove_never_admitted:
+            if (
+                not args.existing_secrets_only
+                or not args.automatic
+                or args.operation_id is None
+                or args.reconcile_pending
+                or args.recover_test_source
+                or args.reconstruct_missing_instance_state
+                or args.channel not in {'dev', 'test'}
+            ):
+                raise PostgresDeployError()
+            remote = SshDeployRemote('ygg-' + args.channel)
+            proof = controller.prove_deploy_absence(
+                args.operation_id,
+                args.channel,
+                lambda: remote.prove_absence(args.operation_id, plan),
+            )
+            proof = {
+                **proof,
+                'contract': 'postmerge-native-operation-absence.v1',
+                'candidate_sha': args.revision,
+                'image_digest': args.image_digest or '',
+            }
+            print(json.dumps(proof, sort_keys=True))
+            return 0
+        if recovery_request is not None:
+            remote = SshDeployRemote('ygg-test')
+            marker = _read_test_recovery_marker(controller, recovery_request)
+            if args.reconstruct_missing_instance_state:
+                if marker is None or marker['state'] != 'ready':
+                    raise PostgresDeployError()
+                source_request = TestRecoveryRequest.from_payload(marker['request'])
+                failed_successor_operation_id = marker['fresh_operation_id']
+                if marker['schema'] == _TEST_RECOVERY_REPAIR_MARKER_SCHEMA:
+                    repair = marker['repair']
+                    if repair['candidate_plan_object'] != plan:
+                        raise PostgresDeployError()
+                    next_operation_id = repair['next_operation_id']
+                else:
+                    next_operation_id = str(uuid4())
+                lineage_request = TestRecoveryRequest(
+                    failed_successor_operation_id, plan,
+                    recovery_request.authority_cutover,
+                    source_operation_id=recovery_request.failed_operation_id,
+                    source_plan=source_request.plan,
+                )
+                lineage_request.validate()
+                # The original reset checkpoint is insufficient: the exact
+                # automatic successor stored in it must itself be terminal
+                # failed before a distinct new candidate can be allocated.
+                with controller.deploy_operation(
+                    'test', allow_bootstrap=False,
+                    operation_id=failed_successor_operation_id,
+                ) as (failed_successor, resumed):
+                    if (not resumed
+                            or failed_successor.completed_result != 'failed'):
+                        raise PostgresDeployError()
+                _write_test_recovery_repair_marker(
+                    controller, source_request,
+                    failed_successor_operation_id=failed_successor_operation_id,
+                    candidate_plan=plan,
+                    next_operation_id=next_operation_id,
+                    instance_state_reconstructed=marker['instance_state_reconstructed'],
+                )
+                marker = _read_test_recovery_marker(controller, lineage_request)
+                if marker is None:
+                    raise PostgresDeployError()
+                if not marker['instance_state_reconstructed']:
+                    result = remote.test_recovery_reconstruct_instance_state(
+                        lineage_request
+                    )
+                    if result.get('activation') != 'inactive_fenced':
+                        raise PostgresDeployError()
+                    _write_test_recovery_repair_marker(
+                        controller, source_request,
+                        failed_successor_operation_id=failed_successor_operation_id,
+                        candidate_plan=plan,
+                        next_operation_id=next_operation_id,
+                        instance_state_reconstructed=True,
+                    )
+                # Reconstruction deliberately retains its deployment lease
+                # until this host checkpoint is durable. The explicit,
+                # idempotent handoff then clears only that authenticated lease
+                # before the fresh normal deployment tries to claim it.
+                remote.test_recovery_release_instance_state(
+                    lineage_request, successor_operation_id=next_operation_id,
+                )
+                admin = SecretAdmin(_configured_host_admin(), controller=controller)
+                receipt = deploy_from_host(
+                    admin, remote, plan,
+                    qualified=lambda: require_qualification(controller),
+                    allow_bootstrap=False, operation_id=next_operation_id,
+                )
+                print(json.dumps(receipt.payload(), sort_keys=True))
+                return 0 if receipt.terminal_result == 'committed' else 78
+
+            if marker is not None and marker['schema'] != _TEST_RECOVERY_MARKER_SCHEMA:
+                raise PostgresDeployError()
+            if (marker is not None
+                    and TestRecoveryRequest.from_payload(marker['request'])
+                    != recovery_request):
+                raise PostgresDeployError()
+            if marker is None:
+                fresh_operation_id = str(uuid4())
+                marker_state = 'resetting'
+            else:
+                fresh_operation_id = marker['fresh_operation_id']
+                marker_state = marker['state']
+            if marker_state == 'resetting':
+                # Keep the old host operation bound until the VM has returned
+                # exact failed terminal evidence. If the old operation was
+                # already terminalized before a crash, deploy_operation exposes
+                # that exact completed ID and the reset remains idempotent.
+                with controller.deploy_operation(
+                    'test', allow_bootstrap=False,
+                    operation_id=recovery_request.failed_operation_id,
+                ) as (operation, resumed):
+                    if not resumed:
+                        raise PostgresDeployError()
+                    receipt = remote.test_recovery_reset(recovery_request)
+                    if receipt.terminal_result != 'failed':
+                        raise PostgresDeployError()
+                    if operation.completed_result is None:
+                        operation.finish(receipt.evidence())
+                    elif operation.completed_result != 'failed':
+                        raise PostgresDeployError()
+                    # The VM validates the retained failed plan against the
+                    # automatic successor before any reset mutation.  Persist
+                    # the host checkpoint only after that call succeeds so a
+                    # static mismatch cannot leave a misleading local marker.
+                    _write_test_recovery_marker(
+                        controller, recovery_request, 'ready', fresh_operation_id,
+                    )
+            admin = SecretAdmin(_configured_host_admin(), controller=controller)
+            receipt = deploy_from_host(
+                admin, remote, plan, qualified=lambda: require_qualification(controller),
+                allow_bootstrap=False, operation_id=fresh_operation_id,
+            )
+            print(json.dumps(receipt.payload(), sort_keys=True))
+            return 0 if receipt.terminal_result == 'committed' else 78
         if args.reconcile_pending:
             if not args.existing_secrets_only:
                 raise PostgresDeployError()

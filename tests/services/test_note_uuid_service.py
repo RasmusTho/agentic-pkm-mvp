@@ -9,6 +9,15 @@ from app.knowledge.errors import KnowledgeWriteConflict
 from app.services import note_uuid
 
 
+def test_worker_inbox_uuid_selector_preserves_configuration_failure(monkeypatch, tmp_path):
+    from app.vault import paths
+    from app.workers import outbox_worker
+    monkeypatch.setattr(paths, "get_vault_inbox_dir_rel", lambda _: (_ for _ in ()).throw(ValueError("invalid configuration")))
+    with pytest.raises(ValueError, match="invalid configuration"):
+        outbox_worker._maybe_heal_uuid(tmp_path / "note.md", tmp_path)
+    assert not note_uuid.inbox_uuid_heal_applies(tmp_path.parent / "outside.md", tmp_path)
+
+
 def test_ensure_note_uuid_keeps_existing_uuid_without_write(monkeypatch, tmp_path: Path) -> None:
     note = tmp_path / "note.md"
     note.write_text("---\nuuid: existing-uuid\n---\n\nBody\n", encoding="utf-8")

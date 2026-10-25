@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/youtube.sync.degraded.v1.schema.json",
+  "title": "youtube.sync.degraded payload (v1)",
+  "description": "Per-source YSS-07 subscription RSS poll degradation receipt. Producer: app/knowledge_acquisition/channel_rss_discovery.py. Idempotency key basis: (topic, binding_id, run_id). Lineage posture: no dispatched consumer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "binding_id",
+    "collection_kind",
+    "collection_ref",
+    "run_id",
+    "reason_code",
+    "detail",
+    "duration_ms"
+  ],
+  "properties": {
+    "binding_id": { "type": "string", "minLength": 1 },
+    "collection_kind": { "const": "subscription_feed" },
+    "collection_ref": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "format": "uuid" },
+    "reason_code": {
+      "type": "string",
+      "enum": [
+        "network_error",
+        "rss_feed_unavailable",
+        "rss_feed_invalid",
+        "rss_feed_too_large",
+        "source_mismatch",
+        "policy_conflict",
+        "filter_metadata_unavailable",
+        "policy_unsupported",
+        "paused_source"
+      ]
+    },
+    "detail": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "duration_ms": { "type": "integer", "minimum": 0 }
+  }
+}

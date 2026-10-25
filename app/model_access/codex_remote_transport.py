@@ -131,6 +131,14 @@ class RemoteEmbeddingError(RuntimeError):
         super().__init__(code)
 
 
+class RemoteEmbeddingIdentityError(RemoteEmbeddingError):
+    """Fixed diagnostic subtype for selected response-identity disagreement."""
+
+
+class RemoteEmbeddingVectorError(RemoteEmbeddingError):
+    """Fixed diagnostic subtype for response vector/dimension disagreement."""
+
+
 def _validate_private_https_endpoint(endpoint: str) -> str:
     try:
         parsed = urlsplit(endpoint)
@@ -752,7 +760,17 @@ class CodexRemoteTransport:
                 # The wire format is a JSON array while the immutable contract
                 # stores vectors as tuples; convert only this declared field.
                 value = {**value, "vector": tuple(value["vector"])}
+            if isinstance(value, dict) and {'vector', 'dimensions'} <= value.keys():
+                vector, dimensions = value['vector'], value['dimensions']
+                if (type(dimensions) is not int or not 1 <= dimensions <= 4096
+                    or not isinstance(vector, tuple) or len(vector) != dimensions
+                    or any(type(item) not in (int, float) for item in vector)):
+                    raise RemoteEmbeddingVectorError(
+                        "embedding_response_invalid", indeterminate=True
+                    )
             result = ProductEmbeddingResponse.model_validate(value)
+        except RemoteEmbeddingVectorError:
+            raise
         except Exception:
             raise RemoteEmbeddingError(
                 "embedding_response_invalid", indeterminate=True
@@ -761,11 +779,16 @@ class CodexRemoteTransport:
         if (
             result.route.provider != request.provider
             or result.route.model != request.model
-            or result.dimensions != request.dimensions
+        ):
+            raise RemoteEmbeddingIdentityError(
+                "embedding_route_or_dimension_mismatch", indeterminate=True
+            )
+        if (
+            result.dimensions != request.dimensions
             or len(result.vector) != request.dimensions
             or any(not math.isfinite(value) for value in result.vector)
         ):
-            raise RemoteEmbeddingError(
+            raise RemoteEmbeddingVectorError(
                 "embedding_route_or_dimension_mismatch", indeterminate=True
             )
         return result

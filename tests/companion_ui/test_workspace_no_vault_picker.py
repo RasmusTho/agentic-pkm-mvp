@@ -616,7 +616,7 @@ def test_loaded_note_v_chip_opens_choose_a_vault_switch_overlay() -> None:
     # The switch overlay reuses the Choose-a-vault overlay, hosted hidden until
     # the chip reveals it (data-reason="switch", not a no_vault first-contact
     # picker).
-    host_start = html.index('data-testid="vault-switch-host"')
+    host_start = html.index('data-testid="vault-switch-host"', html.index("<body"))
     host_open = html.rindex("<div", 0, host_start)
     host_tag = html[host_open : html.index(">", host_start)]
     assert "hidden" in host_tag

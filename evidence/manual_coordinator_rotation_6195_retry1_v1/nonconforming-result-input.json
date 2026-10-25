@@ -1,0 +1,24 @@
+{
+  "historical_source": {
+    "bytes_length": 32512,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/writer/frozen-verifier-5d657d8905f8f61ad24723fc55018bd1149a86d35345fe7cb4805cc59df8ff37.py.txt",
+    "sha256": "5d657d8905f8f61ad24723fc55018bd1149a86d35345fe7cb4805cc59df8ff37"
+  },
+  "rotation_input": {
+    "bytes_length": 2758,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/rotation-input.json",
+    "sha256": "0f5271fb2c637801f0fcc82ba7711fead8062cfe9f1bb374b87f2cedd800bdbe"
+  },
+  "schema_name": "manual_rotation_nonconforming_result_input",
+  "schema_version": 1,
+  "source_custody": {
+    "bytes_length": 1321,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/writer/frozen-verifier-source-custody.json",
+    "sha256": "4db04bd475dbb6d2f3df6c68a07e099ebcfe82aa56e5a0f8962246aa320aad7b"
+  },
+  "strict_refusal": {
+    "bytes_length": 1705,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/writer/frozen-v2-refusal.original.json",
+    "sha256": "45f60fa525c51a72844af9ee48000c2edfb48a2fa221805bfea41785265cdfa0"
+  }
+}

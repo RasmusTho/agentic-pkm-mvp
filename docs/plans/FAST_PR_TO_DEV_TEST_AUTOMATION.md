@@ -4,8 +4,8 @@ Authority: Proposes the post-merge Product Runtime `dev` → `test` automation b
 Temporal class: operational
 Review cadence: before implementation and after the first ten merged candidates
 Source of truth: repository workflows/scripts plus fresh, redaction-safe runtime receipts
-Last reviewed: 2026-10-11
-Last verified against: #5922, #5932 and #5950; `.github/workflows/postmerge-dev-test.yml`, `scripts/postmerge_dev_test.py`, `scripts/install_postmerge_controller.py`, native DeployPlan/RPC and digest-pin tests; [actual same-candidate native DEV/TEST receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) under #5675
+Last reviewed: 2026-10-23 (#6228 production source-policy adoption and #6226 green channel-ref/hold support, repository-only; prior live receipt dates retained)
+Last verified against: `tests/deploy/test_postmerge_dev_test.py::test_channel_refs_advance_only_on_green_verdicts` and `::test_dev_hold_pins_ref_and_records_candidates` (#6226 repository proof); `tests/deploy/test_postmerge_dev_test.py::test_kill_switch_requires_issue_and_expiry` and `::test_kill_switch_pauses_until_expiry` (#6224 repository proof); #5922, #5932 and #5950; `.github/workflows/postmerge-dev-test.yml`, `scripts/postmerge_dev_test.py`, `scripts/install_postmerge_controller.py`, native DeployPlan/RPC and digest-pin tests; [actual same-candidate native DEV/TEST receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) under #5675
 
 # Fast PR-to-merge with automatic dev/test delivery
 
@@ -64,6 +64,35 @@ belong to `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: CI deployment autom
 | Nightly fails | Bind the failure to the tested SHA and channel, publish actionable test/run evidence, and create/update an issue. Do not block an already-merged PR or newer candidates from entering dev/test. | This plan adds no production eligibility rule from a nightly result. Production remains governed by `docs/RELEASE_CHANNELS/README.md` and its required receipts. The bounded PostgreSQL nightly's role remains for the owner decision in #5676. |
 
 No automated database rollback is part of this plan. A failed health check must not imply that restoring an older image restores database state. Keep the channel failure visible and use the existing operator-governed recovery/rollback procedure; any future automatic recovery needs its own migration-aware contract and acceptance evidence.
+
+## Continuous dev delivery target (ADR-0068)
+
+[ADR-0068](../adr/ADR-0068-continuous-dev-delivery-flow.md) (owner-directed 2026-10-18) sets the target for this pipeline: **merge on risk, then `main` → `dev` → `test` → `prod`**. It never stops development for a deploy problem. Until each slice below lands, the current policy above applies. The parent contract Issue is #6207.
+
+- **Merge on risk.** No post-merge stage gates or reverts a merge. Problems found after merge become bug Issues.
+- **Latest wins.** `dev` gets the newest admitted `main` build, and intermediate commits are batched.
+- **A failure files a bug, never a pause.** A red candidate opens or updates one rolling bug Issue per channel, with the SHA, the commit range since the last good candidate, the failing gate and the receipt. The next candidate proceeds. `dev` and `test` never roll back. Recovery is roll-forward, or rebuilding a broken channel from scratch, because its databases are rebuildable projections (Rebuildable System Continuity, #5258). Prod keeps its rollback contract.
+- **Refs record channel state.** `dev` is the last green dev verdict, and differs from `main` only by a documented technical hold. `test` is the last candidate promoted for UAT after a green dev verdict. #6228 adopts protected `stable` production authority, superseding ADR-0040 §1–§2: normal advancement requires exact current green TEST C/D, a signed functional PASS and explicit concrete-plan approval. Generated merge M never substitutes for the tested runtime/image. Source adoption establishes no live ref movement, cutover or production acceptance.
+- **Pause only the machinery.** The supported controller pause requires a linked Issue and an expiry, reports red `paused (#N, until T)` through liveness, and automatically lifts at expiry. Unloading the controller is not a pause mechanism. The [deployment owner](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture) owns the command and live-change authority.
+- **Liveness is loud.** A GitHub check turns red when no dev verdict follows a newer admitted build within the grace period.
+- **Pinned controller tooling,** separate from candidate code. Repository support in #6225 checks
+  the real pin before polling and reports failed startup through liveness using a read-only
+  checkpoint frontier. Later actual activity can recover; a fresh verdict alone cannot hide the
+  failure. The [deployment owner](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture)
+  owns the asynchronous reporting/refusal limits and installation. Live activation and release
+  acceptance remain separate under #6170/#3347.
+
+Enactment slices (children of #6207):
+
+| Slice | ADR-0068 decision |
+| --- | --- |
+| Controller liveness check | D6 |
+| Automatic rolling channel bug Issue — repository support in #6223; live activation retains #6170/#3347 | D3 |
+| `dev` and `test` refs advanced on exact green verdicts, with linked-Issue dev hold — repository support in #6226; live activation retains #6170/#3347 | D4 |
+| Kill switch with Issue and expiry — repository support in #6224; live host changes require an owner OK on #6224; existing #6170/#3347 gates retained | D5 |
+| Pinned controller tooling — repository support in #6225; live activation retains #6170/#3347 | D7 |
+| Heavy tests on `dev` as part of the dev verdict — repository gate in #6227; prerequisite #6205 delivered; live host activation #6170 and qualification #3347 remain gated | D4 |
+| Prod promotion from exact current green `test` to protected `stable` — repository policy and caller admission in #6228; actual operator-approved promotion and parent acceptance remain separate | D4 |
 
 ## Preconditions and delivery sequence
 

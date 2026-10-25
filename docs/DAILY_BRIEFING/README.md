@@ -93,6 +93,16 @@ Multiple tasks read or write the same briefing-note substrate; these invariants 
 
 ## Validation / acceptance path
 
+### Governed identity-only migration batch
+
+DEV exposes an inert wrapper around the composer-owned Daily Briefing identity migration for an
+exact, pre-reviewed set of load-valid dated notes. The wrapper requires the canonical date/path,
+the composer's expected-version CAS, byte-identical body and non-identity frontmatter, the exact
+reviewed target-set digest, and one unchanged physical vault/host authority fence. It delegates the
+write back to the composer; it is not a generic registry producer, cannot repair damaged artifacts,
+and does not select sources, load the controller, deploy, infer, or authorize TEST/PROD. Exact
+rollback is permitted only for the admitted candidate/original byte pair under the same fence.
+
 Follow `docs/TESTING.md :: Automated Technical Acceptance`. TEST is the default acceptance channel;
 use the short same-candidate DEV core-flow smoke and add DEV scenarios only for a specific
 DEV contract or failure. Qualify the actual deployed UI/API and required producer SHA/image digest,

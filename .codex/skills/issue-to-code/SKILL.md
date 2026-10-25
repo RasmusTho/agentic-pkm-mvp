@@ -23,6 +23,12 @@ hub by default. Every direct `gh issue` command in this skill carries `--repo "$
 constituent-surface work, use that constituent repository for its Issue and PR lifecycle while
 preserving a hub Issue only when the governing contract explicitly names it.
 
+When a constituent repository's Issue is handled from a different checkout, resolve its relative
+`Verify:` paths against that checkout by passing `--repo-root "$TARGET_REPO_ROOT"` to
+`scripts/validate_issue_readiness.py` and `--readiness-repo-root "$TARGET_REPO_ROOT"` to
+`scripts/issue_pickup_claim.sh`. Keep `--repo "$REPO"` as the GitHub repository identity; the root
+flag only selects local file checks for the exact target repository during pickup refresh.
+
 ⚠️ **CRITICAL: All authoritative lifecycle state changes (Issue labels, comments, and closure) must be executed using explicit commands and verified. Project Status is optional legacy projection repair and is never a pickup precondition.**
 
 Your governing rule:
@@ -304,6 +310,23 @@ pickup wrapper for both dispatcher-backed and degraded label-only pickup:
 scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" --agent <agent_id> --session <session_id>
 ```
 
+For an Issue in a different repository, run the wrapper from the checkout that owns the shared
+dispatcher state, and bind pickup and Verify-path readiness to the target checkout:
+
+```bash
+TARGET_REPO_ROOT=/absolute/path/to/target-repo
+scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" \
+  --target-worktree "$TARGET_REPO_ROOT" \
+  --readiness-repo-root "$TARGET_REPO_ROOT" \
+  --agent <agent_id> --session <session_id>
+```
+
+With `--target-worktree`, the wrapper resolves the target branch, worktree, and `origin` from that
+checkout; `--repo` and `--readiness-repo-root` must match it. The wrapper calls workspace preflight
+from its own repository with `--cwd` set to the target worktree, while dispatcher status, refresh,
+claim, and release commands run from the wrapper repository so they use its shared dispatcher state.
+The readiness root defaults to the target worktree when omitted.
+
 The wrapper runs workspace preflight and `dispatcher status`, derives the exact repo-qualified task id
 `github-<owner>--<repo>-issue-<N>` (matching the id `dispatcher pull` assigns; pass `--task-id` to
 override), and does not substitute a candidate returned by `dispatcher next`. When the
@@ -312,6 +335,22 @@ task id, issue number, status, owner, lease id, lease resource, holder, expiry, 
 before atomically replacing all `agent:*` state labels with exactly `agent:in-progress`. The replacement preserves
 non-agent labels (including `type:*`, `prio:*`, and `lane:*`). Database or singleton existence alone never produces a
 dispatcher-backed pickup receipt.
+
+For same-owner recovery of an expired dispatcher lease on an already active Issue, use the explicit
+`--takeover-stale` wrapper option. This path requires an open Issue with exactly `agent:in-progress`
+and a strictly valid contract, the canonical repo-qualified task id and matching task repository for
+the selected Issue, an expired unreleased lease for that exact task held by the same `--agent`, and
+an active worktree registration owned by the current `--session`. It checks the repository binding
+again in the post-claim task/lease/event readback. It heartbeats that same worktree registration,
+invokes the dispatcher's atomic
+`claim --takeover-stale --expected-lease-id <observed-id>`, verifies the claim event against that
+exact predecessor, and re-reads the Issue. If the command result is ambiguous, the wrapper accepts
+only an exact task/lease/event readback; it never releases a lease acquired by stale takeover on an
+ambiguous or malformed result. It skips the fresh ready-list refresh and does not mutate Issue
+labels. The flag fails closed when the dispatcher is unavailable, the old lease is still active or
+belongs to another agent, the Issue or worktree ownership has changed, or the claim/event readback
+is incomplete. It is a self-resume path; a different successor still uses the authenticated
+dispatcher-release and worktree-transfer sequence in `resume-work`.
 
 Rescue-stash notes, stale local pickup plans, and prior-session handoffs are
 non-authoritative context. Before using any of them to resume issue pickup,
@@ -348,7 +387,9 @@ scripts/issue_pickup_claim.sh \
 
 Explicit label-only fallback is refused if a successful status response shows the dispatcher
 database exists. A failed automatic dispatcher refresh while the dispatcher is available is a stop condition,
-not permission to bypass its lease state.
+not permission to bypass its lease state. When using this explicit fallback for a different target
+repository, include the same `--target-worktree "$TARGET_REPO_ROOT"` and
+`--readiness-repo-root "$TARGET_REPO_ROOT"` arguments shown above.
 
 Preserve the wrapper's receipt in the PR body. Do not reconstruct a dispatcher-backed receipt from
 `status --json`, database existence, or a separate label command.
@@ -535,6 +576,7 @@ When continuing through anchor drift:
 1. Select the Issue according to priority and readiness rules.
 2. Run mandatory pickup claim wrapper before any lifecycle mutation:
    - `scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" --agent <agent_id> --session <session_id>`
+   - For a different target repository, use the cross-repository command in **Dispatcher Integration** with both `--target-worktree` and `--readiness-repo-root` set to the target checkout root.
    - This wrapper enforces workspace isolation preflight before atomically replacing `agent:*` labels with exactly `agent:in-progress`.
    - If preflight fails, stop and resolve branch/worktree collisions before claiming.
    - After a successful claim, register the dedicated checkout without switching the shared root:
@@ -542,6 +584,13 @@ When continuing through anchor drift:
      Heartbeat the same owner before long validation or review waits. Record `release` only when
      abandoning/handover makes the checkout inactive, or `complete` after terminal delivery; an
      open PR that may need review fixes remains active.
+     Preserve the wrapper's final pickup-claim-complete line exactly as the `pickup_receipt` input
+     to the first issue-backed PR body. The wrapper emits a preflight report before that line, so a
+     shell capture may select only the final line (for example, `tail -n 1`); do not reconstruct the
+     receipt from dispatcher status, labels, or a fabricated success string. Pass the captured value
+     through the body-input JSON and let `scripts/pr_body_generator.py` refuse missing, malformed, or
+     foreign-Issue receipts before publication effects. Issue-free and explicit multi-Issue bodies
+     retain their declared scope; a receipt binds to the governing Issue, never an unclaimed parent.
 3. Run delivered-state preflight before claim when target implementation paths are explicit:
    - Verify whether referenced target modules already exist in the repo.
    - If core implementation already exists, do not proceed as fresh implementation; route to `issue-maintenance-change-control` to correct stale or drifted contract state.

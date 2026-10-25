@@ -143,12 +143,18 @@ def _sanitize_health_value(value: Any, *, parent_key: str | None = None) -> Any:
 async def health(
     model_access_sampling: Literal["background", "cache"] = "background",
 ) -> dict[str, Any]:
+    from app.config.activation_scope import runtime_activation_scope
+    scope = runtime_activation_scope()
+    if scope == 'text-capture':
+        model_access_sampling = 'cache'
     payload = await run_in_threadpool(
         run_health,
         model_access_sampling=model_access_sampling,
     )
     if isinstance(payload, dict):
         payload = _neutralize_llm_diagnostics(payload)
+        if scope == 'text-capture':
+            payload.update(activation_scope=scope, full_channel_qualified=False)
     return _sanitize_health_value(payload)
 
 

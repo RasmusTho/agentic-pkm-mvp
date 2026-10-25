@@ -1,0 +1,48 @@
+{
+  "mechanism": "metadata-concordance / authority-integrity",
+  "scope": "One known delivery reporting-mechanism correction after the actual observed experiment interval; not an in-interval repair or native retry.",
+  "observed_clock": {
+    "tool": "clock.curr_time",
+    "result": {
+      "current_time": "2026-10-18 12:49:59 UTC"
+    }
+  },
+  "maintenance_receipt": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/6236#issuecomment-6249981448",
+  "canonical_body_sha256": "ee1e7c240527c5221017f0b426c9b9aedda8cbf924b85d47f525a2c3d64876aa",
+  "result": {
+    "bytes_length": 18327,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/nonconforming-result.v1.json",
+    "sha256": "8e8457c675ae1bfa4c63231b6386e5c583d4e9d067cff2d76844b5f29d626d97"
+  },
+  "frozen_strict_refusal": {
+    "bytes_length": 1705,
+    "ref": "evidence/manual_coordinator_rotation_6195_retry1_v1/writer/frozen-v2-refusal.original.json",
+    "sha256": "45f60fa525c51a72844af9ee48000c2edfb48a2fa221805bfea41785265cdfa0"
+  },
+  "unchanged_experiment_interval": {
+    "started_at": "2026-10-18T12:04:34Z",
+    "ended_at": "2026-10-18T12:20:12Z",
+    "elapsed_wall_seconds": 938,
+    "implementation_repair_events": 3
+  },
+  "actual_local_assembly_correction": "Before any report input/output was created, applying the existing JSON-only binder to archived Python source refused. A finite raw-source byte/hash binder corrected that type assumption. Later presentation clarified observed nonconformance and retained the earlier derived report without editing originals.",
+  "validation": {
+    "focused_eight_file_tests": 295,
+    "affected_reporting_tests_after_final_wording": 62,
+    "ruff": "pass app tests companion-ui/companion-app",
+    "mypy": "pass app, 1090 files",
+    "docs_guard": "pass",
+    "scoped_public_seam": "74 evidence files, zero secrets, zero uncovered after finite registration",
+    "diff_check": "pass"
+  },
+  "pending": [
+    "fresh independent exact-candidate review",
+    "current-head blessed CI",
+    "native guarded merge and exact closure"
+  ],
+  "unknown": [
+    "whole delivery repair/effort/cost/model-active totals",
+    "engine introspection",
+    "root actual model/reasoning"
+  ]
+}

@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import datetime
-from dataclasses import asdict
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass, replace
 import errno
+import functools
+import inspect
 import heapq
 import json
 import logging
@@ -18,8 +22,9 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 import app.api.routes.canvas as canvas_module
@@ -63,6 +68,7 @@ from app.agent_memory.posture_projection import (
     agent_memory_posture_for_artifacts,
 )
 from app.auth import api_key_header, require_loopback_or_api_key, resolve_auth_subject
+from app.settings.models import SCREEN_CONTROL_KEYS
 from app.text.helpers import (
     body_contains_frontmatter as _body_contains_frontmatter,
     content_hash as _content_hash,
@@ -70,6 +76,7 @@ from app.text.helpers import (
     split_frontmatter as _split_frontmatter,
 )
 from app.config.environment import active_environment
+from app.config.activation_scope import runtime_activation_scope
 from app.config.paths import (
     VaultRootMisconfiguredError,
     resolve_optional_vault_root,
@@ -78,14 +85,36 @@ from app.domain.commitments import (
     CommitmentRecord,
     query_next_and_waiting_commitments,
 )
+from app.calibration.scheduler import RevisitDue, due_revisits
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+from app.receipts.outcome_receipt_log import (
+    OUTCOME_RECEIPT_WRITE_ACTION,
+    OutcomeValue,
+    append_outcome_receipt,
+    iter_outcome_receipts,
+)
+from app.receipts.revisit_dismissal_log import (
+    REVISIT_DISMISSAL_WRITE_ACTION,
+    append_revisit_dismissal,
+    iter_revisit_dismissals,
+)
+from app.receipts.revisit_action_lock import revisit_action_lock
 from app.api.routes.active_context_selection import get_selection_store
 from app.api.routes.ingest_binding import ingest_binding_status
-from app.api.request_active_context import require_scoped_read_context
+from app.api.request_active_context import (
+    require_scoped_read_context,
+    resolve_optional_scoped_read_context,
+)
 from app.instance.errors import RegistryError
+from app.api.routes.vault_resolution import compatibility_selection_window
 from app.api.compatibility_mutation import (
     HEADER_COMPATIBILITY_PRECONDITION,
+    compatibility_selector_bridge,
+    compatibility_write_target_window,
+    make_vault_mutation_seal,
     reject_scoped_vault_mutation,
     require_compatibility_mutation,
+    require_compatibility_write_root,
     issue_compatibility_precondition,
 )
 from app.events.panel import (
@@ -130,10 +159,13 @@ from app.vault.manager import (
     MachineRole,
     VaultContext,
     VaultInitializationResult,
+    VaultManager,
+    VaultPermissions,
     existing_init_target_entries,
     get_vault_manager,
     is_vault_root,
     nearest_enclosing_vault_root,
+    no_vault_context,
 )
 from app.instance.active_context_service import (
     ActiveContextSelectionService,
@@ -161,10 +193,18 @@ from app.vault.settings_service import (
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.standing_questions.registration import register_question_explicitly
 
+# MVR-05B3: every companion mutation carries the pre-05C seal (scoped carriers and
+# misrouted migrated preconditions refused; a legacy write target proved to be
+# the sole compatibility binding). The picker/initialize/reload/settings bridge
+# moves that binding and is exempt from the write-target window only.
 router = APIRouter(
     prefix="/companion",
     tags=["companion"],
-    dependencies=[Depends(reject_scoped_vault_mutation)],
+    # The seal compares the durable compatibility binding with the selection
+    # these routes actually resolve (the companion legacy adapter below).
+    dependencies=[
+        Depends(make_vault_mutation_seal(lambda: _legacy_companion_selected_root()))
+    ],
 )
 
 logger = logging.getLogger(__name__)
@@ -299,11 +339,13 @@ class VaultContextResponse(BaseModel):
     validation_error: str | None = None
     permissions: dict[str, bool] = Field(default_factory=dict)
     active_context: dict[str, Any] | None = None
+    context_selection_id: str | None = None
 
 
 class VaultSelectRequest(BaseModel):
     path: str = Field(..., min_length=1)
     remember: bool = True
+    scoped_selection: bool = False
 
 
 class VaultInitializeRequest(BaseModel):
@@ -319,6 +361,7 @@ class VaultInitializeRequest(BaseModel):
     # Fresh no-vault initialization carries the authenticated single-use
     # precondition minted by ``/vault/initialize/bootstrap``.
     bootstrap_token: str | None = None
+    scoped_selection: bool = False
 
 
 class VaultInitializeResponse(BaseModel):
@@ -466,8 +509,7 @@ _BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
 
 
 def _vault_context_response(context: VaultContext) -> VaultContextResponse:
-    manager = get_vault_manager()
-    permissions = manager.permissions_for_context(context)
+    permissions = _companion_vault_permissions(context)
     active_context = ActiveContextResolver().resolve(context)
     return VaultContextResponse(
         status=context.status,
@@ -513,8 +555,7 @@ def _setting_blocked_reason(definition: SettingDefinition, context: VaultContext
         return "not a vault-scoped setting"
     if context.status != "selected":
         return f"requires selected vault; current status is {context.status}"
-    manager = get_vault_manager()
-    permissions = manager.permissions_for_context(context)
+    permissions = _companion_vault_permissions(context)
     if definition.scope == "vault-shared":
         if not permissions.allow_writes_to_vault:
             return "writes disabled by machine role or local permission"
@@ -575,7 +616,12 @@ def _settings_error_response(error: SettingsValidationError) -> VaultSettingsVal
 
 
 def _recent_vaults_response() -> list[KnownVaultResponse]:
-    manager = get_vault_manager()
+    if _SCOPED_COMPANION_READ.get() is not None:
+        # The process-wide picker recents belong to the legacy single-binding
+        # selector, not to the request's bound vault; never publish them on a
+        # scoped read.
+        return []
+    manager = _legacy_companion_vault_manager()
     try:
         settings = manager.app_local_store.load()
     except Exception:
@@ -834,12 +880,287 @@ class VaultUninitializedError(RuntimeError):
 _READABLE_SELECTED_STATUSES: frozenset[str] = frozenset({"selected", "uninitialized"})
 
 
+# --- MVR-05B2: companion reads on the per-request ActiveContextSet ------------
+#
+# Companion read routes are migrated in place, so one URL serves two separately
+# identified journeys:
+#
+# * A request that presents a selection carrier resolves its own immutable
+#   ActiveContextSet (``resolve_optional_scoped_read_context``) and the whole
+#   route runs inside ``context_bound_read_window``: the shared binding lease is
+#   held from final registry/principal/ownership revalidation through
+#   filesystem, retrieval and cache I/O *and* response serialization. Every
+#   helper below reads the bound root from ``_SCOPED_COMPANION_READ`` and never
+#   consults the process-wide selector for such a request.
+# * A carrier-free request keeps the legacy single-binding journey. Its only
+#   global vault lookups are the three ``_legacy_*`` compatibility adapters,
+#   which tests/architecture/context_boundary_inventory.py lists as retained
+#   until the single-binding compatibility selector retires (MVR-06).
+
+
+@dataclass(frozen=True)
+class _ScopedCompanionRead:
+    """The one binding a scoped companion read is bound to, under its lease."""
+
+    # ``None`` for a healthy explicit zero-binding selection (the scoped no-vault
+    # journey): routes render their no-vault picker state for it.
+    vault_binding_id: str | None
+    root: Path | None
+    context_generation: int
+    vault_context: VaultContext
+    # Stateless classifier for this root; never the process-wide selector.
+    validator: VaultManager
+
+
+_SCOPED_COMPANION_READ: ContextVar[_ScopedCompanionRead | None] = ContextVar(
+    "companion_scoped_read", default=None
+)
+_SCOPED_READ_ROUTE_PARAMETER = "mvr05b2_active_context"
+
+
+def _legacy_companion_vault_manager() -> VaultManager:
+    """Carrier-free compatibility adapter: the process-wide single-binding selector."""
+
+    return get_vault_manager()
+
+
+def _legacy_configured_vault_root(
+    *, environment: Literal["dev", "prod", "test"] | None = None
+) -> Path | None:
+    """Carrier-free compatibility adapter: the configured, unselected vault root."""
+
+    if environment is None:
+        return resolve_optional_vault_root()
+    return resolve_optional_vault_root(environment=environment)
+
+
+def _legacy_vault_root_env_value() -> str:
+    """Carrier-free compatibility adapter: raw ``VAULT_ROOT`` for identity provenance."""
+
+    return os.getenv("VAULT_ROOT", "").strip()
+
+
+def _companion_vault_permissions(context: VaultContext) -> VaultPermissions:
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None:
+        return scoped.validator.permissions_for_context(context)
+    return _legacy_companion_vault_manager().permissions_for_context(context)
+
+
+def _companion_read_vault_context() -> VaultContext:
+    """The vault context a companion read renders: bound binding, else legacy."""
+
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None:
+        return scoped.vault_context
+    return _companion_vault_context_with_lazy_last_active(_legacy_companion_vault_manager())
+
+
+def _scoped_vault_context(
+    validator: VaultManager, root: Path, context: ActiveContextSetV1
+) -> VaultContext:
+    """Write-free classification carrying the binding's stable identity.
+
+    A scoped read never heals identity, so a vault whose settings omit an id would
+    otherwise get a fresh request-local UUID on every read. The selection's binding
+    snapshot already names the stable identity; prefer it.
+    """
+
+    classified = validator.validate_vault(root, heal_identity=False)
+    binding = context.source_bindings[0]
+    return replace(
+        classified,
+        active_vault_id=binding.vault_id or classified.active_vault_id,
+        local_instance_id=binding.local_instance_id or classified.local_instance_id,
+    )
+
+
+@contextmanager
+def _companion_scoped_read_window(context: ActiveContextSetV1) -> Iterator[_ScopedCompanionRead]:
+    """Bind one companion read to ``context`` under its shared binding lease."""
+
+    if len(context.source_bindings) > 1:
+        # Companion read surfaces render exactly one vault. A many-binding
+        # selection is refused rather than silently narrowed to one of them.
+        raise HTTPException(status_code=409, detail="active_context_single_binding_required")
+    registry_path = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
+    if not registry_path:
+        raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
+    registry = VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False))
+    try:
+        # A valid explicit empty selection is the healthy scoped no-vault journey.
+        # It still runs inside the read window, so the principal read-effect fence
+        # holds through response publication exactly as for a bound read.
+        with context_bound_read_window(context, registry_store=registry) as roots:
+            validator = VaultManager()
+            if roots:
+                source = roots[0]
+                scoped = _ScopedCompanionRead(
+                    vault_binding_id=source.vault_binding_id,
+                    root=source.root,
+                    context_generation=source.context_generation,
+                    vault_context=_scoped_vault_context(validator, source.root, context),
+                    validator=validator,
+                )
+            else:
+                scoped = _ScopedCompanionRead(
+                    vault_binding_id=None,
+                    root=None,
+                    context_generation=context.generation,
+                    vault_context=no_vault_context(),
+                    validator=validator,
+                )
+            token = _SCOPED_COMPANION_READ.set(scoped)
+            try:
+                yield scoped
+            finally:
+                _SCOPED_COMPANION_READ.reset(token)
+    except ContextBoundReadError as exc:
+        raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
+
+
+def _document_read_principal(
+    request: Request, api_key: str | None = Depends(api_key_header),
+) -> str | None:
+    if any(name in request.headers for name in ("X-Active-Context-Session", "X-Active-Context-Override")):
+        return None
+    registry_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+    if not registry_path:
+        return None
+    try:
+        principal = _authenticated_principal_id(request, api_key, Path(registry_path))
+        snapshot = VaultRegistryStore(Path(registry_path)).read_existing()
+    except (HTTPException, RegistryError, OSError):
+        # Preserve the legacy read projection, but never grant a write proof to
+        # an unauthenticated caller or initialize/repair unqualified state.
+        return None
+    return principal if (
+        snapshot.settings_rebind is not None
+        and snapshot.settings_rebind.get("candidateBindingId") is not None
+    ) else None
+
+
+def _scoped_companion_document_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:
+    return _scoped_companion_read(endpoint, document_write_proof=True)
+
+
+def _scoped_companion_read(
+    endpoint: Callable[..., Any], *, document_write_proof: bool = False,
+) -> Callable[..., Any]:
+    """Migrate one companion read route onto the per-request ActiveContextSet.
+
+    Adds the carrier dependency to the route. A carrier-bearing request runs the
+    route inside :func:`_companion_scoped_read_window` and serializes the
+    response before the lease is released, so a revocation cannot complete
+    between the read and its publication. A carrier-free request (or a direct
+    in-process call) runs the unchanged legacy body.
+    """
+
+    signature = inspect.signature(endpoint)
+    carrier = inspect.Parameter(
+        _SCOPED_READ_ROUTE_PARAMETER,
+        inspect.Parameter.KEYWORD_ONLY,
+        default=Depends(resolve_optional_scoped_read_context),
+        annotation=ActiveContextSetV1 | None,
+    )
+
+    @functools.wraps(endpoint)
+    def route(*args: Any, **kwargs: Any) -> Any:
+        context = kwargs.pop(_SCOPED_READ_ROUTE_PARAMETER, None)
+        principal = kwargs.pop("mvr05b5_document_principal", None)
+        if context is None and principal is not None:
+            from app.instance.settings_rebind import SettingsRebindStore
+
+            registry = VaultRegistryStore(Path(os.environ["INSTANCE_VAULT_REGISTRY_PATH"]))
+            # One sync worker owns this lock through content and serialization;
+            # no thread-owned lock spans a FastAPI dependency yield.
+            with _legacy_companion_vault_manager().selection_window():
+                with compatibility_write_target_window(selected_root=_legacy_companion_selected_root) as root:
+                    result = endpoint(*args, **kwargs)
+                    response = JSONResponse(content=jsonable_encoder(result))
+                    if root is not None and not isinstance(result, VaultSelectionRequiredResponse):
+                        binding_id = SettingsRebindStore(registry).compatibility_binding_id()
+                        response.headers[HEADER_COMPATIBILITY_PRECONDITION] = issue_compatibility_precondition(
+                            binding_id=binding_id, principal_id=principal, registry=registry,
+                        )
+                    return response
+        if context is None:
+            return endpoint(*args, **kwargs)
+        with _companion_scoped_read_window(context):
+            result = endpoint(*args, **kwargs)
+            if isinstance(result, Response):
+                return result
+            return JSONResponse(content=jsonable_encoder(result))
+
+    extra_parameters = [carrier]
+    if document_write_proof:
+        extra_parameters.append(inspect.Parameter(
+            "mvr05b5_document_principal", inspect.Parameter.KEYWORD_ONLY,
+            default=Depends(_document_read_principal), annotation=str | None,
+        ))
+    setattr(
+        route,
+        "__signature__",
+        signature.replace(parameters=[*signature.parameters.values(), *extra_parameters]),
+    )
+    return route
+
+
+def _scoped_companion_vault_root(
+    scoped: _ScopedCompanionRead,
+    *,
+    require_initialized: bool,
+    context_snapshot_out: dict[str, VaultContext] | None,
+) -> Path:
+    context = scoped.vault_context
+    if scoped.root is None:
+        # Scoped zero-binding selection: the same no-vault picker state as a
+        # carrier-free request with nothing selected, without consulting it.
+        raise NoVaultBoundError("no vault is selected", configured_path=None)
+    if require_initialized and context.status == "uninitialized":
+        # Read-before-initialize: a provisional binding is readable but the
+        # entry/write gates still name the residual ``uninitialized`` state.
+        raise VaultUninitializedError(
+            "the selected vault is not initialized",
+            selected_path=scoped.root,
+        )
+    allowed = frozenset({"selected"}) if require_initialized else _READABLE_SELECTED_STATUSES
+    if context.status not in allowed:
+        # The bound binding is not a readable vault. Refuse; never fall back to
+        # another selection or to the picker of the legacy selector.
+        raise HTTPException(status_code=409, detail="active_context_vault_unreadable")
+    if context_snapshot_out is not None:
+        context_snapshot_out["context"] = context
+    return scoped.root
+
+
+def _legacy_companion_selected_root() -> Path | None:
+    """The legacy selection a companion mutation resolves, or ``None`` without one.
+
+    The pre-05C write seal compares it with the durable compatibility binding.
+    Mutations never run inside a scoped read, so this is always the carrier-free
+    compatibility journey.
+    """
+
+    try:
+        return _active_companion_vault_root()
+    except (VaultRootMisconfiguredError, VaultUninitializedError, NoVaultBoundError):
+        return None
+
+
 def _active_companion_vault_root(
     *,
     require_initialized: bool = False,
     context_snapshot_out: dict[str, VaultContext] | None = None,
 ) -> Path:
-    manager = get_vault_manager()
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None:
+        return _scoped_companion_vault_root(
+            scoped,
+            require_initialized=require_initialized,
+            context_snapshot_out=context_snapshot_out,
+        )
+    manager = _legacy_companion_vault_manager()
     context = _companion_vault_context_with_lazy_last_active(manager)
     # Writes require a fully-initialized vault (status ``selected``); reads also
     # accept a selected-but-``uninitialized`` directory (#2309). An uninitialized
@@ -871,7 +1192,7 @@ def _active_companion_vault_root(
     # VaultRootMisconfiguredError; a set-and-present root is offered to the
     # picker as a one-click open (``configured_path``) but never read until the
     # human selects it.
-    configured = resolve_optional_vault_root()  # raises on set-but-missing
+    configured = _legacy_configured_vault_root()  # raises on set-but-missing
     raise NoVaultBoundError("no vault is selected", configured_path=configured)
 
 
@@ -963,8 +1284,12 @@ def _companion_vault_context_with_lazy_last_active(manager: Any) -> VaultContext
     "/vault/context",
     response_model=VaultContextResponse | VaultSelectionRequiredResponse,
 )
+@_scoped_companion_read
 def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequiredResponse:
-    manager = get_vault_manager()
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None:
+        return _vault_context_response(scoped.vault_context)
+    manager = _legacy_companion_vault_manager()
     context = manager.context
     if context.status == "none":
         context = manager.load_last_active()
@@ -974,7 +1299,7 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
         # (#2006): both return the vault_selection_required picker state (200,
         # never a 500 or a silent ./vault default), with known_vaults surfaced.
         try:
-            root = resolve_optional_vault_root()
+            root = _legacy_configured_vault_root()
         except VaultRootMisconfiguredError as exc:
             return _vault_selection_required_response(exc)
         if root is None:
@@ -987,9 +1312,47 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
     response_model=VaultContextResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
-def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
-    context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
-    return _vault_context_response(context)
+@compatibility_selector_bridge
+def select_companion_vault(
+    req: VaultSelectRequest,
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
+) -> VaultContextResponse:
+    # Only the explicit picker command may create a new scoped handoff. A read
+    # (including a stale session) never reaches this branch or remints intent.
+    registry_path = None
+    if req.scoped_selection:
+        _runtime, registry_path = _first_vault_runtime()
+        _authenticated_principal_id(request, api_key, registry_path)
+    from app.instance.filesystem_identity import resolve_filesystem_root_identity, same_filesystem_root
+
+    # Freeze the physical target before entering the rebind, which can wait on
+    # the watcher. Re-resolving a user alias after that wait could select A but
+    # mint a bearer for a newly retargeted B.
+    selected_identity = resolve_filesystem_root_identity(Path(req.path)) if req.scoped_selection else None
+    selected_path = Path(selected_identity.canonical_path) if selected_identity is not None else Path(req.path)
+    manager = get_vault_manager()
+    if not req.scoped_selection:
+        # Keep the legacy call entry and its existing lock admission unchanged.
+        return _vault_context_response(manager.select_vault(selected_path, remember=req.remember))
+    with manager.selection_window():
+        context = manager.select_vault(selected_path, remember=req.remember)
+        response = _vault_context_response(context)
+        if registry_path is not None:
+            target = resolve_filesystem_root_identity(selected_path)
+            if target != selected_identity:
+                raise HTTPException(status_code=409, detail="reselection_required: selected root identity changed")
+            matches = [
+                item.vault_binding_id
+                for item in VaultRegistryStore(registry_path).load().registrations.values()
+                if same_filesystem_root(resolve_filesystem_root_identity(item.path), target)
+            ]
+            if context.status != "selected" or len(matches) != 1:
+                raise HTTPException(status_code=409, detail="reselection_required: selected binding is not resolvable")
+            response.context_selection_id = _create_initialized_scoped_selection(
+                request=request, api_key=api_key, registry_path=registry_path, binding_id=matches[0]
+            )
+        return response
 
 
 # --- Visual folder browser (#2565) ------------------------------------------
@@ -1046,6 +1409,12 @@ def _resolve_browse_base() -> Path:
     Always returned as a realpath so the containment check compares like with
     like. Never raises: a misconfigured/unset vault root falls through to ``/``.
     """
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None and scoped.root is not None:
+        # A scoped browse is confined to its own bound root -- before the global
+        # VAULT_BROWSE_ROOT override and never its parent, either of which may
+        # hold another registered vault.
+        return scoped.root.expanduser().resolve()
     override = (os.getenv("VAULT_BROWSE_ROOT") or "").strip()
     if override:
         candidate = Path(override).expanduser()
@@ -1063,7 +1432,12 @@ def _resolve_browse_base() -> Path:
         # VAULT_ROOT_TEST must resolve the configured vault's parent as the base —
         # otherwise it is ignored and the base falls through to '/', broadening
         # the first picker screen to the whole tree (#2565 Codex P2).
-        configured = resolve_optional_vault_root(environment=active_environment())
+        # A scoped request browses beside its own bound root instead.
+        configured = (
+            None
+            if scoped is not None
+            else _legacy_configured_vault_root(environment=active_environment())
+        )
     except VaultRootMisconfiguredError:
         configured = None
     if configured is not None:
@@ -1171,6 +1545,7 @@ def _browse_breadcrumb(target: Path, base: Path) -> list[VaultBrowseBreadcrumbSe
     response_model=VaultBrowseResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
+@_scoped_companion_read
 def browse_companion_vault_folder(
     path: str = Query("", description="Directory to list (absolute or base-relative)"),
 ) -> VaultBrowseResponse:
@@ -1256,14 +1631,23 @@ def browse_companion_vault_folder(
 
 
 @router.get("/now", response_model=list[dict])
+@_scoped_companion_read
 def read_companion_now() -> list[dict]:
     """Glance surface — materialized moments from the Contextual Relevance Engine.
 
     Pull-only, read-only projection of vault-native moment artifacts. No write, no
     notification, no reach-out: the human pulls this; the system does not interrupt.
     """
-    context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
+    context = _companion_read_vault_context()
     if context.status == "selected" and context.active_vault_path:
+        # Reach-out receipts carry their producing binding (MVR-05B4c3): a scoped read
+        # shows the nudges stamped with the request binding only; a carrier-free read
+        # keeps the legacy view. A scoped read never writes.
+        scoped = _SCOPED_COMPANION_READ.get()
+        if scoped is not None:
+            if scoped.vault_binding_id is None:
+                return collect_now_moments(context, include_in_app_nudges=False)
+            return collect_now_moments(context, nudge_bindings=(scoped.vault_binding_id,))
         return collect_now_moments(context)
     return []
 
@@ -1333,6 +1717,7 @@ def _create_initialized_scoped_selection(
     response_model=VaultInitializeBootstrapResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
+@compatibility_selector_bridge
 def create_vault_initialize_bootstrap(
     req: VaultInitializeRequest,
     request: Request,
@@ -1378,6 +1763,7 @@ def create_vault_initialize_bootstrap(
     response_model=VaultInitializeResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
+@compatibility_selector_bridge
 def initialize_companion_vault(
     req: VaultInitializeRequest,
     request: Request,
@@ -1400,6 +1786,20 @@ def initialize_companion_vault(
         runtime, registry_path = _first_vault_runtime()
     elif os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip():
         runtime, registry_path = _first_vault_runtime()
+
+    if req.scoped_selection:
+        if registry_path is None:
+            raise HTTPException(status_code=503, detail="instance registry is not bound")
+        _authenticated_principal_id(request, api_key, registry_path)
+        from app.instance.filesystem_identity import FilesystemIdentityError, resolve_filesystem_root_identity
+
+        try:
+            target = Path(resolve_filesystem_root_identity(target).canonical_path)
+        except FilesystemIdentityError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="reselection_required: initialization root identity cannot be established",
+            ) from exc
 
     if runtime is not None and registry_path is not None:
         snapshot = runtime.registry.load()
@@ -1490,14 +1890,25 @@ def initialize_companion_vault(
         machine_role=req.machine_role,
         remember=req.remember,
     )
+    selected = (
+        select_companion_vault(
+            VaultSelectRequest(path=str(target), remember=req.remember, scoped_selection=True),
+            request,
+            api_key,
+        )
+        if req.scoped_selection
+        else _vault_context_response(result.context)
+    )
     return VaultInitializeResponse(
-        context=_vault_context_response(result.context),
+        context=selected,
         created_files=list(result.created_files),
         skipped_existing_files=list(result.skipped_existing_files),
+        context_selection_id=selected.context_selection_id,
     )
 
 
 @router.post("/vault/reload", response_model=VaultContextResponse)
+@compatibility_selector_bridge
 def reload_companion_vault() -> VaultContextResponse:
     manager = get_vault_manager()
     context = manager.context
@@ -1509,8 +1920,12 @@ def reload_companion_vault() -> VaultContextResponse:
 
 
 @router.get("/vault/settings", response_model=VaultSettingsResponse)
+@_scoped_companion_read
 def read_companion_vault_settings() -> VaultSettingsResponse:
-    manager = get_vault_manager()
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None:
+        return _vault_settings_response(scoped.vault_context)
+    manager = _legacy_companion_vault_manager()
     context = manager.context
     if context.status == "none":
         context = manager.load_last_active()
@@ -1518,25 +1933,39 @@ def read_companion_vault_settings() -> VaultSettingsResponse:
 
 
 @router.post("/vault/settings", response_model=VaultSettingUpdateResponse)
-def update_companion_vault_setting(req: VaultSettingUpdateRequest) -> VaultSettingUpdateResponse:
+@compatibility_selector_bridge
+def update_companion_vault_setting(
+    req: VaultSettingUpdateRequest,
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
+) -> VaultSettingUpdateResponse:
+    actor = resolve_auth_subject(request, api_key) if req.key in SCREEN_CONTROL_KEYS else "human"
     manager = get_vault_manager()
-    context = manager.context
-    if context.status != "selected" or not context.active_vault_path:
-        raise HTTPException(
-            status_code=409,
-            detail=f"settings writes require a selected initialized vault; current status is {context.status}",
-        )
-    service = SettingsService()
-    definition = service.registry.get(req.key)
-    if definition is None:
-        raise HTTPException(status_code=404, detail=f"unknown setting: {req.key}")
-    blocked_reason = _setting_blocked_reason(definition, context)
-    if blocked_reason:
-        raise HTTPException(status_code=403, detail=blocked_reason)
-    try:
-        updated, _receipt = service.update_setting(context, req.key, req.value, surface="api", actor="human")
-    except SettingsWriteError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # The settings write lands on the process-selected vault *before* the reload
+    # below rebinds anything, so pin the selection and durable compatibility
+    # binding until the write completes.
+    with compatibility_selection_window(), compatibility_write_target_window(
+        None, selected_root=_legacy_companion_selected_root
+    ):
+        context = manager.context
+        if context.status != "selected" or not context.active_vault_path:
+            raise HTTPException(
+                status_code=409,
+                detail=f"settings writes require a selected initialized vault; current status is {context.status}",
+            )
+        service = SettingsService()
+        definition = service.registry.get(req.key)
+        if definition is None:
+            raise HTTPException(status_code=404, detail=f"unknown setting: {req.key}")
+        blocked_reason = _setting_blocked_reason(definition, context)
+        if blocked_reason:
+            raise HTTPException(status_code=403, detail=blocked_reason)
+        try:
+            updated, _receipt = service.update_setting(
+                context, req.key, req.value, surface="api", actor=actor
+            )
+        except SettingsWriteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     refreshed = manager.select_vault(Path(context.active_vault_path), remember=False)
     return VaultSettingUpdateResponse(
         updated=_setting_value_response(updated),
@@ -1644,6 +2073,32 @@ class RuntimeState(BaseModel):
     commitments: CommitmentSurfaceState = Field(default_factory=CommitmentSurfaceState)
 
 
+CALIBRATION_REVISIT_SOURCE = "calibration.scheduler"
+
+
+class CalibrationRevisitState(BaseModel):
+    """Read-only projection of the next due decision revisit.
+
+    ``state`` distinguishes a healthy empty result from a degraded read.  The
+    latter is intentionally not represented as ``decision_id=None`` alone: an
+    unavailable scheduler must never look like confident zero pending work.
+    """
+
+    state: Literal["pending", "empty", "degraded"] = "empty"
+    decision_id: str | None = None
+    decision_object_id: str | None = None
+    title: str | None = None
+    decided_on: str | None = None
+    rung_index: int | None = None
+    rung_days: int | None = None
+    due_since: str | None = None
+    degraded: bool = False
+    degraded_reason: str | None = None
+    read_only: bool = True
+    authority_role: Literal["derived"] = "derived"
+    source: str = CALIBRATION_REVISIT_SOURCE
+
+
 class CanvasState(BaseModel):
     session_id: str | None
     session_state: str | None
@@ -1706,6 +2161,30 @@ class WorkspaceStateResponse(BaseModel):
     suggestions: SuggestionsState
     guards: GuardState
     reflection_offer: ReflectionOfferState | None = None
+    calibration_revisit: CalibrationRevisitState = Field(default_factory=CalibrationRevisitState)
+
+
+class CalibrationRevisitDecisionRequest(BaseModel):
+    """The four visual-pick outcomes accepted by the revisit card."""
+
+    outcome: OutcomeValue
+    note: str | None = None
+    rung_index: int | None = Field(default=None, ge=0)
+    decision_object_id: str | None = None
+
+
+class CalibrationRevisitDismissRequest(BaseModel):
+    """Stable displayed rung identity for native and enhanced dismiss forms."""
+
+    rung_index: int | None = Field(default=None, ge=0)
+    decision_object_id: str | None = None
+
+
+class CalibrationRevisitActionResponse(BaseModel):
+    status: Literal["answered", "dismissed"]
+    decision_id: str
+    rung_index: int
+    receipt: dict[str, Any] | None = None
 
 
 class ReflectionStartRequest(BaseModel):
@@ -2162,6 +2641,20 @@ def _vault_identity_state(
         or ""
     ).strip().lower()
     channel = raw_channel if raw_channel in {"dev", "test", "prod"} else "unknown"
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None:
+        # A scoped read names its own bound vault. The process-wide settings
+        # name, host-root hint and VAULT_ROOT describe the legacy selection
+        # and would mislabel another binding.
+        bound = scoped.vault_context
+        matches = bound.status == "selected" and scoped.root == vault_root.expanduser().resolve()
+        return VaultIdentityState(
+            vault_name=bound.active_vault_name or vault_root.name or str(vault_root),
+            channel=channel,
+            provenance="active_context",
+            vault_id=bound.active_vault_id if matches else None,
+            local_instance_id=bound.local_instance_id if matches else None,
+        )
     # Optional read-side binding for local presentation state. A name is not
     # identity: different selected vaults can have the same display name.
     # Do not heal, select or require a new startup field merely to expose it.
@@ -2211,7 +2704,7 @@ def _vault_identity_state(
 
     if context is None:
         try:
-            context = get_vault_manager().context
+            context = _legacy_companion_vault_manager().context
         except Exception:
             context = None
     if (
@@ -2236,7 +2729,7 @@ def _vault_identity_state(
 
     # No configured name and no host-root hint: infer identity from the
     # VAULT_ROOT path as before.
-    vault_root_raw = os.getenv("VAULT_ROOT", "").strip()
+    vault_root_raw = _legacy_vault_root_env_value()
     vault_name = vault_root.name or str(vault_root)
     if not vault_root_raw:
         provenance = "default"
@@ -2253,6 +2746,46 @@ def _vault_identity_state(
     )
 
 
+def _scoped_ingest_binding_state(scoped: _ScopedCompanionRead) -> IngestBindingResponse:
+    """Watcher status for the request binding only (MVR-05B4b).
+
+    The heartbeat is one process-wide fact naming one root. It is compared with the
+    request binding's root and reported as bound only for that same root. Any other
+    outcome is "unbound" with no watcher path, so a heartbeat naming another binding
+    is never published, and process-wide rebind state is omitted.
+    """
+
+    if scoped.root is None:
+        return IngestBindingResponse(
+            state="unavailable",
+            bound=False,
+            detail="no vault binding is selected for this request",
+        )
+    try:
+        status = ingest_binding_status(selected_vault_path=str(scoped.root))
+    except Exception:
+        logger.warning("ingest binding status check failed", exc_info=True)
+        # Same visible degradation as the legacy branch: a failed probe must reach
+        # the operator as ``unbound`` (the renderer warns on it), not be hidden.
+        return IngestBindingResponse(
+            state="unbound",
+            bound=False,
+            detail="ingest binding status could not be determined",
+        )
+    if status.is_bound:
+        return IngestBindingResponse(
+            state="bound",
+            bound=True,
+            detail="watcher/worker are bound to this vault",
+            watcher_vault_path=status.watcher_vault_path,
+        )
+    return IngestBindingResponse(
+        state="unbound",
+        bound=False,
+        detail="the watcher/worker are not confirmed bound to this vault",
+    )
+
+
 def _ingest_binding_state(vault_root: Path) -> IngestBindingResponse:
     """Report whether the watcher/worker are actually bound to ``vault_root``.
 
@@ -2261,6 +2794,9 @@ def _ingest_binding_state(vault_root: Path) -> IngestBindingResponse:
     visible must not introduce a new outage of its own).
     """
 
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None:
+        return _scoped_ingest_binding_state(scoped)
     try:
         status = ingest_binding_status(selected_vault_path=str(vault_root))
     except Exception:
@@ -2288,17 +2824,18 @@ def _ingest_binding_state(vault_root: Path) -> IngestBindingResponse:
 def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
     if not vault_root.exists():
         return []
-    q_lower = q.strip().lower()
+    q_lower = q.strip().casefold()
     notes: list[VaultNoteEntry] = []
     for path, rel in _iter_vault_note_files(vault_root):
         try:
             parts = PurePosixPath(rel).parts
             if any(p.startswith(_BROWSE_EXCLUDE_DIR_PREFIXES) for p in parts):
                 continue
-            if q_lower and q_lower not in rel.lower():
+            if q_lower and q_lower not in rel.casefold():
                 body_preview = path.read_text(encoding="utf-8", errors="replace")
                 title = _extract_title(body_preview, fallback=path.stem)
-                if q_lower not in title.lower():
+                _, parsed_body = _split_frontmatter(body_preview)
+                if q_lower not in title.casefold() and q_lower not in parsed_body.casefold():
                     continue
             else:
                 body_preview = path.read_text(encoding="utf-8", errors="replace")
@@ -2315,8 +2852,9 @@ def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
     "/vault/notes",
     response_model=VaultNoteListResponse | VaultSelectionRequiredResponse,
 )
+@_scoped_companion_read
 def list_vault_notes(
-    q: str = Query("", description="Optional search filter by title or path"),
+    q: str = Query("", description="Optional case-insensitive literal filter by title, path, or parsed body"),
 ) -> VaultNoteListResponse | VaultSelectionRequiredResponse:
     vault_root = _active_companion_vault_root_or_picker()
     if isinstance(vault_root, VaultSelectionRequiredResponse):
@@ -2331,7 +2869,7 @@ def list_vault_notes(
 
 @router.get("/vault/notes/scoped", response_model=ScopedVaultNoteListResponse)
 def list_scoped_vault_notes(
-    q: str = Query("", description="Optional search filter by title or path"),
+    q: str = Query("", description="Optional case-insensitive literal filter by title, path, or parsed body"),
     context: ActiveContextSetV1 = Depends(require_scoped_read_context),
 ) -> ScopedVaultNoteListResponse | JSONResponse:
     """Read each selected binding without consulting the global vault manager."""
@@ -2635,11 +3173,30 @@ def _undo_available_for_session(*, session: object, applied_edits: list[object])
     return current_body == getattr(latest, "body_after", None)
 
 
-def _proposal_count_for_artifact(artifact_id: str | None) -> int:
+_PanelBindingView = tuple[bool, str | None]
+
+
+def _panel_binding_view() -> _PanelBindingView:
+    """(has_state, binding) for the panel proposal / idempotency stores.
+
+    A carrier-free request reads the legacy view (``binding=None``). A scoped
+    request reads exactly its own binding's state (MVR-05B4c2); a zero-binding
+    selection owns no state. A scoped read never consults an entry keyed only by
+    artifact id, and never writes.
+    """
+
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is None:
+        return True, None
+    if scoped.vault_binding_id is None:
+        return False, None
+    return True, scoped.vault_binding_id
+
+
+def _proposal_count_for_artifact(artifact_id: str | None, *, binding: str | None = None) -> int:
     if artifact_id is None:
         return 0
-    proposals = getattr(confirm_module._proposal_store, "_proposals", {})
-    return sum(1 for proposal in proposals.values() if proposal.artifact_id == artifact_id)
+    return confirm_module._proposal_store.count_for_artifact(artifact_id, binding=binding)
 
 
 def _panel_state(
@@ -2647,10 +3204,16 @@ def _panel_state(
     selectable_options: list[PanelSelectableOption] | None = None,
 ) -> PanelState:
     options = list(selectable_options or [])
-    proposal_count = _proposal_count_for_artifact(artifact_id)
+    # The proposal and idempotency stores are keyed by the producing binding
+    # (MVR-05B4c2): a scoped panel shows the request binding's state only, even when
+    # another binding holds state for the same artifact id.
+    has_state, binding = _panel_binding_view()
+    proposal_count = (
+        _proposal_count_for_artifact(artifact_id, binding=binding) if has_state else 0
+    )
     selectable_count = sum(1 for option in options if option.selectable)
-    cache = getattr(confirm_module._idempotency_store, "_cache", {})
-    relevant = [resp for resp in cache.values() if resp.artifact_id == artifact_id]
+    responses = confirm_module._idempotency_store.responses_for(binding) if has_state else []
+    relevant = [resp for resp in responses if resp.artifact_id == artifact_id]
     latest = relevant[-1] if relevant else None
     blocked_reason = None
     latest_outcome = None
@@ -2666,9 +3229,9 @@ def _panel_state(
         state = "receipt-displayed"
     else:
         state = "idle"
-    staged = getattr(confirm_module._proposal_store, "_proposals", {})
+    staged = confirm_module._proposal_store.items_for(binding) if has_state else []
     proposal_rows = []
-    for proposal_id, proposal in staged.items():
+    for proposal_id, proposal in staged:
         if proposal.artifact_id != artifact_id:
             continue
         intent = proposal.intent_event
@@ -2857,6 +3420,190 @@ def _commitment_surface_state(vault_root: Path) -> CommitmentSurfaceState:
     )
 
 
+def _companion_vault_binding_id() -> str:
+    """Return the binding that owns the active companion read/write target."""
+
+    scoped = _SCOPED_COMPANION_READ.get()
+    return (scoped.vault_binding_id if scoped is not None else None) or COMPATIBILITY_BINDING_ID
+
+
+def _calibration_revisit_state(
+    vault_root: Path,
+    *,
+    vault_binding_id: str | None = None,
+) -> CalibrationRevisitState:
+    """Project CAL-02's due revisit into the workspace response.
+
+    The scheduler is a durable read boundary.  Any failure is explicit
+    ``degraded`` state so the Companion UI cannot silently present an empty
+    card when it was unable to inspect the vault or receipt ledgers.
+    """
+
+    try:
+        due = due_revisits(
+            vault_root=vault_root,
+            vault_binding_id=vault_binding_id or _companion_vault_binding_id(),
+        )
+    except Exception as exc:  # pragma: no cover - defensive runtime boundary
+        logger.warning("calibration revisit read degraded: %s", exc)
+        return CalibrationRevisitState(
+            state="degraded",
+            degraded=True,
+            degraded_reason="scheduler_unavailable",
+        )
+
+    if not due:
+        return CalibrationRevisitState(state="empty")
+
+    # CAL-02 normally returns one due rung per decision.  Keep the response
+    # deterministic if several decisions are due by selecting the oldest
+    # rung first and using the durable UUID as a stable tie-breaker.
+    pending = min(
+        due,
+        key=lambda item: (item.due_since, str(item.decision_uuid)),
+    )
+    return CalibrationRevisitState(
+        state="pending",
+        decision_id=str(pending.decision_uuid),
+        decision_object_id=str(pending.decision_object_id),
+        title=pending.title,
+        decided_on=pending.decided_on.isoformat(),
+        rung_index=pending.rung_index,
+        rung_days=pending.rung_days,
+        due_since=pending.due_since.isoformat(),
+    )
+
+
+def _calibration_revisit_for_decision(
+    decision_id: str,
+    *,
+    vault_root: Path,
+    vault_binding_id: str | None = None,
+    rung_index: int | None = None,
+    decision_object_id: str | None = None,
+) -> RevisitDue | tuple[str, dict[str, Any]]:
+    """Resolve one displayed rung, including an idempotent replay.
+
+    The client carries the rung it rendered.  If a prior answer/dismissal has
+    already advanced the scheduler, return that durable action instead of
+    recomputing the next rung and stamping it accidentally.
+    """
+
+    binding_id = vault_binding_id or _companion_vault_binding_id()
+
+    try:
+        due = due_revisits(vault_root=vault_root, vault_binding_id=binding_id)
+    except Exception as exc:  # durable read failed before a mutation
+        logger.warning("calibration revisit lookup degraded: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "calibration_revisit_unavailable",
+                "message": "The pending revisit could not be read; no action was recorded.",
+            },
+        ) from exc
+    candidate_for_decision: RevisitDue | None = None
+    for candidate in due:
+        if decision_id in {
+            str(candidate.decision_uuid),
+            str(candidate.decision_object_id),
+        }:
+            candidate_for_decision = candidate
+            break
+
+    outcomes = iter_outcome_receipts(vault_root)
+    dismissals = iter_revisit_dismissals(vault_root)
+
+    def existing_action() -> tuple[str, dict[str, Any]] | None:
+        if rung_index is None:
+            return None
+        for record in outcomes:
+            if (
+                str(record.get("decision_uuid")) == decision_id
+                and record.get("rung_index") == rung_index
+                and (
+                    decision_object_id is None
+                    or str(record.get("decision_object_id")) == decision_object_id
+                )
+            ):
+                return ("answered", record)
+        for record in dismissals:
+            if (
+                str(record.get("decision_uuid")) == decision_id
+                and record.get("rung_index") == rung_index
+                and (
+                    decision_object_id is None
+                    or str(record.get("decision_object_id")) == decision_object_id
+                )
+            ):
+                return ("dismissed", record)
+        return None
+
+    replay = existing_action()
+    if replay is not None:
+        # A durable action wins even if a stale scheduler projection still
+        # reports the same rung as pending.
+        return replay
+
+    if candidate_for_decision is not None:
+        if decision_object_id is not None and str(candidate_for_decision.decision_object_id) != decision_object_id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "calibration_revisit_stale",
+                    "message": "The displayed revisit no longer identifies the active decision.",
+                },
+            )
+        # The original Issue body keeps rung_index optional for the first
+        # native form submission.  Once the ladder has advanced, however, an
+        # identity-free retry cannot distinguish "retry rung 0" from "answer
+        # the newly due rung 1".  Fail closed and require the displayed
+        # identity rather than silently stamping the next rung.
+        if rung_index is None and candidate_for_decision.rung_index > 0:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "calibration_revisit_identity_required",
+                    "message": "The displayed rung identity is required to retry this revisit.",
+                },
+            )
+        if rung_index is None or rung_index == candidate_for_decision.rung_index:
+            return candidate_for_decision
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "calibration_revisit_stale",
+                "message": "The displayed revisit rung is no longer pending.",
+            },
+        )
+
+    if replay is not None:
+        return replay
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error": "calibration_revisit_not_found",
+            "message": "No pending revisit exists for this decision.",
+        },
+    )
+
+
+def _request_orientation_signals() -> OrientationSignals | None:
+    """Orientation runtime signals for this request's binding (MVR-05B4c4).
+
+    A carrier-free read keeps the process-wide signals; a scoped read gets only its
+    binding's ingest runs, outbox events and queue rows. A healthy zero-binding
+    selection has no binding to scope to and returns ``None`` (degraded).
+    """
+
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is None:
+        return get_orientation_signals()
+    if scoped.vault_binding_id is None:
+        return None
+    return get_orientation_signals(scoped.vault_binding_id)
+
+
 def _reorient_state(signals: OrientationSignals | None = None) -> dict[str, list[dict[str, str | bool]]]:
     def item(
         label: str,
@@ -2871,6 +3618,10 @@ def _reorient_state(signals: OrientationSignals | None = None) -> dict[str, list
         }
 
     try:
+        if signals is None:
+            signals = _request_orientation_signals()
+        if signals is None:
+            raise RuntimeError("no binding to scope orientation signals to")
         frame = build_orientation_frame(signals=signals)
     except Exception:
         return {
@@ -2926,6 +3677,10 @@ def _reorient_state(signals: OrientationSignals | None = None) -> dict[str, list
 def _resurface_state(
     safe_note_path: str, signals: OrientationSignals | None = None
 ) -> dict[str, list[dict[str, str | list[str] | bool]] | int | bool]:
+    if signals is None:
+        signals = _request_orientation_signals()
+    if signals is None:
+        return {"candidates": [], "scarce_count": 0, "more_held_back": False}
     evaluation = evaluate_resurfacing_candidates(signals=signals)
     candidates: list[dict[str, str | list[str] | bool]] = []
     for candidate in evaluation.candidates:
@@ -2979,16 +3734,29 @@ def _orientation_memory_review_queue() -> MemoryCandidateReviewQueue:
     return _MEMORY_CANDIDATE_REVIEW_QUEUE
 
 
+def _scoped_memory_review_queue(scoped: _ScopedCompanionRead) -> MemoryCandidateReviewQueue:
+    """The request binding's own review-queue entries, as a detached read-only copy.
+
+    A scoped read never reconfigures, writes to, or reads unstamped or
+    other-binding entries of the process-wide queue (MVR-05B4c1). A zero-binding
+    selection owns no entries.
+    """
+
+    if scoped.vault_binding_id is None:
+        return MemoryCandidateReviewQueue()
+    return _MEMORY_CANDIDATE_REVIEW_QUEUE.snapshot_for_binding(scoped.vault_binding_id)
+
+
 def _memory_review_decision_store() -> ReviewDecisionStore:
     return _MEMORY_REVIEW_DECISION_STORE
 
 
 def _memory_review_vault_context() -> VaultContext:
-    context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
+    context = _companion_read_vault_context()
     if context.active_vault_id or context.active_vault_path:
         return context
     try:
-        resolve_optional_vault_root(environment=active_environment())
+        _legacy_configured_vault_root(environment=active_environment())
     except VaultRootMisconfiguredError as exc:
         return VaultContext(
             status="missing",
@@ -3014,7 +3782,7 @@ def _memory_review_selection_required_response(
             configured_vault_root=Path(context.active_vault_path),
         )
     try:
-        configured = resolve_optional_vault_root(environment=active_environment())
+        configured = _legacy_configured_vault_root(environment=active_environment())
     except VaultRootMisconfiguredError as exc:
         return _vault_selection_required_response(exc)
     return _no_vault_selection_required_response(configured_vault_root=configured)
@@ -3030,7 +3798,11 @@ def _memory_review_channel() -> str:
 
 
 def _orientation_memory_summary() -> WorkspaceOrientationMemory:
-    pending = len(_orientation_memory_review_queue().pending())
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None:
+        pending = len(_scoped_memory_review_queue(scoped).pending())
+    else:
+        pending = len(_orientation_memory_review_queue().pending())
     return WorkspaceOrientationMemory(
         pending_candidate_count=pending,
         source_ref=_orientation_source_ref(
@@ -3051,13 +3823,16 @@ def _orientation_leave_point(
     frame_label: str | None,
     identity: VaultIdentityState,
     vault_root: Path,
+    vault_binding_id: str | None = None,
 ) -> WorkspaceOrientationLeavePoint:
+    # A scoped read keys the cursor by binding and opens it read-only (MVR-05B4c4).
     projection = latest_leave_point_projection(
         vault_id=identity.vault_name,
         channel=identity.channel,
         vault_root=vault_root,
         derived_label=frame_label,
         derived_at=_orientation_iso(signals.ingestion.last_run_at),
+        vault_binding_id=vault_binding_id,
     )
     return WorkspaceOrientationLeavePoint(
         status=projection.status,
@@ -3211,6 +3986,10 @@ def _orientation_memory_mutation_intents(
     trace_id: str,
     emitted_at: datetime.datetime,
 ) -> list[WorkspaceOrientationMutationIntent]:
+    if _SCOPED_COMPANION_READ.get() is not None:
+        # A scoped read is read authority only: it must not append the
+        # process-global intent trace (scoped mutations stay sealed until 05C).
+        return []
     intents: list[WorkspaceOrientationMutationIntent] = []
     for candidate in candidates:
         if len(intents) >= ORIENTATION_MUTATION_INTENTS_CAP:
@@ -3236,15 +4015,19 @@ def _orientation_memory_mutation_intents(
 
 
 def _orientation_governance_summary() -> WorkspaceOrientationGovernance:
-    proposals = getattr(confirm_module._proposal_store, "_proposals", {})
-    receipts = getattr(confirm_module._idempotency_store, "_cache", {})
-    receipt_values = list(receipts.values()) if isinstance(receipts, dict) else []
+    # Computed from the request binding's own proposal / idempotency state
+    # (MVR-05B4c2); the carrier-free view is unchanged.
+    has_state, binding = _panel_binding_view()
+    proposals = confirm_module._proposal_store.items_for(binding) if has_state else []
+    receipt_values = (
+        confirm_module._idempotency_store.responses_for(binding) if has_state else []
+    )
     latest = receipt_values[-1] if receipt_values else None
     latest_outcome = getattr(latest, "outcome", None) if latest is not None else None
     source_kind = "receipt" if receipt_values else "runtime_signal"
     source_ref = "panel.receipts" if receipt_values else "panel.governance_summary"
     return WorkspaceOrientationGovernance(
-        pending_proposal_count=len(proposals) if isinstance(proposals, dict) else 0,
+        pending_proposal_count=len(proposals),
         pending_receipt_count=len(receipt_values),
         latest_receipt_outcome=latest_outcome,
         source_ref=_orientation_source_ref(
@@ -3577,7 +4360,7 @@ def _select_vault_notes(
     cursor: str | None = None,
     filters: dict[str, list[str]] | None = None,
 ) -> tuple[list[VaultBrowserNoteState], int, int, bool, str | None, int]:
-    needle = query.strip().lower()
+    needle = query.strip().casefold()
     cursor_path = str(cursor or "").strip() or None
     active_filters = filters or {}
     total_notes = 0
@@ -3610,7 +4393,13 @@ def _select_vault_notes(
             continue
         total_notes += 1
         title = _browser_title(body, fallback=candidate.stem)
-        if needle and needle not in safe_path.lower() and needle not in title.lower():
+        _, parsed_body = _split_frontmatter(body)
+        if (
+            needle
+            and needle not in safe_path.casefold()
+            and needle not in title.casefold()
+            and needle not in parsed_body.casefold()
+        ):
             continue
         path_zone = _zone_for_path(safe_path)
         metadata = _parse_note_artifact_metadata(body, path_derived_zone=path_zone)
@@ -3682,6 +4471,13 @@ def _attach_receipts_to_notes(
     *,
     vault_root: Path,
 ) -> list[VaultBrowserNoteState]:
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None and scoped.vault_binding_id is None:
+        # A zero-binding selection owns no receipts.
+        return notes
+    # A scoped read returns only receipts stamped with the request binding at
+    # emission, so a UUID or note path shared across bindings never surfaces
+    # another binding's receipt (MVR-05B4c2).
     projection = receipts_for_artifacts(
         [
             ArtifactReceiptTarget(
@@ -3691,6 +4487,7 @@ def _attach_receipts_to_notes(
             for note in notes
         ],
         vault_root=vault_root,
+        binding=scoped.vault_binding_id if scoped is not None else None,
     )
     if projection is None:
         return notes
@@ -3712,6 +4509,15 @@ def _attach_agent_memory_posture_to_notes(
     *,
     vault_root: Path,
 ) -> list[VaultBrowserNoteState]:
+    scoped = _SCOPED_COMPANION_READ.get()
+    # A scoped read matches only candidates stamped with the request binding, so a
+    # UUID or note path shared across bindings never surfaces another binding's
+    # candidate (MVR-05B4c1).
+    queue = (
+        _scoped_memory_review_queue(scoped)
+        if scoped is not None
+        else _orientation_memory_review_queue()
+    )
     projection = agent_memory_posture_for_artifacts(
         [
             AgentMemoryPostureTarget(
@@ -3720,7 +4526,7 @@ def _attach_agent_memory_posture_to_notes(
             )
             for note in notes
         ],
-        queue=_orientation_memory_review_queue(),
+        queue=queue,
         vault_root=vault_root,
     )
     if projection is None:
@@ -4269,8 +5075,9 @@ def _write_rewritten_note_or_409(
     "/vault-browser",
     response_model=VaultBrowserStateResponse | VaultSelectionRequiredResponse,
 )
+@_scoped_companion_read
 def read_companion_vault_browser(
-    q: str = Query("", description="Case-insensitive path/title filter"),
+    q: str = Query("", description="Case-insensitive literal filter by path, title, or parsed body"),
     limit: int = Query(250, ge=1, le=1000),
     cursor: str | None = Query(None, description="Cursor note_path from the prior page"),
     kind: list[str] = Query(default=[], description="Filter by artifact kind (multi-value)"),
@@ -4282,6 +5089,8 @@ def read_companion_vault_browser(
     # docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md §6. Read-only Markdown
     # enumeration with deterministic title/path filtering, active-vault
     # identity, and explicit empty / error / identity-unavailable states.
+    # ``q`` matches path/title and parsed Markdown body text; frontmatter is
+    # excluded from the body surface so arbitrary metadata is not searchable.
     # Hidden / dot-prefixed folders are excluded.
     # Metadata filters (kind, zone, review_state, trust) added in #1254.
     vault_root = _active_companion_vault_root_or_picker()
@@ -4382,6 +5191,7 @@ def _collect_vault_note_paths(vault_root: Path, *, limit: int) -> tuple[list[str
     "/vault-link-index",
     response_model=VaultLinkIndexResponse | VaultSelectionRequiredResponse,
 )
+@_scoped_companion_read
 def read_companion_vault_link_index() -> VaultLinkIndexResponse | VaultSelectionRequiredResponse:
     # #1431 — complete read-only note-path listing so the Companion UI can seed
     # VaultLinkResolver and resolve vault-internal wikilinks end-to-end. Mirrors
@@ -4411,6 +5221,7 @@ def read_companion_vault_link_index() -> VaultLinkIndexResponse | VaultSelection
     "/vault-related",
     response_model=VaultRelatedResponse | VaultSelectionRequiredResponse,
 )
+@_scoped_companion_read
 def read_companion_vault_related(
     note_path: str | None = Query(
         default=None,
@@ -4526,7 +5337,7 @@ def trigger_first_contact_briefing() -> dict[str, object]:
 
     from app.briefing.trigger import first_contact_briefing
 
-    context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
+    context = _companion_read_vault_context()
     if context.status != "selected" or not context.active_vault_path:
         return {
             "triggered": False,
@@ -4543,6 +5354,7 @@ def trigger_first_contact_briefing() -> dict[str, object]:
 
 
 @router.get("/briefing/today")
+@_scoped_companion_read
 def read_today_briefing() -> dict[str, object]:
     """Return the read-only day-start projection and honest listen availability."""
 
@@ -4550,7 +5362,7 @@ def read_today_briefing() -> dict[str, object]:
     from app.briefing.surface import collect_day_start_briefing
 
     today = datetime.datetime.now(ZoneInfo(BRIEFING_TIMEZONE)).date()
-    context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
+    context = _companion_read_vault_context()
     if context.status != "selected" or not context.active_vault_path:
         projection: dict[str, object] = {
             "state": "pending",
@@ -4592,6 +5404,7 @@ def read_today_briefing() -> dict[str, object]:
     "/orientation",
     response_model=WorkspaceOrientationResponse | VaultSelectionRequiredResponse,
 )
+@_scoped_companion_document_read
 def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectionRequiredResponse:
     trace_id = uuid4().hex
     generated_at = datetime.datetime.now(datetime.timezone.utc)
@@ -4620,7 +5433,9 @@ def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectio
         if isinstance(vault_root, VaultSelectionRequiredResponse):
             return vault_root
         identity = _orientation_identity(vault_root)
-        orientation_signals = get_orientation_signals()
+        scoped = _SCOPED_COMPANION_READ.get()
+        # A scoped read sees only its binding's runtime signals (MVR-05B4c4).
+        orientation_signals = _request_orientation_signals()
     except HTTPException:
         raise
     except Exception as exc:
@@ -4637,12 +5452,15 @@ def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectio
     mutation_intents: list[WorkspaceOrientationMutationIntent] = []
 
     try:
+        if orientation_signals is None:
+            raise RuntimeError("no binding to scope the orientation source to")
         frame = build_orientation_frame(signals=orientation_signals)
         leave_point = _orientation_leave_point(
             orientation_signals,
             frame_label=frame.explanation.leave_point,
             identity=identity,
             vault_root=vault_root,
+            vault_binding_id=scoped.vault_binding_id if scoped is not None else None,
         )
         open_loops = _orientation_open_loops(frame.explanation.open_items)
         notable_changes = _orientation_notable_changes(
@@ -4653,6 +5471,8 @@ def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectio
         degraded_reasons.append("orientation_source_unavailable")
 
     try:
+        if orientation_signals is None:
+            raise RuntimeError("no binding to scope the resurfacing source to")
         resurface_candidates = _orientation_resurface_candidates(orientation_signals)
     except Exception:
         degraded_reasons.append("resurfacing_source_unavailable")
@@ -4816,6 +5636,7 @@ def read_companion_tts_audio(cache_key: str) -> FileResponse:
     "/workspace",
     response_model=WorkspaceStateResponse | VaultSelectionRequiredResponse,
 )
+@_scoped_companion_document_read
 def read_companion_workspace(
     note_path: str = Query(..., description="Runtime-relative note path"),
 ) -> WorkspaceStateResponse | VaultSelectionRequiredResponse:
@@ -4850,6 +5671,12 @@ def read_companion_workspace(
         vault_root=vault_root,
         safe_note_path=safe_note_path,
         body=body,
+        # Scoped and text-only reads report unresolved identity rather than
+        # healing a missing UUID into the original source.
+        heal_missing_uuid=(
+            _SCOPED_COMPANION_READ.get() is None
+            and runtime_activation_scope() == 'full'
+        ),
         allow_recovered_identity=True,
     )
     if identity.identity_state == "healed":
@@ -4860,7 +5687,8 @@ def read_companion_workspace(
         canvas_enabled=canvas_enabled,
         writeguard_status=writeguard_status,
     )
-    orientation_signals = get_orientation_signals()
+    # A scoped read sees only its binding's runtime signals (MVR-05B4c4).
+    orientation_signals = _request_orientation_signals()
     reflection_offer: ReflectionOfferState | None = None
     settings_path = vault_root / SETTINGS_DIR_NAME
     if settings_path.is_dir():
@@ -4881,6 +5709,10 @@ def read_companion_workspace(
                 reflection_offer = ReflectionOfferState.model_validate(offer.as_payload())
 
     content_hash = _content_hash(body)
+    calibration_revisit = _calibration_revisit_state(
+        vault_root,
+        vault_binding_id=_companion_vault_binding_id(),
+    )
     selectable_options: list[PanelSelectableOption] = []
     # A recovered identity is read-only: it was never written to the create-once
     # note, so it must not offer checkbox mutation affordances (#5663).
@@ -4926,6 +5758,166 @@ def read_companion_workspace(
             workspace_update=workspace_update,
         ),
         reflection_offer=reflection_offer,
+        calibration_revisit=calibration_revisit,
+    )
+
+
+@router.post(
+    "/calibration/revisits/{decision_id}/decision",
+    response_model=CalibrationRevisitActionResponse | VaultSelectionRequiredResponse,
+)
+def post_calibration_revisit_decision(
+    decision_id: str,
+    req: CalibrationRevisitDecisionRequest,
+) -> CalibrationRevisitActionResponse | VaultSelectionRequiredResponse:
+    """Record one visual-pick outcome through CAL-01's governed write path."""
+
+    vault_root = _active_companion_vault_root_or_picker(require_initialized=True)
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
+    binding_id = _companion_vault_binding_id()
+    # Assert before acquiring the shared lock so a blocked action performs no
+    # path resolution or lock-file I/O at the route boundary.
+    try:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed(OUTCOME_RECEIPT_WRITE_ACTION)
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "writeguard_blocked",
+                "state": "blocked",
+                "message": str(exc),
+            },
+        ) from exc
+    with revisit_action_lock(vault_root):
+        resolved = _calibration_revisit_for_decision(
+            decision_id,
+            vault_root=vault_root,
+            vault_binding_id=binding_id,
+            rung_index=req.rung_index,
+            decision_object_id=req.decision_object_id,
+        )
+        if isinstance(resolved, tuple):
+            action, receipt = resolved
+            if action != "answered":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "calibration_revisit_already_dismissed",
+                        "message": "This revisit rung was already dismissed.",
+                    },
+                )
+            return CalibrationRevisitActionResponse(
+                status="answered",
+                decision_id=decision_id,
+                rung_index=int(receipt["rung_index"]),
+                receipt=receipt,
+            )
+        pending = resolved
+        try:
+            receipt_kwargs: dict[str, Any] = {
+                "decision_object_id": pending.decision_object_id,
+                "decision_uuid": pending.decision_uuid,
+                "rung_index": pending.rung_index,
+                "outcome": req.outcome,
+                "note": req.note.strip() if req.note and req.note.strip() else None,
+                "vault_root": vault_root,
+            }
+            if binding_id != COMPATIBILITY_BINDING_ID:
+                receipt_kwargs["vault_binding_id"] = binding_id
+            receipt = append_outcome_receipt(**receipt_kwargs)
+        except WritesBlockedError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "writeguard_blocked",
+                    "state": "blocked",
+                    "message": str(exc),
+                },
+            ) from exc
+    return CalibrationRevisitActionResponse(
+        status="answered",
+        decision_id=str(pending.decision_uuid),
+        rung_index=pending.rung_index,
+        receipt=receipt,
+    )
+
+
+@router.post(
+    "/calibration/revisits/{decision_id}/dismiss",
+    response_model=CalibrationRevisitActionResponse | VaultSelectionRequiredResponse,
+)
+def post_calibration_revisit_dismiss(
+    decision_id: str,
+    req: CalibrationRevisitDismissRequest | None = None,
+) -> CalibrationRevisitActionResponse | VaultSelectionRequiredResponse:
+    """Defer one revisit through CAL-02's dismissal ledger only."""
+
+    vault_root = _active_companion_vault_root_or_picker(require_initialized=True)
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
+    req = req or CalibrationRevisitDismissRequest()
+    try:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed(REVISIT_DISMISSAL_WRITE_ACTION)
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "writeguard_blocked",
+                "state": "blocked",
+                "message": str(exc),
+            },
+        ) from exc
+    with revisit_action_lock(vault_root):
+        resolved = _calibration_revisit_for_decision(
+            decision_id,
+            vault_root=vault_root,
+            vault_binding_id=_companion_vault_binding_id(),
+            rung_index=req.rung_index,
+            decision_object_id=req.decision_object_id,
+        )
+        if isinstance(resolved, tuple):
+            action, receipt = resolved
+            if action != "dismissed":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "calibration_revisit_already_answered",
+                        "message": "This revisit rung already has an outcome receipt.",
+                    },
+                )
+            return CalibrationRevisitActionResponse(
+                status="dismissed",
+                decision_id=decision_id,
+                rung_index=int(receipt["rung_index"]),
+                receipt=None,
+            )
+        pending = resolved
+        try:
+            # This path never calls ``append_outcome_receipt`` or fabricates an outcome.
+            append_revisit_dismissal(
+                decision_object_id=pending.decision_object_id,
+                decision_uuid=pending.decision_uuid,
+                rung_index=pending.rung_index,
+                vault_root=vault_root,
+            )
+        except WritesBlockedError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "writeguard_blocked",
+                    "state": "blocked",
+                    "message": str(exc),
+                },
+            ) from exc
+    return CalibrationRevisitActionResponse(
+        status="dismissed",
+        decision_id=str(pending.decision_uuid),
+        rung_index=pending.rung_index,
+        # Dismissal is a CAL-02 ledger marker, never an outcome receipt.  Keep
+        # the response field explicit so callers cannot mistake this action for
+        # an answered calibration rung.
+        receipt=None,
     )
 
 
@@ -5243,6 +6235,9 @@ def save_note_body(
     )
     if isinstance(vault_root, VaultSelectionRequiredResponse):
         return vault_root
+    # Pre-05C seal: the resolved write target must be the sealed compatibility
+    # binding (and, on the compatibility route, the precondition's binding).
+    require_compatibility_write_root(request, vault_root)
     note_path = _find_workspace_note(vault_root, safe_note_path)
     if note_path is None:
         raise HTTPException(
@@ -5580,10 +6575,27 @@ def _memory_review_revision_candidate(
 
 
 @router.get("/memory/review-queue", response_model=MemoryReviewQueueResponse)
-def get_memory_review_queue() -> MemoryReviewQueueResponse:
-    """Bounded read over pending memory candidates awaiting review."""
+@_scoped_companion_read
+def get_memory_review_queue(
+    x_active_context_session: str | None = Header(default=None),
+    x_active_context_override: str | None = Header(default=None),
+) -> MemoryReviewQueueResponse:
+    """Bounded read over pending memory candidates awaiting review.
 
-    queue = _orientation_memory_review_queue()
+    A carrier-bearing request (a present header, even a blank one, is scoped and is
+    resolved by ``_scoped_companion_read``) reads only the request binding's
+    candidates (MVR-05B4c1). The two header parameters are retained only so direct
+    in-process callers keep their positional signature; ``Header(...)`` defaults
+    are not values, and the carrier is resolved by the decorator's dependency,
+    never from these parameters.
+    """
+
+    scoped = _SCOPED_COMPANION_READ.get()
+    queue = (
+        _scoped_memory_review_queue(scoped)
+        if scoped is not None
+        else _orientation_memory_review_queue()
+    )
     candidates = [_memory_review_candidate_projection(entry) for entry in queue.pending()]
     return MemoryReviewQueueResponse(
         pending_count=len(candidates),

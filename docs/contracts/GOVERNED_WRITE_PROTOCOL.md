@@ -86,6 +86,15 @@ admissible before it occurs and accountable after its outcome is known.
   reconcile the state-owner mutation receipt or EXE effect receipt and AuthorityReceipt before
   repeating the mutation/effect.
 
+The shipped reviewed semantic-memory materialization path is one concrete producer integration:
+MEM derives the authority request from the persisted human promotion decision, GOV issues and
+validates a token bound to `memory.materialize`, `semantic_memory_materialization`, the reviewer,
+and the exact HKA artifact path, and HKA owns the create-once note mutation receipt. The promotion
+receipt and GOV AuthorityReceipt remain separate durable facts, and MEM does not mark the review
+decision terminal until both are queryable. An HKA artifact alone cannot be used to synthesize a
+missing governed mutation receipt; that state fails closed for explicit remediation. This integration
+does not claim that unrelated runtime write paths implement the full protocol.
+
 ### Partial-failure states
 
 Every authority-bearing producer and consumer must preserve one of these explicit states; no state

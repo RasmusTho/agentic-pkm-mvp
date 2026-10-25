@@ -316,13 +316,22 @@ def product_model_access_gateway(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture(autouse=True)
 def force_memory_store_for_non_pg(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
-    """Keep non-pg tests independent of DATABASE_URL/DB_DSN."""
+    """Keep non-PG cases independent of persistent and prior in-memory stores."""
 
-    if request.node.get_closest_marker("pg") is None:
+    from app.stores import reset_memory_store_backend
+
+    non_pg = request.node.get_closest_marker("pg") is None
+    if non_pg:
         monkeypatch.setenv("STORE_BACKEND", "memory")
         monkeypatch.delenv("DATABASE_URL", raising=False)
         monkeypatch.delenv("DB_DSN", raising=False)
-    yield monkeypatch
+        reset_memory_store_backend()
+    try:
+        yield monkeypatch
+    finally:
+        if non_pg:
+            # This clears only memory singletons, never the PostgreSQL backend.
+            reset_memory_store_backend()
 
 
 @pytest.fixture(autouse=True)

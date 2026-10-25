@@ -2,21 +2,52 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.context_bundles.runtime_registry import get_emitted_bundle
+from app.api.request_active_context import current_scoped_route_read, scoped_route_read
+from app.context_bundles.runtime_registry import emitted_bundle_context_key, get_emitted_bundle
 from app.context_bundles.schema import ContextBundle
 from app.orientation.bundle_consumer import (
     BundleAuthorityViolation,
     OrientationBundleFrame,
     build_orientation_frame_from_bundle,
 )
+from app.observability.status_service import get_orientation_signals
 from app.orientation.runtime import OrientationFrame, build_orientation_frame
 
 router = APIRouter()
 
 
 @router.get("/orientation", response_model=OrientationFrame)
-async def orientation() -> OrientationFrame:
-    return build_orientation_frame()
+@scoped_route_read
+def orientation() -> OrientationFrame:
+    """The orientation frame; a scoped read computes it from its binding's signals."""
+    scoped = current_scoped_route_read()
+    if scoped is None:
+        return build_orientation_frame()
+    if scoped.vault_binding_id is None:
+        # A zero-binding selection has no binding whose work could orient it.
+        raise HTTPException(status_code=409, detail="active_context_binding_required")
+    return build_orientation_frame(
+        signals=get_orientation_signals(vault_binding_id=scoped.vault_binding_id)
+    )
+
+
+def _visible_emitted_bundle(bundle_id: str) -> ContextBundle | None:
+    """The emitted bundle this request may see (MVR-05B4c5).
+
+    A scoped read sees only the emission of its own binding and full context
+    identity (a zero-binding selection sees none); a carrier-free read sees
+    carrier-free emissions only.
+    """
+    scoped = current_scoped_route_read()
+    if scoped is None:
+        return get_emitted_bundle(bundle_id)
+    if scoped.vault_binding_id is None or scoped.context is None:
+        return None
+    return get_emitted_bundle(
+        bundle_id,
+        vault_binding_id=scoped.vault_binding_id,
+        context_key=emitted_bundle_context_key(scoped.context),
+    )
 
 
 def _orientation_bundle_source(bundle_id: str) -> ContextBundle:
@@ -26,7 +57,7 @@ def _orientation_bundle_source(bundle_id: str) -> ContextBundle:
     synthesize a construction envelope when the requested emitted bundle is
     missing, because that would hide addressability failures from operators.
     """
-    bundle = get_emitted_bundle(bundle_id)
+    bundle = _visible_emitted_bundle(bundle_id)
     if bundle is None:
         raise HTTPException(
             status_code=404,
@@ -39,7 +70,8 @@ def _orientation_bundle_source(bundle_id: str) -> ContextBundle:
 
 
 @router.get("/orientation/bundle/{bundle_id}", response_model=OrientationBundleFrame)
-async def orientation_from_bundle(bundle_id: str) -> OrientationBundleFrame:
+@scoped_route_read
+def orientation_from_bundle(bundle_id: str) -> OrientationBundleFrame:
     """Consume a ContextBundle into a read-only orientation frame.
 
     Provenance and exclusions are preserved; authority gating is enforced by

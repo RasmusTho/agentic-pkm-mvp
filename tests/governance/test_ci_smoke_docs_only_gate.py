@@ -29,8 +29,14 @@ docs-only/unowned no-op (executable check against the real selector).
 from __future__ import annotations
 
 from fnmatch import fnmatchcase
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 
+import pytest
 import yaml
 
 from scripts.select_pr_tests import select_tests
@@ -334,3 +340,62 @@ def test_text_contract_lane_does_not_require_unrelated_product_gates() -> None:
         assert selector_index < steps.index(step)
     # Real contract execution remains required for documentation and skill edits.
     assert "runtime_checks" not in by_name["Run scoped not-pg unit tests"]["if"]
+
+
+@pytest.mark.parametrize("changed_path,runtime_checks", (
+    (".github/workflows/ci-smoke.yaml", "false"),
+    ("tests/ops/test_dormant_ownership_initialization.py", "false"),
+    ("app/briefing/compose.py", "true"),
+    ("requirements.txt", "true"),
+))
+def test_smoke_scope_command_uses_real_diff_and_selector(
+    tmp_path: Path, changed_path: str, runtime_checks: str,
+) -> None:
+    steps = yaml.safe_load(_smoke_text())["jobs"]["smoke"]["steps"]
+    step = next(s for s in steps if s.get("id") == "runtime-scope")
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "scripts/select_pr_tests.py", repo / "scripts/select_pr_tests.py")
+    for args in (
+        ["init"], ["config", "user.email", "ci-fixture@example.invalid"],
+        ["config", "user.name", "CI fixture"], ["add", "."], ["commit", "-m", "base"],
+        ["update-ref", "refs/remotes/origin/main", "HEAD"],
+    ):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+    path = repo / changed_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# changed fixture\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "candidate"], cwd=repo, check=True, capture_output=True)
+    output = tmp_path / "output"
+    result = subprocess.run(
+        ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c", step["run"]],
+        cwd=repo, capture_output=True, text=True, check=False,
+        env={**os.environ, "GITHUB_BASE_REF": "main", "GITHUB_OUTPUT": str(output),
+             "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.defpath}"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert fields["runtime_checks"] == runtime_checks
+    assert fields["pytest_args"]
+    assert json.loads(fields["scoped_partitions_json"]) == []
+
+
+def test_smoke_runtime_scope_gates_irrelevant_work_and_preserves_push_discovery() -> None:
+    steps = yaml.safe_load(_smoke_text())["jobs"]["smoke"]["steps"]
+    by_name = {step.get("name"): step for step in steps}
+    classifier = next(i for i, step in enumerate(steps) if step.get("id") == "runtime-scope")
+    for name in (
+        "Install system deps (ffmpeg, ripgrep)", "Pytest full-tree collection health (collect-only)",
+        "Pytest smoke baseline (memory, fail-fast)", "Pytest Quality Wave smoke (memory, fail-fast)",
+    ):
+        step = by_name[name]
+        assert classifier < steps.index(step)
+        assert "github.event_name != 'pull_request'" in step["if"]
+        assert "steps.changes.outputs.heavy_smoke == 'true'" in step["if"]
+        # Missing scope evidence must preserve runtime work, not look like a waiver.
+        assert "steps.runtime-scope.outputs.runtime_checks != 'false'" in step["if"]
+    assert "steps.runtime-scope.outputs.runtime_checks == 'false'" in by_name[
+        "Docs guard (governance/docs-only PRs)"
+    ]["if"]

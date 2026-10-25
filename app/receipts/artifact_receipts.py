@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from app.instance.compatibility_binding import legacy_view_bindings, live_compatibility_binding_id
 from app.receipts.outbox_sources import (
     ReceiptSourceUnavailableError,
     first_str,
@@ -29,6 +30,37 @@ _RECEIPT_SUPPORTING_EVENTS = {
     "panel.action.blocked",
     "panel.action.logged",
 }
+
+# MVR-05B4c2: payload field naming the vault binding that produced a receipt-supporting
+# event. It is written at emission by every producer (always the sealed compatibility
+# binding today, because every panel emitter is a carrier-free path) and is the only
+# attribution a scoped read honours. The outbox row's own ``vault_binding_id`` column
+# defaults to the compatibility binding for unstamped history, so it is never used.
+PRODUCING_BINDING_FIELD = "producing_vault_binding_id"
+
+# A carrier-free (legacy single-binding) read sees receipts stamped with the live
+# compatibility binding or the legacy sentinel, or emitted before stamps existed
+# (``None``). A scoped read never sees the ``None`` bucket.
+
+
+def stamp_producing_binding(
+    payload: dict[str, Any], binding: str | None = None
+) -> dict[str, Any]:
+    """Return ``payload`` stamped with the binding that produced the receipt event.
+
+    ``None`` resolves the live compatibility binding (every panel emitter is a
+    carrier-free path).
+    """
+
+    stamped = dict(payload)
+    stamped[PRODUCING_BINDING_FIELD] = binding or live_compatibility_binding_id()
+    return stamped
+
+
+def _stamp_of(payload: dict[str, Any]) -> str | None:
+    value = payload.get(PRODUCING_BINDING_FIELD)
+    return value if isinstance(value, str) and value.strip() else None
+
 
 # Display-field fallbacks (#3363, Receipts v2). The UI must never invent a
 # verb or run the runtime did not declare -- these are the honest defaults
@@ -119,14 +151,22 @@ def receipts_for_artifacts(
     *,
     vault_root: Path,
     outbox_path: Path | None = None,
+    binding: str | None = None,
 ) -> dict[str, list[dict[str, str | None]]] | None:
     """Return receipt rows keyed by target note path.
+
+    ``binding`` selects the producing-binding view (MVR-05B4c2). A string returns
+    only receipts stamped with exactly that binding at emission, so an artifact
+    UUID or note path shared with another binding never surfaces that binding's
+    receipts; unstamped legacy receipts and promotion receipts (which carry no
+    stamp) are never shown to it. ``None`` is the carrier-free legacy view.
 
     ``None`` means no receipt-supporting source is available, so callers should
     preserve the honest "unavailable" state. An empty list for a target means a
     source exists and no matching receipt was found.
     """
 
+    views = legacy_view_bindings() if binding is None else (binding,)
     target_list = list(targets)
     if not target_list:
         return {}
@@ -164,6 +204,8 @@ def receipts_for_artifacts(
                 projected = _project_receipt_record(record, vault_root=vault_root)
                 if projected is not None:
                     receipt, artifact_uuid, artifact_path = projected
+                    if _stamp_of(record_payload(record)) not in views:
+                        continue
                     receipt_id = str(receipt.get("receipt_id") or "")
                     for note_path in matched_paths(artifact_uuid, artifact_path):
                         if receipt_id in seen[note_path]:
@@ -171,7 +213,7 @@ def receipts_for_artifacts(
                         result[note_path].append(dict(receipt))
                         seen[note_path].add(receipt_id)
                         promotions[note_path].pop(receipt_id, None)
-                else:
+                elif binding is None:
                     for row in iter_promotion_receipt_rows((record,), vault_root=vault_root):
                         matched = matched_paths(row.artifact_uuid, row.artifact_path)
                         if not matched:
@@ -307,6 +349,8 @@ def _requested_by(record: dict[str, Any], payload: dict[str, Any]) -> str | None
 __all__ = [
     "ArtifactReceiptTarget",
     "DISPLAY_VERB_FALLBACK",
+    "PRODUCING_BINDING_FIELD",
     "RUN_LABEL_FALLBACK",
     "receipts_for_artifacts",
+    "stamp_producing_binding",
 ]

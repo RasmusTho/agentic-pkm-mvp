@@ -794,6 +794,7 @@ Read-only GitHub evidence used:
 | CI workflows | implemented | `.github/workflows/**` | Automated checks and projections | PR/push/schedule/manual | Check runs/artifacts/comments | GitHub Actions | `gh workflow list`; [`.github/workflows/ci-smoke.yaml`:4-13], [`.github/workflows/import-linter.yaml`:14-33] |
 | CI failure context collector | implemented (artifact-only) | `.github/workflows/pr-ci-failure-context.yml`, `scripts/collect_ci_failure_context.py` | Build a bounded context pack for failed PR-triggered runs from CI Smoke, Issue and PR Governance, import-linter, architecture-ci, settings-ci, harness-selfverify, Companion UI Browser Runtime, and App Image Build | Failed allow-listed workflow-run metadata and downloaded logs | JSON/Markdown context artifact; no rerun or repair | GitHub Actions artifact upload only | [PR #3222](https://github.com/RasmusTho/agentic-pkm-mvp/pull/3222), [`.github/workflows/pr-ci-failure-context.yml`:1-62], [scripts/collect_ci_failure_context.py:1-537] |
 | verification dispatch producer | implemented (artifact-only) | `.github/workflows/verification-dispatch-request.yml`, `scripts/build_verification_dispatch_request.py` | Emit one versioned, idempotent request after successful `CI Smoke` for the current PR head | Completed `CI Smoke` workflow run plus live PR snapshot carrying exactly one explicit `Governing-Issue`, exact closing identities, authenticated `Final-Review-Rounds`, then that issue's live snapshot; non-governing references remain supporting evidence | `verification_dispatch_request.v3` JSON/Markdown artifact | GitHub Actions artifact upload only; ambiguous or mismatched governing/closing authority emits no request; no agent, merge, issue, label, comment, or dispatcher mutation | [issue #3602](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3602), [`.github/workflows/verification-dispatch-request.yml`], [scripts/build_verification_dispatch_request.py] |
+| post-merge closure request producer | implemented (artifact-only) | `.github/workflows/post-merge-closure-dispatch.yml`, `.github/workflows/post-merge-closure-reconcile.yml`, `scripts/build_closure_dispatch_request.py`, `scripts/reconcile_post_merge_closure.py` | Emit one bounded, idempotent closure request for a merged PR and recover missed merge events from a finite read-only window | Exact repository, PR number, merge SHA, existing post-merge classification link, and bounded recovery cursor/window | `closure_dispatch_request.v1` JSON/Markdown plus pending/continuation recovery artifact | GitHub Actions read permissions and artifact upload only; malformed, foreign, unmerged, or ambiguous evidence emits no terminal claim; no issue, label, project, comment, branch, agent, model, host, or consumer mutation | [issue #6113](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6113), [#3604](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3604), [`docs/AUTONOMOUS_PR_CLOSURE/DISPATCH_AND_RECONCILE_POST_MERGE_CLOSURE.md`] |
 | Demerzel verification consumer / merge executor | implemented in repo; installed-main acceptance pending | `app/dispatcher/verification_consumer.py`, `app/dispatcher/verification_api.py`, `app/dispatcher/verification_merge.py` | Consume authenticated current-head requests through BuilderOps API/PostgreSQL/outbox; separate uncredentialed review-only `verified` authority from host-fenced merge or safe no-merge | Current request, API task lease, exact issue sets/head, clean-review anchor/round count/repair budget, protected-base manifest, host credential generation, authenticated PR-workflow check suites | `builderops_merge_ready.v1`, task-bound outbox operation binding the fixed non-closing merge text, exact GitHub commit readback | Review child has no ambient GitHub mutation path; only the host executor may resolve the scoped credential and invoke an injected conditional/merge-queue transport; push/manual suites cannot mask failed PR checks, and missing API, fence, manifest, fixed merge text, transport, or readback fails closed | [issue #3603](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3603), [`docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md`], [`app/dispatcher/verification_api.py`], [`app/dispatcher/verification_merge.py`] |
 | CI repair orchestrator | implicit | `pr-integration`, escalation docs | Repair CI when triggered | CI failure | Fix or block | Agent PR commits | [`.codex/skills/pr-integration/SKILL.md`:50-67] |
 | PR publisher | implemented | `publish-pr` skill | Branch, commit, push, PR | Local validated diff | PR | Git/GitHub | [`.codex/skills/publish-pr/SKILL.md`:29-37], [`.codex/skills/publish-pr/SKILL.md`:53-159] |
@@ -931,6 +932,8 @@ Mechanism classification:
 | failed work returns to queue | partially implemented | Dispatcher release/block; GitHub labels for blocked; no automated failed-work requeue from CI | [docs/AGENT_ISSUE_DISPATCHER.md:142-150], [`.codex/skills/issue-to-code/SKILL.md`:176-195] |
 | human exception removed from normal queue | deterministic in labels | `agent:needs-human` normally Backlog and not ready | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27] |
 | epic context-budget observation | deterministic + advisory | At slice boundaries, a versioned run-state receipt records explicit context measurement or `unknown`, checkpoint/digest data, cost inputs, and independent lifecycle/execution/model-tier recommendations. It performs no dispatch, spawn, acceptance, CI, review, merge, or closure mutation. | [`app/builderops/epic_run_context_budget.py`], [`tests/builderops/test_epic_run_context_budget.py`], [docs/AGENT_ISSUE_DISPATCHER.md :: Epic-runner context-budget observation] |
+| manual shadow rehydration probe | deterministic + manual + advisory | One fresh agent receives a strictly raw-byte/source-object-bound packet and explicit live-read instructions, then returns one provenance-bearing observation. Every consumer, including standalone receipt deserialization, reconstructs and cross-binds the retained source/pack/observation/comparison chain; every CLI output is create-only and rejects existing, aliased, direct, or transitive evidence targets. A pure comparison records match/mismatch/unknown and external refresh evidence; sparse live external fields never inherit checkpoint values. No score, threshold, launch, dispatch, lease, CI, review, acceptance, merge, or closure effect is available. | [`app/builderops/epic_rehydration_probe.py`], [`tests/builderops/test_epic_rehydration_probe.py`], [docs/AGENT_ISSUE_DISPATCHER.md :: Manual shadow rehydration probe] |
+| manual read-only coordinator-role experiment | manual + pure evidence replay | An explicit operator decision/quiescence/acknowledgment/activation precedes same-successor live terminal continuation. The pure verifier cannot perform those actions. The observed #6236 result is NONCONFORMING for narrative metadata copying; an explicit result preserves that violation and strict refusal, never qualifying the frozen producer protocol or transferring writer/lifecycle authority. | [`app/builderops/manual_coordinator_rotation.py`], [`tests/builderops/test_manual_coordinator_rotation.py`], [docs/AGENT_ISSUE_DISPATCHER.md :: Manual shadow rehydration probe] |
 
 The context-budget evaluator is measurement infrastructure, not a routing authority. Its
 `checkpoint_rotate` and `thin_worker` values are recommendations on separate axes: delegating a
@@ -950,6 +953,92 @@ delivery path only. It neither rotates/compresses a
 coordinator nor starts workers or parallel execution. Dispatcher lease state, live GitHub Issue/PR
 truth, exact branch/SHA, CI, and review state must still be refreshed and acted on through their
 existing owning workflows.
+
+The manual rehydration probe is a read-only consumer of one accepted evaluator receipt. Its packet
+is evidence, not a coordinator context or dispatch plan: a fresh agent must re-read live Issue/PR/CI,
+repository, and dispatcher surfaces, preserve stale-source refresh needs, and return only the strict
+observation schema. Receipt digests bind exact retained JSON bytes (after strict parse equality), and
+external refresh compares one normalized marker projection on both source and live sides. The resulting
+comparison and probe receipt are rebuildable evidence; they cannot
+start another agent or alter any delivery authority. Current readiness is therefore operationally
+limited to a manually launched single probe with durable source, packet, response, and comparison
+artifacts; it does not demonstrate automatic coordinator rotation or production adoption.
+
+The explicit v2 manual probe adds a packet-carried closed response contract and retains v1 without
+reinterpretation. Checkpoint decision delta, gate invariants and evaluator recommendations are
+separate typed fields; live slice next action is independently observed and explicitly
+`not_comparable` to the recommendation. Issue/PR/CI, repository and dispatcher custody is raw-byte
+bound, with separate external-state dimension results and refresh needs. Missing observations stay
+unknown. Only a separately retained independent auditor attestation with fact evidence can establish
+fabrication for comparison; drift and agent self-report cannot. Standalone comparison/receipt
+consumers rederive semantics as well as verifying the complete retained evidence chain.
+Source repository custody and independent repository reads both require the exact `origin` /
+`refs/heads/main` identity and strict head SHA; a self-consistent foreign source is refused.
+The shared field-aware provenance boundary admits exact retained local live-read envelopes only,
+with target/time/domain checks and canonical-path plus inode exclusion of packet/source custody.
+Checkpoint pointers are confined to checkpoint fields, full v2 observations require packet context,
+and audit facts must agree with their own retained evidence. Reconstruction errors/unknowns stay
+visible alongside independent live facts; custody is not authenticated fetch or upstream truth.
+The original response's exact raw packet binding constrains file-aware replay and byte telemetry;
+equivalent JSON in a differently serialized file is not interchangeable. Probe live reads occur
+after successful admission; independent audit reads have their separate source-to-fact interval.
+Optional-audit joins also require the same exact raw response binding as file-aware comparison,
+telemetry and receipt evidence; equal parsed response objects do not establish that identity.
+Receipt CLI ingestion also binds all three explicit packet/response/comparison file inputs to
+their retained refs unconditionally, including the no-audit path.
+
+Its manual telemetry helper measures exact packet/response bytes, a named UTC wall-clock interval,
+and recorder-attested complete-scope native events. Successful starts, packet/response handoffs,
+admission retries and implementation/review/CI repairs have distinct definitions. Every measurement
+names availability, source, unit and scope; bytes do not estimate tokens, wall time does not estimate
+effort, and absent authoritative carrier tokens/cost or attested human minutes remain unknown.
+Admitted invocation configuration is not engine introspection. The retained
+`shadow_rehydration_3798_field_contract.v2` experiment supports only the bounded manual measurement
+path: no overall score, readiness threshold, automatic rotation, compression, policy, takeover,
+worker launch, or Product/runtime memory change follows from its results. Field, telemetry and
+manual artifact details remain in `docs/AGENT_ISSUE_DISPATCHER.md :: Manual shadow rehydration probe`.
+
+The retained `shadow_rehydration_3798_live_access.v2` repeat now qualifies the observer's own
+successful GitHub Issue/PR/complete review-thread, direct `origin` / `refs/heads/main`, and
+dispatcher reads through the unchanged manual v2 consumers. The packet carries exact semantic
+provenance and sanctioned read-only invocation instructions; parent/source access is not borrowed
+as observer proof. A first response with invalid agent-reporting provenance remains refused and
+immutable; a separately admitted fresh retry supplies the qualifying receipt. Its comparable
+fields matched and required no refresh at capture, while fabrication remained unknown and the live
+next action remained not comparable. Historical CI-rollup classification is not a current merge
+gate. Exact byte, wall-clock, event and limitation evidence remains in the manual owner passage
+and retained artifacts, with failed-attempt, between-attempt and delivery counts kept separate.
+This empirical qualification adds no rotation, dispatch, takeover, launch or Product-memory authority.
+
+The later #6236 manual role experiment actually exercised one distinct operator decision,
+incumbent experimental-role quiescence, acknowledgment, activation and same-successor post-activation
+live terminal plan for closed #6195 / merged #6200. The operator was `/root`; the outer delivery
+writer, lease and worktree remained unchanged. Fresh repository drift outranked the checkpoint and
+the successor recommended no external change. This is an observed read-only role boundary, not
+runtime-enforced exclusion or whole-session/active-epic replacement.
+
+Its result is explicitly NONCONFORMING because admission/response engine-source explanation text
+differs. Both original strings and the unknown engine value remain unchanged; the frozen strict
+path still refuses. The opt-in result consumer retains that refusal and historical verifier bytes
+while enforcing all hard identity, custody, phase, live-fidelity and no-effect predicates. It is
+not an automatic fallback or a successful frozen capture. Exact byte/time/event scopes and the
+three in-interval repairs, extra invalid metadata transfer and later reporting repair remain in
+`evidence/manual_coordinator_rotation_6195_retry1_v1/README.md`. No universal score, automatic
+adoption, worker start, writer takeover, dispatch change, process fence or Product-memory claim
+follows from this observed experiment.
+
+Issue #6244 subsequently delivered exact admission-metadata transport on the existing manual
+seam: the finite `manual_coordinator_rotation metadata` producer copies the retained admitted v2
+invocation object, and its optional original-response preflight preserves strict equality rather
+than repairing explanation text. The new `manual_coordinator_rotation_6195_conformant.v1` actual
+experiment passed unchanged v2 consumers and separate-process strict build/verify. A distinct
+operator decision/quiescence/acknowledgment/activation chain led the same packet-only successor to
+fresh live terminal reconciliation and a no-change recommendation, with no Project proposals
+executed. Its 685-second recorder interval and exact byte/event/unknown scopes are retained in
+`evidence/manual_coordinator_rotation_6195_conformant_v1/README.md`; the earlier NONCONFORMING
+originals and refusal remain intact. This is evidence for one manual read-only role boundary, not
+active-epic or whole-session replacement, writer/lease takeover, runtime fencing, changed dispatch,
+worker starts, automatic rotation/compression/adoption or Product-memory authority.
 
 ### Run-state authority
 

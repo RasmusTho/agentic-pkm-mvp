@@ -1,0 +1,76 @@
+{
+  "schema_name": "epic_rehydration_execution_log",
+  "schema_version": 2,
+  "probe_id": "manual_coordinator_rotation_6195_conformant",
+  "clock": {
+    "name": "root recorder actual UTC wall clock observations",
+    "unit": "seconds",
+    "scope": "Conformant-run initial native request through independent six-original root readback; v2 agent-start, frozen-packet/original-response transfers and code/test repair definitions only; the distinct admission-metadata transfer is counted in the full experiment."
+  },
+  "started_at": "2026-10-18T16:45:04Z",
+  "ended_at": "2026-10-18T16:49:40Z",
+  "invocation": {
+    "admitted_model": "gpt-6-luna",
+    "admitted_reasoning_effort": "xhigh",
+    "engine_identity": "unknown",
+    "engine_identity_source": "unknown(native carrier exposes no independent engine identity)",
+    "start_observed_at": "2026-10-18T16:45:18Z",
+    "start_status": "succeeded"
+  },
+  "events_complete": true,
+  "recorder": "/root",
+  "events": [
+    {
+      "id": "conformant-native-start",
+      "kind": "agent_start",
+      "at": "2026-10-18T16:45:18Z",
+      "evidence": "Native collaboration.spawn_agent accepted /root/manual_rotation_successor_6244 with current gpt-6-luna/xhigh/fork:none; root successful-return observation at16:45:18Z, not independent engine introspection."
+    },
+    {
+      "id": "conformant-packet-handoff",
+      "kind": "handoff",
+      "at": "2026-10-18T16:45:18Z",
+      "evidence": "Frozen packet-only initial native handoff; successful native return at16:45:18Z is the recorder observation tick, not a claimed exact transport timestamp. Packet SHA 307f366b8eb960338d19b66bfb6c7342208e6d22a617e2dc3d579a1c78df5122 /58717bytes; later admission-metadata transfer16:46:25Z is separate full-experiment evidence."
+    },
+    {
+      "id": "conformant-initial-response-handoff",
+      "kind": "handoff",
+      "at": "2026-10-18T16:49:40Z",
+      "evidence": "Root independently reopened and hash/length checked all six immutable originals; exact metadata/admission equality and raw Issue/PR/dispatcher/repository plus complete review/actual-clock joins passed. Response e23bb4ad273ec96524e1e0e4938c4a6048650e67ec18141b3053321c82aea195/7049bytes; fidelity 693ddc95b40dc678794c59a75f38f2d687871941b5acd59763d83c1f6f5ea252/13177bytes."
+    }
+  ],
+  "usage": {
+    "input_tokens": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "tokens",
+      "scope": "Conformant-run initial native request through independent six-original root readback; v2 agent-start, frozen-packet/original-response transfers and code/test repair definitions only; the distinct admission-metadata transfer is counted in the full experiment.",
+      "source": "No authoritative native carrier metric receipt or human attestation was supplied for this scope.",
+      "reason": "Bytes and recorder-inclusive UTC wall time are measured separately; they do not establish tokens, monetary cost, model-active duration or human effort."
+    },
+    "output_tokens": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "tokens",
+      "scope": "Conformant-run initial native request through independent six-original root readback; v2 agent-start, frozen-packet/original-response transfers and code/test repair definitions only; the distinct admission-metadata transfer is counted in the full experiment.",
+      "source": "No authoritative native carrier metric receipt or human attestation was supplied for this scope.",
+      "reason": "Bytes and recorder-inclusive UTC wall time are measured separately; they do not establish tokens, monetary cost, model-active duration or human effort."
+    },
+    "model_cost_usd": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "USD",
+      "scope": "Conformant-run initial native request through independent six-original root readback; v2 agent-start, frozen-packet/original-response transfers and code/test repair definitions only; the distinct admission-metadata transfer is counted in the full experiment.",
+      "source": "No authoritative native carrier metric receipt or human attestation was supplied for this scope.",
+      "reason": "Bytes and recorder-inclusive UTC wall time are measured separately; they do not establish tokens, monetary cost, model-active duration or human effort."
+    },
+    "human_minutes": {
+      "availability": "unknown",
+      "value": "unknown",
+      "unit": "minutes",
+      "scope": "Conformant-run initial native request through independent six-original root readback; v2 agent-start, frozen-packet/original-response transfers and code/test repair definitions only; the distinct admission-metadata transfer is counted in the full experiment.",
+      "source": "No authoritative native carrier metric receipt or human attestation was supplied for this scope.",
+      "reason": "Bytes and recorder-inclusive UTC wall time are measured separately; they do not establish tokens, monetary cost, model-active duration or human effort."
+    }
+  }
+}

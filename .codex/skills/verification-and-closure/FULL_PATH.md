@@ -168,9 +168,18 @@ or the normal issue-maintenance/owner-authority path, then re-run the affected c
 
 Verification owns the merge decision.
 
+For the session-owned manual FULL_PATH producer, invoke
+`scripts/build_verified_issue_set_merge_phase.py --mode manual` for every phase. This explicit
+route emits the authenticated continuous `verified_issue_set_merge_phase.v1` chain without
+post-effect deployment or operation-key inputs. It must start from a v1-only history: the CLI
+rejects post-effect inputs, consumer/in-flight v2 predecessors, and mixed v1/v2 phase history.
+Manual v1 is not consumer authority and must never be used for a dispatched or recoverable
+post-effect attempt.
+
 For the recoverable post-effect consumer, require fresh exact deployed capability preflight under
 `docs/AGENT_ISSUE_DISPATCHER.md :: Current-State Honesty` before activation. Build all four phases
-as `verified_issue_set_merge_phase.v2` using `scripts/build_verified_issue_set_merge_phase.py`
+as `verified_issue_set_merge_phase.v2` using
+`scripts/build_verified_issue_set_merge_phase.py --mode consumer`
 with fresh authenticated status deployment readback (or the explicit
 `--post-effect-deployment-json` override); reconciled/restored also require the exact
 `--post-effect-operation-key`. The builder reads the persisted record through the authenticated
@@ -479,7 +488,7 @@ same exact head back to the ordinary verified-merge sequence below.
    merge, Issue, dispatcher, or lifecycle effect. Never reuse the pre-edit green `pr-contract`
    result as merge authority
 4. use `scripts/build_verified_issue_set_merge_phase.py` to post an authenticated
-   `verified_issue_set_merge_phase.v1` `prepared` receipt bound to the durable authority receipt and
+   `prepared` receipt bound to the durable authority receipt and
    exact convergence receipt plus its embedded `final_projection_observation` through
    `--projection-convergence-json`, `--final-projection-observation-json`, and the complete bounded
    PR comment readback through `--comments-json`; `prepared` refuses
@@ -492,7 +501,9 @@ same exact head back to the ordinary verified-merge sequence below.
    pre-#4010 legacy exception, also pass the complete trusted
    authority comment through `--authority-comment-json`; the receipt payload alone does not prove
    cutoff provenance. Require a single continuous prepared/merged/reconciled/restored
-   phase ledger. Every current-schema phase consumer resolves the one trusted durable convergence
+   phase ledger. Pass `--mode manual` for the session-owned manual v1 route described above, or
+   `--mode consumer` for the recoverable v2 route; do not mix modes or phase histories. Every
+   current-schema phase consumer resolves the one trusted durable convergence
    comment, recomputes its quorum/final-observation proof, and requires its digest; duplicate
    convergence comments and missing, stale, forged, or
    conflicting receipts fail closed. Pass the same authenticated convergence JSON to every later

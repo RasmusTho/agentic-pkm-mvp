@@ -51,6 +51,11 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 
+from companion_ui.workspace.scoped_session import (
+    COMPATIBILITY_PATHS, PICKER_DISCOVERY_PATHS, SELECTOR_PATHS, scoped_session_script,
+    HANDOFF_DIGEST_HEADER, session_cookie, session_from_cookie, session_transport_digest,
+)
+
 import httpx
 
 
@@ -90,6 +95,10 @@ from companion_ui.workspace.devui_candidate_assets import load_devui_candidate_a
 from companion_ui.workspace.capture_modal import (
     capture_modal_markup,
     capture_modal_script,
+)
+from companion_ui.workspace.calibration_revisit_card import (
+    calibration_revisit_card_markup,
+    calibration_revisit_card_script,
 )
 from companion_ui.workspace.entry_state import (
     EntryStateResolution,
@@ -3533,6 +3542,14 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
     commitments_mode_html = _render_commitments_mode(
         fields.get("commitments_surface")
     )
+    calibration_revisit_html = (
+        calibration_revisit_card_markup(
+            fields.get("calibration_revisit"),
+            note_path=str(fields.get("note_path") or ""),
+        )
+        if "calibration_revisit" in fields
+        else ""
+    )
     act_mode_html = _render_act_mode(
         proposals=fields.get("panel_proposals") or [],
         response=fields.get("panel_last_response") or {},
@@ -3730,6 +3747,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
     rail_cards_inner = f"""
         {day_start_card_html}
         {reflection_offer_html}
+        {calibration_revisit_html}
         {canvas_lane_html}
         {active_note_body_update_html}
         {suggestion_flow_html}
@@ -4844,6 +4862,7 @@ def _render_vault_note_row(note: dict, filename: str, path: str, note_path: str)
     badges_html = kind_badge + review_badge + trust_badge + health_badge
 
     kind_safe = _e(str(kind_val)) if kind_val else ""
+    artifact_uuid = _e(str(note.get("uuid") or ""))
     is_companion = kind_val in _COMPANION_KINDS
     row_extra_class = " vault-browser-row--companion" if is_companion else ""
     row_kind_attr = f' data-kind="{kind_safe}"' if kind_safe else ""
@@ -4857,10 +4876,12 @@ def _render_vault_note_row(note: dict, filename: str, path: str, note_path: str)
     # raw metadata stay in hidden elements (data-* preserved for tests).
     return (
         f'<li class="vault-browser-row{row_extra_class}" '
-        f'data-testid="workspace-vault-browser-note-row" data-active="{active}"'
+        f'data-testid="workspace-vault-browser-note-row" data-note-path="{_e(path)}" '
+        f'data-artifact-uuid="{artifact_uuid}" data-active="{active}"'
         f'{row_kind_attr}{row_companion_attr}{row_nav_attr}{row_hidden_attr}>'
         f'<a href="{href}" class="vault-browser-row-title" '
-        f'data-testid="workspace-vault-browser-note-link" title="{title}">{_e(stem)}</a>'
+        f'data-testid="workspace-vault-browser-note-link" data-note-path="{_e(path)}" '
+        f'data-artifact-uuid="{artifact_uuid}" title="{title}">{_e(stem)}</a>'
         f'<code class="vault-browser-row-path" data-testid="workspace-vault-browser-note-path" '
         f'title="{_e(path)}" hidden>{_e(filename)}</code>'
         f'<span data-testid="workspace-vault-browser-note-zone" '
@@ -5086,6 +5107,28 @@ def _render_vault_browser(
         active_filters=active_filters or {},
         pagination=pagination or {},
     )
+    search_fields: list[str] = []
+    if note_path:
+        search_fields.append(
+            f'<input type="hidden" name="note_path" value="{_e(note_path)}">'
+        )
+    for field, values in (active_filters or {}).items():
+        for value in values:
+            search_fields.append(
+                f'<input type="hidden" name="{_e(str(field))}" value="{_e(str(value))}">'
+            )
+    search_html = (
+        '<form class="vault-browser-search-form" method="get" '
+        'data-testid="workspace-vault-browser-search-form" '
+        'aria-label="Search vault notes">'
+        + "".join(search_fields)
+        + f'<input type="search" class="vault-browser-search" '
+        f'id="workspace-vault-browser-search" '
+        f'data-testid="workspace-vault-browser-search" name="q" '
+        f'value="{query_text}" placeholder="Search by title, path, or note text…" '
+        'autocomplete="off" aria-label="Search vault notes">'
+        "</form>"
+    )
     selected_note = next((n for n in notes if str(n.get("note_path") or "").strip() == note_path), None)
     # #1427 — keep the inspector out of the default browse view. The tree is the
     # surface; the inspector metadata/actions sit behind a collapsed disclosure
@@ -5124,6 +5167,7 @@ def _render_vault_browser(
                   data-testid="workspace-vault-browser-provenance"
                   data-raw-provenance="{_e(vault_provenance)}">{_e(calm_provenance)}</span>
           </div>
+          {search_html}
           {hidden_html}
           {filters_html}
           {state_html}
@@ -7529,7 +7573,13 @@ def _render_vault_picker_script() -> str:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body || {})
       }).then(function(response) {
-        if (!response.ok) { return response.text().then(function(t) { throw new Error(t || response.status); }); }
+        if (!response.ok) { return response.text().then(function(t) {
+          var data = null;
+          try { data = JSON.parse(t); } catch (e) {}
+          var detail = data && data.detail;
+          var message = detail && (detail.message || (typeof detail === 'string' ? detail : null));
+          throw new Error(message || t || response.status);
+        }); }
         return response.text();
       });
     }
@@ -9246,6 +9296,8 @@ def _render_orientation_index_html(
     health: Optional[dict] = None,
     boot_overlay: str = "",
     day_start_briefing: Optional[dict] = None,
+    compatibility_precondition: Optional[str] = None,
+    scoped_document: bool = False,
 ) -> str:
     if entry_resolution is None:
         entry_resolution = resolve_entry_state(orientation=orientation)
@@ -9661,6 +9713,7 @@ def _render_orientation_index_html(
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Workspace Orientation [{title_suffix}]</title>
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
+  {scoped_session_script(compatibility_precondition, scoped_document=scoped_document)}
   <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     :root {{
@@ -11154,6 +11207,40 @@ CODEMIRROR_MODULE_URL = "/static/vendor/codemirror-6.0.1.mjs"
 _VENDOR_STATIC_CACHE: dict[str, tuple[str, bytes]] | None = None
 
 
+def _local_system_tokens_sheet(source: bytes) -> bytes:
+    """Serve the shipped token sheet with the admitted local-font fallback.
+
+    The generated token source retains its design-system provenance, while the
+    Companion gateway's self-contained page removes its remote font import and
+    keeps the accepted system fallbacks. This is the constrained-reuse
+    no-egress normalization; it adds no token or visual language.
+    """
+    text = source.decode("utf-8")
+    text = re.sub(
+        r"^@import url\('https://fonts\.googleapis\.com/[^\n]+\);\n\n",
+        "",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    for original, normalized in (
+        (
+            "--font-display: 'EB Garamond', Georgia, serif;",
+            '--font-display: Georgia, "Times New Roman", serif;',
+        ),
+        (
+            "--font-ui: 'Space Grotesk', system-ui, sans-serif;",
+            '--font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;',
+        ),
+        (
+            "--font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;",
+            "--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;",
+        ),
+    ):
+        text = text.replace(original, normalized)
+    return text.encode("utf-8")
+
+
 def vendor_static_assets() -> dict[str, tuple[str, bytes]]:
     """Preloaded ``request-path -> (Content-Type, bytes)`` map for vendored ESM.
 
@@ -11177,7 +11264,10 @@ def vendor_static_assets() -> dict[str, tuple[str, bytes]]:
         # must stop startup instead of serving unstyled pages.
         try:
             with open(_YGGDRASIL_TOKENS_PATH, "rb") as fh:
-                cache[YGGDRASIL_TOKENS_URL] = ("text/css; charset=utf-8", fh.read())
+                cache[YGGDRASIL_TOKENS_URL] = (
+                    "text/css; charset=utf-8",
+                    _local_system_tokens_sheet(fh.read()),
+                )
         except OSError as exc:
             raise RuntimeError(
                 f"Yggdrasil tokens sheet missing at {_YGGDRASIL_TOKENS_PATH}; "
@@ -11512,6 +11602,8 @@ def render_index_html(
     health: Optional[dict] = None,
     boot_overlay: str = "",
     day_start_briefing: Optional[dict] = None,
+    compatibility_precondition: Optional[str] = None,
+    scoped_document: bool = False,
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -11570,9 +11662,16 @@ def render_index_html(
             health=health,
             boot_overlay=boot_overlay,
             day_start_briefing=day_start_briefing,
+            compatibility_precondition=compatibility_precondition,
+            scoped_document=scoped_document,
         )
 
     content_section = ""
+    calibration_revisit_script_html = (
+        calibration_revisit_card_script()
+        if fields is not None and "calibration_revisit" in fields
+        else ""
+    )
     # CUIDR-04 (#2447): the relocated runtime/diagnostic telemetry block lives
     # inside the operator drawer (the operator layer). _render_note_section
     # builds it where its derived inputs are in scope and hands it back so the
@@ -11730,11 +11829,9 @@ def render_index_html(
   <meta name="pkm-runtime-channel" content="{_e(runtime_channel)}">
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Real-Note Workspace [{title_suffix}]</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
   {production_static_link}
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
+  {scoped_session_script(compatibility_precondition, scoped_document=scoped_document)}
   <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     /* Page-local tokens. Yggdrasil tokens come from YGGDRASIL_TOKENS_URL (YDS-03, #5629). */
@@ -11746,7 +11843,7 @@ def render_index_html(
       --au-receipt:    #b98be0;
       --au-local:      #6b7a90;
       --au-blocked:    var(--destructive);
-      --font-mono:     'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      --font-mono:     ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }}
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     /* Global reset: the `hidden` attribute must always win. Several elements
@@ -13787,6 +13884,77 @@ def render_index_html(
     .rail-state-value, .rail-state-count {{
       color: var(--fg-2);
     }}
+    /* ---- CAL-03 decision calibration revisit card ---- */
+    .calibration-revisit-card {{
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--border-strong);
+      border-left: 3px solid var(--cyan);
+      border-radius: var(--radius-md);
+      background: var(--bg-raised);
+      color: var(--fg-1);
+    }}
+    .calibration-revisit-card.cal-quiet {{
+      border-left-color: var(--fg-3);
+      color: var(--fg-2);
+    }}
+    .cal-head {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }}
+    .cal-eyebrow, .cal-meta, .cal-hint {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.04em;
+    }}
+    .cal-eyebrow {{ text-transform: uppercase; }}
+    .cal-badge, .cal-badge--amber {{
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      color: var(--cyan);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      padding: 1px 6px;
+    }}
+    .cal-badge--amber {{ color: var(--amber); border-color: var(--amber); }}
+    .cal-q {{
+      color: var(--fg-1);
+      font-size: var(--text-sm);
+      font-weight: 500;
+      line-height: 1.35;
+    }}
+    .cal-title {{ color: var(--cyan); }}
+    .cal-pick-group {{ border: 0; display: flex; flex-direction: column; gap: 6px; }}
+    .cal-pick-group legend {{ color: var(--fg-2); font-size: var(--text-xs); margin-bottom: 2px; }}
+    .cal-picks {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }}
+    .cal-pick, .cal-dismiss {{
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      line-height: 1.2;
+      min-height: 34px;
+      padding: 7px 8px;
+      border-radius: var(--radius-sm);
+    }}
+    .cal-pick {{ background: var(--bg-surface); border: 1px solid var(--border-strong); color: var(--fg-1); }}
+    .cal-pick:hover, .cal-pick:focus-visible {{ border-color: var(--cyan); color: var(--cyan); }}
+    .cal-dismiss {{ background: transparent; border: 1px solid var(--border); color: var(--fg-2); }}
+    .cal-dismiss:hover, .cal-dismiss:focus-visible {{ border-color: var(--amber); color: var(--amber); }}
+    .cal-note-label {{ color: var(--fg-2); font-size: var(--text-xs); }}
+    .cal-note {{
+      background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      color: var(--fg-1); font: inherit; min-height: 48px; padding: 6px 8px; resize: vertical;
+    }}
+    .cal-note:focus {{ border-color: var(--border-focus); outline: 1px solid var(--border-focus); }}
+    .cal-alert {{ color: var(--amber); font-size: var(--text-xs); }}
+    .cal-alert[hidden] {{ display: none; }}
+    @media (min-width: 1100px) {{ .cal-picks {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }} }}
+    @media print {{ .cal-pick-group, .cal-note-label, .cal-note, .cal-foot {{ display: none; }} }}
     /* ---- Commitment surface (read-only): Next (warm) / Review (cool) ---- */
     .commitments-mode {{ display: flex; flex-direction: column; gap: 12px; }}
     .commitment-group {{ display: flex; flex-direction: column; gap: 6px; }}
@@ -15612,7 +15780,7 @@ def render_index_html(
       {guidance_callout_markup('vault')}
       <input type="text" class="vault-browser-search" id="vault-browser-search"
              data-testid="vault-browser-search"
-             placeholder="Search by title or path…"
+             placeholder="Search by title, path, or note text…"
              autocomplete="off">
       <ul class="vault-browser-list" id="vault-browser-list"
           data-testid="vault-browser-list"></ul>
@@ -15647,6 +15815,7 @@ def render_index_html(
     var search  = document.getElementById('vault-browser-search');
     var identity = document.getElementById('vault-browser-identity');
     var debounceTimer = null;
+    var queryGeneration = 0;
 
     function setStatus(msg) {{ status.textContent = msg; }}
 
@@ -15683,8 +15852,10 @@ def render_index_html(
     }}
 
     function fetchNotes(q) {{
+      var generation = ++queryGeneration;
       setStatus('Loading…');
       list.innerHTML = '';
+      list.removeAttribute('data-query');
       var url = '/api/companion/vault/notes' + (q ? '?q=' + encodeURIComponent(q) : '');
       fetch(url)
         .then(function(r) {{
@@ -15692,9 +15863,12 @@ def render_index_html(
           return r.json();
         }})
         .then(function(data) {{
+          if (generation !== queryGeneration) return;
           renderNotes(data.notes, data.vault_identity);
+          list.setAttribute('data-query', q);
         }})
         .catch(function(err) {{
+          if (generation !== queryGeneration) return;
           // D3 (CUIDR-01): a live fetch failure must not surface the raw
           // transport error ("Error: Failed to fetch"). Reuse the single calm
           // grammar template (the same string the server-rendered error path
@@ -15749,6 +15923,8 @@ def render_index_html(
         search.focus();
       }},
       close: function() {{
+        ++queryGeneration;
+        clearTimeout(debounceTimer);
         overlay.classList.remove('open');
       }},
       selectNote: function(path) {{
@@ -15759,6 +15935,11 @@ def render_index_html(
     }};
 
     search.addEventListener('input', function() {{
+      // Invalidate an in-flight response immediately, including during the
+      // debounce interval before the replacement request starts.
+      ++queryGeneration;
+      list.innerHTML = '';
+      list.removeAttribute('data-query');
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(function() {{
         fetchNotes(search.value.trim());
@@ -15780,6 +15961,7 @@ def render_index_html(
   {_panel_apply_script()}
   {panel_palette_script()}
   {memory_review_drawer_script()}
+  {calibration_revisit_script_html}
   {receipts_history_script()}
   {system_map_overlay_script()}
   {guidance_layer_script()}
@@ -16286,6 +16468,8 @@ def handle_get(
     runtime_git_sha: str = "",
     page_origin_host: str = "",
     day_start_briefing: Optional[dict] = None,
+    compatibility_precondition: Optional[str] = None,
+    scoped_document: bool = False,
 ) -> str:
     """Parse query string, optionally load a note, and return full page HTML.
 
@@ -16321,6 +16505,7 @@ def handle_get(
         state = page.load(
             NoteLoadIntent(
                 note_path=note_path,
+                vault_browser_query=params.get("q", [""])[0].strip(),
                 active_filters=active_filters,
                 vault_browser_cursor=cursor,
                 vault_browser_limit=browser_limit,
@@ -16400,6 +16585,17 @@ def handle_get(
         elif orientation is None:
             error = orientation_error or orientation_vault_browser_error
 
+    if "reselection_required" in error or "reselection_required" in orientation_error or "reselection_required" in orientation_vault_browser_error:
+        vault_selection_required = {
+            "state": "vault_selection_required", "reason": "reselection_required",
+            "message": "Choose a vault again to continue.",
+        }
+        fields = None
+        orientation = None
+        orientation_vault_browser = None
+        error = ""
+    if compatibility_precondition is None and not scoped_document:
+        compatibility_precondition = getattr(client, "document_write_precondition", None)
     return render_index_html(
         api_base_url=api_base_url,
         note_path=note_path,
@@ -16419,6 +16615,8 @@ def handle_get(
         health=health,
         boot_overlay=boot_overlay,
         day_start_briefing=day_start_briefing,
+        compatibility_precondition=compatibility_precondition,
+            scoped_document=scoped_document,
     )
 
 
@@ -16471,10 +16669,29 @@ def make_handler(
         _devui_enabled = _resolved_devui_enabled
 
         def _send_json(self, status_code: int, payload: object, *, confirmation_header: str | None = None) -> None:
+            handoff = None
+            if status_code < 400 and urlparse(self.path).path in {VAULT_SELECT_ENDPOINT, VAULT_INITIALIZE_ENDPOINT} and isinstance(payload, dict):
+                bearer = payload.get("context_selection_id")
+                if isinstance(bearer, str) and bearer:
+                    handoff = bearer
+                # Strip only the credential fields on these successful picker
+                # responses, even when a partial response lost the top-level
+                # handoff. A nested copy must never leak through that failure.
+                payload = dict(payload)
+                payload.pop("context_selection_id", None)
+                if isinstance(payload.get("context"), dict) and "context_selection_id" in payload["context"]:
+                    payload["context"] = dict(payload["context"])
+                    payload["context"].pop("context_selection_id", None)
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            if handoff is not None:
+                self.send_header("Set-Cookie", session_cookie(handoff))
+                self.send_header(HANDOFF_DIGEST_HEADER, session_transport_digest(handoff))
+            proof = getattr(self._client, "response_headers", {}).get("x-compatibility-write-precondition")
+            if proof:
+                self.send_header(_COMPATIBILITY_PRECONDITION_HEADER, proof)
             if confirmation_header is not None:
                 self.send_header(_PANEL_CONFIRMATION_HEADER, confirmation_header)
             self.end_headers()
@@ -16529,7 +16746,10 @@ def make_handler(
                 self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
                 return
             try:
-                response = httpx.get(self._api_base_url.rstrip("/") + path, timeout=10.0)
+                response = httpx.get(
+                    self._api_base_url.rstrip("/") + path, timeout=10.0,
+                    headers=self._forwarded_client_headers(path),
+                )
             except httpx.RequestError as exc:
                 self._send_json(
                     502,
@@ -16777,6 +16997,7 @@ def make_handler(
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            self._bind_request_context(parsed.path)
             if parsed.path == "/devui" or parsed.path.startswith("/devui/"):
                 self._serve_devui_candidate(parsed)
                 return
@@ -16822,6 +17043,14 @@ def make_handler(
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if parsed.path in {"/api/companion/vault/notes/scoped", "/api/companion/active-context/selection"}:
+                try:
+                    data = self._client.get(parsed.path, params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
                 return
             if parsed.path == "/api/companion/orientation":
                 try:
@@ -16899,6 +17128,11 @@ def make_handler(
                 # no-vault default — no fabricated vault state.
                 try:
                     data = self._client.get(VAULT_SETTINGS_ENDPOINT, params={})
+                except WorkspaceClientHTTPError as exc:
+                    if "reselection_required" in exc.detail:
+                        self._proxy_error(exc)
+                        return
+                    data = {}
                 except WorkspaceClientError:
                     data = {}
                 # This fragment route is shared by two surfaces (#2485 Codex
@@ -17100,6 +17334,36 @@ def make_handler(
             if parsed.path not in {"/", "/workspace"}:
                 self._send_unknown_document_route()
                 return
+            # Resolve explicit session intent before any page-triggered mutation
+            # or secondary read. A stale bearer is retained, never downgraded.
+            page_headers = self._forwarded_client_headers(parsed.path)
+            page_write_proof = None
+            if "X-Active-Context-Session" in page_headers or "X-Active-Context-Override" in page_headers:
+                try:
+                    if "X-Active-Context-Override" not in page_headers and page_headers.get("X-Active-Context-Session"):
+                        self._client.get("/api/companion/active-context/selection", params={})
+                    # Mint the proof with the same immutable request-local
+                    # adapter that will load this document. Capture it before
+                    # later orientation/health responses overwrite headers.
+                    self._client.get("/api/companion/vault/notes/scoped", params={})
+                    page_write_proof = getattr(self._client, "response_headers", {}).get(
+                        "x-compatibility-write-precondition"
+                    )
+                except WorkspaceClientHTTPError as exc:
+                    if "reselection_required" in exc.detail:
+                        self._send_html(200, render_index_html(
+                            api_base_url=self._api_base_url,
+                            vault_selection_required={
+                                "state": "vault_selection_required", "reason": "reselection_required",
+                                "message": "Choose a vault again to continue.",
+                            },
+                        ))
+                    else:
+                        self._proxy_error(exc)
+                    return
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
             day_start_briefing = None
             try:
                 first_contact = self._client.post(
@@ -17149,6 +17413,8 @@ def make_handler(
                 # runtime signal.
                 page_origin_host=self.headers.get("Host", ""),
                 day_start_briefing=day_start_briefing,
+                compatibility_precondition=page_write_proof,
+                scoped_document="X-Active-Context-Session" in page_headers or "X-Active-Context-Override" in page_headers,
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -17163,6 +17429,8 @@ def make_handler(
                 "/api/companion/briefing/today",
                 "/api/companion/workspace",
                 "/api/companion/vault/notes",
+                "/api/companion/vault/notes/scoped",
+                "/api/companion/active-context/selection",
                 "/api/companion/vault/browse",
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/companion/vault-related",
@@ -17200,6 +17468,7 @@ def make_handler(
                 "/api/companion/vault-browser/actions/queue-review",
                 VAULT_SELECT_ENDPOINT,
                 VAULT_INITIALIZE_ENDPOINT,
+                "/api/companion/vault/initialize/bootstrap",
                 VAULT_RELOAD_ENDPOINT,
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/canvas/sessions",
@@ -17211,7 +17480,13 @@ def make_handler(
         _FORWARDED_CLIENT_AUTH_PATHS = frozenset(
             {
                 VAULT_SELECT_ENDPOINT,
+                "/", "/workspace", "/api/companion/vault/notes", "/api/operator/ask",
+                "/api/companion/workspace", "/api/companion/orientation",
+                "/api/companion/capture/compatibility", "/api/companion/note/save/compatibility",
+                "/api/companion/active-context/selection",
+                "/api/companion/vault/notes/scoped",
                 VAULT_INITIALIZE_ENDPOINT,
+                "/api/companion/vault/initialize/bootstrap",
                 # GET /vault/browse is require_loopback_or_api_key-gated and
                 # enumerates folder names; forward the client's auth context so
                 # the runtime authenticates the real client, not the loopback
@@ -17245,6 +17520,10 @@ def make_handler(
             # verbatim by _proxy_error so the drawer renders calm with the
             # candidate still pending.
             re.compile(r"^/api/companion/memory/review-queue/[^/]+/decision$"),
+            # CAL-03 decision-revisit answer and dismiss actions.  Keep the
+            # route distinction explicit so the UI cannot turn a dismissal
+            # into an outcome receipt (or vice versa).
+            re.compile(r"^/api/companion/calibration/revisits/[^/]+/(?:decision|dismiss)$"),
         )
 
         def _post_path_allowed(self, path: str) -> bool:
@@ -17298,25 +17577,40 @@ def make_handler(
                 return None
             return getattr(self, attr_name)
 
+        def _bind_request_context(self, path: str) -> None:
+            # Clone the transport per request; the class-level client is shared
+            # by browsers and must never retain another browser's capability.
+            headers = self._forwarded_client_headers(path)
+            if hasattr(client, "with_context_headers"):
+                self._client = client.with_context_headers(headers)
+
         def _forwarded_client_headers(self, path: str) -> dict[str, str]:
             client_address = getattr(self, "client_address", None)
             client_host = ""
             if isinstance(client_address, tuple) and client_address:
                 client_host = str(client_address[0]).strip()
             headers: dict[str, str] = {}
-            if client_host and path in self._FORWARDED_CLIENT_AUTH_PATHS:
+            has_session = session_from_cookie(self.headers.get("Cookie", "")) is not None or any(
+                self.headers.get(name) is not None for name in _ACTIVE_CONTEXT_HEADERS[:2]
+            )
+            if client_host and (path in self._FORWARDED_CLIENT_AUTH_PATHS or has_session):
                 headers["X-Forwarded-For"] = client_host
             api_key = self.headers.get("X-API-Key")
             if api_key:
                 headers["X-API-Key"] = api_key
             for name in _ACTIVE_CONTEXT_HEADERS:
                 value = self.headers.get(name)
-                if value:
+                if value is not None:
                     headers[name] = value
+            if "X-Active-Context-Session" not in headers and path not in SELECTOR_PATHS | COMPATIBILITY_PATHS | PICKER_DISCOVERY_PATHS:
+                bearer = session_from_cookie(self.headers.get("Cookie", ""))
+                if bearer is not None:
+                    headers["X-Active-Context-Session"] = bearer
             return headers
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
+            self._bind_request_context(parsed.path)
             if not self._post_path_allowed(parsed.path):
                 self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
                 return
@@ -17345,16 +17639,53 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
+            native_calibration_form = False
             try:
                 payload = json.loads(raw_body.decode("utf-8") or "{}")
             except json.JSONDecodeError:
-                self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
-                return
+                content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                if (
+                    content_type == "application/x-www-form-urlencoded"
+                    and re.fullmatch(
+                        r"/api/companion/calibration/revisits/[^/]+/(?:decision|dismiss)",
+                        parsed.path,
+                    )
+                ):
+                    try:
+                        pairs = parse_qsl(
+                            raw_body.decode("utf-8"),
+                            keep_blank_values=True,
+                            strict_parsing=True,
+                        )
+                    except (UnicodeDecodeError, ValueError):
+                        self._send_json(
+                            400,
+                            {"error": "invalid_form", "message": "Request body must be URL encoded."},
+                        )
+                        return
+                    payload = {key: value for key, value in pairs}
+                    if "rung_index" in payload:
+                        try:
+                            payload["rung_index"] = int(payload["rung_index"])
+                        except ValueError:
+                            pass
+                    native_calibration_form = True
+                else:
+                    self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
+                    return
             runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
             timeout_override = self._post_timeout_override(parsed.path)
+            note_path = str(payload.get("note_path") or "")
+            runtime_payload = dict(payload)
+            if native_calibration_form:
+                runtime_payload.pop("note_path", None)
             try:
                 forwarded_headers = self._forwarded_client_headers(parsed.path)
-                post_kwargs: dict = {"json": payload}
+                if parsed.path == "/api/operator/ask" and any(
+                    name in forwarded_headers for name in _ACTIVE_CONTEXT_HEADERS[:2]
+                ):
+                    runtime_path = "/api/ask/scoped"
+                post_kwargs: dict = {"json": runtime_payload}
                 if forwarded_headers:
                     post_kwargs["headers"] = forwarded_headers
                 if timeout_override is not None:
@@ -17372,6 +17703,26 @@ def make_handler(
                     api_base_url=self._api_base_url,
                     note_path=str(payload.get("note_path") or ""),
                 )
+            if native_calibration_form:
+                expected_status = "answered" if parsed.path.endswith("/decision") else "dismissed"
+                if not isinstance(data, dict) or data.get("status") != expected_status:
+                    self._send_json(
+                        409,
+                        {
+                            "error": "unexpected_action_response",
+                            "message": "The runtime did not confirm the requested calibration action.",
+                        },
+                    )
+                    return
+                location = "/workspace"
+                if note_path:
+                    location += "?note_path=" + quote(note_path, safe="")
+                self.send_response(303)
+                self.send_header("Location", location)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             presentation = _panel_confirmation_presentation(data, payload) if parsed.path == "/api/panel/confirm" else None
             if presentation is not None:
                 self._send_json(200, data, confirmation_header=presentation)
@@ -17380,6 +17731,7 @@ def make_handler(
 
         def do_DELETE(self) -> None:
             parsed = urlparse(self.path)
+            self._bind_request_context(parsed.path)
             if not self._delete_path_allowed(parsed.path):
                 self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
                 return

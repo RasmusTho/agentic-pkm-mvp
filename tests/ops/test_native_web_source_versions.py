@@ -119,7 +119,8 @@ def test_serial_original_daily_sources_acknowledgement_fault_restore_and_drift(s
     effects['deep-review']['panel_confirm'] = 1
     state.grant('panel_confirm')
     admitted_panel = state.begin_request('/api/panel/confirm', payload)
-    panel_ack = asyncio.run(panel_confirm(confirmation.ConfirmRequest(**payload))).model_dump(mode='json')
+    http_request = Request({'type': 'http', 'method': 'POST', 'path': '/api/panel/confirm', 'headers': []})
+    panel_ack = asyncio.run(panel_confirm(confirmation.ConfirmRequest(**payload), http_request)).model_dump(mode='json')
     state.observe('/api/panel/confirm', panel_ack, admitted_panel)
     daily.require_current()
     effects['deep-review']['capture'] = 1
@@ -169,7 +170,8 @@ def test_normal_panel_request_acknowledgement_and_daily_owned_versions(sources, 
             state.begin_request('/api/panel/confirm', payload)
         return
     admitted = state.begin_request('/api/panel/confirm', payload)
-    ack = asyncio.run(panel_confirm(confirmation.ConfirmRequest(**payload))).model_dump(mode='json')
+    http_request = Request({'type': 'http', 'method': 'POST', 'path': '/api/panel/confirm', 'headers': []})
+    ack = asyncio.run(panel_confirm(confirmation.ConfirmRequest(**payload), http_request)).model_dump(mode='json')
     if fault == 'no_action':
         # The normal route's execution label alone cannot license a no-action
         # writeback as the fixed queue-review transition.

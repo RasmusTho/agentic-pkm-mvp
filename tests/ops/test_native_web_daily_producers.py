@@ -65,7 +65,7 @@ def actual_api(tmp_path, monkeypatch):
     observed = client.get('/__native_web_identity')
     assert observed.status_code == 200, observed.text
     data = observed.json()['identity']['fixture']
-    assert companion.get_memory_review_queue().pending_count == len(fixture.CANDIDATE_IDS)
+    assert companion.get_memory_review_queue(None, None).pending_count == len(fixture.CANDIDATE_IDS)
     assert {entry.candidate_id for entry in companion._MEMORY_CANDIDATE_REVIEW_QUEUE.pending()} == set(fixture.CANDIDATE_IDS)
     yield client, vault, data
     client.close()
@@ -82,6 +82,13 @@ def generate(client):
     assert response.status_code == 200, response.text
     assert response.json()['triggered'] is True
     return response
+
+
+def assert_briefing_has_derived_identity(vault, relative_path):
+    from app.services.note_uuid import resolve_read_only_derived_uuid
+    target = vault / relative_path
+    expected = resolve_read_only_derived_uuid(target, vault_root=vault)
+    assert ('uuid: ' + expected + '\n').encode() in target.read_bytes()
 
 
 @pytest.mark.usefixtures('mock_product_api_routes')
@@ -118,6 +125,7 @@ def test_actual_http_first_generation_and_zero_write_replays(actual_api, monkeyp
         assert client.get('/__native_web_identity').status_code == 500
         return
     generate(client)
+    assert_briefing_has_derived_identity(vault, data['daily']['briefing_path'])
     prior = target.read_bytes()
     grant(client, 'first_contact')
     replay = client.post('/api/companion/briefing/first-contact', json={})
@@ -136,6 +144,7 @@ def test_actual_http_source_write_and_guarded_regeneration(actual_api, monkeypat
     from app.write_guard import DEFAULT_WRITE_GUARD
     client, vault, data = actual_api
     generate(client)
+    assert_briefing_has_derived_identity(vault, data['daily']['briefing_path'])
     source = vault / data['daily']['moment_path']
     note = vault / data['daily']['briefing_path']
     original_source, original_note = source.read_bytes(), note.read_bytes()
@@ -181,6 +190,7 @@ def test_actual_http_source_write_and_guarded_regeneration(actual_api, monkeypat
     assert ack['regeneration']['receipt']['operation'] == 'write_note'
     assert ack['regeneration']['receipt']['locator']['path'] == data['daily']['briefing_path']
     assert ack['regeneration']['post_sha256'] == hashlib.sha256(note.read_bytes()).hexdigest()
+    assert_briefing_has_derived_identity(vault, data['daily']['briefing_path'])
     # Main's current Moment reader may silently omit the invalid source. This
     # normal observed result is not the original named-degradation feature PASS.
     if fault == 'duplicate':

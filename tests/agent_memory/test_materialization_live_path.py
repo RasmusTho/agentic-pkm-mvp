@@ -111,8 +111,26 @@ def test_accept_materializes_and_marks_terminal(
     assert "agent-promoted-memory" in body
     assert "scope_id: scope:work/project-alpha" in body
     assert "The user keeps design docs ahead of code." in body
-    receipt = json.loads(receipts_path.read_text(encoding="utf-8"))
+    receipt_records = [
+        json.loads(line)
+        for line in receipts_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    receipt = next(
+        record
+        for record in receipt_records
+        if record["event"] == "promotion.transition.applied"
+    )
+    authority_receipt = next(
+        record
+        for record in receipt_records
+        if record["event"] == "governance.authority_receipt.recorded"
+    )
     assert receipt["payload"]["basis"]["scope_id"] == "scope:work/project-alpha"
+    assert (
+        authority_receipt["payload"]["promotion_receipt_id"]
+        == receipt["payload"]["receipt_id"]
+    )
 
     # The stored review decision is terminal.
     record = store.get_decision(

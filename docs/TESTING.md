@@ -22,6 +22,32 @@ The first SBS enforcement rail is `tests/architecture/test_sbs_fitness_rules.py:
 
 ## Companion UI Browser Runtime Tests
 
+Explicit DEV/TEST `text-capture` activation has source integration coverage in
+`tests/deploy/test_text_capture_activation.py` and
+`tests/api/test_text_capture_serving.py`. The tests use the actual host request,
+supervisor, immutable journal, worker guard, deploy shell/source bootstrap and
+API factory, with external native/model ports injected. They cover default/full
+compatibility, propagation mismatch, same-operation refusal, foundational
+admission failure, the finite method/path perimeter, startup/classifier omission,
+and real temporary-vault capture → literal body discovery → exact original read
+with WriteGuard/context and event receipts preserved. No live native dispatch or
+provider inference is part of that proof.
+The served document controller also crosses the real gateway and text API for
+carrier-free and already selected scoped sessions. It uses the existing session
+liveness reads and document-bound compatibility capture with real admission;
+picker and note-save mutations remain unavailable. The live journey's plain and
+compatibility capture URLs consume one shared capture budget and use the same
+response/offline interception. These are temporary-fixture integration checks.
+
+Text activation deliberately leaves semantic serving and background producers
+unavailable; its liveness, version, cached health diagnostics or PG profile do not
+qualify a full channel or signed TEST promotion. The deployment owner defines
+the exact scope and retained identity/migration/rollback requirements. Actual
+same-candidate DEV/TEST browser proof remains separate under #6321 and #3347.
+The existing initialized-fixture, source selection, current-day-briefing or
+disabled-producer navigation checks and one-use capture/no-replay admission below
+are unchanged. A scope header or source-test PASS cannot replace any of them.
+
 Decision (#1435): Companion UI client-JS runtime behaviour uses Playwright, not Selenium or
 Preview-MCP-only UAT. Browser runtime tests are additive to the existing static
 `tests/companion_ui/*_browser.py` assertions.
@@ -130,14 +156,22 @@ the pilot does not make Product/Builder runtime TypeSafe acceptance claims.
 The live core-flow suite is `tests/companion_ui/test_companion_ui_live_core_flow.py`. It uses the
 same installed pytest/Playwright runtime and runs one serial journey per explicit private
 dev/test manifest. Its eight results cover channel/build/health, note navigation, one governed
-capture, a fresh-context readback, exact object/vector freshness and retrieval, one grounded ASK,
-and two browser-local failure cases. Required model-health failure does not hide independent
+capture, visible literal-body search and click-open in the current and a fresh browser context,
+exact object/vector freshness and direct retrieval diagnostics, one grounded ASK, and two
+browser-local failure cases. The visible search/click-open result is the human-facing proof;
+native admission, capture acknowledgement, direct API/index checks, and object/vector freshness
+remain supporting diagnostics. Required model-health failure does not hide independent
 navigation or capture results after channel, build and fixture checks succeed. Dependent steps
 report `blocked` when their prerequisite could not be proved; their pytest assertions are nonzero.
 Navigation uses the entry page's actionable browse control and scopes folder/note selection to
 the visible browser, excluding its hidden responsive copy. Offline renderer-backed navigation
 proofs in `test_live_core_flow_contract.py` run with `COMPANION_UI_BROWSER_TESTS=1` for both
-cold-start and document entry pages, without reaching a real application endpoint.
+cold-start and document entry pages, without reaching a real application endpoint. Opt-in
+DEV/TEST execution remains separate, current-candidate, non-closing technical acceptance
+evidence; a blocked or skipped live run is not a PASS and does not close the governing lifecycle.
+The constrained-reuse browser proof also records observed request origins: Companion pages serve
+the existing token roles with the shipped local-system font fallback, remove remote font imports at
+the static-token serving boundary, and fail the proof if an unexpected external origin is observed.
 
 ```sh
 COMPANION_UI_LIVE_CORE_FLOW=1 \
@@ -155,7 +189,12 @@ channel ports (8111/18001 or 8112/18002), using exactly `127.0.0.1` on the selec
 diagnostic and HTTP requests reach the same host. A writing journey additionally supplies `vault_id`,
 `vault_path`, `known_note_path`, `known_note_uuid`, `known_excerpt`, `capture_note_path`,
 `capture_note_uuid`, `vault_binding_id`, and `embedding_identity`, with explicit boolean
-`allow_capture` and `allow_ask`. Operator-qualified non-production fixtures are distinct per
+`allow_capture` and `allow_ask`. A capture-only journey may additionally set `capture_only: true`,
+which requires `allow_capture: true` and `allow_ask: false`; its bounded four-step selection ends
+after visible body-phrase discovery/click-open in the current and fresh browser contexts, so it
+does not require semantic-index freshness or ASK/model success. Run that mode explicitly with
+`tests/companion_ui/test_companion_ui_live_core_flow.py::test_04_capture_survives_new_browser_context`.
+Operator-qualified non-production fixtures are distinct per
 channel. Before HTTP admission, native Docker reads bind the loopback gateway's running image,
 published port, exact startup configuration and resolved upstream address to the selected API
 container. The passive probe checks existing last-active restore inputs and complete vault/local
@@ -492,6 +531,12 @@ Older overlapping workflows may still exist while the surface is being consolida
 Current implementation:
 - `.github/workflows/ci-smoke.yaml` — PR smoke for pull-request creation, reopening, code/integration updates (`synchronize`), and base-ref retargets represented by `edited`, with explicit system dependency parity (`ffmpeg`, `ripgrep`), required `ruff check app tests` and `settings-validate` checks, split baseline pytest and deterministic Quality Wave UAT harness steps, and path-based skipping of the heavy pytest slices for docs-only PRs that do not touch code, tests, scripts, workflow, Docker, dependency, or Makefile surfaces. Pure PR title/body metadata edits keep the workflow jobs skipped and are checked by `.github/workflows/issue-pr-governance.yml`.
 - `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC, explicit deterministic acceptance harness coverage via `tests/quality_wave/test_uat_harness.py`, first bounded PG contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`), runtime contract regressions, and fitness gates.
+  Its full-suite producer checks out complete Git history for provenance and promotion/review
+  fixtures, installs the standalone Mimer MCP sidecar requirements separately from the core
+  Product dependencies, and excludes only the explicitly qualified `eval` marker from the default
+  memory lane; the ten deterministic SV/EN checks remain in that lane and the two live checks stay
+  opt-in.
+- `.github/workflows/post-merge-heavy-tests.yml` — records the verdict for the heavy targets `scripts/select_pr_tests.py` defers from `Unit tests (not pg)` (today `tests/deploy`, unless the PR changes a file it reads directly). The repository controller runs them on the ygg `dev` VM after the candidate's native dev deployment and promotes the exact candidate to test only on a pass; red candidates are held without replay while later builds proceed (#6227). The host controller dispatches the verdict, recorded as the `post-merge-heavy-tests/ygg` commit status. An hourly watchdog runs a GitHub-hosted fallback and goes red when no verdict arrives within 6 hours. A red run opens or updates one `type:bug` + `prio:high` alert Issue, and the next green verdict closes it. It is not a required PR check. This repository support does not activate the host controller or accept a live channel; those gates remain #6170/#3347. See `docs/development/TEST_STRATEGY_HOT_PATH.md :: Post-merge heavy tests`.
 - `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
 
 Post-merge image admission is implemented by `.github/workflows/postmerge-dev-test.yml`; the existing
@@ -508,6 +553,26 @@ Docker socket, or external network route. Profile/result identity persists in th
 journal and controller checkpoint, so smoke-only recovery cannot advance a candidate.
 Actions admission alone does not prove deployment or functional testing, and deterministic runner
 tests do not establish live equivalent coverage.
+
+Channel-ref proof (#6226) lives in `tests/deploy/test_postmerge_dev_test.py`, including
+`test_channel_refs_advance_only_on_green_verdicts` and `test_dev_hold_pins_ref_and_records_candidates`.
+Its transport doubles exercise the real controller, dispatch argv, trusted-main CLI, source/image
+loader and exact green artifact consumer. The matrix includes absent refs, non-force refusal,
+foreign/stale inputs, hold activation and read failures, reordered or cancelled Actions requests,
+retained successful attempts and recovery by rerunning the same workflow after a partial ref write.
+Test eligibility depends on the exact dev-green artifact, never Actions dispatch order. This proof
+does not move live refs; the [deployment owner](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1)
+owns hold and recovery procedure and the existing activation gates.
+
+Production promotion proof (#6228) lives in
+`tests/release_channels/test_stable_promotion_from_test.py`. It exercises the real green-ref
+producer, signed STARTUP receipt/report validator, immutable Git reader and native pre-secret
+admission, substituting only external transports. Refusal cases cover stale or mismatched C/D/S/M,
+approval/narrative changes, protection or API denial, foreign PRs, invalid local merge objects,
+signed source/receipt substitution and changed frontiers. Actual shell/Make and native CLI tests
+cover argument forwarding and refusal; the deploy harness also proves previous-good immutable
+rollback remains available under its separate contract. These fixtures establish repository
+behavior, not a live functional PASS, production promotion or parent #6207 red-to-green acceptance.
 [FAST_PR_TO_DEV_TEST_AUTOMATION](plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) sequences live activation,
 functional/isolated-PG coverage handoff and ten-candidate measurement under #5675. The PG PR job is
 retired after actual equivalent dev/test execution passes; non-PG PR checks and the bounded nightly
@@ -652,7 +717,7 @@ The deterministic Quality Wave acceptance harness belongs in `integration-nightl
 Reason:
 - it is a trusted recurring verification signal for the active memory-backed runtime posture
 - it proves the CLI-first UAT contract continues to pass outside tag/manual release events
-- it should run alongside the broader nightly `not pg and not alpha_llm` surface rather than only as a release gate
+- it should run alongside the broader nightly `not pg and not alpha_llm and not eval` surface rather than only as a release gate
 
 Current nightly harness target:
 - `tests/quality_wave/test_uat_harness.py`
@@ -661,22 +726,31 @@ Current nightly harness target:
 
 The first recurring Postgres lane is intentionally small and contract-focused. It exists to establish a credible recurring PG signal without broadening nightly into all PG coverage at once.
 
-Lane membership:
+The required `integration-nightly / pg-contracts` step invokes
+`python -m app.ops.pg_acceptance --ci --nightly`. Its complete bounded target inventory is
+`app/ops/pg_acceptance.py::NIGHTLY_SELECTORS`; the original entry targets include:
 - `tests/int/test_pg_backend.py`
 - `tests/api/test_status_store_pg.py`
 - `tests/indexer/test_outbox_roundtrip_pg.py`
 
 Required service/env contract:
-- GitHub Actions service container: `postgres:16`
+- GitHub Actions service container: `pgvector/pgvector:pg16`
 - `POSTGRES_USER=app`
 - `POSTGRES_PASSWORD=app`
-- `POSTGRES_DB=app`
+- `POSTGRES_DB=app_test`
 - `DATABASE_URL` or `DB_DSN` points at the target Postgres endpoint; the repo DB abstraction normalizes psycopg/SQLAlchemy forms
 - `STORE_BACKEND=pg`
 - schema prepared with `alembic upgrade head`
 
+The shared `RequiredResults` guard requires every target to collect and every selected node to
+pass, including setup and teardown. Imported fixture skips, missing or deselected targets, xfails,
+collection errors and watchdog failures refuse the required invocation. The nightly log records
+the required selector inventory and passed node IDs. Ordinary optional developer pytest keeps its
+explicit environment skips. The separate native dev/test profile retains its existing `SELECTORS`
+inventory and immutable disposable-resource contract.
+
 First-green definition:
-- all three PG lane tests pass against the provisioned Postgres service in `integration-nightly`
+- every required selector collects and every selected node passes against the provisioned Postgres service in `integration-nightly`, with zero required skips, xfails or errors
 - the deterministic acceptance harness step is green in the same nightly workflow run
 - the existing memory-backed nightly suite and runtime contract regressions remain green
 
@@ -725,7 +799,7 @@ Example commands:
 ## Hermetic test environment
 - The test suite clears VAULT_ROOT and PANEL_ACTION_WIRING_PATH by default to prevent accidentally reading a user’s real vault (often iCloud-backed) which can block and hang tests.
 - Tests that require vault wiring overrides must set VAULT_ROOT explicitly (use monkeypatch + temp vault containing System/Config/panel-action-wiring.yaml) or set PANEL_ACTION_WIRING_PATH explicitly.
-- Non-PG API cases reset the in-process memory object, vector and relation stores before and after each test. A prior case's corpus or embedding identity must not change an ask response or health result. This memory-only isolation never truncates database tables or selects a model route; intentional identity mismatches within a case still fail before embedding dispatch. `tests/ci/test_api_memory_store_isolation.py` runs the affected requests after a synthetic prior occupant to guard this boundary.
+- Non-PG cases reset the in-process memory object, vector and relation stores before and after each test. A prior case's corpus or embedding identity must not change API responses or mocked embedding/evaluation requests. This memory-only isolation never truncates database tables or selects a model route; intentional identity mismatches within a case still fail before embedding dispatch. `tests/ci/test_api_memory_store_isolation.py` runs the affected API and embedding cases after a synthetic prior occupant to guard this boundary.
 
 ## Focused commands
 - Single test:

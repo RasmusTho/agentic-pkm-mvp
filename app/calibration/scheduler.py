@@ -8,6 +8,7 @@ from typing import Any, Callable, Iterable, Mapping
 from uuid import UUID
 
 from app.calibration.ladder import DEFAULT_REVISIT_LADDER
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.objects import DomainObject, ObjectStore
 from app.receipts.outcome_receipt_log import iter_outcome_receipts
 from app.receipts.revisit_dismissal_log import iter_revisit_dismissals
@@ -122,11 +123,25 @@ def due_revisits(
     today: date | None = None,
     vault_root: Path | None = None,
     decisions: Iterable[object] | None = None,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
     outcome_reader: ReceiptReader = iter_outcome_receipts,
     dismissal_reader: ReceiptReader = iter_revisit_dismissals,
 ) -> list[RevisitDue]:
     """Return the one pending revisit, if any, for each ingested decision record."""
-    candidates = decisions if decisions is not None else ObjectStore().list_objects(limit=1_000_000)
+    # Decisions are ingested as ordinary ``note`` objects; the semantic
+    # decision-record contract lives in payload.frontmatter.artifact_class.
+    # The previous million-row all-kind scan made every workspace load
+    # proportional to the entire store and could inspect unrelated artifacts.
+    # Scoped callers pass the active binding so Postgres cannot leak another
+    # vault's decisions; no arbitrary row cap is introduced that could turn an
+    # old pending decision into a false empty state.
+    candidates = (
+        decisions
+        if decisions is not None
+        else ObjectStore(vault_binding_id=vault_binding_id).list_objects(
+            kind="note", limit=None
+        )
+    )
     outcomes = outcome_reader(vault_root)
     dismissals = dismissal_reader(vault_root)
     due: list[RevisitDue] = []

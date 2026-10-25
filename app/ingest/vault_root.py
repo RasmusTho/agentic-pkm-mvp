@@ -14,7 +14,11 @@ from app.services.note_uuid import ensure_note_uuid
 from app.domain.state_axes import normalize_artifact_state_axes
 from app.index.outbox import append_jsonl
 from app.knowledge.profile_authority_store import assert_profile_note_ingestible
-from app.observability.ingest_meta import record_ingest_failure, record_ingest_success
+from app.observability.ingest_meta import (
+    ingest_binding_for_root,
+    record_ingest_failure,
+    record_ingest_success,
+)
 from app.observability.log import with_trace_id
 from app.search.service import ingest_object as index_ingest_object
 from app.stores import get_object_store, resolve_store_backend
@@ -25,6 +29,7 @@ from app.rebuildability import (
 )
 from app.stores.provider import get_stores
 from app.objects import resolve_canonical_object_id
+from app.rebuildability.product_total_loss import capture_source_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +175,7 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     ep_ref = episode_ref_from_frontmatter(frontmatter)
     payload = {
         "title": title,
+        "frontmatter": capture_source_frontmatter(text),
         "review_state": review_state,
         "origin": "vault",
         "source": str(path),
@@ -184,6 +190,7 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     # blind-dropped to 'unbound' on the next cold rebuild (index_rebuild reads store_objects payload).
     canonical_payload = {
         **payload_copy,
+        "frontmatter": capture_source_frontmatter(text),
         "core6": core6,
         "episode_ref": ep_ref,
         "replay": replay,
@@ -265,9 +272,11 @@ def ingest_vault_root(root: Path, limit: int | None = None) -> int:
             except Exception as exc:  # pragma: no cover - defensive logging
                 failures += 1
                 logger.exception("Failed to ingest %s: %s", path, exc)
-        record_ingest_success(run_started)
+        record_ingest_success(run_started, vault_binding_id=ingest_binding_for_root(root) or "")
     except Exception as exc:
-        record_ingest_failure(run_started, str(exc))
+        record_ingest_failure(
+            run_started, str(exc), vault_binding_id=ingest_binding_for_root(root) or ""
+        )
         raise
 
     if failures:

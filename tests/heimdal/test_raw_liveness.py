@@ -20,6 +20,7 @@ from app.heimdal.retention import (
 )
 from app.heimdal.settings_notes import SETTINGS, SettingsNote, write_settings_note
 from app.write_guard import WriteGuard
+from tests.helpers.vault_settings import set_test_screen_retention
 
 pytestmark = pytest.mark.not_pg
 
@@ -27,8 +28,9 @@ _KEY = bytes.fromhex(secrets.token_hex(32))
 
 
 @pytest.fixture(autouse=True)
-def _memory_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+def _memory_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
     raw_store.reset_memory_raw_store()
     reset_memory_deletion_receipts()
     yield
@@ -50,6 +52,7 @@ def _settings(tmp_path: Path) -> Path:
         ),
         write_guard=WriteGuard(lambda: {"state": "healthy"}),
     )
+    set_test_screen_retention(root, 1)
     return root
 
 

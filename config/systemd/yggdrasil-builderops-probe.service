@@ -1,0 +1,38 @@
+[Unit]
+Description=BuilderOps bob-1 dependency and transition-alert probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/opt/yggdrasil/builderops-probe
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/opt/yggdrasil/builderops-probe
+LoadCredentialEncrypted=builderops-discord:/etc/yggdrasil/credentials/builderops-discord.cred
+ExecStartPre=/usr/bin/python3 -B -m app.ops.builderops_probe_secret materialize
+ExecStart=/usr/bin/python3 -B -m app.ops.builderops_probe --config /etc/yggdrasil/builderops-probe.json
+ExecStopPost=/usr/bin/python3 -B -m app.ops.builderops_probe_secret cleanup
+StateDirectory=yggdrasil-builderops-probe
+StateDirectoryMode=0700
+RuntimeDirectory=yggdrasil-builderops-probe
+RuntimeDirectoryMode=0700
+# Heimdal's fixed administrator controller owns the encrypted source; this service
+# materializes only its one credential and removes the runtime handoff on exit.
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal

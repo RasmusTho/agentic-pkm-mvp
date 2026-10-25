@@ -106,8 +106,9 @@ Product policy:
   through its own Builder resolver, dev caller binding and MARR operation. The independently
   owned Builder profile pins the model; only the MARR Mac server resolves the TypeSafe key.
   Missing binding or the default disabled server mode produces a visible zero-edge skip, preserving
-  the prior semantic watermark. The separate Builder dev acceptance on #5764 is still required,
-  so no active provider-backed CKM inference is claimed; and
+  the prior semantic watermark. The [preserved Builder DEV receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5764#issuecomment-6203507688)
+  verifies one actual CKM call, whose below-floor result wrote zero edges. Its consumed allowance
+  is preserved; ordinary provider-backed CKM routing remains disabled; and
 - the Product imports and single MAS-02 transition exemption were removed together.
 
 #4169 belongs to the separate deterministic-delivery capability and is not part of this breakdown.

@@ -1,0 +1,17 @@
+[Unit]
+Description=Colima persistent data-mount producer and verification boundary
+DefaultDependencies=no
+After=local-fs.target
+Before=yggdrasil-colima-persistent-substrate.service containerd.service docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/yggdrasil/colima-runtime.env
+# Produce the reviewed filesystem and bind mounts, then verify their exact
+# identity before any containerd or Docker unit may start.
+ExecStart=/usr/local/libexec/yggdrasil-colima-data-mount --provision
+RemainAfterExit=yes
+TimeoutStartSec=900s
+
+[Install]
+WantedBy=containerd.service

@@ -60,7 +60,54 @@ gate, for both target activation and previous release reactivation. A missing `s
 restart fails closed before mutation and readiness polling; the private loopback boundary is never
 silently left pointing at a stale API address.
 
+### Prepared Linux BuilderOps monitoring
+
+Issue #6336 provides repository-side probe preparation, not a host installation.
+`scripts/plan_builderops_probe.py` prints a plan only; it has no apply operation.
+The prepared `yggdrasil-builderops-probe.service` and timer run the one-shot
+`app.ops.builderops_probe` independently of the monitored containers. Their future
+installation requires an exact reviewed source/interpreter and separate operator authority.
+
+The mode-0600 host-owned JSON configuration must name guest `builder-system`, the
+dedicated `unix:///run/docker-builderops.sock` engine and its qualified ID, project
+`builderops-control-plane`, loopback API `http://127.0.0.1:18100`, expected schema and
+authority epoch. Wrong identity refuses before notification. Unavailable containers
+or authenticated readiness, stale worker heartbeat, failed database health (including
+the existing disk/WAL guard), stale outbox or dead letters are unhealthy. `ready=true`
+alone is insufficient: worker freshness is a separate response field. Ambient Docker
+context and HTTP proxy settings cannot change the selected transport, and redirects
+are refused. No backup or recovery-pipeline field is required.
+
+The probe reads the existing scoped `health:read` token; `/readyz` supplies the required
+safe fields, so no additional `status:read` token is needed. A regular owner-private
+token file or the existing root-owned `0:101`/`0640` handoff is accepted. The shared
+Discord notification adapter consumes only the separately admitted mode-0600 host-secret
+runtime handoff. This is not permission to use the Product `test`/`prod` BWS consumer
+on bob-1. The #6347 enabling route admits the dedicated Heimdal-owned
+`heimdal-builderops-alerts` binding through the
+[existing Demerzel controller](../CLOUD_SECRET_PROVISIONING/README.md#bob-1-builderops-alert-handoff).
+The service loads its dedicated encrypted systemd credential and materializes the
+runtime handoff only for its invocation. It uses the qualified host `/usr/bin/python3`
+with the standalone package; no Product bootstrap or BWS client is imported on bob-1.
+Separate operator authority and live handoff/delivery receipts remain required before
+enabling the timer; the repository route is not an installation claim.
+
+Private locked transition state binds the incident to the engine ID and authority
+epoch. Invalid retained state refuses; a failed recovery notification retains the
+outage, and failed down delivery remains retryable. Successful repeated down checks
+are suppressed and one recovery is sent after a confirmed down transition. Webhook
+delivery is not exactly-once across a timeout/crash or a failed state commit. The
+outbox age limit is explicit in configuration (the plan suggests 300 seconds).
+
+The preparation does not switch clients, import or correct legacy tasks, stop the Mac
+stack, or satisfy complete-system acceptance. A host-local probe also cannot alert
+while bob-1 itself is powered off; that requires a separately qualified outside observer.
+
 ### Complete Dev System admission
+
+This section governs complete-system admission. The separately owner-authorized
+[bounded manual DevUI component promotion](#bounded-manual-devui-component-promotion) is a
+different, explicitly limited operation; its receipt cannot satisfy this section.
 
 BuilderOps deployment is admitted only as one part of the complete Dev System topology described in
 [`README.md :: Complete Dev System VM-102 topology contract`](README.md). A Dev UI-only deployment,
@@ -103,7 +150,7 @@ user, but starts `python -m app.builderops.devui_runtime`. It does not start the
 worker, Product API, Product settings, migrations, or any Product store. The image must contain
 this entrypoint at the newly attested candidate; an older candidate is not sufficient.
 
-This is a prepared Linux managed listener, not a deployment executor. A later operator execution
+This is a prepared Linux managed listener, not a deployment executor. Complete-system execution
 must qualify the fixed `builderops` context at `unix:///run/docker-builderops.sock`, authenticate
 the candidate on VM102, satisfy the ordered receipts and operator gates, and install it through
 the governed release path. Neither `deploy_channel.sh` nor an ad hoc process start is that path.
@@ -136,7 +183,9 @@ configuration leaves the affected source unavailable; contradictory repository, 
 selector or baked-document identity refuses startup. Work reads use the existing authenticated
 BuilderOps client with source-owned repository and `receipts:read` / `status:read` permission checks
 and an explicitly pinned `DEVUI_BUILDEROPS_AUTHORITY_EPOCH`. The source token file is reread each
-request, and service revocation or epoch movement withdraws work. CKM stays unavailable.
+request, and service revocation or epoch movement withdraws work. CKM is available through the
+separately approved [private snapshot publication contract](README.md#private-ckm-publication-and-refresh);
+missing, stale or invalid captures retain an independent refusal.
 
 [`docker-compose.devui-sources.yml`](../../docker-compose.devui-sources.yml) is an optional managed
 source-configuration overlay, owned by the Builder runtime/release owner; Platform and Operations
@@ -173,6 +222,118 @@ deployed final-main browser proof, complete-system health or the owner-pilot gat
 #4749 and parent #4741. ARO-09's
 [managed read journey admission](README.md#managed-read-journey-admission) owns those boundaries.
 #5520 preserves the delivered three-GET process boundary and installs no service.
+
+### Bounded manual DevUI component promotion
+
+The owner revision recorded in Issue #6105 admits one read-only DevUI-component operation before
+complete Dev System qualification. This path replaces ad hoc component recreation; it does not
+relax the full-system chain above. `scripts/deploy_devui.sh` runs
+`app.ops.devui_component_promotion` while holding the **same fixed host-local deployment interlock**
+as the BuilderOps wrapper. Only VM102 guest `builder-system`, context `builderops` at
+`unix:///run/docker-builderops.sock`, project `builderops-devui` and service `devui` are admitted.
+The control-plane API/worker/database, their active/previous pins, migrations and Product Runtime
+are outside this effect boundary. The control-plane unattended authorization profile does not
+authorize this project; execution requires the existing explicit manual operator mandate.
+
+The plan binds an exact trusted `main` candidate-pair receipt, host-local attestation, engine,
+current container/image/config, retained baseline Compose bytes, target Compose bytes fetched from
+that source SHA, and a fingerprint of the effective target configuration excluding its own
+fingerprint field. The wrapper checks non-root container posture, fixed command, host networking,
+GET-only listener configuration, read-only rootfs, dropped capabilities and the three fixed read-only
+receipt/source mounts. It cannot add a token, grant, source transport, public port or ingress.
+Optional diagnostic destinations retain the candidate defaults. Existing source bindings are
+preserved; stale/refused/unavailable sources remain explicit and are not deployment success claims.
+
+Use the already authenticated normal operator's gh context on VM102. When invoked through sudo,
+only the gh subprocess runs as the existing `SUDO_USER`; no token is copied or printed. The
+operator Python must already support Playwright Chromium. A launch/close preflight plus the real
+baseline Overview browser check runs before service mutation; missing browser tooling refuses the
+operation. Prepare host tooling deliberately through the Platform owner before invoking this path.
+
+```bash
+sudo scripts/deploy_devui.sh plan --candidate-pair /path/to/candidate-pair.json \
+  --authorization-reference 'github:issue:6105; explicit owner deployment mandate' \
+  --plan /opt/builderops/receipts/devui-promotion-plan.json
+# Review the exact image/config and retained baseline in this plan; use its returned hash.
+sudo scripts/deploy_devui.sh apply --candidate-pair /path/to/candidate-pair.json \
+  --plan /opt/builderops/receipts/devui-promotion-plan.json \
+  --expected-plan-sha256 sha256:<plan-hash>
+```
+
+Planning stages only the two exact Compose files under the existing release directory and writes
+the operator plan; it does not mutate a running service. Apply re-verifies attestation, baseline,
+engine, configuration and browser preconditions under the lock, pulls only the DevUI image, then
+durably retains the component attempt/baseline **before** `up --no-deps --force-recreate devui`.
+Exact observed `/version`, listener liveness and the real browser Overview → BSC / Focus → BSC →
+same Focus journey are required. The browser blocks mutation methods and cross-origin requests and
+asserts no browser storage. It supplies technical proof, never an owner acknowledgement.
+
+The finite `devui_component_deployment.v1` record lives in the existing receipt directory as
+`devui-component-<plan-hash>.json`; `devui-component-latest.json` retains the latest verified terminal
+result. It names source/image/config, engine, authorization reference, plan/candidate hash,
+baseline, observed runtime/browser proof and outcome (`pending`, `deployed`, `rolled_back` or
+`indeterminate`). It explicitly sets complete-system health, source qualification, owner pilot,
+trial and acceptance claims to false. It is not consumed by the full-system receipt reader or by
+the Ready-to-try/acceptance paths.
+
+A completed recreate followed by failed smoke restores only the exact bound DevUI baseline and
+requires its identity/liveness and Overview browser proof. Manual rollback uses the same plan/hash:
+
+```bash
+sudo scripts/deploy_devui.sh rollback --candidate-pair /path/to/candidate-pair.json \
+  --plan /opt/builderops/receipts/devui-promotion-plan.json \
+  --expected-plan-sha256 sha256:<plan-hash>
+```
+
+An interrupted/uncertain Compose or rollback leaves `pending`/`indeterminate` evidence. A subsequent
+plan or apply cannot bypass it by choosing a new plan hash. Stop further effects, read back the
+actual container/image/config and external operation completion under the existing operator
+recovery workflow, then deliberately reconcile the retained attempt. No automatic replay,
+blind compensation, database rewind or fabricated terminal receipt is permitted. Successful
+component deployment leaves #5181, #4749 and #5399 open; the owner's later trial and acceptance
+remain separate observations and decisions.
+
+#### Explicit source-epoch rebind
+
+The operator also implements a config-only source rebind through
+`plan --source-authority-epoch <explicit-positive-epoch>`. This is repository support, not a claim
+that the operator or a new configuration is installed on VM102. Source/Platform owners retain
+their permission and live-effect boundaries. It never discovers or adopts the current epoch as
+a default. Without this option, image promotion retains the existing source binding.
+
+Rebind requires the attested application source/image to equal the exact running baseline. Only
+`DEVUI_BUILDEROPS_AUTHORITY_EPOCH` and the recomputed `DEVUI_CONFIG_FINGERPRINT` may differ;
+repository, API and credential references, diagnostics, Compose bytes, mounts and ingress cannot
+change. The existing plan owner emits `devui_component_promotion_plan.v2`, with the closed
+`rebind_source_epoch` operation and a bounded source observation. The old v1 operator rejects that
+version; new code retains v1 image plans but refuses an epoch change hidden inside them. An epoch
+option on apply/rollback is refused: those actions consume only the reviewed exact plan/hash.
+
+`scripts/devui_source_binding_probe.py` is part of the separately installed operator tooling. The
+operator executes its bytes inside the existing DevUI container, inheriting that container's
+non-root user, configuration and mounted credential. It never uses a host operator's API identity
+or passes a token. The probe loads the production runtime/client, requires schema 5 and the explicit
+repository/epoch, reads status → bounded tasks and addressed task versions → status, and emits only
+closed metadata. It performs no task/import/transition or grant operation. Denied access, changed
+epoch/schema/repository/version or malformed source identity refuses admission. Fresh probe results
+are at most five minutes old; the historical planning observation remains bound to the plan while
+apply obtains new observations. Apply repeats the probe after image pull immediately before
+persisting the attempt/recreating DevUI, and after exact runtime/browser readback.
+
+A consistent binding is separate from useful work evidence. In particular, the production
+`task_payload_invalid` refusal (such as native `completed` versus payload `ready`) is retained as
+`data_outcome: refused`; it is never repaired, hidden or interpreted as empty/healthy work. Generic
+unprojectable tasks remain partial, and no Issue evidence remains unavailable. The component
+receipt records the rebind operation and before/after source observations while preserving every
+false full-system/source/pilot/acceptance claim. A rebind does not transfer prior acceptance to the
+new config fingerprint. Task-data correction and full source qualification retain their owners.
+
+All lock, candidate snapshot, exact-baseline, pending-before-effect, browser, compensation and
+uncertainty rules above still apply. A failed post-rebind probe uses the existing exact-target
+readback before bounded compensation; an unknown outcome remains non-replayable. Manual rollback
+restores the retained baseline epoch/config and verifies its component identity/liveness/browser,
+not the correctness of that historical source binding. No control-plane pin/data rewind or
+permission change follows from either operation.
 
 ### Approved candidate attestation runner
 

@@ -29,6 +29,7 @@ storage/
 checkpoints.sqlite
 provenance.jsonl
 *.txt
+!evidence/manual_coordinator_rotation_6195_retry1_v1/writer/frozen-verifier-5d657d8905f8f61ad24723fc55018bd1149a86d35345fe7cb4805cc59df8ff37.py.txt
 locate_search_backends.sh
 repo_tree.txt
 repo_counts.txt

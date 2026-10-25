@@ -7,9 +7,11 @@ typed response contract.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -27,7 +29,10 @@ from app.agents.panel.writeback import (
 )
 from app.events.panel import PanelIntentEvent
 from app.events.schema import make_outbox_event
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+from app.instance.compatibility_binding import legacy_view_bindings, live_compatibility_binding_id
 from app.outbox.events import INDEX_OUTBOX_PATH
+from app.receipts.artifact_receipts import stamp_producing_binding
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
     append_jsonl_outbox_event,
@@ -44,6 +49,52 @@ PANEL_STAGING_SCHEMA_VERSION = 1
 DEFAULT_PANEL_STAGING_STATE_DIR = Path("runtime/panel")
 DEFAULT_PANEL_STAGING_DB_NAME = "panel_confirmation.sqlite3"
 DEFAULT_PANEL_STAGING_RETENTION_SECONDS = 7 * 24 * 60 * 60
+
+# MVR-05B4c2: staged proposals and idempotent confirm responses are keyed by the
+# vault binding that produced them. Every production stager and confirm path is a
+# carrier-free compatibility write, so the default stamp is the LIVE compatibility
+# binding (the registered id a scoped request for that vault presents; the sentinel
+# only when no registry is bound). A carrier-free view addresses that binding, the
+# legacy sentinel and unstamped (``None``: reloaded from the durable staging DB,
+# which does not persist a stamp) entries. A scoped view addresses exactly its own
+# binding and never the ``None`` bucket.
+_DEFAULT_BINDING: Any = object()
+
+
+def _resolve_stamp(binding: Any) -> str | None:
+    return live_compatibility_binding_id() if binding is _DEFAULT_BINDING else binding
+
+
+_ENVELOPE_KEY = "__panel_binding_envelope__"
+
+
+def _wrap_durable(binding: str | None, payload_json: str) -> str:
+    """Persist the producing binding inside the existing JSON column (no migration)."""
+
+    return json.dumps({_ENVELOPE_KEY: 1, "binding_id": binding, "payload": payload_json})
+
+
+def _unwrap_durable(raw: str) -> tuple[str | None, str]:
+    """(binding, payload JSON). A row written before stamps existed has binding ``None``."""
+
+    try:
+        decoded = json.loads(raw)
+    except ValueError:
+        return None, raw
+    if isinstance(decoded, dict) and decoded.get(_ENVELOPE_KEY) == 1:
+        binding = decoded.get("binding_id")
+        return (binding if isinstance(binding, str) and binding else None), str(
+            decoded.get("payload", "")
+        )
+    return None, raw
+
+
+def _is_legacy_binding(binding: str | None) -> bool:
+    return binding in legacy_view_bindings()
+
+
+def _view_bindings(binding: str | None) -> tuple[str | None, ...]:
+    return legacy_view_bindings() if binding is None else (binding,)
 
 
 def _utc_now_iso() -> str:
@@ -120,6 +171,16 @@ class UnknownProposalError(LookupError):
     pass
 
 
+class RestageRequiredError(UnknownProposalError):
+    """A durable proposal whose producing binding is unproven must be staged again.
+
+    Raised when a registry-bound compatibility write finds a proposal that is not
+    stamped with the live compatibility binding (an unstamped legacy row, or the
+    pre-registry sentinel): it cannot be proven to belong to the vault the confirm
+    would write to, so it is refused rather than executed.
+    """
+
+
 class PanelReceiptPersistenceError(RuntimeError):
     """Neither outbox sink persisted the panel.action.* accountability receipt.
 
@@ -158,6 +219,9 @@ class StagedProposal:
     # (e.g. "canvas_coauthoring"). Distinct from the vault-note/frontmatter
     # ``origin`` field; Panel attribution must never overwrite artifact origin.
     proposal_origin: str | None = None
+    # MVR-05B4c2: the vault binding that produced this proposal; ``None`` is an
+    # unstamped legacy entry (visible only to the carrier-free view).
+    binding_id: str | None = None
 
 
 class CorrectionFields(BaseModel):
@@ -249,7 +313,9 @@ class ProposalStore:
         *,
         retention_seconds: float | None = None,
     ) -> None:
-        self._proposals: dict[str, StagedProposal] = {}
+        # Keyed by (producing binding, proposal id).
+        self._proposals: dict[tuple[str | None, str], StagedProposal] = {}
+        self._lock = threading.RLock()
         self._db_path = Path(db_path).expanduser() if db_path is not None else None
         self._retention_seconds = (
             float(retention_seconds)
@@ -316,14 +382,14 @@ class ProposalStore:
                 conn.commit()
             self._proposals = {}
             for row in rows:
-                self._proposals[str(row["proposal_id"])] = StagedProposal(
+                stamp, event_json = _unwrap_durable(str(row["intent_event_json"]))
+                self._proposals[(stamp, str(row["proposal_id"]))] = StagedProposal(
                     artifact_id=str(row["artifact_id"]),
-                    intent_event=PanelIntentEvent.model_validate_json(
-                        str(row["intent_event_json"])
-                    ),
+                    intent_event=PanelIntentEvent.model_validate_json(event_json),
                     proposed_at=float(row["proposed_at"]),
                     trace_id=str(row["trace_id"] or ""),
                     proposal_origin=row["proposal_origin"],
+                    binding_id=stamp,
                 )
             self._degraded_reason = None
         except Exception as exc:
@@ -337,9 +403,26 @@ class ProposalStore:
             (cutoff,),
         )
 
-    def stage(self, proposal_id: str, proposal: StagedProposal) -> None:
-        self._proposals[proposal_id] = proposal
-        if self._db_path is None or self.degraded:
+    def stage(
+        self,
+        proposal_id: str,
+        proposal: StagedProposal,
+        *,
+        binding: str | None = _DEFAULT_BINDING,
+    ) -> None:
+        """Stage ``proposal`` stamped with its producing ``binding``.
+
+        Every production stager is a carrier-free path, so the default stamp is the
+        sealed compatibility binding. Only legacy-view stamps are written to the
+        durable staging DB (keyed by proposal id alone); another binding's proposal
+        is process-local.
+        """
+
+        binding = _resolve_stamp(binding)
+        with self._lock:
+            proposal.binding_id = binding
+            self._proposals[(binding, proposal_id)] = proposal
+        if self._db_path is None or self.degraded or not _is_legacy_binding(binding):
             return
         try:
             now_iso = _utc_now_iso()
@@ -362,7 +445,7 @@ class ProposalStore:
                     (
                         proposal_id,
                         proposal.artifact_id,
-                        proposal.intent_event.model_dump_json(),
+                        _wrap_durable(binding, proposal.intent_event.model_dump_json()),
                         float(proposal.proposed_at),
                         proposal.trace_id,
                         proposal.proposal_origin,
@@ -375,11 +458,36 @@ class ProposalStore:
             self._degraded_reason = f"{type(exc).__name__}: {exc}"
             logger.warning("panel proposal store degraded to memory-only: %s", exc)
 
-    def get(self, proposal_id: str) -> StagedProposal | None:
-        return self._proposals.get(proposal_id)
+    def _find_key(
+        self, proposal_id: str, binding: str | None
+    ) -> tuple[str | None, str] | None:
+        for candidate in _view_bindings(binding):
+            if (candidate, proposal_id) in self._proposals:
+                return (candidate, proposal_id)
+        return None
 
-    def remove(self, proposal_id: str) -> None:
-        self._proposals.pop(proposal_id, None)
+    def get(self, proposal_id: str, *, binding: str | None = None) -> StagedProposal | None:
+        with self._lock:
+            key = self._find_key(proposal_id, binding)
+            return self._proposals[key] if key is not None else None
+
+    def items_for(self, binding: str | None = None) -> list[tuple[str, StagedProposal]]:
+        """(proposal id, proposal) pairs in the ``binding`` view, oldest first."""
+
+        views = _view_bindings(binding)
+        with self._lock:
+            return [
+                (key[1], proposal)
+                for key, proposal in self._proposals.items()
+                if key[0] in views
+            ]
+
+    def remove(self, proposal_id: str, *, binding: str | None = None) -> None:
+        with self._lock:
+            key = self._find_key(proposal_id, binding)
+            if key is None:
+                return
+            self._proposals.pop(key, None)
         if self._db_path is None or self.degraded:
             return
         try:
@@ -393,13 +501,14 @@ class ProposalStore:
             self._degraded_reason = f"{type(exc).__name__}: {exc}"
             logger.warning("panel proposal store remove degraded to memory-only: %s", exc)
 
-    def count_for_artifact(self, artifact_id: str) -> int:
+    def count_for_artifact(self, artifact_id: str, *, binding: str | None = None) -> int:
         return sum(
-            1 for proposal in self._proposals.values() if proposal.artifact_id == artifact_id
+            1 for _id, proposal in self.items_for(binding) if proposal.artifact_id == artifact_id
         )
 
     def clear(self) -> None:
-        self._proposals.clear()
+        with self._lock:
+            self._proposals.clear()
         if self._db_path is None or self.degraded:
             return
         try:
@@ -411,6 +520,36 @@ class ProposalStore:
             logger.warning("panel proposal store clear degraded to memory-only: %s", exc)
 
 
+_DURABLE_KEY_SEPARATOR = "\x1f"
+
+
+def _durable_key(binding: str | None, key: str) -> str:
+    """The SQLite primary key for an idempotency row: binding-qualified.
+
+    The table's key column is the conflict key, so a bare idempotency key would let
+    a confirmation under binding B overwrite binding A's durable response across a
+    rebind. Legacy (sentinel/unstamped) rows keep the bare key so pre-MVR-05B4c2
+    rows remain readable.
+    """
+
+    if binding is None or binding == COMPATIBILITY_BINDING_ID:
+        return key
+    return f"{binding}{_DURABLE_KEY_SEPARATOR}{key}"
+
+
+def _split_durable_key(durable: str, stamp: str | None) -> str:
+    """The idempotency key of a durable row whose envelope records ``stamp``.
+
+    Only strip a prefix that is exactly this row's own binding, so a legacy bare
+    key that happens to contain the separator is preserved unchanged.
+    """
+
+    prefix = f"{stamp}{_DURABLE_KEY_SEPARATOR}" if stamp else None
+    if prefix and stamp != COMPATIBILITY_BINDING_ID and durable.startswith(prefix):
+        return durable[len(prefix):]
+    return durable
+
+
 class ConfirmIdempotencyStore:
     def __init__(
         self,
@@ -418,7 +557,9 @@ class ConfirmIdempotencyStore:
         *,
         retention_seconds: float | None = None,
     ) -> None:
-        self._cache: dict[str, ConfirmResponse] = {}
+        # Keyed by (producing binding, idempotency key).
+        self._cache: dict[tuple[str | None, str], ConfirmResponse] = {}
+        self._lock = threading.RLock()
         self._db_path = Path(db_path).expanduser() if db_path is not None else None
         self._retention_seconds = (
             float(retention_seconds)
@@ -478,12 +619,13 @@ class ConfirmIdempotencyStore:
                     "SELECT key, response_json FROM panel_confirm_idempotency ORDER BY created_at ASC"
                 ).fetchall()
                 conn.commit()
-            self._cache = {
-                str(row["key"]): ConfirmResponse.model_validate_json(
-                    str(row["response_json"])
+            cache: dict[tuple[str | None, str], ConfirmResponse] = {}
+            for row in rows:
+                stamp, response_json = _unwrap_durable(str(row["response_json"]))
+                cache[(stamp, _split_durable_key(str(row["key"]), stamp))] = (
+                    ConfirmResponse.model_validate_json(response_json)
                 )
-                for row in rows
-            }
+            self._cache = cache
             self._degraded_reason = None
         except Exception as exc:
             self._degraded_reason = f"{type(exc).__name__}: {exc}"
@@ -496,12 +638,34 @@ class ConfirmIdempotencyStore:
             (cutoff,),
         )
 
-    def get(self, key: str) -> ConfirmResponse | None:
-        return self._cache.get(key)
+    def get(self, key: str, *, binding: str | None = None) -> ConfirmResponse | None:
+        with self._lock:
+            for candidate in _view_bindings(binding):
+                found = self._cache.get((candidate, key))
+                if found is not None:
+                    return found
+        return None
 
-    def set(self, key: str, response: ConfirmResponse) -> None:
-        self._cache[key] = response
-        if self._db_path is None or self.degraded:
+    def responses_for(self, binding: str | None = None) -> list[ConfirmResponse]:
+        """Cached responses in the ``binding`` view, oldest first."""
+
+        views = _view_bindings(binding)
+        with self._lock:
+            return [resp for key, resp in self._cache.items() if key[0] in views]
+
+    def set(
+        self,
+        key: str,
+        response: ConfirmResponse,
+        *,
+        binding: str | None = _DEFAULT_BINDING,
+    ) -> None:
+        """Cache ``response`` stamped with its producing ``binding`` (default: sealed compat)."""
+
+        binding = _resolve_stamp(binding)
+        with self._lock:
+            self._cache[(binding, key)] = response
+        if self._db_path is None or self.degraded or not _is_legacy_binding(binding):
             return
         try:
             now = time.time()
@@ -518,8 +682,8 @@ class ConfirmIdempotencyStore:
                         updated_at=excluded.updated_at
                     """,
                     (
-                        key,
-                        response.model_dump_json(),
+                        _durable_key(binding, key),
+                        _wrap_durable(binding, response.model_dump_json()),
                         now,
                         now_iso,
                     ),
@@ -530,7 +694,8 @@ class ConfirmIdempotencyStore:
             logger.warning("panel idempotency store degraded to memory-only: %s", exc)
 
     def clear(self) -> None:
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
         if self._db_path is None or self.degraded:
             return
         try:
@@ -562,8 +727,8 @@ def panel_staging_store_posture() -> dict[str, Any]:
         "degraded": bool(degraded_reasons),
         "degraded_reason": "; ".join(degraded_reasons) if degraded_reasons else None,
         "db_path": sorted(paths)[0] if paths else None,
-        "pending_proposal_count": len(_proposal_store._proposals),
-        "idempotency_key_count": len(_idempotency_store._cache),
+        "pending_proposal_count": len(_proposal_store.items_for()),
+        "idempotency_key_count": len(_idempotency_store.responses_for()),
     }
 
 
@@ -583,7 +748,9 @@ def _emit_projection_event(
     evt = make_outbox_event(
         event=event_name,
         source="panel_agent.confirmation",
-        payload=payload,
+        # MVR-05B4c2: the confirm path is the carrier-free compatibility write; every
+        # receipt it emits is stamped with the sealed compatibility binding.
+        payload=stamp_producing_binding(payload),
         trace_id=trace_id,
     )
     # Receipt-before-ack (P-5, T-panel-confirm): the JSONL audit log is the
@@ -674,6 +841,15 @@ def _resolve_note_file(note_path: str | None) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def staged_proposal_note_file(proposal_id: str) -> Path | None:
+    """The vault file a staged proposal's confirm/reject would write, if resolvable."""
+
+    proposal = _service._proposals.get(proposal_id)
+    if proposal is None:
+        return None
+    return _resolve_note_file(proposal.intent_event.payload.note.path)
 
 
 def _write_rejected_projection(proposal: StagedProposal) -> None:
@@ -772,13 +948,22 @@ class PanelConfirmationService:
         self._ttl = same_turn_ttl
 
     def confirm(self, request: ConfirmRequest) -> ConfirmResponse:
-        cached = self._idempotency.get(request.idempotency_key)
+        live = live_compatibility_binding_id()
+        # Once a registry binding is live, only a response stamped with that exact
+        # binding is a replay of this vault's operation; an unstamped or other-binding
+        # row (e.g. written before the rebind) is never returned for it.
+        cached = self._idempotency.get(
+            request.idempotency_key, binding=None if live == COMPATIBILITY_BINDING_ID else live
+        )
         if cached is not None:
             return cached
 
         proposal = self._proposals.get(request.proposal_id)
         if proposal is None:
             raise UnknownProposalError(request.proposal_id)
+
+        if live != COMPATIBILITY_BINDING_ID and proposal.binding_id != live:
+            raise RestageRequiredError(request.proposal_id)
 
         if proposal.artifact_id != request.artifact_id:
             raise ValueError("proposal does not belong to artifact_id")
@@ -803,7 +988,7 @@ class PanelConfirmationService:
                     idempotency_key=request.idempotency_key,
                     events_emitted=[],
                 )
-                self._idempotency.set(request.idempotency_key, resp)
+                self._idempotency.set(request.idempotency_key, resp, binding=live)
                 self._proposals.remove(request.proposal_id)
                 return resp
             _write_blocked_projection(
@@ -831,7 +1016,7 @@ class PanelConfirmationService:
                 idempotency_key=request.idempotency_key,
                 events_emitted=["panel.action.blocked"],
             )
-            self._idempotency.set(request.idempotency_key, resp)
+            self._idempotency.set(request.idempotency_key, resp, binding=live)
             # A WriteGuard block is transient (health/maintenance lock), not a
             # terminal decision: keep the proposal staged (in-memory + DB) so a
             # post-reopen retry resolves the proposal instead of failing as
@@ -848,7 +1033,7 @@ class PanelConfirmationService:
                 idempotency_key=request.idempotency_key,
                 events_emitted=[],
             )
-            self._idempotency.set(request.idempotency_key, resp)
+            self._idempotency.set(request.idempotency_key, resp, binding=live)
             self._proposals.remove(request.proposal_id)
             return resp
 
@@ -958,7 +1143,7 @@ class PanelConfirmationService:
                 events_emitted=events,
             )
 
-        self._idempotency.set(request.idempotency_key, resp)
+        self._idempotency.set(request.idempotency_key, resp, binding=live)
         self._proposals.remove(request.proposal_id)
         return resp
 
@@ -977,6 +1162,7 @@ __all__ = [
     "panel_staging_store_posture",
     "ProposalStore",
     "Receipt",
+    "RestageRequiredError",
     "SameTurnExecutionError",
     "StagedProposal",
     "UnknownProposalError",
