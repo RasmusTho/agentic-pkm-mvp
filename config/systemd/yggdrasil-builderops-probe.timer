@@ -1,0 +1,11 @@
+[Unit]
+Description=Check BuilderOps bob-1 dependencies every minute
+
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=60
+AccuracySec=5
+Unit=yggdrasil-builderops-probe.service
+
+[Install]
+WantedBy=timers.target

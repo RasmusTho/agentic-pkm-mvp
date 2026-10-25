@@ -792,6 +792,20 @@ owns interpreter setup, preflight, exact paths, durable receipts, and recovery.
   select(.name=="github-live")'`. Full path and rationale:
   `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
 
+### Prepared BuilderOps Linux health probe
+
+Issue #6336 adds a plan-only bob-1 monitoring path, distinct from the Product
+`test`/`prod` probe installer. The prepared probe checks the qualified engine/project,
+authenticated loopback readiness and expected schema/epoch, explicit worker freshness,
+database container health (including local disk/WAL guardrails), and outbox degradation.
+It reuses the shared notification adapter through a separately admitted host-secret
+handoff and retains private engine/epoch-bound outage state. This is repository support,
+not installed monitoring or a client/authority cutover. Installation, a live alert drill,
+and retirement of the Mac duplicate remain separately authorized host work; see the
+[deployment owner contract](BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#prepared-linux-builderops-monitoring).
+Backup/restore is not a readiness gate, and bob-1 power-off detection requires an
+outside observer.
+
 ### BuilderOps VM102 failure-domain preflight
 
 The repository-side BuilderOps deploy wrapper reads the configured project listings before any

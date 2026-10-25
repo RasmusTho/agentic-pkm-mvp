@@ -60,6 +60,43 @@ gate, for both target activation and previous release reactivation. A missing `s
 restart fails closed before mutation and readiness polling; the private loopback boundary is never
 silently left pointing at a stale API address.
 
+### Prepared Linux BuilderOps monitoring
+
+Issue #6336 provides repository-side probe preparation, not a host installation.
+`scripts/plan_builderops_probe.py` prints a plan only; it has no apply operation.
+The prepared `yggdrasil-builderops-probe.service` and timer run the one-shot
+`app.ops.builderops_probe` independently of the monitored containers. Their future
+installation requires an exact reviewed source/interpreter and separate operator authority.
+
+The mode-0600 host-owned JSON configuration must name guest `builder-system`, the
+dedicated `unix:///run/docker-builderops.sock` engine and its qualified ID, project
+`builderops-control-plane`, loopback API `http://127.0.0.1:18100`, expected schema and
+authority epoch. Wrong identity refuses before notification. Unavailable containers
+or authenticated readiness, stale worker heartbeat, failed database health (including
+the existing disk/WAL guard), stale outbox or dead letters are unhealthy. `ready=true`
+alone is insufficient: worker freshness is a separate response field. Ambient Docker
+context and HTTP proxy settings cannot change the selected transport, and redirects
+are refused. No backup or recovery-pipeline field is required.
+
+The probe reads the existing scoped `health:read` token; `/readyz` supplies the required
+safe fields, so no additional `status:read` token is needed. A regular owner-private
+token file or the existing root-owned `0:101`/`0640` handoff is accepted. The shared
+Discord notification adapter consumes only the separately admitted mode-0600 host-secret
+runtime handoff. This is not permission to use the Product `test`/`prod` BWS consumer
+on bob-1, provision a credential or send a test alert. The future host-secret owner must
+admit and sustain that BuilderOps-specific runtime handoff before enabling the timer.
+
+Private locked transition state binds the incident to the engine ID and authority
+epoch. Invalid retained state refuses; a failed recovery notification retains the
+outage, and failed down delivery remains retryable. Successful repeated down checks
+are suppressed and one recovery is sent after a confirmed down transition. Webhook
+delivery is not exactly-once across a timeout/crash or a failed state commit. The
+outbox age limit is explicit in configuration (the plan suggests 300 seconds).
+
+The preparation does not switch clients, import or correct legacy tasks, stop the Mac
+stack, or satisfy complete-system acceptance. A host-local probe also cannot alert
+while bob-1 itself is powered off; that requires a separately qualified outside observer.
+
 ### Complete Dev System admission
 
 This section governs complete-system admission. The separately owner-authorized
