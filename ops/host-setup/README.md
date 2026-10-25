@@ -49,6 +49,21 @@ deployed and verified through the governed deployment handoff.
 | `gaming-pc/` | burst inference | Ollama (`gpt-oss:20b`), `gpu-warden` (Scheduled Task) |
 | `macbook-air/` | thin client | nothing — Tailscale + Screen Sharing / Moonlight |
 
+### BuilderOps Linux probe preparation
+
+`scripts/plan_builderops_probe.py --expected-engine-id <qualified-id>
+--expected-epoch <qualified-epoch> --expected-schema-version <qualified-schema>`
+prints a bob-1-only plan and configuration without contacting or changing a host.
+There is no `--apply` mode. The prepared systemd service/timer are repository artifacts;
+copying them or enabling a service is a separate operator action, not part of this command.
+The plan lists the exact source package, private configuration/token/handoff paths and
+unmet activation prerequisites. Use the
+[BuilderOps monitoring contract](../../docs/BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#prepared-linux-builderops-monitoring)
+for identity, worker/database/disk/WAL checks and private transition-state semantics.
+The existing Product probe installer accepts only `test`/`prod` and must not be used
+to impersonate a BuilderOps alert consumer. No Mac LaunchAgent is loaded or unloaded
+by this preparation, and no notification is sent.
+
 ### Mac mini scheduled host jobs
 
 The Mac mini also has an operator-owned weekly Docker cleanup LaunchAgent at
