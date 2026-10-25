@@ -11,6 +11,10 @@ runtime-declared Panel checkbox option to the canonical checked Markdown state.
 
 from __future__ import annotations
 
+import logging
+import os
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 import app.panel.confirmation as confirm_module
@@ -33,12 +37,38 @@ from app.api.compatibility_mutation import (
     require_compatibility_write_target,
     seal_vault_mutation,
 )
+from app.config.database import runtime_database_is_named
+from app.instance.compatibility_binding import compatibility_binding_for_root
+from app.auth import require_loopback_or_api_key
+from app.standing_questions.projection import rebuild_standing_questions_projection
+from app.standing_questions.review import (
+    QuestionReviewError,
+    accepted_question_receipt,
+    complete_question_acceptance,
+    prepare_question_acceptance,
+    reconcile_missing_question_acceptance,
+)
+from app.text.helpers import content_hash
 
 router = APIRouter(
     prefix="/panel",
     tags=["panel"],
     dependencies=[Depends(seal_vault_mutation)],
 )
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _sync_standing_question_projection(vault_root: Path) -> None:
+    if not runtime_database_is_named(os.environ):
+        return
+    try:
+        binding_id = compatibility_binding_for_root(vault_root)
+        rebuild_standing_questions_projection(vault_root, vault_binding_id=binding_id)
+    except Exception:
+        # The vault write is authoritative; GET reports a stale projection
+        # until the producer retries or a later rebuild succeeds.
+        _LOGGER.exception("standing-question projection refresh failed after review write")
 
 
 @router.post("/confirm", response_model=ConfirmResponse)
@@ -99,18 +129,102 @@ async def panel_confirm(
         raise HTTPException(status_code=422, detail=str(exc))
 
 
-@router.post("/checkbox-projection", response_model=CheckboxProjectionResponse)
+@router.post(
+    "/checkbox-projection",
+    response_model=CheckboxProjectionResponse,
+    dependencies=[Depends(require_loopback_or_api_key)],
+)
 async def panel_checkbox_projection(
     request: CheckboxProjectionRequest,
     http_request: Request,
 ) -> CheckboxProjectionResponse:
-    # The projection resolves its own vault root; hand it the sealed binding so it
-    # proves that root before reading or writing the note.
+    # SQ review reads and writes must stay inside the exact vault authorized by
+    # the mutation seal. Never resolve the process-global selection here: a
+    # concurrent or stale selector could point at a different vault.
     sealed_root = getattr(http_request.state, "compatibility_write_root", None)
+    preflight = None
+    vault_root = Path(sealed_root) if sealed_root is not None else None
+    if request.review_question_id is not None:
+        if vault_root is None:
+            # The legacy pre-registry/pre-floor seal has no durable binding to
+            # prove. Do not let a Question acceptance fall through to ordinary
+            # checkbox projection or resolve the process-global selection.
+            raise capability_not_ready()
+        try:
+            replay = accepted_question_receipt(request, vault_root=vault_root)
+            if replay is not None:
+                return CheckboxProjectionResponse(
+                    status="executed",
+                    artifact_id=request.artifact_id,
+                    note_path=request.note_path,
+                    panel_id=request.panel_id,
+                    option_id=request.option_id,
+                    content_hash_before=request.expected_content_hash,
+                    content_hash_after=request.expected_content_hash,
+                    receipt=replay,
+                    idempotency_key=request.idempotency_key,
+                )
+            reconciled = reconcile_missing_question_acceptance(
+                request,
+                vault_root=vault_root,
+            )
+            if reconciled is not None:
+                _sync_standing_question_projection(Path(vault_root))
+                return CheckboxProjectionResponse(
+                    status="executed",
+                    artifact_id=request.artifact_id,
+                    note_path=request.note_path,
+                    panel_id=request.panel_id,
+                    option_id=request.option_id,
+                    content_hash_before=request.expected_content_hash,
+                    content_hash_after=request.expected_content_hash,
+                    receipt=reconciled,
+                    idempotency_key=request.idempotency_key,
+                )
+            preflight = prepare_question_acceptance(
+                request,
+                vault_root=vault_root,
+            )
+        except QuestionReviewError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     try:
-        return checkbox_projection_module._service.project(request, sealed_root=sealed_root)
+        if preflight is not None and preflight.already_projected:
+            checked_note = preflight.draft_path.read_text(encoding="utf-8")
+            normalized = checked_note.replace("\r\n", "\n").replace("\r", "\n")
+            response = CheckboxProjectionResponse(
+                status="already_projected",
+                artifact_id=request.artifact_id,
+                note_path=request.note_path,
+                panel_id=request.panel_id,
+                option_id=request.option_id,
+                content_hash_before=request.expected_content_hash,
+                content_hash_after=content_hash(normalized),
+                idempotency_key=request.idempotency_key,
+            )
+        else:
+            response = checkbox_projection_module._service.project(
+                request,
+                sealed_root=sealed_root,
+                execute_runtime=preflight is None,
+                legacy_standing_question_acceptance=(
+                    (
+                        request.option_id,
+                        f"Accept this draft into the vault (draft {request.artifact_id[:12]})",
+                    )
+                    if preflight is not None
+                    else None
+                ),
+            )
     except CheckboxProjectionHTTPError as exc:
         raise HTTPException(
             status_code=exc.status_code,
             detail=exc.response.model_dump(mode="json"),
         ) from exc
+    if preflight is not None and response.status in {"projected", "already_projected"}:
+        try:
+            receipt = complete_question_acceptance(preflight, vault_root=vault_root)
+        except QuestionReviewError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        _sync_standing_question_projection(Path(vault_root))
+        return response.model_copy(update={"status": "executed", "receipt": receipt})
+    return response
