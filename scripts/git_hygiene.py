@@ -2871,38 +2871,35 @@ def _dispatcher_example_scan_source(body: str) -> str:
                     del literal_stack[matching:]
         literal_ranges.extend((event.position, len(block.text)) for event in literal_stack)
         if block.literal_projection_changed:
-            offset = 0
             dedicated_fragments = re.compile(
                 rf"(?:^\s*|[.!?]\s+|while\s+the\s+){_DISPATCHER_DEDICATED_KEYWORD}"
                 rf"{_DISPATCHER_RETENTION_SEPARATOR}{_DISPATCHER_WORKTREE_KEYWORD}\b",
-                re.IGNORECASE,
+                re.IGNORECASE | re.MULTILINE,
             )
+            matches = list(dedicated_fragments.finditer(block.text))
+            for index, match in enumerate(matches):
+                word = re.search(_DISPATCHER_DEDICATED_KEYWORD, match.group(0), re.IGNORECASE)
+                position = match.start() + (word.start() if word else 0)
+                end = matches[index + 1].start() if index + 1 < len(matches) else len(block.text)
+                candidate = block.text[position:end]
+                declaration = _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.search(
+                    candidate
+                ) or _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE.search(candidate)
+                if declaration and not any(
+                    a <= position and position + declaration.end() <= b for a, b in literal_ranges
+                ):
+                    source_intact_required = True
+            offset = 0
             for line in block.text.splitlines(keepends=True):
                 for pattern, keyword in (
                     (_DISPATCHER_PICKUP_RECEIPT_RE, r"pickup"),
                     (_DISPATCHER_PRESERVED_WORKTREE_MARKER_RE, r"preserved"),
-                    (dedicated_fragments, _DISPATCHER_DEDICATED_KEYWORD),
                 ):
-                    matches = list(pattern.finditer(line))
-                    for index, match in enumerate(matches):
+                    for match in pattern.finditer(line):
                         word = re.search(keyword, match.group(0), re.IGNORECASE)
-                        local_position = match.start() + (word.start() if word else 0)
-                        position = offset + local_position
-                        if any(a <= position < b for a, b in literal_ranges):
-                            continue
-                        if pattern is dedicated_fragments:
-                            end = (
-                                matches[index + 1].start()
-                                if index + 1 < len(matches)
-                                else len(line)
-                            )
-                            candidate = line[local_position:end]
-                            if not (
-                                _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.search(candidate)
-                                or _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE.search(candidate)
-                            ):
-                                continue
-                        source_intact_required = True
+                        position = offset + match.start() + (word.start() if word else 0)
+                        if not any(a <= position < b for a, b in literal_ranges):
+                            source_intact_required = True
                 offset += len(line)
         for start, stop, raw_start, raw_stop in block.literals:
             if receipt_example(block.text[start:stop]):

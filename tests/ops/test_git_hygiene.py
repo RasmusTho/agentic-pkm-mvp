@@ -6737,6 +6737,7 @@ def test_local_retirement_ignores_partial_html_receipt_examples(
     pytest.param("<code>Dedicated worktree /tmp/old is still dirty</code><!-- outer\n\n-->&lt;!-- sample --&gt; on branch old at head {sha}", id="lossy-pending-entity-control"),
     pytest.param("<code>Dedicated worktree /tmp/example</code> <!-- pending --&gt;\n\n<code>Dedicated worktree /tmp/old is still dirty</code>", id="decoded-source-comment-closer-control"),
     pytest.param("<code>Dedicated worktree /tmp/old is still dirty</code> &lt;!-- sample --&gt; on branch old at head {sha} <!-- pending", id="mixed-source-comment-control"),
+    pytest.param("<code>Dedicated worktree /tmp/example is still dirty</code> &lt;!-- sample --&gt;. `Dedicated` worktree /tmp/old &lt;!-- second --&gt; is still dirty on branch old at head {sha}", id="coded-keyword-loss-regression-control"),
     pytest.param(r"<pre><code>Dedicated worktree /tmp/old is still dirty</code></pre> \<?sample. ?> on branch old at head {sha}", id="markup-nested-control"),
     "<code>Dedicated worktree /tmp/old is still dirty<p></p></code> on branch old at head {sha}",
     "<code>Dedicated worktree /tmp/old is still dirty</code></p> on branch old at head {sha}",
@@ -6807,12 +6808,19 @@ def test_local_retirement_preserves_intent_around_partial_html_code(
 @pytest.mark.parametrize("receipt", [
     "Dedicated worktree /tmp/old is still dirty on branch old at head {sha}",
     "Preserved worktree: /tmp/old; branch: old; base HEAD: {sha}",
+    "Dedi<br>cated worktree /tmp/old is still dirty on branch old at head {sha}",
+    "Dedicated wor<br>ktree /tmp/old is still dirty on branch old at head {sha}",
+    "Dedicated worktree /tmp/old is st<br>ill dirty on branch old at head {sha}",
+    "Dedicated\nworktree /tmp/old is still dirty on branch old at head {sha}",
 ])
+@pytest.mark.parametrize("example_first", [False, True])
 def test_local_retirement_preserves_receipt_hidden_by_literal_projection(
-    tmp_path, monkeypatch, receipt
+    tmp_path, monkeypatch, receipt, example_first
 ):
     repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
-    body = "<code>Dedicated worktree /tmp/example</code> &lt;!-- sample --&gt;. " + receipt.format(sha=sha)
+    example = "<code>Dedicated worktree /tmp/example</code>"
+    hidden_receipt = "&lt;!-- sample --&gt;. " + receipt.format(sha=sha)
+    body = example + " " + hidden_receipt if example_first else hidden_receipt + "\n\n" + example
     monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [{
         "kind": "task", "record": {
             "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
