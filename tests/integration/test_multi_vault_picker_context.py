@@ -1156,19 +1156,32 @@ console.log(JSON.stringify({{status:scoped.status,data:await scoped.json(),cooki
 
 
 def _activated_picker_runtime(tmp_path, monkeypatch):
-    from tests._mvr03_principal_harness import provisioned_instance
+    from app.instance.local_operator_principal import AuthPosture
+    from tests._mvr03_principal_harness import run_principal_cutover
+    from tests._mvr_default_vault_harness import activate, new_runtime
     from tests.helpers.vault_settings import initialize_test_vault
 
-    runtime, first, extra, _principal = provisioned_instance(tmp_path, extra_roots=("two",))
+    # These are write-capable picker journeys: initialize the real content before
+    # registration so bootstrap records the same complete vault/clone identity.
+    roots = [tmp_path / "one", tmp_path / "two"]
+    for index, root in enumerate(roots):
+        root.mkdir()
+        initialize_test_vault(root)
+        (root / f"only-{index}.md").write_text(f"vault {index}\n", encoding="utf-8")
+    runtime = new_runtime(tmp_path)
+    first = runtime.bootstrap_env_binding(vault_root=roots[0], watcher_vault_path=roots[0])
+    activate(runtime, first, tmp_path)
+    extra = (runtime.production_register(roots[1], producer="api"),)
+    InstanceDefaultVaultService(runtime.registry, capability=STORAGE_MUTATION_CAPABILITY).set(first.vault_binding_id)
+    run_principal_cutover(runtime, posture=AuthPosture(
+        configured_credentials=0, credential=None, loopback_listener_proven=True,
+        companion_proxy_configured=False,
+    ))
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
     monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
     monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
     monkeypatch.setenv("WATCHER_ENABLE", "0")
     monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
-    roots = [Path(runtime.registry.load().registrations[item.vault_binding_id].path) for item in (first, extra[0])]
-    for index, root in enumerate(roots):
-        initialize_test_vault(root)
-        (root / f"only-{index}.md").write_text(f"vault {index}\n", encoding="utf-8")
     _install_dormant_settings_rebind_for_test(runtime, first.vault_binding_id)
     manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
@@ -1518,7 +1531,7 @@ def test_rendered_document_proof_cannot_follow_another_tabs_binding(tmp_path, mo
     import json
     from tests._mvr05b_picker_browser import picker_browser
 
-    _runtime, roots, _a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    _runtime, roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
     original = 'shared template\n'
     for root in roots:
         (root / 'shared.md').write_text(original)
@@ -1547,15 +1560,25 @@ console.log(JSON.stringify({status:written.status,data:await written.json(),back
 """.replace('ROOT_A',json.dumps(str(roots[0]))).replace('ROOT_B',json.dumps(str(roots[1]))).replace('WRITE_PATH',json.dumps(path)).replace('PAYLOAD',json.dumps(json.dumps(payload))).replace('NOTE_PAGE', "pageA=await bootDocument('/workspace?note_path=shared.md');" if surface == 'note' else '')
         result = run(script)
     assert result['status'] == 409
-    assert result['data']['detail']['error'] == 'capability_not_ready'
+    if surface == 'note':
+        assert result['data']['detail']['error'] == 'capability_not_ready'
+    else:
+        assert result['data']['detail'] == 'active_context_write_unavailable'
     assert {note['vault_binding_id'] for note in result['background']['notes']} == {binding_b}
     if surface == 'note':
         assert 'id="note-source-editor"' in result['pageA']
     else:
         assert 'Workspace Orientation' in result['pageA']
-    write = next(call for call in calls if call[1] == path + '/compatibility')
-    assert write[2]['X-Compatibility-Write-Precondition'] in proofs[:-1]
-    assert write[2]['X-Compatibility-Write-Precondition'] != proofs[-1]
+    write_path = path + '/compatibility' if surface == 'note' else '/api/companion/capture/scoped'
+    write = next(call for call in calls if call[1] == write_path)
+    if surface == 'note':
+        assert write[2]['X-Compatibility-Write-Precondition'] in proofs[:-1]
+        assert write[2]['X-Compatibility-Write-Precondition'] != proofs[-1]
+    else:
+        assert write[2].get('X-Active-Context-Session')
+        assert write[3]['target_binding_id'] == binding_a
+        assert 'X-Compatibility-Write-Precondition' not in write[2]
+        assert all('capture from old A view' not in note.read_text() for root in roots for note in root.rglob('*.md'))
     assert all((root / 'shared.md').read_text() == original for root in roots)
 
 
@@ -1594,11 +1617,11 @@ console.log(JSON.stringify({status:written.status}));
 
 @pytest.mark.parametrize('surface', ['note', 'capture'])
 @pytest.mark.parametrize('boundary', ['api-restart', 'rebind-before-admission'])
-def test_document_write_refuses_stale_session_or_rebound_target(tmp_path, monkeypatch, surface, boundary):
+def test_document_write_retains_context_and_compatibility_admission(tmp_path, monkeypatch, surface, boundary):
     import json
     from tests._mvr05b_picker_browser import picker_browser
 
-    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    _runtime, roots, binding_a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
     inspections = 0
     rebound = []
 
@@ -1610,12 +1633,12 @@ def test_document_write_refuses_stale_session_or_rebound_target(tmp_path, monkey
                 # Document A is already rendered; no content read primes the
                 # refusal latch before the human's explicit write attempt.
                 selection_routes.reset_selection_store_for_tests()
-        if boundary == 'rebind-before-admission' and path.endswith('/compatibility'):
+        if boundary == 'rebind-before-admission' and (path.endswith('/compatibility') or path == '/api/companion/capture/scoped'):
             companion_module.get_vault_manager().select_vault(roots[1])
             rebound.append(True)
 
     path = '/api/companion/note/save' if surface == 'note' else '/api/companion/capture'
-    body = {'note_path':'only-0.md','new_body':'must not write'} if surface == 'note' else {'text':'must not capture'}
+    body = {'note_path':'only-0.md','new_body':'must not write'} if surface == 'note' else {'text':'selected A capture'}
     with picker_browser(monkeypatch, before_request=interrupt) as (run, calls):
         script = """
 await choose(ROOT_A);
@@ -1623,17 +1646,24 @@ var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'appli
 console.log(JSON.stringify({status:written.status,data:await written.json(),visible:!visible.hidden}));
 """.replace('ROOT_A',json.dumps(str(roots[0]))).replace('WRITE_PATH',json.dumps(path)).replace('PAYLOAD',json.dumps(json.dumps(body)))
         result = run(script)
-    assert result['status'] == (401 if boundary == 'api-restart' else 409)
+    scoped_capture = surface == 'capture' and boundary == 'rebind-before-admission'
+    assert result['status'] == (200 if scoped_capture else 401 if boundary == 'api-restart' else 409), result
     assert (roots[0] / 'only-0.md').read_text() == 'vault 0\n'
     assert (roots[1] / 'only-1.md').read_text() == 'vault 1\n'
-    writes = [call for call in calls if call[1].endswith('/compatibility')]
+    writes = [call for call in calls if call[1].endswith('/compatibility') or call[1] == '/api/companion/capture/scoped']
     if boundary == 'api-restart':
         assert 'reselection_required' in json.dumps(result['data'])
         assert result['visible'] is True
         assert not writes
     else:
-        assert result['data']['detail']['error'] == 'capability_not_ready'
         assert len(writes) == len(rebound) == 1
+        if scoped_capture:
+            assert writes[0][3]['target_binding_id'] == binding_a
+            assert result['data']['governed_write']['authority_receipt']['target_binding_id'] == binding_a
+            assert 'selected A capture' in (roots[0] / result['data']['note_path']).read_text()
+            assert all('selected A capture' not in note.read_text() for note in roots[1].rglob('*.md'))
+        else:
+            assert result['data']['detail']['error'] == 'capability_not_ready'
     assert sum(path.endswith('/notes/scoped') for _method,path,_headers,_body in calls) == 2
 
 
@@ -1982,10 +2012,6 @@ def test_scoped_picker_governed_write_targets_selected_binding(tmp_path, monkeyp
     import json
     from tests._mvr05b_picker_browser import picker_browser
     runtime, roots, binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
-    for binding_id in (binding_a, binding_b):
-        registration = runtime.registry.lookup(binding_id)
-        runtime.complete_initialization(binding_id, vault_id="vault-" + binding_id,
-            local_instance_id=registration.local_instance_id)
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "capture-events.jsonl"))
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
     with picker_browser(monkeypatch) as (run, calls):
