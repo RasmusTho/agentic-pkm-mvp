@@ -339,11 +339,13 @@ class VaultContextResponse(BaseModel):
     validation_error: str | None = None
     permissions: dict[str, bool] = Field(default_factory=dict)
     active_context: dict[str, Any] | None = None
+    context_selection_id: str | None = None
 
 
 class VaultSelectRequest(BaseModel):
     path: str = Field(..., min_length=1)
     remember: bool = True
+    scoped_selection: bool = False
 
 
 class VaultInitializeRequest(BaseModel):
@@ -359,6 +361,7 @@ class VaultInitializeRequest(BaseModel):
     # Fresh no-vault initialization carries the authenticated single-use
     # precondition minted by ``/vault/initialize/bootstrap``.
     bootstrap_token: str | None = None
+    scoped_selection: bool = False
 
 
 class VaultInitializeResponse(BaseModel):
@@ -1016,7 +1019,34 @@ def _companion_scoped_read_window(context: ActiveContextSetV1) -> Iterator[_Scop
         raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
 
 
-def _scoped_companion_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:
+def _document_read_principal(
+    request: Request, api_key: str | None = Depends(api_key_header),
+) -> str | None:
+    if any(name in request.headers for name in ("X-Active-Context-Session", "X-Active-Context-Override")):
+        return None
+    registry_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+    if not registry_path:
+        return None
+    try:
+        principal = _authenticated_principal_id(request, api_key, Path(registry_path))
+        snapshot = VaultRegistryStore(Path(registry_path)).read_existing()
+    except (HTTPException, RegistryError, OSError):
+        # Preserve the legacy read projection, but never grant a write proof to
+        # an unauthenticated caller or initialize/repair unqualified state.
+        return None
+    return principal if (
+        snapshot.settings_rebind is not None
+        and snapshot.settings_rebind.get("candidateBindingId") is not None
+    ) else None
+
+
+def _scoped_companion_document_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:
+    return _scoped_companion_read(endpoint, document_write_proof=True)
+
+
+def _scoped_companion_read(
+    endpoint: Callable[..., Any], *, document_write_proof: bool = False,
+) -> Callable[..., Any]:
     """Migrate one companion read route onto the per-request ActiveContextSet.
 
     Adds the carrier dependency to the route. A carrier-bearing request runs the
@@ -1037,6 +1067,23 @@ def _scoped_companion_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(endpoint)
     def route(*args: Any, **kwargs: Any) -> Any:
         context = kwargs.pop(_SCOPED_READ_ROUTE_PARAMETER, None)
+        principal = kwargs.pop("mvr05b5_document_principal", None)
+        if context is None and principal is not None:
+            from app.instance.settings_rebind import SettingsRebindStore
+
+            registry = VaultRegistryStore(Path(os.environ["INSTANCE_VAULT_REGISTRY_PATH"]))
+            # One sync worker owns this lock through content and serialization;
+            # no thread-owned lock spans a FastAPI dependency yield.
+            with _legacy_companion_vault_manager().selection_window():
+                with compatibility_write_target_window(selected_root=_legacy_companion_selected_root) as root:
+                    result = endpoint(*args, **kwargs)
+                    response = JSONResponse(content=jsonable_encoder(result))
+                    if root is not None and not isinstance(result, VaultSelectionRequiredResponse):
+                        binding_id = SettingsRebindStore(registry).compatibility_binding_id()
+                        response.headers[HEADER_COMPATIBILITY_PRECONDITION] = issue_compatibility_precondition(
+                            binding_id=binding_id, principal_id=principal, registry=registry,
+                        )
+                    return response
         if context is None:
             return endpoint(*args, **kwargs)
         with _companion_scoped_read_window(context):
@@ -1045,10 +1092,16 @@ def _scoped_companion_read(endpoint: Callable[..., Any]) -> Callable[..., Any]:
                 return result
             return JSONResponse(content=jsonable_encoder(result))
 
+    extra_parameters = [carrier]
+    if document_write_proof:
+        extra_parameters.append(inspect.Parameter(
+            "mvr05b5_document_principal", inspect.Parameter.KEYWORD_ONLY,
+            default=Depends(_document_read_principal), annotation=str | None,
+        ))
     setattr(
         route,
         "__signature__",
-        signature.replace(parameters=[*signature.parameters.values(), carrier]),
+        signature.replace(parameters=[*signature.parameters.values(), *extra_parameters]),
     )
     return route
 
@@ -1260,9 +1313,46 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
     dependencies=[Depends(require_loopback_or_api_key)],
 )
 @compatibility_selector_bridge
-def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
-    context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
-    return _vault_context_response(context)
+def select_companion_vault(
+    req: VaultSelectRequest,
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
+) -> VaultContextResponse:
+    # Only the explicit picker command may create a new scoped handoff. A read
+    # (including a stale session) never reaches this branch or remints intent.
+    registry_path = None
+    if req.scoped_selection:
+        _runtime, registry_path = _first_vault_runtime()
+        _authenticated_principal_id(request, api_key, registry_path)
+    from app.instance.filesystem_identity import resolve_filesystem_root_identity, same_filesystem_root
+
+    # Freeze the physical target before entering the rebind, which can wait on
+    # the watcher. Re-resolving a user alias after that wait could select A but
+    # mint a bearer for a newly retargeted B.
+    selected_identity = resolve_filesystem_root_identity(Path(req.path)) if req.scoped_selection else None
+    selected_path = Path(selected_identity.canonical_path) if selected_identity is not None else Path(req.path)
+    manager = get_vault_manager()
+    if not req.scoped_selection:
+        # Keep the legacy call entry and its existing lock admission unchanged.
+        return _vault_context_response(manager.select_vault(selected_path, remember=req.remember))
+    with manager.selection_window():
+        context = manager.select_vault(selected_path, remember=req.remember)
+        response = _vault_context_response(context)
+        if registry_path is not None:
+            target = resolve_filesystem_root_identity(selected_path)
+            if target != selected_identity:
+                raise HTTPException(status_code=409, detail="reselection_required: selected root identity changed")
+            matches = [
+                item.vault_binding_id
+                for item in VaultRegistryStore(registry_path).load().registrations.values()
+                if same_filesystem_root(resolve_filesystem_root_identity(item.path), target)
+            ]
+            if context.status != "selected" or len(matches) != 1:
+                raise HTTPException(status_code=409, detail="reselection_required: selected binding is not resolvable")
+            response.context_selection_id = _create_initialized_scoped_selection(
+                request=request, api_key=api_key, registry_path=registry_path, binding_id=matches[0]
+            )
+        return response
 
 
 # --- Visual folder browser (#2565) ------------------------------------------
@@ -1697,6 +1787,20 @@ def initialize_companion_vault(
     elif os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip():
         runtime, registry_path = _first_vault_runtime()
 
+    if req.scoped_selection:
+        if registry_path is None:
+            raise HTTPException(status_code=503, detail="instance registry is not bound")
+        _authenticated_principal_id(request, api_key, registry_path)
+        from app.instance.filesystem_identity import FilesystemIdentityError, resolve_filesystem_root_identity
+
+        try:
+            target = Path(resolve_filesystem_root_identity(target).canonical_path)
+        except FilesystemIdentityError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="reselection_required: initialization root identity cannot be established",
+            ) from exc
+
     if runtime is not None and registry_path is not None:
         snapshot = runtime.registry.load()
         if req.bootstrap_token or (
@@ -1786,10 +1890,20 @@ def initialize_companion_vault(
         machine_role=req.machine_role,
         remember=req.remember,
     )
+    selected = (
+        select_companion_vault(
+            VaultSelectRequest(path=str(target), remember=req.remember, scoped_selection=True),
+            request,
+            api_key,
+        )
+        if req.scoped_selection
+        else _vault_context_response(result.context)
+    )
     return VaultInitializeResponse(
-        context=_vault_context_response(result.context),
+        context=selected,
         created_files=list(result.created_files),
         skipped_existing_files=list(result.skipped_existing_files),
+        context_selection_id=selected.context_selection_id,
     )
 
 
@@ -5290,7 +5404,7 @@ def read_today_briefing() -> dict[str, object]:
     "/orientation",
     response_model=WorkspaceOrientationResponse | VaultSelectionRequiredResponse,
 )
-@_scoped_companion_read
+@_scoped_companion_document_read
 def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectionRequiredResponse:
     trace_id = uuid4().hex
     generated_at = datetime.datetime.now(datetime.timezone.utc)
@@ -5522,7 +5636,7 @@ def read_companion_tts_audio(cache_key: str) -> FileResponse:
     "/workspace",
     response_model=WorkspaceStateResponse | VaultSelectionRequiredResponse,
 )
-@_scoped_companion_read
+@_scoped_companion_document_read
 def read_companion_workspace(
     note_path: str = Query(..., description="Runtime-relative note path"),
 ) -> WorkspaceStateResponse | VaultSelectionRequiredResponse:
