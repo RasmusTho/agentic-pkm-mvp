@@ -149,12 +149,12 @@ class InquiryGraph:
             lambda *_args, **_kwargs: {"synthesis": self.provider, "verification": self.provider},
         )
         self.app = control_service.production_app()
-        self.http = TestClient(self.app)
+        self.http = TestClient(self.app, base_url="https://testserver.invalid")
         vault = tmp_path / "vault"
         vault.mkdir()
         self.service = ModelInquiryService(vault)
         client = BuilderOpsControlPlaneClient(
-            ClientConfig("http://testserver", "destination-fixture"),
+            ClientConfig("https://testserver.invalid", "destination-fixture"),
             http_client=self.http,
             max_retries=0,
         )

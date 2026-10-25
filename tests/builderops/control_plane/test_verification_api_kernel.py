@@ -399,11 +399,12 @@ def _authenticated_api_ledger(
         create_app(
             store=control_plane_store,
             credentials=CredentialRegistry(manifest),
-        )
+        ),
+        base_url="https://testserver",
     )
     client = BuilderOpsControlPlaneClient(
         ClientConfig(
-            base_url="http://testserver",
+            base_url="https://testserver",
             token="verification-executor-token",
         ),
         http_client=transport,  # type: ignore[arg-type]
