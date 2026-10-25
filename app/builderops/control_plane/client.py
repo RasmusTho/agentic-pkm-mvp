@@ -1,27 +1,38 @@
-"""Versioned authenticated client for the BuilderOps control-plane API.
+"""Versioned authenticated client for BuilderOps coordination API operations.
 
-This is the single authority-bearing transport every MacBook workflow uses to
-reach the independent BuilderOps service (BCP-02). It deliberately holds **no**
-store, database driver, or filesystem authority: when the service is
-unavailable, or a credential is rejected, or a fencing/epoch conflict occurs,
-every method raises a typed fail-closed error and leaves no local authority,
-SQLite database, JSONL/JSON ledger, or fabricated GitHub lease behind.
+This client carries task, lease, attempt, promotion, receipt, and status
+operations to the independent BuilderOps service (BCP-02). It is distinct from
+the local Vault record CLI/store, which remains in use pending its governed
+BCP-03/06 import. The client deliberately holds **no** store, database driver,
+or filesystem authority: when the service is unavailable, or a credential is
+rejected, or a fencing/epoch conflict occurs, every method raises a typed
+fail-closed error and leaves no local authority, SQLite database, JSONL/JSON
+ledger, or fabricated GitHub lease behind.
+
+Authenticated requests accept only a credential-free HTTPS origin, except for
+numeric loopback HTTP used by a directly local service. The owned HTTPX client
+ignores ambient proxy configuration, verifies TLS, and never follows redirects.
 
 BCP-04 prepares the clients; BCP-06 chooses the authoritative cutover moment.
-The base URL and scoped bearer credential come exclusively from host/user secret
+The CLI resolves the base URL and scoped bearer credential from host/user secret
 configuration (environment variables and host secret files), never from files
-checked into a repository, and the credential is never logged.
+checked into a repository. Python callers may construct ``ClientConfig``
+directly; both paths share the same origin validation, and credentials are
+never logged.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -31,6 +42,7 @@ API_VERSION = "v1"
 _EPOCH_HEADER = "X-BuilderOps-Authority-Epoch"
 _DEFAULT_TIMEOUT_SECONDS = 15.0
 _DEFAULT_MAX_RETRIES = 2
+_DNS_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 
 # 409 details that mean "your lease/fence/epoch is no longer authoritative".
 # Shared with the service's HTTP 409 classification via models.py so a
@@ -78,28 +90,101 @@ class ControlPlaneProtocolError(ControlPlaneClientError):
     """Raised on a malformed response or an unmappable 4xx (e.g. 400/422)."""
 
 
+def _validated_control_plane_origin(value: str) -> str:
+    """Return a credential-free API origin or raise a content-free error."""
+    message = "BUILDEROPS_API_URL must be a safe http(s) origin"
+    try:
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or "\\" in value
+            or any(character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+        ):
+            raise ValueError
+        parsed = urlsplit(value)
+        # urlsplit treats a trailing empty query or fragment as an empty value;
+        # reject the delimiters themselves so those forms cannot slip through.
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or "?" in value
+            or "#" in value
+            or parsed.path not in {"", "/"}
+            or parsed.netloc.endswith(":")
+        ):
+            raise ValueError
+        port = parsed.port
+        if port == 0:
+            raise ValueError
+        # Ask HTTPX to validate/normalize host and authority syntax before the
+        # value reaches either an owned or injected transport.
+        httpx.URL(value)
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError
+        address: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            # HTTPX preserves several malformed DNS spellings (spaces,
+            # underscores, empty labels, and non-canonical numeric hosts).
+            # Accept DNS names only when every IDNA label has ordinary host
+            # syntax; IP literals are handled by ipaddress above.
+            if ":" in hostname or "%" in hostname:
+                raise ValueError from None
+            ascii_hostname = hostname.encode("idna").decode("ascii")
+            unrooted_hostname = (
+                ascii_hostname[:-1] if ascii_hostname.endswith(".") else ascii_hostname
+            )
+            labels = unrooted_hostname.split(".")
+            if (
+                not unrooted_hostname
+                or len(unrooted_hostname) > 253
+                or re.fullmatch(r"[0-9.]+", unrooted_hostname)
+                or any(len(label) > 63 or not _DNS_LABEL.fullmatch(label) for label in labels)
+            ):
+                raise ValueError from None
+        if parsed.scheme == "http":
+            if address is None or not address.is_loopback:
+                raise ValueError
+        return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+    except (ValueError, UnicodeError, httpx.InvalidURL):
+        # Never include the URL: it may contain credential-like userinfo.
+        raise ControlPlaneConfigError(message) from None
+
+
 @dataclass(frozen=True)
 class ClientConfig:
-    """Host-resolved base URL plus scoped bearer credential.
+    """Validated API origin plus scoped bearer credential.
 
-    The credential is kept out of ``repr`` and is never logged. It is resolved
-    from a host secret file or a host environment variable, both outside the
-    repository, matching the deployment's credential custody.
+    The origin is checked for every supported construction path. The credential
+    is kept out of ``repr`` and is never logged; CLI configuration resolves it
+    from a host secret file or host environment variable outside the repository.
     """
 
     base_url: str
     token: str = field(repr=False)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "base_url", _validated_control_plane_origin(self.base_url)
+        )
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "ClientConfig":
         source = os.environ if env is None else env
-        base_url = source.get("BUILDEROPS_API_URL", "").strip()
-        if not base_url:
+        raw_base_url = source.get("BUILDEROPS_API_URL", "")
+        if not raw_base_url or not raw_base_url.strip():
             raise ControlPlaneConfigError(
                 "BUILDEROPS_API_URL is required to reach the BuilderOps control plane"
             )
-        if not base_url.startswith(("http://", "https://")):
-            raise ControlPlaneConfigError("BUILDEROPS_API_URL must be an http(s) URL")
+        base_url = _validated_control_plane_origin(raw_base_url.strip())
         token_direct = source.get("BUILDEROPS_API_TOKEN", "").strip()
         token_file = source.get("BUILDEROPS_API_TOKEN_FILE", "").strip()
         if token_direct and token_file:
@@ -135,12 +220,20 @@ class BuilderOpsControlPlaneClient:
         max_retries: int = _DEFAULT_MAX_RETRIES,
         retry_backoff_seconds: float = 0.0,
     ) -> None:
+        # Keep the policy at both public boundaries: ClientConfig protects
+        # normal callers, and this check protects callers that supply a
+        # config-like object or otherwise bypass dataclass construction.
+        base_url = _validated_control_plane_origin(config.base_url)
         self._config = config
         self._max_retries = max(0, max_retries)
         self._retry_backoff = max(0.0, retry_backoff_seconds)
         self._owns_client = http_client is None
         self._http = http_client or httpx.Client(
-            base_url=config.base_url, timeout=_DEFAULT_TIMEOUT_SECONDS
+            base_url=base_url,
+            timeout=_DEFAULT_TIMEOUT_SECONDS,
+            trust_env=False,
+            verify=True,
+            follow_redirects=False,
         )
         self._pinned_epoch: int | None = None
 
@@ -830,6 +923,19 @@ class BuilderOpsControlPlaneClient:
         params: Mapping[str, str] | None = None,
         pin_epoch: bool = True,
     ) -> dict[str, Any]:
+        try:
+            target = httpx.URL(path)
+        except (TypeError, ValueError, httpx.InvalidURL):
+            raise ControlPlaneProtocolError(
+                "BuilderOps request path must be origin-relative"
+            ) from None
+        if not target.is_relative_url or target.host:
+            # Some public operations permit a caller-supplied endpoint path.
+            # Never let an absolute or network-path reference replace the
+            # configured origin while carrying this client's bearer token.
+            raise ControlPlaneProtocolError(
+                "BuilderOps request path must be origin-relative"
+            )
         headers = self._headers(pin_epoch=pin_epoch)
         last_unavailable: Exception | None = None
         # Idempotent retry: reads and idempotency-keyed writes are safe to
@@ -843,6 +949,7 @@ class BuilderOpsControlPlaneClient:
                     json=json_body if json_body is not None else None,
                     params=dict(params) if params else None,
                     headers=headers,
+                    follow_redirects=False,
                 )
             except httpx.HTTPError as exc:
                 last_unavailable = exc
@@ -875,6 +982,10 @@ class BuilderOpsControlPlaneClient:
 
     def _decode(self, response: httpx.Response) -> dict[str, Any]:
         status_code = response.status_code
+        if 300 <= status_code < 400:
+            raise ControlPlaneProtocolError(
+                "BuilderOps control plane returned a redirect"
+            )
         if status_code == 401:
             raise ControlPlaneAuthError("BuilderOps credential is invalid or revoked")
         if status_code == 403:

@@ -853,11 +853,11 @@ def test_api_binds_task_lease_to_principal_and_restricts_public_lifecycle(
         )
     )
     client_a = BuilderOpsControlPlaneClient(
-        ClientConfig(base_url="http://testserver", token="executor-a-token"),
+        ClientConfig(base_url="https://testserver", token="executor-a-token"),
         http_client=transport,  # type: ignore[arg-type]
     )
     client_b = BuilderOpsControlPlaneClient(
-        ClientConfig(base_url="http://testserver", token="executor-b-token"),
+        ClientConfig(base_url="https://testserver", token="executor-b-token"),
         http_client=transport,  # type: ignore[arg-type]
     )
     envelope = {
@@ -1868,7 +1868,7 @@ def test_authenticated_status_supplies_launcher_deployment_readback(
     with TestClient(app) as http:
         assert http.get("/v1/status").status_code == 401
         client = BuilderOpsControlPlaneClient(
-            ClientConfig(base_url="http://testserver", token="status-read-token"), http_client=http
+            ClientConfig(base_url="https://testserver", token="status-read-token"), http_client=http
         )
         ledger = BuilderOpsVerificationLedger(client, repository=REPO)
         ledger.require_post_effect_capability()
@@ -1938,7 +1938,7 @@ def test_terminal_payload_status_correction_enforces_existing_admission(
         )
 
     sdk = BuilderOpsControlPlaneClient(
-        ClientConfig(base_url="http://testserver", token="writer-value-6175"), http_client=transport
+        ClientConfig(base_url="https://testserver", token="writer-value-6175"), http_client=transport
     )
     # Prove the real generic-lease producer admits this exact resource name.
     claimed = sdk.claim_lease(
