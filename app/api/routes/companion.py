@@ -1281,6 +1281,9 @@ def select_companion_vault(
     selected_identity = resolve_filesystem_root_identity(Path(req.path)) if req.scoped_selection else None
     selected_path = Path(selected_identity.canonical_path) if selected_identity is not None else Path(req.path)
     manager = get_vault_manager()
+    if not req.scoped_selection:
+        # Keep the legacy call entry and its existing lock admission unchanged.
+        return _vault_context_response(manager.select_vault(selected_path, remember=req.remember))
     with manager.selection_window():
         context = manager.select_vault(selected_path, remember=req.remember)
         response = _vault_context_response(context)

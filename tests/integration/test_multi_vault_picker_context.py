@@ -1091,7 +1091,8 @@ console.log(JSON.stringify({{failed:failed.status,retry:retry.status,cookie}}));
 """)
     assert result['failed'] == 500
     assert result['retry'] == 409
-    assert result['cookie'] == ''
+    assert 'companion_context_session=' not in result['cookie']
+    assert 'companion_context_intent=pending' in result['cookie']
     assert sum(path.endswith('/initialize/bootstrap') for _method,path,_headers,_body in calls) == 1
     snapshot = runtime.registry.load()
     assert snapshot.registrations == {}
@@ -1132,7 +1133,8 @@ console.log(JSON.stringify({{status:scoped.status,data:await scoped.json(),cooki
     assert len(result['handoffs']) == 1
     assert 'context_selection_id' not in result['handoffs'][0]['body']
     assert 'context_selection_id' not in result['handoffs'][0]['body']['context']
-    selection_id = result['cookie'].split('=', 1)[1]
+    from http.cookies import SimpleCookie
+    selection_id = SimpleCookie(result['cookie'])['companion_context_session'].value
     assert selection_id
     assert calls[-1][2]['X-Active-Context-Session'] == selection_id
     assert sum(path.endswith('/initialize/bootstrap') for _method,path,_headers,_body in calls) == 1
@@ -1209,7 +1211,7 @@ console.log(JSON.stringify({{a,b,write:write.status,cookie,reloads,handoffs}}));
     selections = [call for call in calls if call[1] == "/api/companion/vault/select"]
     assert all(call[3]["scoped_selection"] is True for call in selections)
     reads = [call for call in calls if call[1].endswith('/notes/scoped')]
-    assert reads[0][2]["X-Active-Context-Session"] != reads[1][2]["X-Active-Context-Session"]
+    assert len({call[2]['X-Active-Context-Session'] for call in reads if call[2].get('X-Active-Context-Session')}) == 2
     write = next(call for call in calls if call[1].endswith('/save/compatibility'))
     assert "X-Compatibility-Write-Precondition" in write[2]
     assert "X-Active-Context-Session" not in write[2]
@@ -1310,7 +1312,8 @@ console.log(JSON.stringify({{read}}));
     assert any(path == str(between) for path in _event_paths(tmp_path))
 
 
-def test_picker_bootstrap_explicit_retry_recovers_only_committed_handoff(tmp_path, monkeypatch):
+@pytest.mark.parametrize('failure_kind', ['server-error', 'missing-ack'])
+def test_picker_bootstrap_explicit_retry_recovers_only_committed_handoff(tmp_path, monkeypatch, failure_kind):
     import json
     from tests._mvr05b_picker_browser import picker_browser
 
@@ -1333,7 +1336,7 @@ def test_picker_bootstrap_explicit_retry_recovers_only_committed_handoff(tmp_pat
 
     def lost_handoff(**kwargs):
         handoffs.append(True)
-        if len(handoffs) == 1:
+        if len(handoffs) == 1 and failure_kind == 'server-error':
             raise RuntimeError('response handoff unavailable after commit')
         return create(**kwargs)
 
@@ -1342,12 +1345,14 @@ def test_picker_bootstrap_explicit_retry_recovers_only_committed_handoff(tmp_pat
     with picker_browser(monkeypatch) as (run, calls):
         result = run(f'''
 var options={{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{path:{json.dumps(str(target))},confirm:true}})}};
+dropHandoffAck={json.dumps(failure_kind == 'missing-ack')};
 var failed=await fetch('/api/companion/vault/initialize',options);
+dropHandoffAck=false;
 var recovered=await fetch('/api/companion/vault/initialize',options);
 var read=await fetch('/api/companion/vault/notes/scoped');
 console.log(JSON.stringify({{failed:failed.status,recovered:recovered.status,read:read.status,cookie}}));
 ''')
-    assert result['failed'] == 500
+    assert result['failed'] == (500 if failure_kind == 'server-error' else 409)
     assert result['recovered'] == result['read'] == 200
     assert result['cookie']
     assert len(effects) == 1
@@ -1438,3 +1443,191 @@ console.log(JSON.stringify({{status:read.status,data:await read.json()}}));
     assert {note['vault_binding_id'] for note in results[0]['data']['notes']} == {binding_a}
     assert runtime.open_settings_rebind_store().read().candidate_binding_id == binding_a
     assert alias.resolve() == roots[1]
+
+
+@pytest.mark.parametrize('prior_selection', [False, True])
+def test_missing_scoped_handoff_cannot_become_default_or_prior_selection(tmp_path, monkeypatch, prior_selection):
+    import json
+    import httpx
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    selected = 0
+
+    def strip_handoff(method, path, response):
+        nonlocal selected
+        if method == 'POST' and path.endswith('/vault/select') and response.status_code == 200:
+            selected += 1
+            if selected == (2 if prior_selection else 1):
+                data = response.json()
+                data.pop('context_selection_id', None)
+                return httpx.Response(200, json=data)
+        return response
+
+    with picker_browser(monkeypatch, response_filter=strip_handoff) as (run, calls):
+        script = """
+PRIOR
+var selected=await fetch('/api/companion/vault/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ROOT_B})});
+var page=await (await browserFetch('/workspace')).text();
+console.log(JSON.stringify({status:selected.status,cookie,page,reloads,visible:!visible.hidden,gatewayResponses}));
+""".replace('PRIOR', 'await choose('+json.dumps(str(roots[0]))+');' if prior_selection else '').replace('ROOT_B', json.dumps(str(roots[1])))
+        result = run(script)
+    assert result['status'] == 409
+    assert result['visible'] is True
+    assert 'companion_context_intent=pending' in result['cookie']
+    assert 'Choose a vault again to continue.' in result['page']
+    assert result['reloads'] == (1 if prior_selection else 0)
+    assert result['gatewayResponses'][-1]['status'] == 200  # transport status remains unchanged
+    assert 'context_selection_id' not in result['gatewayResponses'][-1]['body']
+    assert calls[-1][2]['X-Active-Context-Session'] == ''
+
+
+def test_stripped_b_cookie_cannot_substitute_old_a_for_expected_handoff(tmp_path, monkeypatch):
+    import json
+    from http.cookies import SimpleCookie
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    with picker_browser(monkeypatch) as (run, calls):
+        script = """
+await choose(ROOT_A);
+var oldCookie=cookie;
+dropHandoffCookie=true;
+var selected=await fetch('/api/companion/vault/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ROOT_B})});
+dropHandoffCookie=false;
+var page=await (await browserFetch('/workspace')).text();
+console.log(JSON.stringify({status:selected.status,oldCookie,cookie,page,handoffs,reloads}));
+""".replace('ROOT_A',json.dumps(str(roots[0]))).replace('ROOT_B',json.dumps(str(roots[1])))
+        result = run(script)
+    before, after = SimpleCookie(result['oldCookie']), SimpleCookie(result['cookie'])
+    assert before['companion_context_session'].value == after['companion_context_session'].value
+    assert after['companion_context_intent'].value == result['handoffs'][-1]['digest']
+    assert result['status'] == 401
+    assert result['reloads'] == 1
+    assert 'Choose a vault again to continue.' in result['page']
+    assert calls[-1][2]['X-Active-Context-Session'] == ''
+
+
+@pytest.mark.parametrize('surface', ['note', 'capture'])
+def test_rendered_document_proof_cannot_follow_another_tabs_binding(tmp_path, monkeypatch, surface):
+    import hashlib
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+    original = 'shared template\n'
+    for root in roots:
+        (root / 'shared.md').write_text(original)
+    proofs = []
+
+    def observe_proof(method, path, response):
+        if method == 'GET' and path.endswith('/notes/scoped') and response.status_code == 200:
+            proofs.append(response.headers.get('X-Compatibility-Write-Precondition'))
+        return response
+
+    path = '/api/companion/note/save' if surface == 'note' else '/api/companion/capture'
+    payload = {'note_path':'shared.md','new_body':'edit from old A view\n','expected_content_hash':hashlib.sha256(original.encode()).hexdigest()} if surface == 'note' else {'text':'capture from old A view'}
+    with picker_browser(monkeypatch, response_filter=observe_proof) as (run, calls):
+        script = """
+await choose(ROOT_A);
+var pageA=lastDocumentHtml;
+NOTE_PAGE
+// The other tab replaces the shared browser transport, not this A document.
+document.cookie='companion_context_intent=pending; Path=/; SameSite=Strict';
+var b=await browserFetch('/api/companion/vault/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ROOT_B,scoped_selection:true})});
+if(!b.ok)throw new Error('other tab selection failed');
+document.cookie='companion_context_intent='+b.headers.get('X-Companion-Scoped-Handoff')+'; Path=/; SameSite=Strict';
+var background=await (await fetch('/api/companion/vault/notes/scoped')).json();
+var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:PAYLOAD});
+console.log(JSON.stringify({status:written.status,data:await written.json(),background,pageA}));
+""".replace('ROOT_A',json.dumps(str(roots[0]))).replace('ROOT_B',json.dumps(str(roots[1]))).replace('WRITE_PATH',json.dumps(path)).replace('PAYLOAD',json.dumps(json.dumps(payload))).replace('NOTE_PAGE', "pageA=await bootDocument('/workspace?note_path=shared.md');" if surface == 'note' else '')
+        result = run(script)
+    assert result['status'] == 409
+    assert result['data']['detail']['error'] == 'capability_not_ready'
+    assert {note['vault_binding_id'] for note in result['background']['notes']} == {binding_b}
+    if surface == 'note':
+        assert 'id="note-source-editor"' in result['pageA']
+    else:
+        assert 'Workspace Orientation' in result['pageA']
+    write = next(call for call in calls if call[1] == path + '/compatibility')
+    assert write[2]['X-Compatibility-Write-Precondition'] in proofs[:-1]
+    assert write[2]['X-Compatibility-Write-Precondition'] != proofs[-1]
+    assert all((root / 'shared.md').read_text() == original for root in roots)
+
+
+@pytest.mark.parametrize('proof_state', ['missing', 'expired'])
+def test_missing_or_expired_document_proof_never_refreshes_on_save(tmp_path, monkeypatch, proof_state):
+    import json
+    import httpx
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    if proof_state == 'expired':
+        monkeypatch.setattr('app.api.compatibility_mutation._TOKEN_TTL_SECONDS', -1)
+
+    def strip_proof(method, path, response):
+        if proof_state == 'missing' and method == 'GET' and path.endswith('/notes/scoped'):
+            headers = dict(response.headers)
+            headers.pop('x-compatibility-write-precondition', None)
+            return httpx.Response(response.status_code, content=response.content, headers=headers)
+        return response
+
+    with picker_browser(monkeypatch, response_filter=strip_proof) as (run, calls):
+        script = """
+await choose(ROOT_A);
+var written=await fetch('/api/companion/note/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note_path:'only-0.md',new_body:'must not write'})});
+console.log(JSON.stringify({status:written.status}));
+""".replace('ROOT_A',json.dumps(str(roots[0])))
+        result = run(script)
+    assert result['status'] == 409
+    assert (roots[0] / 'only-0.md').read_text() == 'vault 0\n'
+    # Exactly the handoff validation and document producer read, never a
+    # save-time notes read that could silently acquire a fresh proof.
+    assert sum(path.endswith('/notes/scoped') for _method,path,_headers,_body in calls) == 2
+    writes = [call for call in calls if call[1].endswith('/save/compatibility')]
+    assert len(writes) == (1 if proof_state == 'expired' else 0)
+
+
+@pytest.mark.parametrize('surface', ['note', 'capture'])
+@pytest.mark.parametrize('boundary', ['api-restart', 'rebind-before-admission'])
+def test_document_write_refuses_stale_session_or_rebound_target(tmp_path, monkeypatch, surface, boundary):
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+    inspections = 0
+    rebound = []
+
+    def interrupt(method, path):
+        nonlocal inspections
+        if method == 'GET' and path.endswith('/active-context/selection'):
+            inspections += 1
+            if boundary == 'api-restart' and inspections == 2:
+                # Document A is already rendered; no content read primes the
+                # refusal latch before the human's explicit write attempt.
+                selection_routes.reset_selection_store_for_tests()
+        if boundary == 'rebind-before-admission' and path.endswith('/compatibility'):
+            companion_module.get_vault_manager().select_vault(roots[1])
+            rebound.append(True)
+
+    path = '/api/companion/note/save' if surface == 'note' else '/api/companion/capture'
+    body = {'note_path':'only-0.md','new_body':'must not write'} if surface == 'note' else {'text':'must not capture'}
+    with picker_browser(monkeypatch, before_request=interrupt) as (run, calls):
+        script = """
+await choose(ROOT_A);
+var written=await fetch(WRITE_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:PAYLOAD});
+console.log(JSON.stringify({status:written.status,data:await written.json(),visible:!visible.hidden}));
+""".replace('ROOT_A',json.dumps(str(roots[0]))).replace('WRITE_PATH',json.dumps(path)).replace('PAYLOAD',json.dumps(json.dumps(body)))
+        result = run(script)
+    assert result['status'] == (401 if boundary == 'api-restart' else 409)
+    assert (roots[0] / 'only-0.md').read_text() == 'vault 0\n'
+    assert (roots[1] / 'only-1.md').read_text() == 'vault 1\n'
+    writes = [call for call in calls if call[1].endswith('/compatibility')]
+    if boundary == 'api-restart':
+        assert 'reselection_required' in json.dumps(result['data'])
+        assert result['visible'] is True
+        assert not writes
+    else:
+        assert result['data']['detail']['error'] == 'capability_not_ready'
+        assert len(writes) == len(rebound) == 1
+    assert sum(path.endswith('/notes/scoped') for _method,path,_headers,_body in calls) == 2

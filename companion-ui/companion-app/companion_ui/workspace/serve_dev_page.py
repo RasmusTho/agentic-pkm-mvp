@@ -53,7 +53,7 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 
 from companion_ui.workspace.scoped_session import (
     COMPATIBILITY_PATHS, PICKER_DISCOVERY_PATHS, SELECTOR_PATHS, scoped_session_script,
-    session_cookie, session_from_cookie,
+    HANDOFF_DIGEST_HEADER, session_cookie, session_from_cookie, session_transport_digest,
 )
 
 import httpx
@@ -7573,7 +7573,13 @@ def _render_vault_picker_script() -> str:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body || {})
       }).then(function(response) {
-        if (!response.ok) { return response.text().then(function(t) { throw new Error(t || response.status); }); }
+        if (!response.ok) { return response.text().then(function(t) {
+          var data = null;
+          try { data = JSON.parse(t); } catch (e) {}
+          var detail = data && data.detail;
+          var message = detail && (detail.message || (typeof detail === 'string' ? detail : null));
+          throw new Error(message || t || response.status);
+        }); }
         return response.text();
       });
     }
@@ -9290,6 +9296,7 @@ def _render_orientation_index_html(
     health: Optional[dict] = None,
     boot_overlay: str = "",
     day_start_briefing: Optional[dict] = None,
+    compatibility_precondition: Optional[str] = None,
 ) -> str:
     if entry_resolution is None:
         entry_resolution = resolve_entry_state(orientation=orientation)
@@ -9705,7 +9712,7 @@ def _render_orientation_index_html(
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Workspace Orientation [{title_suffix}]</title>
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
-  {scoped_session_script()}
+  {scoped_session_script(compatibility_precondition)}
   <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     :root {{
@@ -11594,6 +11601,7 @@ def render_index_html(
     health: Optional[dict] = None,
     boot_overlay: str = "",
     day_start_briefing: Optional[dict] = None,
+    compatibility_precondition: Optional[str] = None,
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -11652,6 +11660,7 @@ def render_index_html(
             health=health,
             boot_overlay=boot_overlay,
             day_start_briefing=day_start_briefing,
+            compatibility_precondition=compatibility_precondition,
         )
 
     content_section = ""
@@ -11819,7 +11828,7 @@ def render_index_html(
   <title>Companion UI — Real-Note Workspace [{title_suffix}]</title>
   {production_static_link}
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
-  {scoped_session_script()}
+  {scoped_session_script(compatibility_precondition)}
   <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     /* Page-local tokens. Yggdrasil tokens come from YGGDRASIL_TOKENS_URL (YDS-03, #5629). */
@@ -16456,6 +16465,7 @@ def handle_get(
     runtime_git_sha: str = "",
     page_origin_host: str = "",
     day_start_briefing: Optional[dict] = None,
+    compatibility_precondition: Optional[str] = None,
 ) -> str:
     """Parse query string, optionally load a note, and return full page HTML.
 
@@ -16599,6 +16609,7 @@ def handle_get(
         health=health,
         boot_overlay=boot_overlay,
         day_start_briefing=day_start_briefing,
+        compatibility_precondition=compatibility_precondition,
     )
 
 
@@ -16655,20 +16666,22 @@ def make_handler(
             if status_code < 400 and urlparse(self.path).path in {VAULT_SELECT_ENDPOINT, VAULT_INITIALIZE_ENDPOINT} and isinstance(payload, dict):
                 bearer = payload.get("context_selection_id")
                 if isinstance(bearer, str) and bearer:
-                    # The two explicit picker handoffs move the API credential
-                    # into an HttpOnly cookie. No other body field is rewritten.
                     handoff = bearer
-                    payload = dict(payload)
-                    payload.pop("context_selection_id", None)
-                    if isinstance(payload.get("context"), dict) and "context_selection_id" in payload["context"]:
-                        payload["context"] = dict(payload["context"])
-                        payload["context"].pop("context_selection_id", None)
+                # Strip only the credential fields on these successful picker
+                # responses, even when a partial response lost the top-level
+                # handoff. A nested copy must never leak through that failure.
+                payload = dict(payload)
+                payload.pop("context_selection_id", None)
+                if isinstance(payload.get("context"), dict) and "context_selection_id" in payload["context"]:
+                    payload["context"] = dict(payload["context"])
+                    payload["context"].pop("context_selection_id", None)
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             if handoff is not None:
                 self.send_header("Set-Cookie", session_cookie(handoff))
+                self.send_header(HANDOFF_DIGEST_HEADER, session_transport_digest(handoff))
             proof = getattr(self._client, "response_headers", {}).get("x-compatibility-write-precondition")
             if proof:
                 self.send_header(_COMPATIBILITY_PRECONDITION_HEADER, proof)
@@ -17024,7 +17037,7 @@ def make_handler(
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            if parsed.path == "/api/companion/vault/notes/scoped":
+            if parsed.path in {"/api/companion/vault/notes/scoped", "/api/companion/active-context/selection"}:
                 try:
                     data = self._client.get(parsed.path, params={})
                 except WorkspaceClientError as exc:
@@ -17317,9 +17330,18 @@ def make_handler(
             # Resolve explicit session intent before any page-triggered mutation
             # or secondary read. A stale bearer is retained, never downgraded.
             page_headers = self._forwarded_client_headers(parsed.path)
-            if "X-Active-Context-Session" in page_headers and "X-Active-Context-Override" not in page_headers:
+            page_write_proof = None
+            if "X-Active-Context-Session" in page_headers or "X-Active-Context-Override" in page_headers:
                 try:
-                    self._client.get("/api/companion/active-context/selection", params={})
+                    if "X-Active-Context-Override" not in page_headers and page_headers.get("X-Active-Context-Session"):
+                        self._client.get("/api/companion/active-context/selection", params={})
+                    # Mint the proof with the same immutable request-local
+                    # adapter that will load this document. Capture it before
+                    # later orientation/health responses overwrite headers.
+                    self._client.get("/api/companion/vault/notes/scoped", params={})
+                    page_write_proof = getattr(self._client, "response_headers", {}).get(
+                        "x-compatibility-write-precondition"
+                    )
                 except WorkspaceClientHTTPError as exc:
                     if "reselection_required" in exc.detail:
                         self._send_html(200, render_index_html(
@@ -17384,6 +17406,7 @@ def make_handler(
                 # runtime signal.
                 page_origin_host=self.headers.get("Host", ""),
                 day_start_briefing=day_start_briefing,
+                compatibility_precondition=page_write_proof,
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -17399,6 +17422,7 @@ def make_handler(
                 "/api/companion/workspace",
                 "/api/companion/vault/notes",
                 "/api/companion/vault/notes/scoped",
+                "/api/companion/active-context/selection",
                 "/api/companion/vault/browse",
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/companion/vault-related",
@@ -17448,6 +17472,8 @@ def make_handler(
         _FORWARDED_CLIENT_AUTH_PATHS = frozenset(
             {
                 VAULT_SELECT_ENDPOINT,
+                "/api/companion/active-context/selection",
+                "/api/companion/vault/notes/scoped",
                 VAULT_INITIALIZE_ENDPOINT,
                 "/api/companion/vault/initialize/bootstrap",
                 # GET /vault/browse is require_loopback_or_api_key-gated and

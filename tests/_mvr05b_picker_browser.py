@@ -23,7 +23,7 @@ from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 
 
 @contextmanager
-def picker_browser(monkeypatch, *, cookie=""):
+def picker_browser(monkeypatch, *, cookie="", response_filter=None, before_request=None):
     api = TestClient(app, raise_server_exceptions=False, client=("127.0.0.1", 40000))
     calls = []
 
@@ -31,7 +31,10 @@ def picker_browser(monkeypatch, *, cookie=""):
         path = urlparse(url).path
         kwargs.pop("timeout", None)
         calls.append((method, path, dict(kwargs.get("headers") or {}), kwargs.get("json")))
-        return api.request(method, path, **kwargs)
+        if before_request is not None:
+            before_request(method, path)
+        response = api.request(method, path, **kwargs)
+        return response_filter(method, path, response) if response_filter is not None else response
 
     monkeypatch.setattr(httpx, "get", lambda url, **kwargs: request("GET", url, **kwargs))
     monkeypatch.setattr(httpx, "post", lambda url, **kwargs: request("POST", url, **kwargs))
@@ -45,7 +48,13 @@ def picker_browser(monkeypatch, *, cookie=""):
     scripts = [script[script.index('<script>') + 8:script.rindex('</script>')] for script in scripts]
     setup = r'''
 const nativeFetch = globalThis.fetch;
-var cookie = INITIAL_COOKIE, reloads = 0, clickHandler, reloadResolve, handoffs = [];
+var cookie = INITIAL_COOKIE, reloads = 0, clickHandler, reloadResolve, reloadReject, handoffs = [], gatewayResponses = [], lastDocumentHtml = "";
+var dropHandoffCookie = false, dropHandoffAck = false;
+function storeCookie(raw) {
+  var pair=raw.split(';')[0], name=pair.split('=')[0];
+  var parts=cookie?cookie.split('; ').filter(item=>item.split('=')[0]!==name):[];
+  parts.push(pair);cookie=parts.join('; ');
+}
 var visible = {hidden:true, textContent:''};
 function element() {
   var attrs={}, children=[];
@@ -60,20 +69,48 @@ var picker=element();
 picker.querySelector=selector=>selector==='[data-testid="vault-picker-fs-mode"]'?fsMode:selector==='[data-testid="vault-picker-recents-mode"]'?recentsMode:selector==='[data-testid="vault-picker-select-error"]'?visible:selector==='[data-testid="vault-picker-fs-error"]'?fsError:null;
 picker.addEventListener=(kind,fn)=>{if(kind==='click')clickHandler=fn;};
 globalThis.window = globalThis;
-globalThis.location = {href:ORIGIN+'/', origin:ORIGIN, reload:()=>{reloads++; if(reloadResolve)reloadResolve();}};
+globalThis.location = {href:ORIGIN+'/', origin:ORIGIN, reload:()=>{
+  reloads++;
+  bootDocument().then(()=>{if(reloadResolve)reloadResolve();}).catch(error=>{if(reloadReject)reloadReject(error);});
+}};
 globalThis.document = {createElement:element,querySelector:(selector)=>selector==='[data-testid="vault-picker"]'?picker:selector==='[data-testid="vault-picker-select-error"]'?visible:null};
-globalThis.fetch = async function(input, options={}) {
+Object.defineProperty(document,'cookie',{
+  get:()=>cookie.split('; ').filter(item=>item.split('=')[0]!=='companion_context_session').join('; '),
+  set:storeCookie
+});
+var browserFetch = async function(input, options={}) {
   var headers = new Headers(options.headers||{});
   if(cookie)headers.set('Cookie',cookie);
   var response = await nativeFetch(new URL(input,ORIGIN), Object.assign({}, options,{headers}));
+  if(['/api/companion/vault/select','/api/companion/vault/initialize'].includes(new URL(input,ORIGIN).pathname))gatewayResponses.push({status:response.status,body:await response.clone().json()});
   var setCookie = response.headers.get('set-cookie');
-  if(setCookie){cookie=setCookie.split(';')[0];handoffs.push({headers:setCookie,body:await response.clone().json()});}
+  if(setCookie){
+    if(!dropHandoffCookie)storeCookie(setCookie);
+    handoffs.push({headers:setCookie,digest:response.headers.get('X-Companion-Scoped-Handoff'),body:await response.clone().json()});
+  }
+  if(dropHandoffAck && response.headers.has('X-Companion-Scoped-Handoff')){
+    var altered=new Headers(response.headers);altered.delete('X-Companion-Scoped-Handoff');
+    response=new Response(await response.arrayBuffer(),{status:response.status,headers:altered});
+  }
   return response;
 };
+globalThis.fetch=browserFetch;
+async function bootDocument(path='/workspace') {
+  var response=await browserFetch(path);
+  var html=await response.text();
+  lastDocumentHtml=html;
+  var match=html.match(/<script>\s*\/\* companion-scoped-session[\s\S]*?<\/script>/);
+  if(!response.ok || !match)throw new Error('document reload did not contain the production scoped controller');
+  // A navigation installs a new document-local closure from the actual server
+  // response, including the write proof captured while that page was read.
+  globalThis.fetch=browserFetch;
+  (0,eval)(match[0].replace(/^<script>/,'').replace(/<\/script>$/,''));
+  return html;
+}
 function button(path) {var attrs={'data-vault-path':path}; return {getAttribute:k=>attrs[k],setAttribute:(k,v)=>attrs[k]=v,removeAttribute:k=>delete attrs[k],attrs};}
 async function choose(path) {
   var b=button(path);
-  var done=new Promise(resolve=>reloadResolve=resolve);
+  var done=new Promise((resolve,reject)=>{reloadResolve=resolve;reloadReject=reject;});
   clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-row-select"]'?b:null}});
   await Promise.race([done,new Promise((_,reject)=>setTimeout(()=>reject(new Error('picker selection failed: '+JSON.stringify(b.attrs))),4000))]);
 }
@@ -85,7 +122,7 @@ async function browseChoose(path) {
   var row=fsList.children.find(item=>item.attrs['data-fs-path']===path);
   if(!row || row.innerHTML.indexOf('data-testid="vault-picker-fs-open"')===-1)throw new Error('sibling vault action missing: '+path);
   var open=element();open.attrs['data-fs-path']=row.attrs['data-fs-path'];
-  var done=new Promise(resolve=>reloadResolve=resolve);
+  var done=new Promise((resolve,reject)=>{reloadResolve=resolve;reloadReject=reject;});
   clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-fs-open"]'?open:null}});
   await Promise.race([done,new Promise((_,reject)=>setTimeout(()=>reject(new Error('picker discovered selection failed: '+JSON.stringify(open.attrs))),4000))]);
 }
@@ -95,7 +132,7 @@ async function initialize(path) {
   click();
   for(var i=0;i<100 && b.attrs['data-affordance-status']!=='confirm-required';i++)await new Promise(r=>setTimeout(r,10));
   if(b.attrs['data-affordance-status']!=='confirm-required')throw new Error('no initialize confirmation: '+JSON.stringify(b.attrs));
-  var done=new Promise(resolve=>reloadResolve=resolve);
+  var done=new Promise((resolve,reject)=>{reloadResolve=resolve;reloadReject=reject;});
   click();
   await Promise.race([done,new Promise((_,reject)=>setTimeout(()=>reject(new Error('initialize failed: '+JSON.stringify(b.attrs))),4000))]);
 }
@@ -106,7 +143,7 @@ async function initialize(path) {
         if node is None:
             raise RuntimeError("Node is required to verify the production picker controller")
         program = setup + '\n' + '\n'.join(scripts) + '\n(async()=>{'+body+'\n})().catch(e=>{console.error(e);process.exitCode=1;});'
-        result = subprocess.run([node, '-e', program], capture_output=True, text=True, timeout=15)
+        result = subprocess.run([node, '-e', program], capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 

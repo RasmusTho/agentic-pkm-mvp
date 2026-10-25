@@ -34,15 +34,24 @@
   HttpOnly, SameSite=Strict, and has no persistent expiry; it contains no path or principal data.
   On successful explicit `/vault/select` or `/vault/initialize` only, the gateway moves the returned
   `context_selection_id` into `Set-Cookie` and omits that credential field (including its nested
-  initialization-context copy) from browser-facing JSON. All non-credential payload fields and
-  upstream errors retain their runtime meaning. This is a route-specific transport handoff, not
-  generic JSON rewriting. The gateway keeps no shared session state. On page navigation, fragments,
+  initialization-context copy) from browser-facing JSON, including partial successful responses
+  that lost the top-level field. It also returns `X-Companion-Scoped-Handoff`, a non-authority digest
+  of the transported bearer bytes. All non-credential payload fields, statuses, and upstream errors
+  retain their runtime meaning. This is a route-specific transport handoff, not generic JSON rewriting. The gateway keeps no shared session state. On page navigation, fragments,
   and browser API reads, it forwards this opaque value as `X-Active-Context-Session` through a request-local HTTP adapter.
-  Explicit `X-Active-Context-*` headers retain precedence, including blank carriers, and the API
-  authenticates and resolves them. The gateway derives no principal or binding authority.
+  Before select or initialize, the browser writes the nonsecret session cookie
+  `companion_context_intent=pending` and pauses content requests. A successful handoff records its
+  expected transport digest in that cookie and must pass one strict scoped read before the client
+  accepts it or clears its retained bootstrap token. On later requests, a pending, missing, or
+  mismatched bearer becomes a blank explicit selection header, so an old valid A cookie cannot
+  substitute for a lost B handoff. Browser storage failure is a visible refusal before selection.
+  This intent marker and digest grant no authority; the API still authenticates and resolves the
+  actual opaque bearer. Explicit `X-Active-Context-*` headers retain precedence, including blank
+  carriers. The gateway derives no principal or binding authority.
 - Scoped runtime routes (`/api/search/scoped`, `/api/ask/scoped`, and
   `/api/companion/vault/notes/scoped`) enforce the opaque bearer. The consumed Companion read
-  `/api/companion/vault/notes/scoped` is explicitly allowlisted in the single-origin gateway.
+  `/api/companion/vault/notes/scoped` and authenticated
+  `GET /api/companion/active-context/selection` inspection are explicitly allowlisted in the gateway.
   Missing, stale, or stripped carriers return `reselection_required`; there is no carrier-free
   retry. Other Companion production reads forward the same session to their request-context
   dependency, including server-rendered page and fragment reads. A stale page session is checked
@@ -53,9 +62,17 @@
   explicit intent may independently use the ordinary default journey.
 - Compatibility mutations use distinct same-origin routes (`/api/companion/capture/compatibility`
   and `/api/companion/note/save/compatibility`). Before an explicit capture or note edit, the browser
-  reads the scoped notes route once and passes its opaque `X-Compatibility-Write-Precondition`
-  response header to the compatibility mutation. A failed read or missing precondition stops the
-  mutation. The gateway forwards the proof unchanged, and does not translate the session cookie
+  uses the opaque `X-Compatibility-Write-Precondition` captured with that rendered document.
+  Both the note and orientation/capture page producers obtain it through the existing scoped notes
+  read with the same request-local adapter that loads the page, and capture its response header
+  before later projection reads overwrite transport headers. It remains in document-local script
+  state. A save or capture validates session liveness through the authenticated strict selection
+  inspection, then sends the retained proof unchanged. It never refreshes proof from a mutable
+  current cookie or automatically retries a rejected write. Missing or expired proof blocks the
+  mutation and preserves the draft; recovery requires explicit reload/reselection. If another tab
+  selects B while an A document stays open, A's proof cannot authorize a B mutation: the existing
+  compatibility ingress and binding/revision guard either finish an already-admitted A write on A
+  or reject it after B commits. The gateway forwards the proof unchanged, and does not translate the session cookie
   on compatibility mutation or selector-bridge routes. The exact authenticated folder-discovery
   route `/api/companion/vault/browse` also omits cookie-derived selection: it lists picker folders,
   never vault content or a selected context. Its existing API authentication and filesystem
