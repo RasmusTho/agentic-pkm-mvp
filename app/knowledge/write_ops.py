@@ -1343,8 +1343,14 @@ def _create_note_once_at_relative_seam(
 
 
 def default_vault_root_for_path(path: Path | str) -> Path:
+    from app.vault.manager import nearest_enclosing_vault_root
+
     resolved = Path(path).expanduser().resolve()
-    return Path(resolved.anchor) if resolved.anchor else Path("/")
+    anchor = Path(resolved.anchor) if resolved.anchor else Path("/")
+    # Legacy absolute-path callers still need the real content boundary. Using
+    # the filesystem anchor would make an initialized vault a nested child of
+    # their port and correctly fail the adapter's boundary check.
+    return nearest_enclosing_vault_root(resolved, search_root=anchor) or anchor
 
 
 def read_note_text_with_version(path: Path | str) -> tuple[str, str]:

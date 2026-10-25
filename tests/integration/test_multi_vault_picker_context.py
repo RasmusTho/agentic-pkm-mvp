@@ -2011,6 +2011,27 @@ def test_unselected_compatibility_bridge_preserves_read_without_write_proof(tmp_
     assert runtime.registry.read_existing() == before
 
 
+def test_picker_harness_waits_for_real_durable_selection_beyond_four_seconds(tmp_path, monkeypatch):
+    import json
+    import time
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, _binding_a, binding_b = _activated_picker_runtime(tmp_path, monkeypatch)
+
+    def delayed_selection(method, path):
+        if method == "POST" and path == "/api/companion/vault/select":
+            time.sleep(4.2)
+
+    with picker_browser(monkeypatch, before_request=delayed_selection) as (run, _calls):
+        result = run(f'''
+await choose({json.dumps(str(roots[1]))});
+var response=await fetch('/api/companion/vault/notes/scoped');
+console.log(JSON.stringify({{status:response.status,payload:await response.json()}}));
+''')
+    assert result["status"] == 200, result
+    assert {note["vault_binding_id"] for note in result["payload"]["notes"]} == {binding_b}
+
+
 def test_scoped_picker_governed_write_targets_selected_binding(tmp_path, monkeypatch):
     import json
     from tests._mvr05b_picker_browser import picker_browser

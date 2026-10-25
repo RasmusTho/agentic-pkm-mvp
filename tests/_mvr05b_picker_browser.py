@@ -108,11 +108,20 @@ async function bootDocument(path='/workspace') {
   return html;
 }
 function button(path) {var attrs={'data-vault-path':path}; return {getAttribute:k=>attrs[k],setAttribute:(k,v)=>attrs[k]=v,removeAttribute:k=>delete attrs[k],attrs};}
+async function awaitNavigation(action, label, attrs) {
+  var timer;
+  var done=new Promise((resolve,reject)=>{
+    reloadResolve=resolve;reloadReject=reject;
+    // The real gateway includes durable registry/rebind I/O. Four seconds is
+    // not an admission deadline, especially beside the other CI shards.
+    timer=setTimeout(()=>reject(new Error(label+': '+JSON.stringify({attrs,error:visible.textContent,gatewayResponses}))),12000);
+  });
+  try {action();await done;}
+  finally {clearTimeout(timer);reloadResolve=null;reloadReject=null;}
+}
 async function choose(path) {
   var b=button(path);
-  var done=new Promise((resolve,reject)=>{reloadResolve=resolve;reloadReject=reject;});
-  clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-row-select"]'?b:null}});
-  await Promise.race([done,new Promise((_,reject)=>setTimeout(()=>reject(new Error('picker selection failed: '+JSON.stringify(b.attrs))),4000))]);
+  await awaitNavigation(()=>clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-row-select"]'?b:null}}),'picker selection failed',b.attrs);
 }
 async function browseChoose(path) {
   var browse=element();
@@ -122,9 +131,7 @@ async function browseChoose(path) {
   var row=fsList.children.find(item=>item.attrs['data-fs-path']===path);
   if(!row || row.innerHTML.indexOf('data-testid="vault-picker-fs-open"')===-1)throw new Error('sibling vault action missing: '+path);
   var open=element();open.attrs['data-fs-path']=row.attrs['data-fs-path'];
-  var done=new Promise((resolve,reject)=>{reloadResolve=resolve;reloadReject=reject;});
-  clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-fs-open"]'?open:null}});
-  await Promise.race([done,new Promise((_,reject)=>setTimeout(()=>reject(new Error('picker discovered selection failed: '+JSON.stringify(open.attrs))),4000))]);
+  await awaitNavigation(()=>clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-fs-open"]'?open:null}}),'picker discovered selection failed',open.attrs);
 }
 async function initialize(path) {
   var b=button(path);
@@ -132,9 +139,7 @@ async function initialize(path) {
   click();
   for(var i=0;i<100 && b.attrs['data-affordance-status']!=='confirm-required';i++)await new Promise(r=>setTimeout(r,10));
   if(b.attrs['data-affordance-status']!=='confirm-required')throw new Error('no initialize confirmation: '+JSON.stringify(b.attrs));
-  var done=new Promise((resolve,reject)=>{reloadResolve=resolve;reloadReject=reject;});
-  click();
-  await Promise.race([done,new Promise((_,reject)=>setTimeout(()=>reject(new Error('initialize failed: '+JSON.stringify(b.attrs))),4000))]);
+  await awaitNavigation(click,'initialize failed',b.attrs);
 }
 '''.replace('INITIAL_COOKIE', json.dumps(cookie)).replace('ORIGIN', json.dumps(origin))
 

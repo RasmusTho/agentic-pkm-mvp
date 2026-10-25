@@ -30,6 +30,23 @@ def test_default_vault_root_for_path_uses_filesystem_anchor(tmp_path: Path) -> N
     assert root == Path(note.anchor)
 
 
+@pytest.mark.parametrize("initialized_child", [False, True])
+def test_default_vault_root_for_path_uses_nearest_initialized_vault(
+    tmp_path: Path, initialized_child: bool,
+) -> None:
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    parent = tmp_path / "vault"
+    child = parent / "child"
+    initialize_test_vault(parent)
+    child.mkdir()
+    if initialized_child:
+        initialize_test_vault(child)
+    note = child / "Inbox" / "note.md"
+
+    assert write_ops.default_vault_root_for_path(note) == (child if initialized_child else parent)
+
+
 def test_read_note_text_with_version_hashes_exact_raw_bytes(tmp_path: Path) -> None:
     note = tmp_path / "note.md"
     raw = b"---\r\nuuid: crlf-note\r\n---\r\n\r\nBody\r\n"

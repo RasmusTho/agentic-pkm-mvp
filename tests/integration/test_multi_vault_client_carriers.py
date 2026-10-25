@@ -63,8 +63,9 @@ def test_proxy_backend_carrier_matrix_and_activation_boundary() -> None:
         )
     ]
     assert handler_cls.route_allowed("POST", "/api/companion/capture/compatibility")
-    # No page/picker activation is introduced by the callable carrier route.
-    assert not handler_cls.route_allowed("POST", "/api/companion/capture/scoped")
+    # MVR-05C activates only governed capture; other scoped writes stay sealed.
+    assert handler_cls.route_allowed("POST", "/api/companion/capture/scoped")
+    assert not handler_cls.route_allowed("POST", "/api/companion/note/save/scoped")
 
 
 def _compatibility_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
