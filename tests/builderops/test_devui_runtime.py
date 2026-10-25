@@ -460,7 +460,7 @@ def _native_unprojected_tasks(source):
 
     with httpx.Client(base_url="http://fixture", transport=httpx.MockTransport(capture)) as http:
         with BuilderOpsControlPlaneClient(
-            ClientConfig(base_url="http://fixture", token="fixture-token"),
+            ClientConfig(base_url="https://fixture.invalid", token="fixture-token"),
             http_client=http,
         ) as client:
             _dispatch(

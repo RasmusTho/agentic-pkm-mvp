@@ -30,7 +30,7 @@ def test_production_reads_use_source_facts_without_label_or_model_inference(owne
     def local_transport(self, config, **kwargs):
         original_init(self, config, http_client=w.client, max_retries=0)
     monkeypatch.setattr(BuilderOpsControlPlaneClient, "__init__", local_transport)
-    monkeypatch.setenv("BUILDEROPS_API_URL", "http://testserver")
+    monkeypatch.setenv("BUILDEROPS_API_URL", "https://testserver")
     monkeypatch.setenv("BUILDEROPS_API_TOKEN", "owner-test-only-key")
     monkeypatch.setenv("DEVUI_REPOSITORY", REPO)
     monkeypatch.setenv("DEVUI_BUILDEROPS_AUTHORITY_EPOCH", str(w.authority_epoch))

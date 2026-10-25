@@ -26,9 +26,9 @@ control-plane package against local-store fallback.
 
 ## Purpose
 
-Current CLI, boundary, dispatcher, skills, automations, and SSH wrappers can construct/open local
-SQLite or execute a remote CLI directly against Demerzel's database. All actual interactive clients
-are on the MacBook and must cross one authenticated API boundary instead.
+Some CLI, dispatcher, skill, automation, and SSH-wrapper paths can open local SQLite or invoke a
+database-owning host's CLI. BCP-04 prepares coordination clients to use one authenticated API
+boundary; BCP-06 still owns authority activation and the legacy-writer freeze.
 
 ## What This Task Does
 
@@ -49,9 +49,11 @@ are on the MacBook and must cross one authenticated API boundary instead.
 
 ## Concretely
 
-The existing BuilderOps/dispatcher commands keep task-level ergonomics but resolve a Demerzel API
-URL and scoped user credential. Running them with the service unavailable returns a typed error and
-leaves no database/file authority behind; a governance test inventories every production call site.
+The existing BuilderOps/dispatcher commands keep task-level ergonomics but resolve an operator-
+supplied API origin and scoped user credential. The qualified target is Bob-1 over private HTTPS;
+this guide intentionally contains no live endpoint value and does not claim host activation. Running
+the client with the service unavailable returns a typed error and leaves no database/file authority
+behind; a governance test inventories every production call site.
 
 ## Why This Matters
 
@@ -114,19 +116,26 @@ removes direct operational-store access from builder clients.
 - executing merges;
 - importing/finally freezing legacy stores;
 - removing Product Runtime routes; and
-- distributing credentials outside the owner-operated MacBook/Demerzel boundary.
+- distributing credentials outside the owner-operated MacBook and qualified Bob-1 boundary.
 
 ## Client setup (secret-safe)
 
-Repo-local skills and automations route authority-bearing BuilderOps operations
-through the authenticated API client, not a local store. The canonical entry
-points are `python -m app.builderops.control_plane <command>` and the
-`scripts/builderops_api_client.sh` automation wrapper. Both resolve their base
-URL and scoped bearer credential from host-owned configuration only; no
-credential is inlined in the repo, skills, docs, or logs:
+BuilderOps coordination operations (tasks, leases, attempts, promotions,
+receipts, and status) use the authenticated control-plane API, through
+`python -m app.builderops.control_plane <command>` or the
+`scripts/builderops_api_client.sh` automation wrapper. This API is distinct
+from the local Vault record CLI/store (`LearningSignal`, worklog, promotion,
+and receipt records plus generated projections), which remains in use pending
+its governed BCP-03/06 import. Do not redirect those Vault record commands to
+the control-plane API. Both API entry points resolve their base URL and scoped
+bearer credential from host-owned configuration only; no credential is inlined
+in the repo, skills, docs, or logs:
 
 - `BUILDEROPS_API_URL` — the control-plane base URL (required), reached over
-  Tailscale, e.g. `https://demerzel.<tailnet>.ts.net:<port>`.
+  the qualified private-HTTPS BuilderOps API origin on bob-1. Remote origins
+  require HTTPS; HTTP is accepted only for a numeric loopback address used by
+  a directly local service. Supply an origin only: credentials, query strings,
+  fragments, and non-root paths are rejected.
 - `BUILDEROPS_API_TOKEN_FILE` — path to a host secret file holding the scoped
   bearer token (preferred), or
 - `BUILDEROPS_API_TOKEN` — the scoped bearer token in the host environment.
@@ -155,9 +164,11 @@ Promotion updates pass the caller-supplied fenced `--lease` object through the
 same API boundary; the store rejects missing or stale lease evidence without a
 local or fabricated fallback.
 
-The canonical `scripts/builderops_api_client.sh` wrapper supplies the required
-global route flags from host/worktree-owned `BUILDEROPS_DELIVERY_MANIFEST_DIR`
-and `BUILDEROPS_TASK_CLASS`; missing values fail closed before dispatch.
+The client verifies TLS, ignores ambient proxy settings, and refuses redirects
+for authenticated requests. The canonical `scripts/builderops_api_client.sh`
+wrapper supplies the required global route flags from host/worktree-owned
+`BUILDEROPS_DELIVERY_MANIFEST_DIR` and `BUILDEROPS_TASK_CLASS`; missing values
+fail closed before dispatch.
 
 ## How to Verify (Pre-Merge)
 
