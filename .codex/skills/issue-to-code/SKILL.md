@@ -336,6 +336,22 @@ before atomically replacing all `agent:*` state labels with exactly `agent:in-pr
 non-agent labels (including `type:*`, `prio:*`, and `lane:*`). Database or singleton existence alone never produces a
 dispatcher-backed pickup receipt.
 
+For same-owner recovery of an expired dispatcher lease on an already active Issue, use the explicit
+`--takeover-stale` wrapper option. This path requires an open Issue with exactly `agent:in-progress`
+and a strictly valid contract, the canonical repo-qualified task id and matching task repository for
+the selected Issue, an expired unreleased lease for that exact task held by the same `--agent`, and
+an active worktree registration owned by the current `--session`. It checks the repository binding
+again in the post-claim task/lease/event readback. It heartbeats that same worktree registration,
+invokes the dispatcher's atomic
+`claim --takeover-stale --expected-lease-id <observed-id>`, verifies the claim event against that
+exact predecessor, and re-reads the Issue. If the command result is ambiguous, the wrapper accepts
+only an exact task/lease/event readback; it never releases a lease acquired by stale takeover on an
+ambiguous or malformed result. It skips the fresh ready-list refresh and does not mutate Issue
+labels. The flag fails closed when the dispatcher is unavailable, the old lease is still active or
+belongs to another agent, the Issue or worktree ownership has changed, or the claim/event readback
+is incomplete. It is a self-resume path; a different successor still uses the authenticated
+dispatcher-release and worktree-transfer sequence in `resume-work`.
+
 Rescue-stash notes, stale local pickup plans, and prior-session handoffs are
 non-authoritative context. Before using any of them to resume issue pickup,
 fetch and compare against current `origin/main`, this pickup contract, and the
