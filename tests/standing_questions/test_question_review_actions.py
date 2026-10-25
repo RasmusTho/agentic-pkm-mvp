@@ -374,6 +374,66 @@ def test_exp4_success_with_question_cas_failure_is_indeterminate(
     assert answered["candidate_answer_ref"] is None
 
 
+def test_accept_reconciles_matcher_write_that_wins_question_cas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.routes import panel as panel_route
+    from app.panel import checkbox_projection as checkbox_projection_module
+    from fastapi import HTTPException
+
+    vault, draft_path, outbox, store, question, version = _stage_candidate(tmp_path)
+    request = _acceptance_request(
+        draft_path, vault=vault, question=question, question_version=version
+    )
+    service = CheckboxProjectionService(write_guard=_guard())
+    monkeypatch.setattr(checkbox_projection_module, "resolve_optional_vault_root", lambda: vault)
+    monkeypatch.setattr(panel_route.checkbox_projection_module, "_service", service)
+    monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
+    accept = review_module.accept_draft
+
+    def accept_after_matcher_write(candidate_path: Path, **kwargs: Any):
+        current, current_version = store.read_question_with_version(question["question_id"])
+        entry = {
+            "artifact_ref": "note:matched-during-acceptance",
+            "source_stream": "vault.activity",
+            "matched_at": "2026-10-25T10:05:00Z",
+            "confidence_class": "high",
+            "provenance_ref": "receipt:matcher-race",
+            "quoted_span": "New evidence arrived during acceptance.",
+            "content_hash": "2" * 64,
+        }
+        store.update_system_fields_if_unchanged(
+            question["question_id"],
+            current,
+            {"evidence": [*current["evidence"], entry]},
+            expected_version=current_version,
+        )
+        return accept(candidate_path, **kwargs)
+
+    monkeypatch.setattr(review_module, "accept_draft", accept_after_matcher_write)
+
+    with pytest.raises(HTTPException) as indeterminate:
+        asyncio.run(panel_route.panel_checkbox_projection(request, _panel_request(vault)))
+
+    unresolved, new_version = store.read_question_with_version(question["question_id"])
+    assert indeterminate.value.detail["state"] == "acknowledgement_indeterminate"
+    assert unresolved["status"] == "open"
+    assert unresolved["candidate_answer_ref"] == question["candidate_answer_ref"]
+    assert unresolved["evidence"][-1]["provenance_ref"] == "receipt:matcher-race"
+    assert not draft_path.exists()
+
+    retry = request.model_copy(update={"expected_question_version": new_version})
+    recovered = asyncio.run(panel_route.panel_checkbox_projection(retry, _panel_request(vault)))
+    answered, _ = store.read_question_with_version(question["question_id"])
+
+    assert recovered.status == "executed"
+    assert recovered.receipt is not None
+    assert recovered.receipt["idempotent_replay"] is True
+    assert answered["status"] == "answered"
+    assert answered["candidate_answer_ref"] is None
+    assert answered["evidence"][-1]["provenance_ref"] == "receipt:matcher-race"
+
+
 def test_exp4_recovers_materialization_before_acceptance_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -520,6 +580,50 @@ def test_dismiss_declines_without_closing_question(
     assert not draft_path.exists()
     assert ledger.is_declined(declined_id)
     assert not ledger.is_declined("materially-different-future-draft")
+
+
+def test_dismiss_surfaces_indeterminate_after_durable_decline_if_question_cas_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.knowledge.errors import KnowledgeWriteConflict
+
+    vault, draft_path, outbox, store, question, version = _stage_candidate(tmp_path)
+    ledger_path = tmp_path / "declined.jsonl"
+    monkeypatch.setenv("DECLINED_LEDGER_PATH", str(ledger_path))
+    monkeypatch.setattr(review_module, "resolve_outbox_path", lambda _value: outbox)
+
+    def fail_question_ack(*_args: object, **_kwargs: object) -> object:
+        raise KnowledgeWriteConflict("injected post-decline Question CAS failure")
+
+    monkeypatch.setattr(QuestionStore, "update_review_fields_if_unchanged", fail_question_ack)
+
+    with pytest.raises(review_module.QuestionReviewError) as indeterminate:
+        dismiss_question_candidate(
+            question["question_id"],
+            vault_root=vault,
+            expected_question_version=version,
+            write_guard=_guard(),
+        )
+
+    unresolved, _ = store.read_question_with_version(question["question_id"])
+    ledger = DeclinedLedger(ledger_path)
+    receipt = ledger.get_receipt(draft_path.stem)
+    events = [
+        json.loads(line)
+        for line in outbox.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    decline_event = next(event for event in events if event.get("event") == "expansion.create.declined")
+
+    assert indeterminate.value.detail["error"] == "acknowledgement_indeterminate"
+    assert indeterminate.value.detail["state"] == "acknowledgement_indeterminate"
+    assert indeterminate.value.detail["decline_receipt_id"]
+    assert unresolved["status"] == "open"
+    assert unresolved["candidate_answer_ref"] == question["candidate_answer_ref"]
+    assert not draft_path.exists()
+    assert receipt is not None
+    assert receipt.reason == "standing_question_candidate_dismissed"
+    assert decline_event["payload"]["draft_id"] == draft_path.stem
 
 
 def test_explicit_close_and_reopen(tmp_path: Path) -> None:

@@ -163,7 +163,16 @@ def test_legacy_detail_hides_nested_child_candidate_and_evidence(
                     "provenance_ref": "receipt:private-child",
                     "quoted_span": "private child evidence quote",
                     "content_hash": "0" * 64,
-                }
+                },
+                {
+                    "artifact_ref": "vault://Notes/deleted-source.md",
+                    "source_stream": "vault.activity",
+                    "matched_at": "2026-10-25T10:01:00Z",
+                    "confidence_class": "high",
+                    "provenance_ref": "receipt:deleted-parent-source",
+                    "quoted_span": "retained historical parent evidence",
+                    "content_hash": "1" * 64,
+                },
             ],
         },
         expected_version=version,
@@ -183,4 +192,8 @@ def test_legacy_detail_hides_nested_child_candidate_and_evidence(
     assert detail.candidate_answer is not None
     assert detail.candidate_answer.state == "unreadable"
     assert detail.candidate_answer.body is None
-    assert detail.evidence == []
+    assert len(detail.evidence) == 1
+    assert detail.evidence[0].artifact_ref == "vault://Notes/deleted-source.md"
+    assert detail.evidence[0].quoted_span == "retained historical parent evidence"
+    assert detail.evidence[0].provenance_ref == "receipt:deleted-parent-source"
+    assert detail.evidence[0].source_note_path is None

@@ -60,9 +60,20 @@ class QuestionListItem(BaseModel):
     question_id: str
     text: str
     status: Literal["open", "answered", "closed"]
-    created_at: datetime
+    # PostgreSQL TIMESTAMPTZ can represent years outside Python datetime's
+    # range. The projection returns its timestamp text so one legal canonical
+    # Question cannot make the whole list/detail surface unreadable.
+    created_at: str
     evidence_count: int
     has_candidate_answer: bool
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _created_at_as_text(cls, value: object) -> object:
+        # Test and in-process callers may supply normal datetime values. Keep
+        # their established JSON representation while accepting out-of-range
+        # PostgreSQL timestamp strings losslessly.
+        return value.isoformat() if isinstance(value, datetime) else value
 
 
 class QuestionListResponse(BaseModel):
@@ -321,6 +332,7 @@ def _source_note_path(
     *,
     vault_root: Path,
     scoped: ScopedRouteRead | None,
+    require_existing: bool = True,
 ) -> str | None:
     if not isinstance(artifact_ref, str) or not artifact_ref.startswith("vault://"):
         return None
@@ -331,13 +343,13 @@ def _source_note_path(
     try:
         resolved = (vault_root / candidate).resolve()
         relative = resolved.relative_to(vault_root.resolve()).as_posix()
-        if not resolved.is_file():
-            return None
     except (OSError, RuntimeError, ValueError):
         return None
     if nearest_enclosing_vault_root(resolved, search_root=vault_root) != vault_root.resolve():
         return None
     if scoped is not None and not scoped_note_path_owned_by_binding(scoped, resolved):
+        return None
+    if require_existing and not resolved.is_file():
         return None
     return relative
 
@@ -518,16 +530,26 @@ def read_standing_question(question_id: str) -> QuestionDetailResponse | JSONRes
             if not isinstance(entry, dict):
                 continue
             artifact_ref = entry.get("artifact_ref")
-            source_note_path = _source_note_path(artifact_ref, vault_root=root, scoped=scoped)
+            allowed_source_path = _source_note_path(
+                artifact_ref,
+                vault_root=root,
+                scoped=scoped,
+                require_existing=False,
+            )
             if (
                 isinstance(artifact_ref, str)
                 and artifact_ref.startswith("vault://")
-                and source_note_path is None
+                and allowed_source_path is None
             ):
                 # The citation and quoted span are derived from the referenced
                 # note. Suppress the whole item when that note is outside this
                 # vault's read boundary, including for legacy unscoped reads.
                 continue
+            source_note_path = allowed_source_path
+            if source_note_path is not None and not (root / source_note_path).is_file():
+                # A missing source inside this vault does not invalidate its
+                # canonical historical evidence; it only removes navigation.
+                source_note_path = None
             evidence.append(
                 EvidenceItem(
                     artifact_ref=str(artifact_ref or ""),

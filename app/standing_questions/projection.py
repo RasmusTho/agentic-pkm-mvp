@@ -58,7 +58,8 @@ def read_standing_questions_projection(vault_binding_id: str) -> list[dict[str, 
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT question_id, scope, text, status, created_at, registered_via,
+                SELECT question_id, scope, text, status, created_at::text AS created_at,
+                       registered_via,
                        standing_answer_ref, candidate_answer_ref, evidence,
                        last_matched_at, last_refreshed_at, source_path
                 FROM standing_questions

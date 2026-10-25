@@ -41,6 +41,37 @@ def test_list_shows_open_excludes_resolved_by_default(monkeypatch, tmp_path: Pat
     assert default.read_only is True
 
 
+@pytest.mark.parametrize(
+    "created_at",
+    [
+        "0001-02-29 00:00:00.000000 BC",
+        "10000-01-01 23:58:59+00",
+    ],
+    ids=("year-zero", "utc-overflow"),
+)
+def test_list_preserves_postgres_timestamps_outside_python_range(
+    monkeypatch, tmp_path: Path, created_at: str
+) -> None:
+    row = {
+        "question_id": "sq-00000000-0000-0000-0000-000000000001",
+        "scope": "work",
+        "text": "Can the question keep its full timestamp?",
+        "status": "open",
+        "created_at": created_at,
+        "registered_via": "explicit",
+        "standing_answer_ref": None,
+        "candidate_answer_ref": None,
+        "evidence": [],
+    }
+    monkeypatch.setattr(routes, "_vault_and_binding", lambda: (tmp_path, "binding-1"))
+    monkeypatch.setattr(routes, "_current_projection_rows", lambda _root, _binding: [row])
+
+    result = routes.list_standing_questions(include_resolved=False)
+
+    assert len(result.questions) == 1
+    assert result.questions[0].created_at == created_at
+
+
 def test_projection_read_is_read_only_and_matches_canonical_notes(
     monkeypatch, tmp_path: Path
 ) -> None:
