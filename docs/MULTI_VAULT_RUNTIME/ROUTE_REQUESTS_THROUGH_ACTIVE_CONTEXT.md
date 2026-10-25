@@ -451,6 +451,13 @@ stores that have no allowlist entries, and prove progress through their own acce
 stops depending on. The hub
 records the final retained adapters with their retiring owner.
 
+**Final adapter truth.** At stage closure the inventory contains 20 retained compatibility
+adapters: 19 are explicitly owned for retirement by MVR-06 and the MCP environment-root bridge
+`app/mcp/vault_tools.py::_compatibility_env_vault_root` remains owned by #3368. No temporary
+MVR-05B2 or MVR-05B3 adapter remains. The executable source of truth is
+`tests/architecture/context_boundary_inventory.py::COMPATIBILITY_ADAPTERS`; the aggregate
+architecture gate prevents an unowned addition or a reintroduction of a removed request consumer.
+
 Order is serial, on the same terms as 05A and `README.md :: Implementation tasks`: each child is
 `agent:blocked` on its predecessor until that predecessor has merged and been reconciled on
 `origin/main`. Each child copies a complete canonical Issue contract and carries the original
@@ -459,7 +466,7 @@ never drop or weaken, a criterion.
 
 | Child | Issue | Owns | Depends on | Initial capability |
 | --- | --- | --- | --- | --- |
-| MVR-05B0 | [#6135](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6135) | acceptance proof for shipped 05B backend behavior (resolver precedence, invalid selection, per-call server scope, legacy picker/default/watcher handoff) plus the repairs it exposes, including the KD-0F9089B13719 zero-binding dimension ruling | 05A, #5248, #5365–#5368 | Sol/high |
+| MVR-05B0 | [#6135](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6135) | delivered — acceptance proof for shipped 05B backend behavior (resolver precedence, invalid selection, per-call server scope, legacy picker/default/watcher handoff) plus the repairs it exposes, including the KD-0F9089B13719 zero-binding dimension ruling | 05A, #5248, #5365–#5368 | Sol/high |
 | MVR-05B1 | [#6136](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6136) | inventory-derived production-entrypoint context-boundary gate with a named, shrinking compatibility-adapter allowlist | 05B0 | Sol/high |
 | MVR-05B2 | [#6137](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6137) | `companion.py` read routes onto the per-request ActiveContextSet, with nested, provisional, channel-lease, and effect-window enforcement per route | 05B1 | Sol/high |
 | MVR-05B3 | [#6138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6138) | remaining API route modules (`capture`, `artifacts`, `canvas`, `provisional_memory`, `eval_drafts`, `debug`) and the pre-05C `capability_not_ready` mutation seal across every vault-bound write route | 05B2 | Sol/xhigh |
@@ -473,7 +480,7 @@ never drop or weaken, a criterion.
 | MVR-05B4c4 | [#6214](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6214) | orientation runtime signals (ingestion, status outbox, worker queue) scoped per binding and the leave-point cursor (keyed by display name) keyed per binding, never created by a scoped read | 05B4c3 | Sol/high |
 | MVR-05B4c5 | [#6215](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6215) | emitted-bundle registry keyed by (binding, bundle id) for registration and every lookup, so identical bundle ids in two vaults stay independently addressable, and the query-backed bundle producer (`/api/context-bundles/{bundle_id}?query=...`) passing the immutable request context into retrieval, then `/api/orientation` (the frame is built from the 05B4c4 signals), `/api/orientation/bundle/{bundle_id}`, `/api/context-bundles/{bundle_id}` and `/api/resurfacing/bundle/{bundle_id}` answered per binding | 05B4c4 | Sol/high |
 | MVR-05B4c6 | [#6216](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6216) | Heimdal reads classified (capture receipts and meeting session/segment/projection are `explicitly-global` and served unchanged; only the binding-scoped finalization receipt is filtered), the screen-control read, scoped debug-panel diagnostics, a carrier-validating read dependency on every router that loses the refusal (a presented carrier is still validated fail-closed even where the source stays global), and deletion of `refuse_carrier_until_binding_aware` — the last 05B4c child | 05B4c5 | Sol/high |
-| MVR-05B5 | [#6140](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6140) | Companion client activation, stale-selection recovery, client first-vault bootstrap, and the `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md` writeback | 05B4c6 merged, #6162 reconciled closed, then #6139 reconciled closed | Sol/high |
+| MVR-05B5 | [#6140](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6140) | delivered — Companion client activation, stale-selection recovery, client first-vault bootstrap, and the `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md` writeback (PR #6339) | 05B4c6 merged, #6162 reconciled closed, then #6139 reconciled closed | Sol/high |
 | 05B hub | [#3860](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3860) | stage closer: full acceptance matrix on one exact head, `docs/ARCHITECTURE.md` and `docs/SETTINGS.md` writebacks, final allowlist truth, stage receipt to #2143 | 05B0–05B5 | Sol/high |
 
 **05B4 split.** MVR-05B4 (#6139) was filed for the agent, MCP, and CLI carriers. While 05B2 and
