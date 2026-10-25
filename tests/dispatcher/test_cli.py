@@ -361,13 +361,14 @@ def test_claim_verb_takeover_stale_flag(tmp_env, store):
     code, data = _run(
         [
             "claim", ready.task_id, "--agent", "replacement-agent",
-            "--takeover-stale", "--json",
+            "--takeover-stale", "--expected-lease-id", lease.lease_id, "--json",
         ],
     )
 
     assert code == 0
     assert data["ok"] is True
     assert data["lease"]["holder"] == "replacement-agent"
+    assert store.list_events(ready.task_id)[-1].payload["takeover"]["previous_lease_id"] == lease.lease_id
 
 
 # ---------------------------------------------------------------------------

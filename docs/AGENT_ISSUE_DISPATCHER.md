@@ -704,12 +704,30 @@ Normative behavior:
 
 Batch recovery through `reclaim_expired_leases` remains available. An agent that discovers an
 expired current lease may instead make an explicit, claim-time recovery with
-`dispatcher claim <task_id> --takeover-stale`. The dispatcher performs the stale-lease release,
-new lease creation, task update, and `task.claimed` event insert in one SQLite transaction. It
-marks the displaced lease with `release_reason="stale_takeover"`; it never displaces an unexpired
-lease, even when the flag is supplied. A normal stale claim remains eligible in its `claimed`
-status; legacy/reclaimed `ready` rows remain eligible too. A blocked task with an expired lease is
-rejected without changing its task or lease state.
+`dispatcher claim <task_id> --takeover-stale`. Callers that observed a particular predecessor can
+also pass `--expected-lease-id <lease-id>`; the dispatcher checks that the task still references
+that exact lease inside the same SQLite write transaction before any mutation. The dispatcher
+performs the stale-lease release, new lease creation, task update, and `task.claimed` event insert in
+one transaction. It marks the displaced lease with `release_reason="stale_takeover"`; it never
+displaces an unexpired lease, even when the flag is supplied. A normal stale claim remains eligible
+in its `claimed` status; legacy/reclaimed `ready` rows remain eligible too. A blocked task with an
+expired lease is rejected without changing its task or lease state.
+
+The mandatory `scripts/issue_pickup_claim.sh` exposes this recovery only as same-owner self-resume:
+pass `--takeover-stale` for an Issue that is still open with exactly `agent:in-progress`. The wrapper
+also requires the exact task's expired unreleased lease to belong to the same `--agent`, and it
+heartbeats the active target-worktree registration using the supplied `--session` before claiming.
+It validates the Issue contract both before and after the claim, passes the exact observed lease id
+as `--expected-lease-id`, and verifies the new lease and the `task.claimed` event's predecessor
+fields. The dispatcher compares the expected id with the task's currently referenced lease inside
+the same write transaction; if another takeover replaced the observed predecessor, this claim makes
+no change. If the command exits unsuccessfully after committing, the wrapper uses an exact task,
+lease, and event readback to recognize the committed claim. Any ambiguous or mismatched stale
+takeover result leaves the dispatcher state in place for reconciliation; this path never runs the
+ordinary claim-release cleanup. The wrapper skips ready-list refresh and leaves Issue labels intact.
+It never falls back to label-only pickup. A different successor must complete the authenticated
+release → claim → worktree transfer in `resume-work`; an expired lease alone does not transfer
+workspace ownership.
 
 The new claim event remains the receipt. Its payload contains `ttl_minutes` and, for a takeover, a
 `takeover` object with `previous_holder`, `previous_lease_id`, and `previous_expires_at`. Without
@@ -739,6 +757,10 @@ Design boundary:
 
 Canonical loop:
 0. Run `scripts/issue_pickup_claim.sh --issue <N> --repo <owner/repo> --agent <agent_id> --session <session_id>`.
+   For an authenticated same-owner self-resume of an expired lease on an already `agent:in-progress`
+   Issue, add `--takeover-stale`; the wrapper requires the current session's active worktree
+   registration and passes the exact observed old lease id as `--expected-lease-id` before taking it
+   over.
    The wrapper checks `status --json`, then asks `pickup-refresh` to validate the exact
    repo-qualified `github-<owner>--<repo>-issue-<N>` task (matching the id `dispatcher pull` assigns;
    pass `--task-id` to override). A fresh per-repository ready scan and exact-task observation are

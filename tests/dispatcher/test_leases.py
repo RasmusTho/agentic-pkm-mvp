@@ -470,7 +470,11 @@ def test_claim_takeover_stale_succeeds_with_attributed_receipt(store: SqliteStor
     previous_expires_at = _expire_lease(store, old_lease.lease_id)
 
     claimed_task, lease = claim(
-        store, "task-1", "replacement-agent", takeover_stale=True
+        store,
+        "task-1",
+        "replacement-agent",
+        takeover_stale=True,
+        expected_lease_id=old_lease.lease_id,
     )
 
     assert claimed_task.lease_id == lease.lease_id
@@ -482,6 +486,51 @@ def test_claim_takeover_stale_succeeds_with_attributed_receipt(store: SqliteStor
         "previous_lease_id": old_lease.lease_id,
         "previous_expires_at": previous_expires_at,
     }
+
+
+def test_stale_takeover_refuses_a_different_expired_predecessor_without_mutation(
+    store: SqliteStore,
+) -> None:
+    task = _task()
+    store.upsert_task(task)
+    _, observed_lease = claim(store, "task-1", "first-agent")
+    _expire_lease(store, observed_lease.lease_id)
+
+    _, intervening_lease = claim(
+        store, "task-1", "intervening-agent", takeover_stale=True
+    )
+    _expire_lease(store, intervening_lease.lease_id)
+    before_events = store.list_events("task-1")
+
+    with pytest.raises(ValueError, match="expected stale lease predecessor changed"):
+        claim(
+            store,
+            "task-1",
+            "replacement-agent",
+            takeover_stale=True,
+            expected_lease_id=observed_lease.lease_id,
+        )
+
+    current_task = store.get_task("task-1")
+    current_lease = store.get_lease(intervening_lease.lease_id)
+    assert current_task is not None
+    assert current_task.lease_id == intervening_lease.lease_id
+    assert current_task.claimed_by == "intervening-agent"
+    assert current_lease is not None
+    assert current_lease.released_at is None
+    assert store.list_events("task-1") == before_events
+
+
+def test_expected_lease_id_requires_stale_takeover(store: SqliteStore) -> None:
+    store.upsert_task(_task())
+
+    with pytest.raises(ValueError, match="requires --takeover-stale"):
+        claim(
+            store,
+            "task-1",
+            "agent",
+            expected_lease_id="lease-observed",
+        )
 
 
 def test_takeover_releases_expired_lease_with_stale_takeover_reason(store: SqliteStore) -> None:
