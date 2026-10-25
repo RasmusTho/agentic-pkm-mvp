@@ -2045,6 +2045,7 @@ def _dispatcher_render_inline_tokens(
     mask_comment_closers: bool = False,
     mask_code_inline: bool = False,
     preserve_literal_comments: bool = False,
+    literal_loss_ranges: list[tuple[int, int]] | None = None,
 ) -> str:
     parts: list[str] = []
     for token in _dispatcher_cell_text_tokens(tokens):
@@ -2060,14 +2061,28 @@ def _dispatcher_render_inline_tokens(
             else:
                 parts.append(code)
         elif token_type == "text":
-            parts.append(
-                _dispatcher_render_text_token(
-                    token.content,
-                    mask_comment_closers=mask_comment_closers,
-                    preserve_literal_comments=preserve_literal_comments
-                    and token.meta.get("literal_comment_text", True),
-                )
+            preserve = preserve_literal_comments and token.meta.get("literal_comment_text", True)
+            text = _dispatcher_render_text_token(
+                token.content,
+                mask_comment_closers=mask_comment_closers,
+                preserve_literal_comments=preserve,
             )
+            if literal_loss_ranges is not None and preserve and text != _dispatcher_render_text_token(
+                token.content, mask_comment_closers=mask_comment_closers
+            ):
+                offset = sum(map(len, parts))
+                # These are the exact deletions performed by the canonical
+                # text renderer, in the recovered classification coordinates.
+                for match in _DISPATCHER_HTML_COMMENT_OPEN_RE.finditer(token.content):
+                    literal_loss_ranges.append(tuple(
+                        offset + len(_dispatcher_render_text_token(
+                            token.content[:position],
+                            mask_comment_closers=mask_comment_closers,
+                            preserve_literal_comments=True,
+                        ))
+                        for position in match.span()
+                    ))
+            parts.append(text)
         elif token_type in {"html_inline", "html_block"}:
             if mask_comment_closers:
                 content = token.content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
@@ -2090,6 +2105,8 @@ def _dispatcher_render_inline_tokens(
             if token_type == "image":
                 parts.append(token.content)
         elif token.children:
+            child_losses: list[tuple[int, int]] = []
+            offset = sum(map(len, parts))
             parts.append(
                 _dispatcher_render_inline_tokens(
                     token.children,
@@ -2097,12 +2114,20 @@ def _dispatcher_render_inline_tokens(
                     mask_comment_closers=mask_comment_closers,
                     mask_code_inline=mask_code_inline,
                     preserve_literal_comments=preserve_literal_comments,
+                    literal_loss_ranges=child_losses if literal_loss_ranges is not None else None,
                 )
             )
+            if literal_loss_ranges is not None:
+                literal_loss_ranges.extend((a + offset, b + offset) for a, b in child_losses)
         elif token.content:
             parts.append(token.content)
     rendered = "".join(parts)
     if strip_task_prefix:
+        if literal_loss_ranges is not None:
+            removed = [match.span() for match in _DISPATCHER_MARKDOWN_TASK_PREFIX_RE.finditer(rendered)]
+            def project(position: int) -> int:
+                return position - sum(max(0, min(position, stop) - start) for start, stop in removed)
+            literal_loss_ranges[:] = [(project(a), project(b)) for a, b in literal_loss_ranges]
         rendered = _DISPATCHER_MARKDOWN_TASK_PREFIX_RE.sub("", rendered)
     return rendered
 
@@ -2515,13 +2540,15 @@ class _DispatcherExampleBlock:
     literals: list[tuple[int, int, int, int]] = dataclass_field(default_factory=list)
     barriers: list[tuple[int, int]] = dataclass_field(default_factory=list)
     bridge: bool = False
-    literal_projection_changed: bool = False
+    literal_loss_ranges: list[tuple[int, int]] = dataclass_field(default_factory=list)
     source_intact_required: bool = False
 
 
 def _dispatcher_project_example_positions(
     block: _DispatcherExampleBlock,
     removed: Sequence[tuple[int, int]],
+    *,
+    project_literal_loss: bool = True,
 ) -> None:
     """Project rendered coordinates through an exact, nonoverlapping removal."""
 
@@ -2532,6 +2559,8 @@ def _dispatcher_project_example_positions(
         event.position = project(event.position)
     block.literals = [(project(a), project(b), c, d) for a, b, c, d in block.literals]
     block.barriers = [(project(position), origin) for position, origin in block.barriers]
+    if project_literal_loss:
+        block.literal_loss_ranges = [(project(a), project(b)) for a, b in block.literal_loss_ranges]
 
 
 def _dispatcher_example_block(
@@ -2588,10 +2617,10 @@ def _dispatcher_example_block(
             strip_task_prefix=token.level > 1,
             mask_comment_closers=pending,
             preserve_literal_comments=True,
+            literal_loss_ranges=block.literal_loss_ranges if not pending else None,
         )
         if not pending:
             block.text = literal_rendered
-            block.literal_projection_changed = literal_rendered != rendered
         elif full_literal_rendered != rendered:
             comment_source = list(token.content)
             for child in children:
@@ -2731,7 +2760,7 @@ def _dispatcher_example_block(
                 match.span() for match in _DISPATCHER_MARKDOWN_TASK_PREFIX_RE.finditer(unstripped)
             ]
 
-            _dispatcher_project_example_positions(block, removed)
+            _dispatcher_project_example_positions(block, removed, project_literal_loss=False)
         if pending:
             close = rendered.find("-->")
             if close < 0:
@@ -2824,7 +2853,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
             previous.text += "\n\n"
         shift = len(previous.text)
         previous.text += block.text
-        previous.literal_projection_changed |= block.literal_projection_changed
+        previous.literal_loss_ranges.extend((a + shift, b + shift) for a, b in block.literal_loss_ranges)
         previous.source_intact_required |= block.source_intact_required
         for event in (*block.events, *block.structures):
             event.position += shift
@@ -2898,7 +2927,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
                         narrative_ranges.append((start, event.position))
                     del literal_stack[matching:]
         literal_ranges.extend((event.position, len(block.text)) for event in literal_stack)
-        if block.literal_projection_changed:
+        if block.literal_loss_ranges:
             offset = 0
             for segment in _dispatcher_split_scan_segments(block.text):
                 for pattern, complete_intent in (
@@ -2915,7 +2944,7 @@ def _dispatcher_example_scan_source(body: str) -> str:
                             if complete_intent else
                             any(a <= position and end <= b for a, b in literal_ranges)
                         )
-                        if not excluded:
+                        if not excluded and any(a < end and position < b for a, b in block.literal_loss_ranges):
                             lost_intent = True
                             break
                         # A skipped literal can have matched across a later
@@ -2931,7 +2960,10 @@ def _dispatcher_example_scan_source(body: str) -> str:
                     for match in pattern.finditer(line):
                         word = re.search(keyword, match.group(0), re.IGNORECASE)
                         position = offset + match.start() + (word.start() if word else 0)
-                        if not any(a <= position < b for a, b in literal_ranges):
+                        end = offset + match.end()
+                        if not any(a <= position < b for a, b in literal_ranges) and any(
+                            a < end and position < b for a, b in block.literal_loss_ranges
+                        ):
                             lost_intent = True
                 offset += len(line)
         for start, stop, raw_start, raw_stop in block.literals:

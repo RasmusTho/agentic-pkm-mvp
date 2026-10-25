@@ -6898,6 +6898,49 @@ def test_local_retirement_preserves_receipt_beside_partial_html_example(
     assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
 
 
+@pytest.mark.parametrize("receipt", [
+    pytest.param('Dedicated worktree /tmp/old is still dirty on branch old at head {sha}. &lt;!-- sample --&gt;', id='valid-dedicated-literal-comment-0'),
+    pytest.param('Dedicated worktree /tmp/old is still dirty on branch old at head {sha}. &lt;!-- sample --&gt;.', id='valid-dedicated-literal-comment-1'),
+    pytest.param('Dedicated worktree /tmp/old is still dirty on branch old at head {sha}.\n&lt;!-- sample --&gt;', id='valid-dedicated-literal-comment-2'),
+    pytest.param('Preserved worktree: /tmp/old; branch: old; base HEAD: {sha}. &lt;!-- sample --&gt;', id='valid-preserved-literal-comment-4'),
+    pytest.param('Preserved worktree: /tmp/old; branch: old; base HEAD: {sha}. &lt;!-- sample --&gt;.', id='valid-preserved-literal-comment-5'),
+    pytest.param('Preserved worktree: /tmp/old; branch: old; base HEAD: {sha}.\n&lt;!-- sample --&gt;', id='valid-preserved-literal-comment-6'),
+    pytest.param('Pickup intent receipt: worktree: /tmp/old; branch: old; base HEAD: {sha}. &lt;!-- sample --&gt;', id='valid-pickup-literal-comment-8'),
+    pytest.param('Pickup intent receipt: worktree: /tmp/old; branch: old; base HEAD: {sha}. &lt;!-- sample --&gt;.', id='valid-pickup-literal-comment-9'),
+    pytest.param('Pickup intent receipt: worktree: /tmp/old; branch: old; base HEAD: {sha}.\n&lt;!-- sample --&gt;', id='valid-pickup-literal-comment-10'),
+    pytest.param('Dedicated worktree `/tmp/old` is still dirty on branch `old` at head `{sha}`. &lt;!-- sample --&gt;', id='coded-dedicated'),
+    pytest.param('Preserved worktree: `/tmp/old`; branch: `old`; base HEAD: `{sha}`. &lt;!-- sample --&gt;', id='coded-preserved'),
+    pytest.param('Pickup intent receipt: worktree: `/tmp/old`; branch: `old`; base HEAD: `{sha}`. &lt;!-- sample --&gt;', id='coded-pickup'),
+])
+@pytest.mark.parametrize("example_position", ["absent", "before", "after", "separate"])
+def test_local_retirement_preserves_receipt_before_literal_comment(
+    tmp_path, monkeypatch, receipt, example_position
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    receipt = receipt.format(sha=sha)
+    example = "<code>Dedicated worktree /tmp/example</code>"
+    body = (example + "\n\n" + receipt if example_position == "before" else
+            receipt + "\n\n" + example if example_position == "after" else receipt)
+    comments = [{"body": body}]
+    if example_position == "separate":
+        comments.append({"body": example})
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [{
+        "kind": "task", "record": {
+            "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+            "repo": "RasmusTho/agentic-pkm-mvp", "issue_number": 5258,
+            "status": "blocked", "linked_pr": None, "source_anchor_refs": "[]",
+            "sync_state": json.dumps({"comments": comments}),
+        },
+    }])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="preserve actual fixture receipt before literal comment",
+    )
+    assert result["deleted"] == 0
+    assert result["retained"][ref] == "live_or_resumable_activity"
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
 @pytest.mark.parametrize("example", [
     "`Dedicated worktree /tmp/example is still dirty on branch example at head {sha}.`",
     "`\nDedicated worktree /tmp/example is still dirty on branch example at head {sha}.\n`",
