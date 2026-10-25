@@ -11,13 +11,16 @@ UMask=0077
 WorkingDirectory=/opt/yggdrasil/builderops-probe
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=PYTHONPATH=/opt/yggdrasil/builderops-probe
-ExecStart=/opt/yggdrasil/bws-deploy-runtime/bin/python3 -m app.ops.builderops_probe --config /etc/yggdrasil/builderops-probe.json
+LoadCredentialEncrypted=builderops-discord:/etc/yggdrasil/credentials/builderops-discord.cred
+ExecStartPre=/usr/bin/python3 -B -m app.ops.builderops_probe_secret materialize
+ExecStart=/usr/bin/python3 -B -m app.ops.builderops_probe --config /etc/yggdrasil/builderops-probe.json
+ExecStopPost=/usr/bin/python3 -B -m app.ops.builderops_probe_secret cleanup
 StateDirectory=yggdrasil-builderops-probe
 StateDirectoryMode=0700
 RuntimeDirectory=yggdrasil-builderops-probe
 RuntimeDirectoryMode=0700
-# The separately admitted host-secret controller owns /run/.../alerts.env.
-# This prepared unit neither impersonates a Product BWS consumer nor provisions it.
+# Heimdal's fixed Demerzel controller owns the encrypted source; this service
+# materializes only its one credential and removes the runtime handoff on exit.
 RuntimeDirectoryPreserve=yes
 TimeoutStartSec=45
 NoNewPrivileges=true

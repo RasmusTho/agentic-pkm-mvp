@@ -148,6 +148,43 @@ This procedure changes no other GitHub token, runtime image, Compose configurati
 Product channel, or BWS reader permission. Live rotation evidence belongs in the
 operation receipt and delivery PR, separately from broader #5667 acceptance.
 
+## BOB-1 BuilderOps alert handoff
+
+Issue #6347 admits the single Heimdal-owned `heimdal-builderops-alerts` host
+binding on bob-1 for the existing shared alert capability. Its source remains
+`shared/discord.webhook` in the existing `non-prod` BWS project. The fixed
+`scripts/secrets builderops-alerts check|preflight|apply|reconcile` entrypoint
+uses the same Demerzel administrator and host-controller operation lock as the
+DevUI handoff. It grants no Product consumer, BWS reader account, provider, channel,
+or additional webhook identity to bob-1. The closed binding is declared in
+`app/ops/bws_secret_admin.py`; it is independent of Product channel lookup.
+
+The fixed receiver accepts the value only on SSH stdin through
+`bob-1-builder-system`, requires guest `builder-system` and the qualified
+dedicated BuilderOps engine, and holds the existing deployment interlock.
+It uses the existing systemd host-key facility to encrypt the dedicated
+`builderops-discord` credential. Only ciphertext persists at
+`/etc/yggdrasil/credentials/builderops-discord.cred` (root-owned mode 0600).
+The probe service loads that credential through `LoadCredentialEncrypted`;
+its standalone bridge writes only `DISCORD_WEBHOOK` into the private mode-0600
+runtime handoff, then removes the handoff when the service exits. Reboot retains
+the encrypted source and recreates the runtime file at service execution.
+
+Apply preserves the previous encrypted source, compensates a failed replacement,
+and records an operation-bound terminal receipt under the existing BuilderOps
+receipt directory. The controller marks the operation terminal only after reading
+that exact receipt. An interrupted or ambiguous send remains pending; `reconcile`
+reads the receipt without resending the value. A missing receipt requires bounded
+host/process and ciphertext-state investigation before any recovery; never clear
+the controller journal or reapply to bypass an unknown outcome. Rotation remains
+Heimdal-owned: update the existing shared identity through its existing governed
+administration path, then apply this exact handoff; the next probe invocation
+loads the replacement. This does not rotate the provider identity itself.
+
+This repository route is an enabling change. Installation, handoff, enabled timer,
+and actual down/recovery delivery require separate redacted runtime receipts under
+#6347; the source change alone proves none of those effects or full BCP-06 acceptance.
+
 ## Specification delivery
 
 The capability specification and issue traceability were delivered by BWS-00 / #5682 / PR #5683. All repository children are delivered: BWS-01 #5677 / PR #5703, BWS-02 #5678 / PR #5717, BWS-03 #5679 / PR #5732, and BWS-04 #5680 / PR #5725. The parent remains open for integrated acceptance and full live deployment/runtime qualification; the specific BWS, reader-token, MARR, and normal-writer evidence is recorded in #5667 comments #6114638077, #6114724380, and #6114787299.

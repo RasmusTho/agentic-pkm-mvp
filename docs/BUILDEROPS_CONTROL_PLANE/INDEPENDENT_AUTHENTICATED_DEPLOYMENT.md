@@ -83,8 +83,14 @@ safe fields, so no additional `status:read` token is needed. A regular owner-pri
 token file or the existing root-owned `0:101`/`0640` handoff is accepted. The shared
 Discord notification adapter consumes only the separately admitted mode-0600 host-secret
 runtime handoff. This is not permission to use the Product `test`/`prod` BWS consumer
-on bob-1, provision a credential or send a test alert. The future host-secret owner must
-admit and sustain that BuilderOps-specific runtime handoff before enabling the timer.
+on bob-1. The #6347 enabling route admits the dedicated Heimdal-owned
+`heimdal-builderops-alerts` binding through the
+[existing Demerzel controller](../CLOUD_SECRET_PROVISIONING/README.md#bob-1-builderops-alert-handoff).
+The service loads its dedicated encrypted systemd credential and materializes the
+runtime handoff only for its invocation. It uses the qualified host `/usr/bin/python3`
+with the standalone package; no Product bootstrap or BWS client is imported on bob-1.
+Separate operator authority and live handoff/delivery receipts remain required before
+enabling the timer; the repository route is not an installation claim.
 
 Private locked transition state binds the incident to the engine ID and authority
 epoch. Invalid retained state refuses; a failed recovery notification retains the

@@ -338,6 +338,8 @@ def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
         devui = sub.add_parser('devui')
         devui.add_argument('action', choices=('check', 'preflight', 'import', 'apply', 'reconcile', 'rotate'))
         devui.add_argument('--stdin', action='store_true')
+        builderops_alerts = sub.add_parser('builderops-alerts')
+        builderops_alerts.add_argument('action', choices=('check', 'preflight', 'apply', 'reconcile'))
         check = sub.add_parser('check')
         check.add_argument('channel', choices=tuple(CHANNEL_PROJECTS))
         check.add_argument('--consumer', action='append', required=True)
@@ -352,6 +354,9 @@ def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
             if command == 'import':
                 cmd.add_argument('--stdin', action='store_true', required=True)
         args = parser.parse_args(argv)
+        if args.command == 'builderops-alerts':
+            from app.ops.builderops_alert_secret import run
+            return run(args.action, admin=admin)
         if args.command == 'devui':
             from app.ops.devui_secret import run_devui
             return run_devui(args.action, source=stdin or sys.stdin,
