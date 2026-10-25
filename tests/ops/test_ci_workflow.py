@@ -367,18 +367,18 @@ else:
     time.sleep(0.05)
 state_path = Path(os.environ["FAKE_STATE"])
 state_path.parent.mkdir(exist_ok=True)
-with state_path.open("a+", encoding="utf-8") as handle:
+state_path.touch(exist_ok=True)
+lock_path = state_path.with_suffix(".lock")
+with lock_path.open("a+", encoding="utf-8") as handle:
     import fcntl
     fcntl.flock(handle, fcntl.LOCK_EX)
-    handle.seek(0)
-    state = __import__("json").loads(handle.read() or "{}")
+    state = __import__("json").loads(state_path.read_text(encoding="utf-8") or "{}")
     state["active"] = state.get("active", 0) + (targets[0] != "tests/ops")
     state["max_active"] = max(state.get("max_active", 0), state["active"])
-    handle.seek(0)
-    handle.truncate()
-    handle.write(__import__("json").dumps(state))
-    handle.flush()  # Publish buffered bytes before releasing the process lock.
-    if os.environ.get("MODE") == "flush-before-unlock":
+    temporary_state = state_path.with_suffix(".tmp")
+    temporary_state.write_text(__import__("json").dumps(state), encoding="utf-8")
+    os.replace(temporary_state, state_path)
+    if os.environ.get("MODE") == "state-visible-before-unlock":
         assert __import__("json").loads(state_path.read_text()) == state
     fcntl.flock(handle, fcntl.LOCK_UN)
 print("ARGV " + __import__("json").dumps(targets))
@@ -418,15 +418,14 @@ if targets[0] == os.environ.get("FAILING_SHARD") or any(
     sys.exit(1)
 print("1 passed")
 if targets[0] != "tests/ops":
-    with state_path.open("r+", encoding="utf-8") as handle:
+    with lock_path.open("a+", encoding="utf-8") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        state = __import__("json").loads(handle.read() or "{}")
+        state = __import__("json").loads(state_path.read_text(encoding="utf-8") or "{}")
         state["active"] -= 1
-        handle.seek(0)
-        handle.truncate()
-        handle.write(__import__("json").dumps(state))
-        handle.flush()
-        if os.environ.get("MODE") == "flush-before-unlock":
+        temporary_state = state_path.with_suffix(".tmp")
+        temporary_state.write_text(__import__("json").dumps(state), encoding="utf-8")
+        os.replace(temporary_state, state_path)
+        if os.environ.get("MODE") == "state-visible-before-unlock":
             assert __import__("json").loads(state_path.read_text()) == state
         fcntl.flock(handle, fcntl.LOCK_UN)
 ''', encoding="utf-8",
@@ -547,7 +546,7 @@ def test_full_suite_records_fully_deselected_deploy_module(tmp_path: Path) -> No
 
 
 def test_full_suite_fake_shard_state_visible_before_unlock(tmp_path: Path) -> None:
-    result, _files, _job = _run_full_suite_workflow(tmp_path, mode="flush-before-unlock")
+    result, _files, _job = _run_full_suite_workflow(tmp_path, mode="state-visible-before-unlock")
     assert result.returncode == 0, result.stdout + result.stderr
     state = json.loads((tmp_path / "state.json").read_text())
     assert state["active"] == 0
