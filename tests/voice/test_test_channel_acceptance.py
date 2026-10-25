@@ -103,6 +103,8 @@ class FakeTestChannel:
         self.drift_after_voice = False
         self.tts_override: dict[str, Any] = {}
         self.sources_override: list[dict[str, Any]] | None = None
+        self.body_override: dict[str, Any] = {}
+        self.health_override: dict[str, Any] = {}
 
     def get(self, path: str, query: Mapping[str, str] | None = None) -> tuple[int, str, bytes]:
         self.calls.append(("GET", path))
@@ -113,8 +115,8 @@ class FakeTestChannel:
             return 200, "application/json", json.dumps({"git_sha": sha, "built_at": ""}).encode()
         if path == "/api/health":
             assert query == {"model_access_sampling": "cache"}
-            return 200, "application/json", json.dumps({"environment": self.environment, "ok": True,
-                                                        "version": self.git_sha}).encode()
+            health = {"environment": self.environment, "ok": True, "version": self.git_sha, **self.health_override}
+            return 200, "application/json", json.dumps({k: v for k, v in health.items() if v is not None}).encode()
         if vta.AUDIO_PATH.fullmatch(path):
             return 200, "audio/wav", REPLY_AUDIO
         return 404, "application/json", b"{}"
@@ -138,6 +140,7 @@ class FakeTestChannel:
                             "segments": [{"index": 0, "language": language, "text": ANSWER,
                                           "provider_available": True, **route}]},
         }
+        body.update(self.body_override)
         return 200, "application/json", json.dumps(body).encode()
 
 
@@ -176,6 +179,17 @@ def test_swedish_and_english_use_qualified_routes_and_return_audio(tmp_path: Pat
     foreign = FakeTestChannel()
     foreign.sources_override = [{"uuid": "x", "path": "private/real-note.md"}]
     assert _run(tmp_path / "f", foreign)["languages"]["sv"]["reason"] == "citation_not_from_synthetic_source"
+
+    # Any degraded turn fails, except the documented best-effort transcript marker.
+    degraded = FakeTestChannel()
+    degraded.body_override = {"degraded": True, "reason": "retrieval_partial"}
+    assert _run(tmp_path / "g", degraded)["languages"]["sv"]["reason"] == "voice_degraded_retrieval_partial"
+    unlogged = FakeTestChannel()
+    unlogged.body_override = {"degraded": True, "reason": "session_transcript_unavailable",
+                              "session_error": "session_transcript_unavailable"}
+    unlogged_receipt = _run(tmp_path / "l", unlogged)
+    assert unlogged_receipt["passed"] is True
+    assert unlogged_receipt["languages"]["en"]["session_transcript"] == "unavailable"
 
     class Silent(FakeTestChannel):
         def get(self, path: str, query: Mapping[str, str] | None = None) -> tuple[int, str, bytes]:
@@ -264,10 +278,18 @@ def test_candidate_and_channel_must_match_qualification(
     other.reported = "sha256:" + "0" * 64
     assert _run(tmp_path, other)["refusal"] == "candidate_mismatch" and not other.voice_turns
 
+    # Health must report the same SHA; a missing version is not a match.
+    no_version = FakeTestChannel()
+    no_version.health_override = {"version": None}
+    assert _run(tmp_path, no_version)["refusal"] == "candidate_mismatch" and not no_version.voice_turns
+
     # The image digest must be bound by a fresh, matching TEST topology observation.
     for topology, expected in ((_topology(digest="sha256:" + "1" * 64), "deployment_image_mismatch"),
                                (_topology(age=timedelta(hours=30)), "deployment_identity_unavailable"),
-                               (_topology(refusals=["image_unverified"]), "deployment_identity_refused")):
+                               (_topology(refusals=["image_unverified"]), "deployment_identity_refused"),
+                               ({**_topology(), "channels": [
+                                   {**c, "health_version": "version:1.2.3"} for c in _topology()["channels"]]},
+                                "deployment_identity_unverified")):
         fresh = FakeTestChannel()
         payload = _qualification(tmp_path / "t", topology=topology)
         assert vta.run_acceptance(payload, fresh, base_dir=tmp_path / "t")["refusal"] == expected
@@ -285,7 +307,10 @@ def test_receipt_is_candidate_bound_and_secret_free(tmp_path: Path, monkeypatch:
     assert receipt["schema"] == "voice_test_channel_acceptance.v1"
     assert receipt["candidate"] == {"source_sha": SHA, "image_digest": DIGEST}
     assert receipt["observed_before"] == receipt["observed_after"] == {
-        "channel": "test", "source_sha": SHA, "image_digest_source": "channel_topology"}
+        "channel": "test", "source_sha": SHA, "health_ok": True, "image_digest_source": "channel_topology"}
+    payload = _qualification(tmp_path)
+    assert receipt["qualification_sha256"] == hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert receipt["deployment"]["source_image_identity"].endswith("@" + DIGEST)
     assert receipt["deployment"]["source_ref"] == "qualification:voice-6234"
     assert receipt["routes"] == ROUTES
@@ -332,6 +357,17 @@ def test_receipt_is_candidate_bound_and_secret_free(tmp_path: Path, monkeypatch:
     written = out.read_text()
     assert TOKEN not in written and json.loads(written)["passed"] is True
     assert out.stat().st_mode & 0o077 == 0
+    # An unexpected verifier error still yields a complete failed receipt, never an empty file.
+    def boom(*_: Any, **__: Any) -> dict[str, Any]:
+        raise OSError("disk")
+
+    original = vta.run_acceptance
+    monkeypatch.setattr(vta, "run_acceptance", boom)
+    errored = tmp_path / "errored.json"
+    assert vta.main(["--qualification", str(path), "--out", str(errored)]) == 1
+    assert json.loads(errored.read_text())["refusal"] == "verifier_error_OSError"
+    monkeypatch.setattr(vta, "run_acceptance", original)
+
     # An existing --out path is refused before any voice turn is sent.
     seen.clear()
     with pytest.raises(FileExistsError):
@@ -369,6 +405,9 @@ def test_verifier_has_no_configuration_or_prod_write_path(tmp_path: Path) -> Non
     default = vta.HttpTransport("https://ygg-test.example.internal")
     handlers = default._open.__self__.handlers  # type: ignore[attr-defined]
     assert not [h for h in handlers if isinstance(h, ProxyHandler) and h.proxies]
+
+    with pytest.raises(vta.VoiceAcceptanceRefusal, match="bearer_requires_https"):
+        vta.HttpTransport("http://ygg-test.example.internal", token=TOKEN, opener=opener)
 
     transport = vta.HttpTransport("https://ygg-test.example.internal", token=TOKEN, opener=opener)
     for method, path in (("GET", "/api/vault/select"), ("GET", "/api/settings"), ("GET", "/api/companion/tts/plan")):

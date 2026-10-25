@@ -23,6 +23,11 @@ Boundaries (fail closed):
 * The receipt never contains audio bytes, prompts, transcript/answer text or
   credential values. An optional bearer token is read from the environment
   variable named by ``AUTH_TOKEN_ENV`` and is never recorded.
+* The qualification evidence (refs, receipt hashes, status, routes) is an
+  operator-supplied input; it is validated for shape and candidate agreement and
+  reported verbatim so the parent reviewer can check it against the referenced
+  receipts. Public ``/api/health`` deliberately neutralizes LLM route identity,
+  and the topology carries no ingress host, so those bindings are not re-observed.
 * ``/api/ask/voice`` has no actor or route-identity field. The synthetic actor
   is therefore a reference to the TEST channel's qualified synthetic actor and
   source binding, and the ASR/ASK route identities and image digest are bound
@@ -75,6 +80,9 @@ ALLOWED_POST = frozenset({VOICE_PATH})
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_FIXTURE_BYTES = 8 * 1024 * 1024
 DEGRADED_REASONS = frozenset({"tts_unavailable", "capture_intent_surfaced"})
+# The voice-session transcript is best effort (INV-VOICE-A); its absence is
+# reported in the receipt but does not negate an audible grounded answer.
+TRANSCRIPT_BEST_EFFORT = "session_transcript_unavailable"
 AUDIBLE_PEAK_FRACTION = 0.01
 _PCM_CODES = {1: "B", 2: "h", 4: "i"}
 _PROD_HOST_TOKENS = frozenset({"prod", "production", "prd", "stable"})
@@ -223,6 +231,7 @@ def validate_qualification(payload: Any, *, base_dir: Path | None = None) -> dic
         resolved[language] = {"audio_path": path, "audio_sha256": fixture["audio_sha256"],
                               "expected_source_ids": list(ids)}
     result = dict(payload)
+    result["input_sha256"] = _hash_json(payload)
     result["channel"] = channel
     result["api_url"] = _origin(api_url)
     result["fixtures"] = resolved
@@ -253,8 +262,8 @@ def deployment_identity(path: Path, candidate: Mapping[str, str]) -> dict[str, s
     image = entry["source_image_identity"]
     _require(image != "unknown" and image.endswith("@" + candidate["image_digest"]), "deployment_image_mismatch")
     version = entry["health_version"].removeprefix("version:").lower()
-    if re.fullmatch(r"[0-9a-f]{7,40}", version):
-        _require(candidate["source_sha"].startswith(version), "deployment_image_mismatch")
+    _require(bool(re.fullmatch(r"[0-9a-f]{7,40}", version)), "deployment_identity_unverified")
+    _require(candidate["source_sha"].startswith(version), "deployment_image_mismatch")
     return {"source_ref": topology["source_ref"], "observed_at": topology["observed_at"],
             "source_image_identity": image, "topology_sha256": _hash_json(topology)}
 
@@ -269,7 +278,7 @@ def _json(status: int, raw: bytes, reason: str) -> dict[str, Any]:
     return value
 
 
-def observe_candidate(q: Mapping[str, Any], transport: Transport) -> dict[str, str]:
+def observe_candidate(q: Mapping[str, Any], transport: Transport) -> dict[str, Any]:
     """Read the running identity; refuse PROD, a foreign channel or another candidate."""
 
     try:
@@ -286,7 +295,7 @@ def observe_candidate(q: Mapping[str, Any], transport: Transport) -> dict[str, s
     _require(environment == CHANNEL, "channel_mismatch")
     running = str(version.get("git_sha") or "").strip().lower()
     _require(running == q["candidate"]["source_sha"], "candidate_mismatch")
-    health_sha = str(health.get("version") or running).strip().lower()
+    health_sha = str(health.get("version") or "").strip().lower()
     _require(health_sha == running, "candidate_mismatch")
     # The Product /version surface exposes only the git SHA today. A digest is
     # compared whenever the target reports one; otherwise the digest is bound by
@@ -294,7 +303,7 @@ def observe_candidate(q: Mapping[str, Any], transport: Transport) -> dict[str, s
     digest = version.get("image_digest")
     if digest is not None:
         _require(str(digest).strip().lower() == q["candidate"]["image_digest"], "candidate_mismatch")
-    return {"channel": environment, "source_sha": running,
+    return {"channel": environment, "source_sha": running, "health_ok": health.get("ok") is True,
             "image_digest_source": "observed" if digest is not None else "channel_topology"}
 
 
@@ -386,8 +395,10 @@ def verify_language(q: Mapping[str, Any], language: str, transport: Transport) -
             raise AssertionError("transcript_missing")
         if not detected.startswith(language):
             raise AssertionError("detected_language_mismatch")
-        if body.get("reason") in DEGRADED_REASONS:
-            raise AssertionError(f"voice_degraded_{body['reason']}")
+        if body.get("reason") in DEGRADED_REASONS or (
+            body.get("degraded") is True and body.get("reason") != TRANSCRIPT_BEST_EFFORT
+        ):
+            raise AssertionError("voice_degraded_" + re.sub(r"[^a-z0-9_]", "", str(body.get("reason") or "unknown"))[:48])
         if not outcome["answer_present"]:
             raise AssertionError("answer_missing")
         expected = set(fixture["expected_source_ids"])
@@ -463,9 +474,8 @@ def _base_receipt(q: Mapping[str, Any] | None) -> dict[str, Any]:
             synthetic_actor=q["synthetic_actor"],
             scope_bound=bool(q.get("scope")),
             deployment=dict(q["deployment"]),
-            qualification_sha256=_hash_json({k: (v if k != "fixtures" else {  # fixture paths excluded
-                lang: {"audio_sha256": f["audio_sha256"], "expected_source_ids": f["expected_source_ids"]}
-                for lang, f in v.items()}) for k, v in q.items()}),
+            # Recomputable: sha256 of the input JSON with sorted keys and compact separators.
+            qualification_sha256=q["input_sha256"],
         )
     return receipt
 
@@ -541,6 +551,7 @@ class HttpTransport:
     def __init__(self, origin: str, *, token: str | None = None, timeout: float = 120.0,
                  opener: Callable[..., Any] | None = None) -> None:
         self._origin = origin.rstrip("/")
+        _require(not token or urlparse(self._origin).scheme == "https", "bearer_requires_https")
         self._token = token
         self._timeout = timeout
         # An empty ProxyHandler keeps the request (and any bearer) off HTTP(S)_PROXY.
@@ -597,12 +608,18 @@ def main(argv: list[str] | None = None) -> int:
     origin = _origin(payload["api_url"]) if isinstance(payload, dict) and isinstance(payload.get("api_url"), str) else ""
     # Reserve the receipt path before any voice turn so a collision cannot discard
     # evidence of turns that already ran (and tempt a replay).
-    out = open(args.out, "x", encoding="utf-8") if args.out is not None else None
+    out = None
+    if args.out is not None:
+        out = os.fdopen(os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8")
     try:
-        if out is not None:
-            os.fchmod(out.fileno(), 0o600)
-        transport = HttpTransport(origin, token=os.environ.get(AUTH_TOKEN_ENV) or None)
-        receipt = run_acceptance(payload, transport, base_dir=args.qualification.resolve().parent)
+        try:
+            transport = HttpTransport(origin, token=os.environ.get(AUTH_TOKEN_ENV) or None)
+            receipt = run_acceptance(payload, transport, base_dir=args.qualification.resolve().parent)
+        except VoiceAcceptanceRefusal as exc:
+            receipt = _finish({**_base_receipt(None), "refusal": exc.reason})
+        except Exception as exc:  # never leave an empty receipt behind
+            receipt = _finish({**_base_receipt(None), "outcome": "failed",
+                               "refusal": "verifier_error_" + type(exc).__name__})
         text = json.dumps(receipt, indent=2, sort_keys=True)
         if out is not None:
             out.write(text + "\n")
