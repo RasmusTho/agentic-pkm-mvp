@@ -31,19 +31,32 @@ def test_active_promotion_docs_agree_on_migration_applicability() -> None:
     assert "active production promotion path" in classification
     assert "`app` DB" in classification
     assert "`pkm-prod`" in classification
-    assert "`main`-tracking production path" in readme
+    assert "Current: protected `stable` authority" in readme
     assert (
         "unclassified migration blocks the current prod migration operation"
         in readme.replace("\n", " ")
     )
-    assert "target gated promotion-plan workflow" in promotion_plan
-    assert "same active production applicability boundary" in prepare_promotion
+    assert "Migration delta" in promotion_plan
+    assert "active (`app` DB, compose project `pkm-prod`)" in promotion_plan
+    assert (
+        "each classified as **reversible** or **forward-only** per "
+        "`DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION`"
+        in promotion_plan
+    )
+    assert "For each migration: reads its reversibility marker" in prepare_promotion
+    assert "flags forward-only ones explicitly" in prepare_promotion
 
-    future_hardening = readme.split("### Future promotion hardening", 1)[1].split(
-        "## Human need", 1
-    )[0]
-    assert "automated enforcement of migration reversibility classification" in future_hardening
-    assert "automated migration reversal classification" not in future_hardening
+    migration_applicability = " ".join(
+        readme.split("#### Current migration reversibility applicability", 1)[1]
+        .split("\n### ", 1)[0]
+        .split()
+    )
+    assert (
+        "current baseline now enforces that check in the canonical production startup path"
+        in migration_applicability
+    )
+    assert "`scripts/run_migrations.sh` resolves and classifies" in migration_applicability
+    assert "`scripts/deploy_channel.sh` checks the live pending migrations" in migration_applicability
 
 
 def test_active_promotion_path_is_covered_by_reversibility_contract() -> None:
