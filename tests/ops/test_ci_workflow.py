@@ -745,6 +745,8 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+if "--collect-only" in sys.argv:
+    raise SystemExit(0)
 target_text = " ".join(sys.argv[1:])
 print(target_text, flush=True)
 if active_dir_value := os.environ.get("FAKE_ACTIVE_DIR"):
@@ -917,6 +919,9 @@ import sys
 
 args = sys.argv[1:]
 node = "tests/scripts/test_publication.py::test_publish_pr_rejects_missing_governing_issue"
+if "--collect-only" in args:
+    print(node)
+    raise SystemExit(0)
 executions = 0
 if "tests/scripts" in args:
     executions += 1
@@ -1333,6 +1338,92 @@ with state_path.open("r+") as handle:
         capture_output=True, text=True, timeout=30, check=False,
     )
     return result, json.loads(state_path.read_text()), nodes
+
+
+def _weighted_root_fixture(tmp_path, monkeypatch, *, collection_code=0):
+    import scripts.run_scoped_test_partitions as runner
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+    from scripts.select_pr_tests import SCOPED_DEPLOY_SERIAL_BOUNDARY
+
+    serial = SCOPED_DEPLOY_SERIAL_BOUNDARY
+    deploy_nodes = (*SHARED_CHECKOUT_NODES, *(
+        f"{TARGET_MODULE}::test_regular_{index:04}" for index in range(696)
+    ))
+    nodes = (*deploy_nodes, *(
+        f"tests/ops/test_atomic.py::test_case[{index}]" for index in range(2603)
+    ), *(
+        f"tests/scripts/test_atomic.py::test_case[{index}]" for index in range(1310)
+    ))
+    collections = []
+    executed = []
+
+    class Collection:
+        pid = 123456789
+        returncode = collection_code
+
+        def communicate(self, timeout):
+            assert timeout == runner.COLLECTION_TIMEOUT_SECONDS
+            return "\n".join(nodes) if not collection_code else "collection failed", None
+
+    def collect(command, **kwargs):
+        assert "--collect-only" in command
+        collections.append(command)
+        return Collection()
+
+    def execute(index, targets, *, log_dir, timeout_seconds):
+        executed.append(tuple(targets))
+        log = log_dir / f"partition-{index}.log"
+        log.write_text("".join(f"{node} PASSED\n" for node in targets if node in deploy_nodes))
+        return index, 0, log, False
+
+    monkeypatch.setattr(runner.subprocess, "Popen", collect)
+    monkeypatch.setattr(runner, "_terminate_process_group", lambda _pid: None)
+    monkeypatch.setattr(runner, "_run_partition", execute)
+    expected = (TARGET_MODULE, "tests/ops", "tests/scripts")
+
+    def run():
+        return runner.run_partitions(
+            tuple((target,) for target in expected), log_dir=tmp_path / "logs",
+            aggregate_log=tmp_path / "aggregate.log", jobs=4, timeout_seconds=10,
+            serial_last=False, serial_boundary=serial,
+            execution_units=tuple((target,) for target in expected), expected_targets=expected,
+        )
+
+    return run, collections, executed, deploy_nodes, serial
+
+
+def test_scoped_runner_weights_atomic_roots_without_stacking_deploy_nodes(tmp_path, monkeypatch):
+    from scripts.select_pr_tests import PR_MARKER_EXPRESSION
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES
+
+    run, collections, executed, nodes, serial = _weighted_root_fixture(tmp_path, monkeypatch)
+    assert run() == 0
+    assert len(collections) == 1
+    collection = collections[0]
+    assert collection[collection.index("-m") + 1] == PR_MARKER_EXPRESSION
+    assert "tests/ops" in collection and "tests/scripts" in collection
+    assert all(f"--ignore={path}" in collection for path in serial)
+    assert executed[-1] == serial
+    parallel = executed[:-1]
+    assert len(parallel) == 4
+    ops = next(unit for unit in parallel if "tests/ops" in unit)
+    scripts = next(unit for unit in parallel if "tests/scripts" in unit)
+    assert ops != scripts
+    assert ops == ("tests/ops", *(f"--ignore={path}" for path in serial))
+    assert scripts == ("tests/scripts",)
+    assert sorted(target for unit in parallel for target in unit if target in nodes) == sorted(nodes)
+    assert sum(set(SHARED_CHECKOUT_NODES) <= set(unit) for unit in parallel) == 1
+    assert all(path not in unit for unit in parallel for path in serial)
+
+
+def test_scoped_runner_weight_collection_failure_stops_execution(tmp_path, monkeypatch):
+    run, collections, executed, _nodes, _serial = _weighted_root_fixture(
+        tmp_path, monkeypatch, collection_code=2,
+    )
+    with pytest.raises(RuntimeError, match="collection failed"):
+        run()
+    assert len(collections) == 1
+    assert executed == []
 
 
 def test_scoped_runner_splits_measured_module_with_exact_coverage(tmp_path: Path) -> None:
