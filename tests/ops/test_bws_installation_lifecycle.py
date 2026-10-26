@@ -57,8 +57,8 @@ def _qualified_service(monkeypatch, *, token: str | None = None):
     return service, calls, payload
 
 
-def test_config_authenticates_fixed_control_root_without_launcher_or_unit_hint(monkeypatch, tmp_path):
-    control_root = (tmp_path.resolve() / "bws-control").resolve()
+def test_config_authenticates_fixed_control_root_without_launcher_or_unit_hint(monkeypatch, secure_tmp_path):
+    control_root = (secure_tmp_path.resolve() / "bws-control").resolve()
     anchor = control_root / "app/ops/postgres_deploy_linux.py"
     anchor.parent.mkdir(mode=0o755, parents=True)
     anchor.write_text("# synthetic fixed deployment anchor\n")
@@ -310,8 +310,8 @@ def test_stop_old_refuses_before_candidate_launcher_is_staged(monkeypatch):
     assert service.phase == "qualified"
 
 
-def test_fixed_unit_stops_legacy_process_with_staged_candidate_launcher(monkeypatch, tmp_path):
-    control_root = tmp_path.resolve() / "bws-control"
+def test_fixed_unit_stops_legacy_process_with_staged_candidate_launcher(monkeypatch, secure_tmp_path):
+    control_root = secure_tmp_path.resolve() / "bws-control"
     anchor = control_root / "app/ops/postgres_deploy_linux.py"
     anchor.parent.mkdir(mode=0o755, parents=True)
     anchor.write_text("# synthetic fixed deployment anchor\n")

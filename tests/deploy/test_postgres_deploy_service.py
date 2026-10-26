@@ -264,10 +264,10 @@ assert sys.modules['app.ops.bws_installation_admission'].IMPORT_RESERVED is True
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_candidate_rpc_checkout_requires_exact_clean_head(tmp_path, monkeypatch):
+def test_candidate_rpc_checkout_requires_exact_clean_head(secure_tmp_path, monkeypatch):
     from app.ops import bws_installation_admission
 
-    checkout = tmp_path / 'candidate'
+    checkout = secure_tmp_path / 'candidate'
     script = checkout / 'scripts' / 'postgres_deploy_service.py'
     application = checkout / 'app' / 'ops'
     application.mkdir(parents=True)

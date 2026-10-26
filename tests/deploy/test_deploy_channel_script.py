@@ -3073,7 +3073,7 @@ def test_bws_deploy_requires_raw_key_for_active_capture():
 
 @pytest.mark.parametrize('quiescent', [True, False])
 def test_missing_active_raw_key_stops_supervisor_before_activation(
-    tmp_path, monkeypatch, quiescent
+    tmp_path, monkeypatch, quiescent, admitted_bws_caller
 ):
     from types import SimpleNamespace
     from uuid import uuid4
@@ -3488,7 +3488,9 @@ def test_bws_runtime_env_config_preflight_fails_before_mutation(tmp_path, monkey
 
 
 @pytest.mark.parametrize('runtime_path_state', ['absent', 'malformed', 'missing_file', 'unreadable_file'])
-def test_bws_token_push_does_not_require_runtime_env_config(tmp_path, monkeypatch, runtime_path_state):
+def test_bws_token_push_does_not_require_runtime_env_config(
+    tmp_path, monkeypatch, runtime_path_state, admitted_bws_caller
+):
     from app.ops import bws_token_push
     from app.ops import postgres_deploy_linux as linux
 
@@ -3605,7 +3607,9 @@ def test_vm_and_deploy_shell_reject_directory_runtime_selector_source(tmp_path):
     assert result.returncode != 0
 
 
-def test_vm_selector_failure_records_abort_and_releases_channel_lock(tmp_path, monkeypatch):
+def test_vm_selector_failure_records_abort_and_releases_channel_lock(
+    tmp_path, monkeypatch, admitted_bws_caller
+):
     from types import SimpleNamespace
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import PostgresDeployError
@@ -3761,7 +3765,9 @@ def test_postgres_bootstrap_ambiguous_create_without_matching_operation_note_rem
         assert admin.controller._pending(descriptor) is not None
 
 
-def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(tmp_path, monkeypatch):
+def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(
+    tmp_path, monkeypatch, admitted_bws_caller
+):
     from contextlib import contextmanager
     from dataclasses import asdict, replace
     from types import SimpleNamespace

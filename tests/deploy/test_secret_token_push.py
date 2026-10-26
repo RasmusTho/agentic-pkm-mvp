@@ -1174,7 +1174,7 @@ def test_status_refuses_missing_malformed_or_mismatched_receipt(tmp_path, receip
 
 
 def test_deploy_launcher_parses_and_forwards_token_push_worker_arguments(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, admitted_bws_caller
 ):
     from types import SimpleNamespace
 

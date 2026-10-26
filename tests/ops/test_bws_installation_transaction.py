@@ -973,10 +973,10 @@ def test_source_payload_inventory_is_exact_and_independent_json(monkeypatch, tmp
         )
 
 
-def test_candidate_checkout_recheck_rejects_contract_json_worktree_drift(monkeypatch, tmp_path):
+def test_candidate_checkout_recheck_rejects_contract_json_worktree_drift(monkeypatch, secure_tmp_path):
     monkeypatch.setattr(transaction, "_OWNER_UID", os.geteuid())
     monkeypatch.setattr(transaction, "_OWNER_GID", os.getegid())
-    checkout = _owned_dir(tmp_path / "candidate")
+    checkout = _owned_dir(secure_tmp_path / "candidate")
     app = _owned_dir(checkout / "app")
     scripts = _owned_dir(checkout / "scripts")
     (app / "__init__.py").write_bytes(b"")
