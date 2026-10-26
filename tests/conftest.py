@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,16 +46,6 @@ if "not pg" in _mark_expr:
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-
-@pytest.fixture
-def secure_tmp_path(tmp_path):
-    """Use a private temp root, escaping sticky shared temp directories when needed."""
-    if any(path.stat().st_mode & 0o022 for path in (tmp_path, *tmp_path.parents)):
-        with tempfile.TemporaryDirectory(prefix="pytest-secure-", dir=ROOT) as directory:
-            yield Path(directory)
-        return
-    yield tmp_path
 
 
 @dataclass

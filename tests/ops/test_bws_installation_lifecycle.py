@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.ops import bws_installation_lifecycle as lifecycle
+from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
 
 def _root(path: str, inode: int) -> dict[str, int | str]:

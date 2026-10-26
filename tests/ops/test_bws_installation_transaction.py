@@ -14,6 +14,7 @@ from contextlib import contextmanager
 import pytest
 
 from app.ops.bws_control_installation import Change, Root
+from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
 from app.ops import bws_installation_lifecycle, bws_installation_transaction as transaction
 

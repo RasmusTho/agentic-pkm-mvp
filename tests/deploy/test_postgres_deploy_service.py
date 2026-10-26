@@ -14,6 +14,7 @@ import pytest
 from app.ops import postgres_deploy as deploy
 from app.ops import postgres_deploy_linux as linux
 from scripts import postgres_deploy_service as service
+from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
 
 ROOT = Path(__file__).resolve().parents[2]
