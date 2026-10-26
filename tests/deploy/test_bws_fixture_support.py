@@ -21,7 +21,7 @@ def test_protected_temp_path_uses_home_when_tmp_and_repository_ancestry_are_unsa
         candidate
         for candidate in (tmp_path, repository_root, Path.home(), Path(sys.prefix))
         if (
-            bws_fixture_support._has_protected_ancestry(candidate)
+            bws_fixture_support._has_protected_ancestry(candidate, require_private_leaf=False)
             and os.access(candidate, os.W_OK | os.X_OK)
         )
     )
@@ -30,6 +30,11 @@ def test_protected_temp_path_uses_home_when_tmp_and_repository_ancestry_are_unsa
         prefix="pytest-bws-fixture-home-", dir=safe_parent
     ) as home_dir:
         safe_home = Path(home_dir)
+        safe_home.chmod(0o750)
+        assert bws_fixture_support._has_protected_ancestry(
+            safe_home, require_private_leaf=False
+        )
+        assert not bws_fixture_support._has_protected_ancestry(safe_home)
         unsafe_root = safe_home / "unsafe"
         unsafe_root.mkdir()
         unsafe_root.chmod(0o777)

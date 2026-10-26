@@ -13,14 +13,20 @@ from pathlib import Path
 import pytest
 
 
-def _has_protected_ancestry(path: Path) -> bool:
+def _has_protected_ancestry(path: Path, *, require_private_leaf: bool = True) -> bool:
     try:
         resolved = path.resolve(strict=True)
-        for directory in (resolved, *resolved.parents):
+        for index, directory in enumerate((resolved, *resolved.parents)):
             info = directory.stat(follow_symlinks=False)
+            is_leaf = index == 0
+            allowed_modes = (
+                {0o700, 0o755}
+                if is_leaf and require_private_leaf
+                else {0o700, 0o750, 0o755}
+            )
             if (
                 not stat.S_ISDIR(info.st_mode)
-                or stat.S_IMODE(info.st_mode) not in {0o700, 0o755}
+                or stat.S_IMODE(info.st_mode) not in allowed_modes
                 or info.st_mode & 0o022
                 or info.st_uid not in {0, os.geteuid()}
             ):
@@ -42,7 +48,10 @@ def _protected_temp_path(tmp_path: Path, *, repository_root: Path) -> Iterator[P
             candidate = candidate.resolve(strict=True)
         except OSError:
             continue
-        if not _has_protected_ancestry(candidate) or not os.access(candidate, os.W_OK | os.X_OK):
+        if (
+            not _has_protected_ancestry(candidate, require_private_leaf=False)
+            or not os.access(candidate, os.W_OK | os.X_OK)
+        ):
             continue
         try:
             temporary = tempfile.TemporaryDirectory(prefix="pytest-secure-", dir=candidate)

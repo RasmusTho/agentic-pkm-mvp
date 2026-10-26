@@ -353,11 +353,12 @@ def _checkout_binding(checkout: Path, candidate_sha: str) -> dict[str, object]:
             root = os.fstat(child)
             named_root = os.stat(part, dir_fd=current, follow_symlinks=False)
             is_checkout = index == len(path_parts) - 1
+            allowed_modes = {0o700, 0o755} if is_checkout else {0o700, 0o750, 0o755}
             if ((root.st_dev, root.st_ino) != (named_root.st_dev, named_root.st_ino)
                     or not stat.S_ISDIR(root.st_mode)
                     or (root.st_uid != _OWNER_UID if is_checkout else root.st_uid not in {0, _OWNER_UID})
                     or (root.st_gid != _OWNER_GID if is_checkout else root.st_mode & 0o022 != 0)
-                    or stat.S_IMODE(root.st_mode) not in {0o700, 0o755}
+                    or stat.S_IMODE(root.st_mode) not in allowed_modes
                     or os.get_inheritable(child)):
                 _refuse()
             current = child

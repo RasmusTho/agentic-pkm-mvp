@@ -588,6 +588,42 @@ def test_native_profile_sends_caller_source_modules_only_on_initial_profile(monk
     assert "_caller_source_modules" not in requests[1]
 
 
+def test_open_absolute_directory_allows_private_0750_ancestors_only(secure_tmp_path, monkeypatch):
+    monkeypatch.setattr(transaction, "_OWNER_UID", os.geteuid())
+    monkeypatch.setattr(transaction, "_OWNER_GID", os.getegid())
+    parent = secure_tmp_path / "private-parent"
+    parent.mkdir(mode=0o750)
+    parent.chmod(0o750)
+    root = parent / "source-root"
+    root.mkdir(mode=0o700)
+    root.chmod(0o700)
+
+    opened: list[int] = []
+    try:
+        descriptor = transaction._open_absolute_directory(root.resolve(), opened)
+        assert descriptor == opened[-1]
+        assert os.fstat(descriptor).st_mode & 0o777 == 0o700
+    finally:
+        for fd in reversed(opened):
+            os.close(fd)
+
+    def assert_refused() -> None:
+        descriptors: list[int] = []
+        try:
+            with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+                transaction._open_absolute_directory(root.resolve(), descriptors)
+        finally:
+            for fd in reversed(descriptors):
+                os.close(fd)
+
+    root.chmod(0o750)
+    assert_refused()
+    root.chmod(0o700)
+
+    parent.chmod(0o770)
+    assert_refused()
+
+
 @pytest.mark.parametrize("binding_kind", ["absent", "candidate", "checkout", "script"])
 def test_native_transaction_refuses_stale_direct_caller_binding_before_checkout_or_backup(
         tmp_path, monkeypatch, binding_kind):

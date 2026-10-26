@@ -791,11 +791,12 @@ def _open_absolute_directory(path: Path, opened: list[int]) -> int:
             info = os.fstat(child)
             named = os.stat(part, dir_fd=current, follow_symlinks=False)
             is_target = index == len(path_parts) - 1
+            allowed_modes = {0o700, 0o755} if is_target else {0o700, 0o750, 0o755}
             if ((info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)
                     or not stat.S_ISDIR(info.st_mode)
                     or (info.st_uid != _OWNER_UID if is_target else info.st_uid not in {0, _OWNER_UID})
                     or (info.st_gid != _OWNER_GID if is_target else info.st_mode & 0o022 != 0)
-                    or stat.S_IMODE(info.st_mode) not in {0o700, 0o755}
+                    or stat.S_IMODE(info.st_mode) not in allowed_modes
                     or os.get_inheritable(child)):
                 _refuse()
             current = child

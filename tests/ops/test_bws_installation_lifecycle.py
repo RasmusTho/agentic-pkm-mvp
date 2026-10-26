@@ -59,6 +59,7 @@ def _qualified_service(monkeypatch, *, token: str | None = None):
 
 
 def test_config_authenticates_fixed_control_root_without_launcher_or_unit_hint(monkeypatch, secure_tmp_path):
+    secure_tmp_path.chmod(0o750)
     control_root = (secure_tmp_path.resolve() / "bws-control").resolve()
     anchor = control_root / "app/ops/postgres_deploy_linux.py"
     anchor.parent.mkdir(mode=0o755, parents=True)
@@ -124,6 +125,14 @@ def test_config_authenticates_fixed_control_root_without_launcher_or_unit_hint(m
 
     assert contract[:2] == (start[:3], cleanup[:3])
     assert service.control["path"] == str(control_root)
+    secure_tmp_path.chmod(0o770)
+    with pytest.raises(RuntimeError, match="bws_lifecycle_unproven"):
+        service._config()
+    secure_tmp_path.chmod(0o750)
+    control_root.chmod(0o750)
+    with pytest.raises(RuntimeError, match="bws_lifecycle_unproven"):
+        service._config()
+    control_root.chmod(0o755)
     properties[("Service", "ExecCondition")] = [start]
     with pytest.raises(RuntimeError, match="bws_lifecycle_unproven"):
         service._config()

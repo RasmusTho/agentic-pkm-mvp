@@ -229,16 +229,19 @@ def _discovered_control_projection(
         if len(candidates) > 16:
             _refuse()
 
-        def directory(name: str, parent: int | None = None) -> int:
+        def directory(
+            name: str, parent: int | None = None, *, allow_0750_ancestor: bool = False,
+        ) -> int:
             fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                          **({} if parent is None else {'dir_fd': parent}))
             descriptors.append(fd)
             info = os.fstat(fd)
+            allowed_modes = {0o700, 0o750, 0o755} if allow_0750_ancestor else {0o700, 0o755}
             if (not stat.S_ISDIR(info.st_mode)
                     or (info.st_uid, info.st_gid) not in {
                         (0, 0), (_CONTROL_OWNER_UID, _CONTROL_OWNER_GID),
                     }
-                    or stat.S_IMODE(info.st_mode) not in {0o700, 0o755} or os.get_inheritable(fd)):
+                    or stat.S_IMODE(info.st_mode) not in allowed_modes or os.get_inheritable(fd)):
                 _refuse()
             return fd
 
@@ -263,8 +266,9 @@ def _discovered_control_projection(
             return True
 
         root = directory('/')
-        for name in Path(CONTROL_DIRECTORY).parts[1:]:
-            root = directory(name, root)
+        control_parts = Path(CONTROL_DIRECTORY).parts[1:]
+        for index, name in enumerate(control_parts):
+            root = directory(name, root, allow_0750_ancestor=index < len(control_parts) - 1)
         roots = {}
         for candidate in candidates:
             parts = candidate[len(CONTROL_DIRECTORY) + 1:].rstrip('/').split('/')
@@ -279,13 +283,15 @@ def _discovered_control_projection(
                         _refuse()
                     if not stat.S_ISDIR(info.st_mode):
                         break
-                    child = directory(name, parent)
+                    child = directory(name, parent, allow_0750_ancestor=True)
                 except FileNotFoundError:
                     break
                 ancestors.append((path + '/' + name, child))
             for path, fd in reversed(ancestors):
                 if anchor(fd):
                     info = os.fstat(fd)
+                    if stat.S_IMODE(info.st_mode) not in {0o700, 0o755}:
+                        _refuse()
                     roots[path] = dict(path=path, device=info.st_dev, inode=info.st_ino,
                                       uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode))
                     break

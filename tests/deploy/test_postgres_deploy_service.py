@@ -268,6 +268,7 @@ assert sys.modules['app.ops.bws_installation_admission'].IMPORT_RESERVED is True
 def test_candidate_rpc_checkout_requires_exact_clean_head(secure_tmp_path, monkeypatch):
     from app.ops import bws_installation_admission
 
+    secure_tmp_path.chmod(0o750)
     checkout = secure_tmp_path / 'candidate'
     script = checkout / 'scripts' / 'postgres_deploy_service.py'
     application = checkout / 'app' / 'ops'
@@ -343,6 +344,23 @@ def test_candidate_rpc_checkout_requires_exact_clean_head(secure_tmp_path, monke
     caller = {'candidate_sha': revision, 'source_checkout': binding}
     assert service._verify_caller_checkout(caller) == str(script)
     bws_installation_admission._verify_checkout_caller(caller)
+    checkout.chmod(0o750)
+    with pytest.raises(bws_installation_admission.InstallationAdmissionRefused):
+        bws_installation_admission._checkout_binding(checkout.resolve(), revision)
+    with pytest.raises(bws_installation_admission.InstallationAdmissionRefused):
+        bws_installation_admission._verify_checkout_caller(caller)
+    with pytest.raises(RuntimeError, match='bws_preimport_reservation_refused'):
+        service._verify_caller_checkout(caller)
+    checkout.chmod(0o755)
+
+    secure_tmp_path.chmod(0o770)
+    with pytest.raises(bws_installation_admission.InstallationAdmissionRefused):
+        bws_installation_admission._checkout_binding(checkout.resolve(), revision)
+    with pytest.raises(bws_installation_admission.InstallationAdmissionRefused):
+        bws_installation_admission._verify_checkout_caller(caller)
+    with pytest.raises(RuntimeError, match='bws_preimport_reservation_refused'):
+        service._verify_caller_checkout(caller)
+    secure_tmp_path.chmod(0o750)
     with pytest.raises(RuntimeError, match='bws_candidate_checkout_refused'):
         service._candidate_checkout_root('a' * 40)
 

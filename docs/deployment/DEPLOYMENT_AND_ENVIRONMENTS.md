@@ -1340,6 +1340,12 @@ configuration, public-root identities, complete on-disk Python inventory under `
 `scripts/`, separately validated JSON contract, and fixed launcher bytes. This is old-state disk
 evidence; it does not claim which bytes the old process loaded.
 
+Intermediate directories traversed to reach the candidate checkout or authenticated roots may use
+mode `0750` when the existing owner checks pass and the directory is not group/world-writable. The
+selected checkout and source/control roots, plus required in-root anchors, retain their exact
+`0700`/`0755` checks. Sticky/shared or writable ancestors, symlinks, foreign owners, and a `0750`
+selected root still refuse; no-follow identity and file-mode checks are unchanged.
+
 Before mutation, the transaction checks the exact candidate Git tree without importing or executing
 candidate modules, compares it with the current no-follow disk inventory, validates candidate file
 modes and JSON separately, and refuses missing, untracked, duplicate, deleted, symlinked,
