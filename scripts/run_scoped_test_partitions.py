@@ -226,19 +226,15 @@ def _run_partition(
             return index, 124, log_path, True
 
 
-def _collect_deploy_nodes(target: str, *, cache: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
-    """Collect deploy nodes once so a slow file can be split across workers."""
-
-    path = _target_file(target)
-    if path in cache:
-        return cache[path]
+def _collect_parallel_nodes(targets: Sequence[str]) -> tuple[str, ...]:
+    """Collect the parallel inventory once for node splitting and atomic weights."""
     command = [
         "pytest",
         "--collect-only",
         "-q",
         "-m",
         PR_MARKER_EXPRESSION,
-        target,
+        *targets,
     ]
     process = subprocess.Popen(
         command,
@@ -254,22 +250,21 @@ def _collect_deploy_nodes(target: str, *, cache: dict[str, tuple[str, ...]]) -> 
         _terminate_process_group(process.pid)
         process.wait()
         raise RuntimeError(
-            f"deploy work-unit collection timed out after {COLLECTION_TIMEOUT_SECONDS}s: {target}"
+            f"parallel work-unit collection timed out after {COLLECTION_TIMEOUT_SECONDS}s"
         ) from exc
     finally:
         _terminate_process_group(process.pid)
     if process.returncode not in (0, 5):
         raise RuntimeError(
-            f"deploy work-unit collection failed ({process.returncode}): {target}\n{output}"
+            f"parallel work-unit collection failed ({process.returncode})\n{output}"
         )
     nodes = tuple(sorted(
         line.strip()
         for line in output.splitlines()
-        if line.strip().startswith(path) and "::" in line.strip()
+        if line.strip().startswith("tests/") and "::" in line.strip()
     ))
     if len(set(nodes)) != len(nodes):
-        raise ValueError("collected deploy node inventory contains duplicates")
-    cache[path] = nodes
+        raise ValueError("collected parallel node inventory contains duplicates")
     return nodes
 
 
@@ -315,30 +310,6 @@ def _expand_and_balance_parallel(
 ) -> tuple[tuple[str, ...], ...]:
     """Split the measured module safely, then balance bounded atomic candidates."""
 
-    cache: dict[str, tuple[str, ...]] = {}
-    # Collect selected deploy directories before their file-level execution
-    # units. The stable file inventory authenticates coverage; only the measured
-    # module may expand further, through the existing shared-checkout node plan.
-    for target in expected_targets:
-        path = _target_file(target)
-        if _is_deploy_target(target):
-            if not path.endswith(".py"):
-                _collect_deploy_nodes(target, cache=cache)
-
-    def deploy_nodes_for_target(target: str) -> tuple[str, ...]:
-        path = _target_file(target)
-        if path in cache:
-            return cache[path]
-        for root, nodes in cache.items():
-            if root == "tests/deploy" or path.startswith(f"{root}/"):
-                return tuple(
-                    node
-                    for node in nodes
-                    if _target_file(node) == path
-                    or _target_file(node).startswith(f"{path}/")
-                )
-        return _collect_deploy_nodes(target, cache=cache)
-
     positional_targets = tuple(
         target
         for candidate in candidates
@@ -353,20 +324,28 @@ def _expand_and_balance_parallel(
         in effective_targets
     )
 
+    # One collection includes the same serial exclusions as execution. Directory
+    # roots remain atomic; their case count is a packing weight, not a new shard.
+    collected = _collect_parallel_nodes(tuple(
+        argument for candidate in candidates for argument in candidate
+    )) if candidates else ()
+
+    def nodes_for_target(target: str) -> tuple[str, ...]:
+        return tuple(node for node in collected if node == target or _strictly_covers(target, node))
+
     expanded: list[tuple[str, ...]] = []
     seen_targets: set[str] = set()
-    deploy_node_weight: dict[str, int] = {}
+    node_weight: dict[str, int] = {}
     for candidate in candidates:
         positional = tuple(target for target in candidate if not target.startswith("-"))
         options = tuple(target for target in candidate if target.startswith("-"))
         if len(positional) != 1:
             raise ValueError("each execution candidate must contain one positional target")
         target = positional[0]
-        path = _target_file(target)
         if _is_deploy_target(target):
             if options:
                 raise ValueError("deploy execution candidates must not contain pytest options")
-            nodes = deploy_nodes_for_target(target)
+            nodes = nodes_for_target(target)
             files = _deploy_test_files(target)
             deploy_units: list[tuple[str, ...]] = []
             for file_path in files:
@@ -375,13 +354,14 @@ def _expand_and_balance_parallel(
                     units = plan_node_units(file_nodes, TARGET_MODULE, max_workers=jobs)
                     deploy_units.extend(units)
                     for unit in units:
-                        deploy_node_weight[unit[0]] = len(unit)
+                        node_weight[unit[0]] = len(unit)
                 else:
                     deploy_units.append((file_path,))
-                    deploy_node_weight[file_path] = max(1, len(file_nodes))
+                    node_weight[file_path] = max(1, len(file_nodes))
             refined = tuple(deploy_units)
         else:
             refined = (tuple(candidate),)
+            node_weight[target] = max(1, len(nodes_for_target(target)))
         for item in refined:
             positional_target = next(value for value in item if not value.startswith("-"))
             if positional_target in seen_targets:
@@ -411,7 +391,7 @@ def _expand_and_balance_parallel(
 
     def candidate_weight(candidate: tuple[str, ...]) -> int:
         positional = next(target for target in candidate if not target.startswith("-"))
-        return deploy_node_weight.get(positional, 1)
+        return node_weight.get(positional, 1)
 
     for candidate in sorted(expanded, key=lambda item: (-candidate_weight(item), item)):
         index = min(range(len(buckets)), key=lambda item: (weights[item], item))
