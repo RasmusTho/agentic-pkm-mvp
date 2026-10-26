@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import stat
-import sys
 import tempfile
 from pathlib import Path
 
@@ -19,7 +18,7 @@ def test_protected_temp_path_uses_home_when_tmp_and_repository_ancestry_are_unsa
     repository_root = Path(__file__).resolve().parents[2]
     safe_parent = next(
         candidate
-        for candidate in (tmp_path, repository_root, Path.home(), Path(sys.prefix))
+        for candidate in (tmp_path, repository_root, Path.home())
         if (
             bws_fixture_support._has_protected_ancestry(candidate, require_private_leaf=False)
             and os.access(candidate, os.W_OK | os.X_OK)

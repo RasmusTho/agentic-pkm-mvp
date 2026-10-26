@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import stat
-import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -43,7 +42,7 @@ def _protected_temp_path(tmp_path: Path, *, repository_root: Path) -> Iterator[P
         yield tmp_path
         return
 
-    for candidate in (repository_root, Path.home(), Path(sys.prefix)):
+    for candidate in (repository_root, Path.home()):
         try:
             candidate = candidate.resolve(strict=True)
         except OSError:
