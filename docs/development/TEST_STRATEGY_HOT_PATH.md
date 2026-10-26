@@ -325,9 +325,11 @@ effort improved before adopting further changes.
 - When `tests/deploy` is retained pre-merge because a changed source triggers its heavy coverage,
   the selector preserves the authenticated target inventory and emits a derived
   `scoped_execution_units_json` plan. The slow deploy directory is expanded to stable test files,
-  directory/file overlap is removed, and the runner collects those files once after dependency
-  setup so node counts can weight the distribution of stable file targets across at most four
-  bounded work units.
+  directory/file overlap is removed, and the runner collects the effective parallel inventory once
+  after dependency setup, with the same marker and serial-boundary exclusions as execution.
+  Collected case counts weight both deploy work units and the unchanged atomic nondeploy roots
+  across at most four bounded processes; `tests/ops` and `tests/scripts` no longer each weigh one.
+  This single collection also supplies the measured deploy module's node plan.
   The selected-target union remains the authority: the runner rejects empty, missing, duplicate,
   escaped, incomplete, or non-exact collected coverage. Deploy and the remaining selected targets
   run with bounded parallelism; the bounded host-process/writer-census ops modules start only
@@ -352,6 +354,13 @@ effort improved before adopting further changes.
   detailed output was delayed until 01:47:34 UTC. That job had 87 failures across all five phases;
   its final one-failure summary described only the serial phase. These historical timings justify
   the bounded change but do not establish its resulting runtime or a ten-minute protected lane.
+  [PR #6373 job 121395691072](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/40268371054/job/121395691072)
+  reached this scoped node-splitting path but packed roughly 2603 ops cases with 232 deploy nodes
+  and other files because nondeploy roots still weighed one. That partition took 2932.76 seconds;
+  the subsequent serial boundary added about 12m34. The job failed with one fixture assertion and
+  four fixture setup errors. Correcting atomic-root weights avoids this packing defect without
+  splitting those roots or changing the serial boundary. Case counts are not measured durations;
+  the resulting protected-lane runtime and any ten-minute bound remain unproven.
   Other scoped selections retain the existing
   single pytest invocation. This mechanism addresses the critical-path failure recorded by
   [failed job 117620023504](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39108712261/job/117620023504)
