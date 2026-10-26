@@ -62,11 +62,14 @@ silently left pointing at a stale API address.
 
 ### Prepared Linux BuilderOps monitoring
 
-Issue #6336 provides repository-side probe preparation, not a host installation.
-`scripts/plan_builderops_probe.py` prints a plan only; it has no apply operation.
-The prepared `yggdrasil-builderops-probe.service` and timer run the one-shot
-`app.ops.builderops_probe` independently of the monitored containers. Their future
-installation requires an exact reviewed source/interpreter and separate operator authority.
+Issue #6336 provides repository-side probe preparation; `scripts/plan_builderops_probe.py`
+remains plan-only. As of 2026-10-26, the separately authorized #6347 component window has installed
+the reviewed standalone package and admitted encrypted alert handoff on bob-1, enabled the
+`yggdrasil-builderops-probe.timer`, and qualified authenticated health plus a controlled
+down/repeat/recovery drill. The [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#issuecomment-6405523126) binds the package, engine,
+schema5/epoch77627680301974, native executions, delivery and exact worker restoration.
+The one-shot `app.ops.builderops_probe` runs independently of the monitored containers;
+future installation or replacement still requires reviewed source/interpreter and operator authority.
 
 The mode-0600 host-owned JSON configuration must name guest `builder-system`, the
 dedicated `unix:///run/docker-builderops.sock` engine and its qualified ID, project
@@ -99,9 +102,11 @@ are suppressed and one recovery is sent after a confirmed down transition. Webho
 delivery is not exactly-once across a timeout/crash or a failed state commit. The
 outbox age limit is explicit in configuration (the plan suggests 300 seconds).
 
-The preparation does not switch clients, import or correct legacy tasks, stop the Mac
-stack, or satisfy complete-system acceptance. A host-local probe also cannot alert
-while bob-1 itself is powered off; that requires a separately qualified outside observer.
+Repository preparation alone does not establish runtime activation. The #6347 receipts cover
+this monitoring component, the explicit client profile and retirement of the exact three Mac
+duplicates with their data retained; they do not establish global BCP-05/06 or complete-system
+acceptance, import/replay legacy tasks, or change the separate Vault store. A host-local probe
+cannot alert while bob-1 itself is powered off; that requires a separately qualified outside observer.
 
 ### Complete Dev System admission
 

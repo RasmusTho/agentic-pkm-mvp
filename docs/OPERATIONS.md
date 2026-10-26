@@ -548,6 +548,13 @@ Companion docs:
 - `docs/runbooks/UAT_PANEL_WATCHER.md` for a watcher/panel walkthrough
 
 ## Runtime Compose Stack
+
+The separate BuilderOps component window #6347 (status 2026-10-26) qualified bob-1 monitoring and
+retired only the old Mac `builderops-control-plane` API/worker/DB containers. Their restart
+policies are disabled and original PostgreSQL volume/history retained, including the failed
+old PR #5350 distinction. No import/replay or unrelated helper lifecycle change occurred; see
+the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#issuecomment-6405523126). The app runtime stack below retains its own lifecycle.
+
 - Canonical runtime compose stack: `db`, `api`, `watcher`, `worker`.
 - `docker-compose.yaml` starts FastAPI (`api`), `worker`, `watcher`, and Postgres for local development.
 - Ensure `.env` contains the desired secrets before running `docker compose up --build`.
@@ -837,10 +844,11 @@ Issue #6336 adds a plan-only bob-1 monitoring path, distinct from the Product
 `test`/`prod` probe installer. The prepared probe checks the qualified engine/project,
 authenticated loopback readiness and expected schema/epoch, explicit worker freshness,
 database container health (including local disk/WAL guardrails), and outbox degradation.
-It reuses the shared notification adapter through a separately admitted host-secret
-handoff and retains private engine/epoch-bound outage state. This is repository support,
-not installed monitoring or a client/authority cutover. Installation, a live alert drill,
-and retirement of the Mac duplicate remain separately authorized host work; see the
+It reuses the shared notification adapter through the dedicated admitted encrypted host
+credential and private invocation-only handoff, retaining engine/epoch-bound outage state.
+As of 2026-10-26, the separately authorized #6347 window has installed and enabled this component
+and qualified one down/repeat/recovery drill with the exact worker restored healthy.
+This component result does not establish global client/authority cutover; see the
 [deployment owner contract](BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#prepared-linux-builderops-monitoring).
 Backup/restore is not a readiness gate, and bob-1 power-off detection requires an
 outside observer.
