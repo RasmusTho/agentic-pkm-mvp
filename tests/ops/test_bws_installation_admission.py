@@ -105,6 +105,40 @@ def test_terminal_receipt_precedes_shared_admission_and_next_fresh_owner(monkeyp
         assert next_lease.complete(_receipt(next_request))["operation_id"] == next_request["operation_id"]
 
 
+def test_terminal_checkout_binding_does_not_block_admission_after_checkout_removal(
+    monkeypatch, tmp_path,
+):
+    runtime, _receipts = _patch_directories(monkeypatch, tmp_path)
+    request = _request()
+    checkout = tmp_path / "candidate"
+    checkout.mkdir(mode=0o700)
+    checkout_info = checkout.stat()
+    caller = {
+        "pid": os.getpid(), "uid": os.geteuid(), "gid": os.getegid(), "start_time": 42,
+        "argv_sha256": _digest("1"), "executable_sha256": _digest("2"),
+        "launcher_sha256": _digest("3"), "candidate_sha": request["candidate_sha"],
+        "source_checkout": {
+            "path": str(checkout), "device": checkout_info.st_dev, "inode": checkout_info.st_ino,
+            "mode": stat.S_IMODE(checkout_info.st_mode), "revision": request["candidate_sha"],
+            "script_sha256": _digest("4"),
+        },
+    }
+    monkeypatch.setattr(admission, "_fixed_caller_identity", lambda _channel: dict(caller))
+    monkeypatch.setattr(admission, "_verify_checkout_caller", lambda _caller: None)
+    with admission.installation_admission(**request) as lease:
+        lease.complete(_receipt(request))
+
+    checkout.rmdir()
+    monkeypatch.setattr(admission, "_verify_checkout_caller", lambda _caller: admission._refuse())
+
+    assert admission.cleanup_must_skip("dev") is False
+    with admission.installation_admission("dev", mode="shared"):
+        pass
+    assert json.loads((runtime / "dev.source-installation.lock").read_text())["operation_id"] == request[
+        "operation_id"
+    ]
+
+
 def test_start_confirmation_waits_for_exact_one_use_grant_to_be_consumed(monkeypatch, tmp_path):
     runtime, _receipts = _patch_directories(monkeypatch, tmp_path)
     request = _request()

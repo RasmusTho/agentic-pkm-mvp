@@ -490,19 +490,28 @@ def _candidate_checkout_caller_identity(channel: str, checkout: Path, candidate_
             "source_checkout": _checkout_binding(checkout, candidate_sha)}
 
 
-def _verify_checkout_caller(caller: dict[str, object]) -> None:
+def _checkout_caller_binding(caller: dict[str, object]) -> dict[str, object] | None:
     binding = caller.get("source_checkout")
     if binding is None:
-        return
+        return None
     if (type(binding) is not dict or set(binding) != {
             "path", "device", "inode", "mode", "revision", "script_sha256",
     } or any(type(binding[key]) is not int for key in ("device", "inode", "mode"))
+            or binding["device"] < 0 or binding["inode"] <= 0
+            or binding["mode"] not in {0o700, 0o755}
             or type(binding["path"]) is not str or not Path(binding["path"]).is_absolute()
             or type(binding["revision"]) is not str
             or binding["revision"] != caller.get("candidate_sha")
             or type(binding["script_sha256"]) is not str
             or re.fullmatch(r"[0-9a-f]{64}", binding["script_sha256"]) is None):
         _refuse()
+    return binding
+
+
+def _verify_checkout_caller(caller: dict[str, object]) -> None:
+    binding = _checkout_caller_binding(caller)
+    if binding is None:
+        return
     selected = _checkout_binding(Path(binding["path"]), cast(str, binding["revision"]))
     if selected != binding:
         _refuse()
@@ -577,7 +586,7 @@ def _owner_record(raw: bytes, channel: str) -> dict[str, object]:
                 or type(caller["source_checkout"]) is not dict))):
         _refuse()
     if set(caller) == checkout_fields:
-        _verify_checkout_caller(caller)
+        _checkout_caller_binding(caller)
     return record
 
 
