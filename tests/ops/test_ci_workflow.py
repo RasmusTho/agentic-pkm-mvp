@@ -378,6 +378,8 @@ with lock_path.open("a+", encoding="utf-8") as handle:
     temporary_state = state_path.with_suffix(".tmp")
     temporary_state.write_text(__import__("json").dumps(state), encoding="utf-8")
     os.replace(temporary_state, state_path)
+    if os.environ.get("MODE") == "state-visible-before-unlock":
+        assert __import__("json").loads(state_path.read_text()) == state
     fcntl.flock(handle, fcntl.LOCK_UN)
 print("ARGV " + __import__("json").dumps(targets))
 if os.environ.get("MODE") == "deploy-deselected" and targets[0] == "tests/deploy/nested/child_test.py":
@@ -423,6 +425,8 @@ if targets[0] != "tests/ops":
         temporary_state = state_path.with_suffix(".tmp")
         temporary_state.write_text(__import__("json").dumps(state), encoding="utf-8")
         os.replace(temporary_state, state_path)
+        if os.environ.get("MODE") == "state-visible-before-unlock":
+            assert __import__("json").loads(state_path.read_text()) == state
         fcntl.flock(handle, fcntl.LOCK_UN)
 ''', encoding="utf-8",
     )
@@ -539,6 +543,14 @@ def test_full_suite_records_fully_deselected_deploy_module(tmp_path: Path) -> No
     assert "0 tests/deploy/nested/child_test.py" in (shard_root / "status").read_text().splitlines()
     log = (shard_root / "logs/tests_deploy_nested_child_test.py.log").read_text()
     assert "1 deselected" in log and "EXECUTED" not in log
+
+
+def test_full_suite_fake_shard_state_visible_before_unlock(tmp_path: Path) -> None:
+    result, _files, _job = _run_full_suite_workflow(tmp_path, mode="state-visible-before-unlock")
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["active"] == 0
+    assert state["max_active"] <= 4
 
 
 def test_full_suite_node_collection_failure_is_fail_red_and_retained(tmp_path: Path) -> None:
