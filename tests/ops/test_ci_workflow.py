@@ -1259,6 +1259,153 @@ if "TIMEOUT_SCOPED" in __import__("os").environ:
     assert "incomplete" in incomplete.stderr
 
 
+def _run_scoped_measured_fixture(tmp_path: Path, mode: str = "complete"):
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+
+    nodes = [*SHARED_CHECKOUT_NODES, *(
+        f"{TARGET_MODULE}::test_regular_{index}[value with space]" for index in range(9)
+    )]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(f"#!{sys.executable}\n" + r'''
+import fcntl
+import json
+import os
+from pathlib import Path
+import sys
+import time
+args = sys.argv[1:]
+nodes = json.loads(os.environ["FAKE_NODES"])
+mode = os.environ["FAKE_MODE"]
+if "--collect-only" in args:
+    print("\n".join(nodes))
+    raise SystemExit(0)
+state_path = Path(os.environ["FAKE_STATE"])
+serial = "tests/ops/test_native_journaling_acceptance.py" in args
+with state_path.open("a+") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    handle.seek(0)
+    raw = handle.read()
+    state = json.loads(raw) if raw else {"active": 0, "peak": 0, "invocations": []}
+    state["active"] += 1
+    state["peak"] = max(state["peak"], state["active"])
+    state["invocations"].append(args)
+    if serial:
+        state["serial_active"] = state["active"]
+        state["serial_invocation_count"] = len(state["invocations"])
+    handle.seek(0)
+    handle.truncate()
+    json.dump(state, handle)
+time.sleep(0.05)
+for node in args:
+    if node in nodes:
+        if mode == "missing" and node == nodes[-1]:
+            continue
+        print(node + " PASSED", flush=True)
+        if mode == "duplicate" and node == nodes[-1]:
+            print(node + " PASSED", flush=True)
+        if mode == "unexpected" and node == nodes[-1]:
+            print(node.split("::")[0] + "::test_unplanned PASSED", flush=True)
+with state_path.open("r+") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    state = json.load(handle)
+    state["active"] -= 1
+    handle.seek(0)
+    handle.truncate()
+    json.dump(state, handle)
+''', encoding="utf-8")
+    fake_pytest.chmod(0o755)
+    expected = [TARGET_MODULE, "tests/scripts", "tests/ops"]
+    state_path = tmp_path / "state.json"
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+         "--partitions-json", json.dumps([[target] for target in expected]),
+         "--expected-targets-json", json.dumps(expected),
+         "--execution-units-json", json.dumps([[target] for target in expected]),
+         "--log-dir", str(tmp_path / "logs"),
+         "--aggregate-log", str(tmp_path / "aggregate.log"),
+         "--jobs", "4", "--shard-timeout-seconds", "10",
+         "--serial-boundary-json", json.dumps(["tests/ops/test_native_journaling_acceptance.py"])],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             "FAKE_NODES": json.dumps(nodes), "FAKE_MODE": mode, "FAKE_STATE": str(state_path)},
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    return result, json.loads(state_path.read_text()), nodes
+
+
+def test_scoped_runner_splits_measured_module_with_exact_coverage(tmp_path: Path) -> None:
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+
+    result, state, nodes = _run_scoped_measured_fixture(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    invocations = state["invocations"]
+    actual = [target for args in invocations for target in args if target.startswith(TARGET_MODULE)]
+    assert sorted(actual) == sorted(nodes)
+    node_invocations = [args for args in invocations if any(node in args for node in nodes)]
+    assert 2 <= len(node_invocations) <= 4
+    assert sum(set(SHARED_CHECKOUT_NODES) <= set(args) for args in node_invocations) == 1
+    assert state["peak"] <= 4
+    assert state["serial_active"] == 1
+    assert state["serial_invocation_count"] == len(invocations)
+    assert all("--ignore=tests/ops/test_native_journaling_acceptance.py" in args
+               for args in invocations if "tests/ops" in args)
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert all(aggregate.count(node + " PASSED") == 1 for node in nodes)
+
+
+@pytest.mark.parametrize("mode", ["missing", "duplicate", "unexpected"])
+def test_scoped_runner_rejects_incomplete_measured_node_evidence(tmp_path: Path, mode: str) -> None:
+    result, _state, _nodes = _run_scoped_measured_fixture(tmp_path, mode)
+    assert result.returncode == 1
+    assert "Collected-node verification failed:" in result.stderr
+    assert "Collected-node verification failed:" in (tmp_path / "aggregate.log").read_text()
+
+
+def test_scoped_runner_reports_failure_before_other_partitions_finish(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(f"#!{sys.executable}\n" + r'''
+import os
+from pathlib import Path
+import sys
+import time
+if "tests/fast" in sys.argv:
+    print("early-diagnostic", flush=True)
+    raise SystemExit(7)
+release = Path(os.environ["FAKE_RELEASE"])
+while not release.exists():
+    time.sleep(0.01)
+print("slow-released-after-diagnostic", flush=True)
+''', encoding="utf-8")
+    fake_pytest.chmod(0o755)
+    release = tmp_path / "release"
+    process = subprocess.Popen(
+        [sys.executable, str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+         "--partitions-json", json.dumps([["tests/fast"], ["tests/slow"]]),
+         "--expected-targets-json", json.dumps(["tests/fast", "tests/slow"]),
+         "--log-dir", str(tmp_path / "logs"),
+         "--aggregate-log", str(tmp_path / "aggregate.log"),
+         "--jobs", "2", "--shard-timeout-seconds", "5"],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_RELEASE": str(release)},
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    assert process.stdout is not None
+    output = []
+    for line in process.stdout:
+        output.append(line)
+        if "early-diagnostic" in line:
+            release.touch()
+    assert process.wait(timeout=15) == 1
+    assert "".join(output).count("early-diagnostic") == 1
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert "early-diagnostic" in aggregate
+    assert "slow-released-after-diagnostic" in aggregate
+    assert "PARTITION TIMED OUT" not in aggregate
+
 def test_scoped_runner_serial_last_failure_is_aggregated(tmp_path: Path) -> None:
     """The legacy serial-last path must remain fail-loud and observable."""
     bin_dir = tmp_path / "bin"
