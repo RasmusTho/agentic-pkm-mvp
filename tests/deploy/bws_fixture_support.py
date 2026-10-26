@@ -2,34 +2,27 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 import os
 import stat
+import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 
-def _has_protected_ancestry(path: Path, *, require_private_leaf: bool = True) -> bool:
+def _has_protected_ancestry(path: Path) -> bool:
     try:
         resolved = path.resolve(strict=True)
-        for index, directory in enumerate((resolved, *resolved.parents)):
+        for directory in (resolved, *resolved.parents):
             info = directory.stat(follow_symlinks=False)
-            is_leaf = index == 0
-            sticky_shared_ancestor = (
-                not is_leaf and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            )
             if (
                 not stat.S_ISDIR(info.st_mode)
+                or stat.S_IMODE(info.st_mode) not in {0o700, 0o755}
+                or info.st_mode & 0o022
                 or info.st_uid not in {0, os.geteuid()}
-                or (info.st_mode & 0o022 and not sticky_shared_ancestor)
-                or (
-                    is_leaf
-                    and require_private_leaf
-                    and stat.S_IMODE(info.st_mode) not in {0o700, 0o755}
-                )
             ):
                 return False
         return True
@@ -44,14 +37,18 @@ def _protected_temp_path(tmp_path: Path, *, repository_root: Path) -> Iterator[P
         yield tmp_path
         return
 
-    for candidate in (repository_root, Path.home()):
+    for candidate in (repository_root, Path.home(), Path(sys.prefix)):
         try:
             candidate = candidate.resolve(strict=True)
         except OSError:
             continue
-        if not _has_protected_ancestry(candidate, require_private_leaf=False):
+        if not _has_protected_ancestry(candidate) or not os.access(candidate, os.W_OK | os.X_OK):
             continue
-        with tempfile.TemporaryDirectory(prefix="pytest-secure-", dir=candidate) as directory:
+        try:
+            temporary = tempfile.TemporaryDirectory(prefix="pytest-secure-", dir=candidate)
+        except OSError:
+            continue
+        with temporary as directory:
             protected = Path(directory)
             if _has_protected_ancestry(protected):
                 yield protected
