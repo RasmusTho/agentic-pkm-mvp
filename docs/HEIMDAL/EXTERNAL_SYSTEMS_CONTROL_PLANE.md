@@ -93,6 +93,10 @@ Discord is a downstream delivery provider for one shared Yggdrasil alert capabil
 - channel splits, if ever required, are by severity/privacy/audience, not by subsystem ownership;
 - an optional Discord MCP may assist administration, but it is never part of the critical alert path.
 
+The shared webhook adapter identifies its client with Discord's documented `DiscordBot`
+User-Agent format and the public repository URL/version. Discord may reject the default Python
+User-Agent with Cloudflare error 1010; this header carries no credential or provider authority.
+
 The channel, webhook, provider account, and host-native credential reference are not shipped by
 this document. They require the bounded delivery work tracked by the observability Issues and a
 redacted live drill receipt.
