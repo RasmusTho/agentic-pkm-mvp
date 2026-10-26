@@ -96,7 +96,7 @@ def refused(module, args):
 
 @pytest.mark.parametrize("fault", [
     "traversal", "absolute", "double_slash", "backslash", "extra_payload", "duplicate", "wrong_kind",
-    "control_json", "other_launcher", "bad_hash", "hash_mismatch", "bad_before", "bad_mode", "absence_mode",
+    "control_json", "control_scripts", "other_launcher", "bad_hash", "hash_mismatch", "bad_before", "bad_mode", "absence_mode",
     "symlink", "ancestor_symlink", "root_symlink", "hardlink", "mode_drift", "root_owner", "root_identity",
     "unsafe_directory", "unsafe_root", "alias_root", "missing_before",
 ])
@@ -114,6 +114,8 @@ def test_public_manifest_and_target_boundaries(case, fault):
         args["changes"] += (change,)
     elif fault == "control_json":
         edit.update(root="control", path="config/secrets/host_secret_contract.json")
+    elif fault == "control_scripts":
+        edit.update(root="control", path="scripts/helper.py")
     elif fault == "other_launcher":
         edit.update(root="launcher", path="other-launcher")
     elif fault == "bad_hash":
@@ -123,7 +125,7 @@ def test_public_manifest_and_target_boundaries(case, fault):
     elif fault == "bad_before":
         edit["before_sha256"] = "bad"
     elif fault == "bad_mode":
-        edit["mode"] = 0o755
+        edit["mode"] = 0o700
     elif fault == "absence_mode":
         edit["before_sha256"] = None
     elif fault == "symlink":
@@ -246,6 +248,119 @@ def test_public_files_and_launcher_install_exactly(case, monkeypatch):
     assert bundle.exists()
 
 
+def test_prepare_publishes_backup_without_replacing_targets(case):
+    module, paths, args = case
+    before = snapshot(paths)
+
+    handle = module.prepare_public_files(**args)
+
+    assert handle.state == "prepared"
+    assert snapshot(paths) == before
+    bundle = Path(handle.bundle_path)
+    assert bundle.is_dir()
+    assert json.loads((bundle / "manifest.json").read_bytes())
+    assert not (paths["application"] / "app/ops/created.py").exists()
+    assert (paths["launcher"] / "yggdrasil-bws-deploy").read_bytes() == b"#!/fixed/python\nold launcher\n"
+
+    assert module.apply_public_files(handle) is handle
+    assert handle.state == "installed"
+    assert all(outcome != "refused" for _, outcome in module.compensate_public_files(handle))
+    assert handle.compensation_attempted is True
+    assert handle.compensation_complete is True
+    handle.close()
+
+
+def test_prepared_handle_proves_no_change_before_restored_old_start(case):
+    module, paths, args = case
+    before = snapshot(paths)
+    handle = module.prepare_public_files(**args)
+
+    assert module.compensate_public_files(handle) == ()
+    assert handle.compensation_attempted is True
+    assert handle.compensation_complete is True
+    assert handle.state == "compensated"
+    assert snapshot(paths) == before
+    assert Path(handle.bundle_path).is_dir()
+    handle.close()
+
+
+def test_prepared_compensation_refuses_drift_in_an_already_matching_target(case):
+    module, paths, args = case
+    handle = module.prepare_public_files(**args)
+    matching = paths["application"] / "app/ops/matching.py"
+    matching.write_bytes(b"foreign after preflight\n")
+    matching.chmod(0o644)
+    foreign_inode = matching.stat().st_ino
+
+    with pytest.raises(module.InstallationRefused, match="compensation_refused"):
+        module.compensate_public_files(handle)
+
+    assert handle.compensation_attempted is True
+    assert handle.compensation_complete is False
+    assert dict(handle.compensation)["app/ops/matching.py"] == "refused"
+    assert matching.stat().st_ino == foreign_inode
+    assert matching.read_bytes() == b"foreign after preflight\n"
+    handle.close()
+
+
+def test_apply_refuses_drift_after_preparation_without_overwriting_it(case):
+    module, paths, args = case
+    handle = module.prepare_public_files(**args)
+    changed = paths["application"] / "app/ops/helper.py"
+    changed.write_bytes(b"foreign after backup\n")
+    changed.chmod(0o600)
+    foreign_inode = changed.stat().st_ino
+
+    with pytest.raises(module.InstallationRefused, match="file_drift") as raised:
+        module.apply_public_files(handle)
+
+    assert raised.value.installation is handle
+    assert handle.state == "refused"
+    assert changed.stat().st_ino == foreign_inode
+    assert changed.read_bytes() == b"foreign after backup\n"
+    assert (paths["launcher"] / "yggdrasil-bws-deploy").read_bytes() == b"#!/fixed/python\nold launcher\n"
+    assert Path(handle.bundle_path).is_dir()
+    handle.close()
+
+
+def test_apply_refuses_a_closed_or_consumed_handle(case):
+    module, _paths, args = case
+    handle = module.prepare_public_files(**args)
+    handle.close()
+    with pytest.raises(module.InstallationRefused, match="installation_state_refused"):
+        module.apply_public_files(handle)
+
+
+def test_handle_refuses_apply_and_close_from_a_different_process(case):
+    module, paths, args = case
+    before = snapshot(paths)
+    handle = module.prepare_public_files(**args)
+    owner_pid = handle._owner_pid
+    handle._owner_pid = owner_pid + 1
+
+    with pytest.raises(module.InstallationRefused, match="installation_owner_process_refused"):
+        module.apply_public_files(handle)
+    with pytest.raises(module.InstallationRefused, match="installation_owner_process_refused"):
+        handle.close()
+
+    assert handle.state == "prepared"
+    assert snapshot(paths) == before
+    handle._owner_pid = owner_pid
+    handle.close()
+
+
+def test_prepared_state_cannot_be_reconstructed_from_a_path(case):
+    module, paths, args = case
+    before = snapshot(paths)
+    foreign = module.Installation(args["backup_root"].path + "/synthetic", state="prepared")
+
+    with pytest.raises(module.InstallationRefused, match="installation_state_refused"):
+        module.apply_public_files(foreign)
+
+    assert snapshot(paths) == before
+    assert not list(paths["backups"].iterdir())
+
+
 @pytest.mark.parametrize("fault", ["mid_install", "rename_then_error", "link_then_error", "target_fsync", "target_partial_write", "foreign_same_bytes", "inplace_drift", "newcomer"])
 def test_partial_install_compensation_is_exact_and_owned(case, monkeypatch, fault):
     module, paths, args = case
@@ -308,6 +423,10 @@ def test_partial_install_compensation_is_exact_and_owned(case, monkeypatch, faul
     monkeypatch.setattr(os, "write", write)
     error = refused(module, args)
     result = dict(error.installation.compensation)
+    assert error.installation.compensation_attempted is True
+    assert error.installation.compensation_complete is all(
+        outcome != "refused" for outcome in result.values()
+    )
     assert (historical / "pin").read_bytes() == b"retain forever"
     assert (paths["backups"] / args["bundle_name"] / "manifest.json").is_file()
     if fault in {"foreign_same_bytes", "inplace_drift"}:
@@ -381,7 +500,7 @@ def test_component_has_no_native_execution_entrypoint(case):
     tree = ast.parse(Path(module.__file__).read_text())
     imports = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
     imports |= {name.name for node in ast.walk(tree) if isinstance(node, ast.Import) for name in node.names}
-    assert imports <= {"__future__", "fcntl", "hashlib", "json", "os", "pathlib", "re", "stat", "dataclasses", "typing", "uuid"}
+    assert imports <= {"__future__", "fcntl", "hashlib", "json", "os", "pathlib", "re", "stat", "dataclasses", "typing", "uuid", "weakref"}
     with module.install_public_files(**args) as handle:
         assert handle.state == "installed"
         assert all(outcome != "refused" for _, outcome in module.compensate_public_files(handle))

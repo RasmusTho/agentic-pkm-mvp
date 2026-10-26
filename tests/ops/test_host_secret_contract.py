@@ -10,6 +10,7 @@ from app.ops.host_secret_contract import (
     HostSecretContract,
     UndeclaredSecretConsumerError,
     load_host_secret_contract,
+    load_host_secret_contract_bytes,
 )
 from app.ops.host_secret_controller import HostSecretController
 
@@ -45,6 +46,25 @@ def test_contract_is_value_free() -> None:
     text = Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8")
 
     assert "value" not in text
+
+
+def test_independent_contract_load_accepts_exact_public_bytes() -> None:
+    raw = Path("config/secrets/host_secret_contract.json").read_bytes()
+
+    assert load_host_secret_contract_bytes(raw) == load_host_secret_contract()
+
+
+def test_independent_contract_load_refuses_duplicate_keys_and_non_bytes() -> None:
+    raw = Path("config/secrets/host_secret_contract.json").read_bytes()
+    duplicate = raw.replace(
+        b'"keychain_service": "yggdrasil.host-secrets",',
+        b'"keychain_service": "ambiguous",\n  "keychain_service": "yggdrasil.host-secrets",',
+    )
+
+    with pytest.raises(ValueError, match="duplicate host secret contract key"):
+        load_host_secret_contract_bytes(duplicate)
+    with pytest.raises(ValueError, match="invalid host secret contract"):
+        load_host_secret_contract_bytes("not bytes")  # type: ignore[arg-type]
 
 
 def test_contract_resolves_distinct_channel_scoped_keychain_accounts() -> None:
