@@ -335,7 +335,24 @@ effort improved before adopting further changes.
   the PR marker expression and 120-second per-test thread watchdog; each work unit remains within
   the unchanged 3300-second shard budget, and per-unit plus aggregate logs are retained. Any
   failed, timed-out, missing, duplicate, incomplete, or serial-boundary failure stays red under the
-  single required `Unit tests (not pg)` verdict. Other scoped selections retain the existing
+  single required `Unit tests (not pg)` verdict.
+  The measured `tests/deploy/test_deploy_channel_script.py` module reuses the full-suite node
+  planner when more than one worker is available. Its two shared-checkout rollback tests remain
+  together; its remaining collected nodes form disjoint units within the same four-process cap.
+  Other deploy files remain atomic. The runner authenticates the selected file inventory before
+  expansion, rejects duplicate collected nodes, and verifies one pytest result for every planned
+  node in its executing partition. Missing, duplicate, unexpected, or unrecognized node results
+  fail that partition. A single-worker invocation retains file execution.
+  Each completed failed partition emits its diagnostic log immediately, before waiting for other
+  workers or the serial boundary. The final aggregate retains every partition's log, and remaining
+  selected coverage still runs; prompt diagnostics do not turn partial execution into success.
+  [PR #6373 job 121343690509](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/40251333352/job/121343690509)
+  supplied the motivating measurement: the atomic deployment file took 2324.55 seconds and the
+  serial boundary took 892.48 seconds. An earlier partition finished red at 00:57:33 UTC, while its
+  detailed output was delayed until 01:47:34 UTC. That job had 87 failures across all five phases;
+  its final one-failure summary described only the serial phase. These historical timings justify
+  the bounded change but do not establish its resulting runtime or a ten-minute protected lane.
+  Other scoped selections retain the existing
   single pytest invocation. This mechanism addresses the critical-path failure recorded by
   [failed job 117620023504](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39108712261/job/117620023504)
   from PR #6193. The closed #6206 balancing contract retained its 60-minute ceiling and accepted
