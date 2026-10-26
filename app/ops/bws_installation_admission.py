@@ -512,7 +512,7 @@ def _verify_checkout_caller(caller: dict[str, object]) -> None:
     binding = _checkout_caller_binding(caller)
     if binding is None:
         return
-    selected = _checkout_binding(Path(binding["path"]), cast(str, binding["revision"]))
+    selected = _checkout_binding(Path(cast(str, binding["path"])), cast(str, binding["revision"]))
     if selected != binding:
         _refuse()
 
