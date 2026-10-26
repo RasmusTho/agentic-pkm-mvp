@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
-def target(tmp_path, monkeypatch, request):
+def target(tmp_path, monkeypatch, request, admitted_bws_caller):
     tmp_path = runtime_reachable_test_root(tmp_path, request).resolve()
     root = tmp_path / 'checkout'
     (root / 'config/deploy').mkdir(parents=True)

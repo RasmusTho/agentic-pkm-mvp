@@ -4095,11 +4095,17 @@ class LinuxEffects:
                 and owner_marker.get('kind') == 'operator-identity-restoration'
                 and self.config.channel == 'dev'
             )
+            bws_source_installation = (
+                set(owner_marker) == {'kind', 'channel', 'operation_id', 'candidate_sha', 'image_digest'}
+                and owner_marker.get('kind') == 'bws-source-installation'
+                and re.fullmatch(r'[0-9a-f]{40}', owner_marker.get('candidate_sha', '')) is not None
+                and re.fullmatch(r'sha256:[0-9a-f]{64}', owner_marker.get('image_digest', '')) is not None
+            )
             if (journal is None or journal.channel != self.config.channel
                 or self.config.channel not in {'dev', 'test'}
                 or not (
                     qualification or karakeep or source_persistence or source_diagnostic
-                    or operator_identity_restoration
+                    or operator_identity_restoration or bws_source_installation
                 )
                 or owner_marker['channel'] != self.config.channel
                 or owner_marker['operation_id'] != self.operation_id
@@ -4128,14 +4134,15 @@ class LinuxEffects:
             self.lock_fd = None
             if descriptor is not None:
                 os.close(descriptor)
-            receipt = (journal or self.config.journal).read()
-            if retire_terminal and receipt and receipt.operation_id == self.operation_id and receipt.terminal_result:
-                if owner_marker is not None:
-                    with self.failed_reconciliation_lock(expected_owner=owner_marker) as handle:
-                        self.retire_reconciled_channel_lock(handle, expected_owner=owner_marker)
-                else:
-                    (path / 'bws-owner').unlink()
-                    path.rmdir()
+            if retire_terminal:
+                receipt = (journal or self.config.journal).read()
+                if receipt and receipt.operation_id == self.operation_id and receipt.terminal_result:
+                    if owner_marker is not None:
+                        with self.failed_reconciliation_lock(expected_owner=owner_marker) as handle:
+                            self.retire_reconciled_channel_lock(handle, expected_owner=owner_marker)
+                    else:
+                        (path / 'bws-owner').unlink()
+                        path.rmdir()
             # Pending or unreadable state retains the mkdir lock as a durable
             # admission refusal. Never clear it merely because this thread ended.
 
@@ -4262,16 +4269,22 @@ class SupervisedOperation:
 
     def _run(self) -> None:
         try:
-            with self.effects.channel_lock():
-                try:
-                    self._run_locked()
-                except Exception:
-                    self.failed = True
-                    receipt = self.effects.config.journal.read()
-                    if (receipt and receipt.operation_id == self.operation_id
-                        and receipt.stage == 'prepared' and self.effects.quiescent()):
-                        self.effects.config.journal.write(self.operation_id, 'aborted')
-                    # Terminal write remains under the lock, before its cleanup.
+            from app.ops.bws_installation_admission import shared_caller_reservation
+
+            # The request handler may return `pending` while this worker keeps
+            # running. Retain the cross-channel shared reservation until every
+            # worker effect and its channel-lock cleanup have finished.
+            with shared_caller_reservation(self.effects.config.channel):
+                with self.effects.channel_lock():
+                    try:
+                        self._run_locked()
+                    except Exception:
+                        self.failed = True
+                        receipt = self.effects.config.journal.read()
+                        if (receipt and receipt.operation_id == self.operation_id
+                            and receipt.stage == 'prepared' and self.effects.quiescent()):
+                            self.effects.config.journal.write(self.operation_id, 'aborted')
+                        # Terminal write remains under the lock, before its cleanup.
         except Exception:
             self.failed = True
         finally:
@@ -4510,6 +4523,48 @@ class DeploymentSupervisor:
         return {'result': result, 'recovery': 'test-instance-state-released'}
 
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
+        if data.get('action') == 'source-installation-profile':
+            profile_fields = {'action', 'operation_id', 'candidate_sha', 'image_digest', '_peer_credentials'}
+            if (frozenset(data) not in {frozenset(profile_fields),
+                                        frozenset(profile_fields | {'caller_source_modules'})}
+                    or type(data.get('_peer_credentials')) is not tuple):
+                raise PostgresDeployError()
+            caller_source_modules = data.get('caller_source_modules')
+            operation_id = data['operation_id']
+            revision = data['candidate_sha']
+            image_digest = data['image_digest']
+            peer_credentials = data['_peer_credentials']
+            if (type(operation_id) is not str or str(UUID(operation_id)) != operation_id
+                    or type(revision) is not str or re.fullmatch(r'[0-9a-f]{40}', revision) is None
+                    or type(image_digest) is not str
+                    or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None):
+                raise PostgresDeployError()
+            from app.ops.bws_installation_admission import require_active_installation_owner
+
+            require_active_installation_owner(
+                self.config.channel, operation_id, revision, image_digest,
+                peer_credentials=peer_credentials,
+            )
+            with self.mutex:
+                self._require_current_config()
+                if ((self.operation is not None and not self.operation.finished.is_set())
+                        or self.karakeep is not None):
+                    raise PostgresDeployError()
+                from app.ops.bws_installation_transaction import loaded_source_profile
+                from app.ops.bws_installation_admission import cleanup_must_skip
+
+                if not cleanup_must_skip(self.config.channel):
+                    raise PostgresDeployError()
+
+                return {
+                    'source_installation_profile': loaded_source_profile(
+                        self.config, operation_id=operation_id,
+                        candidate_sha=revision, image_digest=image_digest,
+                        caller_source_modules=caller_source_modules,
+                    ),
+                    'supervisor_idle': True,
+                    'exec_stop_post_no_write': True,
+                }
         if data.get('action') in {'karakeep-acquire', 'karakeep-project'}:
             from app.ops.karakeep_runtime import dispatch
 
@@ -4762,7 +4817,32 @@ def serve(config: LinuxConfig) -> None:
                 raw = self.rfile.readline(65537)
                 if not raw.endswith(b'\n') or len(raw) > 65536:
                     raise PostgresDeployError()
-                result = supervisor.request(json.loads(raw))
+                request = json.loads(raw)
+                if not isinstance(request, dict):
+                    raise PostgresDeployError()
+
+                if isinstance(request, dict) and request.get('action') == 'source-installation-profile':
+                    # This private callback is admissible only while the same
+                    # fixed launcher process holds the exclusive owner.
+                    option = getattr(socket, 'SO_PEERCRED', None)
+                    if type(option) is not int:
+                        raise PostgresDeployError()
+                    credentials = self.connection.getsockopt(socket.SOL_SOCKET, option, 12)
+                    if type(credentials) is not bytes or len(credentials) != 12:
+                        raise PostgresDeployError()
+                    peer_credentials = tuple(
+                        int.from_bytes(credentials[offset:offset + 4], byteorder=sys.byteorder, signed=True)
+                        for offset in (0, 4, 8)
+                    )
+                    if any(value < 0 for value in peer_credentials):
+                        raise PostgresDeployError()
+                    request['_peer_credentials'] = peer_credentials
+                    result = supervisor.request(request)
+                else:
+                    from app.ops.bws_installation_admission import shared_caller_reservation
+
+                    with shared_caller_reservation(config.channel):
+                        result = supervisor.request(request)
             except Exception:
                 result = {'refused': True}
             self.wfile.write((json.dumps(result, sort_keys=True) + '\n').encode())
@@ -4775,11 +4855,22 @@ def serve(config: LinuxConfig) -> None:
     if config.socket_path.exists():
         config.socket_path.unlink()
     previous_umask = os.umask(0o077)
+    startup_reservation_released = False
+
+    def release_startup_reservation() -> None:
+        nonlocal startup_reservation_released
+        callback = getattr(sys, '_yggdrasil_bws_startup_reservation_release', None)
+        if callback is not None and not startup_reservation_released:
+            startup_reservation_released = True
+            callback()
+
     try:
         with Server(str(config.socket_path), Handler) as server:
             os.chmod(config.socket_path, 0o600)
+            release_startup_reservation()
             server.serve_forever()
     finally:
+        release_startup_reservation()
         os.umask(previous_umask)
         os.close(singleton)
 
@@ -4787,6 +4878,19 @@ def serve(config: LinuxConfig) -> None:
 def rpc(channel: str, request: dict[str, Any]) -> dict[str, Any]:
     if channel not in {'dev', 'test', 'prod'} or os.geteuid() != 0:
         raise PostgresDeployError()
+    if isinstance(request, dict) and request.get('action') == 'source-installation':
+        if channel not in {'dev', 'test'}:
+            raise PostgresDeployError()
+        from app.ops.bws_installation_transaction import run_source_installation
+
+        return run_source_installation(channel, request)
+    from app.ops.bws_installation_admission import shared_caller_reservation
+
+    with shared_caller_reservation(channel):
+        return _rpc_via_supervisor(channel, request)
+
+
+def _rpc_via_supervisor(channel: str, request: dict[str, Any]) -> dict[str, Any]:
     path = Path('/run/yggdrasil/bws-deploy') / (channel + '.sock')
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(
@@ -4799,7 +4903,10 @@ def rpc(channel: str, request: dict[str, Any]) -> dict[str, Any]:
         with connection.makefile('rwb') as stream:
             stream.write((json.dumps(request) + '\n').encode())
             stream.flush()
-            raw = stream.readline(65537)
+            response_limit = 1_048_576 if request.get('action') == 'source-installation-profile' else 65536
+            raw = stream.readline(response_limit + 1)
+            if not raw.endswith(b'\n') or len(raw) > response_limit:
+                raise PostgresDeployError()
     result = json.loads(raw)
     if not isinstance(result, dict) or result.get('refused'):
         raise PostgresDeployError()
@@ -5308,7 +5415,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--compose-command')
     args = parser.parse_args(argv)
     journaling_started = False
+    admissions = ExitStack()
     try:
+        if args.action not in {'serve', 'rpc', 'cleanup'}:
+            from app.ops.bws_installation_admission import shared_caller_reservation
+
+            admissions.enter_context(shared_caller_reservation(args.channel))
         if args.action in {'karakeep-acquire', 'karakeep-project'}:
             if args.channel != 'test' or any((args.operation_id, args.attempt_id, args.prior_generation, args.compose_command)):
                 raise PostgresDeployError()
@@ -5381,6 +5493,23 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == 'guard':
             inherited_worker_guard(args.channel, args.compose_command)
         elif args.action == 'cleanup':
+            from app.ops.bws_installation_admission import cleanup_must_skip
+
+            if args.channel in {'dev', 'test'}:
+                from app.ops.bws_installation_admission import shared_caller_reservation
+
+                # The no-write probe alone is racy: a source installer could
+                # acquire its exclusive owner immediately after the probe.
+                # Hold the shared caller reservation for the complete cleanup
+                # body so either cleanup finishes first or ExecStopPost skips.
+                if cleanup_must_skip(args.channel):
+                    return 0
+                try:
+                    admissions.enter_context(shared_caller_reservation(args.channel))
+                except Exception:
+                    # Contention or uncertain admission must never fall through
+                    # to source cleanup during an owner transition.
+                    return 0
             effects = LinuxEffects(LinuxConfig.load(args.channel))
             running = effects.compose('ps', '--status', 'running', '-q', *DATABASE_CONSUMERS.values()).strip()
             if not running and effects.quiescent() and effects.config.password_file.exists():
@@ -5408,6 +5537,8 @@ def main(argv: list[str] | None = None) -> int:
             return 78
         print('database deployment refused; operation remains pending', file=sys.stderr)
         return 78
+    finally:
+        admissions.close()
 
 
 if __name__ == '__main__':
