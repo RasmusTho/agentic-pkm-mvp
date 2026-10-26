@@ -113,6 +113,7 @@ def test_terminal_checkout_binding_does_not_block_admission_after_checkout_remov
     checkout = tmp_path / "candidate"
     checkout.mkdir(mode=0o700)
     checkout_info = checkout.stat()
+    checkout_verifier = admission._verify_checkout_caller
     caller = {
         "pid": os.getpid(), "uid": os.geteuid(), "gid": os.getegid(), "start_time": 42,
         "argv_sha256": _digest("1"), "executable_sha256": _digest("2"),
@@ -129,12 +130,21 @@ def test_terminal_checkout_binding_does_not_block_admission_after_checkout_remov
         lease.complete(_receipt(request))
 
     checkout.rmdir()
-    monkeypatch.setattr(admission, "_verify_checkout_caller", lambda _caller: admission._refuse())
+    monkeypatch.setattr(admission, "_verify_checkout_caller", checkout_verifier)
+    with pytest.raises(admission.InstallationAdmissionRefused):
+        admission._verify_live_caller(caller)
 
     assert admission.cleanup_must_skip("dev") is False
     with admission.installation_admission("dev", mode="shared"):
         pass
-    assert json.loads((runtime / "dev.source-installation.lock").read_text())["operation_id"] == request[
+    fixed_caller = {
+        key: value for key, value in caller.items() if key not in {"candidate_sha", "source_checkout"}
+    }
+    monkeypatch.setattr(admission, "_fixed_caller_identity", lambda _channel: fixed_caller)
+    next_request = _request()
+    with admission.installation_admission(**next_request) as next_lease:
+        next_lease.complete(_receipt(next_request))
+    assert json.loads((runtime / "dev.source-installation.lock").read_text())["operation_id"] == next_request[
         "operation_id"
     ]
 
