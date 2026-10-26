@@ -109,8 +109,11 @@ only the BuilderOps probe's private temporary runtime handoff. The
 [cloud-secret owner procedure](../CLOUD_SECRET_PROVISIONING/README.md#bob-1-builderops-alert-handoff)
 owns application, recovery and rotation. This admission creates no provider,
 channel, BWS account, Product consumer grant, or separate secret store; Heimdal
-retains the shared relationship and credential lifecycle. Runtime activation and
-delivery remain unverified until #6347 records their exact live receipts.
+retains the shared relationship and credential lifecycle. The separately authorized
+#6347 component window has, as of 2026-10-26, qualified this dedicated bob-1 probe binding and
+one controlled down/recovery delivery pair through the existing shared destination;
+its [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#issuecomment-6405523126) preserves the exact scope and failure/retry evidence.
+Other consumers and complete-system acceptance retain their separate qualification gates.
 
 ## Integration and event boundary
 
