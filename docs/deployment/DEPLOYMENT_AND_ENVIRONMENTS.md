@@ -6,13 +6,14 @@ Authority: Canonical deployment + environment-separation contract. `docs/ENVIRON
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
 Infrastructure reference review: 2026-10-21 (status ownership and stale October 3 paragraph only)
-Last reviewed: 2026-10-23 (#6228 promotion admission and recovery binding, repository-only; existing TEST preparation, native acquisition and credential gates retained; other sections were not re-audited)
+Last reviewed: 2026-10-26 (#6342 BWS recovery transaction, repository-only; no new live host or service verification)
 Last live runtime verification: 2026-10-11 UTC (accepted native DEV/TEST activation, health/version/UI and isolated PostgreSQL verification under #5675; the earlier read-only route checks remain separate, and `prod` was not queried)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903); Issue #5868 and the existing-secret deployment Verify targets, which establish repository behavior only.
 Verification update (2026-10-10): repository support includes post-merge image admission and private-host dev/test orchestration under #5922. Deterministic verification establishes the orchestration, digest and migration boundaries; live activation and functional channel acceptance are recorded separately under #5675.
 Verification update (2026-10-11): the accepted full controller flow committed DEV and TEST at one immutable candidate from `main` at `216ef75e9a2ea009e547e96497a0bb2532b9a379`, each 547/547 selected PG tests, with the current shared profile, health/version/UI, matching native/stream envelopes and exact owned cleanup/lock readback. The [actual receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) establishes the PG coverage handoff. Permanent controller installed/loaded source, runtime and checkpoint are recorded separately on #5675 after reviewed-main installation; native PG/smoke does not establish production eligibility.
 Verification update (2026-09-29): BWS-03/#5679's encrypted reader-token push command was delivered by PR #5732 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`). At that point this established repository support only; see the 2026-10-15 #5667 update below for the later component-specific live receipts and the remaining integrated acceptance gate.
 Verification update (2026-10-15): #5667 comments [#6114638077](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114638077) and [#6114724380](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114724380) verify the current Free-plan entitlement, both existing reader tokens' access to both projects, active encrypted reader services and matching receipts on ygg-dev, ygg-test, and ygg-prod, the exact MARR non-prod binding, and retirement of the unused generic helper/token. Comment [#6114787299](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) accepts the Demerzel normal-writer model and same-user bearer residual. These component receipts do not establish the complete target/action-bound DEV/TEST/PROD deployment/runtime acceptance; #5667 remains open for that parent gate.
+Verification update (2026-10-26): Issue #6342 adds repository support for one fresh, exact DEV/TEST BWS source-installation transaction. Its synthetic transaction tests do not establish live operation admission, host recovery, candidate admission, or same-image DEV/TEST acceptance; the owner gates under #3347 remain controlling.
 
 ## Why this document exists
 
@@ -1299,11 +1300,15 @@ response interception and offline abort follow those same exact paths.
 Repository-only public-file transaction support (#6331) is available in
 `app.ops.bws_control_installation`. Its callable `install_public_files` consumes an exact
 finite reviewed manifest, replacement bytes and authenticated application/control/launcher/backup
-root identities. It accepts Python files below `app/`, the application's separately loaded
+root identities. It accepts Python files below `app/` in the application and control roots, Python
+files below `scripts/` in the application root, the application's separately loaded
 `config/secrets/host_secret_contract.json`, and the fixed `yggdrasil-bws-deploy` launcher only.
 It validates no-follow ancestor/file identities, ownership, single-link regular files, exact
-before hashes/modes or absence, and after hashes. Source/JSON replacements are mode `0644`;
-the launcher is mode `0755`. Already-matching targets retain their inode and timestamps.
+before hashes/modes or absence, and after hashes. The loaded `scripts/__init__.py` may retain its
+tracked mode `0755` in the old generation; the candidate source replacement is normalized to
+`0644`, and same-handle compensation restores the exact prior mode. Other source/JSON replacements
+are mode `0644`; the launcher is mode `0755`. Already-matching targets retain their inode and
+timestamps.
 
 Before replacing a target, the component saves actual before bytes and supported modes (or an
 absence marker), fsyncs each backup and publishes a manifest inside an exclusively created
@@ -1323,12 +1328,66 @@ there is no retry/adoption/replay loader, CLI, automatic post-merge hook or live
 These are **file mechanics only**, proved with temporary-filesystem tests. The caller must
 already hold authenticated exclusion of other writers for the complete handle lifetime;
 component directory flocks serialize cooperating component calls only, not native admission.
-They do not discharge the parent #3347 gates: actual native preflight, admission exclusion,
-old/new BWS generation, whole ExecStopPost no-write proof, complete imported Python and
-independent JSON closure, service stop/reload, one-use native effect decision, candidate
-admission, or same-final-image DEV/TEST acceptance. No boolean assertion replaces those
-prerequisites. #3347 remains open; repository delivery is neither an assembled installation
-packet nor permission to operate it.
+
+The fixed DEV/TEST caller in `app.ops.bws_installation_transaction` composes those file mechanics
+with the existing BWS operation reservation, current writer/caller census, authenticated public
+roots, and fixed unit lifecycle. Its first-call route is a direct `rpc dev|test` invocation from a
+clean candidate checkout whose `HEAD` equals the requested revision. The request binds that checkout
+and the live RPC process, including the checkout identity and launcher-script digest. The old
+supervisor may use the legacy launcher and may not support a source-profile RPC or source-byte
+loader; the transaction does not query one. It records the old process/kernel token, unit
+configuration, public-root identities, complete on-disk Python inventory under `app/` and
+`scripts/`, separately validated JSON contract, and fixed launcher bytes. This is old-state disk
+evidence; it does not claim which bytes the old process loaded.
+
+Intermediate directories traversed to reach the candidate checkout or authenticated roots may use
+mode `0750` when the existing owner checks pass and the directory is not group/world-writable. The
+selected checkout and source/control roots, plus required in-root anchors, retain their exact
+`0700`/`0755` checks. Sticky/shared or writable ancestors, symlinks, foreign owners, and a `0750`
+selected root still refuse; no-follow identity and file-mode checks are unchanged.
+
+Before mutation, the transaction checks the exact candidate Git tree without importing or executing
+candidate modules, compares it with the current no-follow disk inventory, validates candidate file
+modes and JSON separately, and refuses missing, untracked, duplicate, deleted, symlinked,
+unsupported, oversized, ambiguous, or drifting evidence. It prepares one backup handle for all
+changed public files. The existing terminal deployment and writer census are captured as
+before-state evidence and must remain identical at each recheck. Their revision and image may differ
+from the separately verified requested candidate. While holding the exclusive BWS reservation, it
+installs the candidate fixed launcher first through that handle. The new launcher's pre-import
+`ExecStopPost` path sees the
+exclusive lock and exits through its no-write cleanup path. The transaction then rechecks callers
+and the protected writer census, stops and verifies the exact old process, and only then installs
+the remaining candidate source and JSON files through the same handle.
+
+Only the newly started candidate supervisor must provide the complete source-only profile. The
+fixed launcher disables bytecode writes and loads `app.*` and `scripts.*` modules from stable,
+no-follow source reads; the candidate profile checks the complete installed inventory and JSON
+contract against the expected candidate, then checks each reported loaded module hash and mode
+against that inventory. A one-use start grant binds service startup to the exact operation and
+generation. The transaction keeps the owner and backup handle through
+candidate verification, compensation or install, handle/runtime closure, final profile and writer
+rechecks, and the redacted terminal receipt. It never repeats a service start or adopts an
+unresolved owner.
+
+If candidate installation fails after the old service is verified stopped, compensation restores
+only exact writes from the original handle. The prior service is restarted only if its restored
+runtime can also be qualified. The legacy supervisor in this first-call path has no loaded-source
+profile, so after a post-stop failure the transaction leaves the service stopped and retains
+ownership evidence; it does not claim a verified old-runtime restart. Unknown cleanup or drift also
+leaves it stopped and keeps the owner unresolved. A failure before requesting the old service stop
+can compensate the staged launcher through the same handle. If the stop was requested but its
+outcome cannot be verified, the transaction preserves the owner and backup evidence without
+retrying the stop, compensating the launcher, publishing a terminal receipt, or continuing with
+source/JSON installation. An unfinished owner marker survives process loss and is never adopted or
+replayed. This is repository support for one DEV/TEST `source-installation` RPC, not a CLI, general
+installer, PROD path, native host transaction, or DEV/TEST acceptance receipt.
+
+These checks establish repository support only. They do not establish that the actual native
+owner, complete caller census, whole `ExecStopPost` no-write path, old/new generations, final
+same-handle closure, or one-use effect decision have been admitted for a live operation. The
+owner's separate #3347/#6321 gates still control any native call and same-image DEV/TEST
+acceptance. Synthetic transaction tests and repository delivery are not an assembled live
+installation packet or permission to operate it; #3347 remains open.
 
 For full-scope BWS deploys, the target image's native-source embedding dependency is preflighted before the
 migration writer drain. A strict Product embedding route selects the current provider/model; the

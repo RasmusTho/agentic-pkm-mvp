@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 from datetime import date
 import json
 import os
@@ -401,6 +402,8 @@ def test_journaling_refusal_is_not_native_web_evidence(monkeypatch, capsys):
     assert linux.main(['qualify-journaling', 'prod', str(uuid4())]) == 78
     outcome = json.loads(capsys.readouterr().out)
     assert outcome['profile_version'] == journaling.PROFILE and outcome['cleanup'] == 'not_started'
+    monkeypatch.setattr('app.ops.bws_installation_admission.shared_caller_reservation',
+                        lambda _channel: nullcontext())
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: object())
     monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: SimpleNamespace(
         _web_admission=lambda _operation: None,

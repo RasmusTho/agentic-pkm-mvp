@@ -42,7 +42,7 @@ def _request(plan, identifier, action='prepare', *, bootstrap=False):
 
 
 @pytest.fixture(params=['dev', 'test'])
-def native(tmp_path, monkeypatch, request):
+def native(tmp_path, monkeypatch, request, admitted_bws_caller):
     channel = request.param
     root = tmp_path / 'checkout'
     (root / 'config/deploy').mkdir(parents=True)

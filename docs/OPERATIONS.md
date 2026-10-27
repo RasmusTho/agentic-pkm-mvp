@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-24 (#6316 current-state source admission; #6228 and prior repository support retained; no new live host or service verification)
+Last reviewed: 2026-10-26 (#6342 BWS recovery transaction, repository-only; no new live host or service verification)
 Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; this is not a new deployment, release or functional-acceptance receipt.
 Infrastructure reference review: 2026-10-21; other sections retain their individual verification dates.
 Local Colima startup entry reviewed 2026-10-24 against scripts/start_full_system.sh, tests/ops/test_colima_runtime_readiness.py and the isolated/default runtime receipts on Issue #4899; no TARS verification or placement change.
@@ -15,6 +15,7 @@ Native journaling entry repository evidence (2026-10-14): app/ops/postgres_deplo
 Native authority-cutover repository evidence (2026-10-14): app/ops/postgres_deploy.py::DeployPlan, app/ops/postgres_deploy_linux.py::DeploymentSupervisor and tests/deploy/test_postgres_deploy_authority_cutover.py; live nonprod qualification remains with #3367.
 TEST dormant-ownership section reviewed and verified against repository-only #5937 evidence (2026-10-16): app/instance/legacy_owner_recovery.py::initialize_dormant_ownership and tests/ops/test_dormant_ownership_initialization.py; no live authority, channel or service verification.
 Current-state source admission section last verified against repository-only #6316 evidence (2026-10-24): app/ops/native_source_admission.py, app/ops/postgres_deploy_linux.py::LinuxEffects.persist_source_identity and tests/ops/test_native_source_diagnostic_admission.py; actual source and same-candidate DEV/TEST acceptance remain with #3347/#6300.
+BWS source-install recovery repository evidence (2026-10-26): `app/ops/bws_installation_transaction.py`, `app/ops/bws_installation_admission.py`, `app/ops/bws_installation_lifecycle.py`, and `tests/ops/test_bws_installation_transaction.py`; Issue #6342. Synthetic temporary-file and injected-port proof only; no native host or service verification, and same-image DEV/TEST acceptance remains with #3347.
 Last verified against: scripts/postmerge_channel_bug.py::advance_channel_ref, .github/workflows/postmerge-channel-bug.yml and tests/deploy/test_postmerge_dev_test.py::test_channel_refs_advance_only_on_green_verdicts / ::test_dev_hold_pins_ref_and_records_candidates (#6226 repository-only ref/hold proof); scripts/postmerge_dev_test.py and tests/deploy/test_postmerge_dev_test.py::test_test_promotion_requires_passing_dev_heavy_verdict (#6227 repository-only dev-heavy gate evidence); requirements-bws-deploy.txt (host SDK closure), scripts/install_postmerge_controller.py, scripts/postmerge_controller.py, scripts/postmerge_dev_test.py, scripts/dev_delivery_liveness.py and tests/deploy/test_postmerge_dev_test.py::test_controller_runs_from_pinned_tooling / ::test_controller_self_check_fails_loud (#6225 repository-only pinned tooling and startup proof); scripts/postmerge_dev_test.py::engage_pause and tests/deploy/test_postmerge_dev_test.py::test_kill_switch_pauses_until_expiry (#6224 repository-only pause evidence); scripts/dev_delivery_liveness.py and tests/governance/test_dev_delivery_liveness_workflow.py (#6222 repository-only liveness evidence); scripts/postmerge_dev_test.py, scripts/postmerge_channel_bug.py and tests/deploy/test_postmerge_dev_test.py (#6223 repository-only rolling channel-bug evidence); scripts/companion_ui_postdeploy_smoke.sh::preflight and tests/companion_ui/test_gateway_postdeploy_smoke.py::test_collection_preflight_classifies_captured_output_without_pipe_race (#6079 repository-only evidence), docs/MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md, app/api/routes/ask.py::ask_voice, app/chat/voice_session.py::VoiceSessions, tests/voice/test_session_transcript.py::test_only_write_is_appendonly_transcript (VOICE-04 repository evidence), docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/KARAKEEP_MIMER_ACQUISITION/README.md, docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md, docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md, config/secrets/host_secret_contract.json, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, app/ops/native_source_bootstrap.py, scripts/deploy_channel.sh, tests/deploy/test_deploy_channel_script.py::test_native_deploy_rebuilds_source_projection_before_health_gate, tests/deploy/test_deploy_channel_script.py::test_native_api_source_selector_refuses_before_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_unbound_api_preserves_idle_without_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_prepares_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_refuses_unavailable_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_preserves_selected_embedding_identity, Issue #6069 candidate containing origin/main 8ec709f (repository-only; no live channel verification), tests/ops/test_ci_workflow.py::test_not_pg_steps_have_room_for_selected_coverage, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-14
 TypeSafe credential boundary evidence: config/secrets/host_secret_contract.json; tests/ops/test_host_secret_contract.py::test_typesafe_key_uses_non_prod_project_and_marr_only_consumer, tests/ops/test_secret_admin.py::test_typesafe_import_targets_non_prod_and_rejects_other_channels, and tests/architecture/test_typesafe_runtime_boundary.py::test_runtime_key_stays_on_marr_and_callers_keep_separate_policy; Issue #5808 follows Issue #5801 / PR #5803 on 2026-10-07. Repository-only fake/injected-source evidence; no live BWS permission or host/provider verification.
 TypeSafe Builder CKM repository evidence: app/builderops/ckm/judgment.py, app/model_access/ckm_judgment_executor.py, tests/builderops/ckm/test_semantic_typesafe.py, and Issue #5768 on 2026-10-05; fake-provider proofs only, with runtime disabled and no live host or provider verification.
@@ -83,6 +84,19 @@ controller load, deployment, inference, or promotion. Do not replay partial/inde
 reconcile only against retained exact hashes. Rollback is permitted only for a validated batch
 member whose current bytes equal its admitted candidate and must run under the same pre/post fence.
 No raw path, UUID, content, or exception text belongs in its public count-only receipt.
+
+The repository also supports one new, single-use DEV/TEST BWS source-installation transaction through
+`app.ops.bws_installation_transaction`. Its direct `rpc dev|test` caller must come from the exact
+clean candidate checkout. It binds a fresh operation reservation, the complete current writer/caller
+census, source roots, unit configuration, and old/new generations; it records old on-disk state but
+does not infer which source bytes a legacy service loaded. The fixed candidate launcher is installed
+first, the exact old process is stopped and verified, and only then are remaining source and JSON
+files replaced through the same prepared handle. Success requires final exact-generation checks and
+a redacted terminal receipt. If installation fails after stop and the old runtime cannot be
+qualified, the transaction leaves the service stopped and its owner unresolved. It never adopts or
+replays an earlier operation, retries an unknown outcome, or routes to PROD. This repository support
+does not authorize a live call or prove DEV/TEST acceptance; #3347 remains the owner gate. See the
+[detailed deployment contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery).
 
 ### #6300 fixed-selection reconciliation (historical, count-only)
 
@@ -534,6 +548,13 @@ Companion docs:
 - `docs/runbooks/UAT_PANEL_WATCHER.md` for a watcher/panel walkthrough
 
 ## Runtime Compose Stack
+
+The separate BuilderOps component window #6347 (status 2026-10-26) qualified bob-1 monitoring and
+retired only the old Mac `builderops-control-plane` API/worker/DB containers. Their restart
+policies are disabled and original PostgreSQL volume/history retained, including the failed
+old PR #5350 distinction. No import/replay or unrelated helper lifecycle change occurred; see
+the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#issuecomment-6405523126). The app runtime stack below retains its own lifecycle.
+
 - Canonical runtime compose stack: `db`, `api`, `watcher`, `worker`.
 - `docker-compose.yaml` starts FastAPI (`api`), `worker`, `watcher`, and Postgres for local development.
 - Ensure `.env` contains the desired secrets before running `docker compose up --build`.
@@ -823,10 +844,11 @@ Issue #6336 adds a plan-only bob-1 monitoring path, distinct from the Product
 `test`/`prod` probe installer. The prepared probe checks the qualified engine/project,
 authenticated loopback readiness and expected schema/epoch, explicit worker freshness,
 database container health (including local disk/WAL guardrails), and outbox degradation.
-It reuses the shared notification adapter through a separately admitted host-secret
-handoff and retains private engine/epoch-bound outage state. This is repository support,
-not installed monitoring or a client/authority cutover. Installation, a live alert drill,
-and retirement of the Mac duplicate remain separately authorized host work; see the
+It reuses the shared notification adapter through the dedicated admitted encrypted host
+credential and private invocation-only handoff, retaining engine/epoch-bound outage state.
+As of 2026-10-26, the separately authorized #6347 window has installed and enabled this component
+and qualified one down/repeat/recovery drill with the exact worker restored healthy.
+This component result does not establish global client/authority cutover; see the
 [deployment owner contract](BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#prepared-linux-builderops-monitoring).
 Backup/restore is not a readiness gate, and bob-1 power-off detection requires an
 outside observer.

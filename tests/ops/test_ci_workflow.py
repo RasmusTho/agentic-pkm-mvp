@@ -367,16 +367,19 @@ else:
     time.sleep(0.05)
 state_path = Path(os.environ["FAKE_STATE"])
 state_path.parent.mkdir(exist_ok=True)
-with state_path.open("a+", encoding="utf-8") as handle:
+state_path.touch(exist_ok=True)
+lock_path = state_path.with_suffix(".lock")
+with lock_path.open("a+", encoding="utf-8") as handle:
     import fcntl
     fcntl.flock(handle, fcntl.LOCK_EX)
-    handle.seek(0)
-    state = __import__("json").loads(handle.read() or "{}")
+    state = __import__("json").loads(state_path.read_text(encoding="utf-8") or "{}")
     state["active"] = state.get("active", 0) + (targets[0] != "tests/ops")
     state["max_active"] = max(state.get("max_active", 0), state["active"])
-    handle.seek(0)
-    handle.truncate()
-    handle.write(__import__("json").dumps(state))
+    temporary_state = state_path.with_suffix(".tmp")
+    temporary_state.write_text(__import__("json").dumps(state), encoding="utf-8")
+    os.replace(temporary_state, state_path)
+    if os.environ.get("MODE") == "state-visible-before-unlock":
+        assert __import__("json").loads(state_path.read_text()) == state
     fcntl.flock(handle, fcntl.LOCK_UN)
 print("ARGV " + __import__("json").dumps(targets))
 if os.environ.get("MODE") == "deploy-deselected" and targets[0] == "tests/deploy/nested/child_test.py":
@@ -415,13 +418,15 @@ if targets[0] == os.environ.get("FAILING_SHARD") or any(
     sys.exit(1)
 print("1 passed")
 if targets[0] != "tests/ops":
-    with state_path.open("r+", encoding="utf-8") as handle:
+    with lock_path.open("a+", encoding="utf-8") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        state = __import__("json").loads(handle.read() or "{}")
+        state = __import__("json").loads(state_path.read_text(encoding="utf-8") or "{}")
         state["active"] -= 1
-        handle.seek(0)
-        handle.truncate()
-        handle.write(__import__("json").dumps(state))
+        temporary_state = state_path.with_suffix(".tmp")
+        temporary_state.write_text(__import__("json").dumps(state), encoding="utf-8")
+        os.replace(temporary_state, state_path)
+        if os.environ.get("MODE") == "state-visible-before-unlock":
+            assert __import__("json").loads(state_path.read_text()) == state
         fcntl.flock(handle, fcntl.LOCK_UN)
 ''', encoding="utf-8",
     )
@@ -538,6 +543,14 @@ def test_full_suite_records_fully_deselected_deploy_module(tmp_path: Path) -> No
     assert "0 tests/deploy/nested/child_test.py" in (shard_root / "status").read_text().splitlines()
     log = (shard_root / "logs/tests_deploy_nested_child_test.py.log").read_text()
     assert "1 deselected" in log and "EXECUTED" not in log
+
+
+def test_full_suite_fake_shard_state_visible_before_unlock(tmp_path: Path) -> None:
+    result, _files, _job = _run_full_suite_workflow(tmp_path, mode="state-visible-before-unlock")
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["active"] == 0
+    assert state["max_active"] <= 4
 
 
 def test_full_suite_node_collection_failure_is_fail_red_and_retained(tmp_path: Path) -> None:
@@ -732,6 +745,8 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+if "--collect-only" in sys.argv:
+    raise SystemExit(0)
 target_text = " ".join(sys.argv[1:])
 print(target_text, flush=True)
 if active_dir_value := os.environ.get("FAKE_ACTIVE_DIR"):
@@ -904,6 +919,9 @@ import sys
 
 args = sys.argv[1:]
 node = "tests/scripts/test_publication.py::test_publish_pr_rejects_missing_governing_issue"
+if "--collect-only" in args:
+    print(node)
+    raise SystemExit(0)
 executions = 0
 if "tests/scripts" in args:
     executions += 1
@@ -1245,6 +1263,239 @@ if "TIMEOUT_SCOPED" in __import__("os").environ:
     assert incomplete.returncode != 0
     assert "incomplete" in incomplete.stderr
 
+
+def _run_scoped_measured_fixture(tmp_path: Path, mode: str = "complete"):
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+
+    nodes = [*SHARED_CHECKOUT_NODES, *(
+        f"{TARGET_MODULE}::test_regular_{index}[value with space]" for index in range(9)
+    )]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(f"#!{sys.executable}\n" + r'''
+import fcntl
+import json
+import os
+from pathlib import Path
+import sys
+import time
+args = sys.argv[1:]
+nodes = json.loads(os.environ["FAKE_NODES"])
+mode = os.environ["FAKE_MODE"]
+if "--collect-only" in args:
+    print("\n".join(nodes))
+    raise SystemExit(0)
+state_path = Path(os.environ["FAKE_STATE"])
+serial = "tests/ops/test_native_journaling_acceptance.py" in args
+with state_path.open("a+") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    handle.seek(0)
+    raw = handle.read()
+    state = json.loads(raw) if raw else {"active": 0, "peak": 0, "invocations": []}
+    state["active"] += 1
+    state["peak"] = max(state["peak"], state["active"])
+    state["invocations"].append(args)
+    if serial:
+        state["serial_active"] = state["active"]
+        state["serial_invocation_count"] = len(state["invocations"])
+    handle.seek(0)
+    handle.truncate()
+    json.dump(state, handle)
+time.sleep(0.05)
+for node in args:
+    if node in nodes:
+        if mode == "missing" and node == nodes[-1]:
+            continue
+        print(node + " PASSED", flush=True)
+        if mode == "duplicate" and node == nodes[-1]:
+            print(node + " PASSED", flush=True)
+        if mode == "unexpected" and node == nodes[-1]:
+            print(node.split("::")[0] + "::test_unplanned PASSED", flush=True)
+with state_path.open("r+") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    state = json.load(handle)
+    state["active"] -= 1
+    handle.seek(0)
+    handle.truncate()
+    json.dump(state, handle)
+''', encoding="utf-8")
+    fake_pytest.chmod(0o755)
+    expected = [TARGET_MODULE, "tests/scripts", "tests/ops"]
+    state_path = tmp_path / "state.json"
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+         "--partitions-json", json.dumps([[target] for target in expected]),
+         "--expected-targets-json", json.dumps(expected),
+         "--execution-units-json", json.dumps([[target] for target in expected]),
+         "--log-dir", str(tmp_path / "logs"),
+         "--aggregate-log", str(tmp_path / "aggregate.log"),
+         "--jobs", "4", "--shard-timeout-seconds", "10",
+         "--serial-boundary-json", json.dumps(["tests/ops/test_native_journaling_acceptance.py"])],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             "FAKE_NODES": json.dumps(nodes), "FAKE_MODE": mode, "FAKE_STATE": str(state_path)},
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    return result, json.loads(state_path.read_text()), nodes
+
+
+def _weighted_root_fixture(tmp_path, monkeypatch, *, collection_code=0):
+    import scripts.run_scoped_test_partitions as runner
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+    from scripts.select_pr_tests import SCOPED_DEPLOY_SERIAL_BOUNDARY
+
+    serial = SCOPED_DEPLOY_SERIAL_BOUNDARY
+    deploy_nodes = (*SHARED_CHECKOUT_NODES, *(
+        f"{TARGET_MODULE}::test_regular_{index:04}" for index in range(696)
+    ))
+    nodes = (*deploy_nodes, *(
+        f"tests/ops/test_atomic.py::test_case[{index}]" for index in range(2603)
+    ), *(
+        f"tests/scripts/test_atomic.py::test_case[{index}]" for index in range(1310)
+    ))
+    collections = []
+    executed = []
+
+    class Collection:
+        pid = 123456789
+        returncode = collection_code
+
+        def communicate(self, timeout):
+            assert timeout == runner.COLLECTION_TIMEOUT_SECONDS
+            return "\n".join(nodes) if not collection_code else "collection failed", None
+
+    def collect(command, **kwargs):
+        assert "--collect-only" in command
+        collections.append(command)
+        return Collection()
+
+    def execute(index, targets, *, log_dir, timeout_seconds):
+        executed.append(tuple(targets))
+        log = log_dir / f"partition-{index}.log"
+        log.write_text("".join(f"{node} PASSED\n" for node in targets if node in deploy_nodes))
+        return index, 0, log, False
+
+    monkeypatch.setattr(runner.subprocess, "Popen", collect)
+    monkeypatch.setattr(runner, "_terminate_process_group", lambda _pid: None)
+    monkeypatch.setattr(runner, "_run_partition", execute)
+    expected = (TARGET_MODULE, "tests/ops", "tests/scripts")
+
+    def run():
+        return runner.run_partitions(
+            tuple((target,) for target in expected), log_dir=tmp_path / "logs",
+            aggregate_log=tmp_path / "aggregate.log", jobs=4, timeout_seconds=10,
+            serial_last=False, serial_boundary=serial,
+            execution_units=tuple((target,) for target in expected), expected_targets=expected,
+        )
+
+    return run, collections, executed, deploy_nodes, serial
+
+
+def test_scoped_runner_weights_atomic_roots_without_stacking_deploy_nodes(tmp_path, monkeypatch):
+    from scripts.select_pr_tests import PR_MARKER_EXPRESSION
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES
+
+    run, collections, executed, nodes, serial = _weighted_root_fixture(tmp_path, monkeypatch)
+    assert run() == 0
+    assert len(collections) == 1
+    collection = collections[0]
+    assert collection[collection.index("-m") + 1] == PR_MARKER_EXPRESSION
+    assert "tests/ops" in collection and "tests/scripts" in collection
+    assert all(f"--ignore={path}" in collection for path in serial)
+    assert executed[-1] == serial
+    parallel = executed[:-1]
+    assert len(parallel) == 4
+    ops = next(unit for unit in parallel if "tests/ops" in unit)
+    scripts = next(unit for unit in parallel if "tests/scripts" in unit)
+    assert ops != scripts
+    assert ops == ("tests/ops", *(f"--ignore={path}" for path in serial))
+    assert scripts == ("tests/scripts",)
+    assert sorted(target for unit in parallel for target in unit if target in nodes) == sorted(nodes)
+    assert sum(set(SHARED_CHECKOUT_NODES) <= set(unit) for unit in parallel) == 1
+    assert all(path not in unit for unit in parallel for path in serial)
+
+
+def test_scoped_runner_weight_collection_failure_stops_execution(tmp_path, monkeypatch):
+    run, collections, executed, _nodes, _serial = _weighted_root_fixture(
+        tmp_path, monkeypatch, collection_code=2,
+    )
+    with pytest.raises(RuntimeError, match="collection failed"):
+        run()
+    assert len(collections) == 1
+    assert executed == []
+
+
+def test_scoped_runner_splits_measured_module_with_exact_coverage(tmp_path: Path) -> None:
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+
+    result, state, nodes = _run_scoped_measured_fixture(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    invocations = state["invocations"]
+    actual = [target for args in invocations for target in args if target.startswith(TARGET_MODULE)]
+    assert sorted(actual) == sorted(nodes)
+    node_invocations = [args for args in invocations if any(node in args for node in nodes)]
+    assert 2 <= len(node_invocations) <= 4
+    assert sum(set(SHARED_CHECKOUT_NODES) <= set(args) for args in node_invocations) == 1
+    assert state["peak"] <= 4
+    assert state["serial_active"] == 1
+    assert state["serial_invocation_count"] == len(invocations)
+    assert all("--ignore=tests/ops/test_native_journaling_acceptance.py" in args
+               for args in invocations if "tests/ops" in args)
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert all(aggregate.count(node + " PASSED") == 1 for node in nodes)
+
+
+@pytest.mark.parametrize("mode", ["missing", "duplicate", "unexpected"])
+def test_scoped_runner_rejects_incomplete_measured_node_evidence(tmp_path: Path, mode: str) -> None:
+    result, _state, _nodes = _run_scoped_measured_fixture(tmp_path, mode)
+    assert result.returncode == 1
+    assert "Collected-node verification failed:" in result.stderr
+    assert "Collected-node verification failed:" in (tmp_path / "aggregate.log").read_text()
+
+
+def test_scoped_runner_reports_failure_before_other_partitions_finish(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(f"#!{sys.executable}\n" + r'''
+import os
+from pathlib import Path
+import sys
+import time
+if "tests/fast" in sys.argv:
+    print("early-diagnostic", flush=True)
+    raise SystemExit(7)
+release = Path(os.environ["FAKE_RELEASE"])
+while not release.exists():
+    time.sleep(0.01)
+print("slow-released-after-diagnostic", flush=True)
+''', encoding="utf-8")
+    fake_pytest.chmod(0o755)
+    release = tmp_path / "release"
+    process = subprocess.Popen(
+        [sys.executable, str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+         "--partitions-json", json.dumps([["tests/fast"], ["tests/slow"]]),
+         "--expected-targets-json", json.dumps(["tests/fast", "tests/slow"]),
+         "--log-dir", str(tmp_path / "logs"),
+         "--aggregate-log", str(tmp_path / "aggregate.log"),
+         "--jobs", "2", "--shard-timeout-seconds", "5"],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_RELEASE": str(release)},
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    assert process.stdout is not None
+    output = []
+    for line in process.stdout:
+        output.append(line)
+        if "early-diagnostic" in line:
+            release.touch()
+    assert process.wait(timeout=15) == 1
+    assert "".join(output).count("early-diagnostic") == 1
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert "early-diagnostic" in aggregate
+    assert "slow-released-after-diagnostic" in aggregate
+    assert "PARTITION TIMED OUT" not in aggregate
 
 def test_scoped_runner_serial_last_failure_is_aggregated(tmp_path: Path) -> None:
     """The legacy serial-last path must remain fail-loud and observable."""

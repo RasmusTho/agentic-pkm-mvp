@@ -257,9 +257,14 @@ def _expected_child_binding(logical_id: str) -> str:
 
 
 def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretContract:
-    payload = json.loads(
-        path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_json_keys
-    )
+    return load_host_secret_contract_bytes(path.read_bytes())
+
+
+def load_host_secret_contract_bytes(raw: bytes) -> HostSecretContract:
+    """Validate the independently loaded public JSON contract from exact bytes."""
+    if type(raw) is not bytes or not raw or len(raw) > 1024 * 1024:
+        raise ValueError("invalid host secret contract")
+    payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
     if not isinstance(payload, dict) or set(payload) != _CONTRACT_FIELDS:
         raise ValueError("invalid host secret contract")
     if (

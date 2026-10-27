@@ -18,6 +18,7 @@ import stat
 from dataclasses import dataclass, field
 from typing import Mapping, NoReturn
 from uuid import uuid4
+import weakref
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,7 @@ class _Target:
     uid: int
     gid: int
     written: _File | None = None
+    applied: bool = False
 
 
 @dataclass
@@ -88,6 +90,8 @@ class Installation:
     bundle_path: str
     state: str = "preparing"
     compensation: list[tuple[str, str]] = field(default_factory=list)
+    compensation_attempted: bool = False
+    compensation_complete: bool | None = None
     _directories: list[_Directory] = field(default_factory=list, repr=False)
     _targets: list[_Target] = field(default_factory=list, repr=False)
     _backup_files: dict[str, _File] = field(default_factory=dict, repr=False)
@@ -95,11 +99,20 @@ class Installation:
     _bundle: int | None = field(default=None, repr=False)
     _backup_parent: int | None = field(default=None, repr=False)
     _bundle_name: str = field(default="", repr=False)
+    _owner_pid: int = field(default_factory=os.getpid, init=False, repr=False)
+
+    def _require_owner_process(self) -> None:
+        if self._owner_pid != os.getpid():
+            _refuse("installation_owner_process_refused")
+        if any(os.get_inheritable(descriptor) for descriptor in self._fds):
+            _refuse("installation_descriptor_refused")
 
     def close(self) -> None:
+        self._require_owner_process()
         for fd in reversed(self._fds):
             os.close(fd)
         self._fds.clear()
+        _LIVE_INSTALLATIONS.pop(id(self), None)
         self.state = "closed"
 
     def __enter__(self) -> Installation:
@@ -107,6 +120,9 @@ class Installation:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+
+_LIVE_INSTALLATIONS: weakref.WeakValueDictionary[int, Installation] = weakref.WeakValueDictionary()
 
 
 def _refuse(reason: str) -> NoReturn:
@@ -140,7 +156,7 @@ def _manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
     if any(not isinstance(c, Change) or not isinstance(c.root, str)
            or not isinstance(c.path, str) for c in changes):
         _refuse("manifest_refused")
-    if not changes or len(changes) > 128 or set(roots) != {c.root for c in changes}:
+    if not changes or len(changes) > 192 or set(roots) != {c.root for c in changes}:
         _refuse("manifest_refused")
     if not set(roots) <= {"application", "control", "launcher"}:
         _refuse("manifest_refused")
@@ -161,20 +177,28 @@ def _manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
         _refuse("root_alias_refused")
     for change in changes:
         parts = _path(change.path)
-        source = (len(parts) >= 2 and parts[0] == "app" and parts[-1].endswith(".py")
-                  and all(re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*(?:\.py)?", p) for p in parts))
-        allowed = (source if change.root in {"application", "control"} else
-                   change.path == "yggdrasil-bws-deploy")
+        source_path = (len(parts) >= 2 and re.fullmatch(r"[A-Za-z0-9_]+\.py", parts[-1])
+                       and all(re.fullmatch(r"[A-Za-z0-9_]+", p) for p in parts[:-1]))
+        allowed = (
+            (source_path and (parts[0] == "app" or
+                              (change.root == "application" and parts[0] == "scripts")))
+            if change.root in {"application", "control"} else
+            change.path == "yggdrasil-bws-deploy"
+        )
         if change.root == "application" and change.path == "config/secrets/host_secret_contract.json":
             allowed = True
-        mode = 0o755 if change.root == "launcher" else 0o644
+        mode_ok = (
+            change.mode == 0o755 if change.root == "launcher" else
+            change.mode in {0o644, 0o755} if source_path else
+            change.mode == 0o644
+        )
         before_ok = ((change.before_sha256 is None and change.before_mode is None)
                      or (isinstance(change.before_sha256, str)
                          and re.fullmatch(r"[0-9a-f]{64}", change.before_sha256)
                          and type(change.before_mode) is int
                          and change.before_mode in {0o600, 0o644, 0o700, 0o755}))
         data = payloads[(change.root, change.path)]
-        if (not allowed or type(change.mode) is not int or change.mode != mode or not before_ok
+        if (not allowed or type(change.mode) is not int or not mode_ok or not before_ok
                 or not isinstance(change.after_sha256, str)
                 or re.fullmatch(r"[0-9a-f]{64}", change.after_sha256) is None
                 or not isinstance(data, bytes) or len(data) > 8 * 1024 * 1024
@@ -365,27 +389,38 @@ def _compensate(handle: Installation) -> bool:
         return False
     complete = True
     for target in reversed(handle._targets):
-        if target.written is None:
-            continue
         outcome = "refused"
         try:
             _backup_valid(handle)
             name = PurePosixPath(target.change.path).name
-            _same(target.parent, name, target.written)
-            if target.before is None:
-                os.unlink(name, dir_fd=target.parent)
-                os.fsync(target.parent)
-                _same(target.parent, name, None)
-                outcome = "removed"
+            if target.written is None:
+                # Already-matching and not-yet-written files are still part of
+                # the recovery proof. Do not start the old service if any one
+                # of these targets drifted after its preflight snapshot.
+                _same(target.parent, name, target.before)
+                outcome = "unchanged"
             else:
-                index = handle._targets.index(target)
-                saved = handle._backup_files[f"{index:04d}.before"]
-                _same(handle._bundle, f"{index:04d}.before", saved)  # type: ignore[arg-type]
-                _replace(handle, target, saved.data, stat.S_IMODE(target.before.info.st_mode), target.written)
-                outcome = "restored"
+                _same(target.parent, name, target.written)
+                if target.before is None:
+                    os.unlink(name, dir_fd=target.parent)
+                    os.fsync(target.parent)
+                    _same(target.parent, name, None)
+                    outcome = "removed"
+                else:
+                    index = handle._targets.index(target)
+                    saved = handle._backup_files[f"{index:04d}.before"]
+                    _same(handle._bundle, f"{index:04d}.before", saved)  # type: ignore[arg-type]
+                    _replace(handle, target, saved.data,
+                             stat.S_IMODE(target.before.info.st_mode), target.written)
+                    restored = _file(handle, target.parent, name, target.uid, target.gid,
+                                     stat.S_IMODE(target.before.info.st_mode))
+                    if restored.data != target.before.data:
+                        _refuse("file_drift")
+                    outcome = "restored"
         except (OSError, InstallationRefused):
             pass
-        handle.compensation.append((target.change.path, outcome))
+        if target.written is not None or outcome == "refused":
+            handle.compensation.append((target.change.path, outcome))
         if outcome == "refused":
             complete = False
     return complete
@@ -398,6 +433,22 @@ def install_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ..
 
     On refusal the exception retains a handle when allocated. Close it after
     inspection. Neither a failure nor close removes any backup or authorizes replay.
+    """
+    return apply_public_files(prepare_public_files(
+        roots=roots, changes=changes, payloads=payloads,
+        backup_root=backup_root, bundle_name=bundle_name,
+    ))
+
+
+def prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ...],
+                         payloads: Mapping[tuple[str, str], bytes], backup_root: Root,
+                         bundle_name: str) -> Installation:
+    """Validate and durably back up a finite manifest without replacing targets.
+
+    The returned handle retains the exact root, target, backup and flock identities
+    required by ``apply_public_files`` and compensation. Close it only after the
+    caller's surrounding operation reaches its terminal decision. A failed
+    preparation preserves any allocated backup bundle and never authorizes replay.
     """
     roots, changes, payloads = dict(roots), tuple(changes), dict(payloads)
     _manifest(roots, changes, payloads, backup_root)
@@ -433,37 +484,92 @@ def install_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ..
             _refuse("file_alias_refused")
         _tree(handle)
         _backup(handle, backup_fd, bundle_name)
-        handle.state = "installing"
         for target in handle._targets:
+            _same(target.parent, PurePosixPath(target.change.path).name, target.before)
+        handle.state = "prepared"
+        _LIVE_INSTALLATIONS[id(handle)] = handle
+        return handle
+    except (OSError, InstallationRefused) as exc:
+        handle.state = "refused"
+        reason = exc.reason if isinstance(exc, InstallationRefused) else "filesystem_refused"
+        raise InstallationRefused(reason, handle) from None
+
+
+def apply_public_files(
+    handle: Installation, *, target_keys: tuple[tuple[str, str], ...] | None = None,
+) -> Installation:
+    """Install selected targets through the exact still-open prepared handle.
+
+    A caller may apply disjoint subsets in order while retaining the same
+    backup/compensation authority. Every target remains bound to its original
+    identity; a later subset refuses if an earlier or not-yet-applied target
+    drifted.
+    """
+    if (not isinstance(handle, Installation) or handle.state not in {"prepared", "partially_installed"}
+            or _LIVE_INSTALLATIONS.get(id(handle)) is not handle):
+        raise InstallationRefused(
+            "installation_state_refused",
+            handle if isinstance(handle, Installation) else None,
+        )
+    handle._require_owner_process()
+    try:
+        all_keys = {(target.change.root, target.change.path) for target in handle._targets}
+        if target_keys is None:
+            selected_keys = all_keys
+        else:
+            selected_keys = set(target_keys)
+            if (not target_keys or len(selected_keys) != len(target_keys)
+                    or not selected_keys <= all_keys):
+                _refuse("target_selection_refused")
+        _tree(handle)
+        _backup_valid(handle)
+        for target in handle._targets:
+            expected = target.written if target.applied and target.written is not None else target.before
+            _same(target.parent, PurePosixPath(target.change.path).name, expected)
+        handle.state = "installing" if selected_keys == all_keys else "partially_installing"
+        for target in handle._targets:
+            key = (target.change.root, target.change.path)
+            if key not in selected_keys or target.applied:
+                continue
             _backup_valid(handle)
             _same(target.parent, PurePosixPath(target.change.path).name, target.before)
             if (target.before is not None and target.before.data == target.after
                     and stat.S_IMODE(target.before.info.st_mode) == target.change.mode):
+                target.applied = True
                 continue
             _replace(handle, target, target.after, target.change.mode, target.before)
+            target.applied = True
         _backup_valid(handle)
         for target in handle._targets:
-            _same(target.parent, PurePosixPath(target.change.path).name, target.written or target.before)
-        handle.state = "installed"
+            _same(target.parent, PurePosixPath(target.change.path).name,
+                  target.written if target.applied and target.written is not None else target.before)
+        handle.state = ("installed" if all(target.applied for target in handle._targets)
+                        else "partially_installed")
         return handle
     except (OSError, InstallationRefused) as exc:
-        if handle.state == "installing":
-            _compensate(handle)
+        if handle.state in {"installing", "partially_installing"}:
+            handle.compensation_attempted = True
+            handle.compensation_complete = _compensate(handle)
         handle.state = "refused"
         reason = exc.reason if isinstance(exc, InstallationRefused) else "filesystem_refused"
         raise InstallationRefused(reason, handle) from None
 
 
 def compensate_public_files(handle: Installation) -> tuple[tuple[str, str], ...]:
-    """Restore exact installed inodes once; any refusal raises with the live handle.
+    """Verify an untouched prepared handle or restore exact installed inodes once.
 
     The whole backup must remain valid even when no target needed replacement.
     Per-target outcomes remain available on the handle when compensation refuses.
     """
-    if handle.state != "installed":
+    if (not isinstance(handle, Installation)
+            or handle.state not in {"prepared", "partially_installed", "installed"}
+            or _LIVE_INSTALLATIONS.get(id(handle)) is not handle):
         raise InstallationRefused("compensation_state_refused", handle)
+    handle._require_owner_process()
     handle.state = "compensating"
-    if not _compensate(handle):
+    handle.compensation_attempted = True
+    handle.compensation_complete = _compensate(handle)
+    if not handle.compensation_complete:
         handle.state = "compensation_refused"
         raise InstallationRefused("compensation_refused", handle)
     handle.state = "compensated"

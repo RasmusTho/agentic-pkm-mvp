@@ -180,7 +180,9 @@ def test_runner_refuses_missing_or_foreign_evidence(tmp_path, monkeypatch, outpu
     assert fake.container is None and not runner.directory.exists()
 
 
-def test_qualify_heavy_is_fixed_dev_test_and_refuses_uncommitted(monkeypatch, capsys):
+def test_qualify_heavy_is_fixed_dev_test_and_refuses_uncommitted(
+    monkeypatch, capsys, admitted_bws_caller
+):
     assert linux.main(['qualify-heavy', 'prod', OPERATION]) == 78
     assert json.loads(capsys.readouterr().out) == {
         'profile_version': heavy.PROFILE_VERSION, 'result': 'refused', 'reason': 'fixed_dev_test_invocation_required'}
