@@ -75,7 +75,7 @@ _SOURCE_PROJECTION_FAILURE_REASONS = frozenset({
     'embedding_guard_refused',
     'embedding_probe_client_failed', 'embedding_probe_identity_mismatch',
     'embedding_probe_generation_failed', 'embedding_probe_vector_invalid',
-    'embedding_probe_cleanup_failed',
+    'embedding_probe_cleanup_failed', 'embedding_probe_executor_busy',
     'source_worker_timeout', 'source_worker_terminated', 'source_worker_oom',
 })
 # The embedding identity/model gate runs before the native source gate drains
@@ -88,7 +88,7 @@ _TEST_RECOVERY_SOURCE_FAILURE_REASONS = _SOURCE_PROJECTION_FAILURE_REASONS - fro
     'embedding_model_unavailable', 'embedding_model_not_ready', 'embedding_probe_failed',
     'embedding_probe_client_failed', 'embedding_probe_identity_mismatch',
     'embedding_probe_generation_failed', 'embedding_probe_vector_invalid',
-    'embedding_probe_cleanup_failed',
+    'embedding_probe_cleanup_failed', 'embedding_probe_executor_busy',
 })
 _GUARD_FAILURE_CHECKPOINTS = frozenset({
     'config_runtime_file_binding', 'inherited_owner_fd_inode_flock',

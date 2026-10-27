@@ -443,7 +443,9 @@ and the selected provider/model; no diagnostic permits provider substitution or 
 Its fixed content-free reasons are `embedding_probe_client_failed` (client/identity acquisition),
 `embedding_probe_identity_mismatch`, `embedding_probe_generation_failed` (generation/transport),
 `embedding_probe_vector_invalid` (shape/dimension and existing routed-client vector refusals), and
-`embedding_probe_cleanup_failed`, and `embedding_guard_refused`. The latter is reserved only when
+`embedding_probe_cleanup_failed`, `embedding_probe_executor_busy` (the Model Access executor kept
+refusing with its pre-dispatch `executor_busy` after the client's bounded re-send schedule), and
+`embedding_guard_refused`. The latter is reserved only when
 the inherited BWS guard refuses the supervised Compose call before Docker runs; it carries no
 checkpoint, guard status, or other host detail. An earlier failure takes precedence over cleanup failure;
 unknown process outcomes retain `embedding_probe_failed`. The wrapper discards child streams
