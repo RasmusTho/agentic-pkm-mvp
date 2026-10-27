@@ -1345,6 +1345,17 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/quality_wave",),
     ),
     (
+        # The shipped picker controller driven over the real gateway and API
+        # (#6368). A test- or harness-only edit must run the module rather
+        # than fail closed as unowned; the harness alone has no tests.
+        "multi_vault_picker",
+        (
+            "tests/integration/test_multi_vault_picker_context.py",
+            "tests/_mvr05b_picker_browser.py",
+        ),
+        ("tests/integration/test_multi_vault_picker_context.py",),
+    ),
+    (
         "ops",
         ("app/ops/", "tests/ops/"),
         ("tests/ops",),
