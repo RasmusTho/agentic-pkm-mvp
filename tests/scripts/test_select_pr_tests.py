@@ -2650,6 +2650,107 @@ def test_deploy_trigger_keeps_heavy_deploy_suite_on_pr_path(path: str) -> None:
     )
 
 
+@pytest.mark.parametrize("source", sorted(selector.NATIVE_DEPLOY_CONTROL_SOURCES))
+def test_native_deploy_control_scope_removes_only_unrelated_serial_modules(
+    source: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    changed = [source, "tests/deploy/test_postgres_deploy_linux.py", "docs/OPERATIONS.md"]
+    with monkeypatch.context() as baseline:
+        baseline.setattr(selector, "_native_deploy_control_selection", lambda selection, paths: selection)
+        broad = select_tests(changed)
+    selection = select_tests(changed)
+    assert not selection.full_suite
+    assert selection.subsystems == broad.subsystems
+    assert selection.deferred_targets == broad.deferred_targets
+    assert "tests/ops" in broad.targets and "tests/ops" not in selection.targets
+    assert set(broad.targets) - {"tests/ops"} <= set(selection.targets)
+    ops_modules = {
+        str(path) for path in Path("tests/ops").rglob("*.py")
+        if path.name.startswith("test_") or path.name.endswith("_test.py")
+    }
+    assert set(selection.targets) == (
+        set(broad.targets) - {"tests/ops"} | ops_modules
+    ) - selector.NATIVE_DEPLOY_UNRELATED_SERIAL
+    assert len(selector.NATIVE_DEPLOY_UNRELATED_SERIAL) == 7
+    assert len(selector.SCOPED_DEPLOY_SERIAL_BOUNDARY) == 8
+    assert "tests/ops/test_native_journaling_acceptance.py" in selection.targets
+    assert ("tests/deploy" in selection.targets) == ("tests/deploy" in broad.targets)
+    assert "tests/deploy/test_postgres_deploy_linux.py" in selection.targets
+    assert selector.requires_runtime_checks(changed)
+
+
+@pytest.mark.parametrize("extra", [
+    *sorted(selector.NATIVE_DEPLOY_UNRELATED_SERIAL),
+    "app/instance/runtime.py",
+    "app/instance/legacy_owner_recovery.py",
+    "scripts/git_hygiene.py",
+    "scripts/instance_state_writer_inventory.py",
+    "scripts/start_full_system.sh",
+    "scripts/deploy_channel.sh",
+    "scripts/postgres_deploy_service.py",
+    "tests/conftest.py",
+    "tests/deploy/conftest.py",
+    "tests/deploy/bws_fixture_support.py",
+    "tests/helpers/runtime_start_harness.py",
+    "tests/ops/test_colima_runtime_readiness.py",
+    "docs/ENVIRONMENTS.md",
+])
+def test_native_deploy_control_scope_falls_back_for_unaudited_changes(extra: str) -> None:
+    selection = select_tests(["app/ops/postgres_deploy_linux.py", extra])
+    assert selection.full_suite or "tests/ops" in selection.targets
+    assert "native deploy control scope" not in selection.reason
+    if extra.startswith("tests/") and extra.endswith(".py") and "conftest" not in extra:
+        assert selection.full_suite or extra in selection.targets
+
+
+def test_native_deploy_control_scope_requires_source_and_complete_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    changed = ["tests/deploy/test_postgres_deploy_linux.py", "docs/OPERATIONS.md"]
+    assert "native deploy control scope" not in select_tests(changed).reason
+    original = Path.is_file
+    for missing in (
+        "app/ops/postgres_deploy_linux.py",
+        "tests/ops/test_dormant_ownership_initialization.py",
+    ):
+        with monkeypatch.context() as context:
+            context.setattr(Path, "is_file", lambda path: str(path) != missing and original(path))
+            assert "native deploy control scope" not in select_tests(
+                ["app/ops/postgres_deploy_linux.py"]
+            ).reason
+
+
+def test_native_deploy_control_output_preserves_partition_and_serial_coverage(tmp_path: Path) -> None:
+    changed = [
+        *sorted(selector.NATIVE_DEPLOY_CONTROL_SOURCES),
+        "tests/deploy/test_postgres_deploy_linux.py",
+        "tests/ops/test_secret_admin.py",
+        "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+    ]
+    selection = select_tests(changed)
+    output = tmp_path / "native-control-output"
+    selector._write_github_output(output, selection)
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert fields["runtime_checks"] == "true"
+    assert json.loads(fields["scoped_serial_boundary_json"]) == [
+        "tests/ops/test_native_journaling_acceptance.py"
+    ]
+    partitions = json.loads(fields["scoped_partitions_json"])
+    assert sorted(target for partition in partitions for target in partition) == sorted(selection.targets)
+    assert len(selection.targets) == len(set(selection.targets))
+    units = json.loads(fields["scoped_execution_units_json"])
+    assert 1 <= len(units) <= 4
+    for target in [*selection.targets, *(target for unit in units for target in unit)]:
+        file = target.split("::", 1)[0]
+        assert not any(
+            excluded == file or excluded.startswith(file.rstrip("/") + "/")
+            for excluded in selector.NATIVE_DEPLOY_UNRELATED_SERIAL
+        ), target
+    assert "tests/ops/test_native_journaling_acceptance.py" in units[-1]
+    for changed_test in (path for path in changed if path.startswith("tests/")):
+        assert changed_test in selection.targets
+
+
 def test_scoped_deploy_partitions_preserve_selected_targets(tmp_path: Path) -> None:
     changed = [
         "app/ops/postgres_deploy_linux.py",

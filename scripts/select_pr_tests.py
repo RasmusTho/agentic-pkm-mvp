@@ -6,7 +6,7 @@ from functools import lru_cache
 import importlib.util
 import json
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
@@ -2042,6 +2042,84 @@ SCOPED_DEPLOY_SERIAL_BOUNDARY = (
     "tests/ops/test_start_full_runtime_health.py",
 )
 
+# These control-only changes do not change the seven sibling serial producers.
+# Keep all other normal coverage, including the shared native-journaling locks.
+NATIVE_DEPLOY_CONTROL_SOURCES = frozenset({
+    "app/ops/host_secret_controller.py",
+    "app/ops/postgres_deploy.py",
+    "app/ops/postgres_deploy_linux.py",
+    "app/ops/postgres_deploy_host.py",
+})
+NATIVE_DEPLOY_CONTROL_PATHS = NATIVE_DEPLOY_CONTROL_SOURCES | frozenset({
+    "tests/deploy/test_deploy_channel.py",
+    "tests/deploy/test_deploy_channel_script.py",
+    "tests/deploy/test_host_deploy_metadata.py",
+    "tests/deploy/test_native_image_acquisition_failure.py",
+    "tests/deploy/test_native_operator_identity_restoration.py",
+    "tests/deploy/test_postgres_deploy_authority_cutover.py",
+    "tests/deploy/test_postgres_deploy_authority_metadata.py",
+    "tests/deploy/test_postgres_deploy_linux.py",
+    "tests/deploy/test_postgres_deploy_principal_cutover.py",
+    "tests/deploy/test_postgres_deploy_service.py",
+    "tests/deploy/test_postmerge_dev_test.py",
+    "tests/deploy/test_postmerge_heavy_acceptance.py",
+    "tests/deploy/test_postmerge_pg_acceptance.py",
+    "tests/deploy/test_secret_token_push.py",
+    "tests/deploy/test_text_capture_activation.py",
+    "tests/ops/test_bws_installation_lifecycle.py",
+    "tests/ops/test_bws_installation_transaction.py",
+    "tests/ops/test_host_secret_bootstrap.py",
+    "tests/ops/test_host_secret_contract.py",
+    "tests/ops/test_native_guard_diagnostics.py",
+    "tests/ops/test_native_journaling_acceptance.py",
+    "tests/ops/test_native_source_diagnostic_admission.py",
+    "tests/ops/test_native_source_identity_persistence.py",
+    "tests/ops/test_native_web_acceptance.py",
+    "tests/ops/test_native_web_lock_lifecycle.py",
+    "tests/ops/test_postgres_deploy_bws_installation.py",
+    "tests/ops/test_secret_admin.py",
+    "docs/OPERATIONS.md",
+    "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+    "docs/CLOUD_SECRET_PROVISIONING/README.md",
+})
+NATIVE_DEPLOY_UNRELATED_SERIAL = frozenset({
+    "tests/ops/test_dormant_ownership_initialization.py",
+    "tests/ops/test_git_hygiene.py",
+    "tests/ops/test_instance_state_deployment_lease.py",
+    "tests/ops/test_instance_state_volume_contract.py",
+    "tests/ops/test_instance_state_writer_inventory.py",
+    "tests/ops/test_mvr05_mixed_version_fence.py",
+    "tests/ops/test_start_full_runtime_health.py",
+})
+
+
+def _native_deploy_control_selection(selection: Selection, paths: tuple[str, ...]) -> Selection:
+    """Remove only audited sibling suites for a closed control-source diff."""
+    if (
+        selection.full_suite
+        or "tests/ops" not in selection.targets
+        or not NATIVE_DEPLOY_CONTROL_SOURCES.intersection(paths)
+        or not set(paths) <= NATIVE_DEPLOY_CONTROL_PATHS
+        or any(not Path(path).is_file() or Path(path).is_symlink() for path in paths)
+    ):
+        return selection
+    root = Path("tests/ops")
+    if not root.is_dir() or root.is_symlink():
+        return selection
+    modules = tuple(str(path) for path in sorted(root.rglob("*.py")) if _is_test_module(str(path)))
+    if (
+        not NATIVE_DEPLOY_UNRELATED_SERIAL <= set(modules)
+        or any(not Path(path).is_file() or Path(path).is_symlink() for path in modules)
+    ):
+        return selection
+    targets = _dedupe([
+        item
+        for target in selection.targets
+        for item in (modules if target == "tests/ops" else (target,))
+        if item.split("::", 1)[0] not in NATIVE_DEPLOY_UNRELATED_SERIAL
+    ])
+    return replace(selection, targets=targets, reason=selection.reason + "; native deploy control scope")
+
 
 def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     runtime_prefixes = ("app/", "companion-ui/")
@@ -2182,9 +2260,10 @@ def select_tests(changed_files: list[str]) -> Selection:
     # Subsystem and docs branches funnel through this return, so changed
     # test coverage (or the explicit isolated smoke) is unioned once — no splice
     # to forget if a future branch is added here (the #3383 failure mode).
-    return _defer_heavy(
+    selection = _defer_heavy(
         Selection(False, subsystems, _pr_targets([*targets, *changed_tests]), reason), paths
     )
+    return _native_deploy_control_selection(selection, paths)
 
 
 def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
