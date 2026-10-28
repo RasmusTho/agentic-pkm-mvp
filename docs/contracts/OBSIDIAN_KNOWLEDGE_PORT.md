@@ -137,6 +137,7 @@ Validation rules:
 
 The KnowledgePort boundary is the normative write path for:
 - normal vault note writes and appends,
+- bounded identity-preserving same-vault placement through the HKA placement owner,
 - UUID healing writes back into vault notes,
 - companion-note creation and update,
 - bounded system-surface writes under system-owned paths,
@@ -151,6 +152,17 @@ KnowledgePort may not:
   path,
 - silently redefine human-authored meaning-bearing body content under the banner of healing,
 - or promote runtime/index artifacts into human-surface truth by write side effect alone.
+
+The dormant AUTOOPS-05 placement interface is `KnowledgePlacementOwner` in `app/knowledge/placement.py`.
+Its direct composition requires an immutable selected-vault/actor binding and current WSP/GOV
+checks through the existing full ActiveContextSetV1/selected-binding GOV effect window, expected
+source and absent-destination generations, no-clobber publication, durable
+reservation/recovery evidence, and source/AuthorityReceipts. It currently supports ordinary
+rewritten Markdown human notes only. The source stays authoritative until destination identity
+verification; projection lag is explicit and recoverable from the destination and receipt. The
+supported local-filesystem assumptions and finite transition matrix are owned by
+`docs/YGGDRASIL_AUTONOMOUS_OPERATIONS/DELIVER_IDENTITY_PRESERVING_MOVE_AND_RENAME.md`.
+This source interface does not install a runtime adapter or relax authenticated activation seals.
 
 ## Required test baseline
 1. Contract tests for `NoteLocator` portability constraints.

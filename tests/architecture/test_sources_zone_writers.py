@@ -87,6 +87,8 @@ SOURCE_RESOLVER_CALLERS = {
     ("app/heimdal/candidate_projection.py", "project_pending_candidates"),
     ("app/heimdal/meeting_finalization.py", "meetings_dir_rel"),
     ("app/journaling/day_context.py", "_read_captures"),
+    # HKA placement excludes the selected Sources zone; it cannot write there.
+    ("app/knowledge/placement.py", "KnowledgePlacementOwner._path"),
     ("app/knowledge/service.py", "_build_adapter"),
     ("app/knowledge/service.py", "resolve_knowledge_port"),
     ("app/knowledge_acquisition/acquire.py", "_candidate_will_render"),
@@ -107,6 +109,7 @@ SOURCE_CLASSIFICATION_FORWARDING_CALLERS = {
     ("app/knowledge/adapters.py", "FsVaultAdapter._classify_target"): "self.sources_root_rel",
     ("app/knowledge/adapters.py", "ObsidianCliAdapter.write_note"): "self.sources_root_rel",
     ("app/services/artifact_identity.py", "_is_create_once"): "sources_root_rel",
+    ("app/knowledge/placement.py", "KnowledgePlacementOwner._path"): "get_vault_sources_dir_rel(self.root)",
     (
         "app/ops/native_operator_identity_restoration.py",
         "run_worker",
@@ -130,6 +133,11 @@ SOURCE_DEFAULT_ROOT_ARGUMENTS = {
 }
 
 SOURCE_DEFAULT_ROOT_FORWARDING_CALLERS = {
+    (
+        "app/knowledge/placement.py",
+        "KnowledgePlacementOwner._path",
+        "app.knowledge.multiwriter.classify_note_in_vault",
+    ): ("get_vault_sources_dir_rel(self.root)",),
     (
         "app/agents/panel_agent/policy.py",
         "watcher_panel_writeback_allowed",
@@ -1321,6 +1329,7 @@ def test_classifier_callsite_inventory_rejects_missing_or_default_sources_root()
             "app/knowledge/__init__.py",
             "app/knowledge/adapters.py",
             "app/knowledge/multiwriter.py",
+            "app/knowledge/placement.py",
             "app/ops/native_operator_identity_restoration.py",
             "app/services/artifact_identity.py",
         )

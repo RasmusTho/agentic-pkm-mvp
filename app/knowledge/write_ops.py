@@ -21,9 +21,11 @@ import uuid
 from app.knowledge.adapters import (
     _atomically_retain_controlled_entry,
     _atomic_exchange_at,
-    _atomic_rename_noreplace_at,
+    # Explicit internal re-exports for HKA placement's physical mechanics.
+    # Adapter selection and authority stay at their existing owner boundaries.
+    _atomic_rename_noreplace_at as _atomic_rename_noreplace_at,
     _open_conflict_directory,
-    _read_stable_descriptor,
+    _read_stable_descriptor as _read_stable_descriptor,
     _same_file_identity,
 )
 from app.knowledge.contracts import WriteReceipt
