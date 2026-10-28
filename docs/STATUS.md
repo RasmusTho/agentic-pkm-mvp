@@ -1244,3 +1244,7 @@ Definitions: **live** = consumed by a running service in normal operation; **sea
 registered but flag-gated or uncalled; **dormant** = code plus tests exist, no runtime invocation.
 The CRE shows the activation path working; closing the rest of the Maintenance/Expansion asymmetry
 is the system's next major frontier, and the sequencing is intentional, not an oversight.
+
+## Subscription classification comparison (#3429, 2026-10-28)
+
+The opt-in subscription comparator uses the existing no-tools Codex executor for GPT-5.6 Luna, Terra and Sol. Its Issue receipt owns measured quality and batch timing. It neither provisions an API key nor changes Product defaults; usage and API-dollar costs are unavailable from this adapter.
