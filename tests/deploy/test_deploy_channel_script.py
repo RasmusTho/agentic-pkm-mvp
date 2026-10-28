@@ -4947,21 +4947,35 @@ def test_recover_test_source_rejects_plan_mismatch_before_host_marker(monkeypatc
     from app.ops import postgres_deploy_host as host
     from app.ops.host_secret_controller import HostSecretController
     from app.ops.postgres_deploy import AuthorityCutover, PostgresDeployError
-    from uuid import uuid4
 
-    failed_operation_id = str(uuid4())
     controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert resumed is False
+        failed_operation_id = operation.operation_id
+        operation.prepare_mutation()
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    retained_failed_revision = 'b' * 40
+    reset_requests = []
+    admin_resolutions = []
 
     class Remote:
         def __init__(self, hostname):
             assert hostname == 'ygg-test'
 
-        def test_recovery_reset(self, _request):
+        def test_recovery_reset(self, request):
+            # Model the VM refusing the candidate because it does not match the
+            # retained failed plan. The host must not publish a ready marker.
+            reset_requests.append(request)
+            assert request.plan.revision == 'a' * 40
+            assert request.plan.revision != retained_failed_revision
             raise PostgresDeployError()
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(
+        host, '_configured_deploy_admin',
+        lambda plan, selected: admin_resolutions.append((plan.channel, selected)) or object(),
+    )
     args = [
         'test', 'a' * 40, '--automatic', '--image-digest', 'sha256:' + 'a' * 64,
         '--existing-secrets-only', '--recover-test-source',
@@ -4972,6 +4986,10 @@ def test_recover_test_source_rejects_plan_mismatch_before_host_marker(monkeypatc
     ]
 
     assert host.main(args) == 78
+    assert admin_resolutions == [('test', controller)]
+    assert len(reset_requests) == 1
+    assert reset_requests[0].failed_operation_id == failed_operation_id
+    assert reset_requests[0].authority_cutover == authority
     marker = controller.directory / ('test-source-recovery-' + failed_operation_id + '.json')
     assert not marker.exists()
 
