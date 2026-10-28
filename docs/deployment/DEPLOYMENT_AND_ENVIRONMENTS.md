@@ -1389,6 +1389,17 @@ owner's separate #3347/#6321 gates still control any native call and same-image 
 acceptance. Synthetic transaction tests and repository delivery are not an assembled live
 installation packet or permission to operate it; #3347 remains open.
 
+New caught `refused_before_backup` receipts carry a value-free `prebackup_gate` from this finite
+set: `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
+`authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
+`backup_roots`, `source_manifest`, `candidate_profile`, `old_kernel_qualification`,
+`qualified_writer_snapshot`, or `generation_qualification`. The field classifies the producer gate
+that refused without storing exception text or request values. `authority_cutover` is one real
+current-writer predicate after `bound_plan`; its presence does not establish the cause of the
+earlier observed refusal. The canonical validator continues accepting legacy refusal receipts
+without this optional field and rejects unknown labels or use on other statuses. Status and null
+generation/backup meanings are unchanged.
+
 For full-scope BWS deploys, the target image's native-source embedding dependency is preflighted before the
 migration writer drain. A strict Product embedding route selects the current provider/model; the
 redacted Compose handoff exposes only those two fields. If Ollama is selected, the deploy starts the
