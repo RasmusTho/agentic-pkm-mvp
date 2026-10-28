@@ -1669,6 +1669,49 @@ def test_voice_contract_and_runtime_change_selects_voice_coverage() -> None:
     assert "tests/governance" in selection.targets
 
 
+@pytest.mark.parametrize("paths", (
+    ("app/episode_debrief/trigger.py",),
+    ("app/episode_debrief/store.py",),
+    (
+        "app/episode_debrief/trigger.py",
+        "tests/episode_debrief/test_trigger.py",
+        "docs/EPISODE_DEBRIEF/TRIGGER_DEBRIEF_ON_CLOSURE.md",
+    ),
+))
+def test_debrief_runtime_paths_select_owned_coverage_at_ci_entrypoint(
+    paths: tuple[str, ...], monkeypatch: pytest.MonkeyPatch, capsys, tmp_path: Path,
+) -> None:
+    output = tmp_path / "github-output"
+    argv = ["select_pr_tests.py", "--github-output", str(output)]
+    for path in paths:
+        argv.extend(("--changed-file", path))
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert selector.main() == 0
+    reported = capsys.readouterr().out
+    assert "full_suite=false\n" in reported
+    assert "subsystems=episodes\n" in reported
+    assert "unowned_paths=" not in reported
+    assert "tests/episode_debrief" in reported
+    assert "tests/episodes" in reported
+    assert "tests/invariants" in reported
+    assert "runtime_checks=true\n" in output.read_text()
+
+
+def test_debrief_owner_does_not_admit_a_similarly_named_runtime_directory(
+    monkeypatch: pytest.MonkeyPatch, capsys, tmp_path: Path,
+) -> None:
+    path = "app/episode_debrief_extra/trigger.py"
+    output = tmp_path / "github-output"
+    monkeypatch.setattr(sys, "argv", [
+        "select_pr_tests.py", "--changed-file", path, "--github-output", str(output),
+    ])
+
+    assert selector.main() == 2
+    assert f"unowned_paths={path}\n" in capsys.readouterr().out
+    assert not output.exists()
+
+
 def test_episodes_runtime_change_selects_episodes_coverage() -> None:
     selection = select_tests(
         [

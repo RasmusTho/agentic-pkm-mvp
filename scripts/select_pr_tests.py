@@ -1078,6 +1078,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "episodes",
         (
             "app/episodes/",
+            "app/episode_debrief/",
             "app/jobs/episodes_projection.py",
             # CrossScopeFlow is an Episodes contract even though its shared
             # definition and owner documentation live outside app/episodes.
@@ -1089,6 +1090,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # deprecated-store failure (from #3479) is repaired.
             "schemas/metadata-bundle.schema.json",
             "tests/episodes/",
+            "tests/episode_debrief/",
             "tests/architecture/test_cross_scope_flow_schema.py",
             "tests/invariants/test_episode_binding.py",
             "tests/invariants/test_cross_scope_flow.py",
@@ -1096,6 +1098,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
         (
             "tests/episodes",
+            "tests/episode_debrief",
             "tests/invariants",
             "tests/architecture/test_cross_scope_flow_schema.py",
         ),
