@@ -67,6 +67,175 @@ def _active_native_runtime(debrief_db, monkeypatch, *, extra_roots: tuple[str, .
     return first, extra
 
 
+def _initialize_nested_child(debrief_db, tmp_path: Path) -> Path:
+    from app.instance.vault_registry import AppLocalSettingsStore
+    from app.vault.manager import VaultManager
+    from app.write_guard import WriteGuard
+
+    child = debrief_db.root / "independent-child"
+    manager = VaultManager(
+        app_local_store=AppLocalSettingsStore(tmp_path / "probe-app-local.md"),
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    manager.initialize_vault(child, remember=False)
+    return child
+
+
+def _move_episode_into_child(debrief_db, episode_id: str, child: Path, *, via_symlink: bool):
+    relative = Path(debrief_db.execute(
+        "SELECT note_path FROM episodes WHERE episode_id=%s", (episode_id,)
+    )[0][0])
+    source = debrief_db.root / relative
+    target = child / "episode.md"
+    source.rename(target)
+    if via_symlink:
+        source.symlink_to(target)
+    else:
+        debrief_db.execute("UPDATE episodes SET note_path=%s WHERE episode_id=%s",
+                           (target.relative_to(debrief_db.root).as_posix(), episode_id))
+    return source, target, relative
+
+
+def _restore_episode_to_parent(debrief_db, episode_id: str, source: Path, target: Path,
+                               relative: Path) -> None:
+    if source.is_symlink():
+        source.unlink()
+    target.rename(source)
+    debrief_db.execute("UPDATE episodes SET note_path=%s WHERE episode_id=%s",
+                       (relative.as_posix(), episode_id))
+
+
+@pytest.mark.parametrize("via_symlink", [False, True], ids=["direct", "symlink"])
+def test_tick_rejects_nested_vault_episode_before_read(
+    debrief_db, monkeypatch, tmp_path: Path, via_symlink: bool,
+) -> None:
+    first, _ = _active_native_runtime(debrief_db, monkeypatch)
+    debrief_db.root = Path(first.path)
+    episode = debrief_db.episode(binding=first.vault_binding_id, scope="private")
+    debrief_db.closure(episode, binding=first.vault_binding_id)
+    child = _initialize_nested_child(debrief_db, tmp_path)
+    _, target, _ = _move_episode_into_child(debrief_db, episode, child, via_symlink=via_symlink)
+
+    reads: list[Path] = []
+    target_real = target.resolve()
+    original_read_text = Path.read_text
+
+    def observe_child_read(path: Path, *args, **kwargs):
+        if path == target_real:
+            reads.append(path)
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", observe_child_read)
+    with pytest.raises(DebriefReconciliationError, match="nested vault"):
+        debrief_db.tick(vault_binding_id=first.vault_binding_id)
+
+    assert reads == []
+    assert debrief_db.triggers() == []
+    assert store.get_cursor(vault_binding_id=first.vault_binding_id) is None
+
+
+@pytest.mark.parametrize("explicit_ref", [False, True], ids=["deterministic", "explicit"])
+def test_tick_rejects_nested_vault_debrief_artifact(
+    debrief_db, monkeypatch, tmp_path: Path, explicit_ref: bool,
+) -> None:
+    first, _ = _active_native_runtime(debrief_db, monkeypatch)
+    debrief_db.root = Path(first.path)
+    explicit = "existing-child-debrief"
+    episode = debrief_db.episode(
+        binding=first.vault_binding_id,
+        debrief_ref=[explicit] if explicit_ref else None,
+    )
+    frontier = debrief_db.closure(episode, binding=first.vault_binding_id)
+    child = _initialize_nested_child(debrief_db, tmp_path)
+    artifact_id = explicit if explicit_ref else debrief_id_for_episode(episode)
+    child_artifact = child / "_system" / "episode-debriefs" / f"{artifact_id}.md"
+    child_artifact.parent.mkdir(parents=True)
+    child_artifact.write_text("Child-owned debrief.\n", encoding="utf-8")
+    parent_artifact = debrief_db.root / "_system" / "episode-debriefs" / f"{artifact_id}.md"
+    parent_artifact.parent.mkdir(parents=True)
+    parent_artifact.symlink_to(child_artifact)
+
+    existence_checks: list[Path] = []
+    child_artifact_real = child_artifact.resolve()
+    original_is_file = Path.is_file
+
+    def observe_child_artifact_check(path: Path) -> bool:
+        if path == child_artifact_real:
+            existence_checks.append(path)
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", observe_child_artifact_check)
+    with pytest.raises(DebriefReconciliationError, match="nested vault"):
+        debrief_db.tick(vault_binding_id=first.vault_binding_id)
+
+    assert existence_checks == []
+    assert debrief_db.triggers() == []
+    assert store.get_cursor(vault_binding_id=first.vault_binding_id) is None
+
+    parent_artifact.unlink()
+    monkeypatch.setattr(Path, "is_file", original_is_file)
+    summary = debrief_db.tick(vault_binding_id=first.vault_binding_id)
+    assert summary["triggered"] == [debrief_id_for_episode(episode)]
+    assert store.get_cursor(vault_binding_id=first.vault_binding_id).row_id == frontier
+    assert [payload["episode_id"] for payload in debrief_db.triggers()] == [episode]
+
+
+def test_nested_vault_refusal_preserves_healthy_progress_and_retry(
+    debrief_db, monkeypatch, tmp_path: Path,
+) -> None:
+    first, _ = _active_native_runtime(debrief_db, monkeypatch)
+    debrief_db.root = Path(first.path)
+    bad = debrief_db.episode(binding=first.vault_binding_id, scope="private")
+    good = debrief_db.episode(binding=first.vault_binding_id, scope="work")
+    debrief_db.closure(bad, binding=first.vault_binding_id)
+    frontier = debrief_db.closure(good, binding=first.vault_binding_id, ordinal=2)
+    child = _initialize_nested_child(debrief_db, tmp_path)
+    source, target, relative = _move_episode_into_child(debrief_db, bad, child, via_symlink=False)
+
+    with pytest.raises(DebriefReconciliationError, match="nested vault"):
+        debrief_db.tick(vault_binding_id=first.vault_binding_id)
+    assert store.get_cursor(vault_binding_id=first.vault_binding_id) is None
+    assert [payload["episode_id"] for payload in debrief_db.triggers()] == [good]
+
+    _restore_episode_to_parent(debrief_db, bad, source, target, relative)
+    debrief_db.tick(vault_binding_id=first.vault_binding_id)
+    assert store.get_cursor(vault_binding_id=first.vault_binding_id).row_id == frontier
+    assert {payload["episode_id"] for payload in debrief_db.triggers()} == {bad, good}
+    assert len(debrief_db.triggers()) == 2
+
+
+@pytest.mark.parametrize("binding_mode", ["compatibility", "native"])
+@pytest.mark.parametrize("via_symlink", [False, True], ids=["direct", "same-root-symlink"])
+def test_parent_owned_paths_preserve_native_and_compatibility_ticks(
+    debrief_db, monkeypatch, binding_mode: str, via_symlink: bool,
+) -> None:
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+
+    if binding_mode == "native":
+        first, _ = _active_native_runtime(debrief_db, monkeypatch)
+        debrief_db.root = Path(first.path)
+        binding_id = first.vault_binding_id
+    else:
+        binding_id = COMPATIBILITY_BINDING_ID
+
+    episode = debrief_db.episode(binding=binding_id)
+    if via_symlink:
+        relative = Path(debrief_db.execute(
+            "SELECT note_path FROM episodes WHERE episode_id=%s", (episode,)
+        )[0][0])
+        note = debrief_db.root / relative
+        alias = note.with_name(f"alias-{note.name}")
+        alias.symlink_to(note)
+        debrief_db.execute("UPDATE episodes SET note_path=%s WHERE episode_id=%s",
+                           (alias.relative_to(debrief_db.root).as_posix(), episode))
+
+    summary = debrief_db.tick(vault_binding_id=binding_id)
+    assert summary["triggered"] == [debrief_id_for_episode(episode)]
+    assert [payload["episode_id"] for payload in debrief_db.triggers()] == [episode]
+    if binding_mode == "compatibility":
+        assert not (debrief_db.root / "settings" / "vault.md").exists()
+
+
 def test_active_registry_closure_reconciles_compatibility_projection(debrief_db, monkeypatch) -> None:
     from datetime import datetime, timezone
     from app.episodes.closure import EpisodeCloseCandidate, close_episode
