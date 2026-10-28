@@ -142,6 +142,18 @@ def test_pr_integration_skill_allows_all_approved_pr_lanes() -> None:
         assert fragment in text, fragment
 
 
+def test_pr_integration_skill_routes_review_repairs_by_severity() -> None:
+    text = " ".join(_read(".codex/skills/pr-integration/SKILL.md").split())
+
+    for fragment in (
+        "Before any review-feedback repair, classify each finding by severity and required disposition",
+        "Only P0/P1 findings enter repair and re-review.",
+        "Do not route P2/P3 through the legacy `cheap fix` category",
+        "explicitly reclassify it as P0/P1 and record the evidence before repair.",
+    ):
+        assert fragment in text, fragment
+
+
 def test_verification_skill_distinguishes_issue_backed_and_direct_repair_modes() -> None:
     text = _read(".codex/skills/verification-and-closure/FULL_PATH.md")
 
