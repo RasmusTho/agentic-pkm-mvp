@@ -229,18 +229,21 @@ def test_fixture_question_full_loop(
     accepted = asyncio.run(
         panel_route.panel_checkbox_projection(request, _panel_request(vault))
     )
-    answered_note = store.read_question(question_id)
+    answered_note, answered_version = store.read_question_with_version(question_id)
     assert accepted.status == "executed"
     assert accepted.receipt is not None
+    accepted_receipt_id = accepted.receipt["authority_receipt_id"]
     assert answered_note["status"] == "answered"
     assert answered_note["candidate_answer_ref"] is None
     assert answered_note["standing_answer_ref"]
     answer_path = vault / answered_note["standing_answer_ref"].removeprefix("vault://")
+    accepted_answer_bytes = answer_path.read_bytes()
     answer_frontmatter, answer_body = load_frontmatter(
-        answer_path.read_text(encoding="utf-8")
+        accepted_answer_bytes.decode("utf-8")
     )
     assert answer_frontmatter["authority_state"] == "accepted"
     assert answer_frontmatter["question_id"] == question_id
+    assert answer_frontmatter["acceptance_receipt_id"] == accepted_receipt_id
     assert provenance_ref in answer_frontmatter["provenance_refs"]
     assert supporting_span in answer_body
 
@@ -250,5 +253,19 @@ def test_fixture_question_full_loop(
     assert acceptance_replay.status == "executed"
     assert acceptance_replay.receipt is not None
     assert acceptance_replay.receipt["idempotent_replay"] is True
+    assert (
+        acceptance_replay.receipt["authority_receipt_id"]
+        == accepted_receipt_id
+    )
+    replayed_answered_note, replayed_answered_version = store.read_question_with_version(
+        question_id
+    )
+    assert replayed_answered_version == answered_version
+    assert replayed_answered_note["status"] == answered_note["status"] == "answered"
+    assert (
+        replayed_answered_note["standing_answer_ref"]
+        == answered_note["standing_answer_ref"]
+    )
+    assert replayed_answered_note == answered_note
+    assert answer_path.read_bytes() == accepted_answer_bytes
     assert hashlib.sha256(evidence_path.read_bytes()).hexdigest() == evidence_hash
-
