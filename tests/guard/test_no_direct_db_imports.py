@@ -78,6 +78,11 @@ ALLOW_FILES = (
     # state, rebuildable from the underlying streams), direct connection, no ORM
     # layer to route through.
     'app/episodes/engine_state.py',
+    # Episode Debrief trigger adapter (DEBRIEF-01, #3334). Same bounded pattern as
+    # app/episodes/engine_state.py above: its consumer cursor lives in the existing
+    # `episode_engine_state` table, plus topic-scoped `outbox` closure reads and
+    # read-only `episodes`/`episode_artifact_binding` projection queries.
+    'app/episode_debrief/store.py',
     # vault.activity outbox cursor reader (ERE-04, #3179). Bounded topic-scoped
     # SELECT over the `outbox` table strictly after this consumer's own durable
     # position; never touches `delivered_at` (the worker dispatcher's flag).

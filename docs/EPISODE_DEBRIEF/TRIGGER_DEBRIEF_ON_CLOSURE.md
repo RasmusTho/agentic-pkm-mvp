@@ -11,6 +11,12 @@ can_parallelize_with: []
 
 # Trigger Debrief on Closure
 
+Implementation: `app/episode_debrief/trigger.py`; PostgreSQL adapter:
+`app/episode_debrief/store.py`; CLI: `app/cli/episode_debrief.py`. The existing
+binding-scoped `episode_engine_state` table stores only this consumer's position; no new schema
+or private queue is introduced. `debrief_id` is `debrief-` followed by SHA-256 of `episode_id`.
+The versioned output schema is `schemas/events/debrief.trigger.created.v1.schema.json`.
+
 ## Purpose
 
 ERE's `episode.closed` event today drives decay only (`EMIT_CLOSURE_AND_DERIVE_DECAY.md`); closure has
@@ -54,7 +60,7 @@ maintains.
 
 ```
 $ python -m app.cli episode-debrief tick --json
-{"triggered": ["debrief-ep-2026-07-07-morning"], "skipped_ineligible": 1, "skipped_already_debriefed": 0}
+{"triggered": ["debrief-3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"], "skipped_ineligible": 1, "skipped_already_debriefed": 0}
 ```
 
 ## Why This Matters
@@ -85,14 +91,28 @@ itself never fused — reopening the exact leak `GATE_CROSS_SCOPE_FUSION.md` clo
 ## How to Verify (Pre-Merge)
 
 ```
-ruff check app tests && mypy app
-pytest -q tests/episode_debrief/test_trigger.py
-pytest -q -m "not pg"
+ruff check app tests companion-ui/companion-app
+mypy app
+# Explicit disposable PostgreSQL target; use the canonical pytest-not-pg host lease.
+pytest -q -m pg tests/episode_debrief/test_trigger.py
+# Complete affected subsystem/contract selection; use the pytest-not-pg host lease.
+pytest -q -m "not pg" tests/episodes tests/events tests/stores tests/services/test_outbox_*.py tests/services/test_multi_vault_outbox_dual_key_dedup.py tests/architecture/test_import_boundary.py tests/guard/test_no_direct_db_imports.py
 ```
 
-Blocked until ERE-02 (#3177) / ERE-04 (#3179) / ERE-06 (#3181) merge — this task cannot run against a
-real `episode.closed` event until then. Tests in the interim run against a synthetic closure payload
-shaped to the ERE-06 schema; the merge-blocking dependency stands regardless (`agent:blocked` until then).
+This source-purpose profile replaces the generic repository-wide non-PG instruction for this
+bounded consumer. Existing projection schemas, shared outbox/worker behavior, retrieval, ingest,
+Companion, scope authority and live channels are not changed. The complete affected contracts above
+remain required alongside every AC and the production-path durability/race matrix; repository-wide
+test breadth cannot substitute for those PostgreSQL assertions. Current-head CI remains a separate
+publication/merge gate. No assertion or protected P0/P1 floor is waived.
+Both pytest selections use the existing `pytest-not-pg` coordination resource; its name does not
+select tests or authorize a different database.
+
+ERE-02 (#3177), ERE-04 (#3179) and ERE-06 (#3181) are delivered. The acceptance tests use an explicit
+disposable PostgreSQL target and the actual consumer, canonical outbox writer and cursor SQL. They
+cover stale concurrent ticks, emit-before-cursor crashes, database cursor-write failure followed by a
+fresh-process restart, malformed final rows and existing (including dismissed) debrief replay.
+They do not substitute for parent #3331's separate composed/live-channel acceptance.
 
 ## Out of Scope
 
@@ -110,6 +130,14 @@ projection (ERE-02) plus debrief-artifact existence, never computed only in memo
 mid-tick loses nothing user-facing — the next tick recomputes the same set and re-emits exactly the
 triggers still owed, with no duplicates (idempotent) and no silent loss.
 
+The cursor's atomic upsert compares typed PostgreSQL `(timestamptz, uuid)` values, never string
+timestamps or last-write-wins state. The raw batch frontier includes malformed rows, but it advances
+only after every closed projection candidate reconciles successfully. Unreadable/outside-root notes
+refuse reconciliation without advancing; healthy emissions already committed remain idempotent on
+retry. The tick never reads or writes the outbox worker's `delivered_at` marker. Every sweep reports
+`pending_debrief`, including eligible episodes whose durable trigger already exists, until their
+debrief artifact exists. Scope comes from the current Episode note without normalization/substitution.
+
 ## Related Docs
 
 - `docs/EPISODE_RESOLUTION_ENGINE/EMIT_CLOSURE_AND_DERIVE_DECAY.md` (the `episode.closed` event this
@@ -122,4 +150,4 @@ triggers still owed, with no duplicates (idempotent) and no silent loss.
 ## Related GitHub Issues
 
 One issue: `[Episode Debrief] trigger-debrief-on-closure: durable idempotent trigger from episode
-closure`. Blocked until ERE-02 (#3177) / ERE-04 (#3179) / ERE-06 (#3181) merge.
+closure` (**#3334**). ERE-02/#3177, ERE-04/#3179 and ERE-06/#3181 are delivered prerequisites.
