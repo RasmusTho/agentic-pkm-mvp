@@ -714,6 +714,11 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
   executor. See [the dated infrastructure status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
   for installed and observed services. A merged adapter or running listener does not establish
   persistent Product routing, inference qualification or release acceptance.
+- For the explicit `openai_api` evaluation transport, the executor may start through
+  `scripts/start_model_access_executor.sh` as the dev-only `model-access-executor` Keychain consumer
+  of `openai.api-key` (#6386). Switching the launchd job to that launcher and the owner's one-time
+  Keychain store are separate operator steps; until both happen that transport reports
+  `credential_unavailable`.
 - The repository resolves the MARR-only `typesafe.api-key` binding from the exact
   `dev/typesafe.api-key` identity in the existing `non-prod` BWS project through the existing
   read-only `non-prod-reader` account (#5801 / #5808). Its BWS reader token remains a

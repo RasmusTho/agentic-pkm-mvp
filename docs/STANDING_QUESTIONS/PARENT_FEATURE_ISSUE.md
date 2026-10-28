@@ -91,12 +91,27 @@ cross-scope sharing/federation — out of scope entirely, not deferred).
 
 ## Acceptance Criteria
 
-The capability-level ACs in `docs/STANDING_QUESTIONS/README.md :: Capability acceptance criteria`,
-each with its `Verify:` target there — including the end-to-end fixture loop, the human-terminal
-Question-note invariant, the no-writes-to-evidence-artifacts invariant, the
-acceptance-is-the-only-path-to-answered invariant, the pending-review-not-clobbered invariant, the
-contradiction-surfaced invariant, and a real-question live validation receipt from the test channel
-posted to this issue.
+The capability-level ACs in `docs/STANDING_QUESTIONS/README.md :: Capability acceptance criteria`
+remain required. Their current verification targets are:
+
+- Registered Question projection rebuild. Verify:
+  `tests/standing_questions/test_question_projection.py::test_projection_rebuilds_from_vault`
+- Composed fixture lifecycle from capture intent through human acceptance. Verify:
+  `tests/standing_questions/test_capability_end_to_end.py::test_fixture_question_full_loop`
+- Human-terminal Question-note fields. Verify:
+  `tests/standing_questions/test_question_store.py::test_engine_cannot_overwrite_human_owned_fields`
+- Evidence matching never mutates its source artifact. Verify:
+  `tests/standing_questions/test_evidence_matching.py::test_matching_never_writes_to_source_artifact`
+- Answers remain candidates until human acceptance. Verify:
+  `tests/standing_questions/test_answer_refresh.py::test_draft_never_sets_standing_answer_ref`
+  Verify: `tests/standing_questions/test_answer_refresh.py::test_refresh_path_never_writes_status`
+  Verify: `tests/standing_questions/test_question_review_actions.py::test_accept_projects_checkbox_and_flips_status_atomically`
+- Pending review is not clobbered by a later refresh. Verify:
+  `tests/standing_questions/test_answer_refresh.py::test_pending_review_not_clobbered_by_new_delta`
+- Contradictions are surfaced on the candidate. Verify:
+  `tests/standing_questions/test_answer_refresh.py::test_contradiction_surfaced_not_silently_rewritten`
+- Real-question live validation on qualified TARS TEST. Verify:
+  runtime receipt: standing_questions_live_acceptance.v1
 
 ## Implementation Tasks
 
@@ -109,18 +124,21 @@ Per-task `Verify:` targets (each task file couples ACs to `How to Verify (Pre-Me
 intent and evidence-association classifiers run through the schema-constrained-completion gate
 (`app/components/llm/constrained.py`) so their `UNKNOWN`/degrade paths are fuzz-tested the same way
 `docs/RUNTIME_CORRECTNESS_KERNEL/STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN.md` requires; pg-marked probes
-(projection rebuild, migration) run on the mac mini test channel.
+(projection rebuild, migration) run on qualified TARS TEST.
 
 ## Validation / Acceptance Path
 
-After each child merges: a validation receipt comment here (test run links, tick output). After SQ-03:
-run a fixture evidence-matching pass against a seeded open question. After SQ-04/SQ-05: run the
-fixture-question end-to-end (register → match → refresh → accept). Then: the real-day live
-validation — the operator registers ≥1 real standing question on the test channel and lets it
-accumulate real evidence — receipt posted here. Acceptance → parent closure; RQ-SQ1/RQ-SQ2 tuning
-spins off as follow-up issues informed by live data. No owner-doc promotion PR is needed at capability
-acceptance unless a currently-shipped-truth doc would otherwise misstate this capability as absent
-(none identified at spec time).
+After each child merges, post a validation receipt here. After #6388 merges, run its composed
+fixture-question proof (register → match → refresh → accept). Then perform the real-day live
+validation on the exact qualified TARS TEST candidate: the operator registers at least one real
+standing question and lets real evidence accumulate until a legible, provenance-cited candidate
+answer is produced. Post `receipt: standing_questions_live_acceptance.v1` here, bound to the source
+SHA, immutable image digest, `/version`, TEST environment, `/api/health`, question/evidence references,
+provenance, and candidate-answer result. Record human accept/dismiss only if the operator acts; never
+auto-accept. Acceptance → parent closure; RQ-SQ1/RQ-SQ2 tuning spins off as follow-up issues informed
+by live data. No owner-doc promotion PR is needed at capability acceptance unless a
+currently-shipped-truth doc would otherwise misstate this capability as absent (none identified at
+spec time).
 
 ## Out of Scope
 
@@ -130,7 +148,7 @@ sharing/federation (out of scope entirely, would need its own ADR).
 
 ## Suggested Validation
 
-`pytest -q -m "not pg"` per child; `pytest -q -m pg tests/standing_questions/` on the test channel;
+`pytest -q -m "not pg"` per child; `pytest -q -m pg tests/standing_questions/` on qualified TARS TEST;
 `python -m app.cli questions tick --json` against the Bifrost test vault; receipts to this issue.
 
 ## Source Docs

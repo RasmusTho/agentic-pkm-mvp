@@ -751,3 +751,39 @@ def test_ollama_adapter_preserves_instruction_channels_with_one_http_call() -> N
 def test_ollama_endpoint_rejects_an_explicit_zero_port() -> None:
     with pytest.raises(ValueError, match="host-local HTTP origin"):
         OllamaHttpAdapter(base_url="http://127.0.0.1:0")
+
+
+def test_provider_credential_resolver_reads_bootstrap_runtime_file(tmp_path, monkeypatch) -> None:
+    from app.model_access import codex_executor_service
+    from app.model_access.provider_api import ProviderApiError
+    from app.ops.host_secret_bootstrap import HOST_SECRET_RUNTIME_ENV_FILE
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    env_file = runtime / "secrets.env"
+    env_file.write_text("OPENAI_API_KEY=runtime-file-value\n")
+    env_file.chmod(0o600)
+    monkeypatch.setenv(HOST_SECRET_RUNTIME_ENV_FILE, str(env_file))
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-value")
+    resolver = codex_executor_service.ProviderCredentialResolver()
+    # Resolved once at startup: later file changes do not re-read the surface.
+    env_file.unlink()
+    assert resolver("OPENAI_API_KEY") == "runtime-file-value"
+
+    # Without a bootstrap file the previous ambient lookup still applies.
+    monkeypatch.delenv(HOST_SECRET_RUNTIME_ENV_FILE)
+    assert codex_executor_service.ProviderCredentialResolver()("OPENAI_API_KEY") == "ambient-value"
+
+    # Neither source: the production adapter reports a typed, value-free refusal.
+    monkeypatch.delenv("OPENAI_API_KEY")
+    adapter = codex_executor_service.ProductProviderApiAdapter(
+        adapter_factory=_factory(),
+        credential_resolver=codex_executor_service.ProviderCredentialResolver(),
+        timeout_seconds=1,
+    )
+    with pytest.raises(ProviderApiError) as refused:
+        adapter._api_key("openai")
+    assert str(refused.value) == "credential_unavailable"
+    assert "credential_resolver=ProviderCredentialResolver()" in inspect.getsource(
+        codex_executor_service.main
+    )
