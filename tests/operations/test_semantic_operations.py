@@ -6,6 +6,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from threading import Event
+import time
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -629,3 +630,112 @@ def test_semantic_request_binding_refuses_before_effect(bound, mismatch):
         request = replace(request, expected_version=None)
     assert bound.run(request).status in {OperationStatus.REJECTED, OperationStatus.CONFLICTED}
     assert bound.note.read_bytes() == original and not bound.owner.receipt_path.exists()
+
+
+def _observe_source_seam(bound, monkeypatch):
+    observed = {"calls": 0, "final": False, "exchanges": []}
+    require = context_bound_write.require_effect_locator
+    exchange = adapters._atomic_exchange_at
+
+    def require_observed(*args, **kwargs):
+        observed["calls"] += 1
+        observed["final"] = observed["calls"] == 2
+        return require(*args, **kwargs)
+
+    def exchange_observed(*args, **kwargs):
+        observed["exchanges"].append((time.time(), bound.current["authority"]))
+        return exchange(*args, **kwargs)
+
+    monkeypatch.setattr(context_bound_write, "require_effect_locator", require_observed)
+    monkeypatch.setattr(adapters, "_atomic_exchange_at", exchange_observed)
+    return observed
+
+
+def test_expiry_during_final_approval_callback_prevents_source_exchange(bound, monkeypatch):
+    # Keep the real clock, immutable context, GOV window, actual HKA CAS and
+    # approval result. Only the final trusted port is delayed past expiry.
+    bound.owner.active_context = replace(bound.owner.active_context, expires_at=time.time() + 3)
+    observed = _observe_source_seam(bound, monkeypatch)
+    current = bound.owner.authority_is_current
+    waited = []
+
+    def approval(intent, grant):
+        verdict = current(intent, grant)
+        if observed["final"]:
+            remaining = bound.owner.active_context.expires_at - time.time()
+            assert remaining > 0, "fixture expired before reaching the final approval callback"
+            waited.append(True)
+            time.sleep(remaining + 0.03)
+        return verdict
+
+    bound.owner.authority_is_current = approval
+    before = bound.note.read_bytes()
+    result = bound.run(bound.approve(bound.request()))
+    assert waited == [True]
+    assert result.status is OperationStatus.REJECTED
+    assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
+    assert bound.note.read_bytes() == before and not observed["exchanges"]
+    assert not bound.owner.receipt_path.exists()
+
+
+@pytest.mark.parametrize("revoke", ["approval", "context"])
+def test_revocation_during_final_member_reads_prevents_source_exchange(bound, monkeypatch, revoke):
+    observed = _observe_source_seam(bound, monkeypatch)
+    resolve = bound.owner._resolve_many
+    revoked = []
+
+    def resolve_with_revocation(identities):
+        result = resolve(identities)
+        if observed["final"] and identities == set(bound.members):
+            bound.current["authority" if revoke == "approval" else "context"] = False
+            revoked.append(True)
+        return result
+
+    monkeypatch.setattr(bound.owner, "_resolve_many", resolve_with_revocation)
+    before = bound.note.read_bytes()
+    result = bound.run(bound.approve(bound.request()))
+    assert revoked == [True]
+    assert result.status is OperationStatus.REJECTED
+    assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
+    assert bound.note.read_bytes() == before and not observed["exchanges"]
+    assert not bound.owner.receipt_path.exists()
+
+
+@pytest.mark.parametrize("position", ["first", "last", "merge"])
+def test_all_matching_uuid_declarations_are_strictly_validated(bound, position):
+    identity, other = bound.members[0], str(uuid4())
+    if position == "merge":
+        declaration = f"base: &identity {{uuid: {identity}}}\n<<: *identity\nuuid: {other}\n"
+    else:
+        values = (identity, other) if position == "first" else (other, identity)
+        declaration = f"uuid: {values[0]}\nuuid: {values[1]}\n"
+    (bound.owner.root / "Notes/ambiguous.md").write_text(
+        f"---\n{declaration}artifact_class: human_knowledge\n---\nAmbiguous source.\n"
+    )
+    before = bound.note.read_bytes()
+    result = bound.run(bound.approve(bound.request()))
+    assert result.status is OperationStatus.INVALID
+    assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
+    assert bound.note.read_bytes() == before and not bound.owner.receipt_path.exists()
+
+
+def test_context_revocation_during_final_registry_read_prevents_source_exchange(bound, monkeypatch):
+    observed = _observe_source_seam(bound, monkeypatch)
+    read = bound.owner.registry_store.read_existing
+    revoked = []
+
+    def read_then_revoke():
+        snapshot = read()
+        if observed["final"]:
+            bound.current["context"] = False
+            revoked.append(True)
+        return snapshot
+
+    monkeypatch.setattr(bound.owner.registry_store, "read_existing", read_then_revoke)
+    before = bound.note.read_bytes()
+    result = bound.run(bound.approve(bound.request()))
+    assert revoked == [True]
+    assert result.status is OperationStatus.REJECTED
+    assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
+    assert bound.note.read_bytes() == before and not observed["exchanges"]
+    assert not bound.owner.receipt_path.exists()

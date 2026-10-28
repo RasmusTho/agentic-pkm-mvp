@@ -18,7 +18,7 @@ from typing import Any, Callable, Mapping, cast
 from uuid import UUID
 
 import yaml
-from yaml.nodes import MappingNode
+from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
 from app.events.schema import make_outbox_event
 from app.governance.governed_write import (
@@ -137,6 +137,49 @@ def _uuid(value: Any) -> str:
         return str(UUID(value.strip()))
     except ValueError as exc:
         raise SemanticValidationError("artifact identity is not a UUID") from exc
+
+
+def _declared_identities(node: Node | None) -> set[str]:
+    """Probe UUID declarations without collapsing duplicate keys or YAML merges.
+
+    This is candidate discovery only. Any matching candidate must still pass
+    the strict metadata/identity decoder before supplying authority or meaning.
+    """
+    identities: set[str] = set()
+    visited: set[int] = set()
+
+    def values(value: Node) -> None:
+        if id(value) in visited:
+            return
+        visited.add(id(value))
+        if isinstance(value, ScalarNode):
+            try:
+                identities.add(_uuid(value.value))
+            except SemanticValidationError:
+                pass
+        elif isinstance(value, SequenceNode):
+            for child in value.value:
+                values(child)
+        elif isinstance(value, MappingNode):
+            for _, child in value.value:
+                values(child)
+
+    def declarations(value: Node | None) -> None:
+        if value is None or id(value) in visited:
+            return
+        visited.add(id(value))
+        if isinstance(value, MappingNode):
+            for key, child in value.value:
+                if isinstance(key, ScalarNode) and key.value == "uuid":
+                    values(child)
+                elif isinstance(key, ScalarNode) and key.value == "<<":
+                    declarations(child)
+        elif isinstance(value, SequenceNode):
+            for child in value.value:
+                declarations(child)
+
+    declarations(node)
+    return identities
 
 
 def _vocabulary(value: Any) -> str:
@@ -275,9 +318,6 @@ class KnowledgeSemanticOwner:
             not configured
             or Path(configured).resolve() != self.registry_store.path.resolve()
             or self.target_binding_id not in self.active_context.binding_ids
-            or not self.context_is_current()
-            or self.active_context.expires_at is not None
-            and self.active_context.expires_at <= time.time()
         ):
             raise InvalidDecisionTokenError("semantic source context is unavailable or mismatched")
         snapshot = self.registry_store.read_existing()
@@ -288,6 +328,13 @@ class KnowledgeSemanticOwner:
             or Path(registration.path).resolve() != self.root
         ):
             raise InvalidDecisionTokenError("semantic root differs from the selected binding")
+        # Registry/path reads above may block. Observe current selection and
+        # lifetime after them; the GOV seam repeats expiry after approval too.
+        if not self.context_is_current() or (
+            self.active_context.expires_at is not None
+            and self.active_context.expires_at <= time.time()
+        ):
+            raise InvalidDecisionTokenError("semantic source context is unavailable or expired")
 
     def _path(self, path: Path, *, mutable: bool) -> str:
         relative = path.relative_to(self.root).as_posix()
@@ -356,7 +403,9 @@ class KnowledgeSemanticOwner:
                 # A matching candidate is then decoded strictly before it can
                 # supply identity, membership or mutation content.
                 try:
-                    candidate = yaml.safe_load(block[1])
+                    candidate_ids = _declared_identities(
+                        yaml.compose(block[1], Loader=yaml.SafeLoader)
+                    )
                 except yaml.YAMLError:
                     flattened = block[1].lower().replace("-", "")
                     if any(identity.replace("-", "") in flattened for identity in artifact_ids):
@@ -364,15 +413,11 @@ class KnowledgeSemanticOwner:
                             "a matching source candidate has malformed frontmatter"
                         )
                     continue
-                value = candidate.get("uuid") if isinstance(candidate, dict) else None
-                if value is None:
+                if not candidate_ids.intersection(artifact_ids):
                     continue
-                try:
-                    identity = _uuid(value)
-                except SemanticValidationError:
-                    continue
+                metadata, _ = _metadata(text)
+                identity = _uuid(metadata.get("uuid"))
                 if identity in artifact_ids:
-                    metadata, _ = _metadata(text)
                     resolved = resolve_note_artifact_identity(
                         artifact_path=path,
                         vault_root=self.root,
@@ -497,6 +542,11 @@ class KnowledgeSemanticOwner:
             }
 
             def check() -> None:
+                # Source and health checks can block. Complete them before
+                # observing the final current context and semantic approval.
+                if operation == REORDER:
+                    self._resolve_many(set(patch["member_order"]))
+                self.write_guard.assert_writes_allowed(binding["action"])
                 self._context()
                 if (
                     not isinstance(grant, GovernedWriteGrant)
@@ -517,9 +567,6 @@ class KnowledgeSemanticOwner:
                     context=self.active_context,
                     target_binding_id=self.target_binding_id,
                 )
-                self.write_guard.assert_writes_allowed(binding["action"])
-                if operation == REORDER:
-                    self._resolve_many(set(patch["member_order"]))
 
             check()
             assert grant is not None

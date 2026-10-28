@@ -113,19 +113,27 @@ def context_bound_write_window(
         )
         if runtime is None:
             raise InvalidDecisionTokenError("governed write requires a binding runtime")
+
         def check() -> None:
             # An authorized window does not extend the frozen selection's TTL.
             # State owners call this again after their own waits, immediately
             # before publishing source bytes.
             if context.expires_at is not None and context.expires_at <= time.time():
                 raise InvalidDecisionTokenError("active context expired at the source seam")
-            adapter.validate_decision_token(
-                decision_token=token, action=action, write_class=write_class,
-                actor=actor, resource=resource,
-            )
-            adapter.validate_context(token, context=context, target_binding_id=target_binding_id)
             if effect_check is not None:
                 effect_check()
+            adapter.validate_decision_token(
+                decision_token=token,
+                action=action,
+                write_class=write_class,
+                actor=actor,
+                resource=resource,
+            )
+            adapter.validate_context(token, context=context, target_binding_id=target_binding_id)
+            # The owner callback may itself wait on approval or source I/O.
+            # Observe expiry after that work, immediately before publication.
+            if context.expires_at is not None and context.expires_at <= time.time():
+                raise InvalidDecisionTokenError("active context expired at the source seam")
 
         boundary = _WRITE_BOUNDARY.set((root, resource, check))
         try:
