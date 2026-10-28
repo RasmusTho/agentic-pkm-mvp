@@ -3829,7 +3829,7 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
     controller = SimpleNamespace(directory=tmp_path)
     captured = []
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'SshDeployRemote', lambda _host: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
@@ -4492,7 +4492,7 @@ def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_p
     controller.deploy_operation = deploy_operation
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
     monkeypatch.setattr(host, 'deploy_from_host', deploy)
@@ -4587,7 +4587,7 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
 
@@ -4778,7 +4778,7 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
 
@@ -5009,17 +5009,13 @@ def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monke
             recovered.append(selected)
             return DeployReceipt(failed_operation_id, 'test', 'deploy', 'failed', 'failed')
 
-    admin_attempts = 0
-
-    def configured_admin():
-        nonlocal admin_attempts
-        admin_attempts += 1
-        if admin_attempts == 1:
-            # Crash after reset/reconciliation but before fresh deployment.
-            raise RuntimeError('simulated host setup interruption')
-        return object()
+    deploy_attempts: list[str] = []
 
     def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap, operation_id):
+        deploy_attempts.append(operation_id)
+        if len(deploy_attempts) == 1:
+            # Crash after reset checkpoint, at the fresh-deploy boundary.
+            raise RuntimeError('simulated host interruption before fresh deploy')
         qualified()
         assert selected == plan
         assert allow_bootstrap is False
@@ -5028,7 +5024,7 @@ def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monke
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, '_configured_host_admin', configured_admin)
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
     monkeypatch.setattr(host, 'deploy_from_host', deploy)
@@ -5046,11 +5042,13 @@ def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monke
     assert marker is not None and marker['state'] == 'ready'
     fresh_operation_id = marker['fresh_operation_id']
     assert recovered == [request]
+    assert deploy_attempts == [fresh_operation_id]
     with controller._locked_journal() as descriptor:
         assert controller._pending(descriptor) is None
 
     assert host.main(args) == 0
     assert recovered == [request]
+    assert deploy_attempts == [fresh_operation_id, fresh_operation_id]
     assert deployed == [fresh_operation_id]
 
 
@@ -5843,7 +5841,6 @@ def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_pat
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
     monkeypatch.setattr(host, 'SecretAdmin', Admin)
 
     assert host.main(['dev', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 78

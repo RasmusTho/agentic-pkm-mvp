@@ -489,7 +489,7 @@ def test_host_cli_produces_explicit_cutover_without_inferred_ack(target, monkeyp
 
     captured = []
     monkeypatch.setattr(host, 'HostSecretController', lambda: object())
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'SshDeployRemote', lambda _: object())
     identifier = str(uuid4())
