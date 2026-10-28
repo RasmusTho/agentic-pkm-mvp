@@ -56,7 +56,11 @@ Do not end the session unless the shared workflow stop-loss or explicit user sco
 - Run only the relevant checks for the lane and risk.
 - Native delivery reuses evidence per `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Evidence reuse and stop rule`; record affected checks in the existing PR Validation section.
 - On executor/in-flight deliveries apply **late-change supersession** whenever a late delivery change alters the PR head, scope/authority body, governing contract, or required-check configuration after readiness evidence was collected. Compare the prior/current digest/version of every mutable authority surface — PR body, governing contract, and required-check configuration — alongside the head SHA to detect same-head changes. Determine which evidence depends on that change, record a `late_change_supersession_receipt.v1` with the prior/current heads and digest/version snapshots, affected evidence, and required reruns, and rerun that affected evidence on the current head SHA before handoff. Preserve unrelated evidence only when its dependency is unchanged; never hand off stale evidence to closure.
-- Triage review feedback into blocking, cheap fix, out-of-scope, or incorrect/not-applicable.
+- Before any review-feedback repair, classify each finding by severity and required disposition
+  under `docs/development/PR_HOT_PATH.md :: CI Status Handling`. Only P0/P1 findings enter repair
+  and re-review. Do not route P2/P3 through the legacy `cheap fix` category; if a finding breaches a
+  protected severity floor or fails a governing acceptance criterion, explicitly reclassify it as
+  P0/P1 and record the evidence before repair.
 - For review-feedback repairs, verify the fixing commit is reachable from the target base branch before declaring the repair complete. If the repair addresses an earlier review thread, reply with the fixing PR or merge commit and resolve the original thread. [base-branch-truth] [review-thread-closure]
 - On resume or recovery, re-check the current branch, `origin/main`, relevant merged PRs, and expected implementation files before continuing publication, integration, or reimplementation. [post-resume-current-state-gate]
 - Write the minimal delivery receipt before handoff.
