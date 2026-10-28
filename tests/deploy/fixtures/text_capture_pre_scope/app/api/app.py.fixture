@@ -1,0 +1,437 @@
+from __future__ import annotations
+
+import logging
+import os
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.config.llm import ensure_provider
+from app.index.doctor import diagnose_index
+from app.middleware.trace import TraceIdMiddleware
+from app.observability import configure_metrics, setup_logging
+from app.observability.status_service import register_source_understanding_availability_provider
+
+try:
+    from app.api.routes.ingest import router as ingest_router
+except ImportError:
+    ingest_router = None
+
+try:
+    from app.api.routes.search import router as search_router
+except ImportError:
+    search_router = None
+
+try:
+    from app.api.routes.instance_default_vault import (
+        router as instance_default_vault_router,
+    )
+except ImportError:
+    instance_default_vault_router = None
+
+try:
+    from app.api.routes.active_context_selection import (
+        router as active_context_selection_router,
+    )
+except ImportError:
+    active_context_selection_router = None
+
+try:
+    from app.api.routes.vault_dimensions import router as vault_dimensions_router
+except ImportError:
+    vault_dimensions_router = None
+
+try:
+    from app.api.routes.status import router as status_router
+except ImportError:
+    status_router = None
+
+try:
+    from app.api.routes.ask import router as ask_router
+except ImportError:
+    ask_router = None
+
+try:
+    from app.api.routes.orientation import router as orientation_router
+except ImportError:
+    orientation_router = None
+
+try:
+    from app.api.routes.health import router as health_router
+except ImportError:
+    health_router = None
+
+try:
+    from app.api.routes.health_contract import router as health_contract_router
+except ImportError:
+    health_contract_router = None
+
+try:
+    from app.api.routes.settings_validate import router as settings_validate_router
+except ImportError:
+    settings_validate_router = None
+
+try:
+    from app.api.routes.events_tail import router as events_tail_router
+except ImportError:
+    events_tail_router = None
+
+try:
+    from app.api.routes.debug import router as debug_router
+except ImportError:
+    debug_router = None
+
+try:
+    from app.api.routers.agent import router as agent_router
+except ImportError:
+    agent_router = None
+
+try:
+    from app.api.routes.canvas import router as canvas_router
+except ImportError:
+    canvas_router = None
+
+try:
+    from app.api.routes.panel import router as panel_router
+except ImportError:
+    panel_router = None
+
+try:
+    from app.api.routes.artifacts import router as artifacts_router
+except ImportError:
+    artifacts_router = None
+
+try:
+    from app.api.routes.companion import router as companion_router
+except ImportError:
+    companion_router = None
+
+try:
+    from app.api.routes.builderops import router as builderops_router
+except ImportError:
+    builderops_router = None
+
+try:
+    from app.api.routes.context_bundles import router as context_bundles_router
+except ImportError:
+    context_bundles_router = None
+
+try:
+    from app.api.routes.resurfacing import router as resurfacing_router
+except ImportError:
+    resurfacing_router = None
+
+try:
+    from app.api.routes.eval_drafts import router as eval_drafts_router
+except ImportError:
+    eval_drafts_router = None
+
+try:
+    from app.api.routes.source_understanding import router as source_understanding_router
+except ImportError:
+    source_understanding_router = None
+
+register_source_understanding_availability_provider(lambda: source_understanding_router is not None)
+
+try:
+    from app.api.routes.capture import router as capture_router
+except ImportError:
+    capture_router = None
+
+try:
+    from app.api.routes.provisional_memory import router as provisional_memory_router
+except ImportError:
+    provisional_memory_router = None
+
+try:
+    from app.api.routes.heimdal_screen import router as heimdal_screen_router
+except ImportError:
+    heimdal_screen_router = None
+
+try:
+    from app.api.routes.heimdal_capture import router as heimdal_capture_router
+except ImportError:
+    heimdal_capture_router = None
+
+try:
+    from app.api.routes.heimdal_meeting import router as heimdal_meeting_router
+except ImportError:
+    heimdal_meeting_router = None
+
+try:
+    from app.api.routes.version import router as version_router
+except ImportError:
+    version_router = None
+
+try:
+    from app.api.routes.signboard import router as signboard_router
+except ImportError:
+    signboard_router = None
+
+try:
+    from app.api.routes.cockpit import router as cockpit_router
+except ImportError:
+    cockpit_router = None
+
+try:
+    from app.api.routes.devui import router as devui_router
+except ImportError:
+    devui_router = None
+
+static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
+logger = logging.getLogger(__name__)
+
+
+def _truthy_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _run_index_preflight() -> None:
+    if not _truthy_env("EMBED_INDEX_PREFLIGHT", default=True):
+        return
+    try:
+        result = diagnose_index()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Embedding index preflight failed: %s", exc)
+        return
+
+    issues = result.get("issues") or []
+    warnings = result.get("warnings") or []
+    if not issues and not warnings:
+        return
+
+    summary = "; ".join(issues or warnings)
+    severity = "issues" if issues else "warnings"
+    logger.warning(
+        (
+            "Embedding index preflight detected %s: %s. "
+            "Run `python -m app.cli index rebuild` to realign embeddings."
+        ),
+        severity,
+        summary,
+    )
+
+
+def _log_v6_seam_status() -> None:
+    from app.api.v6_seams import check_v6_seams
+
+    seams = check_v6_seams()
+    logger.info(
+        "v6.0 seams: orientation=%s, resurfacing=%s, commitments=%s, canvas=%s",
+        seams.get("orientation"),
+        seams.get("resurfacing"),
+        seams.get("commitments"),
+        seams.get("canvas"),
+    )
+
+
+def _warm_retrieval_cache() -> None:
+    """Warm the in-process retrieval cache from the durable vector index.
+
+    Single production init call site (KERNEL-05, audit invariant I-D3;
+    post-merge audit finding F2 / #2900): every retrieval entrypoint
+    (``/api/ask``, ``/api/context-bundles``, and any other
+    ``app.retrieval.hybrid.hybrid_search`` caller) shares the same
+    module-level ``_STORE``. Warming it once here, at process/lifespan
+    init, means no route-specific warm can be skipped or added without
+    cold-start coverage — new routes cannot silently regress I-D3.
+    """
+    from app.retrieval.hybrid import rebuild_from_durable_index
+
+    try:
+        rebuild_from_durable_index()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Retrieval cache warm from durable index failed: %s", exc)
+
+
+def _ingest_settings_at_startup() -> None:
+    """Resolve vault-authored settings at API startup (SETTINGS-01 / F1).
+
+    Without this, a container that never ran ``settings compile`` silently serves
+    pydantic code defaults. Invalid sources degrade loudly (health
+    ``settings.state``) rather than crashing startup, so this never raises.
+    """
+    from app.settings.ingestion import ingest_settings
+
+    try:
+        ingest_settings(reason="api_startup")
+    except Exception as exc:  # pragma: no cover - defensive; ingest already degrades
+        logger.warning("Settings ingestion at API startup failed: %s", exc)
+
+
+def _run_ingress_key_preflight() -> None:
+    """Detect a missing ingress-lane precondition before first use (#4422, #4492).
+
+    Covers HEIMDAL_RAW_STORE_KEY for both governed ingress lanes and the media
+    lane's standing consent grant. Degrade-visibly, never fail-exit: the
+    preflight records and logs the ingress-lane availability (surfaced on
+    /api/status) while every other API function keeps serving; the request-time
+    raw_store_key_unavailable / consent_refused contracts on the capture routes
+    are unchanged.
+    """
+    try:
+        from app.heimdal.ingress_preflight import run_ingress_preflight
+
+        run_ingress_preflight()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Heimdal ingress preflight failed to run: %s", exc)
+
+
+def _run_cold_volume_startup_binding() -> None:
+    """Bind the verified cold root in this serving process after restart."""
+    from app.heimdal import raw_store
+
+    raw_store.revoke_cold_archive_binding()
+    if os.getenv("PKM_ENVIRONMENT", "dev").lower() != "prod":
+        return
+    try:
+        from app.ops.heimdal_cold_volume import (
+            _channel_archive_metadata_authority,
+            require_archive_volume_ready,
+        )
+
+        config_root = Path(os.getenv("PKM_CONFIG_ROOT", Path.cwd()))
+        channel = os.getenv("PKM_ENVIRONMENT", "prod").lower()
+        _metadata_path, metadata = _channel_archive_metadata_authority(
+            config_root=config_root,
+            channel=channel,
+        )
+        volume_proof = require_archive_volume_ready(
+            metadata,
+            expected_channel=channel,
+        )
+        # The readiness boundary also binds today, but startup owns the
+        # process-local resolver explicitly: retaining and applying the proof
+        # here prevents a future validation-only refactor from silently
+        # revoking cold reads and cleanup after every process restart.
+        raw_store.configure_cold_archive_root(
+            metadata.mountpoint,
+            verified_volume=volume_proof,
+            expected_archive_ref=metadata.archive_id,
+        )
+    except Exception as exc:  # pragma: no cover - production host dependent
+        raw_store.revoke_cold_archive_binding()
+        logger.error("Verified Heimdal cold-volume binding unavailable; cold reads fail closed: %s", type(exc).__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from app.agent_memory.ask_provenance_manifest import start_ask_provenance_runtime
+
+    start_ask_provenance_runtime()
+    _run_ingress_key_preflight()
+    _run_cold_volume_startup_binding()
+    await _run_index_preflight()
+    _log_v6_seam_status()
+    _ingest_settings_at_startup()
+    _warm_retrieval_cache()
+    yield
+
+
+def _create_app() -> FastAPI:
+    # Process-level structured logging (#3895): JSON lines on stdout with
+    # span-schema field names (trace_id, status, extra); logging.getLogger
+    # call sites stay untouched.
+    setup_logging()
+    application = FastAPI(title="Agentic PKM API", lifespan=lifespan)
+    application.add_middleware(TraceIdMiddleware)
+    application.mount("/static", StaticFiles(directory=static_dir), name="static")
+    configure_metrics(application)
+
+    if ingest_router is not None:
+        application.include_router(ingest_router)
+    if search_router is not None:
+        application.include_router(search_router)
+    if status_router is not None:
+        application.include_router(status_router, prefix="/api")
+    if ask_router is not None:
+        application.include_router(ask_router, prefix="/api")
+    if orientation_router is not None:
+        application.include_router(orientation_router, prefix="/api")
+    if health_router is not None:
+        application.include_router(health_router, prefix="/api")
+    if health_contract_router is not None:
+        application.include_router(health_contract_router)
+    if settings_validate_router is not None:
+        application.include_router(settings_validate_router, prefix="/api")
+    if events_tail_router is not None:
+        application.include_router(events_tail_router, prefix="/api")
+    if debug_router is not None:
+        application.include_router(debug_router)
+    if agent_router is not None:
+        application.include_router(agent_router)
+    if canvas_router is not None:
+        application.include_router(canvas_router, prefix="/api")
+    if panel_router is not None:
+        application.include_router(panel_router, prefix="/api")
+    if artifacts_router is not None:
+        application.include_router(artifacts_router, prefix="/api")
+    if companion_router is not None:
+        application.include_router(companion_router, prefix="/api")
+    if instance_default_vault_router is not None:
+        application.include_router(instance_default_vault_router, prefix="/api")
+    if active_context_selection_router is not None:
+        application.include_router(active_context_selection_router, prefix="/api")
+    if vault_dimensions_router is not None:
+        application.include_router(vault_dimensions_router, prefix="/api")
+    if builderops_router is not None:
+        application.include_router(builderops_router, prefix="/api")
+    if context_bundles_router is not None:
+        application.include_router(context_bundles_router, prefix="/api")
+    if resurfacing_router is not None:
+        application.include_router(resurfacing_router, prefix="/api")
+    if eval_drafts_router is not None:
+        application.include_router(eval_drafts_router, prefix="/api")
+    if source_understanding_router is not None:
+        application.include_router(source_understanding_router, prefix="/api")
+    if capture_router is not None:
+        application.include_router(capture_router, prefix="/api")
+    if provisional_memory_router is not None:
+        application.include_router(provisional_memory_router, prefix="/api")
+    if heimdal_screen_router is not None:
+        application.include_router(heimdal_screen_router)
+    if heimdal_capture_router is not None:
+        application.include_router(heimdal_capture_router)
+    if heimdal_meeting_router is not None:
+        application.include_router(heimdal_meeting_router)
+    if version_router is not None:
+        application.include_router(version_router)
+    if signboard_router is not None:
+        application.include_router(signboard_router, prefix="/api")
+    if cockpit_router is not None:
+        application.include_router(cockpit_router, prefix="/api")
+    if devui_router is not None:
+        application.include_router(devui_router, prefix="/api")
+    return application
+
+
+# Product owns its provider-policy preflight here rather than in ``app``'s
+# namespace initializer.  BuilderOps can therefore import its own entrypoints
+# from this source tree without resolving Product configuration.
+ensure_provider()
+app = _create_app()
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> HTMLResponse:
+    """Interim dashboard for status visibility and manual ASK checks."""
+    index_path = static_dir / "index.html"
+    return HTMLResponse(index_path.read_text(encoding="utf-8"))
+
+
+@app.get("/signboard", response_class=HTMLResponse)
+async def signboard_page() -> HTMLResponse:
+    """Local visual view over the dispatcher Signboard projection."""
+    return HTMLResponse((static_dir / "signboard.html").read_text(encoding="utf-8"))
+
+
+@app.get("/cockpit", response_class=HTMLResponse)
+async def cockpit_page() -> HTMLResponse:
+    """BuilderOps cockpit registry: read-time join over builder authorities."""
+    return HTMLResponse((static_dir / "cockpit.html").read_text(encoding="utf-8"))

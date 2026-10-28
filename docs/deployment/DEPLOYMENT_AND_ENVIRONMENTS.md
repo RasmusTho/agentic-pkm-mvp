@@ -1352,7 +1352,16 @@ modes and JSON separately, and refuses missing, untracked, duplicate, deleted, s
 unsupported, oversized, ambiguous, or drifting evidence. It prepares one backup handle for all
 changed public files. The existing terminal deployment and writer census are captured as
 before-state evidence and must remain identical at each recheck. Their revision and image may differ
-from the separately verified requested candidate. While holding the exclusive BWS reservation, it
+from the separately verified requested candidate. An ordinary existing-secrets terminal plan may
+omit authority cutover. That path reloads and matches the existing native owner configuration,
+requires the explicit pin/runtime `VAULT_HOST_ROOT` to agree with the installed DEV/TEST channel,
+root selectors and mounts, and uses the same complete writer and retained-state census. It does
+not synthesize a binding or cutover selection. A plan carrying authority cutover still validates
+its selected inputs. Missing or mismatched terminal requests, unproven owner/context, unknown or
+transitioning writers, and changed configuration or census refuse before backup or service stop;
+later drift retains the existing exact-generation stop and unresolved-owner behavior. These
+repository checks do not qualify live installation or parent acceptance.
+While holding the exclusive BWS reservation, it
 installs the candidate fixed launcher first through that handle. The new launcher's pre-import
 `ExecStopPost` path sees the
 exclusive lock and exits through its no-write cleanup path. The transaction then rechecks callers
@@ -1389,14 +1398,27 @@ owner's separate #3347/#6321 gates still control any native call and same-image 
 acceptance. Synthetic transaction tests and repository delivery are not an assembled live
 installation packet or permission to operate it; #3347 remains open.
 
+If the source-installation RPC caller loses its response, the owner may issue one
+DEV/TEST-only `source-installation-reconcile` request for the same operation. The request must
+bind the exact operation ID, candidate SHA, image digest and bundle name from the retained owner
+marker. Recovery acquires both persistent source-installation locks exclusively, validates the
+authenticated owner marker and operation receipt, and proves the transaction-side source lock is
+closed before returning the existing receipt. A terminal receipt may retire that exact detached
+transaction lock; `unknown` and `compensated_stopped` receipts are returned as unresolved and
+retain the owner evidence. Missing, mismatched, malformed, live or ambiguous state returns a
+finite unresolved result and retains every hold. The request never starts, retries, replaces,
+adopts or releases an installation based on a different owner marker, and it is not a generic
+observer or a permission to operate a native host.
+
 New caught `refused_before_backup` receipts carry a value-free `prebackup_gate` from this finite
 set: `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
 `authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
 `backup_roots`, `source_manifest`, `candidate_profile`, `old_kernel_qualification`,
 `qualified_writer_snapshot`, or `generation_qualification`. The field classifies the producer gate
-that refused without storing exception text or request values. `authority_cutover` is one real
-current-writer predicate after `bound_plan`; its presence does not establish the cause of the
-earlier observed refusal. The canonical validator continues accepting legacy refusal receipts
+that refused without storing exception text or request values. `authority_cutover` classifies
+validation of a present cutover selection after `bound_plan`; ordinary-terminal owner/context
+refusals remain `current_writer_snapshot` (or the qualified recheck gate). Its presence does not
+establish the cause of the earlier observed refusal. The canonical validator continues accepting legacy refusal receipts
 without this optional field and rejects unknown labels or use on other statuses. Status and null
 generation/backup meanings are unchanged.
 

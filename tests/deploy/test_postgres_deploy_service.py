@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -436,6 +436,147 @@ def test_source_installation_reexecs_exact_candidate_launcher_before_import(tmp_
         service._dispatch(root, 'dev', ['rpc', 'dev'], caller_checkout=root)
 
     assert executed == [(binding, b'exact C1 source', raw, ['rpc', 'dev'])]
+
+
+def test_source_installation_recovery_reexecs_exact_candidate_before_import(tmp_path, monkeypatch):
+    old_root = tmp_path / "old-generation"
+    candidate_root = tmp_path / "candidate"
+    old_root.mkdir()
+    candidate_root.mkdir()
+    request = {
+        "action": "source-installation-reconcile",
+        "operation_id": "019ff695-00a6-7072-a082-57cbf2b3ee22",
+        "candidate_sha": "a" * 40,
+        "image_digest": "sha256:" + "b" * 64,
+        "bundle_name": "candidate-recovery",
+    }
+    raw = json.dumps(request)
+    released = []
+    executed = []
+
+    class Reservation:
+        skip_cleanup = False
+
+        def release(self):
+            released.append(True)
+
+    class CandidateReexec(Exception):
+        pass
+
+    binding = {
+        "candidate_sha": request["candidate_sha"], "checkout": str(candidate_root),
+        "script_sha256": "c" * 64,
+    }
+    monkeypatch.setattr(service, "_preimport_reservation", lambda *_args: Reservation())
+    monkeypatch.setattr(service, "_candidate_checkout_root", lambda _sha: candidate_root)
+    monkeypatch.setattr(service, "_candidate_launcher_binding", lambda *_args: (binding, b"exact recovery C1"))
+    monkeypatch.setattr(service.sys, "stdin", io.StringIO(raw))
+
+    def reexec(launcher_binding, source, request_raw, arguments):
+        assert released == [True]
+        executed.append((launcher_binding, source, request_raw, arguments))
+        raise CandidateReexec
+
+    monkeypatch.setattr(service, "_execute_verified_candidate_entrypoint", reexec)
+    with pytest.raises(CandidateReexec):
+        service._dispatch(old_root, "dev", ["rpc", "dev"], caller_checkout=old_root)
+
+    assert executed == [(binding, b"exact recovery C1", raw, ["rpc", "dev"])]
+
+
+def test_source_installation_transport_unknown_reconciles_only_exact_terminal_receipt(
+    tmp_path, monkeypatch, capsys,
+):
+    """The transport can recover one exact receipt, never a foreign operation."""
+    from app.ops import bws_installation_admission as admission
+
+    runtime = tmp_path / "runtime"
+    receipts = tmp_path / "receipts"
+    runtime.mkdir(mode=0o700)
+    receipts.mkdir(mode=0o700)
+    monkeypatch.setattr(admission, "_RUNTIME_DIRECTORY", runtime)
+    monkeypatch.setattr(admission, "_RECEIPT_DIRECTORY", receipts)
+    monkeypatch.setattr(admission, "_OWNER_UID", os.geteuid())
+    monkeypatch.setattr(admission, "_OWNER_GID", os.getegid())
+    caller = {
+        "pid": os.getpid(), "uid": os.geteuid(), "gid": os.getegid(), "start_time": 42,
+        "argv_sha256": "1" * 64, "executable_sha256": "2" * 64, "launcher_sha256": "3" * 64,
+    }
+    monkeypatch.setattr(admission, "_fixed_caller_identity", lambda _channel: dict(caller))
+    monkeypatch.setattr(admission, "_proc_identity", lambda pid: {
+        "pid": pid, "start_time": caller["start_time"],
+        "argv_sha256": caller["argv_sha256"], "executable_sha256": caller["executable_sha256"],
+    })
+    monkeypatch.setattr(
+        admission, "_open_directory",
+        lambda path: (os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW), path.stat()),
+    )
+    operation_id = "019ff695-00a6-7072-a082-57cbf2b3ee22"
+    install_request = {
+        "channel": "dev", "mode": "exclusive", "operation_id": operation_id,
+        "candidate_sha": "a" * 40, "image_digest": "sha256:" + "b" * 64,
+        "bundle_name": "synthetic-recovery",
+    }
+    receipt = {
+        "schema": admission._RECEIPT_SCHEMA, "operation_id": operation_id, "channel": "dev",
+        "candidate_sha": install_request["candidate_sha"], "image_digest": install_request["image_digest"],
+        "old_generation_sha256": "c" * 64, "new_generation_sha256": "d" * 64,
+        "backup_manifest_sha256": "e" * 64, "status": "installed",
+    }
+    with admission.installation_admission(**install_request) as lease:
+        lease.complete(receipt)
+
+    closed = []
+
+    class Effects:
+        def __init__(self, _config):
+            pass
+
+        def channel_lock_owner(self):
+            return b"synthetic-owner"
+
+        @contextmanager
+        def failed_reconciliation_lock(self, *, expected_owner):
+            closed.append(("lock", expected_owner))
+            yield object()
+
+        def retire_reconciled_channel_lock(self, _handle, *, expected_owner):
+            closed.append(("retire", expected_owner))
+
+    config = SimpleNamespace(channel="dev")
+    monkeypatch.setattr(linux.LinuxConfig, "load", staticmethod(lambda _channel: config))
+    monkeypatch.setattr(linux, "LinuxEffects", Effects)
+    monkeypatch.setattr(linux.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(service, "_preimport_reservation",
+                        lambda _channel, _action: service._PreimportReservation(None))
+    monkeypatch.setattr(service, "_install_source_loader", lambda _root: None)
+    binding = {
+        "candidate_sha": install_request["candidate_sha"],
+        "checkout": str(tmp_path), "script_sha256": "c" * 64,
+    }
+    monkeypatch.setattr(service, "_candidate_checkout_root", lambda _sha: tmp_path)
+    monkeypatch.setattr(service, "_candidate_launcher_binding",
+                        lambda *_args: (binding, b"synthetic candidate launcher"))
+    monkeypatch.setattr(service.sys, service._VERIFIED_CANDIDATE_ENTRYPOINT, binding, raising=False)
+
+    request = {
+        "action": "source-installation-reconcile", "operation_id": operation_id,
+        "candidate_sha": install_request["candidate_sha"],
+        "image_digest": install_request["image_digest"],
+        "bundle_name": install_request["bundle_name"],
+    }
+    monkeypatch.setattr(service.sys, "stdin", io.StringIO(json.dumps(request)))
+    assert service._dispatch(tmp_path, "dev", ["rpc", "dev"], caller_checkout=tmp_path) == 0
+    assert json.loads(capsys.readouterr().out) == {"source_installation": receipt}
+    assert [item[0] for item in closed] == ["lock", "retire"]
+
+    foreign = {**request, "candidate_sha": "f" * 40}
+    monkeypatch.setattr(service.sys, "stdin", io.StringIO(json.dumps(foreign)))
+    assert service._dispatch(tmp_path, "dev", ["rpc", "dev"], caller_checkout=tmp_path) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "source_installation": {"status": "unresolved", "reason": "owner_mismatch"},
+    }
+    assert [item[0] for item in closed] == ["lock", "retire"]
 
 
 def test_verified_candidate_entrypoint_runs_as_main_and_restores_process_state(tmp_path, monkeypatch):
