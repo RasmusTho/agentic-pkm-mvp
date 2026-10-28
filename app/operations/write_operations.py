@@ -302,6 +302,10 @@ def _update_body(
         return current
     frontmatter, old_body = split_frontmatter(current)
     prefix = current[: len(current) - len(old_body)] if frontmatter is not None else ""
+    if prefix and body and not prefix.endswith("\n"):
+        # A metadata-only note may close at EOF. Keep its delimiter separate
+        # from the replacement body without changing any frontmatter bytes.
+        prefix += "\r\n" if "\r\n" in prefix and not prefix.endswith("\r") else "\n"
     content = prefix + body
     gov = GovernedWriteAdapter()
     resource = path.relative_to(config.vault_root.resolve()).as_posix()

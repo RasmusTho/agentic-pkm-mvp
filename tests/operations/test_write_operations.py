@@ -490,6 +490,26 @@ def test_policy_fallback_never_emits_an_unadmitted_downstream_effect(bound, monk
     )
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("final_newline", [False, True])
+@pytest.mark.parametrize("body", ["Replacement body.", ""])
+def test_body_edit_preserves_metadata_only_frontmatter_at_eof(
+    bound, newline, final_newline, body
+) -> None:
+    prefix = newline.join([
+        "---", f"uuid: {bound.artifact_id}", "kind: note", "trust: human", "---",
+    ]) + (newline if final_newline else "")
+    bound.note_path.write_bytes(prefix.encode())
+    result = _run(
+        bound, _request(bound, writes.UPDATE_OPERATION_ID, arguments={"body": body})
+    )
+    assert result.status is OperationStatus.CONVERGENCE_PENDING
+    separator = newline if body and not final_newline else ""
+    updated = bound.note_path.read_bytes().decode()
+    assert updated == prefix + separator + body
+    assert writes.split_frontmatter(updated)[0] == writes.split_frontmatter(prefix)[0]
+
+
 def test_source_identity_and_metadata_remain_with_their_owners(bound) -> None:
     request = _request(
         bound,
