@@ -155,7 +155,8 @@ KnowledgePort may not:
 
 The dormant AUTOOPS-05 placement interface is `KnowledgePlacementOwner` in `app/knowledge/placement.py`.
 Its direct composition requires an immutable selected-vault/actor binding and current WSP/GOV
-checks, expected source and absent-destination generations, no-clobber publication, durable
+checks through the existing full ActiveContextSetV1/selected-binding GOV effect window, expected
+source and absent-destination generations, no-clobber publication, durable
 reservation/recovery evidence, and source/AuthorityReceipts. It currently supports ordinary
 rewritten Markdown human notes only. The source stays authoritative until destination identity
 verification; projection lag is explicit and recoverable from the destination and receipt. The

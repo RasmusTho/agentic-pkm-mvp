@@ -12,8 +12,9 @@ can_parallelize_with: []
 
 # Deliver Identity-Preserving Move and Rename
 
-State: AUTOOPS-05 source implementation, composed directly and dormant. Authenticated installation
-and the pre-05C activation seal remain with #5352/#3861; this slice does not accept the parent capability.
+State: AUTOOPS-05 source implementation, composed directly and dormant. Authenticated operations
+installation remains with #5352; delivered MVR-05C/#3861 context/ownership rules apply. This slice
+does not accept the parent capability.
 
 ## Purpose
 
@@ -65,9 +66,20 @@ authoritative until destination activation is verified.
 selected-vault root, immutable context/generation, actor, stable artifact ID and current source
 locator. Operation arguments cannot select another root, owner or principal. The owner rechecks
 WSP context, nested-vault membership, parent identities, WriteGuard and the GOV token binding at
-the filesystem effect seam. The trusted composition must supply current-context and current
-delegation/policy validators; both execution and recovery revalidate them before effects. Kernel
-admission still owns bounded delegation and policy.
+the filesystem effect seam. Every invocation requires the server-resolved full `ActiveContextSetV1`,
+one selected `target_binding_id` and the existing instance `VaultRegistryStore`; no legacy/unbound
+placement writer is installed. The owner checks the configured instance and current selected root,
+binds its own DecisionToken through GOV, and enters the existing `context_bound_write_window` before
+its vault lock. The principal read fence, host ownership fence and shared selected-binding lease
+remain held through source, AuthorityReceipt persistence and cleanup. Callback policy checks only
+narrow this authority; they cannot replace the context/window or widen the selected set.
+
+Recovery revalidates the persisted token against the exact trusted typed snapshot and selected target
+and re-enters the same current GOV effect window. JSON evidence cannot construct a new context.
+Expired/revoked/stale/missing context, unbound token, wrong instance/root/selected target and retired
+source ingress refuse. All new direct-composition producers and fixtures use the existing WSP/GOV
+selection and instance owners; no bearer, default selection, registry, role or effect lease is minted
+by the placement owner. Kernel admission still owns bounded delegation and policy.
 
 This bounded interface supports ordinary rewritten Markdown human notes with an existing identity.
 It refuses retained Sources, append-only/control paths, hidden/system paths, companions and Canvas
@@ -109,6 +121,23 @@ bytes are synchronized and retained by a private hardlink before publication. Pr
 are removed only after the source effect and AuthorityReceipt are recorded and a live destination
 inode is verified; interrupted cleanup remains explicitly recoverable.
 
+Recovery treats observed names as effect evidence, never as proof of successful synchronization.
+Every transition re-establishes its required durability barriers even when an earlier invocation
+already created or moved the entry:
+
+| Observed transition | Required barrier before advancing the durable phase |
+| --- | --- |
+| Private recovery root or transaction directory exists | Synchronize its parent after checking the private directory, including on reopen |
+| Exact retained `original` link exists | Synchronize the retained file bytes and transaction directory before `prepared` |
+| Exact published destination exists | Synchronize the destination directory before verified `activated` |
+| Exact captured `retired` source exists | Synchronize both source and transaction directories before the source/GOV receipt becomes `committed` |
+| Private cleanup names are already absent | Synchronize the transaction directory before recording `cleanup_complete` |
+
+Unavailable pre-commit synchronization keeps the intent recoverable and cannot create an applied
+AuthorityReceipt. A later cleanup synchronization failure keeps cleanup incomplete while preserving
+the already committed source receipt. Once the barrier is available, explicit recovery reconciles
+the same observed effect, re-establishes durability and completes without repeating the namespace mutation.
+
 ## Finite transition and failure matrix
 
 | Durable phase / failure | Authority and retained evidence | Allowed continuation |
@@ -122,6 +151,7 @@ inode is verified; interrupted cleanup remains explicitly recoverable.
 | `retiring`: crash before/after source capture | Destination and retained original identify the effect; a captured source is inspectable | Resume only when exact source/retired-name evidence proves the transition; missing source alone is never success |
 | Source replacement wins the retirement syscall | Expected artifact remains retained; raced replacement is retained separately | Restore the replacement only with no-replace semantics; preserve a second winner; return recovery-required |
 | Destination/source/parent generation changes, malformed evidence, unavailable fsync or receipt persistence | Preserve all observed entries and any known receipt; no false success | Recovery-required; inspect the same request's durable evidence and current authority before continuation |
+| Explicit recovery loses authority before historical evidence is readable | No new effect is admitted; the earlier attempt may already have published or retired the source | Refuse continuation and report source effect `unknown` with repair inspection required; refusal cannot imply the historical effect was not applied |
 | `committed`: source effect and GOV AuthorityReceipt synchronized | Destination owns the stable identity; old source locator retired | Clean exact private links idempotently, return the same receipt; source is never applied again |
 | Locator/Store/index/link lag | Unchanged destination bytes and durable old/new locator receipt remain authoritative | `convergence_pending` with explicit source-backed repair evidence; existing ingest/projection owners rebuild from the destination |
 
@@ -135,8 +165,9 @@ The current compatibility `vault_sync.update_path` uses the legacy binding and i
 a new context-aware writer by this slice. The existing source-backed ingest path is the repair
 owner; the real-path test replays the moved/renamed source and proves stable Store and companion
 locators converge. Source delivery alone installs no watcher, HTTP, GUI, MCP or singleton and
-makes no automatic projection-convergence claim. #4659's independent append mechanism and #4932's
-Canvas authority stay with their existing owners.
+makes no automatic projection-convergence claim. MVR-05C/#3861 is delivered through PR #6349; its
+context/token/effect-window and source-retirement rules are reused rather than replaced. #4659's
+independent append mechanism and #4932's Canvas authority stay with their existing owners.
 
 ## Related Docs
 
@@ -147,5 +178,6 @@ Canvas authority stay with their existing owners.
 ## Related GitHub Issues
 
 AUTOOPS-02/#5331 and AUTOOPS-04/#5333 are delivered prerequisites. #5334 owns this placement source
-implementation. Parent #5329 retains integrated acceptance; #5352/#3861 retain activation. TCD hint:
+implementation. Parent #5329 retains integrated acceptance; #5352 retains operations-runtime
+installation, while delivered #3861 owns current context/ownership rules. TCD hint:
 `fresh_issue_agent`, helper budget 1, strong reasoning due to data integrity and concurrency.

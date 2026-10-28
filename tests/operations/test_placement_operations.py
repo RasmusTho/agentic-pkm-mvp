@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import replace
 from hashlib import sha256
 import json
 from pathlib import Path, PurePosixPath
+from threading import Event
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,6 +14,8 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.knowledge import placement
 from app.knowledge.errors import KnowledgeCapabilityError
 from app.knowledge.placement import KnowledgePlacementOwner
+from app.instance.active_context_service import ActiveContextSelectionService
+from app.instance.context_selection import ContextSelectionStore
 from app.operations import (
     JsonReceiptStore,
     OperationContext,
@@ -27,6 +30,8 @@ from app.services.companion_note import read_companion
 from app.stores import get_object_store, reset_store_backends
 from app.vault.paths import get_vault_capture_note_rel, get_vault_system_dir_rel
 from tests.api._vault_test_helpers import bind_initialized_vault
+from tests._mvr03_principal_harness import provisioned_instance
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
 class Interrupted(BaseException):
@@ -35,9 +40,33 @@ class Interrupted(BaseException):
 
 @pytest.fixture
 def bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    root = tmp_path / "vault"
-    root.mkdir()
-    manager = bind_initialized_vault(monkeypatch, root, store_dir=tmp_path)
+    runtime, registration, _, principal = provisioned_instance(tmp_path / "instance")
+    root = Path(registration.path)
+    manager = bind_initialized_vault(
+        monkeypatch, root, store_dir=tmp_path, channel=runtime.layout.channel_id
+    )
+    runtime.complete_initialization(
+        registration.vault_binding_id,
+        vault_id="vault-" + registration.vault_binding_id,
+        local_instance_id=registration.local_instance_id,
+    )
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    service = ActiveContextSelectionService(
+        registry_store=runtime.registry,
+        principal_record=principal,
+        selection_store=ContextSelectionStore(),
+    )
+    derived = service.derive("trusted_loopback")
+    bearer, _ = service.create(derived=derived, binding_ids=[registration.vault_binding_id])
+    context = service.resolve_request_context(
+        derived=derived,
+        session_bearer=bearer,
+        override_bearer=None,
+        action="operation.artifact.move",
+        write_class="vault_placement",
+        required_permission="write",
+    ).snapshot
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
     monkeypatch.setenv("COMPANION_CREATE_COOLDOWN_SECONDS", "0")
@@ -57,9 +86,12 @@ def bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     owner = KnowledgePlacementOwner(
         vault_root=root,
-        context_ref="fixture-context",
-        vault_generation="generation-1",
-        actor="owner",
+        context_ref=context.context_id,
+        vault_generation=str(context.generation),
+        actor=context.principal_context.principal_id,
+        active_context=context,
+        target_binding_id=registration.vault_binding_id,
+        registry_store=runtime.registry,
         context_is_current=lambda: manager.context.status == "selected"
         and manager.context.active_vault_path == str(root),
         authority_is_current=lambda intent: intent.artifact_id == identity
@@ -67,7 +99,10 @@ def bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         filesystem="local-posix-v1",
     )
     yield operations.PlacementOperationServerConfig(
-        owner, OperationContext("fixture-context", "generation-1"), identity, "Notes/original.md"
+        owner,
+        OperationContext(context.context_id, str(context.generation)),
+        identity,
+        "Notes/original.md",
     )
     reset_store_backends()
 
@@ -97,7 +132,7 @@ def _request(
             key: destination,
             "destination_generation": config.owner.destination_generation(target),
         },
-        provenance=OperationProvenance("owner", "direct-test", "test"),
+        provenance=OperationProvenance(config.owner.actor, "direct-test", "test"),
     )
 
 
@@ -107,7 +142,7 @@ def _delegation(config, request):
         "vault_generation": config.context.vault_generation,
         "operation_ids": [request.operation_id],
         "policy_version": "policy-1",
-        "principal": "owner",
+        "principal": config.owner.actor,
         "client": "test",
         "surface": "test",
         "receipt_ref": "delegation-1",
@@ -144,6 +179,9 @@ def _restart(config):
             context_ref=previous.context_ref,
             vault_generation=previous.vault_generation,
             actor=previous.actor,
+            active_context=previous.active_context,
+            target_binding_id=previous.target_binding_id,
+            registry_store=previous.registry_store,
             context_is_current=previous.context_is_current,
             authority_is_current=previous.authority_is_current,
             filesystem=previous.filesystem,
@@ -179,6 +217,10 @@ def test_move_and_rename_preserve_identity_and_converge_locators(bound):
     assert receipt["destination_locator"] == "Projects/moved.md"
     assert receipt["projection_repair"] == ["locator", "store", "index", "link"]
     assert receipt["governed_write"]["authority_receipt"]["effect_id"] == request.request_id
+    authority = receipt["governed_write"]["authority_receipt"]
+    assert authority["target_binding_id"] == bound.owner.target_binding_id
+    assert authority["active_context"]["context_id"] == bound.context.active_context_ref
+    assert authority["active_context"]["principal_context"]["principal_id"] == bound.owner.actor
     # Projection lag has durable repair evidence. The existing real ingest owner
     # repairs from the destination, never from a mutable path-only cache.
     summary = run_vault_alpha_ingest_paths(bound.owner.root, [destination])
@@ -678,6 +720,31 @@ def test_parent_and_source_leaf_aliases_refuse_before_reservation(bound):
     assert not list((root / ".pkm-placement").glob("*.json"))
 
 
+def test_reserved_destination_alias_cannot_bypass_restart_reservation(bound, monkeypatch):
+    root = bound.owner.root
+    if not (root / "pROJECTS").is_dir() or not (root / "pROJECTS").samefile(root / "Projects"):
+        pytest.skip("actual case-insensitive lookup is required for this platform boundary")
+    request = _request(bound, destination="Projects/Moved.md")
+    store = bound.owner._store
+
+    def interrupt(root, state, name, record):
+        store(root, state, name, record)
+        if record["phase"] == "prepared":
+            raise Interrupted()
+
+    monkeypatch.setattr(bound.owner, "_store", interrupt)
+    with pytest.raises(Interrupted):
+        _run(bound, request)
+    other_id = str(uuid4())
+    (root / "Notes/other.md").write_text(f"---\nuuid: {other_id}\n---\nAnother artifact.\n")
+    other = replace(_restart(bound), artifact_id=other_id, source="Notes/other.md")
+    other.owner.authority_is_current = lambda intent: intent.artifact_id == other_id
+    alias = _request(other, destination="Projects/moved.md", request_id="another-request")
+    assert _run(other, alias).status is OperationStatus.CONFLICTED
+    assert (root / bound.source).exists() and (root / other.source).exists()
+    assert not (root / "Projects/Moved.md").exists()
+
+
 def test_post_publication_fsync_failure_preserves_unknown_effect_and_repair(bound, monkeypatch):
     request = _request(bound)
     source = bound.owner.root / bound.source
@@ -713,3 +780,293 @@ def test_post_publication_fsync_failure_preserves_unknown_effect_and_repair(boun
     assert recovered.status is OperationStatus.CONVERGENCE_PENDING
     assert recovered.convergence.source_effect is SourceEffectStatus.COMMITTED
     assert not source.exists() and destination.read_bytes() == raw
+
+
+@pytest.mark.parametrize("operation", ["artifact.move", "artifact.rename"])
+@pytest.mark.parametrize("failed_directory", ["source", "recovery"])
+def test_recovered_retirement_reasserts_both_directory_syncs(
+    bound, monkeypatch, operation, failed_directory
+):
+    destination_name = "renamed.md" if operation == "artifact.rename" else "Projects/moved.md"
+    request = _request(bound, operation=operation, destination=destination_name)
+    source = bound.owner.root / bound.source
+    destination = (
+        source.with_name(destination_name)
+        if operation == "artifact.rename"
+        else bound.owner.root / destination_name
+    )
+    transaction = (
+        bound.owner.root / ".pkm-placement" / sha256(request.request_id.encode()).hexdigest()
+    )
+    source_parent = source.parent.stat().st_ino
+    raw = source.read_bytes()
+    fsync, rename = placement.os.fsync, placement._atomic_rename_noreplace_at
+    failures = captures = 0
+
+    def unavailable(fd):
+        nonlocal failures
+        if not source.exists() and destination.exists():
+            barrier = source_parent if failed_directory == "source" else transaction.stat().st_ino
+            if placement.os.fstat(fd).st_ino == barrier:
+                failures += 1
+                raise OSError("retirement namespace synchronization remains unavailable")
+        return fsync(fd)
+
+    def capture_once(src, source_name, dst, destination_name):
+        nonlocal captures
+        rename(src, source_name, dst, destination_name)
+        if destination_name == "retired":
+            captures += 1
+
+    monkeypatch.setattr(placement.os, "fsync", unavailable)
+    monkeypatch.setattr(placement, "_atomic_rename_noreplace_at", capture_once)
+    initial = _run(bound, request)
+    assert initial.status is OperationStatus.RECOVERY_REQUIRED
+    assert _record(bound)["phase"] == "retiring" and _record(bound)["receipt"] is None
+    assert (transaction / "retired").read_bytes() == raw
+    assert not source.exists() and destination.read_bytes() == raw
+    blocked_recovery = operations.reconcile_placement_operation(request, _restart(bound))
+    assert blocked_recovery.status is OperationStatus.RECOVERY_REQUIRED
+    record = _record(bound)
+    assert record["phase"] == "retiring" and record["receipt"] is None
+    assert not record["cleanup_complete"] and failures == 2 and captures == 1
+    monkeypatch.setattr(placement.os, "fsync", fsync)
+    recovered = operations.reconcile_placement_operation(request, _restart(bound))
+    assert recovered.status is OperationStatus.CONVERGENCE_PENDING
+    assert _record(bound)["cleanup_complete"] and captures == 1
+    assert destination.read_bytes() == raw and not source.exists()
+    assert operations.reconcile_placement_operation(request, _restart(bound)) == recovered
+
+
+def test_recovered_original_link_requires_its_directory_sync(bound, monkeypatch):
+    request = _request(bound)
+    source = bound.owner.root / bound.source
+    destination = bound.owner.root / "Projects/moved.md"
+    transaction = (
+        bound.owner.root / ".pkm-placement" / sha256(request.request_id.encode()).hexdigest()
+    )
+    fsync = placement.os.fsync
+    failures = 0
+
+    def unavailable(fd):
+        nonlocal failures
+        if (
+            (transaction / "original").exists()
+            and not destination.exists()
+            and placement.os.fstat(fd).st_ino == transaction.stat().st_ino
+        ):
+            failures += 1
+            raise OSError("retained-source directory synchronization remains unavailable")
+        return fsync(fd)
+
+    monkeypatch.setattr(placement.os, "fsync", unavailable)
+    assert _run(bound, request).status is OperationStatus.RECOVERY_REQUIRED
+    assert _record(bound)["phase"] == "reserved"
+    assert (
+        operations.reconcile_placement_operation(request, _restart(bound)).status
+        is OperationStatus.RECOVERY_REQUIRED
+    )
+    assert _record(bound)["phase"] == "reserved" and failures == 2
+    assert source.exists() and not destination.exists()
+    monkeypatch.setattr(placement.os, "fsync", fsync)
+    assert (
+        operations.reconcile_placement_operation(request, _restart(bound)).status
+        is OperationStatus.CONVERGENCE_PENDING
+    )
+
+
+def test_existing_recovery_root_requires_parent_sync_before_new_effect(bound, monkeypatch):
+    request = _request(bound)
+    root = bound.owner.root
+    source, destination = root / bound.source, root / "Projects/moved.md"
+    root_inode = root.stat().st_ino
+    fsync = placement.os.fsync
+    failures = 0
+
+    def unavailable(fd):
+        nonlocal failures
+        if (root / ".pkm-placement").exists() and placement.os.fstat(fd).st_ino == root_inode:
+            failures += 1
+            raise OSError("recovery-root parent synchronization remains unavailable")
+        return fsync(fd)
+
+    monkeypatch.setattr(placement.os, "fsync", unavailable)
+    assert _run(bound, request).status is OperationStatus.RECOVERY_REQUIRED
+    assert source.exists() and not destination.exists()
+    retry = _request(bound, request_id="fresh-authorized-request")
+    assert _run(_restart(bound), retry).status is OperationStatus.RECOVERY_REQUIRED
+    assert failures == 2 and not list((root / ".pkm-placement").glob("*.json"))
+    assert source.exists() and not destination.exists()
+    monkeypatch.setattr(placement.os, "fsync", fsync)
+    assert (
+        _run(_restart(bound), _request(bound, request_id="after-storage-recovery")).status
+        is OperationStatus.CONVERGENCE_PENDING
+    )
+
+
+def test_mvr_missing_expired_and_unselected_context_cannot_borrow_callbacks(bound, monkeypatch):
+    request = _request(bound)
+    source = bound.owner.root / bound.source
+    original = bound.owner.active_context
+    handler = operations.build_placement_operation_handlers(bound)["artifact.move"]
+    monkeypatch.setattr(bound.owner, "active_context", None)
+    assert handler(request).status is OperationStatus.REJECTED
+    monkeypatch.setattr(bound.owner, "active_context", replace(original, expires_at=1.0))
+    assert handler(request).status is OperationStatus.REJECTED
+    monkeypatch.setattr(bound.owner, "active_context", original)
+    monkeypatch.setattr(bound.owner, "target_binding_id", "not-in-selected-set")
+    assert handler(request).status is OperationStatus.REJECTED
+    assert source.exists() and not (bound.owner.root / "Projects/moved.md").exists()
+    assert not (bound.owner.root / ".pkm-placement").exists()
+
+
+def test_mvr_selected_binding_cannot_be_repointed_by_a_server_callback(bound, monkeypatch):
+    from app.write_guard import WritesBlockedError
+
+    request = _request(bound)
+    root = bound.owner.root
+    another = root.parent / "unselected-root"
+    another.mkdir()
+    wrong = _restart(bound)
+    wrong.owner.root = another
+    wrong.owner.root_identity = placement._inode(another.stat())
+    monkeypatch.setattr(wrong.owner, "context_is_current", lambda: True)
+    monkeypatch.setattr(wrong.owner, "authority_is_current", lambda _: True)
+    with pytest.raises(WritesBlockedError):
+        wrong.owner.source_generation(bound.source, bound.artifact_id)
+    assert _run(wrong, request).status is OperationStatus.REJECTED
+    assert not (another / ".pkm-placement").exists()
+    assert (root / bound.source).exists()
+
+
+def test_mvr_unbound_recovery_token_never_resumes_the_source(bound, monkeypatch):
+    request = _request(bound)
+    store = bound.owner._store
+
+    def interrupt(root, state, name, record):
+        store(root, state, name, record)
+        if record["phase"] == "prepared":
+            raise Interrupted()
+
+    monkeypatch.setattr(bound.owner, "_store", interrupt)
+    with pytest.raises(Interrupted):
+        _run(bound, request)
+    record = _record(bound)
+    record["grant"]["decision_token"]["active_context"] = None
+    path = (
+        bound.owner.root
+        / ".pkm-placement"
+        / (sha256(request.request_id.encode()).hexdigest() + ".json")
+    )
+    path.write_text(json.dumps(record))
+    refused = operations.reconcile_placement_operation(request, _restart(bound))
+    assert refused.status is OperationStatus.RECOVERY_REQUIRED
+    assert (bound.owner.root / bound.source).exists()
+    assert not (bound.owner.root / "Projects/moved.md").exists()
+
+
+def test_mvr_revoked_principal_refuses_before_placement(bound):
+    from app.instance.runtime import open_local_operator_principal_store
+
+    request = _request(bound)
+    principal = open_local_operator_principal_store(bound.owner.registry_store.path)
+    principal.rotate_credential(
+        credential="synthetic-placement-rotation", _capability=STORAGE_MUTATION_CAPABILITY
+    )
+    assert _run(bound, request).status is OperationStatus.REJECTED
+    assert (bound.owner.root / bound.source).exists()
+    assert not (bound.owner.root / ".pkm-placement").exists()
+
+
+@pytest.mark.parametrize("phase", ["activated", "committed"])
+def test_denied_recovery_cannot_claim_historical_effect_was_not_applied(
+    bound, monkeypatch, phase
+):
+    from app.instance.runtime import open_local_operator_principal_store
+
+    request = _request(bound)
+    store = bound.owner._store
+
+    def interrupt(root, state, name, record):
+        store(root, state, name, record)
+        if record["phase"] == phase:
+            raise Interrupted()
+
+    monkeypatch.setattr(bound.owner, "_store", interrupt)
+    with pytest.raises(Interrupted):
+        _run(bound, request)
+    destination = bound.owner.root / "Projects/moved.md"
+    assert destination.exists() and _record(bound)["phase"] == phase
+    before = _record(bound)
+    principal = open_local_operator_principal_store(bound.owner.registry_store.path)
+    principal.rotate_credential(
+        credential="synthetic-placement-recovery-rotation", _capability=STORAGE_MUTATION_CAPABILITY
+    )
+    refused = operations.reconcile_placement_operation(request, _restart(bound))
+    assert refused.status is OperationStatus.REJECTED
+    assert refused.convergence.source_effect is SourceEffectStatus.UNKNOWN
+    assert all(
+        getattr(refused.convergence, item) is ConvergenceState.REBUILD_REQUIRED
+        for item in ("store", "index", "link")
+    )
+    assert refused.convergence.extensions["locator_repair"] != "not_required"
+    assert _record(bound) == before and destination.exists()
+    assert (bound.owner.root / bound.source).exists() == (phase == "activated")
+
+
+def test_mvr_effect_window_covers_source_and_durable_authority_receipt(bound, monkeypatch):
+    from app.instance.binding_effect_lease import BindingEffectLeaseManager
+    from app.instance.runtime import open_local_operator_principal_store
+    import os
+
+    request = _request(bound)
+    entered, release = Event(), Event()
+    store = bound.owner._store
+
+    def pause_after_receipt(root, state, name, record):
+        store(root, state, name, record)
+        if record["phase"] == "committed" and not entered.is_set():
+            entered.set()
+            assert release.wait(timeout=5)
+
+    monkeypatch.setattr(bound.owner, "_store", pause_after_receipt)
+    leases = BindingEffectLeaseManager.for_runtime(
+        registry_store=bound.owner.registry_store,
+        ownership_root=Path(os.environ["INSTANCE_OWNERSHIP_ROOT"]),
+        state_root=bound.owner.registry_store.path.parent / "binding-effect-leases",
+    )
+    principal = open_local_operator_principal_store(bound.owner.registry_store.path)
+
+    def exclusive():
+        with leases.exclusive_change(
+            bound.owner.target_binding_id,
+            channel_id=os.environ["PKM_ENVIRONMENT"],
+            root=bound.owner.root,
+        ):
+            return True
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        placed = pool.submit(_run, bound, request)
+        assert entered.wait(timeout=5)
+        changed = pool.submit(exclusive)
+        revoked = pool.submit(
+            principal.rotate_credential,
+            credential="synthetic-placement-rotation",
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        try:
+            for pending in (changed, revoked):
+                with pytest.raises(TimeoutError):
+                    pending.result(timeout=0.1)
+        finally:
+            release.set()
+        assert placed.result(timeout=5).status is OperationStatus.CONVERGENCE_PENDING
+        assert changed.result(timeout=5)
+        revoked.result(timeout=5)
+    assert (
+        _record(bound)["receipt"]["governed_write"]["authority_receipt"]["active_context"][
+            "principal_context"
+        ]["revision"]
+        == bound.owner.active_context.principal_context.revision
+    )
+    assert not (bound.owner.root / bound.source).exists()

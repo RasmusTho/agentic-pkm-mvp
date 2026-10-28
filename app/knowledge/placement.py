@@ -19,7 +19,17 @@ import sys
 from typing import Any, Callable, Iterator, cast
 from uuid import uuid4
 
-from app.governance.governed_write import DecisionToken, GovernedWriteAdapter
+from app.governance.governed_write import (
+    DecisionToken,
+    GovernedWriteAdapter,
+    GovernedWriteGrant,
+    InvalidDecisionTokenError,
+)
+from app.instance.channel_transfer import require_source_root_ingress
+from app.instance.context_bound_read import ContextBoundReadError
+from app.instance.context_bound_write import context_bound_write_window
+from app.instance.errors import RegistryError
+from app.instance.vault_registry import VaultRegistryStore
 from app.knowledge.adapters import (
     _atomic_rename_noreplace_at,
     _read_stable_descriptor,
@@ -29,10 +39,12 @@ from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflic
 from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note_in_vault
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.vault.manager import nearest_enclosing_vault_root
+from app.vault.active_context_v1 import ActiveContextError, ActiveContextSetV1
 from app.vault.path_overlap import (
     VaultPathOverlapError,
     assert_targets_do_not_overlap_capture_note,
     vault_path_is_within,
+    vault_paths_overlap,
 )
 from app.vault.paths import (
     get_vault_sources_dir_rel,
@@ -109,17 +121,22 @@ def _entry(parent: int, name: str) -> dict[str, Any] | None:
 def _private_directory(parent: int, name: str) -> int:
     try:
         os.mkdir(name, 0o700, dir_fd=parent)
-        os.fsync(parent)
     except FileExistsError:
         pass
     fd = os.open(name, _DIRECTORY, dir_fd=parent)
-    info = os.fstat(fd)
-    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise KnowledgeCapabilityError(
+                "placement recovery directory must be private and owner-controlled"
+            )
+        # An existing name may come from an interrupted mkdir whose parent
+        # synchronization failed. Presence is not a durability receipt.
+        os.fsync(parent)
+        return fd
+    except BaseException:
         os.close(fd)
-        raise KnowledgeCapabilityError(
-            "placement recovery directory must be private and owner-controlled"
-        )
-    return fd
+        raise
 
 
 def _canonical_leaf(parent: int, name: str) -> None:
@@ -163,6 +180,9 @@ class KnowledgePlacementOwner:
         context_ref: str,
         vault_generation: str,
         actor: str,
+        active_context: ActiveContextSetV1,
+        target_binding_id: str,
+        registry_store: VaultRegistryStore,
         context_is_current: Callable[[], bool],
         authority_is_current: Callable[[PlacementIntent], bool],
         filesystem: str | None = None,
@@ -175,12 +195,36 @@ class KnowledgePlacementOwner:
         self.context_ref = context_ref
         self.vault_generation = vault_generation
         self.actor = actor
+        self.active_context = active_context
+        self.target_binding_id = target_binding_id
+        self.registry_store = registry_store
         self.context_is_current = context_is_current
         self.authority_is_current = authority_is_current
         self.filesystem = filesystem
         self.write_guard = write_guard
 
     def _context(self) -> None:
+        if (
+            not isinstance(self.active_context, ActiveContextSetV1)
+            or not isinstance(self.registry_store, VaultRegistryStore)
+            or self.active_context.context_id != self.context_ref
+            or str(self.active_context.generation) != self.vault_generation
+            or self.active_context.principal_context.principal_id != self.actor
+            or self.target_binding_id not in self.active_context.binding_ids
+        ):
+            raise WritesBlockedError(
+                "rejected",
+                "placement requires the complete server-bound context and selected target",
+                "placement",
+            )
+        configured_registry = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+        if (
+            not configured_registry
+            or Path(configured_registry).resolve() != self.registry_store.path.resolve()
+        ):
+            raise WritesBlockedError(
+                "rejected", "placement registry differs from the bound instance", "placement"
+            )
         if (
             not all((self.actor, self.context_ref, self.vault_generation))
             or not self.context_is_current()
@@ -192,6 +236,61 @@ class KnowledgePlacementOwner:
             )
         if self.root.resolve() != self.root or _inode(self.root.stat()) != self.root_identity:
             raise KnowledgeWriteConflict("placement root identity changed")
+        try:
+            require_source_root_ingress(self.root, allow_admitted_effect=True)
+            snapshot = self.registry_store.read_existing()
+            selected = snapshot.registrations.get(self.target_binding_id)
+            if (
+                snapshot.app_install_id != self.active_context.instance_identity
+                or selected is None
+                or Path(selected.path).resolve() != self.root
+            ):
+                raise WritesBlockedError(
+                    "rejected", "placement root is not the server-selected binding", "placement"
+                )
+        except RegistryError as exc:
+            raise WritesBlockedError(
+                "rejected", "placement source ingress is unavailable", "placement"
+            ) from exc
+
+    @contextmanager
+    def _effect_window(self, intent: PlacementIntent) -> Iterator[GovernedWriteGrant]:
+        """Reuse MVR/GOV ownership, principal and binding leases; never mint selection."""
+        self._authority(intent)
+        gov = GovernedWriteAdapter()
+        grant = gov.issue_decision_token(
+            write_guard=self.write_guard, **self._grant_binding(intent)
+        )
+        grant = gov.bind_context(
+            grant, context=self.active_context, target_binding_id=self.target_binding_id
+        )
+        with context_bound_write_window(
+            self.active_context,
+            target_binding_id=self.target_binding_id,
+            token=grant.decision_token,
+            registry_store=self.registry_store,
+            **self._grant_binding(intent),
+        ) as root:
+            if root != self.root:
+                raise InvalidDecisionTokenError("placement root differs from the selected binding")
+            yield grant
+
+    def _token(self, record: dict[str, Any]) -> DecisionToken:
+        raw = dict(record["grant"]["decision_token"])
+        if raw.get("target_binding_id") != self.target_binding_id or _digest(
+            raw.get("active_context")
+        ) != _digest(asdict(self.active_context)):
+            raise InvalidDecisionTokenError(
+                "placement recovery context differs from the original token"
+            )
+        # Reuse the trusted typed snapshot only after exact comparison with its
+        # persisted representation; JSON data never creates context authority.
+        raw["active_context"] = self.active_context
+        token = DecisionToken(**raw)
+        GovernedWriteAdapter().validate_context(
+            token, context=self.active_context, target_binding_id=self.target_binding_id
+        )
+        return token
 
     def _path(self, value: str) -> PurePosixPath:
         path = PurePosixPath(value)
@@ -349,8 +448,8 @@ class KnowledgePlacementOwner:
             return None
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
             info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 262144:
-                raise KnowledgeWriteConflict("placement evidence is not a bounded private record")
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise KnowledgeWriteConflict("placement evidence is not a private regular record")
             value = json.load(handle)
         if (
             not isinstance(value, dict)
@@ -477,7 +576,7 @@ class KnowledgePlacementOwner:
                 return PlacementResult(
                     "invalid", reason="rename must preserve its parent directory"
                 )
-            with self._locked() as (root, state):
+            with self._effect_window(intent) as grant, self._locked() as (root, state):
                 self._authority(intent)
                 name = sha256(intent.request_id.encode()).hexdigest() + ".json"
                 record = self._load(state, name)
@@ -503,10 +602,11 @@ class KnowledgePlacementOwner:
                         other = self._load(state, other_name)
                         if other is not None and other["phase"] != "committed":
                             prior = other["intent"]
-                            if prior["artifact_id"] == intent.artifact_id or {
-                                prior["source"],
-                                prior["destination"],
-                            } & {intent.source, intent.destination}:
+                            if prior["artifact_id"] == intent.artifact_id or any(
+                                vault_paths_overlap(old, current, vault_root=self.root)
+                                for old in (prior["source"], prior["destination"])
+                                for current in (intent.source, intent.destination)
+                            ):
                                 return PlacementResult(
                                     "conflicted",
                                     reason="placement artifact or destination has an outstanding reservation",
@@ -543,9 +643,6 @@ class KnowledgePlacementOwner:
                             self._identity(intent.source, intent.artifact_id, raw)
                         finally:
                             os.close(fd)
-                        grant = GovernedWriteAdapter().issue_decision_token(
-                            write_guard=self.write_guard, **self._grant_binding(intent)
-                        )
                         record = {
                             "schema": "hka.placement.v1",
                             "intent": asdict(intent),
@@ -568,6 +665,13 @@ class KnowledgePlacementOwner:
                         os.close(transaction)
                 return self._result(record)
         except WritesBlockedError as exc:
+            return PlacementResult("recovery_required" if record else "rejected", record, str(exc))
+        except (
+            InvalidDecisionTokenError,
+            ContextBoundReadError,
+            RegistryError,
+            ActiveContextError,
+        ) as exc:
             return PlacementResult("recovery_required" if record else "rejected", record, str(exc))
         except KnowledgeCapabilityError as exc:
             return PlacementResult(
@@ -592,6 +696,8 @@ class KnowledgePlacementOwner:
             "context_ref": self.context_ref,
             "vault_generation": self.vault_generation,
             "actor": self.actor,
+            "target_binding_id": self.target_binding_id,
+            "active_context_digest": _digest(asdict(self.active_context)),
         }
 
     def _grant_binding(self, intent: PlacementIntent) -> dict[str, str]:
@@ -642,7 +748,7 @@ class KnowledgePlacementOwner:
         self._path(intent.destination)
         self._authority(intent)
         GovernedWriteAdapter().validate_decision_token(
-            decision_token=DecisionToken(**record["grant"]["decision_token"]),
+            decision_token=self._token(record),
             **self._grant_binding(intent),
         )
         with self._parents(
@@ -693,7 +799,6 @@ class KnowledgePlacementOwner:
                     dst_dir_fd=transaction,
                     follow_symlinks=False,
                 )
-                os.fsync(transaction)
             require(transaction, "original")
             require(src, source.name)
             retained_fd = os.open("original", _READ, dir_fd=transaction)
@@ -701,6 +806,7 @@ class KnowledgePlacementOwner:
                 os.fsync(retained_fd)
             finally:
                 os.close(retained_fd)
+            os.fsync(transaction)
             advance("prepared")
         if record["phase"] == "prepared":
             # Persist uncertainty before entering the public namespace syscall.
@@ -738,8 +844,10 @@ class KnowledgePlacementOwner:
                 require(src, source.name)
                 self._seam(root, state, src, dst, record, intent)
                 _atomic_rename_noreplace_at(src, source.name, transaction, "retired")
-                os.fsync(src)
-                os.fsync(transaction)
+            # Reassert both namespace barriers on recovery, including when the
+            # retained entry proves the rename happened in an earlier process.
+            os.fsync(src)
+            os.fsync(transaction)
             if _entry(transaction, "retired") != expected:
                 # Preserve a replacement that won the source name. Restore it
                 # only with no-replace semantics; a second winner stays intact.
@@ -760,13 +868,13 @@ class KnowledgePlacementOwner:
             self._seam(root, state, src, dst, record, intent)
             mutation = WriteReceipt(
                 intent.operation,
-                NoteLocator(self.context_ref, intent.destination),
+                NoteLocator(self.target_binding_id, intent.destination),
                 "knowledge.placement",
                 trace_id=intent.request_id,
                 writer_identity=self.actor,
             )
             authority = GovernedWriteAdapter().record_authority_receipt(
-                decision_token=DecisionToken(**record["grant"]["decision_token"]),
+                decision_token=self._token(record),
                 mutation_receipt=cast(Any, mutation),
                 state_owner="knowledge",
                 resource=intent.source,
@@ -802,6 +910,7 @@ class KnowledgePlacementOwner:
             self._store(root, state, name, record)
 
     def _result(self, record: dict[str, Any]) -> PlacementResult:
+        record = json.loads(json.dumps(record))
         if (
             record["phase"] == "committed"
             and record.get("receipt")

@@ -102,16 +102,22 @@ def _execute(
         config.context.active_context_ref,
         config.context.vault_generation or "",
     )
-    return _map(config.owner.place_artifact(intent, recover=recover), request)
+    return _map(config.owner.place_artifact(intent, recover=recover), request, recover=recover)
 
 
-def _map(result: PlacementResult, request: OperationRequest) -> OwnerExecutionResult:
+def _map(
+    result: PlacementResult, request: OperationRequest, *, recover: bool = False
+) -> OwnerExecutionResult:
     record = result.record or {}
     receipt = record.get("receipt")
     source = (
         SourceEffectStatus.COMMITTED if result.source_committed else SourceEffectStatus.NOT_APPLIED
     )
     if result.status == "recovery_required" and not record:
+        source = SourceEffectStatus.UNKNOWN
+    if recover and not record and result.status != "not_found":
+        # Admission may refuse before historical evidence can be read. It
+        # establishes no new effect, but cannot erase an earlier attempt.
         source = SourceEffectStatus.UNKNOWN
     if record.get("phase") == "publishing":
         source = SourceEffectStatus.UNKNOWN
