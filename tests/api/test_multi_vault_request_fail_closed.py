@@ -12,7 +12,7 @@ from app.api.routes import active_context_selection as selection_routes
 from app.api.routes import ask as ask_routes
 from app.instance._storage_boundary import CapabilityNotReadyError
 from app.instance.context_selection import ContextSelectionStore
-from app.instance.vault_registry import KnownVaultRef
+from app.instance.vault_registry import KnownVaultRef, RegistryError
 from app.vault.active_context_v1 import DimensionFilter
 from tests._mvr03_principal_harness import provisioned_instance
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
@@ -140,8 +140,8 @@ def test_invalid_override_fails_closed_without_falling_back_to_session(
     assert "stale-override" not in response.text
 
 
-def test_backend_read_enabling_preserves_dormant_producers(instance, client, monkeypatch) -> None:
-    """All scoped read producers work while legacy/picker writes remain dormant."""
+def test_scoped_reads_preserve_lifecycle_and_transfer_admission_guards(instance, client, monkeypatch) -> None:
+    """Scoped reads do not bypass dormant lifecycle or transfer participant guards."""
 
     runtime, first = instance
     session = _create(client, first.vault_binding_id)
@@ -187,10 +187,13 @@ def test_backend_read_enabling_preserves_dormant_producers(instance, client, mon
         runtime.remove(first.vault_binding_id)
     with pytest.raises(CapabilityNotReadyError, match="MVR-06C"):
         runtime.relocate(first.vault_binding_id, runtime.layout.root / "relocated")
-    with pytest.raises(CapabilityNotReadyError, match="MVR-05C"):
+    before_registry, before_ledger = runtime.registry.load(), runtime.ledger.load()
+    with pytest.raises(RegistryError, match="transfer requires distinct channels"):
         runtime.transfer_to(runtime, first.vault_binding_id)
+    assert runtime.registry.load() == before_registry and runtime.ledger.load() == before_ledger
+    assert not (runtime.layout.root / "channel-transfer.json").exists()
 
-    # No scoped read implicitly activates the not-ready picker/write routes.
+    # Removal, relocation and transfer have no ungoverned request route.
     assert not any(
         route.path.endswith("/remove") or route.path.endswith("/relocate") or route.path.endswith("/transfer")
         for route in client.app.routes

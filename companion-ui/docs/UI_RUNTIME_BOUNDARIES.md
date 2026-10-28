@@ -64,13 +64,18 @@
   session or override carrier is present, including a blank one. A carrier-free request retains
   `/api/ask`. Both paths preserve real client authentication and the presented carriers; there is
   no retry on the legacy twin after a scoped refusal.
-- Compatibility mutations use distinct same-origin routes (`/api/companion/capture/compatibility`
-  and `/api/companion/note/save/compatibility`). Before an explicit capture or note edit, the browser
+- Scoped page capture sends its opaque context bearer and the rendered document's selected
+  `target_binding_id` to `/api/companion/capture/scoped`. Session liveness is checked first; the
+  retained rendered target is never replaced from a newer cookie. The runtime requires selected
+  membership, exact-context GOV authority and the shared binding effect window. A stale document
+  therefore cannot write to a newly selected binding.
+- Carrier-free capture and note edits retain distinct same-origin compatibility routes (`/api/companion/capture/compatibility`
+  and `/api/companion/note/save/compatibility`). Before these compatibility writes, the browser
   uses the opaque `X-Compatibility-Write-Precondition` captured with that rendered document.
   For scoped pages, both note and orientation/capture producers obtain it through the existing scoped notes
   read with the same request-local adapter that loads the page, and capture its response header
   before later projection reads overwrite transport headers. It remains in document-local script
-  state. A scoped page save or capture validates session liveness through the authenticated strict selection
+  state. A scoped page note save validates session liveness through the authenticated strict selection
   inspection, then sends the retained proof unchanged. It never refreshes proof from a mutable
   current cookie or automatically retries a rejected write. Missing or expired proof blocks the
   mutation and preserves the draft; recovery requires explicit reload/reselection.

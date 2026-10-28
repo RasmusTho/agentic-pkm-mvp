@@ -160,7 +160,10 @@ def _resolve_vault_root_path(
     """
     default_path = DEFAULT_VAULT_ROOT if fallback_to_default else None
     if value is not None or not allow_env:
-        return value if value is not None else default_path
+        explicit = value if value is not None else default_path
+        if explicit is None:
+            return None
+        return _cli_vault_carrier(explicit, env_policy="none").root
     return _cli_vault_carrier(value, env_policy="channel", default_path=default_path).root
 
 

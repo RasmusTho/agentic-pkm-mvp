@@ -25,6 +25,7 @@ from tests.companion_ui.live_smoke_contract import (
 
 _CAPTURE_PATHS = frozenset({
     '/api/companion/capture', '/api/companion/capture/compatibility',
+    '/api/companion/capture/scoped',
 })
 
 

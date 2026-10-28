@@ -368,6 +368,7 @@ def _create_app() -> FastAPI:
             )
         } | {('POST', path) for path in (
             '/api/companion/capture', '/api/companion/capture/compatibility',
+            '/api/companion/capture/scoped',
         )}
 
         @application.middleware('http')

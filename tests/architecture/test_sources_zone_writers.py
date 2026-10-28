@@ -80,7 +80,7 @@ SOURCE_LITERAL_ALLOWLIST = {
 # check until its role is understood and registered.
 SOURCE_RESOLVER_CALLERS = {
     ("app/agents/panel_agent/policy.py", "watcher_panel_writeback_allowed"),
-    ("app/api/routes/capture.py", "capture_to_inbox"),
+    ("app/api/routes/capture.py", "_capture_to_inbox"),
     ("app/cli/alpha_human_flows.py", "_select_sample_files"),
     ("app/heimdal/candidate_projection.py", "write_candidate_note"),
     ("app/heimdal/candidate_projection.py", "write_reading_candidate_note"),
@@ -203,7 +203,7 @@ SOURCE_DEFAULT_ROOT_FORWARDING_CALLERS = {
 }
 
 SOURCE_WRITE_EXCLUSIONS = {
-    ("app/api/routes/capture.py", "capture_to_inbox"),
+    ("app/api/routes/capture.py", "_capture_to_inbox"),
     ("app/mcp/vault_tools.py", "append_note"),
 }
 

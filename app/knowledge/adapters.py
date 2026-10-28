@@ -728,6 +728,11 @@ class FsVaultAdapter:
     def _absolute_path(self, locator: NoteLocator) -> Path:
         target = (self.vault_root / locator.path).resolve()
         root = self.vault_root.resolve()
+        from app.instance.channel_transfer import require_source_root_ingress
+        from app.vault.manager import nearest_enclosing_vault_root
+        require_source_root_ingress(root, allow_admitted_effect=True)
+        if nearest_enclosing_vault_root(target, search_root=root) != root:
+            raise KnowledgeCapabilityError("note locator belongs to another vault boundary")
         try:
             target.relative_to(root)
         except ValueError as exc:

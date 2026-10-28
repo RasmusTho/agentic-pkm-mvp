@@ -138,6 +138,11 @@ def frozen_binding_effect(runtime: ScalarBindingRuntime) -> Iterator[None]:
         _FROZEN_EFFECT_RUNTIME.reset(token)
 
 
+def current_binding_effect_runtime() -> ScalarBindingRuntime | None:
+    """The already-admitted worker/write effect, never a new authority grant."""
+    return _FROZEN_EFFECT_RUNTIME.get()
+
+
 def resolve_scalar_binding_runtime(
     *,
     requested_binding_id: str | None = None,

@@ -1451,6 +1451,26 @@ class OwnershipLedger:
                 )
             yield lease
 
+    def require_transfer_destination(
+        self, *, source_binding_id: str, destination_channel_id: str,
+        destination_binding_id: str,
+    ) -> None:
+        """Read-only admission before transfer intent or registry/floor effects."""
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            source = current.leases.get(source_binding_id)
+            if source is None or source.state != "active":
+                raise LedgerError("source lease is not active")
+            destination = replace(source, channel_id=destination_channel_id,
+                                  vault_binding_id=destination_binding_id)
+            self._assert_no_collision(
+                self._replace(current, leases={binding: lease for binding, lease in current.leases.items()
+                    if binding != source_binding_id}, tombstones={}, transfer=None),
+                destination, key=key, allow_same_channel_nested=True,
+            )
+
     def begin_transfer(
         self,
         *,
@@ -1473,6 +1493,13 @@ class OwnershipLedger:
             source = current.leases.get(source_binding_id)
             if source is None or source.state != "active":
                 raise LedgerError("source lease is not active")
+            destination = replace(source, channel_id=destination_channel_id,
+                                  vault_binding_id=destination_binding_id)
+            self._assert_no_collision(
+                self._replace(current, leases={binding: lease for binding, lease in current.leases.items()
+                    if binding != source_binding_id}, tombstones={}, transfer=None),
+                destination, key=key, allow_same_channel_nested=True,
+            )
             reservation = TransferReservation(
                 transfer_id=f"transfer-{uuid4()}",
                 source_channel_id=source.channel_id,
@@ -1507,6 +1534,10 @@ class OwnershipLedger:
                 ancestor_fingerprints=transfer.ancestor_fingerprints,
                 sealed_root=transfer.sealed_root,
                 state="active",
+            )
+            self._assert_no_collision(
+                self._replace(current, tombstones={}, transfer=None), active,
+                key=key, allow_same_channel_nested=True,
             )
             leases = dict(current.leases)
             leases[active.vault_binding_id] = active

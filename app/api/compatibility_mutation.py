@@ -286,6 +286,8 @@ def compatibility_write_target_window(
         try:
             binding_id = SettingsRebindStore(registry).compatibility_binding_id()
             binding_root = _registered_root(registry, binding_id)
+            from app.instance.channel_transfer import require_source_ingress
+            require_source_ingress(registry, binding_id)
         except (RegistryError, CompatibilityMutationError) as exc:
             raise _capability_not_ready() from exc
         if selected is not None and not _same_root(selected, binding_root):
@@ -308,6 +310,11 @@ def make_vault_mutation_seal(
     """
 
     def seal(request: Request) -> Iterator[None]:
+        # This distinct endpoint owns the full GOV/context effect window.
+        # Every other mutation retains the compatibility seal.
+        if getattr(request.scope.get("endpoint"), "__governed_context_write__", False):
+            yield
+            return
         reject_scoped_vault_mutation(request)
         if (
             request.method.upper() in _MUTATION_METHODS
@@ -400,6 +407,8 @@ def require_compatibility_mutation(
                 registry=registry,
             )
             binding_root = _registered_root(registry, proof.binding_id)
+            from app.instance.channel_transfer import require_source_ingress
+            require_source_ingress(registry, proof.binding_id)
         except Exception as exc:
             if isinstance(exc, HTTPException):
                 raise

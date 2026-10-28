@@ -346,6 +346,7 @@ class WorkerTickResult:
 def run_once(
     *,
     vault_root: Path | None = None,
+    _eligible_binding_ids: tuple[str, ...] | None = None,
 ) -> WorkerTickResult:
     """Run a single worker tick, idling honestly when no vault is selected.
 
@@ -362,6 +363,10 @@ def run_once(
     resolved_root = _resolve_optional_vault_root(vault_root)
     binding_runtime = resolve_scalar_binding_runtime(vault_root=resolved_root)
     eligible = eligible_worker_bindings(binding_runtime)
+    if _eligible_binding_ids is not None:
+        if eligible is None or not set(_eligible_binding_ids).issubset(eligible):
+            raise RuntimeError("transfer drain cannot widen worker bindings")
+        eligible = _eligible_binding_ids
     binding_stamp = required_worker_binding_stamp(binding_runtime)
     message = (
         poll_outbox_one()
@@ -436,6 +441,32 @@ def run_once(
             return WorkerTickResult(state="processed", processed=1)
         ack_outbox(message["id"])
     return WorkerTickResult(state="processed", processed=1)
+
+
+def drain_binding_outbox(*, vault_root: Path, binding_id: str, include_compatibility: bool = False) -> dict[str, Any]:
+    """Settle source work through real dispatch/receipt/ack under its original ID."""
+    from app.instance.settings_rebind import SettingsRebindStore
+    from app.services.outbox import pending_transfer_rows
+    runtime = resolve_scalar_binding_runtime(requested_binding_id=binding_id, vault_root=vault_root)
+    if runtime is None or runtime.vault_binding_id != binding_id:
+        raise RuntimeError("transfer drain requires the source binding runtime")
+    rebind = runtime.registry_store.load().settings_rebind
+    compatibility = include_compatibility or (rebind is not None and SettingsRebindStore(runtime.registry_store).read().candidate_binding_id == binding_id)
+    eligible = (binding_id, COMPATIBILITY_BINDING_ID) if compatibility else (binding_id,)
+    settled: list[str] = []
+    for _ in range(10000):
+        pending = pending_transfer_rows(binding_id, include_compatibility=compatibility)
+        if not pending:
+            return {"schema": "binding-transfer-drain.v1", "source_binding_id": binding_id,
+                    "terminal_row_ids": settled, "unsettled": 0}
+        result = run_once(vault_root=vault_root, _eligible_binding_ids=eligible)
+        remaining = pending_transfer_rows(binding_id, include_compatibility=compatibility)
+        previous_ids = {str(row["id"]) for row in pending}
+        remaining_ids = {str(row["id"]) for row in remaining}
+        settled.extend(sorted(previous_ids - remaining_ids))
+        if result.state != "processed" or remaining_ids == previous_ids:
+            raise RuntimeError("source queue has unsettled or stale rows; transfer is not ready")
+    raise RuntimeError("source queue drain exceeded its bounded budget")
 
 
 def _message_meta(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
