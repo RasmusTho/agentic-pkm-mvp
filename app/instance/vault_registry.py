@@ -43,6 +43,8 @@ if TYPE_CHECKING:
 
 
 CURRENT_REGISTRY_SCHEMA = "agentic-pkm.instance-vault-registry.v1"
+FOREGROUND_REGISTRY_SCHEMA = "agentic-pkm.instance-vault-registry.v2"
+SUPPORTED_REGISTRY_SCHEMAS = frozenset({CURRENT_REGISTRY_SCHEMA, FOREGROUND_REGISTRY_SCHEMA})
 APP_LOCAL_SCHEMA = "design-handoff.app-local.v1"
 REGISTRY_AUTHORITY_DORMANT = "dormant"
 REGISTRY_AUTHORITY_ACTIVE = "active"
@@ -685,7 +687,7 @@ class VaultRegistryStore:
             except (OSError, RegistryParseError):
                 return self._read_current_locked(recover=True)
             schema = _optional_str(document.frontmatter.get("schema"))
-            if schema == CURRENT_REGISTRY_SCHEMA:
+            if schema in SUPPORTED_REGISTRY_SCHEMAS:
                 # Already migrated: nothing to do, and deliberately no write. The
                 # spec materializes a legacy last-active "during the one-time
                 # schema migration only", so the promotion lives in
@@ -1025,6 +1027,7 @@ class VaultRegistryStore:
         expected_revision: int | None = None,
         clear_default: bool = False,
         replacement_default_binding_id: str | None = None,
+        transfer_lineage: TransferLineage | None = None,
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Remove one registration; production removal remains sealed.
@@ -1053,6 +1056,7 @@ class VaultRegistryStore:
                 current.authority == REGISTRY_AUTHORITY_ACTIVE
                 and isinstance(floor, dict)
                 and _optional_str(floor.get("targetVaultBindingId")) == vault_binding_id
+                and transfer_lineage is None
             ):
                 # Reference safety is not only about the MVR-02 default: removing
                 # the MVR-01C scalar rollback target would write a registry whose
@@ -1065,6 +1069,30 @@ class VaultRegistryStore:
             registrations = dict(current.registrations)
             del registrations[vault_binding_id]
             updated = self._with_registrations(current, registrations)
+            if transfer_lineage is not None:
+                if (
+                    transfer_lineage.source_binding_id != vault_binding_id
+                    or not (current.extensions.get("runtimeFloors") or {}).get("minimumForegroundOwnership")
+                ):
+                    raise RegistryError("transfer retirement requires the foreground ownership floor")
+                source = current.registrations[vault_binding_id]
+                tombstones = dict(updated.removal_tombstones)
+                tombstones[vault_binding_id] = RemovalTombstone(
+                    source.vault_binding_id, source.ref, source.path, source.vault_id,
+                    source.local_instance_id, int(source.extensions.get("contentEpoch", 1)),
+                )
+                updated = replace(updated, removal_tombstones=tombstones,
+                                  transfer_lineage=(*current.transfer_lineage, transfer_lineage))
+                states = updated.extensions.get("bindingEffectLeases")
+                if isinstance(states, dict):
+                    states.pop(vault_binding_id, None)
+                if isinstance(floor, dict) and floor.get("targetVaultBindingId") == vault_binding_id:
+                    updated.extensions["scalarRollback"] = {
+                        **updated.extensions["scalarRollback"],
+                        "targetVaultBindingId": None,
+                        "retiredTargetBindingId": vault_binding_id,
+                        "retiredByTransfer": transfer_lineage.ownership_transfer_id,
+                    }
             # MVR-04 transactional membership repair. `_with_registrations` already
             # deep-copied `extensions`, so this mutates the *pending* generation only, and
             # the single `_write_locked` below commits the deregistration and the
@@ -1359,6 +1387,30 @@ class VaultRegistryStore:
             expected_revision=current.revision,
             _capability=_capability,
         )
+
+    def advance_foreground_ownership_floor(
+        self, *, _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Atomically qualify schema + ownership floor while source producers are stopped.
+
+        Previous images reject v2 at their existing schema gate before vault I/O.
+        Initial/bootstrap producers continue to emit the v1 compatibility image.
+        """
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            if current.schema == FOREGROUND_REGISTRY_SCHEMA:
+                return current
+            extensions = copy.deepcopy(current.extensions)
+            extensions["runtimeFloors"] = {**extensions.get("runtimeFloors", {}),
+                "minimumForegroundOwnership": "mvr05c.v1"}
+            revision = current.revision + 1
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                extensions["scalarRollback"] = {**extensions["scalarRollback"], "forkRegistryRevision": revision}
+            updated = replace(current, schema=FOREGROUND_REGISTRY_SCHEMA, revision=revision, extensions=extensions)
+            self._write_locked(updated)
+            return updated
 
     def require_authoritative_activation(
         self,
@@ -1866,7 +1918,7 @@ class VaultRegistryStore:
         *,
         retire_scalar_session: bool = False,
     ) -> None:
-        if snapshot.schema != CURRENT_REGISTRY_SCHEMA or snapshot.authority not in {
+        if snapshot.schema not in SUPPORTED_REGISTRY_SCHEMAS or snapshot.authority not in {
             REGISTRY_AUTHORITY_DORMANT,
             REGISTRY_AUTHORITY_ACTIVE,
         }:
@@ -2108,7 +2160,7 @@ class VaultRegistryStore:
             document = _read_document(self.path)
         except (OSError, RegistryParseError):
             return
-        if _optional_str(document.frontmatter.get("schema")) != CURRENT_REGISTRY_SCHEMA:
+        if _optional_str(document.frontmatter.get("schema")) not in SUPPORTED_REGISTRY_SCHEMAS:
             return
         try:
             snapshot = self._snapshot_from_frontmatter(document.frontmatter)
@@ -2206,7 +2258,7 @@ class VaultRegistryStore:
 
     def _snapshot_from_frontmatter(self, frontmatter: Mapping[str, Any]) -> RegistrySnapshot:
         schema = _optional_str(frontmatter.get("schema"))
-        if schema != CURRENT_REGISTRY_SCHEMA:
+        if schema not in SUPPORTED_REGISTRY_SCHEMAS:
             raise RegistryError(f"registry schema mismatch: {schema or '<missing>'}")
         authority = _optional_str(frontmatter.get("authority"))
         if authority not in {REGISTRY_AUTHORITY_DORMANT, REGISTRY_AUTHORITY_ACTIVE}:
@@ -2249,7 +2301,17 @@ class VaultRegistryStore:
             if (
                 not isinstance(floor, dict)
                 or floor.get("schema") != SCALAR_ROLLBACK_SCHEMA
-                or _optional_str(floor.get("targetVaultBindingId")) not in registrations
+                or (
+                    _optional_str(floor.get("targetVaultBindingId")) not in registrations
+                    and not (
+                        floor.get("targetVaultBindingId") is None
+                        and floor.get("retiredTargetBindingId") in removal_tombstones
+                        and any(item.ownership_transfer_id == floor.get("retiredByTransfer")
+                                and item.source_binding_id == floor.get("retiredTargetBindingId")
+                                for item in transfer_lineage)
+                        and (extensions.get("runtimeFloors") or {}).get("minimumForegroundOwnership") == "mvr05c.v1"
+                    )
+                )
                 or floor.get("forkRegistryRevision") != revision_value
                 or floor.get("gatewayPreflight") != "authenticated-mutation-filter"
                 or floor.get("nativeGuardPreflight") != "deny-by-default"
@@ -2271,6 +2333,11 @@ class VaultRegistryStore:
         runtime_floors = extensions.get("runtimeFloors") or {}
         if not isinstance(runtime_floors, dict):
             raise RegistryError("runtime floors are invalid")
+        foreground_floor = runtime_floors.get("minimumForegroundOwnership")
+        if (schema == FOREGROUND_REGISTRY_SCHEMA) != (foreground_floor == "mvr05c.v1"):
+            raise RegistryError("foreground ownership floor requires its qualified registry schema")
+        if foreground_floor is not None and foreground_floor != "mvr05c.v1":
+            raise RegistryError("foreground ownership runtime floor is incompatible")
         settings_floor = _optional_str(
             runtime_floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY)
         )

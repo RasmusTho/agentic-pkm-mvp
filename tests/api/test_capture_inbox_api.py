@@ -217,7 +217,7 @@ def test_capture_has_no_task_semantics(
     # task-state field exists anywhere in the contract.
     openapi = app.openapi()
     request_schema = openapi["components"]["schemas"]["CaptureRequest"]
-    assert set(request_schema["properties"].keys()) == {"text"}
+    assert set(request_schema["properties"].keys()) == {"text", "target_binding_id"}
     assert request_schema.get("additionalProperties") is False
 
     response_schema = openapi["components"]["schemas"]["CaptureResponse"]

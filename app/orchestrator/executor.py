@@ -308,9 +308,14 @@ def _decision_token_from_metadata(
     return token
 
 
+def _has_governed_context_shape(raw: Mapping[str, Any], fields: frozenset[str]) -> bool:
+    """Migrate retained non-context receipts; EXE cannot borrow a scoped capture token."""
+    return set(raw) in (fields, fields | {"active_context", "target_binding_id"}) and raw.get("active_context") is None and raw.get("target_binding_id") is None
+
+
 def _validated_decision_token(raw: Mapping[str, Any]) -> DecisionToken | None:
     """Reconstruct only a token that has the complete generated GOV schema."""
-    if set(raw) != _DECISION_TOKEN_FIELDS:
+    if not _has_governed_context_shape(raw, _DECISION_TOKEN_FIELDS):
         return None
     if raw.get("valid") is not True:
         return None
@@ -557,7 +562,7 @@ def _validate_persisted_authority_payload(
         or execution_request.get("actor") != actor
         or execution_request.get("resource") != resource
         or not isinstance(decision_token, dict)
-        or set(decision_token) != _DECISION_TOKEN_FIELDS
+        or not _has_governed_context_shape(decision_token, _DECISION_TOKEN_FIELDS)
         or decision_token.get("valid") is not True
         or decision_token.get("action") != _MCP_APPEND_ACTION
         or decision_token.get("write_class") != _MCP_APPEND_WRITE_CLASS
@@ -587,7 +592,7 @@ def _validate_persisted_authority_payload(
     authority_receipt = payload.get("authority_receipt")
     if (
         not isinstance(authority_receipt, dict)
-        or set(authority_receipt) != _AUTHORITY_RECEIPT_FIELDS
+        or not _has_governed_context_shape(authority_receipt, _AUTHORITY_RECEIPT_FIELDS)
         or not isinstance(authority_receipt.get("receipt_id"), str)
         or not authority_receipt.get("receipt_id")
         or authority_receipt.get("effect_id") != effect_id
@@ -615,7 +620,7 @@ def _validate_persisted_authority_payload(
     retry_token = payload.get("retry_decision_token")
     if retry_token is not None and (
         not isinstance(retry_token, dict)
-        or set(retry_token) != _DECISION_TOKEN_FIELDS
+        or not _has_governed_context_shape(retry_token, _DECISION_TOKEN_FIELDS)
         or retry_token.get("valid") is not True
         or retry_token.get("token_id") == decision_token.get("token_id")
         or retry_token.get("action") != _MCP_APPEND_ACTION

@@ -60,6 +60,12 @@ def resolve_context_read_roots(
         raise ContextBoundReadError("active context is degraded") from exc
 
     snapshot = registry_store.load()
+    from app.instance.channel_transfer import require_source_ingress
+    for binding_id in context.binding_ids:
+        try:
+            require_source_ingress(registry_store, binding_id)
+        except RuntimeError as exc:
+            raise ContextBoundReadError("source binding ingress is closed") from exc
     if snapshot.app_install_id != context.instance_identity:
         raise ContextBoundReadError("active context belongs to another instance")
 

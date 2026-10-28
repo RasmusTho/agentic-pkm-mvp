@@ -651,6 +651,7 @@ def test_ask_fallback_cannot_pass_grounded_answer() -> None:
 
 @pytest.mark.parametrize('capture_path', [
     '/api/companion/capture', '/api/companion/capture/compatibility',
+    '/api/companion/capture/scoped',
 ])
 def test_request_guard_limits_mutations_to_one_armed_action(tmp_path: Path, capture_path: str) -> None:
     runner = _runner(tmp_path)
@@ -694,6 +695,7 @@ def test_existing_evidence_directory_is_not_overwritten(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize('capture_path', [
     '/api/companion/capture', '/api/companion/capture/compatibility',
+    '/api/companion/capture/scoped',
 ])
 def test_report_consumes_capture_slot_before_forwarding(tmp_path: Path, capture_path: str) -> None:
     runner = _runner(tmp_path)
@@ -730,7 +732,7 @@ def test_offline_capture_interception_covers_both_transports(tmp_path: Path, mon
     runner.capture_unavailable_preserves_draft()
     assert len(interceptions) == 1
     matcher = interceptions[0]
-    for path in ('/api/companion/capture', '/api/companion/capture/compatibility'):
+    for path in ('/api/companion/capture', '/api/companion/capture/compatibility', '/api/companion/capture/scoped'):
         assert matcher('http://127.0.0.1:8111' + path + '?trace=test')
     assert not matcher('http://127.0.0.1:8111/api/companion/capture/unknown')
     assert not matcher('http://127.0.0.1:8111/api/companion/note/save/compatibility')
@@ -783,6 +785,7 @@ def test_mock_or_unproven_generation_cannot_pass(route: Any, answer: str) -> Non
 
 @pytest.mark.parametrize('capture_path', [
     '/api/companion/capture', '/api/companion/capture/compatibility',
+    '/api/companion/capture/scoped',
 ])
 def test_invalid_ack_blocks_actual_dependent_steps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capture_path: str,

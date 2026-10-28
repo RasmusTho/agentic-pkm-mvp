@@ -1,9 +1,9 @@
-"""Behavioral MVR-05B compatibility-mutation seals (MVR-05B3, #6138).
+"""Behavioral compatibility-mutation seals after MVR-05C capture activation.
 
 Every test drives the production API routes. The sealed population is derived
 from the live application, not re-typed: every mutation route either carries the
-pre-05C seal (``seal_vault_mutation`` / the distinct compatibility route guard)
-or is named in ``NOT_VAULT_BOUND_MUTATIONS`` with the reason it writes no vault.
+compatibility seal, carries the finite governed-context admission, or is named
+in ``NOT_VAULT_BOUND_MUTATIONS`` with the reason it writes no vault.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from app.api.compatibility_mutation import (
     require_compatibility_mutation,
 )
 from app.api.routes import active_context_selection as selection_routes
+from app.api.request_governed_write import require_capture_context
 from app.instance.settings_rebind import SettingsRebindStore, _install_dormant_settings_rebind
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager
@@ -37,6 +38,7 @@ pytestmark = pytest.mark.not_pg
 
 _MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CAPABILITY_NOT_READY = {"error": "capability_not_ready", "capability": "mvr05c_scoped_write"}
+GOVERNED_CONTEXT_MUTATIONS = {("POST", "/api/companion/capture/scoped")}
 
 # Mutation routes that write no vault-bound state, by endpoint module. A new
 # mutation route fails ``test_scoped_write_is_sealed_until_mvr05c`` until it is
@@ -71,6 +73,8 @@ def _dependency_calls(route: APIRoute) -> set[Any]:
 
 
 def _is_sealed(route: APIRoute) -> bool:
+    if getattr(route.endpoint, "__governed_context_write__", False):
+        return False
     return any(
         getattr(call, "__name__", "") == "seal_vault_mutation"
         or call is require_compatibility_mutation
@@ -183,12 +187,23 @@ def test_scoped_write_is_sealed_until_mvr05c(tmp_path, monkeypatch) -> None:
     root_a, root_b = Path(first.path), Path(second.path)
     session = _session(client, first.vault_binding_id)
 
-    # The sealed population is derived from the live app and is complete: every
-    # mutation route is sealed or classified as writing no vault-bound state.
+    # The live mutation population stays closed. The sole graduated endpoint
+    # must retain its real selection admission; a marker on a new route fails.
+    governed = {
+        (method, path)
+        for method, path, route in _mutation_routes()
+        if getattr(route.endpoint, "__governed_context_write__", False)
+    }
+    assert governed == GOVERNED_CONTEXT_MUTATIONS
+    for method, path, route in _mutation_routes():
+        if (method, path) in governed:
+            assert require_capture_context in _dependency_calls(route)
     unclassified = sorted(
         f"{method} {path} ({route.endpoint.__module__})"
         for method, path, route in _mutation_routes()
-        if not _is_sealed(route) and route.endpoint.__module__ not in NOT_VAULT_BOUND_MUTATIONS
+        if not _is_sealed(route)
+        and (method, path) not in governed
+        and route.endpoint.__module__ not in NOT_VAULT_BOUND_MUTATIONS
     )
     assert not unclassified, "unsealed vault-bound mutation route:\n" + "\n".join(unclassified)
     sealed = _sealed_routes()
@@ -395,6 +410,16 @@ def test_migrated_write_route_rejects_stripped_precondition_without_legacy_downg
             response = _send(client, method, path, {HEADER_COMPATIBILITY_PRECONDITION: value})
             assert response.status_code == 409, (method, path, response.text)
             assert response.json()["detail"] == _CAPABILITY_NOT_READY
+    # The graduated endpoint requires its own scoped admission. A compatibility
+    # precondition cannot become a bearer or fall through to a legacy write.
+    for value in (precondition, ""):
+        response = client.post(
+            "/api/companion/capture/scoped",
+            headers={HEADER_COMPATIBILITY_PRECONDITION: value},
+            json={"text": "must not write", "target_binding_id": first.vault_binding_id},
+        )
+        assert response.status_code == 401, response.text
+        assert response.json()["detail"] == "reselection_required"
     assert _tree(root_a) == before
     assert not (tmp_path / "index-outbox.jsonl").exists()
 

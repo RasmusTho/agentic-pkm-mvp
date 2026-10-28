@@ -17489,6 +17489,7 @@ def make_handler(
                 "/api/companion/journaling/reflection/start",
                 "/api/companion/capture",
                 "/api/companion/capture/compatibility",
+                "/api/companion/capture/scoped",
                 "/api/companion/note/save",  # direct human note edit
                 "/api/companion/note/save/compatibility",
                 "/api/companion/tts/plan",
@@ -17511,7 +17512,8 @@ def make_handler(
                 VAULT_SELECT_ENDPOINT,
                 "/", "/workspace", "/api/companion/vault/notes", "/api/operator/ask",
                 "/api/companion/workspace", "/api/companion/orientation",
-                "/api/companion/capture/compatibility", "/api/companion/note/save/compatibility",
+                "/api/companion/capture/compatibility",
+                "/api/companion/capture/scoped", "/api/companion/note/save/compatibility",
                 "/api/companion/active-context/selection",
                 "/api/companion/vault/notes/scoped",
                 VAULT_INITIALIZE_ENDPOINT,
@@ -17530,6 +17532,7 @@ def make_handler(
                 "/api/companion/journaling/reflection/start",
                 "/api/companion/capture",
                 "/api/companion/capture/compatibility",
+                "/api/companion/capture/scoped",
                 "/api/companion/note/save",
                 "/api/companion/vault-browser/actions/queue-review",
             }

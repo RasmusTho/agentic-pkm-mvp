@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Literal, Protocol
 from uuid import uuid4
 
 from app.write_guard import WriteGuard
+from app.vault.active_context_v1 import ActiveContextSetV1
 
 CONTRACT_VERSION = "governed_write_protocol.v0"
 
@@ -68,6 +69,8 @@ class DecisionToken:
     issued_at: str
     valid: bool = True
     contract_version: str = CONTRACT_VERSION
+    active_context: ActiveContextSetV1 | None = None
+    target_binding_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,8 @@ class AuthorityReceipt:
     trace_id: str | None = None
     effect_id: str | None = None
     contract_version: str = CONTRACT_VERSION
+    active_context: ActiveContextSetV1 | None = None
+    target_binding_id: str | None = None
 
 
 class GovernedWriteAdapter:
@@ -136,6 +141,31 @@ class GovernedWriteAdapter:
             issued_at=issued_at,
         )
         return GovernedWriteGrant(policy_decision=decision, decision_token=token)
+
+    def bind_context(
+        self, grant: GovernedWriteGrant, *, context: ActiveContextSetV1,
+        target_binding_id: str,
+    ) -> GovernedWriteGrant:
+        """Bind a producer's existing authority request to its complete frozen selection."""
+        context.require_effect_capable()
+        if target_binding_id not in context.binding_ids:
+            raise InvalidDecisionTokenError("write target is outside selected bindings")
+        return replace(grant, decision_token=replace(
+            grant.decision_token, active_context=context, target_binding_id=target_binding_id,
+        ))
+
+    def validate_context(
+        self, token: DecisionToken, *, context: ActiveContextSetV1,
+        target_binding_id: str,
+    ) -> None:
+        context.require_effect_capable()
+        if (
+            not isinstance(token.active_context, ActiveContextSetV1)
+            or token.active_context != context
+            or token.target_binding_id != target_binding_id
+            or target_binding_id not in context.binding_ids
+        ):
+            raise InvalidDecisionTokenError("DecisionToken active context or target changed")
 
     def issue_human_decision_token(
         self,
@@ -268,6 +298,8 @@ class GovernedWriteAdapter:
             recorded_at=_utc_now(),
             trace_id=trace_id or mutation_receipt.trace_id,
             effect_id=effect_id,
+            active_context=decision_token.active_context,
+            target_binding_id=decision_token.target_binding_id,
         )
 
 

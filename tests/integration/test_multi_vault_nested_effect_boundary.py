@@ -200,3 +200,19 @@ def test_parent_authority_cannot_read_registered_child_vault(tmp_path: Path, mon
     assert nearest_enclosing_vault_root(child / "secret.md", search_root=parent) == child
     assert _find_workspace_note(parent, "child/secret.md") is None
     assert _find_workspace_note(child, "secret.md") == (child / "secret.md").resolve()
+
+
+def test_parent_authority_cannot_write_registered_child_vault(tmp_path, monkeypatch):
+    from tests.api.test_multi_vault_governed_writes import setup_capture
+    runtime, first, _, client, headers = setup_capture(tmp_path, monkeypatch)
+    child = Path(first.path) / "child"
+    initialize_test_vault(child)
+    # Both unregistered and registered initialized child boundaries are refused.
+    for registered in (False, True):
+        if registered:
+            runtime.production_register(child, producer="picker")
+        monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", "child/inbox.md")
+        result = client.post("/api/companion/capture/scoped", headers=headers,
+            json={"text": "Forbidden", "target_binding_id": first.vault_binding_id})
+        assert result.status_code == 409, result.text
+        assert not (child / "inbox.md").exists()

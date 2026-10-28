@@ -561,6 +561,19 @@ class SettingsRebindActivation:
             )
             raise
 
+    def retire_for_transfer(self, source_binding_id: str) -> SettingsRebindRecord:
+        """Clear the retiring compatibility target through the ordinary watcher journal.
+
+        No implicit replacement or destination selection is made. The configured
+        watcher must acknowledge and complete CLEAR before it is stopped.
+        """
+        current = self.store.read()
+        if current.candidate_binding_id not in {source_binding_id, None}:
+            return current
+        return self._activate_locked(
+            selection=None, candidate_binding_id=None, candidate_root=None,
+        )
+
     def activate_default(
         self,
         *,

@@ -489,7 +489,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "then MARR-11 (#5794) added a clone-local model-profile definition "
         "earlier in the file."
     ),
-    ("app/instance/vault_registry.py", 2995): (
+    ("app/instance/vault_registry.py", 3062): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
         "registry (default_app_local_settings_path(), typically an XDG data "
         "dir) -- a machine-local app config store outside the vault content "
@@ -500,7 +500,8 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "SETTINGS-05A adds no new "
         "write_frontmatter site: like MVR-02/MVR-04, it writes the registry through "
         "_atomic_private_write, "
-        "not the vault-content seam."
+        "not the vault-content seam. MVR-05C moves this unchanged app-local site "
+        "from 2995 to 3062 while adding transfer retirement support."
     ),
 }
 
