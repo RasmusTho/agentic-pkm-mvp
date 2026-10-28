@@ -1481,7 +1481,7 @@ def _transaction_fixture(
     return request, ports, admission, service, events, old_state, candidate
 
 
-def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, terminal=True):
+def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, terminal=True, legacy=False):
     """Keep native config, terminal readers and the real Docker census in the transaction."""
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import DeployJournal, DeployPlan
@@ -1490,6 +1490,8 @@ def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, t
     (root / "config/deploy").mkdir(parents=True)
     runtime_path = root / "runtime.env"
     vault_root = str(tmp_path.resolve() / "existing-vault")
+    container_root = "/app/vault" if legacy else vault_root
+    vault_overlay = ("docker-compose.legacy-vault.yml" if legacy else "docker-compose.full-host-vault.yml")
     database = "postgresql+psycopg://app@db:5432/app_" + channel
     pin_path = root / "config/deploy" / (channel + ".env")
     pin_path.write_text("VAULT_HOST_ROOT=" + vault_root + "\n")
@@ -1500,6 +1502,7 @@ def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, t
     for name in (
         "docker-compose.yaml", f"docker-compose.{channel}.yml", "docker-compose.bws.yml",
         "docker-compose.full-host-vault.yml", "docker-compose.test-vault.yml",
+        "docker-compose.legacy-vault.yml",
     ):
         (root / name).write_text("services: {}\n")
     native_config = {
@@ -1545,8 +1548,8 @@ def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, t
                 "Env": [
                     "DATABASE_URL=" + database, "EMBED_PROVIDER=ollama", "EMBED_MODEL=installed",
                     "LLM_PROVIDER=ollama", "STORE_BACKEND=pg", "PKM_ENVIRONMENT=" + channel,
-                    "VAULT_HOST_ROOT=" + vault_root, "VAULT_ROOT=" + vault_root,
-                    "WATCHER_VAULT_PATH=" + vault_root,
+                    "VAULT_ROOT=" + container_root, "VAULT_ROOT_DEV=" + container_root,
+                    "VAULT_ROOT_TEST=" + container_root, "WATCHER_VAULT_PATH=" + container_root,
                 ],
                 "Labels": {"com.docker.compose.project": "pkm-" + channel,
                            "com.docker.compose.service": name, "com.docker.compose.oneoff": "False"},
@@ -1554,7 +1557,7 @@ def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, t
             "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
             "State": {"Status": "running", "Running": True, "Paused": False,
                       "Restarting": False, "Pid": index, "StartedAt": "installed"},
-            "Mounts": [{"Type": "bind", "Source": vault_root, "Destination": vault_root,
+            "Mounts": [{"Type": "bind", "Source": vault_root, "Destination": container_root,
                         "Mode": "", "RW": True, "Propagation": "rprivate"}],
         })
     compose_calls = []
@@ -1573,7 +1576,7 @@ def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, t
                                 "State": row["State"]["Status"]} for row in rows])
         assert argv[-3:] == ["config", "--format", "json"]
         assert kwargs["env"]["VAULT_HOST_ROOT"] == vault_root
-        assert str(root / "docker-compose.full-host-vault.yml") in argv
+        assert str(root / vault_overlay) in argv
         if channel == "test":
             assert str(root / "docker-compose.test-vault.yml") in argv
         environment = dict(entry.split("=", 1) for entry in rows[0]["Config"]["Env"])
@@ -1605,10 +1608,12 @@ def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, t
 
 
 @pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("legacy", [False, True], ids=["full-host", "legacy-mount"])
 def test_source_installation_accepts_ordinary_terminal_deployment_without_cutover(
-    tmp_path, monkeypatch, channel,
+    tmp_path, monkeypatch, channel, legacy,
 ):
-    fixture = _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel)
+    fixture = _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, legacy=legacy)
+    assert not any(entry.startswith("VAULT_HOST_ROOT=") for entry in fixture.rows[0]["Config"]["Env"])
     assert fixture.plan.authority_cutover is None and fixture.plan.principal_cutover is False
     assert fixture.journal.operation_request(fixture.terminal_id)[0]["bootstrap"] is False
 
@@ -1634,7 +1639,7 @@ def test_source_installation_accepts_ordinary_terminal_deployment_without_cutove
 @pytest.mark.parametrize("channel", ["dev", "test"])
 @pytest.mark.parametrize("fault", [
     "missing_plan", "mismatched_plan", "native_owner", "missing_context", "foreign_context",
-    "wrong_channel", "wrong_root_selector", "unknown_writer", "transitioning_writer",
+    "wrong_channel", "wrong_root_selector", "foreign_host_selector", "unknown_writer", "transitioning_writer",
     "drifting_owner", "drifting_context", "drifting_writer",
 ])
 def test_ordinary_terminal_installation_refuses_unproven_or_drifting_owner_state(
@@ -1667,6 +1672,8 @@ def test_ordinary_terminal_installation_refuses_unproven_or_drifting_owner_state
                     entry if not entry.startswith(selector + "=") else selector + "=foreign"
                     for entry in fixture.rows[0]["Config"]["Env"]
                 ]
+            elif fault == "foreign_host_selector":
+                fixture.rows[0]["Config"]["Env"].append("VAULT_HOST_ROOT=/foreign")
             elif fault == "unknown_writer":
                 row = json.loads(json.dumps(fixture.rows[0]))
                 row["Id"] = "f" * 64
@@ -1684,6 +1691,9 @@ def test_ordinary_terminal_installation_refuses_unproven_or_drifting_owner_state
     result = transaction._execute_source_installation(channel, fixture.request, fixture.ports)
 
     assert result["source_installation"]["status"] == "refused_before_backup"
+    assert result["source_installation"]["prebackup_gate"] == (
+        "qualified_writer_snapshot" if fault.startswith("drifting_") else "current_writer_snapshot"
+    )
     assert calls == (2 if fault.startswith("drifting_") else 1)
     assert not {"prepare", "apply_launcher", "stop_old", "apply_source", "start_new"} & set(fixture.events)
 

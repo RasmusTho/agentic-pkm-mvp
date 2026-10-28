@@ -714,6 +714,9 @@ class SourceIdentityRuntimeSnapshot:
     legacy_installed_fingerprints: frozenset[str] = frozenset()
     census_fingerprint: str = ''
     retained_state_fingerprint: str = ''
+    # Private observation only; ordinary deployments need not export the host
+    # interpolation selector into their installed container environment.
+    host_root: str | None = None
 
 
 _MAX_LEGACY_MOUNT_ORDER_CANDIDATES = 4096
@@ -1464,8 +1467,8 @@ class LinuxEffects:
         overlays = ['-f', str(cfg.root / 'docker-compose.bws.yml')]
         if env['BWS_DATABASE_TARGET'] == 'external':
             overlays += ['-f', str(cfg.root / 'docker-compose.bws-external.yml')]
-        if source_snapshot is not None:
-            host_root = cutover.root if cutover is not None else env.get('VAULT_HOST_ROOT')
+        if source_snapshot is not None and (cutover is not None or source_snapshot.host_root is not None):
+            host_root = cutover.root if cutover is not None else source_snapshot.host_root
             if (not host_root or source_snapshot.container_root not in {host_root, '/app/vault'}
                 or source_snapshot.vault_overlay != (
                     'docker-compose.full-host-vault.yml'
@@ -2366,7 +2369,7 @@ class LinuxEffects:
                     raise PostgresDeployError()
                 if selected is None and (
                     parsed.get('PKM_ENVIRONMENT') != cfg.channel
-                    or parsed.get('VAULT_HOST_ROOT') != selected_root
+                    or parsed.get('VAULT_HOST_ROOT', selected_root) != selected_root
                     or not any(parsed.get(key) for key in (
                         'VAULT_ROOT', 'VAULT_ROOT_' + cfg.channel.upper(), 'WATCHER_VAULT_PATH',
                     ))
@@ -2511,6 +2514,7 @@ class LinuxEffects:
                 if key not in _SOURCE_HELPER_IMAGE_OWNED_ENV
             )),
             unset_environment=api_unset_environment,
+            host_root=selected_root,
         )
         try:
             # A bare ``docker compose run -e NAME`` consults Compose's project
@@ -2590,6 +2594,7 @@ class LinuxEffects:
             legacy_installed_fingerprints=legacy_installed_fingerprints,
             census_fingerprint=census_fingerprint,
             retained_state_fingerprint=retained_state_fingerprint,
+            host_root=selected_root,
         )
 
     def channel_lock_owner(self) -> bytes | None:
