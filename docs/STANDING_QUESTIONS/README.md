@@ -134,25 +134,27 @@ Resolution Engine — not a pre-code gate.
 ## Capability acceptance criteria
 
 - [ ] A registered question survives as a vault-canonical note and appears in the rebuildable
-      projection. Verify: `tests/standing_questions/test_question_store.py::test_registered_question_appears_in_projection`
+      projection. Verify: `tests/standing_questions/test_question_projection.py::test_projection_rebuilds_from_vault`
 - [ ] End-to-end on a fixture: capture-intent text → classified proposal → accepted → open question →
       matching evidence attaches with provenance → evidence delta crosses threshold → candidate answer
       drafted → human accepts → `status: answered`, all idempotent. Verify:
       `tests/standing_questions/test_capability_end_to_end.py::test_fixture_question_full_loop`
-      (lands with SQ-05)
 - [ ] Question notes are human-terminal (INV-SQ-A) enforced at the production write seam. Verify:
       `tests/standing_questions/test_question_store.py::test_engine_cannot_overwrite_human_owned_fields`
 - [ ] Evidence links never mutate the evidence artifact (INV-SQ-B). Verify:
       `tests/standing_questions/test_evidence_matching.py::test_matching_never_writes_to_source_artifact`
 - [ ] Answers are candidate-class until acceptance; acceptance is the only path to `answered`
-      (INV-SQ-C). Verify: `tests/standing_questions/test_answer_refresh.py::test_answered_status_requires_acceptance`
+      (INV-SQ-C).
+      Verify: `tests/standing_questions/test_answer_refresh.py::test_draft_never_sets_standing_answer_ref`
+      Verify: `tests/standing_questions/test_answer_refresh.py::test_refresh_path_never_writes_status`
+      Verify: `tests/standing_questions/test_question_review_actions.py::test_accept_projects_checkbox_and_flips_status_atomically`
 - [ ] A pending candidate-answer review is never clobbered by a later refresh (INV-SQ-D). Verify:
       `tests/standing_questions/test_answer_refresh.py::test_pending_review_not_clobbered_by_new_delta`
 - [ ] A contradicting refresh is explicitly flagged, never silently applied (INV-SQ-E). Verify:
       `tests/standing_questions/test_answer_refresh.py::test_contradiction_surfaced_not_silently_rewritten`
-- [ ] Live validation on the test channel: ≥1 real standing question the operator registers
+- [ ] Live validation on qualified TARS TEST: ≥1 real standing question the operator registers
       accumulates real evidence and produces a legible candidate answer, receipt posted to the parent
-      issue. Verify: parent-issue validation receipt (mac mini test channel)
+      issue. Verify: runtime receipt: standing_questions_live_acceptance.v1
 - [ ] Owner-doc promotion only after acceptance: no owner doc currently claims this capability as
       shipped; none needs a "not yet built" line removed until the first task merges (unlike ERE, no
       ADR consequence line references this capability yet). Verify: doc writeback at this README's
