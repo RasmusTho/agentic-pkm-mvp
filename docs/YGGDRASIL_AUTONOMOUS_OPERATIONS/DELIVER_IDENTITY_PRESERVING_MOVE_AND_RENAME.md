@@ -86,6 +86,10 @@ selection and instance owners; no bearer, default selection, registry, role or e
 by the placement owner. Kernel admission still owns bounded delegation and policy.
 
 This bounded interface supports ordinary rewritten Markdown human notes with an existing identity.
+Receipt locators use the existing central KnowledgePort factory; paths with outer padding are
+refused before reservation so normalization cannot change the literal source/destination spelling.
+The existing `write_ops` helper boundary supplies the same descriptor/no-replace primitives without
+selecting or installing another concrete adapter.
 It refuses retained Sources, append-only/control paths, hidden/system paths, companions and Canvas
 chat-session artifacts. Rename changes one filename within its current parent; move takes one full
 vault-relative destination. Both preserve every source byte, inode, access metadata, stable ID and

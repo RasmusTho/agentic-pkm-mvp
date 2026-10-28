@@ -1200,3 +1200,60 @@ def test_context_expiry_at_later_effect_seams_preserves_observed_truth(
     if phase != "prepared":
         assert outcome.convergence.store is ConvergenceState.REBUILD_REQUIRED
         assert outcome.convergence.extensions["locator_repair"] != "not_required"
+
+
+def test_selected_configured_sources_zone_refuses_both_placement_sides(bound):
+    from app.settings.locations import canonical_settings_root
+
+    root = bound.owner.root
+    settings = canonical_settings_root(root) / "system-settings.md"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text("---\npaths:\n  sources_dir_rel: ConfiguredSources\n---\n")
+    retained = root / "ConfiguredSources"
+    retained.mkdir()
+    request = _request(bound)
+    raw = (root / bound.source).read_bytes()
+    destination = "ConfiguredSources/refused.md"
+    with pytest.raises(KnowledgeCapabilityError):
+        bound.owner.destination_generation(destination)
+    refused = _run(
+        bound,
+        replace(request, arguments={"destination": destination, "destination_generation": "absent"}),
+    )
+    assert refused.status is OperationStatus.NOT_SUPPORTED
+    assert (root / bound.source).read_bytes() == raw and not (root / destination).exists()
+    (root / bound.source).rename(retained / "original.md")
+    config = replace(bound, source="ConfiguredSources/original.md")
+    with pytest.raises(KnowledgeCapabilityError):
+        bound.owner.source_generation(config.source, config.artifact_id)
+    refused = _run(config, replace(request, request_id="retained-source"))
+    assert refused.status is OperationStatus.NOT_SUPPORTED
+    assert (retained / "original.md").read_bytes() == raw
+    assert not (root / "Projects/moved.md").exists()
+    assert not (root / ".pkm-placement").exists()
+
+
+def test_locator_normalization_cannot_change_literal_placement_spelling(bound):
+    root = bound.owner.root
+    (root / " Projects").mkdir()
+    request = _request(bound)
+    source = root / bound.source
+    raw = source.read_bytes()
+    destination = " Projects/moved.md"
+    with pytest.raises(KnowledgeCapabilityError):
+        bound.owner.destination_generation(destination)
+    refused = _run(
+        bound,
+        replace(request, arguments={"destination": destination, "destination_generation": "absent"}),
+    )
+    assert refused.status is OperationStatus.NOT_SUPPORTED
+    assert source.read_bytes() == raw
+    assert not (root / destination).exists() and not (root / "Projects/moved.md").exists()
+    (root / " Notes").mkdir()
+    source.rename(root / " Notes/original.md")
+    config = replace(bound, source=" Notes/original.md")
+    with pytest.raises(KnowledgeCapabilityError):
+        bound.owner.source_generation(config.source, config.artifact_id)
+    assert _run(config, replace(request, request_id="padded-source")).status is OperationStatus.NOT_SUPPORTED
+    assert (root / config.source).read_bytes() == raw
+    assert not (root / ".pkm-placement").exists()

@@ -31,11 +31,12 @@ from app.instance.context_bound_read import ContextBoundReadError
 from app.instance.context_bound_write import context_bound_write_window
 from app.instance.errors import RegistryError
 from app.instance.vault_registry import VaultRegistryStore
-from app.knowledge.adapters import (
+from app.knowledge import make_note_locator
+from app.knowledge.write_ops import (
     _atomic_rename_noreplace_at,
     _read_stable_descriptor,
 )
-from app.knowledge.contracts import NoteLocator, WriteReceipt
+from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
 from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note_in_vault
 from app.services.artifact_identity import resolve_note_artifact_identity
@@ -308,6 +309,7 @@ class KnowledgePlacementOwner:
         path = PurePosixPath(value)
         if (
             not value
+            or value != value.strip()
             or path.is_absolute()
             or path.as_posix() != value
             or any(part in {".", ".."} or part.startswith(".") for part in path.parts)
@@ -883,7 +885,7 @@ class KnowledgePlacementOwner:
             self._seam(root, state, src, dst, record, intent)
             mutation = WriteReceipt(
                 intent.operation,
-                NoteLocator(self.target_binding_id, intent.destination),
+                make_note_locator(intent.destination, vault=self.target_binding_id),
                 "knowledge.placement",
                 trace_id=intent.request_id,
                 writer_identity=self.actor,
