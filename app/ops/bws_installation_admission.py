@@ -51,6 +51,22 @@ _RECEIPT_STATUSES = frozenset({
     "refused_before_stop",
     "unknown",
 })
+_PREBACKUP_REFUSAL_GATES = frozenset({
+    "channel_lock_entry",
+    "channel_owner_check",
+    "caller_census",
+    "current_writer_snapshot",
+    "authority_cutover",
+    "candidate_verification",
+    "old_disk_state",
+    "owner_launcher_profile",
+    "backup_roots",
+    "source_manifest",
+    "candidate_profile",
+    "old_kernel_qualification",
+    "qualified_writer_snapshot",
+    "generation_qualification",
+})
 _ADMISSION_TERMINAL_STATUSES = frozenset({
     "installed", "compensated_restored", "refused_before_backup", "refused_before_stop",
 })
@@ -69,13 +85,23 @@ def _sha256(value: object) -> bool:
     return type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
-def _receipt_generations(status: object, old: object, new: object, backup: object) -> bool:
+def _receipt_generations(
+    status: object, old: object, new: object, backup: object, *,
+    prebackup_gate_present: bool = False, prebackup_gate: object = None,
+) -> bool:
+    if prebackup_gate_present and (
+        status != "refused_before_backup" or type(prebackup_gate) is not str
+        or prebackup_gate not in _PREBACKUP_REFUSAL_GATES
+    ):
+        return False
     if status in {"installed", "compensated_restored", "compensated_stopped", "unknown"}:
-        return _sha256(old) and _sha256(new) and _sha256(backup)
+        return (not prebackup_gate_present and _sha256(old) and _sha256(new)
+                and _sha256(backup))
     if status == "refused_before_backup":
         return old is None and new is None and backup is None
     if status == "refused_before_stop":
-        return _sha256(old) and _sha256(new) and (backup is None or _sha256(backup))
+        return (not prebackup_gate_present and _sha256(old) and _sha256(new)
+                and (backup is None or _sha256(backup)))
     return False
 
 
@@ -616,15 +642,19 @@ def _terminal_receipt(owner: dict[str, object]) -> dict[str, object]:
             "candidate_sha": owner["candidate_sha"],
             "image_digest": owner["image_digest"],
         }
+        receipt_fields = {
+            "schema", "operation_id", "channel", "candidate_sha", "image_digest",
+            "old_generation_sha256", "new_generation_sha256", "backup_manifest_sha256", "status",
+        }
+        gate_present = type(receipt) is dict and "prebackup_gate" in receipt
         if (type(receipt) is not dict or any(receipt.get(key) != value for key, value in expected.items())
                 or receipt.get("status") not in _RECEIPT_STATUSES
                 or not _receipt_generations(receipt.get("status"), receipt.get("old_generation_sha256"),
                                             receipt.get("new_generation_sha256"),
-                                            receipt.get("backup_manifest_sha256"))
-                or set(receipt) != {
-                    "schema", "operation_id", "channel", "candidate_sha", "image_digest",
-                    "old_generation_sha256", "new_generation_sha256", "backup_manifest_sha256", "status",
-                }):
+                                            receipt.get("backup_manifest_sha256"),
+                                            prebackup_gate_present=gate_present,
+                                            prebackup_gate=receipt.get("prebackup_gate"))
+                or set(receipt) not in (receipt_fields, receipt_fields | {"prebackup_gate"})):
             _refuse()
         return receipt
     except Exception:
@@ -1081,7 +1111,8 @@ class InstallationAdmission:
             "schema", "operation_id", "channel", "candidate_sha", "image_digest",
             "old_generation_sha256", "new_generation_sha256", "backup_manifest_sha256", "status",
         }
-        if (type(receipt) is not dict or set(receipt) != fields
+        gate_present = type(receipt) is dict and "prebackup_gate" in receipt
+        if (type(receipt) is not dict or set(receipt) not in (fields, fields | {"prebackup_gate"})
                 or receipt["schema"] != _RECEIPT_SCHEMA
                 or receipt["operation_id"] != self.operation_id
                 or receipt["channel"] != self.channel
@@ -1090,7 +1121,9 @@ class InstallationAdmission:
                 or receipt["status"] not in _RECEIPT_STATUSES
                 or not _receipt_generations(receipt["status"], receipt["old_generation_sha256"],
                                             receipt["new_generation_sha256"],
-                                            receipt["backup_manifest_sha256"])):
+                                            receipt["backup_manifest_sha256"],
+                                            prebackup_gate_present=gate_present,
+                                            prebackup_gate=receipt.get("prebackup_gate"))):
             _refuse()
         return dict(receipt)
 

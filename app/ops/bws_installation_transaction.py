@@ -51,6 +51,22 @@ _CONTRACT = Path("config/secrets/host_secret_contract.json")
 _CANDIDATE_CLEAN_PATHS = ("app", "scripts", _CONTRACT.as_posix())
 _BACKUP_DIRECTORY = Path("/var/lib/yggdrasil/bws-deploy-convergence")
 _STARTUP_RELEASE_CALLABLE = "<fixed-bws-startup-release>"
+_PREBACKUP_REFUSAL_GATES = frozenset({
+    "channel_lock_entry",
+    "channel_owner_check",
+    "caller_census",
+    "current_writer_snapshot",
+    "authority_cutover",
+    "candidate_verification",
+    "old_disk_state",
+    "owner_launcher_profile",
+    "backup_roots",
+    "source_manifest",
+    "candidate_profile",
+    "old_kernel_qualification",
+    "qualified_writer_snapshot",
+    "generation_qualification",
+})
 _LOCAL_SOURCE_REFERENCE = re.compile(
     rb"(?<![A-Za-z0-9_])c?(?:app|scripts|llm_contract|mimer_runtime|companion_ui)"
     rb"(?:(?:\.[A-Za-z_][A-Za-z_0-9]*)|(?:/[A-Za-z_][A-Za-z_0-9]*))*(?![A-Za-z0-9_])",
@@ -101,6 +117,20 @@ class _WriterSnapshot:
 
 def _refuse() -> NoReturn:
     raise RuntimeError("bws_installation_transaction_refused") from None
+
+
+class _PrebackupGateRefusal(RuntimeError):
+    """A finite producer gate refusal, without exception or input details."""
+
+    def __init__(self, gate: str) -> None:
+        self.gate = gate
+        super().__init__("bws_installation_transaction_refused")
+
+
+def _refuse_prebackup_gate(gate: str) -> NoReturn:
+    if type(gate) is not str or gate not in _PREBACKUP_REFUSAL_GATES:
+        _refuse()
+    raise _PrebackupGateRefusal(gate) from None
 
 
 def _sha(raw: bytes) -> str:
@@ -1691,12 +1721,17 @@ def _current_writer_snapshot(effects: Any, request: dict[str, str]) -> _WriterSn
         plan = effects.config.journal.bound_plan(receipt.operation_id)
         receipt.require_profile(plan)
         selected = plan.authority_cutover
-        if (selected is None or type(plan.revision) is not str
+        if selected is None:
+            _refuse_prebackup_gate("authority_cutover")
+        if (type(plan.revision) is not str
                 or re.fullmatch(r"[0-9a-f]{40}", plan.revision) is None
                 or type(plan.image_digest) is not str
                 or re.fullmatch(r"sha256:[0-9a-f]{64}", plan.image_digest) is None):
             _refuse()
-        selected.validate()
+        try:
+            selected.validate()
+        except Exception:
+            _refuse_prebackup_gate("authority_cutover")
         snapshot = effects.source_identity_runtime_snapshot(
             selected, require_running_capture=False, current_state=True,
         )
@@ -1717,6 +1752,8 @@ def _current_writer_snapshot(effects: Any, request: dict[str, str]) -> _WriterSn
             container_root=snapshot.container_root,
             vault_overlay=snapshot.vault_overlay,
         )
+    except _PrebackupGateRefusal:
+        raise
     except Exception:
         _refuse()
 
@@ -1929,8 +1966,14 @@ def _root_projection(root: Any) -> dict[str, object]:
 def _receipt(
     request: dict[str, str], *, status: str, old_generation: str | None,
     new_generation: str | None, backup_manifest: str | None,
+    prebackup_gate: str | None = None,
 ) -> dict[str, object]:
-    return {
+    if status == "refused_before_backup":
+        if type(prebackup_gate) is not str or prebackup_gate not in _PREBACKUP_REFUSAL_GATES:
+            _refuse()
+    elif prebackup_gate is not None:
+        _refuse()
+    receipt: dict[str, object] = {
         "schema": "agentic-pkm.bws-source-installation-receipt.v1",
         "operation_id": request["operation_id"],
         "channel": request["channel"],
@@ -1941,6 +1984,9 @@ def _receipt(
         "backup_manifest_sha256": backup_manifest,
         "status": status,
     }
+    if status == "refused_before_backup":
+        receipt["prebackup_gate"] = prebackup_gate
+    return receipt
 
 
 def _retire_channel_owner(effects: Any, owner: dict[str, str]) -> None:
@@ -2172,6 +2218,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
     proposed_generation: str | None = None
     final_generation: str | None = None
     backup_manifest: str | None = None
+    prebackup_gate = "channel_lock_entry"
 
     with ports.admission(channel, request) as admission:
         def publish_terminal_receipt() -> None:
@@ -2182,7 +2229,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
             admission.complete(receipt)
             terminal_receipt_published = True
 
-        def recover_failure(*, publish: bool) -> bool:
+        def recover_failure(*, publish: bool, failure: BaseException | None = None) -> bool:
             nonlocal phase, receipt, terminal_safe, handle, recovery_attempted
             nonlocal handle_close_uncertain
             recovery_attempted = True
@@ -2258,8 +2305,11 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                 # or same-process backup handle has unknown lifetime.
                 return False
             if phase == "before_backup" and receipt is None:
+                refusal_gate = (failure.gate if isinstance(failure, _PrebackupGateRefusal)
+                                else prebackup_gate)
                 receipt = _receipt(request, status="refused_before_backup", old_generation=None,
-                                   new_generation=None, backup_manifest=None)
+                                   new_generation=None, backup_manifest=None,
+                                   prebackup_gate=refusal_gate)
                 terminal_safe = lock_owned
             elif (phase in {"qualified", "prepared"} and receipt is None
                     and (service is None or not service.runtime_context_started
@@ -2293,28 +2343,39 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                 publish_terminal_receipt()
             return True
 
+        prebackup_gate = "channel_lock_entry"
         try:
             with effects.channel_lock(journal=config.journal, owner_marker=channel_owner,
                                       retire_terminal=False):
                 lock_owned = True
                 try:
+                    prebackup_gate = "channel_owner_check"
                     if effects.channel_lock_owner() != expected_channel_owner:
                         _refuse()
                     # The owner marker makes later old ExecStopPost invocations a
                     # no-write fast path. Refuse an invocation that passed that
                     # check just before this owner acquired its lock.
+                    prebackup_gate = "caller_census"
                     ports.cleanup_callers(channel)
+                    prebackup_gate = "current_writer_snapshot"
                     baseline = _require_writer_snapshot(ports.preflight(effects, request), request)
+                    prebackup_gate = "candidate_verification"
                     ports.verify_candidate(config, request)
+                    prebackup_gate = "old_disk_state"
                     old_state = ports.old_state(config, request)
+                    prebackup_gate = "owner_launcher_profile"
                     _require_owner_launcher_profile(admission, old_state)
+                    prebackup_gate = "backup_roots"
                     roots, backup_root = ports.roots(config, old_state)
+                    prebackup_gate = "source_manifest"
                     changes, payloads, manifest_proof = ports.source_manifest(
                         old_state, config, request, roots, backup_root,
                     )
+                    prebackup_gate = "candidate_profile"
                     candidate_profile = _candidate_profile(old_state, payloads, manifest_proof)
                     roots = {name: root for name, root in roots.items()
                              if name in manifest_proof["changed_roots"]}
+                    prebackup_gate = "old_kernel_qualification"
                     service = ports.service(channel)
                     launcher = payloads[("launcher", "yggdrasil-bws-deploy")]
                     launcher_content = {"sha256": _sha(launcher),
@@ -2327,9 +2388,11 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                             control_root={"path": str(_CONTROL_DIRECTORY), **control_identity},
                             launcher_content=launcher_content,
                         )
+                        prebackup_gate = "qualified_writer_snapshot"
                         current = _require_writer_snapshot(ports.preflight(effects, request), request)
                         if service.phase != "qualified" or current != baseline:
                             _refuse()
+                        prebackup_gate = "generation_qualification"
                         old_generation = _generation_sha(old_state, service.old_token, service.contract)
                         proposed_generation = _generation_sha(
                             candidate_profile, manifest_proof["new_generation_sha256"], service.contract,
@@ -2495,8 +2558,8 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                         )
                     else:
                         _refuse()
-                except Exception:
-                    if not recover_failure(publish=True):
+                except Exception as exc:
+                    if not recover_failure(publish=True, failure=exc):
                         raise
                 if receipt is None:
                     _refuse()
@@ -2509,7 +2572,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                 ports.retire(effects, channel_owner)
                 lock_owned = False
             return {"source_installation": receipt}
-        except Exception:
+        except Exception as exc:
             if terminal_receipt_published or terminal_receipt_attempted:
                 # An attempted durable publication may have reached disk. Preserve the
                 # verified runtime and owner evidence; never stop or replay after it.
@@ -2519,7 +2582,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
             # If channel-lock acquisition failed before yielding, no transaction effect ran.
             # Record only a no-effect refusal under installation admission; preserve any
             # partial lock-path evidence left by a failed context-manager entry.
-            if not recover_failure(publish=True):
+            if not recover_failure(publish=True, failure=exc):
                 raise
             if terminal_safe and lock_owned:
                 ports.retire(effects, channel_owner)

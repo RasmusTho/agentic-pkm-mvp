@@ -1128,11 +1128,12 @@ def test_live_preflight_keeps_existing_terminal_identity_separate_from_candidate
 
 
 def _transaction_fixture(
-    *, preflight_error=False, terminal_identity_drift: str | None = None, apply_error=False,
+    *, preflight_error=False, preflight_gate_error: str | None = None,
+    terminal_identity_drift: str | None = None, apply_error=False,
     compensation_complete=True, profile_mismatch=False, profile_error=False, retire_error=False,
     channel_lock_error=False, preflight_drift_at: int | None = None,
     profile_drift_at: int | None = None, profile_error_at: int | None = None,
-    stop_old_error=False, handle_close_error=False, **_legacy_options,
+    stop_old_error=False, handle_close_error=False, verify_candidate_error=False, **_legacy_options,
 ):
     events: list[str] = []
     request = {
@@ -1371,6 +1372,8 @@ def _transaction_fixture(
             nonlocal preflight_calls
             preflight_calls += 1
             events.append("preflight")
+            if preflight_gate_error is not None:
+                transaction._refuse_prebackup_gate(preflight_gate_error)
             if preflight_error:
                 raise RuntimeError("synthetic census refusal")
             terminal_revision = "c" * 40
@@ -1401,6 +1404,8 @@ def _transaction_fixture(
         def verify_candidate(self, _config, _request):
             assert admission.active
             events.append("verify_candidate")
+            if verify_candidate_error:
+                raise RuntimeError("synthetic private path and secret candidate refusal")
 
         def old_state(self, _config, _request):
             events.append("old_disk_state")
@@ -1493,6 +1498,96 @@ def test_preflight_refuses_before_backup_or_stop_without_exact_owner_census_and_
     assert admission.receipt == receipt
 
 
+@pytest.mark.parametrize(("options", "expected_gate"), [
+    ({"preflight_error": True}, "current_writer_snapshot"),
+    ({"channel_lock_error": True}, "channel_lock_entry"),
+    ({"preflight_gate_error": "authority_cutover"}, "authority_cutover"),
+], ids=["current_writer_snapshot", "channel_lock_entry", "authority_cutover"])
+def test_prebackup_refusal_receipt_reports_finite_gate(options, expected_gate):
+    request, ports, admission, _service, events, _old, _candidate = _transaction_fixture(**options)
+
+    result = transaction._execute_source_installation("dev", request, ports)
+
+    receipt = result["source_installation"]
+    assert receipt["status"] == "refused_before_backup"
+    assert receipt["prebackup_gate"] == expected_gate
+    assert receipt["old_generation_sha256"] is None
+    assert receipt["new_generation_sha256"] is None
+    assert receipt["backup_manifest_sha256"] is None
+    assert "prepare" not in events and "stop_old" not in events and "apply" not in events
+    assert admission.receipt == receipt
+
+
+def test_second_native_writer_snapshot_error_reports_qualified_gate(monkeypatch):
+    from app.ops import native_source_admission
+
+    request, ports, admission, _service, events, _old, _candidate = _transaction_fixture()
+    effects = ports.effects(None)
+    config = ports.configuration("dev")
+    receipt = SimpleNamespace(
+        terminal_result="committed", operation_id=str(uuid.uuid4()), stage="committed",
+        require_profile=lambda _plan: None,
+    )
+    plan = SimpleNamespace(
+        revision="c" * 40,
+        image_digest="sha256:" + "d" * 64,
+        authority_cutover=SimpleNamespace(validate=lambda: None),
+    )
+    config.journal = SimpleNamespace(read=lambda: receipt, bound_plan=lambda _operation_id: plan)
+    effects.config = config
+
+    def fail_runtime_snapshot(*_args, **_kwargs):
+        raise RuntimeError("synthetic private writer census detail")
+
+    effects.source_identity_runtime_snapshot = fail_runtime_snapshot
+    effects.quiescent = lambda: True
+    monkeypatch.setattr(native_source_admission, "require_terminal_deployment", lambda _effects: None)
+
+    original_preflight = ports.preflight
+    preflight_calls = 0
+
+    def preflight(selected_effects, selected_request):
+        nonlocal preflight_calls
+        preflight_calls += 1
+        if preflight_calls == 2:
+            return transaction._current_writer_snapshot(selected_effects, selected_request)
+        return original_preflight(selected_effects, selected_request)
+
+    ports.preflight = preflight
+
+    result = transaction._execute_source_installation("dev", request, ports)
+
+    selected = result["source_installation"]
+    assert selected["status"] == "refused_before_backup"
+    assert selected["prebackup_gate"] == "qualified_writer_snapshot"
+    assert "synthetic private writer census detail" not in json.dumps(selected, sort_keys=True)
+    assert selected["old_generation_sha256"] is None
+    assert selected["new_generation_sha256"] is None
+    assert selected["backup_manifest_sha256"] is None
+    assert "prepare" not in events and "stop_old" not in events and "apply" not in events
+    assert admission.receipt == selected
+
+
+def test_prebackup_refusal_receipt_is_redacted_and_fail_closed():
+    request, ports, admission, _service, events, _old, _candidate = _transaction_fixture(
+        verify_candidate_error=True,
+    )
+
+    result = transaction._execute_source_installation("dev", request, ports)
+
+    receipt = result["source_installation"]
+    public_receipt = json.dumps(receipt, sort_keys=True)
+    assert receipt["status"] == "refused_before_backup"
+    assert receipt["prebackup_gate"] == "candidate_verification"
+    assert "synthetic private path" not in public_receipt and "secret candidate" not in public_receipt
+    assert receipt["old_generation_sha256"] is None
+    assert receipt["new_generation_sha256"] is None
+    assert receipt["backup_manifest_sha256"] is None
+    assert "prepare" not in events and "stop_old" not in events and "apply" not in events
+    assert events.index("admission_complete") < events.index("channel_lock_exit")
+    assert admission.receipt == receipt
+
+
 @pytest.mark.parametrize("mismatch", ["revision", "image"])
 def test_preflight_refuses_current_terminal_identity_drift_before_backup_or_effects(mismatch):
     request, ports, admission, _service, events, _old, _candidate = _transaction_fixture(
@@ -1503,6 +1598,7 @@ def test_preflight_refuses_current_terminal_identity_drift_before_backup_or_effe
 
     receipt = result["source_installation"]
     assert receipt["status"] == "refused_before_backup"
+    assert receipt["prebackup_gate"] == "qualified_writer_snapshot"
     assert "preflight" in events
     assert "verify_candidate" in events
     assert "prepare" not in events and "stop_old" not in events and "apply" not in events
@@ -1543,7 +1639,10 @@ def test_candidate_launcher_is_staged_before_stop_under_same_handle():
     assert admission.active is False
 
 
-def test_native_writer_snapshot_requires_terminal_owner_and_selected_authority_cutover(monkeypatch):
+@pytest.mark.parametrize("cutover_failure", ["missing", "invalid"])
+def test_native_writer_snapshot_requires_terminal_owner_and_selected_authority_cutover(
+    monkeypatch, cutover_failure,
+):
     from app.ops import native_source_admission
 
     calls: list[str] = []
@@ -1556,7 +1655,20 @@ def test_native_writer_snapshot_requires_terminal_owner_and_selected_authority_c
         terminal_result="committed", operation_id="terminal-operation", stage="committed",
         require_profile=lambda _plan: calls.append("profile-bound"),
     )
-    plan = SimpleNamespace(authority_cutover=None)
+    if cutover_failure == "missing":
+        plan = SimpleNamespace(authority_cutover=None)
+        expected_calls = ["terminal-owner", "profile-bound"]
+    else:
+        def invalid_cutover():
+            calls.append("authority-validate")
+            raise RuntimeError("synthetic private authority detail")
+
+        plan = SimpleNamespace(
+            revision="c" * 40,
+            image_digest="sha256:" + "d" * 64,
+            authority_cutover=SimpleNamespace(validate=invalid_cutover),
+        )
+        expected_calls = ["terminal-owner", "profile-bound", "authority-validate"]
     journal = SimpleNamespace(read=lambda: receipt, bound_plan=lambda _operation_id: plan)
     effects = SimpleNamespace(
         config=SimpleNamespace(channel="dev", journal=journal),
@@ -1566,10 +1678,11 @@ def test_native_writer_snapshot_requires_terminal_owner_and_selected_authority_c
     monkeypatch.setattr(native_source_admission, "require_terminal_deployment",
                         lambda _effects: calls.append("terminal-owner"))
 
-    with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+    with pytest.raises(transaction._PrebackupGateRefusal) as refusal:
         transaction._current_writer_snapshot(effects, request)
 
-    assert calls == ["terminal-owner", "profile-bound"]
+    assert refusal.value.gate == "authority_cutover"
+    assert calls == expected_calls
 
 
 def test_candidate_preflight_uses_fixed_local_git_and_docker_environment(monkeypatch, tmp_path):
