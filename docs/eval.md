@@ -300,6 +300,24 @@ labels, then validates exact coverage and scores each answer through the legacy 
 This is a batched subscription comparison; its timing is per batch, and it is not the independent
 API-call protocol above. No Product classifier route or default changes.
 
+The subscription decision protocol is `subscription_intent_decision.v3` (#6422). It first asks
+whether the intent can be resolved coherently, including missing context and mutually incompatible
+requested states. The closed decision tag `abstain` maps locally to the unchanged comparator's
+UNKNOWN safe-fail. Concrete tags bind a fixed class/action pair: body editing and exploratory
+reasoning have no action; each of the four governance subtypes binds its corresponding action.
+There are no independent model-supplied class/action fields that could contradict each other.
+Unknown tags, extra fields and malformed decisions invalidate the run before scoring; they cannot
+count as valid abstention. Every concrete pair still passes the existing schema.
+Coherent sequential/mixed requests still preserve the strongest required gate. The instructions
+contain no fixture-specific examples, source IDs or expected labels.
+
+This corrects the original forced-three-class protocol: the #3429 receipt's English/Swedish
+conflicting-intent cases required UNKNOWN, but the model had no valid explicit abstention channel.
+The golden set, its rationale, thresholds and scoring remain unchanged. Receipts now add the
+protocol version, instruction/schema hashes, abstention count and content-free per-case class
+outcomes. All-abstain output still has zero answer coverage and only 8/68 passing cases under the
+original scorer; hard-gate success alone is not evidence of useful classification quality.
+
 The `gpt56-classification-eval.v1` receipt contains catalog eligibility, exact dispatched models,
 CLI/profile metadata, dataset hash, coverage, metrics, mutation-side gate and batch elapsed time.
 The adapter supplies no provider-served identity attestation, token counts or dollar billing:

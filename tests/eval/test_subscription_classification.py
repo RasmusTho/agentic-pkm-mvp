@@ -24,10 +24,22 @@ class FakeExecutor:
         self.calls.append(kwargs)
         cases_by_text = {c.utterance: c for c in load_classification_cases()}
         answers = [{"case_id": item["case_id"],
-                    "intent_class": cases_by_text[item["intent"]].expected_intent,
-                    "action_type": cases_by_text[item["intent"]].expected_action_type,
+                    "decision": ("abstain" if cases_by_text[item["intent"]].expected_intent == "unknown"
+                                 else cases_by_text[item["intent"]].expected_action_type
+                                 or cases_by_text[item["intent"]].expected_intent),
                     "rationale": "PRIVATE-COMPLETION-CANARY"}
                    for item in json.loads(kwargs["user_prompt"])]
+        if self.invalid == "unsafe_conflicts":
+            for answer, item in zip(answers, json.loads(kwargs["user_prompt"])):
+                if cases_by_text[item["intent"]].id in {
+                    "multi-en-archive-but-keep-writing", "multi-sv-arkivera-men-fortsatta"
+                }:
+                    answer.update(decision="note_lifecycle")
+        elif self.invalid == "all_abstain":
+            for answer in answers:
+                answer.update(decision="abstain")
+        elif self.invalid == "contradictory":
+            answers[0].update(decision="abstain", intent_class="governance_bearing", action_type="note_lifecycle")
         if self.invalid == "duplicate":
             answers[-1] = answers[0]
         elif self.invalid == "missing":
@@ -82,7 +94,7 @@ def test_subscription_receipt_is_content_free_and_billing_unavailable():
         assert run["batch_elapsed_seconds"] >= 0
 
 
-@pytest.mark.parametrize("failure", ["duplicate", "missing", "provider"])
+@pytest.mark.parametrize("failure", ["duplicate", "missing", "provider", "contradictory"])
 def test_incomplete_batch_stops_without_partial_quality_or_provider_text(failure):
     executor = FakeExecutor(invalid=failure)
     result = run_comparison(executor)
@@ -91,3 +103,59 @@ def test_incomplete_batch_stops_without_partial_quality_or_provider_text(failure
     assert result["runs"][0]["metrics"] is None
     assert result["runs"][0]["completed_cases"] == 0
     assert "PRIVATE-PROVIDER-ERROR-CANARY" not in json.dumps(result)
+    if failure == "contradictory":
+        assert result["runs"][0]["decision_rejection"] == "decision_fields"
+
+
+@pytest.mark.parametrize("patch", [
+    {"decision": "unknown"}, {"decision": "governance_bearing"}, {"decision": True},
+    {"decision": None}, {"decision": 1}, {"decision": ""},
+    {"intent_class": "governance_bearing"}, {"action_type": "note_lifecycle"},
+    {"abstain": True}, {"rationale": 1}, {"unexpected": True},
+])
+def test_explicit_abstention_is_validated_before_local_unknown(patch):
+    from app.eval.classification import _legacy_comparator
+    from app.eval.subscription_classification import DECISIONS, validated_decision_completion
+
+    abstention = {"decision": "abstain", "rationale": None}
+    completion = validated_decision_completion(abstention)
+    assert _legacy_comparator("a synthetic unresolved request", lambda **kw: completion, "test") == "unknown"
+    with pytest.raises(ValueError):
+        validated_decision_completion({**abstention, **patch})
+    for missing in abstention:
+        with pytest.raises(ValueError):
+            validated_decision_completion({k: v for k, v in abstention.items() if k != missing})
+    for decision, expected in DECISIONS.items():
+        decoded = validated_decision_completion({"decision": decision, "rationale": None})
+        if expected is not None:
+            assert (json.loads(decoded)["intent_class"], json.loads(decoded)["action_type"]) == expected
+    valid = validated_decision_completion({"decision": "note_lifecycle", "rationale": None})
+    assert _legacy_comparator("a synthetic resolved request", lambda **kw: valid, "test") == "governance_bearing"
+
+
+def test_abstention_protocol_does_not_weaken_quality_scoring():
+    from app.eval.subscription_classification import DECISION_INSTRUCTIONS, DECISION_PROTOCOL
+
+    correct = run_comparison(FakeExecutor())
+    for run in correct["runs"]:
+        assert run["hard_gate_passed"] is True and run["metrics"]["pass_rate"] == 1.0
+        assert run["abstained_cases"] == 8
+        assert run["case_outcomes"]["multi-en-archive-but-keep-writing"] == "unknown"
+        assert run["case_outcomes"]["multi-sv-arkivera-men-fortsatta"] == "unknown"
+        assert run["case_outcomes"]["multi-sv-snygga-till-och-arkivera"] == "governance_bearing"
+    assert correct["decision_protocol"] == DECISION_PROTOCOL
+    assert len(correct["instruction_sha256"]) == len(correct["schema_sha256"]) == 64
+    for case in load_classification_cases():
+        assert case.id not in DECISION_INSTRUCTIONS and case.utterance not in DECISION_INSTRUCTIONS
+
+    unsafe = run_comparison(FakeExecutor(invalid="unsafe_conflicts"))
+    assert unsafe["complete"] is True and unsafe["hard_gate_passed"] is False
+    for run in unsafe["runs"]:
+        assert {c["case_id"] for c in run["metrics"]["mutation_side_confusions"]} == {
+            "multi-en-archive-but-keep-writing", "multi-sv-arkivera-men-fortsatta"}
+
+    vacuous = run_comparison(FakeExecutor(invalid="all_abstain"))
+    for run in vacuous["runs"]:
+        assert run["abstained_cases"] == 68
+        assert run["metrics"]["safe_fail"]["answer_rate"] == 0.0
+        assert run["metrics"]["pass_rate"] == 8 / 68
