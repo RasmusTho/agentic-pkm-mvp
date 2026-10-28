@@ -10,7 +10,7 @@ import re
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Literal, cast
+from typing import Any, AsyncIterator, Literal, Mapping, cast
 
 from fastapi import FastAPI, Request
 from jsonschema.exceptions import SchemaError
@@ -37,6 +37,7 @@ from app.model_access.ckm_judgment_executor import BuilderTypeSafeExecutor
 from app.model_access.ckm_judgment_contract import (
     CKM_JUDGMENT_REQUEST_BYTES, BuilderJudgmentResult, validate_ckm_request,
 )
+from app.ops.host_secret_bootstrap import load_runtime_secret_values
 from llm_contract import ModelCapabilities, SystemOneJudgmentRequest
 from app.model_access.remote_contract import (
     CompletionCapabilityIntent,
@@ -1094,6 +1095,23 @@ def serve_executor(app: FastAPI, *, host: str = "127.0.0.1", port: int = 8787) -
     )
 
 
+class ProviderCredentialResolver:
+    """Resolve provider bindings from the host-secret bootstrap, then ambient env.
+
+    The bootstrap hands declared bindings over through its runtime file only, so
+    the file is read once at startup and the launcher's consumer grant wins; an
+    unbootstrapped process keeps the previous ambient lookup. No value is logged
+    or returned in errors.
+    """
+
+    def __init__(self, runtime_values: Mapping[str, str] | None = None) -> None:
+        values = load_runtime_secret_values() if runtime_values is None else runtime_values
+        self._runtime_values = {k: v for k, v in values.items() if v and v.strip()}
+
+    def __call__(self, name: str) -> str | None:
+        return self._runtime_values.get(name) or os.environ.get(name)
+
+
 def _repository_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -1132,7 +1150,7 @@ def main() -> None:
     )
     provider_api_adapter = ProductProviderApiAdapter(
         adapter_factory=factory,
-        credential_resolver=os.environ.get,
+        credential_resolver=ProviderCredentialResolver(),
         timeout_seconds=120,
     )
     app = create_codex_executor_app(
