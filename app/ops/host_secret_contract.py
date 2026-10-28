@@ -9,7 +9,12 @@ import re
 from urllib.parse import quote
 
 
-DEFAULT_CONTRACT_PATH = Path("config/secrets/host_secret_contract.json")
+DEFAULT_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "config"
+    / "secrets"
+    / "host_secret_contract.json"
+)
 _CONTRACT_FIELDS = frozenset(
     {
         "version",
