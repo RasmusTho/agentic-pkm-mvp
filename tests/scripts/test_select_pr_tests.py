@@ -2507,10 +2507,31 @@ def test_test_module_shared_or_unclear_consumers_keep_broad_ownership(
     assert {"tests/ops", "tests/scripts"} <= set(selection.targets)
 
 
+@pytest.mark.parametrize("statement", [
+    "import importlib\nimportlib.import_module(module_name)",
+    "from unknown import *",
+    "exec('import generated_helper')",
+    "exec(generated_code)",
+    "import runpy\nrunpy.run_path(path)",
+])
+def test_test_module_outgoing_dynamic_code_retains_consumers(test_module_repository, statement: str) -> None:
+    test_module_repository({
+        "tests/deploy/test_seed.py": statement + "\nshared = 1\ndef test_seed(): pass\n",
+        "tests/ops/test_consumer.py": "from tests.deploy.test_seed import shared\ndef test_consumer(): pass\n",
+        "tests/ops/test_transitive.py": "from tests.ops.test_consumer import shared\ndef test_transitive(): pass\n",
+        "tests/ops/test_unrelated.py": "def test_unrelated(): pass\n",
+    })
+    selection = select_tests(["tests/deploy/test_seed.py"])
+    assert selection.reason == "test modules and their static consumers"
+    assert set(selection.targets) == {*selector.CI_INTEGRITY_TARGETS, "tests/deploy/test_seed.py",
+                                      "tests/ops/test_consumer.py", "tests/ops/test_transitive.py"}
+
+
 @pytest.mark.parametrize("content", [
-    "import importlib\nimportlib.import_module(module_name)\ndef test_seed(): pass\n",
-    "from unknown import *\ndef test_seed(): pass\n",
-    "exec('import generated_helper')\ndef test_seed(): pass\n",
+    "pytest_plugins = []\ndef test_seed(): pass\n",
+    "pytest_plugins: list[str] = []\ndef test_seed(): pass\n",
+    "def pytest_configure(config): pass\ndef test_seed(): pass\n",
+    "exec(code)\npytest_plugins = []\ndef test_seed(): pass\n",
     "def test_seed(:\n",
     "shared = 1\n",  # A helper does not become a test module through its filename.
 ])

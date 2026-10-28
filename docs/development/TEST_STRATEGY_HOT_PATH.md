@@ -173,7 +173,10 @@ coverage. Unknown architecture siblings remain unowned and refuse selection.
 
 Shared fixture/helper/support files, conftest, pytest hooks/plugins, configuration, dependencies,
 Product or mixed changes, deleted/renamed or unknown paths keep their normal broader scope.
-Known consumers with computed imports or file loaders also disqualify the narrow route. Static
+Outgoing computed imports, wildcard imports, and code/file loaders in the originally changed
+owned test modules do not broaden selection: those complete modules still run. Explicit pytest
+hooks/plugins retain precedence and disqualify even those changed modules. Additional incoming
+consumers with computed imports or file loaders still disqualify the narrow route. Static
 analysis cannot prove the absence of every dynamic dependency or collection-order coupling;
 the existing broad nightly/manual execution remains the backstop. This trades delayed discovery
 of those test-harness defects for shorter ordinary PR feedback, without weakening runtime guards.
