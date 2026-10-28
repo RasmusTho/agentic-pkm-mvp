@@ -1240,7 +1240,11 @@ def test_zone_resolved_via_settings_not_literal() -> None:
     assert _fs_adapter_construction_forwards_resolved_sources_root(service_source)
     assert _obsidian_adapter_construction_forwards_resolved_sources_root(service_source)
     assert _fs_adapter_forwards_resolved_sources_root(adapter_source)
-    assert _source_classification_forwarding_inventory(_application_sources()) == {
+    assert {
+        (relative, scope): roots
+        for (relative, scope, consumer), roots in default_root_callers.items()
+        if consumer == "app.knowledge.multiwriter.classify_note_in_vault"
+    } == {
         caller: (root_expression,)
         for caller, root_expression in SOURCE_CLASSIFICATION_FORWARDING_CALLERS.items()
     }
