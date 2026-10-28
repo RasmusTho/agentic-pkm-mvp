@@ -2592,3 +2592,43 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
 def run_source_installation(channel: str, request: object) -> dict[str, object]:
     """Execute one fixed DEV/TEST source install through existing BWS ownership."""
     return _execute_source_installation(channel, request, _NativePorts())
+
+
+def reconcile_source_installation(channel: str, request: object) -> dict[str, object]:
+    """Recover a lost source-installation response by its exact operation ID.
+
+    Admission proves the persistent source-installation locks and receipt while
+    the callback below proves the separate transaction lock is closed.  Only
+    receipts whose transaction was already terminal retire that second lock;
+    unresolved outcomes retain the owner marker and all evidence.
+    """
+    from app.ops.bws_installation_admission import reconcile_installation_operation
+    from app.ops.postgres_deploy_linux import LinuxConfig, LinuxEffects
+
+    def close_transaction_lock(owner: dict[str, object], receipt: dict[str, object]) -> None:
+        config = LinuxConfig.load(channel)
+        if config.channel != channel:
+            raise RuntimeError("bws_source_installation_recovery_refused")
+        effects = LinuxEffects(config)
+        expected_owner: dict[str, str] = {
+            "kind": "bws-source-installation", "channel": channel,
+            "operation_id": cast(str, owner["operation_id"]),
+            "candidate_sha": cast(str, owner["candidate_sha"]),
+            "image_digest": cast(str, owner["image_digest"]),
+        }
+        terminal = receipt["status"] in {
+            "installed", "compensated_restored", "refused_before_backup", "refused_before_stop",
+        }
+        # A completed transaction may already have retired its source-side
+        # lock before the caller lost its response.  Missing is evidence of
+        # closure only for a receipt that is already terminal; unresolved
+        # outcomes must still present the exact retained owner lock.
+        if effects.channel_lock_owner() is None:
+            if terminal:
+                return
+            raise RuntimeError("bws_source_installation_recovery_refused")
+        with effects.failed_reconciliation_lock(expected_owner=expected_owner) as handle:
+            if terminal:
+                effects.retire_reconciled_channel_lock(handle, expected_owner=expected_owner)
+
+    return reconcile_installation_operation(channel, request, retire=close_transaction_lock)

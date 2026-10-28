@@ -1389,6 +1389,18 @@ owner's separate #3347/#6321 gates still control any native call and same-image 
 acceptance. Synthetic transaction tests and repository delivery are not an assembled live
 installation packet or permission to operate it; #3347 remains open.
 
+If the source-installation RPC caller loses its response, the owner may issue one
+DEV/TEST-only `source-installation-reconcile` request for the same operation. The request must
+bind the exact operation ID, candidate SHA, image digest and bundle name from the retained owner
+marker. Recovery acquires both persistent source-installation locks exclusively, validates the
+authenticated owner marker and operation receipt, and proves the transaction-side source lock is
+closed before returning the existing receipt. A terminal receipt may retire that exact detached
+transaction lock; `unknown` and `compensated_stopped` receipts are returned as unresolved and
+retain the owner evidence. Missing, mismatched, malformed, live or ambiguous state returns a
+finite unresolved result and retains every hold. The request never starts, retries, replaces,
+adopts or releases an installation based on a different owner marker, and it is not a generic
+observer or a permission to operate a native host.
+
 New caught `refused_before_backup` receipts carry a value-free `prebackup_gate` from this finite
 set: `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
 `authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,

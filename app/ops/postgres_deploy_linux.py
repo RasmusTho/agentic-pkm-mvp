@@ -2578,6 +2578,8 @@ class LinuxEffects:
                     dir_fd=parent_fd,
                 )
             except FileNotFoundError:
+                # The authenticated deployment parent exists, so absence of
+                # the channel lock entry is the only proven closed-lock state.
                 return None
             directory_info = os.fstat(directory_fd)
             if (
@@ -2602,8 +2604,6 @@ class LinuxEffects:
             if len(raw) > 4096 or set(os.listdir(directory_fd)) != {'bws-owner'}:
                 raise PostgresDeployError()
             return raw
-        except FileNotFoundError:
-            return None
         except Exception:
             raise PostgresDeployError() from None
         finally:
@@ -5153,6 +5153,12 @@ def rpc(channel: str, request: dict[str, Any]) -> dict[str, Any]:
         from app.ops.bws_installation_transaction import run_source_installation
 
         return run_source_installation(channel, request)
+    if isinstance(request, dict) and request.get('action') == 'source-installation-reconcile':
+        if channel not in {'dev', 'test'}:
+            raise PostgresDeployError()
+        from app.ops.bws_installation_transaction import reconcile_source_installation
+
+        return reconcile_source_installation(channel, request)
     from app.ops.bws_installation_admission import shared_caller_reservation
 
     with shared_caller_reservation(channel):

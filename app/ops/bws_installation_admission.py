@@ -23,7 +23,7 @@ import stat
 import subprocess
 import sys
 import time
-from typing import Iterator, NoReturn, cast
+from typing import Callable, Iterator, NoReturn, cast
 from uuid import UUID
 
 _RECEIPT_DIRECTORY = Path("/var/lib/yggdrasil/bws-deploy-convergence")
@@ -75,6 +75,14 @@ _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 
 class InstallationAdmissionRefused(Exception):
     """The BWS reservation or its terminal evidence is unknown."""
+
+
+_SOURCE_INSTALLATION_RECONCILE_ACTION = "source-installation-reconcile"
+_RECOVERY_REFUSAL_REASONS = frozenset({
+    "request_binding", "runtime_state_missing", "global_lock_active", "channel_lock_active",
+    "owner_missing", "owner_mismatch", "owner_invalid", "receipt_missing", "receipt_invalid",
+    "lock_recheck_failed", "retirement_unproven",
+})
 
 
 def _refuse() -> NoReturn:
@@ -775,6 +783,141 @@ def _require_terminal_channel_owners(parent_fd: int) -> None:
         receipt = _terminal_receipt(owner)
         if receipt["status"] not in _ADMISSION_TERMINAL_STATUSES:
             _refuse()
+
+
+def _recovery_request(channel: str, request: object) -> dict[str, str]:
+    """Validate the immutable binding used by same-operation recovery."""
+    fields = {"action", "operation_id", "candidate_sha", "image_digest", "bundle_name"}
+    if channel not in {"dev", "test"} or type(request) is not dict or set(request) != fields:
+        _refuse()
+    operation_id = request.get("operation_id")
+    candidate_sha = request.get("candidate_sha")
+    image_digest = request.get("image_digest")
+    bundle_name = request.get("bundle_name")
+    try:
+        if (request.get("action") != _SOURCE_INSTALLATION_RECONCILE_ACTION
+                or type(operation_id) is not str or str(UUID(operation_id)) != operation_id
+                or type(candidate_sha) is not str
+                or re.fullmatch(r"[0-9a-f]{40}", candidate_sha) is None
+                or type(image_digest) is not str
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is None
+                or type(bundle_name) is not str
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", bundle_name) is None):
+            _refuse()
+    except Exception:
+        _refuse()
+    return {
+        "operation_id": operation_id,
+        "candidate_sha": candidate_sha,
+        "image_digest": image_digest,
+        "bundle_name": bundle_name,
+    }
+
+
+def _recovery_unresolved(reason: str) -> dict[str, object]:
+    if reason not in _RECOVERY_REFUSAL_REASONS:
+        reason = "lock_recheck_failed"
+    return {"source_installation": {"status": "unresolved", "reason": reason}}
+
+
+def reconcile_installation_operation(
+    channel: str,
+    request: object,
+    *,
+    retire: Callable[[dict[str, object], dict[str, object]], None] | None = None,
+) -> dict[str, object]:
+    """Recover one lost source-install response without adopting or replaying it.
+
+    The runtime and channel locks are acquired exclusively before the owner and
+    receipt are read.  ``retire`` is invoked while those locks remain held so a
+    caller can prove/retire its second, source-side lock atomically.  Unknown
+    and compensated-stopped receipts are returned but never retired.
+    """
+    try:
+        selected = _recovery_request(channel, request)
+    except InstallationAdmissionRefused:
+        return _recovery_unresolved("request_binding")
+
+    parent = global_fd = channel_fd = None
+    global_identity = channel_identity = None
+    try:
+        try:
+            parent, _ = _open_runtime_directory(create=False)
+        except Exception:
+            return _recovery_unresolved("runtime_state_missing")
+        try:
+            global_fd, global_info = _open_lock(parent, _GLOBAL_LOCK, create=False)
+            channel_fd, channel_info = _open_lock(
+                parent, f"{channel}.source-installation.lock", create=False,
+            )
+        except Exception:
+            return _recovery_unresolved("runtime_state_missing")
+        global_identity = (global_info.st_dev, global_info.st_ino)
+        channel_identity = (channel_info.st_dev, channel_info.st_ino)
+        try:
+            fcntl.flock(global_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                return _recovery_unresolved("global_lock_active")
+            return _recovery_unresolved("lock_recheck_failed")
+        try:
+            fcntl.flock(channel_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                return _recovery_unresolved("channel_lock_active")
+            return _recovery_unresolved("lock_recheck_failed")
+
+        if (os.pread(global_fd, 1, 0) or os.pread(channel_fd, 4097, 0) == b""
+                or len(os.pread(channel_fd, 4097, 0)) > 4096):
+            return _recovery_unresolved("owner_missing")
+        owner_raw = os.pread(channel_fd, 4097, 0)
+        try:
+            owner = _owner_record(owner_raw, channel)
+        except InstallationAdmissionRefused:
+            return _recovery_unresolved("owner_invalid")
+        if any(owner.get(key) != selected[key] for key in (
+                "operation_id", "candidate_sha", "image_digest", "bundle_name",
+        )):
+            return _recovery_unresolved("owner_mismatch")
+        try:
+            receipt = _terminal_receipt(owner)
+        except InstallationAdmissionRefused:
+            return _recovery_unresolved("receipt_invalid")
+
+        # Re-read every identity and marker after receipt validation.  A
+        # replacement pathname or changed owner is not evidence for recovery.
+        global_after = os.fstat(global_fd)
+        channel_after = os.fstat(channel_fd)
+        global_named = os.stat(_GLOBAL_LOCK, dir_fd=parent, follow_symlinks=False)
+        channel_named = os.stat(
+            f"{channel}.source-installation.lock", dir_fd=parent, follow_symlinks=False,
+        )
+        if (os.pread(global_fd, 1, 0)
+                or (global_after.st_dev, global_after.st_ino) != global_identity
+                or (channel_after.st_dev, channel_after.st_ino) != channel_identity
+                or (global_named.st_dev, global_named.st_ino) != global_identity
+                or (channel_named.st_dev, channel_named.st_ino) != channel_identity
+                or os.pread(channel_fd, 4097, 0) != owner_raw):
+            return _recovery_unresolved("lock_recheck_failed")
+        if retire is not None:
+            try:
+                retire(owner, receipt)
+            except Exception:
+                return _recovery_unresolved("retirement_unproven")
+        if os.pread(channel_fd, 4097, 0) != owner_raw:
+            return _recovery_unresolved("lock_recheck_failed")
+        return {"source_installation": dict(receipt)}
+    except InstallationAdmissionRefused:
+        return _recovery_unresolved("lock_recheck_failed")
+    except Exception:
+        return _recovery_unresolved("lock_recheck_failed")
+    finally:
+        for descriptor in (channel_fd, global_fd, parent):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
 
 
 def cleanup_must_skip(channel: str) -> bool:
