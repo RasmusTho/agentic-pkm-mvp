@@ -60,7 +60,7 @@ maintains.
 
 ```
 $ python -m app.cli episode-debrief tick --json
-{"triggered": ["debrief-ep-2026-07-07-morning"], "skipped_ineligible": 1, "skipped_already_debriefed": 0}
+{"triggered": ["debrief-3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"], "skipped_ineligible": 1, "skipped_already_debriefed": 0}
 ```
 
 ## Why This Matters

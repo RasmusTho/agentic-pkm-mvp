@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Final
@@ -12,9 +13,11 @@ from app.events.models import new_event
 from app.events.types import DEBRIEF_TRIGGER_CREATED
 from app.events.topic_schema_registry import TopicSchemaViolation
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+from app.instance.filesystem_identity import resolve_filesystem_root_identity, same_filesystem_root
 from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 from app.services.outbox import derive_idempotency_key, write_outbox_event
 from app.episode_debrief import store
+from app.watcher.vault_watcher import extract_context_dimensions_for_note
 from app.workers.outbox_binding_gate import current_binding_effect_window
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import load_frontmatter
@@ -66,6 +69,21 @@ def _resolve_inside(root: Path, relative: Path | str, subject: str) -> Path:
         return (root / relative).resolve()
     except (OSError, RuntimeError) as exc:
         raise DebriefReconciliationError(f"{subject} cannot be reconciled") from exc
+
+
+def _is_configured_scalar_root(root: Path) -> bool:
+    # The compatibility projection belongs to the configured scalar vault the
+    # current ERE producers write; another selected vault never reads it.
+    raw = (os.getenv("WATCHER_VAULT_PATH") or os.getenv("VAULT_ROOT") or "").strip()
+    if not raw:
+        return False
+    try:
+        configured = Path(raw).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    return same_filesystem_root(
+        resolve_filesystem_root_identity(configured), resolve_filesystem_root_identity(root)
+    )
 
 
 def _episode_fields(root: Path, row: store.EpisodeRow) -> dict[str, Any]:
@@ -123,15 +141,16 @@ def run_debrief_tick(
     runtime = resolve_scalar_binding_runtime(requested_binding_id=vault_binding_id, vault_root=root)
     binding_id = runtime.vault_binding_id if runtime is not None else vault_binding_id
     # Closures, cursor and triggers follow the resolved runtime binding. The
-    # scalar request reads its runtime projection plus the compatibility one
-    # the current ERE producers still write, so either producer posture
-    # converges; an explicit native binding reads only its own projection.
-    if vault_binding_id != COMPATIBILITY_BINDING_ID:
-        projection_binding_ids: tuple[str, ...] = (binding_id,)
-    elif binding_id == COMPATIBILITY_BINDING_ID:
-        projection_binding_ids = (COMPATIBILITY_BINDING_ID,)
-    else:
+    # scalar request for the configured scalar vault reads its runtime
+    # projection plus the compatibility one the current ERE producers still
+    # write, so either producer posture converges. An explicit native binding,
+    # or any other selected vault, reads only its own projection.
+    if binding_id == COMPATIBILITY_BINDING_ID:
+        projection_binding_ids: tuple[str, ...] = (COMPATIBILITY_BINDING_ID,)
+    elif vault_binding_id == COMPATIBILITY_BINDING_ID and _is_configured_scalar_root(root):
         projection_binding_ids = (binding_id, COMPATIBILITY_BINDING_ID)
+    else:
+        projection_binding_ids = (binding_id,)
     write_guard.assert_writes_allowed(TRIGGER_WRITE_ACTION)
     # Freeze the selected root so nested outbox writes never borrow ambient
     # scalar root authority.
@@ -140,15 +159,16 @@ def run_debrief_tick(
 
 
 def _closed_episodes(projection_binding_ids: tuple[str, ...]) -> list[store.EpisodeRow]:
-    # The first namespace wins for an episode present in more than one.
-    seen: set[str] = set()
-    episodes: list[store.EpisodeRow] = []
+    # During the producer transition one episode can be bound in both
+    # namespaces. Each count is a lower bound on its active bindings, so keep
+    # the row with the most; a tie keeps the earlier (runtime) namespace.
+    episodes: dict[str, store.EpisodeRow] = {}
     for projection_binding_id in projection_binding_ids:
         for episode in store.closed_episodes(vault_binding_id=projection_binding_id):
-            if episode.episode_id not in seen:
-                seen.add(episode.episode_id)
-                episodes.append(episode)
-    return episodes
+            kept = episodes.get(episode.episode_id)
+            if kept is None or episode.bound_artifact_count > kept.bound_artifact_count:
+                episodes[episode.episode_id] = episode
+    return list(episodes.values())
 
 
 def _reconcile(
@@ -187,7 +207,9 @@ def _reconcile(
                 event_type=DEBRIEF_TRIGGER_CREATED, source="episode_debrief.trigger",
                 payload={"episode_id": episode.episode_id, "debrief_id": debrief_id,
                          "scope": scope, "bound_artifact_count": episode.bound_artifact_count},
-                context_dimensions={"scope": scope, "sphere_memberships": [], "situated_identity": None},
+                # SSI-01: the same extractor the episode.closed producer uses,
+                # so the trigger is never less restricted than its episode.
+                context_dimensions={**extract_context_dimensions_for_note(fields), "scope": scope},
             )
             inserted = write_outbox_event(
                 event, idempotency_key=derive_idempotency_key(

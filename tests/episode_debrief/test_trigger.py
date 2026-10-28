@@ -136,6 +136,45 @@ def test_emission_failure_does_not_suppress_unrelated_healthy_trigger(debrief_db
     assert store.get_cursor().row_id == frontier
 
 
+def test_scalar_tick_on_other_registered_vault_never_reads_compatibility_projection(
+    debrief_db, monkeypatch,
+) -> None:
+    _, (second,) = _active_native_runtime(debrief_db, monkeypatch, extra_roots=("two",))
+    debrief_db.root = Path(second.path)
+    # The compatibility projection belongs to the configured scalar vault. A
+    # same-path note under another selected vault must not borrow it.
+    debrief_db.episode(scope="work")
+    native = debrief_db.episode(binding=second.vault_binding_id, scope="private")
+    summary = debrief_db.tick()
+    assert summary["triggered"] == [debrief_id_for_episode(native)]
+    assert debrief_db.execute("SELECT vault_binding_id, payload->'payload'->>'episode_id' FROM outbox "
+                              "WHERE topic='debrief.trigger.created'") == [(second.vault_binding_id, native)]
+
+
+def test_dual_namespace_episode_uses_most_bound_projection_row(debrief_db, monkeypatch) -> None:
+    first, _ = _active_native_runtime(debrief_db, monkeypatch)
+    debrief_db.root = Path(first.path)
+    episode = debrief_db.episode(count=3)
+    # A partial native row must not hide the eligible compatibility row.
+    debrief_db.bind(episode, count=1, binding=first.vault_binding_id)
+    debrief_db.execute("INSERT INTO episodes (vault_binding_id, episode_id, scope, title, time_start, "
+                       "closed, segmentation, note_path) SELECT %s, episode_id, scope, title, time_start, "
+                       "closed, segmentation, note_path FROM episodes WHERE episode_id = %s",
+                       (first.vault_binding_id, episode))
+    assert debrief_db.tick()["triggered"] == [debrief_id_for_episode(episode)]
+    assert [payload["bound_artifact_count"] for payload in debrief_db.triggers()] == [3]
+
+
+def test_trigger_carries_episode_context_dimensions(debrief_db) -> None:
+    episode = debrief_db.episode(scope="private", extra_fields={
+        "sphere_memberships": ["family"], "situated_identity": "parent"})
+    debrief_db.tick()
+    assert debrief_db.execute(
+        "SELECT payload->'context_dimensions' FROM outbox WHERE topic='debrief.trigger.created'"
+    ) == [({"scope": "private", "sphere_memberships": ["family"], "situated_identity": "parent"},)]
+    assert debrief_db.triggers()[0]["episode_id"] == episode
+
+
 def test_explicit_native_projection_uses_selected_root_effect_context(debrief_db, monkeypatch) -> None:
     _, (second,) = _active_native_runtime(debrief_db, monkeypatch, extra_roots=("two",))
     debrief_db.root = Path(second.path)
@@ -369,8 +408,7 @@ def test_binding_isolation_and_reconciliation_without_event(debrief_db) -> None:
     debrief_db.closure(episode, binding="other-binding")
     assert debrief_db.tick()["consumed"] == 0
     assert debrief_db.triggers() == []
-    debrief_db.execute("INSERT INTO episode_artifact_binding VALUES (%s, 'artifact-extra', %s, 'active')",
-                       (COMPATIBILITY_BINDING_ID, episode))
+    debrief_db.bind(episode, count=1, binding=COMPATIBILITY_BINDING_ID, prefix="artifact-extra")
     assert debrief_db.tick()["triggered"] == [debrief_id_for_episode(episode)]
     assert debrief_db.triggers()[0]["scope"] == "work"
 

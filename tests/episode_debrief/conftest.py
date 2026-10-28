@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import pytest
@@ -14,11 +15,12 @@ from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.write_guard import WriteGuard
 from scripts.yaml_roundtrip import dump_frontmatter
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 @pytest.fixture
 def debrief_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     import psycopg
-    from psycopg.conninfo import make_conninfo
 
     # The global PG guard validates the explicit admin target before collection.
     # Each test owns a fresh database, never truncating the configured database.
@@ -28,29 +30,24 @@ def debrief_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     database = "test_episode_debrief_" + uuid4().hex
     with psycopg.connect(dsn, autocommit=True) as admin:
         admin.execute(f'CREATE DATABASE "{database}"')
-    selected = make_conninfo(dsn, dbname=database)
+    # Alembic needs URL form; keep the explicit target's host, port and options.
+    selected = urlunsplit(urlsplit(dsn)._replace(path="/" + database))
     monkeypatch.setenv("DATABASE_URL", selected)
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "0")
     monkeypatch.delenv("INSTANCE_VAULT_REGISTRY_PATH", raising=False)
     monkeypatch.delenv("INSTANCE_OWNERSHIP_ROOT", raising=False)
-    with psycopg.connect(selected) as conn:
-        conn.execute("""
-            CREATE TABLE episode_engine_state (
-                vault_binding_id text NOT NULL, key text NOT NULL, value jsonb NOT NULL,
-                updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (vault_binding_id, key));
-            CREATE TABLE episodes (
-                vault_binding_id text NOT NULL, episode_id text NOT NULL, scope text NOT NULL,
-                note_path text NOT NULL, closed boolean NOT NULL, PRIMARY KEY (vault_binding_id, episode_id));
-            CREATE TABLE episode_artifact_binding (
-                vault_binding_id text NOT NULL, artifact_ref text NOT NULL, episode_id text NOT NULL,
-                binding_state text NOT NULL, PRIMARY KEY (vault_binding_id, artifact_ref, episode_id));
-            CREATE TABLE outbox (
-                id uuid PRIMARY KEY, topic text NOT NULL, payload jsonb NOT NULL,
-                created_at timestamptz NOT NULL DEFAULT now(), delivered_at timestamptz,
-                attempts integer NOT NULL DEFAULT 0, vault_binding_id text NOT NULL, legacy_key text);
-        """)
+    # The production schema is migration-owned: run `alembic upgrade head`
+    # rather than hand-written tables, so the proof exercises the real columns.
+    from alembic import command
+    from alembic.config import Config
+
+    with psycopg.connect(selected, autocommit=True) as conn:
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    config = Config(str(REPO_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(REPO_ROOT / "app" / "alembic"))
+    command.upgrade(config, "head")
     fixture = DebriefDB(selected, tmp_path)
     try:
         yield fixture
@@ -73,7 +70,7 @@ class DebriefDB:
     def episode(
         self, *, count: int = 3, scope: str = "work", closed: bool = True,
         binding: str = COMPATIBILITY_BINDING_ID, episode_id: str | None = None,
-        debrief_ref: list[str] | None = None,
+        debrief_ref: list[str] | None = None, extra_fields: dict[str, Any] | None = None,
     ) -> str:
         episode_id = episode_id or "ep-" + str(uuid4())
         relative = f"episodes/{episode_id}.md"
@@ -88,13 +85,24 @@ class DebriefDB:
         }
         if debrief_ref is not None:
             fields["debrief_ref"] = debrief_ref
+        fields.update(extra_fields or {})
         path.write_text(dump_frontmatter(fields, "Human content stays unchanged.\n"), encoding="utf-8")
-        self.execute("INSERT INTO episodes VALUES (%s, %s, %s, %s, %s)",
-                     (binding, episode_id, scope, relative, closed))
-        for index in range(count):
-            self.execute("INSERT INTO episode_artifact_binding VALUES (%s, %s, %s, 'active')",
-                         (binding, f"artifact-{index}", episode_id))
+        self.execute("INSERT INTO episodes (vault_binding_id, episode_id, scope, title, time_start, "
+                     "closed, segmentation, note_path) VALUES (%s, %s, %s, 'Finite fixture', "
+                     "'2026-10-13T08:00:00Z', %s, 'proposed', %s)",
+                     (binding, episode_id, scope, closed, relative))
+        self.bind(episode_id, count=count, scope=scope, binding=binding)
         return episode_id
+
+    def bind(
+        self, episode_id: str, *, count: int, scope: str = "work",
+        binding: str = COMPATIBILITY_BINDING_ID, prefix: str = "artifact",
+    ) -> None:
+        for index in range(count):
+            self.execute("INSERT INTO episode_artifact_binding (vault_binding_id, artifact_ref, episode_id, "
+                         "scope, basis, confidence, binding_state, rule) "
+                         "VALUES (%s, %s, %s, %s, 'time_overlap', 1.0, 'active', 'fixture')",
+                         (binding, f"{prefix}-{index}", episode_id, scope))
 
     def closure(
         self, episode_id: str, *, scope: str = "work", malformed: bool = False,
