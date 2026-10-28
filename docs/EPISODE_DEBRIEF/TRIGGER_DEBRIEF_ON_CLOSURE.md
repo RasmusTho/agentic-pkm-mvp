@@ -55,6 +55,11 @@ maintains.
 5. **Output**: emits `debrief.trigger.created` (payload: `episode_id`, `debrief_id`, `scope`, bound-
    artifact count) — plumbing DEBRIEF-02 consumes. The episode projection + debrief existence is the
    truth; a lost event self-heals at the next reconciliation tick (INV-ERE-C's pattern, applied here).
+6. **Nearest-vault ownership**: before reading an Episode note or accepting debrief-artifact existence,
+   the tick resolves its nearest enclosing initialized vault and requires it to be the selected root.
+   The selected root remains the search floor even when a legacy root has no initialization marker;
+   same-root symlinks still work, while paths resolving into an initialized child vault are refused
+   before note content is read or artifact existence is checked.
 
 ## Concretely
 
@@ -105,6 +110,11 @@ Companion, scope authority and live channels are not changed. The complete affec
 remain required alongside every AC and the production-path durability/race matrix; repository-wide
 test breadth cannot substitute for those PostgreSQL assertions. Current-head CI remains a separate
 publication/merge gate. No assertion or protected P0/P1 floor is waived.
+The ownership regressions in the trigger module exercise direct and symlink-resolved child Episode
+notes, deterministic and explicit debrief artifacts, healthy-item progress and retry after repair,
+and parent-owned direct/same-root-symlink paths in native and compatibility modes. They use the real
+tick entrypoint and initialized child-vault marker; legacy selected roots remain valid without a
+marker.
 Both pytest selections use the existing `pytest-not-pg` coordination resource; its name does not
 select tests or authorize a different database.
 
@@ -133,10 +143,14 @@ triggers still owed, with no duplicates (idempotent) and no silent loss.
 The cursor's atomic upsert compares typed PostgreSQL `(timestamptz, uuid)` values, never string
 timestamps or last-write-wins state. The raw batch frontier includes malformed rows, but it advances
 only after every closed projection candidate reconciles successfully. Unreadable/outside-root notes
-refuse reconciliation without advancing; healthy emissions already committed remain idempotent on
-retry. The tick never reads or writes the outbox worker's `delivered_at` marker. Every sweep reports
-`pending_debrief`, including eligible episodes whose durable trigger already exists, until their
-debrief artifact exists. Scope comes from the current Episode note without normalization/substitution.
+and note or artifact paths owned by a nested initialized vault refuse reconciliation without
+advancing; child note content is not read and child artifact existence is not accepted. Healthy
+emissions already committed remain idempotent on retry, and a repaired path converges on the next
+tick. Same-root symlinks remain valid, and the selected root does not acquire an initialization
+precondition. The tick never reads or writes the outbox worker's `delivered_at` marker. Every sweep
+reports `pending_debrief`, including eligible episodes whose durable trigger already exists, until
+their debrief artifact exists. Scope comes from the current Episode note without
+normalization/substitution.
 
 ## Related Docs
 

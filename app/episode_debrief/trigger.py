@@ -17,6 +17,7 @@ from app.instance.filesystem_identity import resolve_filesystem_root_identity, s
 from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 from app.services.outbox import derive_idempotency_key, write_outbox_event
 from app.episode_debrief import store
+from app.vault.manager import nearest_enclosing_vault_root
 from app.watcher.vault_watcher import extract_context_dimensions_for_note
 from app.workers.outbox_binding_gate import current_binding_effect_window
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
@@ -71,6 +72,16 @@ def _resolve_inside(root: Path, relative: Path | str, subject: str) -> Path:
         raise DebriefReconciliationError(f"{subject} cannot be reconciled") from exc
 
 
+def _assert_selected_vault_owns_path(root: Path, path: Path, subject: str) -> None:
+    if path == root or not path.is_relative_to(root):
+        raise DebriefReconciliationError(f"{subject} points outside the selected vault")
+    owner = nearest_enclosing_vault_root(path, search_root=root)
+    if owner is None:
+        raise DebriefReconciliationError(f"{subject} points outside the selected vault")
+    if owner != root:
+        raise DebriefReconciliationError(f"{subject} belongs to a nested vault")
+
+
 def _is_configured_scalar_root(root: Path) -> bool:
     # The compatibility projection belongs to the configured scalar vault the
     # current ERE producers write; another selected vault never reads it.
@@ -88,8 +99,7 @@ def _is_configured_scalar_root(root: Path) -> bool:
 
 def _episode_fields(root: Path, row: store.EpisodeRow) -> dict[str, Any]:
     path = _resolve_inside(root, row.note_path, f"episode note {row.episode_id}")
-    if path == root or not path.is_relative_to(root):
-        raise DebriefReconciliationError("episode projection points outside the selected vault")
+    _assert_selected_vault_owns_path(root, path, f"episode note {row.episode_id}")
     try:
         fields, _ = load_frontmatter(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -117,8 +127,7 @@ def _already_debriefed(root: Path, fields: dict[str, Any], debrief_id: str) -> b
         path = _resolve_inside(
             root, Path("_system") / "episode-debriefs" / f"{ref}.md", f"debrief artifact {ref}"
         )
-        if not path.is_relative_to(root):
-            raise DebriefReconciliationError("debrief artifact points outside the selected vault")
+        _assert_selected_vault_owns_path(root, path, f"debrief artifact {ref}")
         try:
             if path.is_file():
                 return True
