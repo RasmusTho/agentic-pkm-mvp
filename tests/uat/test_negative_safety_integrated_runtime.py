@@ -17,6 +17,7 @@ import app.api.routes.vault_resolution as vault_resolution_module
 import app.panel.checkbox_projection as projection_module
 import app.panel.confirmation as confirm_module
 from app.agents.panel.writeback import stable_action_id
+from app.agents.panel_agent.runtime import PanelRuntimeResult
 from app.api.app import app
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager
@@ -310,8 +311,12 @@ def test_provider_unavailable_fails_closed(
         checked=True,
         status="logged",
     )
-    runtime_result = MagicMock(actions=[result], emitted_events=[])
-    with patch.object(confirm_module, "execute_panel_intent", return_value=runtime_result):
+    # Keep the real envelope's explicit no-source defaults. An unrestricted
+    # MagicMock invents source failures and receipts beyond this UAT boundary.
+    with patch.object(
+        confirm_module, "execute_panel_intent",
+        side_effect=lambda event: PanelRuntimeResult(intent=event, actions=[result]),
+    ):
         confirm = client.post(
             "/api/panel/confirm",
             json=_confirm_body(
@@ -336,6 +341,8 @@ def test_provider_unavailable_fails_closed(
     assert queue.status_code == 200, queue.text
     assert confirm.status_code == 200, confirm.text
     assert confirm.json()["status"] == "logged"
+    assert confirm.json()["source_state"] == "not_applied"
+    assert confirm.json()["source_receipt"] is None
     # With no edit-capable provider the intent classification cannot validate:
     # the coauthor surface fails closed on the explicit UNKNOWN landing surface
     # (read-only + re-ask, KERNEL-07) and the note is never mutated.
@@ -435,9 +442,10 @@ def test_replay_and_foreign_intent_rejected(
         checked=True,
         status="logged",
     )
-    runtime_result = MagicMock(actions=[result], emitted_events=[])
-
-    with patch.object(confirm_module, "execute_panel_intent", return_value=runtime_result) as execute:
+    with patch.object(
+        confirm_module, "execute_panel_intent",
+        side_effect=lambda event: PanelRuntimeResult(intent=event, actions=[result]),
+    ) as execute:
         first = client.post("/api/panel/confirm", json=_confirm_body())
         replay = client.post("/api/panel/confirm", json=_confirm_body())
         foreign = client.post(
@@ -451,6 +459,8 @@ def test_replay_and_foreign_intent_rejected(
     assert first.status_code == 200, first.text
     assert replay.status_code == 200, replay.text
     assert first.json() == replay.json()
+    assert first.json()["source_state"] == "not_applied"
+    assert first.json()["source_receipt"] is None
     assert execute.call_count == 1
     assert foreign.status_code == 404
     assert foreign.json()["detail"]["error"] == "unknown_proposal"
