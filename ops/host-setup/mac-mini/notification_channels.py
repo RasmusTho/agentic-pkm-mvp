@@ -14,9 +14,11 @@ import logging
 import os
 from pathlib import Path
 import re
+import ssl
 import stat
 from typing import Protocol
 from urllib.parse import urlsplit
+import urllib.request
 
 
 log = logging.getLogger("notification_channels")
@@ -216,6 +218,11 @@ class NullChannel:
         log.info("[dry-run] would push: %s — %s", subject, body)
 
 
+class _NoDiscordRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class DiscordChannel:
     """One-way Discord webhook push using a host-secret runtime binding."""
 
@@ -227,16 +234,15 @@ class DiscordChannel:
                 f"{_DISCORD_WEBHOOK_SECRET} host-secret binding is malformed"
             )
         self._webhook_url = webhook_url
+        self._webhook_id = urlsplit(webhook_url).path.split("/")[3]
 
     def send(self, subject: str, body: str) -> None:
-        import urllib.request
-
         payload = json.dumps(
             {"content": f"**{subject}**\n{body}"},
             ensure_ascii=False,
         ).encode("utf-8")
         request = urllib.request.Request(
-            self._webhook_url,
+            self._webhook_url + "?wait=true",
             data=payload,
             headers={
                 "Content-Type": "application/json",
@@ -245,8 +251,29 @@ class DiscordChannel:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                log.info("discord webhook push sent: %s", response.status)
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({}),
+                urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+                _NoDiscordRedirect(),
+            )
+            with opener.open(request, timeout=10) as response:
+                if response.status != 200:
+                    raise ValueError("unconfirmed webhook delivery")
+                body_bytes = response.read(64 * 1024 + 1)
+                if len(body_bytes) > 64 * 1024:
+                    raise ValueError("invalid webhook confirmation")
+                confirmation = json.loads(body_bytes.decode("utf-8"))
+                if (
+                    not isinstance(confirmation, dict)
+                    or confirmation.get("webhook_id") != self._webhook_id
+                    or any(
+                        not isinstance(confirmation.get(field), str)
+                        or re.fullmatch(r"[1-9][0-9]{0,19}", confirmation[field]) is None
+                        for field in ("id", "channel_id")
+                    )
+                ):
+                    raise ValueError("invalid webhook confirmation")
+                log.info("discord webhook push confirmed: %s", response.status)
         except Exception:
             raise NotificationDeliveryError("discord webhook delivery failed") from None
 
