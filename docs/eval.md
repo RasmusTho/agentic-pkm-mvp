@@ -283,6 +283,35 @@ or provider exception text. Only the checked-in golden set is sent; vault/user
 notes are outside this command. The parent comparison remains a separate opt-in
 acceptance step and does not change Product defaults.
 
+### Subscription classification comparison (#3429)
+
+The owner-selected comparison uses the existing Codex subscription and no API key:
+
+```bash
+CODEX_CLI_SAFE_PROFILE_PATH=/absolute/host-owned/safe-profile.json \
+python -m app.eval.subscription_classification --run
+```
+
+Run on the Mac executor host with its pinned Codex CLI on PATH and its existing subscription login.
+The command uses the existing no-tools `CodexCliExecutor`, checks the entire account-visible catalog
+before inference, and dispatches exactly `gpt-5.6-luna`, `gpt-5.6-terra`, and `gpt-5.6-sol` at `low`
+reasoning. It sends one batch of the 68 checked-in intents per model, with case IDs but no expected
+labels, then validates exact coverage and scores each answer through the legacy comparator seam.
+This is a batched subscription comparison; its timing is per batch, and it is not the independent
+API-call protocol above. No Product classifier route or default changes.
+
+The `gpt56-classification-eval.v1` receipt contains catalog eligibility, exact dispatched models,
+CLI/profile metadata, dataset hash, coverage, metrics, mutation-side gate and batch elapsed time.
+The adapter supplies no provider-served identity attestation, token counts or dollar billing:
+`served_model`, `usage` and `cost` remain null with explicit reasons. Subscription limits still
+apply; null billing is never zero cost. The old `gpt-5.4-mini` baseline was absent from the account
+catalog inspected on 2026-10-28; the receipt records its availability and whether it was evaluated.
+It makes no baseline regression or API-price comparison claim. Provider failure or invalid coverage
+stops subsequent inference without retry/fallback, raw error text or partial quality claims. A
+complete run can fail the mutation-side gate; report that measured failure and retain defaults.
+Exit codes are 0 for complete coverage with the hard gate passing, 1 for incomplete coverage or
+quality-gate failure, and 2 for preflight/setup failure. Prompts and raw answers are not in receipts.
+
 ### Thresholds and the regression gate
 
 Thresholds live in `config/eval_thresholds.yaml` (schema

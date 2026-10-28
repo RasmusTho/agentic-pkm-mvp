@@ -83,6 +83,14 @@ Embeddings are currently dispatched from `app/llm/embeddings.py` (superseded as 
 | OpenAI GPT-5.6 candidates | `LLM_PROVIDER=openai`, `LLM_MODEL=gpt-5.6-luna` \| `gpt-5.6-terra` \| `gpt-5.6-sol` | Luna is the cost-sensitive tier, Terra balances intelligence and cost, and Sol is the flagship tier. They are registered candidates, not a Product default: keep `gpt-5.4-mini` as the current default until the separately reviewed classification comparison has a complete receipt. Explicit evaluation uses the admitted model/transport route in `docs/eval.md`; ordinary Luna routing remains subscription-backed. |
 | DeepSeek API | `LLM_PROVIDER=deepseek`, `DEEPSEEK_API_KEY=...`, `LLM_MODEL=deepseek-chat` | Reuses the same timeout model as other chat providers. |
 
+The owner revised #3429 to compare available GPT-5.6 Luna, Terra and Sol through the existing
+Codex subscription (`python -m app.eval.subscription_classification --run` on the executor host).
+The previous GPT-5.4 Mini baseline is unavailable in the inspected subscription catalog. This
+batched legacy-comparator evaluation reports quality and batch timing; API billing, token usage
+and provider-served model attestation are unavailable. See `docs/eval.md :: Subscription
+classification comparison (#3429)` for the protocol and limitations. Product defaults remain
+unchanged; a measured quality failure does not authorize a default switch.
+
 ## Timeouts, retries, breakers
 
 - `LLM_TIMEOUT` applies to every HTTP call and defaults to 60s when unset.
