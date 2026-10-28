@@ -300,12 +300,14 @@ labels, then validates exact coverage and scores each answer through the legacy 
 This is a batched subscription comparison; its timing is per batch, and it is not the independent
 API-call protocol above. No Product classifier route or default changes.
 
-The subscription decision protocol is `subscription_intent_decision.v2` (#6422). It first asks
+The subscription decision protocol is `subscription_intent_decision.v3` (#6422). It first asks
 whether the intent can be resolved coherently, including missing context and mutually incompatible
-requested states. An explicit boolean `abstain: true` requires null intent/action and maps locally
-to the unchanged comparator's UNKNOWN safe-fail. Concrete decisions require `abstain: false` and
-must pass the existing class/action schema plus action consistency checks. A malformed or
-contradictory decision invalidates the run before scoring; it cannot count as a valid abstention.
+requested states. The closed decision tag `abstain` maps locally to the unchanged comparator's
+UNKNOWN safe-fail. Concrete tags bind a fixed class/action pair: body editing and exploratory
+reasoning have no action; each of the four governance subtypes binds its corresponding action.
+There are no independent model-supplied class/action fields that could contradict each other.
+Unknown tags, extra fields and malformed decisions invalidate the run before scoring; they cannot
+count as valid abstention. Every concrete pair still passes the existing schema.
 Coherent sequential/mixed requests still preserve the strongest required gate. The instructions
 contain no fixture-specific examples, source IDs or expected labels.
 

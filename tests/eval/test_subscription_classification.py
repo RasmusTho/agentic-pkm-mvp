@@ -24,10 +24,9 @@ class FakeExecutor:
         self.calls.append(kwargs)
         cases_by_text = {c.utterance: c for c in load_classification_cases()}
         answers = [{"case_id": item["case_id"],
-                    "abstain": cases_by_text[item["intent"]].expected_intent == "unknown",
-                    "intent_class": (None if cases_by_text[item["intent"]].expected_intent == "unknown"
-                                     else cases_by_text[item["intent"]].expected_intent),
-                    "action_type": cases_by_text[item["intent"]].expected_action_type,
+                    "decision": ("abstain" if cases_by_text[item["intent"]].expected_intent == "unknown"
+                                 else cases_by_text[item["intent"]].expected_action_type
+                                 or cases_by_text[item["intent"]].expected_intent),
                     "rationale": "PRIVATE-COMPLETION-CANARY"}
                    for item in json.loads(kwargs["user_prompt"])]
         if self.invalid == "unsafe_conflicts":
@@ -35,12 +34,12 @@ class FakeExecutor:
                 if cases_by_text[item["intent"]].id in {
                     "multi-en-archive-but-keep-writing", "multi-sv-arkivera-men-fortsatta"
                 }:
-                    answer.update(abstain=False, intent_class="governance_bearing", action_type="note_lifecycle")
+                    answer.update(decision="note_lifecycle")
         elif self.invalid == "all_abstain":
             for answer in answers:
-                answer.update(abstain=True, intent_class=None, action_type=None)
+                answer.update(decision="abstain")
         elif self.invalid == "contradictory":
-            answers[0].update(abstain=True, intent_class="governance_bearing", action_type="note_lifecycle")
+            answers[0].update(decision="abstain", intent_class="governance_bearing", action_type="note_lifecycle")
         if self.invalid == "duplicate":
             answers[-1] = answers[0]
         elif self.invalid == "missing":
@@ -105,22 +104,20 @@ def test_incomplete_batch_stops_without_partial_quality_or_provider_text(failure
     assert result["runs"][0]["completed_cases"] == 0
     assert "PRIVATE-PROVIDER-ERROR-CANARY" not in json.dumps(result)
     if failure == "contradictory":
-        assert result["runs"][0]["decision_rejection"] == "abstention_conflict"
+        assert result["runs"][0]["decision_rejection"] == "decision_fields"
 
 
 @pytest.mark.parametrize("patch", [
-    {"abstain": "true"}, {"abstain": 1},
+    {"decision": "unknown"}, {"decision": "governance_bearing"}, {"decision": True},
+    {"decision": None}, {"decision": 1}, {"decision": ""},
     {"intent_class": "governance_bearing"}, {"action_type": "note_lifecycle"},
-    {"rationale": 1}, {"unexpected": True},
-    {"abstain": False}, {"abstain": False, "intent_class": "unknown"},
-    {"abstain": False, "intent_class": "exploratory", "action_type": "note_lifecycle"},
-    {"abstain": False, "intent_class": "governance_bearing"},
+    {"abstain": True}, {"rationale": 1}, {"unexpected": True},
 ])
 def test_explicit_abstention_is_validated_before_local_unknown(patch):
     from app.eval.classification import _legacy_comparator
-    from app.eval.subscription_classification import validated_decision_completion
+    from app.eval.subscription_classification import DECISIONS, validated_decision_completion
 
-    abstention = {"abstain": True, "intent_class": None, "action_type": None, "rationale": None}
+    abstention = {"decision": "abstain", "rationale": None}
     completion = validated_decision_completion(abstention)
     assert _legacy_comparator("a synthetic unresolved request", lambda **kw: completion, "test") == "unknown"
     with pytest.raises(ValueError):
@@ -128,9 +125,11 @@ def test_explicit_abstention_is_validated_before_local_unknown(patch):
     for missing in abstention:
         with pytest.raises(ValueError):
             validated_decision_completion({k: v for k, v in abstention.items() if k != missing})
-    concrete = {"abstain": False, "intent_class": "governance_bearing",
-                "action_type": "note_lifecycle", "rationale": None}
-    valid = validated_decision_completion(concrete)
+    for decision, expected in DECISIONS.items():
+        decoded = validated_decision_completion({"decision": decision, "rationale": None})
+        if expected is not None:
+            assert (json.loads(decoded)["intent_class"], json.loads(decoded)["action_type"]) == expected
+    valid = validated_decision_completion({"decision": "note_lifecycle", "rationale": None})
     assert _legacy_comparator("a synthetic resolved request", lambda **kw: valid, "test") == "governance_bearing"
 
 
