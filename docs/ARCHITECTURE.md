@@ -205,6 +205,12 @@ The [AUTOOPS-05 owner document](YGGDRASIL_AUTONOMOUS_OPERATIONS/DELIVER_IDENTITY
 owns the supported-filesystem and transition matrix. Authenticated operations installation remains
 with #5352.
 
+Dormant classification, human tag edits, and authored collection-order permutations use the HKA
+semantic owner with explicit semantic approval, the full selected GOV context, and expected-version
+source writes. The [ArtifactContract](contracts/ARTIFACT_CONTRACT.md#dormant-semantic-commands-autoops-06)
+owns the exact admitted fields, `member_order` source representation, refusal and receipt/recovery
+boundary. Store/index/link projections remain derived; authenticated installation remains #5352.
+
 ## Fitness Functions
 
 Fitness functions capture the high-level criteria that must hold true for the runtime to be considered healthy.

@@ -1395,6 +1395,7 @@ def write_note_from_absolute(
     expected_version: str | None = None,
     writer_identity: str | None = None,
     accept_staged_conflict: bool = False,
+    vault: str | None = None,
 ) -> WriteReceipt:
     # Guard-at-seam (#2910): assert WriteGuard inside the port itself, before
     # any path resolution or filesystem mutation, so a blocked write is
@@ -1420,7 +1421,7 @@ def write_note_from_absolute(
     if expected_version is None:
         resolved_path = Path(os.path.realpath(os.path.expanduser(os.fspath(path))))
         resolved_path.relative_to(resolved_root)
-        locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
+        locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root, vault=vault)
     else:
         # Preserve the caller-authorized lexical vault-relative path. Resolving
         # the leaf here would let a symlink swap between the final caller policy
@@ -1434,7 +1435,7 @@ def write_note_from_absolute(
         except ValueError:
             lexical_root = Path(os.path.abspath(os.path.expanduser(os.fspath(vault_root))))
             relative_path = lexical_path.relative_to(lexical_root)
-        locator = make_note_locator(relative_path.as_posix())
+        locator = make_note_locator(relative_path.as_posix(), vault=vault)
     # Absolute path writes target the local filesystem boundary directly.
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())
     kwargs: dict[str, str] = {}
