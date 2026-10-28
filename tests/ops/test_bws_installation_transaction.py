@@ -1128,7 +1128,8 @@ def test_live_preflight_keeps_existing_terminal_identity_separate_from_candidate
 
 
 def _transaction_fixture(
-    *, preflight_error=False, preflight_gate_error: str | None = None,
+    *, channel="dev", config_override=None,
+    preflight_error=False, preflight_gate_error: str | None = None,
     terminal_identity_drift: str | None = None, apply_error=False,
     compensation_complete=True, profile_mismatch=False, profile_error=False, retire_error=False,
     channel_lock_error=False, preflight_drift_at: int | None = None,
@@ -1149,7 +1150,7 @@ def _transaction_fixture(
     old_state = {
         "schema": transaction._OLD_DISK_STATE_SCHEMA,
         "operation_id": request["operation_id"],
-        "channel": "dev",
+        "channel": channel,
         "candidate_sha": request["candidate_sha"],
         "image_digest": request["image_digest"],
         "roots": {
@@ -1355,7 +1356,7 @@ def _transaction_fixture(
             events.append("verify_caller_checkout")
 
         def configuration(self, channel):
-            assert channel == "dev"
+            assert channel == config.channel
             return config
 
         def effects(self, _config):
@@ -1365,7 +1366,7 @@ def _transaction_fixture(
             return admission
 
         def cleanup_callers(self, channel):
-            assert channel == "dev" and admission.active
+            assert channel == config.channel and admission.active
             events.append("cleanup_caller_census")
 
         def preflight(self, _effects, _selected_request):
@@ -1384,7 +1385,7 @@ def _transaction_fixture(
                 else:
                     terminal_image_digest = "sha256:" + "f" * 64
             snapshot = transaction._WriterSnapshot(
-                channel="dev",
+                channel=channel,
                 terminal_revision=terminal_revision,
                 terminal_image_digest=terminal_image_digest,
                 terminal_operation_id=terminal_operation_id,
@@ -1475,9 +1476,280 @@ def _transaction_fixture(
             if retire_error:
                 raise RuntimeError("synthetic channel-owner retirement failure")
 
-    config = SimpleNamespace(channel="dev", root=Path("/srv/app"), journal=object())
+    config = config_override or SimpleNamespace(channel=channel, root=Path("/srv/app"), journal=object())
     ports = Ports()
     return request, ports, admission, service, events, old_state, candidate
+
+
+def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, terminal=True, legacy=False):
+    """Keep native config, terminal readers and the real Docker census in the transaction."""
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan
+
+    root = tmp_path.resolve() / "checkout"
+    (root / "config/deploy").mkdir(parents=True)
+    runtime_path = root / "runtime.env"
+    vault_root = str(tmp_path.resolve() / "existing-vault")
+    container_root = "/app/vault" if legacy else vault_root
+    vault_overlay = ("docker-compose.legacy-vault.yml" if legacy else "docker-compose.full-host-vault.yml")
+    database = "postgresql+psycopg://app@db:5432/app_" + channel
+    pin_path = root / "config/deploy" / (channel + ".env")
+    pin_path.write_text("VAULT_HOST_ROOT=" + vault_root + "\n")
+    runtime_path.write_text("LLM_PROVIDER=ollama\nDATABASE_URL=" + database + "\n")
+    (root / "config/runtime.defaults.env").write_text(
+        "EMBED_PROVIDER=ollama\nEMBED_MODEL=installed\nSTORE_BACKEND=pg\n"
+    )
+    for name in (
+        "docker-compose.yaml", f"docker-compose.{channel}.yml", "docker-compose.bws.yml",
+        "docker-compose.full-host-vault.yml", "docker-compose.test-vault.yml",
+        "docker-compose.legacy-vault.yml",
+    ):
+        (root / name).write_text("services: {}\n")
+    native_config = {
+        "root": str(root), "data_directory": str(tmp_path.resolve() / "data"),
+        "uid": max(os.geteuid(), 1), "gid": max(os.getegid(), 1),
+        "organization_id": str(uuid.uuid4()), "project_id": str(uuid.uuid4()),
+        "runtime_env_file": str(runtime_path),
+    }
+    # Substitute the root-owned host-file boundary, keeping LinuxConfig.load's
+    # complete validation and every journal/receipt/request reader real.
+    def private_config(path):
+        assert path == Path("/etc/yggdrasil/bws-deploy") / (channel + ".json")
+        return dict(native_config)
+
+    monkeypatch.setattr(linux, "_private_json", private_config)
+    journal = DeployJournal(tmp_path.resolve() / "journal", channel)
+    monkeypatch.setattr(linux.LinuxConfig, "journal", property(lambda _self: journal))
+    config = linux.LinuxConfig.load(channel)
+    plan = DeployPlan(channel, "c" * 40, ("db",), ("postgres-db",),
+                      image_digest="sha256:" + "d" * 64)
+    terminal_id = str(uuid.uuid4())
+    journal.bind_request(terminal_id, plan, False, create=True)
+    for stage in (("prepared", "preflighted", "materialized", "activating", "committed")
+                  if terminal else ("prepared",)):
+        journal.write(terminal_id, stage)
+
+    request, ports, admission, service, events, old_state, candidate = _transaction_fixture(
+        channel=channel, config_override=config,
+    )
+    effects = ports.effects(config)
+    effects.__dict__.update(linux.LinuxEffects(config).__dict__)
+    for method in (
+        "source_identity_runtime_snapshot", "environment", "compose", "source_compose_invocation",
+        "quiescent", "_running_one_shots",
+    ):
+        setattr(effects, method, getattr(linux.LinuxEffects, method).__get__(effects))
+    rows = []
+    for index, name in enumerate(("api", "worker", "watcher"), 1):
+        rows.append({
+            "Id": f"{index:064x}", "Image": "sha256:" + f"{index:064x}",
+            "Config": {
+                "Image": "installed:" + plan.revision, "User": f"{config.uid}:{config.gid}",
+                "Env": [
+                    "DATABASE_URL=" + database, "EMBED_PROVIDER=ollama", "EMBED_MODEL=installed",
+                    "LLM_PROVIDER=ollama", "STORE_BACKEND=pg", "PKM_ENVIRONMENT=" + channel,
+                    "VAULT_ROOT=" + container_root, "VAULT_ROOT_DEV=" + container_root,
+                    "VAULT_ROOT_TEST=" + container_root, "WATCHER_VAULT_PATH=" + container_root,
+                ],
+                "Labels": {"com.docker.compose.project": "pkm-" + channel,
+                           "com.docker.compose.service": name, "com.docker.compose.oneoff": "False"},
+            },
+            "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+            "State": {"Status": "running", "Running": True, "Paused": False,
+                      "Restarting": False, "Pid": index, "StartedAt": "installed"},
+            "Mounts": [{"Type": "bind", "Source": vault_root, "Destination": container_root,
+                        "Mode": "", "RW": True, "Propagation": "rprivate"}],
+        })
+    compose_calls = []
+
+    def command(argv, **kwargs):
+        if argv[1:3] == ["ps", "--all"]:
+            if "label=com.docker.compose.oneoff=True" in argv:
+                return ""
+            return "\n".join(row["Id"] for row in rows)
+        if argv[1] == "inspect":
+            return json.dumps(rows)
+        assert argv[1] == "compose"
+        compose_calls.append((argv, kwargs["env"]))
+        if "ps" in argv:
+            return json.dumps([{"Service": row["Config"]["Labels"]["com.docker.compose.service"],
+                                "State": row["State"]["Status"]} for row in rows])
+        assert argv[-3:] == ["config", "--format", "json"]
+        assert kwargs["env"]["VAULT_HOST_ROOT"] == vault_root
+        assert str(root / vault_overlay) in argv
+        if channel == "test":
+            assert str(root / "docker-compose.test-vault.yml") in argv
+        environment = dict(entry.split("=", 1) for entry in rows[0]["Config"]["Env"])
+        return json.dumps({"services": {name: {
+            "labels": {"com.agentic-pkm.mvr05.db-role": "client"}, "environment": environment,
+        } for name in ("api", "worker", "watcher")}})
+
+    monkeypatch.setattr(linux, "_command", command)
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", str(tmp_path.resolve() / "ownership"))
+    for key in ("DATABASE_URL", "DB_DSN", "POSTGRES_PASSWORD", "PGPASSWORD", "PGPASSFILE",
+                "PGSERVICE", "PGSERVICEFILE", "DOCKER_CONTEXT"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+    preflights = []
+
+    def preflight(selected_effects, selected_request):
+        snapshot = transaction._NativePorts.preflight(ports, selected_effects, selected_request)
+        preflights.append(snapshot)
+        events.append("native_preflight")
+        return snapshot
+
+    ports.preflight = preflight
+    return SimpleNamespace(
+        request=request, ports=ports, admission=admission, service=service, events=events,
+        journal=journal, plan=plan, terminal_id=terminal_id, rows=rows, pin=pin_path,
+        runtime=runtime_path, native_config=native_config, preflights=preflights,
+        compose_calls=compose_calls, old_state=old_state, candidate=candidate,
+    )
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("legacy", [False, True], ids=["full-host", "legacy-mount"])
+def test_source_installation_accepts_ordinary_terminal_deployment_without_cutover(
+    tmp_path, monkeypatch, channel, legacy,
+):
+    fixture = _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, legacy=legacy)
+    assert not any(entry.startswith("VAULT_HOST_ROOT=") for entry in fixture.rows[0]["Config"]["Env"])
+    assert fixture.plan.authority_cutover is None and fixture.plan.principal_cutover is False
+    assert fixture.journal.operation_request(fixture.terminal_id)[0]["bootstrap"] is False
+
+    result = transaction._execute_source_installation(channel, fixture.request, fixture.ports)
+
+    assert result["source_installation"].get("prebackup_gate") is None
+    assert result["source_installation"]["status"] == "installed"
+    assert fixture.admission.receipt == result["source_installation"]
+    assert len(fixture.preflights) == 4 and len(set(fixture.preflights)) == 1
+    snapshot = fixture.preflights[0]
+    assert snapshot.terminal_revision == fixture.plan.revision != fixture.request["candidate_sha"]
+    assert snapshot.terminal_image_digest == fixture.plan.image_digest != fixture.request["image_digest"]
+    assert snapshot.terminal_operation_id == fixture.terminal_id
+    assert snapshot.running_writers == snapshot.existing_writers == ("api", "watcher", "worker")
+    assert fixture.compose_calls
+    assert fixture.events.index("apply_launcher") < fixture.events.index("stop_old")
+    assert fixture.events.index("stop_old") < fixture.events.index("apply_source")
+    assert fixture.events.index("handle_close") < fixture.events.index("runtime_close")
+    assert fixture.events.index("runtime_close") < fixture.events.index("admission_complete")
+    assert fixture.events[-2:] == ["retire_channel_owner", "admission_exit"]
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("fault", [
+    "missing_plan", "mismatched_plan", "native_owner", "missing_context", "foreign_context",
+    "wrong_channel", "wrong_root_selector", "foreign_host_selector", "unknown_writer", "transitioning_writer",
+    "drifting_owner", "drifting_context", "drifting_writer",
+])
+def test_ordinary_terminal_installation_refuses_unproven_or_drifting_owner_state(
+    tmp_path, monkeypatch, channel, fault,
+):
+    fixture = _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel)
+    native_preflight = fixture.ports.preflight
+    calls = 0
+
+    def preflight(effects, request):
+        nonlocal calls
+        calls += 1
+        if calls == (2 if fault.startswith("drifting_") else 1):
+            request_path = fixture.journal.directory / (channel + ".request.json")
+            if fault == "missing_plan":
+                request_path.unlink()
+            elif fault == "mismatched_plan":
+                raw = json.loads(request_path.read_text())
+                raw["operation_id"] = str(uuid.uuid4())
+                request_path.write_text(json.dumps(raw))
+            elif fault in {"native_owner", "drifting_owner"}:
+                fixture.native_config["uid"] += 1
+            elif fault == "missing_context":
+                fixture.pin.write_text("")
+            elif fault == "foreign_context":
+                fixture.rows[0]["Mounts"][0]["Source"] += "-foreign"
+            elif fault in {"wrong_channel", "wrong_root_selector"}:
+                selector = "PKM_ENVIRONMENT" if fault == "wrong_channel" else "VAULT_ROOT"
+                fixture.rows[0]["Config"]["Env"] = [
+                    entry if not entry.startswith(selector + "=") else selector + "=foreign"
+                    for entry in fixture.rows[0]["Config"]["Env"]
+                ]
+            elif fault == "foreign_host_selector":
+                fixture.rows[0]["Config"]["Env"].append("VAULT_HOST_ROOT=/foreign")
+            elif fault == "unknown_writer":
+                row = json.loads(json.dumps(fixture.rows[0]))
+                row["Id"] = "f" * 64
+                row["Config"]["Labels"]["com.docker.compose.service"] = "unclassified-writer"
+                fixture.rows.append(row)
+            elif fault == "transitioning_writer":
+                fixture.rows[0]["State"]["Restarting"] = True
+            elif fault == "drifting_context":
+                fixture.runtime.write_text(fixture.runtime.read_text() + "# changed context\n")
+            elif fault == "drifting_writer":
+                fixture.rows[0]["State"]["Pid"] += 100
+        return native_preflight(effects, request)
+
+    fixture.ports.preflight = preflight
+    result = transaction._execute_source_installation(channel, fixture.request, fixture.ports)
+
+    assert result["source_installation"]["status"] == "refused_before_backup"
+    assert result["source_installation"]["prebackup_gate"] == (
+        "qualified_writer_snapshot" if fault.startswith("drifting_") else "current_writer_snapshot"
+    )
+    assert calls == (2 if fault.startswith("drifting_") else 1)
+    assert not {"prepare", "apply_launcher", "stop_old", "apply_source", "start_new"} & set(fixture.events)
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_ordinary_terminal_state_is_rechecked_after_handle_and_runtime_close(tmp_path, monkeypatch, channel):
+    fixture = _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel)
+    native_preflight = fixture.ports.preflight
+
+    def preflight(effects, request):
+        if len(fixture.preflights) == 3:
+            assert "handle_close" in fixture.events and "runtime_close" in fixture.events
+            fixture.rows[0]["State"]["Pid"] += 100
+        return native_preflight(effects, request)
+
+    fixture.ports.preflight = preflight
+    result = transaction._execute_source_installation(channel, fixture.request, fixture.ports)
+
+    assert result["source_installation"]["status"] == "unknown"
+    assert fixture.events.index("runtime_close") < fixture.events.index("stop_new")
+    assert "retire_channel_owner" not in fixture.events
+    assert "compensate_same_handle" not in fixture.events
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("fault", ["invalid_cutover", "unresolved_operation", "unknown_operation"])
+def test_ordinary_installation_preserves_cutover_and_unknown_operation_refusals(
+    tmp_path, monkeypatch, channel, fault,
+):
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    fixture = _ordinary_terminal_installation_fixture(
+        tmp_path, monkeypatch, channel, terminal=fault == "invalid_cutover",
+    )
+    if fault == "invalid_cutover":
+        path = fixture.journal.directory / (channel + ".request.json")
+        raw = json.loads(path.read_text())
+        raw["plan"]["authority_cutover"] = {
+            "binding_id": "existing", "root": "/", "ownership_root": "/srv/owner",
+        }
+        path.write_text(json.dumps(raw))
+    elif fault == "unknown_operation":
+        fixture.journal.fence_unknown(fixture.terminal_id, fixture.plan, channel_lock_identity=(1, 2, 3))
+    before = {path.name: path.read_bytes() for path in fixture.journal.directory.iterdir()}
+
+    result = transaction._execute_source_installation(channel, fixture.request, fixture.ports)
+
+    assert result["source_installation"]["status"] == "refused_before_backup"
+    assert not {"prepare", "stop_old", "apply_source", "start_new"} & set(fixture.events)
+    assert {path.name: path.read_bytes() for path in fixture.journal.directory.iterdir()} == before
+    if fault == "unknown_operation":
+        with pytest.raises(PostgresDeployError):
+            fixture.journal.bound_plan(fixture.terminal_id)
+        with pytest.raises(PostgresDeployError):
+            fixture.journal.bind_request(fixture.terminal_id, fixture.plan, False, create=True)
+        assert fixture.journal.unknown_tombstone(fixture.terminal_id)["outcome"] == "unknown"
 
 
 def test_preflight_refuses_before_backup_or_stop_without_exact_owner_census_and_generations():
@@ -1639,9 +1911,8 @@ def test_candidate_launcher_is_staged_before_stop_under_same_handle():
     assert admission.active is False
 
 
-@pytest.mark.parametrize("cutover_failure", ["missing", "invalid"])
 def test_native_writer_snapshot_requires_terminal_owner_and_selected_authority_cutover(
-    monkeypatch, cutover_failure,
+    monkeypatch,
 ):
     from app.ops import native_source_admission
 
@@ -1655,20 +1926,15 @@ def test_native_writer_snapshot_requires_terminal_owner_and_selected_authority_c
         terminal_result="committed", operation_id="terminal-operation", stage="committed",
         require_profile=lambda _plan: calls.append("profile-bound"),
     )
-    if cutover_failure == "missing":
-        plan = SimpleNamespace(authority_cutover=None)
-        expected_calls = ["terminal-owner", "profile-bound"]
-    else:
-        def invalid_cutover():
-            calls.append("authority-validate")
-            raise RuntimeError("synthetic private authority detail")
+    def invalid_cutover():
+        calls.append("authority-validate")
+        raise RuntimeError("synthetic private authority detail")
 
-        plan = SimpleNamespace(
-            revision="c" * 40,
-            image_digest="sha256:" + "d" * 64,
-            authority_cutover=SimpleNamespace(validate=invalid_cutover),
-        )
-        expected_calls = ["terminal-owner", "profile-bound", "authority-validate"]
+    plan = SimpleNamespace(
+        revision="c" * 40,
+        image_digest="sha256:" + "d" * 64,
+        authority_cutover=SimpleNamespace(validate=invalid_cutover),
+    )
     journal = SimpleNamespace(read=lambda: receipt, bound_plan=lambda _operation_id: plan)
     effects = SimpleNamespace(
         config=SimpleNamespace(channel="dev", journal=journal),
@@ -1682,7 +1948,7 @@ def test_native_writer_snapshot_requires_terminal_owner_and_selected_authority_c
         transaction._current_writer_snapshot(effects, request)
 
     assert refusal.value.gate == "authority_cutover"
-    assert calls == expected_calls
+    assert calls == ["terminal-owner", "profile-bound", "authority-validate"]
 
 
 def test_candidate_preflight_uses_fixed_local_git_and_docker_environment(monkeypatch, tmp_path):

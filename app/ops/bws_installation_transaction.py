@@ -1721,17 +1721,16 @@ def _current_writer_snapshot(effects: Any, request: dict[str, str]) -> _WriterSn
         plan = effects.config.journal.bound_plan(receipt.operation_id)
         receipt.require_profile(plan)
         selected = plan.authority_cutover
-        if selected is None:
-            _refuse_prebackup_gate("authority_cutover")
         if (type(plan.revision) is not str
                 or re.fullmatch(r"[0-9a-f]{40}", plan.revision) is None
                 or type(plan.image_digest) is not str
                 or re.fullmatch(r"sha256:[0-9a-f]{64}", plan.image_digest) is None):
             _refuse()
-        try:
-            selected.validate()
-        except Exception:
-            _refuse_prebackup_gate("authority_cutover")
+        if selected is not None:
+            try:
+                selected.validate()
+            except Exception:
+                _refuse_prebackup_gate("authority_cutover")
         snapshot = effects.source_identity_runtime_snapshot(
             selected, require_running_capture=False, current_state=True,
         )
