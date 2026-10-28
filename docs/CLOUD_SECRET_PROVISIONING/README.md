@@ -24,6 +24,8 @@ The repository implements the preserved Mac Keychain path and all four BWS slice
 
 Parent #5667 remains open. Its complete target/action-bound DEV/TEST/PROD deployment/runtime acceptance has not been established by the component receipts above. A consolidated parent receipt must bind the required behavior to the authorized target and action for each channel. The Oct7 receipt covers one DEV deployment only; the Oct13 Karakeep receipt covers Karakeep in DEV/TEST only. Neither supplies the full cloud-secret deployment/runtime acceptance. Any first-initialization action still requires the deployment owner's local qualification file and action-time authority. Existing-host credential cleanup remains a separate operator migration; repository delivery alone does not establish that cleanup.
 
+The default host-secret contract lookup resolves `config/secrets/host_secret_contract.json` from the source root containing `app/ops/host_secret_contract.py`, independent of the process working directory. A caller-supplied path remains authoritative; missing or malformed input fails closed without fallback to the default. This path behavior does not establish that an installed copy is current or that any channel is qualified.
+
 Native source-backed Product recovery (#5918) runs inside BWS-04's existing activation and API
 consumer context, while the ordinary runtime writers are stopped. It uses the selected candidate
 image, API bootstrap and PostgreSQL password file; no retired secret alias, new consumer grant,

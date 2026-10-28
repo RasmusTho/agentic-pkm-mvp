@@ -27,6 +27,44 @@ def test_contract_rejects_undeclared_consumer_secret_pair() -> None:
         contract.require_declared(channel="dev", consumer="heimdal-capture-watch", secret="unrelated-key")
 
 
+def test_default_contract_loads_from_non_repo_cwd(tmp_path: Path, monkeypatch) -> None:
+    expected = load_host_secret_contract()
+
+    monkeypatch.chdir(tmp_path)
+
+    assert load_host_secret_contract() == expected
+
+
+def test_deploy_plan_validates_from_non_repo_cwd(tmp_path: Path, monkeypatch) -> None:
+    from app.ops.postgres_deploy import DeployPlan
+
+    plan = DeployPlan("dev", "a" * 40, ("api",), ("postgres-api",))
+    monkeypatch.chdir(tmp_path)
+
+    plan.validate()
+
+
+def test_explicit_contract_path_is_authoritative_from_non_repo_cwd(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    source = DEFAULT_CONTRACT_PATH
+    expected = load_host_secret_contract(source)
+    explicit_path = tmp_path / "explicit-contract.json"
+    explicit_path.write_bytes(source.read_bytes())
+    invalid_path = tmp_path / "invalid-contract.json"
+    invalid_path.write_text("{}", encoding="utf-8")
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+
+    monkeypatch.chdir(cwd)
+
+    assert load_host_secret_contract(explicit_path) == expected
+    with pytest.raises(ValueError, match="invalid host secret contract"):
+        load_host_secret_contract(invalid_path)
+    with pytest.raises(FileNotFoundError):
+        load_host_secret_contract(tmp_path / "missing-contract.json")
+
+
 def test_undeclared_request_error_does_not_disclose_caller_identifiers() -> None:
     contract = load_host_secret_contract()
     raw_channel = "noncanonical-channel"
