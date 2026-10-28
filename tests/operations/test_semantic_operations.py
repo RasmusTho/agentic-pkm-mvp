@@ -779,7 +779,7 @@ def test_revocation_during_final_member_reads_prevents_source_exchange(bound, mo
 
     def resolve_with_revocation(identities):
         result = resolve(identities)
-        if observed["final"] and identities == set(bound.members):
+        if observed["final"] and set(bound.members).issubset(identities):
             if revoke == "approval":
                 bound.revoke_approval(request.request_id)
             else:
@@ -969,3 +969,76 @@ def test_decoded_uuid_in_unrelated_malformed_field_is_not_identity(bound, field)
     request = bound.approve(bound.request())
     assert bound.run(request).status is OperationStatus.CONVERGENCE_PENDING
     assert bound.metadata()["member_order"] == bound.members[::-1]
+
+
+@pytest.mark.parametrize("operation", [CLASSIFY, TAGS_ADD, TAGS_REMOVE, REORDER])
+@pytest.mark.parametrize("matching", [True, False], ids=["matching", "unrelated-control"])
+def test_all_semantic_families_recheck_target_identity_at_final_hka_seam(
+    bound, monkeypatch, operation, matching
+):
+    arguments, changes = {
+        CLASSIFY: ({"artifact_class": "project_note"}, {"artifact_class": "project_note"}),
+        TAGS_ADD: ({"tags": ["work"]}, {"tags": ["research", "work"]}),
+        TAGS_REMOVE: ({"tags": ["research"]}, {"tags": []}),
+        REORDER: ({"ordered_ids": bound.members[::-1]}, {"member_order": bound.members[::-1]}),
+    }[operation]
+    request = bound.approve(bound.request(operation, arguments), changes)
+    before = bound.note.read_bytes()
+    entered, resume = Event(), Event()
+    anchored = adapters._require_anchored_directory_identity
+    observed = _observe_source_seam(bound, monkeypatch)
+    paused = False
+
+    def pause(*args, **kwargs):
+        nonlocal paused
+        value = anchored(*args, **kwargs)
+        if not paused:
+            paused = True
+            entered.set()
+            assert resume.wait(10)
+        return value
+
+    monkeypatch.setattr(adapters, "_require_anchored_directory_identity", pause)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        effect = pool.submit(bound.run, request)
+        assert entered.wait(10)
+        (bound.owner.root / "Notes/concurrent-target.md").write_text(
+            f"---\nuuid: {bound.identity if matching else uuid4()}\nartifact_class: human_knowledge\n---\nConcurrent human note.\n"
+        )
+        resume.set()
+        result = effect.result(timeout=10)
+    if matching:
+        assert result.status is OperationStatus.INVALID
+        assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
+        assert bound.note.read_bytes() == before and not observed["exchanges"]
+        assert not bound.owner.receipt_path.exists()
+    else:
+        assert result.status is OperationStatus.CONVERGENCE_PENDING
+        assert result.convergence.source_effect is SourceEffectStatus.COMMITTED
+        assert len(observed["exchanges"]) == 1
+        assert bound.records()[0]["authority_receipt"]["outcome"] == "applied"
+
+
+def test_final_target_census_follows_blocking_health_work(bound, monkeypatch):
+    request = bound.approve(bound.request())
+    before = bound.note.read_bytes()
+    observed = _observe_source_seam(bound, monkeypatch)
+    snapshot = bound.owner.write_guard.snapshot_fn
+    created = []
+
+    def health():
+        value = snapshot()
+        if observed["final"] and not created:
+            (bound.owner.root / "Notes/late-target.md").write_text(
+                f"---\nuuid: {bound.identity}\nartifact_class: human_knowledge\n---\nHuman copy during health lookup.\n"
+            )
+            created.append(True)
+        return value
+
+    monkeypatch.setattr(bound.owner.write_guard, "snapshot_fn", health)
+    result = bound.run(request)
+    assert created == [True]
+    assert result.status is OperationStatus.INVALID
+    assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
+    assert bound.note.read_bytes() == before and not observed["exchanges"]
+    assert not bound.owner.receipt_path.exists()

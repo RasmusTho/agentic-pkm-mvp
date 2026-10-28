@@ -118,7 +118,10 @@ resolution can invalidate a selection and therefore already takes locks in resol
 Approval mutations must not hold their lock while entering selection/resolver/binding operations.
 
 Both windows span the HKA CAS and durable source/authority receipt event. At the rewritten-note
-seam, member, health, registry and approval lookup work finishes before the final owned guards;
+seam, health, registry and locator admission precede the final source census: every semantic
+family revalidates its target UUID, and reorder also revalidates its complete member UUIDs.
+Target ambiguity or locator drift therefore refuses after preceding owner/CAS waits. This source
+validation and all approval lookup work finish before the final owned guards;
 only static exact GOV token/context validation and immutable expiry checking follow them,
 immediately before exchange or staged-conflict publication. An entry-time approval or held lock
 never extends the lifetime. A typed state-owner pre-publication refusal is distinct from an

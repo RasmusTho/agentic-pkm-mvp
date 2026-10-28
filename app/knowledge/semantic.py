@@ -634,10 +634,15 @@ class KnowledgeSemanticOwner:
                 # Source and health checks can block. Complete them before
                 # the owned nonblocking guard under both held owner fences.
                 try:
-                    if operation == REORDER:
-                        self._resolve_many(set(patch["member_order"]))
                     self.write_guard.assert_writes_allowed(binding["action"])
                     self._context()
+                    self._path(path, mutable=True)
+                    needed = {identity}
+                    if operation == REORDER:
+                        needed.update(patch["member_order"])
+                    current_sources = self._resolve_many(needed)
+                    if current_sources[identity][0] != path:
+                        raise _PreEffectRefusal("conflicted", "bound source locator changed")
                     validate_grant()
                     if not callable(require_current):
                         raise InvalidDecisionTokenError("semantic authority fences are not held")
