@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 from app.ops import bws_installation_admission as admission
+from app.ops import bws_installation_transaction as transaction
 
 
 def _digest(char: str) -> str:
@@ -372,6 +373,31 @@ def test_no_effect_refusal_receipt_releases_owner_for_a_fresh_operation(monkeypa
     with admission.installation_admission(**next_request) as lease:
         assert lease.operation_id == next_request["operation_id"]
         lease.complete(_receipt(next_request))
+
+
+def test_refused_before_backup_receipt_is_backward_compatible_and_validates_gate(monkeypatch, tmp_path):
+    _patch_directories(monkeypatch, tmp_path)
+    assert admission._PREBACKUP_REFUSAL_GATES == transaction._PREBACKUP_REFUSAL_GATES
+    request = _request()
+    legacy = _receipt(request, status="refused_before_backup")
+    diagnostic = {**legacy, "prebackup_gate": "current_writer_snapshot"}
+
+    with admission.installation_admission(**request) as lease:
+        assert lease._validate_receipt(legacy) == legacy
+        assert lease._validate_receipt(diagnostic) == diagnostic
+
+        unknown_gate = {**diagnostic, "prebackup_gate": "private_exception_text"}
+        with pytest.raises(admission.InstallationAdmissionRefused):
+            lease._validate_receipt(unknown_gate)
+
+        incompatible_status = {**_receipt(request), "prebackup_gate": "current_writer_snapshot"}
+        with pytest.raises(admission.InstallationAdmissionRefused):
+            lease._validate_receipt(incompatible_status)
+
+        lease.complete(diagnostic)
+
+    with admission.installation_admission("dev", mode="shared"):
+        pass
 
 
 def test_stopped_compensation_keeps_caller_and_cleanup_fences(monkeypatch, tmp_path):

@@ -99,6 +99,17 @@ replays an earlier operation, retries an unknown outcome, or routes to PROD. Thi
 does not authorize a live call or prove DEV/TEST acceptance; #3347 remains the owner gate. See the
 [detailed deployment contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery).
 
+A caught `refused_before_backup` receipt includes the finite `prebackup_gate` diagnostic. Its values
+are `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
+`authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
+`backup_roots`, `source_manifest`, `candidate_profile`, `old_kernel_qualification`,
+`qualified_writer_snapshot`, and `generation_qualification`. The diagnostic contains no exception
+text or operation input; it identifies the producer gate for that caught refusal. The
+`authority_cutover` value names a real current-writer predicate after the bound plan is read, but
+does not establish that it caused any previously observed refusal. Legacy receipts without this
+field remain valid. The `refused_before_backup` status and null generation and backup fields retain
+their existing meanings.
+
 ### #6300 fixed-selection reconciliation (historical, count-only)
 
 The accepted V7 summary is the fixed selection of 651 items: 12 persisted, 544 missing, 95 invalid,
