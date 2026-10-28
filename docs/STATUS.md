@@ -82,6 +82,21 @@ only: no live provider call, Mac host setting/service change, embedding-index mu
 was performed. The designated Luna/Codex CLI receipt above remains the only live route acceptance;
 integrated Product chat/embedding host acceptance is still separate.
 
+### Episode Debrief repository trigger support (2026-10-14)
+
+DEBRIEF-01 (#3334) adds `episode-debrief tick` and the registered `debrief.trigger.created` topic.
+It reconciles closed episodes and current artifact bindings, preserves the Episode note's exact scope,
+and reuses the canonical outbox with a deterministic per-episode identity. Its binding-scoped cursor
+advances atomically after successful reconciliation, including a malformed final event; concurrent
+stale ticks and crash/restart retries retain one durable trigger and derivable still-owed work.
+The provisional artifact-count floor is 3, defined only in `app/episode_debrief/trigger.py`.
+
+Last reviewed (Episode Debrief): 2026-10-14. Last verified against:
+`docs/EPISODE_DEBRIEF/README.md`, `app/episode_debrief/trigger.py`, `app/episode_debrief/store.py`,
+and `tests/episode_debrief/test_trigger.py` production-path PostgreSQL fixtures. This is repository
+support. DEBRIEF-02 synthesis, DEBRIEF-03 review and parent #3331's composed/test-channel acceptance
+remain separate work; no deployed runtime or operator qualification is claimed.
+
 ### TypeSafe System One repository support (2026-10-06)
 
 PR #5803 merged repository support for typed Jev judgments in the Product canvas and Builder CKM,

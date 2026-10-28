@@ -285,6 +285,12 @@
             "delete",
             "insert"
           ]
+        },
+        {
+          "module": "app/episode_debrief/store.py",
+          "operations": [
+            "insert"
+          ]
         }
       ],
       "rebuild_mechanism": "row-scoped",

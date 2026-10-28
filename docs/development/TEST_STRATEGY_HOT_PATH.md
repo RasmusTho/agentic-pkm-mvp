@@ -137,6 +137,11 @@ is cached only in the current process, keyed by file metadata; there is no store
 This general route keeps `runtime_checks=true` and the usual dependencies, ACL provisioning,
 markers and watchdog. It does not change Product-source selection or the exact CI contract route.
 
+The Sources-zone caller census (`tests/architecture/test_sources_zone_writers.py`) has exact
+ownership in the existing vault CI route. A census-only change retains the complete module,
+its static test consumers and common CI checks; mixed changes retain vault/instance/knowledge
+coverage. Unknown architecture siblings remain unowned and refuse selection.
+
 Shared fixture/helper/support files, conftest, pytest hooks/plugins, configuration, dependencies,
 Product or mixed changes, deleted/renamed or unknown paths keep their normal broader scope.
 Known consumers with computed imports or file loaders also disqualify the narrow route. Static

@@ -347,6 +347,36 @@ def test_mvr05_authority_recovery_architecture_test_has_vault_ci_owner() -> None
     assert "tests/ops" not in selection.targets
 
 
+@pytest.mark.parametrize(
+    "companion_paths",
+    [
+        (),
+        (
+            "scripts/select_pr_tests.py",
+            "tests/scripts/test_select_pr_tests.py",
+            "docs/development/TEST_STRATEGY_HOT_PATH.md",
+        ),
+    ],
+)
+def test_sources_zone_census_keeps_vault_proof_and_exact_ownership(companion_paths) -> None:
+    path = "tests/architecture/test_sources_zone_writers.py"
+
+    selection = select_tests([path, *companion_paths])
+
+    assert selection.full_suite is False
+    assert "vault" in selection.subsystems
+    assert selection.unowned_paths == ()
+    assert {path, *selector.CI_INTEGRITY_TARGETS} <= set(selection.targets)
+    if companion_paths:
+        assert {"tests/instance", "tests/vault", "tests/knowledge"} <= set(selection.targets)
+    else:
+        assert "tests/instance" not in selection.targets
+    assert selector.requires_runtime_checks([path, *companion_paths]) is True
+
+    unknown_path = "tests/architecture/test_unknown_sources_guard.py"
+    assert select_tests([unknown_path]).unowned_paths == (unknown_path,)
+
+
 def test_knowledge_runtime_modules_select_vault_knowledge_and_port_coverage() -> None:
     selection = select_tests(
         [

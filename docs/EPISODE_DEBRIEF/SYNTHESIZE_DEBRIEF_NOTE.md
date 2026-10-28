@@ -71,7 +71,7 @@ proven citation-validated, no-laundering-guarded, activation-gated draft lifecyc
 $ python -m app.cli episode-debrief synthesize --episode ep-2026-07-07-morning --json
 {
   "kind": "create.episode_debrief",
-  "draft": "_system/episode-debriefs/debrief-ep-2026-07-07-morning.md",
+  "draft": "_system/episode-debriefs/debrief-3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f.md",
   "sections": {"decisions": 2, "commitments": 3, "open_loops": 1, "key_captures": 4},
   "episode_note_updated": true
 }
