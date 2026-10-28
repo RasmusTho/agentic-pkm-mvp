@@ -50,10 +50,15 @@ gates. Classification/tagging ownership remains #5335.
 Panel source writeback now uses HKA CAS and returns its original `WriteReceipt`. A supplied caller
 version is checked before graph preparation and passed unchanged to the final write. Source
 failure cannot produce an executed confirmation; post-source failure preserves the source receipt
-and reports recovery. Queuing a downstream action is not proof that its semantic owner applied
-that action. The operation receipt explicitly records that downstream effects are unverified.
+and reports recovery. The autonomous composition persists its existing GOV AuthorityReceipt at
+the source-receipt checkpoint, before releasing notifications or acknowledgements. Its note
+diagnostics remain pending rather than claiming an effect was already queued. Queuing a downstream
+action is not proof that its semantic owner applied that action: proposal-backed operations remain
+`not_acknowledged` with a pending operation receipt and retain the diagnostic source receipt
+separately until the semantic owner's effect receipt is known. The same source read validates both
+version and live artifact identity before authorization.
 
-Successful source writes retain their GOV accountability and source receipt, but report
+Successful capture/create/body source writes retain their GOV accountability and source receipt, but report
 `convergence_pending` with Store/index/link `rebuild_required` until their existing owners reconcile
 from source. This is exposed repair work, not a claim that a new repair consumer is installed.
 Unknown effects and incomplete receipts require reconciliation and are never retried by these

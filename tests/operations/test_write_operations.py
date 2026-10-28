@@ -59,6 +59,10 @@ def bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> writes.WriteOperat
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
     monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
     monkeypatch.setenv("PANEL_AGENT_PIPELINE", "direct")
+    monkeypatch.setenv(
+        "PANEL_ACTIONS_PATH",
+        str(Path(__file__).resolve().parents[2] / "docs/settings/panel-actions.md"),
+    )
     monkeypatch.setenv("POLICY_ENFORCE", "0")
     monkeypatch.setattr(
         "app.orchestrator.executor.INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl")
@@ -325,7 +329,7 @@ def test_panel_confirmation_write_is_versioned_and_failures_do_not_succeed(
 
     monkeypatch.setattr(panel_runtime, "write_note_from_absolute", writer)
     outcome = _run(bound, request)
-    assert outcome.status is OperationStatus.CONVERGENCE_PENDING
+    assert outcome.status is OperationStatus.NOT_ACKNOWLEDGED
     assert versions == [request.expected_version]
     response = bound.confirmation_service._idempotency.get(request.request_id)
     assert response.source_receipt is receipts[0]
@@ -541,3 +545,218 @@ def test_lost_gov_or_kernel_receipt_preserves_the_known_source_receipt(bound, mo
     assert result.receipt.extensions["write"]["source_receipt"]["outcome"] == "written"
     assert result.receipt.status is ReceiptStatus.PENDING
     assert _run(bound, request, kernel=kernel).status is OperationStatus.RECOVERY_REQUIRED
+
+
+def _events(config):
+    path = config.vault_root.parent / "outbox.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_queued_semantic_proposal_retains_only_a_pending_operation_receipt(bound) -> None:
+    # R1 F1: the actual catalogue/graph queues promotion; it has not performed
+    # the requested semantic source effect merely by writing Panel diagnostics.
+    _stage(bound, action_id="promote.evergreen")
+    result = _run(
+        bound,
+        _request(
+            bound, writes.PROPOSAL_APPLY_OPERATION_ID, arguments={"proposal_id": "proposal-1"}
+        ),
+    )
+    assert result.status is OperationStatus.NOT_ACKNOWLEDGED
+    assert result.receipt.status is ReceiptStatus.PENDING
+    assert result.convergence.source_effect is SourceEffectStatus.COMMITTED
+    assert result.convergence.extensions == {
+        "source_scope": "panel_diagnostic",
+        "requested_effect": "unverified",
+    }
+    assert result.receipt.extensions["write"]["source_receipt"]["outcome"] == "written"
+    assert "maturity: evergreen" not in bound.note_path.read_text()
+    topics = [event["event"] for event in _events(bound)]
+    assert topics.index("governance.authority_receipt.recorded") < topics.index(
+        "promote.intent.created"
+    )
+
+
+@pytest.mark.parametrize("failure", ["gov_receipt", "gov_sink"])
+def test_panel_notification_and_ack_wait_for_durable_source_authority(
+    bound, monkeypatch, failure
+) -> None:
+    # R1 F2: only the GOV checkpoint is faulted; HKA mutation remains real.
+    _stage(bound, action_id="promote.evergreen")
+    if failure == "gov_receipt":
+
+        def lose(*_, **__):
+            raise OSError("GOV receipt unavailable")
+
+        monkeypatch.setattr(writes.GovernedWriteAdapter, "record_authority_receipt", lose)
+    else:
+        monkeypatch.setattr(writes, "append_jsonl_outbox_event", lambda *_, **__: False)
+    request = _request(
+        bound, writes.PROPOSAL_APPLY_OPERATION_ID, arguments={"proposal_id": "proposal-1"}
+    )
+    kernel = _kernel(bound)
+    result = _run(bound, request, kernel=kernel)
+    assert result.status is OperationStatus.RECOVERY_REQUIRED
+    assert result.convergence.source_effect is SourceEffectStatus.COMMITTED
+    assert result.receipt.extensions["write"]["source_receipt"]["outcome"] == "written"
+    assert not any(
+        event["event"]
+        in {"promote.intent.created", "panel.action.triggered", "panel.action.logged"}
+        for event in _events(bound)
+    )
+    assert not panel_graph._IDEMPOTENCY_GUARD.seen_action(bound.artifact_id, "promote.evergreen")
+    after = bound.note_path.read_bytes()
+    assert _run(bound, request, kernel=kernel) == result
+    assert bound.note_path.read_bytes() == after
+
+
+@pytest.mark.parametrize(
+    "action_id,trust_verb", [("promote.evergreen", "SUGGEST"), ("not-in-catalog", "APPLY")]
+)
+def test_refused_actions_never_enter_the_real_planner(
+    bound, monkeypatch, action_id, trust_verb
+) -> None:
+    # R1 F3: planner and direct dispatch consume the graph's same admission.
+    from app.stores.plan_store import get_plan_store, reset_plan_store
+
+    reset_plan_store()
+    monkeypatch.setenv("PANEL_AGENT_PIPELINE", "planner")
+    _stage(bound, action_id=action_id, trust_verb=trust_verb)
+    result = _run(
+        bound,
+        _request(
+            bound, writes.PROPOSAL_APPLY_OPERATION_ID, arguments={"proposal_id": "proposal-1"}
+        ),
+    )
+    assert result.status is OperationStatus.REJECTED
+    assert get_plan_store().list_by_object(bound.artifact_id) == []
+    assert not any(event["event"] == "promote.intent.created" for event in _events(bound))
+
+
+def test_proposal_identity_is_checked_from_the_current_versioned_source(bound) -> None:
+    # R1 F4: freshness cannot authorize a different UUID at the same locator.
+    _stage(bound, action_id="promote.evergreen")
+    bound.note_path.write_text(bound.note_path.read_text().replace(bound.artifact_id, str(uuid4())))
+    replacement = bound.note_path.read_bytes()
+    result = _run(
+        bound,
+        _request(
+            bound, writes.PROPOSAL_APPLY_OPERATION_ID, arguments={"proposal_id": "proposal-1"}
+        ),
+    )
+    assert result.status is OperationStatus.CONFLICTED
+    assert bound.note_path.read_bytes() == replacement
+    assert _events(bound) == []
+
+
+def test_final_confirmation_sink_failure_caches_the_known_source_recovery(
+    bound, monkeypatch
+) -> None:
+    # R1 F5: the final confirmation sink fails after runtime/GOV persistence.
+    from app.panel import confirmation
+
+    _stage(bound, action_id="promote.evergreen")
+    monkeypatch.setattr(confirmation, "append_jsonl_outbox_event", lambda *_, **__: False)
+    request = _request(
+        bound, writes.PROPOSAL_APPLY_OPERATION_ID, arguments={"proposal_id": "proposal-1"}
+    )
+    result = _run(bound, request)
+    assert result.status is OperationStatus.RECOVERY_REQUIRED
+    assert result.convergence.source_effect is SourceEffectStatus.COMMITTED
+    response = bound.confirmation_service._idempotency.get(request.request_id)
+    assert response.status == "recovery_required" and response.source_state == "committed"
+    assert result.receipt.extensions["write"]["source_receipt"] == asdict(response.source_receipt)
+    assert bound.confirmation_service._proposals.get("proposal-1") is None
+    before = bound.note_path.read_bytes()
+    replay = bound.confirmation_service.confirm(
+        ConfirmRequest(
+            proposal_id="proposal-1",
+            artifact_id=bound.artifact_id,
+            action="confirm",
+            idempotency_key=request.request_id,
+            expected_version=request.expected_version,
+        ),
+        vault_root=bound.vault_root,
+    )
+    assert replay == response and bound.note_path.read_bytes() == before
+
+
+def test_panel_api_withholds_ack_but_exposes_and_replays_known_source_recovery(
+    bound, monkeypatch
+) -> None:
+    from fastapi.testclient import TestClient
+    from app.api.app import app
+    from app.panel import confirmation
+
+    _stage(bound, action_id="promote.evergreen")
+    monkeypatch.setattr(confirmation, "_service", bound.confirmation_service)
+    monkeypatch.setattr(confirmation, "append_jsonl_outbox_event", lambda *_, **__: False)
+    writes_seen = []
+    writer = panel_runtime.write_note_from_absolute
+
+    def record(*args, **kwargs):
+        receipt = writer(*args, **kwargs)
+        writes_seen.append(receipt)
+        return receipt
+
+    monkeypatch.setattr(panel_runtime, "write_note_from_absolute", record)
+    payload = {
+        "proposal_id": "proposal-1",
+        "artifact_id": bound.artifact_id,
+        "action": "confirm",
+        "idempotency_key": "api-confirm",
+        "expected_version": read_note_text_with_version(bound.note_path)[1],
+    }
+    response = TestClient(app).post("/api/panel/confirm", json=payload)
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["state"] == "not_acknowledged" and detail["source_state"] == "committed"
+    assert detail["source_receipt"] == asdict(writes_seen[0])
+    before = bound.note_path.read_bytes()
+    assert TestClient(app).post("/api/panel/confirm", json=payload).json() == response.json()
+    assert bound.note_path.read_bytes() == before and len(writes_seen) == 1
+
+
+def test_admitted_async_logged_action_reaches_its_existing_owner(bound) -> None:
+    # R1 F6: logged/unhandled_action is the graph's admitted async handoff.
+    _stage(bound, action_id="note.move.workbench")
+    proposal = bound.confirmation_service._proposals.get("proposal-1")
+    descriptor = panel_runtime.load_panel_action_catalog().get("note.move.workbench")
+    proposal.intent_event.payload.actions[0].mapping = descriptor.to_mapping()
+    result = _run(
+        bound,
+        _request(
+            bound, writes.PROPOSAL_APPLY_OPERATION_ID, arguments={"proposal_id": "proposal-1"}
+        ),
+    )
+    assert result.status is OperationStatus.NOT_ACKNOWLEDGED
+    topics = [event["event"] for event in _events(bound)]
+    assert topics.index("governance.authority_receipt.recorded") < topics.index(
+        "note.move.workbench"
+    )
+    assert "(pending owner acknowledgement," in bound.note_path.read_text()
+
+
+def test_final_panel_cas_conflict_retains_failed_gov_and_source_receipts(
+    bound, monkeypatch
+) -> None:
+    _stage(bound, action_id="promote.evergreen")
+    request = _request(
+        bound, writes.PROPOSAL_APPLY_OPERATION_ID, arguments={"proposal_id": "proposal-1"}
+    )
+    original = panel_runtime.write_note_from_absolute
+    replacement = bound.note_path.read_text() + "Concurrent save.\n"
+
+    def race(*args, **kwargs):
+        bound.note_path.write_text(replacement)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(panel_runtime, "write_note_from_absolute", race)
+    result = _run(bound, request)
+    assert result.status is OperationStatus.CONFLICTED
+    assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
+    write = result.receipt.extensions["write"]
+    assert write["source_receipt"]["outcome"] == "conflict_staged"
+    assert write["authority_receipt"]["outcome"] == "failed"
+    assert bound.note_path.read_text() == replacement
+    assert not any(event["event"] == "promote.intent.created" for event in _events(bound))

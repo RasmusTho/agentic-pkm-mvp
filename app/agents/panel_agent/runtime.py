@@ -130,6 +130,7 @@ class PanelRuntimeResult(BaseModel):
     source_state: str = "not_applied"
     source_failure: str | None = None
     projection_state: str = "not_required"
+    downstream_state: str = "not_required"
 
 
 def execute_panel_intent(
@@ -141,6 +142,7 @@ def execute_panel_intent(
     allow_legacy_promotion_without_trust_verb: bool = False,
     producing_binding_id: str | None = None,
     expected_version: str | None = None,
+    source_receipt_sink: Callable[[WriteReceipt], None] | None = None,
 ) -> PanelRuntimeResult:
     # Guard-at-seam (#2808, formal-model.md Divergence F-A): assert WriteGuard
     # here, at the write seam itself, before any filesystem mutation. API
@@ -282,11 +284,22 @@ def execute_panel_intent(
     )
     state = run_panel_graph(initial_state, decider_mode=decider_mode)
 
+    # Admission belongs to the graph. A logged result may be its explicit
+    # catalogue-authorized async owner handoff, or a refusal. Reuse one set
+    # for direct and planner dispatch instead of interpreting status as policy.
+    admitted_action_ids = {
+        result.id for result in state.action_results
+        if result.checked and (
+            result.status == "triggered"
+            or (result.details or {}).get("admitted_owner_handoff") is True
+        )
+    }
+
     pipeline_mode = get_panel_agent_pipeline()
     if pipeline_mode == "planner":
         planned_action_ids: list[str] = []
         for result in state.action_results:
-            if not result.checked or result.status not in {"triggered", "logged"}:
+            if result.id not in admitted_action_ids:
                 continue
             if result.id not in planned_action_ids:
                 planned_action_ids.append(result.id)
@@ -305,7 +318,6 @@ def execute_panel_intent(
         getattr(event, "event", None) or getattr(event, "event_type", None)
         for event in emitted_events
     }
-    admitted_action_ids = {result.id for result in state.action_results if result.checked and result.status == "triggered"}
     for action in intent_event.payload.actions:
         if not action.checked or action.id not in admitted_action_ids:
             continue
@@ -372,6 +384,7 @@ def execute_panel_intent(
         source_receipt = _apply_note_writeback(
             state, note_text, vault_root, vault_uuid=vault_uuid,
             expected_version=expected_version,
+            acknowledgement_pending=source_receipt_sink is not None,
         )
     except KnowledgeWriteConflict as exc:
         staged = exc.receipt is not None and exc.receipt.outcome == "conflict_staged"
@@ -387,6 +400,11 @@ def execute_panel_intent(
         return PanelRuntimeResult(intent=intent_event, actions=state.action_results, source_state="unknown", source_failure="recovery_required")
 
     try:
+        # A dormant autonomous composition supplies existing GOV accountability
+        # here, after HKA's receipt and before any notification/acknowledgement.
+        # Human Panel/Canvas paths acquire no new mandatory token or callback.
+        if source_receipt is not None and source_receipt_sink is not None:
+            source_receipt_sink(source_receipt)
         if source_receipt is not None:
             done = [r.label for r in state.action_results if r.checked and r.status in {"triggered", "logged"} and (r.details or {}).get("reason") not in _FALLBACK_REASONS]
             upsert_executed_ids(state.note.uuid, [stable_action_id(label) for label in done])
@@ -408,6 +426,7 @@ def execute_panel_intent(
             source_receipt=source_receipt,
             source_state="committed" if source_receipt else "not_applied",
             source_failure="recovery_required", projection_state="rebuild_required",
+            downstream_state="unknown",
         )
 
     return PanelRuntimeResult(
@@ -418,6 +437,7 @@ def execute_panel_intent(
         source_receipt=source_receipt,
         source_state="committed" if source_receipt else "not_applied",
         projection_state="pending" if source_receipt else "not_required",
+        downstream_state="queued" if admitted_action_ids else "not_required",
     )
 
 
@@ -594,6 +614,7 @@ def _apply_note_writeback(
     *,
     vault_uuid: str | None = None,
     expected_version: str | None = None,
+    acknowledgement_pending: bool = False,
 ) -> WriteReceipt | None:
     """Remove executed checkboxes, write proposal suggestions, write receipts, and persist to vault file.
 
@@ -725,6 +746,10 @@ def _apply_note_writeback(
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     receipts = [f"\u2705 {label} ({now_str})" for label in executed_labels]
     receipts += [f"\u23f3 {label} (queued, {now_str})" for label in queued_labels]
+    if acknowledgement_pending:
+        # The operation's GOV/notification checkpoint follows this very source
+        # write. Its diagnostic block cannot already claim queued or executed.
+        receipts = [f"\u23f3 {label} (pending owner acknowledgement, {now_str})" for label in executed_labels + queued_labels]
     # Proposal-offered receipts: visible suggestion line in AI status block.
     # Only emit for proposals that are newly inserted this pass; duplicate
     # proposals on rerun stay silent so receipt blocks remain bounded.

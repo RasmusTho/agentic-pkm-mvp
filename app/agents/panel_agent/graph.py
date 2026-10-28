@@ -113,10 +113,13 @@ def _build_action_result(
     status: str,
     emitted: list[str],
     reason: str | None = None,
+    admitted_owner_handoff: bool = False,
 ) -> PanelRuntimeActionResult:
     details: dict[str, Any] = {}
     if reason:
         details["reason"] = reason
+    if admitted_owner_handoff:
+        details["admitted_owner_handoff"] = True
     return PanelRuntimeActionResult(
         id=action.id,
         label=action.label,
@@ -356,7 +359,8 @@ def _handle_action(
     _mark_action(state, note_id, action_to_use.id)
     return (
         _build_action_result(
-            action_to_use, status="logged", emitted=emitted_names, reason=logged.payload.get("reason")
+            action_to_use, status="logged", emitted=emitted_names, reason=logged.payload.get("reason"),
+            admitted_owner_handoff=mapping is not None,
         ),
         emitted,
     )

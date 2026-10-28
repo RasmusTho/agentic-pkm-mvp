@@ -7,7 +7,7 @@ authenticated installation remains #5352 / MVR-05C work.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import os
 from pathlib import Path
@@ -19,7 +19,12 @@ from pydantic import ValidationError
 
 from app.api.routes import capture
 from app.events.schema import make_outbox_event
-from app.governance.governed_write import GovernedWriteAdapter, InvalidDecisionTokenError
+from app.governance.governed_write import (
+    GovernedWriteAdapter,
+    GovernedWriteGrant,
+    InvalidDecisionTokenError,
+)
+from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
 from app.orchestrator.executor import (
@@ -250,22 +255,9 @@ def _target(
     return lexical
 
 
-def _update_body(
-    request: OperationRequest, config: WriteOperationServerConfig
-) -> OwnerExecutionResult:
-    path = _target(request, config)
-    if isinstance(path, OwnerExecutionResult):
-        return path
-    body = request.arguments.get("body")
-    if (
-        set(request.arguments) != {"body"}
-        or not isinstance(body, str)
-        or body_contains_frontmatter(body)
-    ):
-        return _refuse(
-            OperationStatus.INVALID,
-            "body edit preserves frontmatter; metadata requires its owner proposal",
-        )
+def _source_snapshot(
+    request: OperationRequest, config: WriteOperationServerConfig, path: Path
+) -> str | OwnerExecutionResult:
     current, version = read_note_text_with_version(path)
     if version != request.expected_version:
         return _refuse(OperationStatus.CONFLICTED, "expected source version is stale")
@@ -284,6 +276,28 @@ def _update_body(
         return _refuse(
             OperationStatus.CONFLICTED, "source identity differs from the bound artifact"
         )
+    return current
+
+
+def _update_body(
+    request: OperationRequest, config: WriteOperationServerConfig
+) -> OwnerExecutionResult:
+    path = _target(request, config)
+    if isinstance(path, OwnerExecutionResult):
+        return path
+    body = request.arguments.get("body")
+    if (
+        set(request.arguments) != {"body"}
+        or not isinstance(body, str)
+        or body_contains_frontmatter(body)
+    ):
+        return _refuse(
+            OperationStatus.INVALID,
+            "body edit preserves frontmatter; metadata requires its owner proposal",
+        )
+    current = _source_snapshot(request, config, path)
+    if isinstance(current, OwnerExecutionResult):
+        return current
     frontmatter, old_body = split_frontmatter(current)
     prefix = current[: len(current) - len(old_body)] if frontmatter is not None else ""
     content = prefix + body
@@ -297,33 +311,33 @@ def _update_body(
     }
     grant = gov.issue_decision_token(write_guard=DEFAULT_WRITE_GUARD, **binding)
     gov.validate_decision_token(decision_token=grant.decision_token, **binding)
-    source = write_note_from_absolute(
-        path,
-        content,
-        vault_root=config.vault_root,
-        action=binding["action"],
-        expected_version=str(request.expected_version),
-        writer_identity=config.actor,
-    )
     try:
-        authority = gov.record_authority_receipt(
-            decision_token=grant.decision_token,
-            mutation_receipt=cast(Any, source),
-            state_owner="knowledge",
-            trace_id=request.request_id,
-            effect_id=request.request_id,
+        source = write_note_from_absolute(
+            path,
+            content,
+            vault_root=config.vault_root,
+            action=binding["action"],
+            expected_version=str(request.expected_version),
+            writer_identity=config.actor,
         )
-    except Exception:
-        return _unreceipted_source(request, asdict(source))
-    governed = {
-        "policy_decision": asdict(grant.policy_decision),
-        "decision_token": asdict(grant.decision_token),
-        "authority_receipt": asdict(authority),
-    }
-    return _record_and_complete(
+    except KnowledgeWriteConflict as exc:
+        if exc.receipt is None or exc.receipt.outcome != "conflict_staged":
+            raise
+        return _account_source(
+            request,
+            exc.receipt,
+            gov,
+            grant,
+            outcome_status=OperationStatus.CONFLICTED,
+            source_effect=SourceEffectStatus.NOT_APPLIED,
+            effect_state="source_conflict_staged",
+            warning="HKA staged the conflict; canonical source was not changed",
+        )
+    return _account_source(
         request,
-        asdict(source),
-        governed,
+        source,
+        gov,
+        grant,
         resulting_version=hashlib.sha256(content.encode("utf-8")).hexdigest(),
     )
 
@@ -358,9 +372,9 @@ def _apply_proposal(
         return _refuse(
             OperationStatus.NOT_SUPPORTED, "profile writer is outside this operation binding"
         )
-    _, version = read_note_text_with_version(path)
-    if version != request.expected_version:
-        return _refuse(OperationStatus.CONFLICTED, "expected source version is stale")
+    snapshot = _source_snapshot(request, config, path)
+    if isinstance(snapshot, OwnerExecutionResult):
+        return snapshot
     gov = GovernedWriteAdapter()
     binding = {
         "action": "panel.confirm",
@@ -370,6 +384,25 @@ def _apply_proposal(
     }
     grant = gov.issue_decision_token(write_guard=DEFAULT_WRITE_GUARD, **binding)
     gov.validate_decision_token(decision_token=grant.decision_token, **binding)
+    accounted: OwnerExecutionResult | None = None
+
+    def account_before_acknowledgement(source: WriteReceipt) -> None:
+        nonlocal accounted
+        accounted = _account_source(
+            request,
+            source,
+            gov,
+            grant,
+            outcome_status=OperationStatus.NOT_ACKNOWLEDGED,
+            effect_state="panel_source_applied_downstream_unverified",
+            source_scope="panel_diagnostic",
+            warning="Panel source receipt is known; the requested semantic effect still lacks its owner's receipt. Reconcile the queued intent; never retry it blindly.",
+        )
+        if accounted.status is OperationStatus.RECOVERY_REQUIRED:
+            raise RuntimeError(
+                "source accountability is not durable; withhold downstream acknowledgement"
+            )
+
     response = config.confirmation_service.confirm(
         ConfirmRequest(
             proposal_id=request.arguments["proposal_id"],
@@ -379,43 +412,78 @@ def _apply_proposal(
             expected_version=str(request.expected_version),
         ),
         vault_root=config.vault_root,
+        source_receipt_sink=account_before_acknowledgement,
     )
-    if response.source_state != "committed" or response.source_receipt is None:
-        status = {
-            "conflicted": OperationStatus.CONFLICTED,
-            "blocked": OperationStatus.REJECTED,
-            "not_found": OperationStatus.NOT_FOUND,
-        }.get(response.status, OperationStatus.RECOVERY_REQUIRED)
-        return _refuse(status, "Panel has no acknowledged source application")
+    if accounted is not None:
+        if response.status == "recovery_required":
+            return replace(
+                accounted,
+                status=OperationStatus.RECOVERY_REQUIRED,
+                warnings=accounted.warnings
+                + ("Panel confirmation or downstream acknowledgement requires reconciliation",),
+            )
+        if response.status == "logged" and response.downstream_state == "not_required":
+            receipt = dict(accounted.effect_receipt or {})
+            receipt["write"] = {**receipt.get("write", {}), "effect_state": "panel_diagnostic_only"}
+            return replace(accounted, status=OperationStatus.REJECTED, effect_receipt=receipt)
+        # A diagnostic/source receipt and a queued semantic intent are not the
+        # requested semantic owner's receipt. The overall operation stays pending.
+        return accounted
+    if response.source_receipt is not None and response.source_receipt.outcome == "conflict_staged":
+        return _account_source(
+            request,
+            response.source_receipt,
+            gov,
+            grant,
+            outcome_status=OperationStatus.CONFLICTED,
+            source_effect=SourceEffectStatus.NOT_APPLIED,
+            effect_state="source_conflict_staged",
+            warning="HKA staged the conflict; canonical source was not changed",
+        )
+    status = {
+        "conflicted": OperationStatus.CONFLICTED,
+        "blocked": OperationStatus.REJECTED,
+        "rejected": OperationStatus.REJECTED,
+        "not_found": OperationStatus.NOT_FOUND,
+    }.get(response.status, OperationStatus.RECOVERY_REQUIRED)
+    return _refuse(status, "Panel has no operation-bound acknowledged source application")
+
+
+def _account_source(
+    request: OperationRequest,
+    source: WriteReceipt,
+    gov: GovernedWriteAdapter,
+    grant: GovernedWriteGrant,
+    **kwargs: Any,
+) -> OwnerExecutionResult:
     try:
         authority = gov.record_authority_receipt(
             decision_token=grant.decision_token,
-            mutation_receipt=cast(Any, response.source_receipt),
+            mutation_receipt=cast(Any, source),
             state_owner="knowledge",
             trace_id=request.request_id,
             effect_id=request.request_id,
+            outcome="failed" if source.outcome == "conflict_staged" else "applied",
         )
     except Exception:
-        return _unreceipted_source(request, asdict(response.source_receipt))
+        return _unreceipted_source(
+            request,
+            asdict(source),
+            source_effect=kwargs.get("source_effect", SourceEffectStatus.COMMITTED),
+        )
     governed = {
         "policy_decision": asdict(grant.policy_decision),
         "decision_token": asdict(grant.decision_token),
         "authority_receipt": asdict(authority),
     }
-    return _record_and_complete(
-        request,
-        asdict(response.source_receipt),
-        governed,
-        partial=response.status == "recovery_required",
-        effect_state="panel_source_applied_downstream_unverified"
-        if response.status == "executed"
-        else "panel_diagnostic_only",
-        refused=response.status == "logged",
-    )
+    return _record_and_complete(request, asdict(source), governed, **kwargs)
 
 
 def _unreceipted_source(
-    request: OperationRequest, source: Mapping[str, Any]
+    request: OperationRequest,
+    source: Mapping[str, Any],
+    *,
+    source_effect: SourceEffectStatus = SourceEffectStatus.COMMITTED,
 ) -> OwnerExecutionResult:
     return OwnerExecutionResult(
         OperationStatus.RECOVERY_REQUIRED,
@@ -428,12 +496,14 @@ def _unreceipted_source(
             }
         },
         convergence=OperationConvergence(
-            SourceEffectStatus.COMMITTED,
+            source_effect,
             store=ConvergenceState.REBUILD_REQUIRED,
             index=ConvergenceState.REBUILD_REQUIRED,
             link=ConvergenceState.REBUILD_REQUIRED,
         ),
-        warnings=("source committed without an AuthorityReceipt; reconcile before retry",),
+        warnings=(
+            "owner source result is known without an AuthorityReceipt; reconcile before retry",
+        ),
     )
 
 
@@ -442,13 +512,13 @@ def _record_and_complete(
 ) -> OwnerExecutionResult:
     result = _completed(request, source_receipt=source, governed=governed, **kwargs)
     # Existing outbox accountability, not a second journal or AuthorityReceipt.
-    event = make_outbox_event(
-        event="governance.authority_receipt.recorded",
-        source="operations.write",
-        trace_id=request.request_id,
-        payload=dict(result.effect_receipt or {}),
-    )
     try:
+        event = make_outbox_event(
+            event="governance.authority_receipt.recorded",
+            source="operations.write",
+            trace_id=request.request_id,
+            payload=dict(result.effect_receipt or {}),
+        )
         if not append_jsonl_outbox_event(
             Path(os.getenv("INDEX_OUTBOX_PATH") or INDEX_OUTBOX_PATH),
             event,
@@ -462,7 +532,7 @@ def _record_and_complete(
             effect_receipt=result.effect_receipt,
             convergence=result.convergence,
             warnings=(
-                "source committed; AuthorityReceipt persistence requires reconciliation; never retry the source",
+                "owner source result is known; AuthorityReceipt persistence requires reconciliation; never retry the source",
             ),
         )
     return result
@@ -474,24 +544,27 @@ def _completed(
     source_receipt: Mapping[str, Any],
     governed: Mapping[str, Any],
     resulting_version: str | None = None,
-    partial: bool = False,
     effect_state: str = "source_applied",
-    refused: bool = False,
+    outcome_status: OperationStatus = OperationStatus.CONVERGENCE_PENDING,
+    source_effect: SourceEffectStatus = SourceEffectStatus.COMMITTED,
+    source_scope: str = "requested_source",
+    warning: str = "source receipt is known; Store/index/link require owner reconciliation from source",
 ) -> OwnerExecutionResult:
     authority = governed.get("authority_receipt", {})
     receipt_id = authority.get("receipt_id") if isinstance(authority, Mapping) else None
     if not receipt_id:
         return OwnerExecutionResult.ambiguous()
+    projection = (
+        ConvergenceState.REBUILD_REQUIRED
+        if source_effect is SourceEffectStatus.COMMITTED
+        else ConvergenceState.NOT_REQUIRED
+    )
     return OwnerExecutionResult(
-        OperationStatus.RECOVERY_REQUIRED
-        if partial
-        else OperationStatus.REJECTED
-        if refused
-        else OperationStatus.CONVERGENCE_PENDING,
+        outcome_status,
         items=tuple(
             {
                 "artifact_id": target["artifact_id"],
-                "status": "convergence_pending",
+                "status": outcome_status.value,
                 "version": request.expected_version,
                 "result_version": resulting_version,
             }
@@ -506,17 +579,21 @@ def _completed(
                 **dict(governed),
                 "input_version": request.expected_version,
                 "resulting_version": resulting_version,
-                "projection_repair": ["store", "index", "link"],
+                "projection_repair": ["store", "index", "link"]
+                if source_effect is SourceEffectStatus.COMMITTED
+                else [],
                 "effect_state": effect_state,
             },
         },
         convergence=OperationConvergence(
-            SourceEffectStatus.COMMITTED,
-            store=ConvergenceState.REBUILD_REQUIRED,
-            index=ConvergenceState.REBUILD_REQUIRED,
-            link=ConvergenceState.REBUILD_REQUIRED,
+            source_effect,
+            store=projection,
+            index=projection,
+            link=projection,
+            extensions={
+                "source_scope": source_scope,
+                "requested_effect": "unverified" if source_scope == "panel_diagnostic" else "known",
+            },
         ),
-        warnings=(
-            "source receipt is known; Store/index/link require owner reconciliation from source",
-        ),
+        warnings=(warning,),
     )

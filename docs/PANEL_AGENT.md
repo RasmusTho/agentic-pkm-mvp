@@ -232,11 +232,21 @@ AUTOOPS-04 adapter requires a caller version. An applied source write exposes th
 `source_receipt` in `ConfirmResponse`; `source_state` and `projection_state` distinguish committed
 source from derived work. A source refusal or indeterminate write never returns `executed`.
 Post-source acknowledgement or companion-refresh failure reports `recovery_required`, retains
-the source receipt, and does not repeat the source write. Graph action acknowledgements,
+the source receipt in a cached recovery response, removes the committed proposal from pending work,
+and does not repeat the source write. A final confirm audit-sink failure preserves the existing
+withheld-ack HTTP 500 and exposes that known source receipt/state. Graph action acknowledgements,
 executed-ID persistence, and downstream notification follow the source write; a policy/allowlist/
 APPLY refusal cannot enqueue the denied downstream action. A queued downstream semantic action
 still requires its own owner's effect receipt; the Panel source receipt proves only its note
 writeback.
+
+For dormant autonomous composition, the server supplies a source-receipt checkpoint that records
+and persists existing GOV accountability before downstream notification. It adds no mandatory token
+to human Panel or Canvas callers. The graph explicitly marks admitted asynchronous owner handoffs;
+both direct dispatch and planner handoff consume that admission, preserving catalogue-authorized
+`logged/unhandled_action` handoffs while excluding APPLY/allowlist refusals. Autonomous diagnostic
+lines remain pending, and the operation stays unacknowledged until its requested semantic owner's
+receipt exists.
 
 ### Panel identity vocabulary
 
