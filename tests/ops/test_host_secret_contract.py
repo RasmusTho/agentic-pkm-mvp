@@ -7,6 +7,7 @@ import pytest
 
 from app.ops import host_secret_bootstrap
 from app.ops.host_secret_contract import (
+    DEFAULT_CONTRACT_PATH,
     HostSecretContract,
     UndeclaredSecretConsumerError,
     load_host_secret_contract,
@@ -361,6 +362,13 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "optional_secrets": [],
             "role_requirements": {},
         },
+        {
+            "consumer": "model-access-executor",
+            "channels": ["dev"],
+            "secrets": ["openai.api-key"],
+            "optional_secrets": [],
+            "role_requirements": {},
+        },
     ]
     assert all("design" not in item["consumer"] for item in payload["consumers"])
     assert contract.required_secrets_for_role(
@@ -540,6 +548,8 @@ def test_existing_consumer_environment_grants_are_unchanged() -> None:
         for consumer, secrets in expected.items()
         for secret in secrets
     ) | {("dev", "marr-server-dev", "typesafe.api-key")} | {
+        ("dev", "model-access-executor", "openai.api-key")
+    } | {
         (channel, consumer, secret)
         for channel in ("dev", "test")
         for consumer, secrets in {
@@ -805,3 +815,29 @@ def test_typesafe_key_missing_or_unauthorized_binding_fails_closed(
     diagnostics = output.out + output.err + caplog.text + "".join(traceback.format_exception(error.value))
     assert _TYPESAFE_CANARY not in diagnostics
     assert error.value.__suppress_context__
+
+
+def test_model_access_executor_grant_is_dev_openai_only() -> None:
+    contract = load_host_secret_contract()
+    grants = {grant for grant in contract.allowed if grant[1] == "model-access-executor"}
+    assert grants == {("dev", "model-access-executor", "openai.api-key")}
+    assert contract.keychain_account(
+        channel="dev", consumer="model-access-executor", secret="openai.api-key"
+    ) == "dev:model-access-executor:openai.api-key"
+    for channel in ("test", "prod"):
+        with pytest.raises(UndeclaredSecretConsumerError):
+            contract.require_declared(
+                channel=channel, consumer="model-access-executor", secret="openai.api-key"
+            )
+
+    for consumer_patch in (
+        {"channels": ["dev", "test"]},
+        {"channels": ["prod"]},
+        {"secrets": ["openai.api-key", "anthropic.api-key"]},
+        {"secrets": ["anthropic.api-key"]},
+    ):
+        payload = json.loads(DEFAULT_CONTRACT_PATH.read_text())
+        entry = next(c for c in payload["consumers"] if c["consumer"] == "model-access-executor")
+        entry.update(consumer_patch)
+        with pytest.raises(ValueError):
+            load_host_secret_contract_bytes(json.dumps(payload).encode())

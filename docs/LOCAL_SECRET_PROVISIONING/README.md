@@ -165,6 +165,20 @@ retains its own gates. The original repository slice performed no rotation, Keyc
 installation, live provider call or channel activation; the linked operational receipts supply the
 separate DEV evidence.
 
+The Mac model-access executor is the dev-only `model-access-executor` consumer of the existing
+`openai.api-key` (owner decision on [#3429](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3429#issuecomment-6461562895),
+#6386). It serves only the explicit `openai_api` evaluation transport; Product model defaults and
+routes are unchanged. `scripts/start_model_access_executor.sh` launches the executor through
+`app.ops.host_secret_bootstrap --provider keychain --channel dev --consumer model-access-executor
+--run-on-credential-unavailable`. The executor reads the binding from the bootstrap runtime file, and
+a missing item still starts it with that transport reporting `credential_unavailable`. The owner
+provisions the item once, interactively, so the value never enters argv, shell history, or an agent:
+`security add-generic-password -U -s yggdrasil.host-secrets -a dev:model-access-executor:openai.api-key -w`
+(with `-w` last, `security` prompts for the value). The launcher refuses to start unless
+`MODEL_ACCESS_EXECUTOR_PYTHON` names the executor's interpreter. This repository support is not live
+activation: the running launchd job must separately be switched to this launcher from a release that
+contains it.
+
 The Discord binding is granted only to the Heimdal-owned `heimdal-external-alerts` consumer on
 `dev`, `test`, and `prod`, and is one-way notification transport only. Creating, rotating, deleting,
 or live-validating the provider identity remains external operational work.
