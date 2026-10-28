@@ -169,11 +169,12 @@ def test_native_text_activation_preserves_foundational_guards(tmp_path, channel,
 def test_legacy_selected_image_refuses_text_before_bootstrap_or_runtime(tmp_path, channel):
     root, env, sha = _native_source_harness(tmp_path, channel=channel, ready=False)
     repository = Path(__file__).resolve().parents[2]
-    legacy_revision = 'd4004fbb3bab42ac9068d65494a22edf05c5c96e'
+    legacy_sources = repository / 'tests/deploy/fixtures/text_capture_pre_scope'
     # Use the actual pre-scope image source, rather than teaching a stub to
-    # return an invented compatibility verdict. Its strict preflight must win.
+    # return an invented compatibility verdict. Frozen bytes also work offline
+    # in shallow checkouts. Its strict preflight must win.
     for relative in ('app/ops/native_source_bootstrap.py', 'app/api/app.py', 'scripts/start_api.sh'):
-        legacy = subprocess.check_output(['git', '-C', str(repository), 'show', legacy_revision + ':' + relative])
+        legacy = (legacy_sources / (relative + '.fixture')).read_bytes()
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(legacy)
