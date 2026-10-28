@@ -29,6 +29,40 @@ artifact.update(id="...", expected_version=4, patch=...)
   -> governed owner writer -> committed source receipt -> projection convergence status
 ```
 
+## Implementation posture
+
+The AUTOOPS-04 implementation is a dormant, direct-composition seam in
+`app/operations/write_operations.py`. `build_write_operation_handlers` returns handlers for
+`artifact.capture`, `artifact.create`, `artifact.update`, and `proposal.apply` for explicit
+composition with `OperationExecutionKernel`. It installs no HTTP route, GUI/MCP exposure, or
+runtime singleton. #5352 owns authenticated installation; MVR-05C/#3861 remains its production
+write-activation prerequisite and the existing pre-05C seal remains in force.
+
+The finite owners are the existing governed capture entrypoint, the EXE/GOV
+`mcp.vault.append_note` chain for typed `kind=note` creation, GOV plus HKA's versioned writer for
+body editing, and `PanelConfirmationService.confirm` for an existing owner-validated proposal.
+The server pins context/generation, actor, vault root, and the existing note identity/locator;
+operation arguments cannot supply arbitrary filesystem targets or artifact schemas. Direct body
+editing preserves the source frontmatter and rejects metadata fields. Metadata requests must name
+an existing Panel proposal and retain its field/schema, action allowlist, confirmation, and APPLY
+gates. Classification/tagging ownership remains #5335.
+
+Panel source writeback now uses HKA CAS and returns its original `WriteReceipt`. A supplied caller
+version is checked before graph preparation and passed unchanged to the final write. Source
+failure cannot produce an executed confirmation; post-source failure preserves the source receipt
+and reports recovery. Queuing a downstream action is not proof that its semantic owner applied
+that action. The operation receipt explicitly records that downstream effects are unverified.
+
+Successful source writes retain their GOV accountability and source receipt, but report
+`convergence_pending` with Store/index/link `rebuild_required` until their existing owners reconcile
+from source. This is exposed repair work, not a claim that a new repair consumer is installed.
+Unknown effects and incomplete receipts require reconciliation and are never retried by these
+handlers. The kernel's durable request reservation/replay remains the operation recovery boundary;
+it does not replace AuthorityReceipt or extend #4659's append guarantee across processes.
+
+The existing user-present Canvas body-edit policy (#4932) and MCP v1 capture protocol are unchanged.
+This child does not establish shipped cross-surface capability acceptance; parent #5329 retains it.
+
 ## Why This Matters
 
 An agent can only act autonomously when a bounded delegation reaches the same safe writer as the GUI.
@@ -50,9 +84,17 @@ An agent can only act autonomously when a bounded delegation reaches the same sa
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api/test_capture_inbox_api.py`
 - `ruff check app tests`
 
+Additional owner-boundary proof:
+
+- `tests/operations/test_write_operations.py::test_panel_confirmation_write_is_versioned_and_failures_do_not_succeed`
+- `tests/operations/test_write_operations.py::test_dormant_autonomous_edit_preserves_canvas_policy_and_installation_seal`
+- `tests/operations/test_write_operations.py::test_committed_source_survives_projection_and_authority_receipt_failures`
+- `tests/operations/test_write_operations.py::test_replay_after_restart_never_repeats_a_committed_owner_write`
+
 ## Out of Scope
 
-- Raw filesystem writes, arbitrary schema creation, move/rename, batch execution, or migration of the registered writer families already delivered under #3570. A new AUTOOPS-02 writer path still needs its own bounded contract and verification against the current write protocol.
+- Raw filesystem writes, arbitrary schema creation, move/rename, batch execution, or migration of the registered writer families already delivered under #3570. The finite Panel source/CAS/receipt consolidation is included in AUTOOPS-04.
+- Replacing #4659's append transaction mechanism or adding a competing journal, cross-process append guarantee, authenticated runtime installation, deployment, or promotion.
 
 ## Restart / Durability Posture
 

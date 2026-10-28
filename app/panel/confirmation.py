@@ -32,6 +32,7 @@ from app.events.schema import make_outbox_event
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.instance.compatibility_binding import legacy_view_bindings, live_compatibility_binding_id
 from app.outbox.events import INDEX_OUTBOX_PATH
+from app.knowledge.contracts import WriteReceipt
 from app.receipts.artifact_receipts import stamp_producing_binding
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
@@ -244,6 +245,7 @@ class ConfirmRequest(BaseModel):
     action: str
     idempotency_key: str = Field(min_length=1)
     correction: CorrectionFields | None = None
+    expected_version: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _validate_action(self) -> "ConfirmRequest":
@@ -294,6 +296,9 @@ class ConfirmResponse(BaseModel):
     error: str | None = None
     idempotency_key: str
     events_emitted: list[str] = Field(default_factory=list)
+    source_receipt: WriteReceipt | None = None
+    source_state: str = "not_applied"
+    projection_state: str = "not_required"
     # Receipt-visibility posture for the operational loop. Derived from status
     # when not explicitly provided; the UI surfaces this as visibility, not as
     # durable approval/execution authority.
@@ -947,7 +952,7 @@ class PanelConfirmationService:
         self._guard = write_guard or DEFAULT_WRITE_GUARD
         self._ttl = same_turn_ttl
 
-    def confirm(self, request: ConfirmRequest) -> ConfirmResponse:
+    def confirm(self, request: ConfirmRequest, *, vault_root: Path | None = None) -> ConfirmResponse:
         live = live_compatibility_binding_id()
         # Once a registry binding is live, only a response stamped with that exact
         # binding is a replay of this vault's operation; an unstamped or other-binding
@@ -1039,11 +1044,34 @@ class PanelConfirmationService:
 
         import app.panel.confirmation as _self_mod
 
+        event = proposal.intent_event
         if request.correction and request.correction.enabled:
-            corrected_event = _apply_correction(proposal.intent_event, request.correction)
-            result = _self_mod.execute_panel_intent(corrected_event)
-        else:
-            result = _self_mod.execute_panel_intent(proposal.intent_event)
+            event = _apply_correction(event, request.correction)
+        # Preserve legacy direct consumers while threading a supplied source
+        # precondition unchanged into the real writer. The root is server-owned.
+        runtime_kwargs: dict[str, Any] = {}
+        if request.expected_version is not None:
+            runtime_kwargs["expected_version"] = request.expected_version
+        if vault_root is not None:
+            runtime_kwargs["vault_root"] = vault_root
+        result = _self_mod.execute_panel_intent(event, **runtime_kwargs)
+        source_receipt = getattr(result, "source_receipt", None)
+        source_state = getattr(result, "source_state", "not_applied")
+        projection_state = getattr(result, "projection_state", "not_required")
+        source_failure = getattr(result, "source_failure", None)
+        if source_failure:
+            resp = ConfirmResponse(
+                proposal_id=request.proposal_id, artifact_id=request.artifact_id,
+                status=source_failure, outcome=source_failure,
+                error="Panel source or acknowledgement requires reconciliation",
+                idempotency_key=request.idempotency_key,
+                source_receipt=source_receipt, source_state=source_state,
+                projection_state=projection_state,
+            )
+            self._idempotency.set(request.idempotency_key, resp, binding=live)
+            if source_state in {"committed", "unknown"}:
+                self._proposals.remove(request.proposal_id)
+            return resp
         emitted_events = list(result.emitted_events or [])
         events = [_event_name(e) for e in emitted_events]
 
@@ -1143,6 +1171,9 @@ class PanelConfirmationService:
                 events_emitted=events,
             )
 
+        resp.source_receipt = source_receipt
+        resp.source_state = source_state
+        resp.projection_state = projection_state
         self._idempotency.set(request.idempotency_key, resp, binding=live)
         self._proposals.remove(request.proposal_id)
         return resp

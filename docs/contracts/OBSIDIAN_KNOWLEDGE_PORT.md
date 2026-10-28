@@ -88,6 +88,15 @@ only paths classified `REWRITTEN`, then route through the hardened absolute help
 writeback, or acknowledgement. `OptimisticWriteGuard.write_if_unchanged` is a check-then-write
 utility, not an approved rewritten-note CAS.
 
+The staged Panel confirmation runtime also returns the original HKA `WriteReceipt` from its
+note-source writeback. Its optional caller `expected_version` is never replaced by a newer read;
+legacy callers that provide none use the raw-byte read/transform/CAS discipline above. Known
+staged conflicts remain distinct from receiptless indeterminate failures, and source or projection
+failure cannot be acknowledged as a completed confirmation. The dormant AUTOOPS-04 body-edit
+binding composes GOV authorization, this expected-version writer, and GOV accountability; it
+preserves frontmatter and adds no general metadata authority or change to user-present Canvas
+body-edit authorization.
+
 Reference types:
 - `NoteLocator(vault, path)` where `path` is vault-relative and portable (`/` separators).
 - `WriteReceipt(operation, locator, adapter, trace_id, fallback_used, note_class, writer_identity, written_at, outcome, conflict_artifact)`.

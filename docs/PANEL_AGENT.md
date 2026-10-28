@@ -224,6 +224,20 @@ of confirm/block/reject handling. If the SQLite backing is unavailable, staging 
 memory-only mode and `/api/status` reports the Panel staging store as degraded through
 `panel_diagnostics`.
 
+Staged confirmation source writeback uses the HKA versioned writer. `ConfirmRequest.expected_version`
+is optional for existing human callers; when supplied, the runtime checks it before preparing any
+effects and passes it unchanged into source CAS. Without a supplied version, the existing Panel
+flow binds the text and SHA-256 version to one raw-byte read before transformation. The dormant
+AUTOOPS-04 adapter requires a caller version. An applied source write exposes the original
+`source_receipt` in `ConfirmResponse`; `source_state` and `projection_state` distinguish committed
+source from derived work. A source refusal or indeterminate write never returns `executed`.
+Post-source acknowledgement or companion-refresh failure reports `recovery_required`, retains
+the source receipt, and does not repeat the source write. Graph action acknowledgements,
+executed-ID persistence, and downstream notification follow the source write; a policy/allowlist/
+APPLY refusal cannot enqueue the denied downstream action. A queued downstream semantic action
+still requires its own owner's effect receipt; the Panel source receipt proves only its note
+writeback.
+
 ### Panel identity vocabulary
 
 - `panel_id`: Runtime identifier for one parsed Panel block within one note/artifact. It scopes proposals and options but does not identify an option by itself.
