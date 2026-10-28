@@ -86,7 +86,7 @@ def native(tmp_path, monkeypatch, request, admitted_bws_caller):
                           journal=DeployJournal(tmp_path / 'journal', channel))
     controller = HostSecretController(tmp_path / 'host-controller')
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
-    monkeypatch.setattr(host, '_configured_host_admin', Provider)
+    monkeypatch.setattr(host, '_configured_host_admin', lambda _plan: Provider())
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _: cfg)
     monkeypatch.setattr(linux, 'PasswordSource', PasswordFile)
     monkeypatch.setattr(linux, 'password_authenticate', lambda env: (

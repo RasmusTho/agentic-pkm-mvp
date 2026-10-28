@@ -127,10 +127,12 @@ class SecretHistory:
 class SecretAdmin:
     def __init__(self, provider: SecretAdminProvider, *,
                  controller: HostSecretController | None = None,
-                 contract: HostSecretContract | None = None) -> None:
+                 contract: HostSecretContract | None = None,
+                 target_project_scope: str | None = None) -> None:
         self.provider = provider
         self.controller = controller or HostSecretController()
         self.contract = contract or load_host_secret_contract()
+        self.target_project_scope = target_project_scope
 
     def _identity(self, channel: str, secret: str) -> tuple[str, tuple[str, ...]]:
         if (channel, secret) == (DEVUI_TARGET, DEVUI_SECRET):
@@ -159,6 +161,10 @@ class SecretAdmin:
         operation.require_active(channel)
         if operation.kind not in {'check', 'deploy'} or not consumers:
             raise SecretAdminError()
+        if (self.target_project_scope is not None
+                and (channel not in {'dev', 'test'}
+                     or self.target_project_scope != CHANNEL_PROJECTS[channel])):
+            raise SecretAdminError()
         selected: dict[str, set[str]] = {}
         for consumer in consumers:
             if consumer in DATABASE_CONSUMERS:
@@ -174,6 +180,10 @@ class SecretAdmin:
         statuses = []
         for secret in sorted(selected):
             identity, projects = self._identity(channel, secret)
+            if self.target_project_scope is not None:
+                if self.target_project_scope not in projects:
+                    raise SecretAdminError()
+                projects = (self.target_project_scope,)
             copies = [self.provider.read(project, identity) for project in projects]
             absent = sum(copy is None for copy in copies)
             status = 'ok'
