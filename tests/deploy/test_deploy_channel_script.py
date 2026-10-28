@@ -9965,12 +9965,16 @@ _EMBEDDING_PROBE_REASONS = [
     'embedding_probe_generation_failed', 'embedding_probe_vector_invalid',
     'embedding_probe_cleanup_failed',
 ]
+_EMBEDDING_PROBE_STATUSES = list(enumerate(_EMBEDDING_PROBE_REASONS, 114)) + [
+    (121, 'embedding_probe_executor_busy')]
 
 
 @pytest.mark.parametrize('fault,status', [
     ('client', 114), ('identity', 114), ('mismatch', 115), ('generation', 116),
     ('dimension', 117), ('shape', 117), ('nan', 0), ('cleanup', 118),
     ('generation_cleanup', 116), ('unexpected', 78), ('success', 0),
+    # A candidate image without the busy type keeps the generic generation status.
+    ('busy', 121), ('busy_cleanup', 121), ('busy_old_image', 116),
 ])
 def test_native_embedding_probe_subreasons_cover_production_call_site(tmp_path, fault, status):
     assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
@@ -9994,11 +9998,12 @@ class Client:
         events.append('embed')
         assert text == 'Yggdrasil deployment preflight'
         if fault in {'generation', 'generation_cleanup'}: fail()
+        if fault.startswith('busy'): raise Busy('embedding_executor_busy')
         if fault == 'unexpected': raise SystemExit(78)
         return {'dimension': [0.0], 'shape': 'xx', 'nan': [float('nan'), 0.0]}.get(fault, [0.0, 1.0])
     def close(self):
         events.append('close')
-        if fault in {'cleanup', 'generation_cleanup'}: fail()
+        if fault in {'cleanup', 'generation_cleanup', 'busy_cleanup'}: fail()
 def factory():
     events.append('client')
     if fault == 'client': fail()
@@ -10007,6 +10012,9 @@ module = types.ModuleType('app.components.llm.fabric')
 module.get_product_embedding_client = factory
 module.RemoteEmbeddingIdentityError = type('RemoteEmbeddingIdentityError', (Exception,), {})
 module.RemoteEmbeddingVectorError = type('RemoteEmbeddingVectorError', (Exception,), {})
+Busy = type('RemoteEmbeddingExecutorBusyError', (Exception,), {})
+if fault != 'busy_old_image':
+    module.RemoteEmbeddingExecutorBusyError = Busy
 sys.modules['app.components.llm.fabric'] = module
 '''
     # Even refusal must close an acquired client; no exception payload escapes.
@@ -10021,7 +10029,7 @@ sys.modules['app.components.llm.fabric'] = module
     assert result.stdout == result.stderr == ''
 
 
-@pytest.mark.parametrize('status,reason', list(enumerate(_EMBEDDING_PROBE_REASONS, 114)) + [(42, 'embedding_probe_failed')])
+@pytest.mark.parametrize('status,reason', _EMBEDDING_PROBE_STATUSES + [(42, 'embedding_probe_failed')])
 def test_native_embedding_probe_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, status, reason):
     from dataclasses import asdict
     from app.ops import postgres_deploy_linux as linux

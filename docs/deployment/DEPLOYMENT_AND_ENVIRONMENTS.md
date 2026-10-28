@@ -1406,6 +1406,9 @@ The probe's fixed child exit statuses 114–118 map respectively to
 `embedding_probe_client_failed`, `embedding_probe_identity_mismatch`,
 `embedding_probe_generation_failed`, `embedding_probe_vector_invalid`, and
 `embedding_probe_cleanup_failed`; unknown exits (including 119) retain `embedding_probe_failed`.
+Status 121 maps to `embedding_probe_executor_busy`: the routed client exhausted its bounded re-send
+of the Model Access executor's pre-dispatch `executor_busy` refusal. A candidate image without that
+typed error keeps reporting the busy refusal as 116.
 Status 120 maps to `embedding_guard_refused` and is reserved by the supervised Compose wrapper when the
 inherited BWS guard refuses before Docker executes; the receipt retains no checkpoint, status,
 or other private guard payload.
