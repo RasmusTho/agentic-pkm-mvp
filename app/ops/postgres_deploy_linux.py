@@ -1464,8 +1464,15 @@ class LinuxEffects:
         overlays = ['-f', str(cfg.root / 'docker-compose.bws.yml')]
         if env['BWS_DATABASE_TARGET'] == 'external':
             overlays += ['-f', str(cfg.root / 'docker-compose.bws-external.yml')]
-        if cutover is not None and source_snapshot is not None:
-            env['VAULT_HOST_ROOT'] = cutover.root
+        if source_snapshot is not None:
+            host_root = cutover.root if cutover is not None else env.get('VAULT_HOST_ROOT')
+            if (not host_root or source_snapshot.container_root not in {host_root, '/app/vault'}
+                or source_snapshot.vault_overlay != (
+                    'docker-compose.full-host-vault.yml'
+                    if source_snapshot.container_root == host_root else 'docker-compose.legacy-vault.yml'
+                )):
+                raise PostgresDeployError()
+            env['VAULT_HOST_ROOT'] = host_root
             env['DEPLOY_VAULT_CONTAINER_ROOT'] = source_snapshot.container_root
             overlays += ['-f', str(cfg.root / source_snapshot.vault_overlay)]
             if cfg.channel == 'test':
@@ -2256,7 +2263,7 @@ class LinuxEffects:
 
     def source_identity_runtime_snapshot(
         self,
-        selected: AuthorityCutover,
+        selected: AuthorityCutover | None,
         *,
         require_running_capture: bool,
         allow_legacy_mount_order: bool = False,
@@ -2265,6 +2272,45 @@ class LinuxEffects:
     ) -> SourceIdentityRuntimeSnapshot:
         """Bind installed writers and the exact candidate-child configuration."""
         cfg = self.config
+        if selected is None and (
+            cfg.channel not in {'dev', 'test'} or not current_state or require_running_capture
+            or allow_legacy_mount_order or transitioning_writers
+            or type(cfg).load(cfg.channel) != cfg
+        ):
+            raise PostgresDeployError()
+
+        def env_values(path: Path) -> dict[str, str]:
+            from scripts.compose_env import compose_env_value
+
+            values: dict[str, str] = {}
+            try:
+                lines = path.read_text(encoding='utf-8').splitlines()
+            except (OSError, UnicodeError):
+                raise PostgresDeployError() from None
+            for line in lines:
+                match = re.match(
+                    r'^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$',
+                    line.strip(),
+                )
+                if match:
+                    key, raw = match.groups()
+                    if key in values:
+                        raise PostgresDeployError()
+                    values[key] = compose_env_value(raw)
+            return values
+
+        pin_path, runtime_path = database_input_files(cfg)
+        defaults_path = cfg.root / 'config/runtime.defaults.env'
+        pin_values = env_values(pin_path)
+        runtime_values = env_values(runtime_path)
+        defaults_values = env_values(defaults_path)
+        selected_host_root = pin_values.get('VAULT_HOST_ROOT') or runtime_values.get('VAULT_HOST_ROOT', '')
+        selected_root = selected.root if selected is not None else selected_host_root
+        if (not selected_root or selected_root != selected_host_root or selected_root == '/'
+            or not Path(selected_root).is_absolute() or str(Path(selected_root)) != selected_root
+            or '..' in Path(selected_root).parts
+            or any(character in selected_root for character in ('\x00', '\n', '\r', ':'))):
+            raise PostgresDeployError()
         ids = _command([
             'docker', 'ps', '--all', '--no-trunc', '--filter',
             'label=com.docker.compose.project=pkm-' + cfg.channel,
@@ -2312,11 +2358,21 @@ class LinuxEffects:
                 mount for mount in mounts
                 if isinstance(mount, dict)
                 and mount.get('Type') == 'bind'
-                and mount.get('Source') == selected.root
-                and mount.get('Destination') in {selected.root, '/app/vault'}
+                and mount.get('Source') == selected_root
+                and mount.get('Destination') in {selected_root, '/app/vault'}
             ]
             if service in {'api', 'worker', 'watcher'}:
                 if len(selected_mounts) != 1:
+                    raise PostgresDeployError()
+                if selected is None and (
+                    parsed.get('PKM_ENVIRONMENT') != cfg.channel
+                    or parsed.get('VAULT_HOST_ROOT') != selected_root
+                    or not any(parsed.get(key) for key in (
+                        'VAULT_ROOT', 'VAULT_ROOT_' + cfg.channel.upper(), 'WATCHER_VAULT_PATH',
+                    ))
+                    or any(parsed.get(key) and parsed[key] != selected_mounts[0]['Destination']
+                           for key in ('VAULT_ROOT', 'VAULT_ROOT_' + cfg.channel.upper(), 'WATCHER_VAULT_PATH'))
+                ):
                     raise PostgresDeployError()
                 selected_destinations.add(str(selected_mounts[0]['Destination']))
             snapshots[service] = {
@@ -2339,11 +2395,11 @@ class LinuxEffects:
         if len(selected_destinations) != 1:
             raise PostgresDeployError()
         container_root = next(iter(selected_destinations))
-        if container_root not in {selected.root, '/app/vault'}:
+        if container_root not in {selected_root, '/app/vault'}:
             raise PostgresDeployError()
         vault_overlay = (
             'docker-compose.full-host-vault.yml'
-            if container_root == selected.root
+            if container_root == selected_root
             else 'docker-compose.legacy-vault.yml'
         )
         api_environment = environments.get('api')
@@ -2416,39 +2472,9 @@ class LinuxEffects:
                 if descriptor is not None:
                     os.close(descriptor)
 
-        def env_values(path: Path) -> dict[str, str]:
-            from scripts.compose_env import compose_env_value
-
-            values: dict[str, str] = {}
-            try:
-                lines = path.read_text(encoding='utf-8').splitlines()
-            except (OSError, UnicodeError):
-                raise PostgresDeployError() from None
-            for line in lines:
-                match = re.match(
-                    r'^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$',
-                    line.strip(),
-                )
-                if match:
-                    key, raw = match.groups()
-                    if key in values:
-                        raise PostgresDeployError()
-                    values[key] = compose_env_value(raw)
-            return values
-
-        pin_path, runtime_path = database_input_files(cfg)
-        defaults_path = cfg.root / 'config/runtime.defaults.env'
-        pin_values = env_values(pin_path)
-        runtime_values = env_values(runtime_path)
-        defaults_values = env_values(defaults_path)
         effective_values = {**defaults_values, **runtime_values}
         runtime_llm = runtime_values.get('LLM_PROVIDER', '')
         effective_values['LLM_PROVIDER'] = runtime_llm or pin_values.get('LLM_PROVIDER', '')
-        selected_host_root = pin_values.get('VAULT_HOST_ROOT', '')
-        if not selected_host_root:
-            selected_host_root = runtime_values.get('VAULT_HOST_ROOT', '')
-        if selected_host_root != selected.root:
-            raise PostgresDeployError()
         for key in (
             'LLM_PROVIDER', 'EMBED_PROVIDER', 'EMBED_MODEL', 'STORE_BACKEND',
         ):
