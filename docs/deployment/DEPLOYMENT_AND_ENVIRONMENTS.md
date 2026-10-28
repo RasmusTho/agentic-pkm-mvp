@@ -1967,7 +1967,9 @@ duplicate implementation issue is needed. The request-bound migration acknowledg
 `816cb6f3a3569e145d28701851fc2b067cf7c627` remains a prerequisite and is not replaced by this map.
 
 The designated agent-host entrypoint is `python3 -m app.ops.postgres_deploy_host <channel> <revision>`.
-It uses the same BWS controller lock as import/check before selected-consumer parity checks, then
+It uses the same BWS controller lock as import/check before selected-consumer checks. DEV/TEST
+deployment checks read only the selected project's value for shared identities; the generic admin
+check/import path retains its two-copy parity behavior. The entrypoint then
 contacts only `ygg-<channel>` with value-free requests. For a Product deployment that may only read
 existing BWS values, pass `--existing-secrets-only`. The selected checks still run; a missing
 PostgreSQL password refuses before any RPC or remote deployment mutation. The host operation journal
@@ -1991,26 +1993,37 @@ approval. The admin token remains on Demerzel. Retain locks, parity
 checks, history, pending unknown outcomes and matching terminal receipts; this acceptance does not
 complete broader deployment/runtime qualification.
 
-After a host session restart, the same invocation recovers missing `BWS_ORGANIZATION_ID`,
-`BWS_NON_PROD_PROJECT_ID`, and `BWS_PROD_PROJECT_ID` from the installed canonical
-`/etc/yggdrasil/bws-deploy/<channel>.json` on `ygg-dev`, `ygg-test`, and `ygg-prod`.
-For example, `python3 -m app.ops.postgres_deploy_host test <authorized-revision>
---existing-secrets-only` needs no metadata exports when those protected sources are available.
-Complete explicit metadata remains supported without remote reads; any supplied partial metadata
-must match the installed mapping. The host requires canonical UUIDs, one organization, the same
-dev/test non-prod project, and a distinct prod project before constructing the admin client.
+After a host session restart, the validated deployment plan selects the BWS metadata route.
+For DEV/TEST, the host uses only `BWS_ORGANIZATION_ID` and `BWS_NON_PROD_PROJECT_ID`; when
+either selected field is missing, it reads only the selected channel's installed canonical file
+from `ygg-dev` or `ygg-test`. Any supplied selected field must match that file. When both selected
+fields are explicit, no metadata SSH read is needed. The DEV/TEST route does not inspect
+`BWS_PROD_PROJECT_ID` or contact `ygg-prod`. For example,
+`python3 -m app.ops.postgres_deploy_host test <authorized-revision> --existing-secrets-only`
+needs no metadata exports when the protected TEST source is available.
 
-This fallback uses only strict host-key SSH, noninteractive sudo, and a bounded read-only Python
-reader with a 20-second timeout per alias. It checks root-owned, non-writable, nonsymlink directory
-ancestry and a root-owned, single-link, regular `0600` channel file no larger than 64 KiB. It accepts
-only the existing channel-config fields and returns only organization/project metadata. Unavailable
-SSH, unsafe files, malformed or unexpected output, and conflicting mappings refuse before operation
-admission with the existing value-free diagnostic. Metadata stays in process memory; the fallback
-does not load runtime env or token files, mutate `os.environ`, persist configuration, or contact BWS.
-Keychain authentication, selected-consumer checks, the host controller, VM journal/lock, exact
-request reconciliation, existing-secrets-only mode, and bootstrap/prod acknowledgment gates retain
-their existing authority. Repository tests establish this recovery path; live channel qualification
-remains with #5667.
+PROD deployment and complete administrative callers retain the full three-ID configuration path.
+That path continues to validate the organization and both configured projects. Target BWS admin
+sessions verify each configured project with the SDK's `projects().get(project_id)` response,
+checking its exact ID, canonical name, and organization before requesting secret values.
+
+The installed-metadata fallback uses only strict host-key SSH, noninteractive sudo, and a bounded
+read-only Python reader with a 20-second timeout for the selected alias. It checks root-owned,
+non-writable, nonsymlink directory ancestry and a root-owned, single-link, regular `0600` channel
+file no larger than 64 KiB. It accepts only the existing channel-config fields and returns only
+organization/project metadata. Unavailable SSH, unsafe files, malformed or unexpected output, and
+conflicting selected fields refuse before operation admission with the existing value-free
+diagnostic. Metadata stays in process memory; the fallback does not load runtime env or token files,
+mutate `os.environ`, persist configuration, or contact BWS.
+
+The admin SDK's `secrets().list(organization_id)` remains an organization-scoped identifier-metadata
+query. Before `secrets().get()` reads a value, the host filters for the exact organization, logical
+identity, and single selected project binding. A DEV/TEST host deployment reads only its selected
+non-prod copy for shared identities; generic shared-secret administrative checks and imports retain
+their two-copy parity contract. Keychain authentication, selected-consumer checks, the host
+controller, VM journal/lock, exact request reconciliation, existing-secrets-only mode, and
+bootstrap/prod acknowledgment gates retain their existing authority. Repository tests establish
+this recovery path; live channel qualification remains with #5667.
 
 When such a deployment remains pending after its supervised worker has ended, reconcile only the
 same operation using its exact request revision and original `--ack-forward-only` choice. The

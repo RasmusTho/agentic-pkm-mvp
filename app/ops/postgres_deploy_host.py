@@ -25,6 +25,7 @@ from app.ops.secret_admin import SecretAdmin
 
 
 _ADMIN_METADATA_KEYS = ('BWS_ORGANIZATION_ID', 'BWS_NON_PROD_PROJECT_ID', 'BWS_PROD_PROJECT_ID')
+_NON_PROD_METADATA_KEYS = ('BWS_ORGANIZATION_ID', 'BWS_NON_PROD_PROJECT_ID')
 # Stdlib-only code sent to the existing strict aliases: it requires no checkout
 # update on the VMs and opens only canonical non-secret channel configuration.
 _CHANNEL_METADATA_READER = '''
@@ -119,9 +120,33 @@ def _installed_channel_metadata(channel: str) -> dict[str, str]:
         raise PostgresDeployError() from None
 
 
-def _configured_host_admin() -> BwsSecretAdmin:
-    # Keep unrelated callers' configured_admin factory unchanged. Complete
-    # explicit metadata preserves its route; partial metadata must match sources.
+def _configured_host_admin(plan: DeployPlan | None = None) -> BwsSecretAdmin:
+    # The non-prod deployment route is target-scoped: PROD metadata and aliases
+    # are deliberately outside this resolution path.
+    if plan is not None:
+        plan.validate()
+        if plan.channel in {'dev', 'test'}:
+            supplied = {
+                key: _canonical_uuid(os.environ[key])
+                for key in _NON_PROD_METADATA_KEYS if key in os.environ
+            }
+            if len(supplied) == len(_NON_PROD_METADATA_KEYS):
+                return BwsSecretAdmin(BwsAdminConfig.for_non_prod_target(
+                    supplied['BWS_ORGANIZATION_ID'], supplied['BWS_NON_PROD_PROJECT_ID'],
+                ))
+            installed_target = _installed_channel_metadata(plan.channel)
+            target = {
+                'BWS_ORGANIZATION_ID': installed_target['organization_id'],
+                'BWS_NON_PROD_PROJECT_ID': installed_target['project_id'],
+            }
+            if any(value != target[key] for key, value in supplied.items()):
+                raise PostgresDeployError()
+            return BwsSecretAdmin(BwsAdminConfig.for_non_prod_target(
+                target['BWS_ORGANIZATION_ID'], target['BWS_NON_PROD_PROJECT_ID'],
+            ))
+
+    # Keep complete administrative and PROD routes available. Partial complete-
+    # route metadata must match every installed channel source.
     supplied = {key: _canonical_uuid(os.environ[key]) for key in _ADMIN_METADATA_KEYS if key in os.environ}
     if len(supplied) == len(_ADMIN_METADATA_KEYS):
         return BwsSecretAdmin(BwsAdminConfig.from_environment(supplied))
@@ -134,6 +159,16 @@ def _configured_host_admin() -> BwsSecretAdmin:
     if any(value != metadata[key] for key, value in supplied.items()):
         raise PostgresDeployError()
     return BwsSecretAdmin(BwsAdminConfig.from_environment(metadata))
+
+
+def _configured_deploy_admin(plan: DeployPlan,
+                             controller: HostSecretController) -> SecretAdmin:
+    plan.validate()
+    target_scope = 'non-prod' if plan.channel in {'dev', 'test'} else None
+    return SecretAdmin(
+        _configured_host_admin(plan), controller=controller,
+        target_project_scope=target_scope,
+    )
 
 
 def require_qualification(controller: HostSecretController) -> None:
@@ -847,6 +882,10 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(proof, sort_keys=True))
             return 0
         if recovery_request is not None:
+            # Resolve the exact test target before any recovery RPC can change
+            # remote state. The provider session and secret-value checks remain
+            # inside deploy_from_host's controller-locked preflight.
+            admin = _configured_deploy_admin(plan, controller)
             remote = SshDeployRemote('ygg-test')
             marker = _read_test_recovery_marker(controller, recovery_request)
             if args.reconstruct_missing_instance_state:
@@ -908,7 +947,6 @@ def main(argv: list[str] | None = None) -> int:
                 remote.test_recovery_release_instance_state(
                     lineage_request, successor_operation_id=next_operation_id,
                 )
-                admin = SecretAdmin(_configured_host_admin(), controller=controller)
                 receipt = deploy_from_host(
                     admin, remote, plan,
                     qualified=lambda: require_qualification(controller),
@@ -954,7 +992,6 @@ def main(argv: list[str] | None = None) -> int:
                     _write_test_recovery_marker(
                         controller, recovery_request, 'ready', fresh_operation_id,
                     )
-            admin = SecretAdmin(_configured_host_admin(), controller=controller)
             receipt = deploy_from_host(
                 admin, remote, plan, qualified=lambda: require_qualification(controller),
                 allow_bootstrap=False, operation_id=fresh_operation_id,
@@ -985,7 +1022,7 @@ def main(argv: list[str] | None = None) -> int:
             receipt = receipts[-1]
             print(json.dumps(receipt.payload(), sort_keys=True))
             return 0
-        admin = SecretAdmin(_configured_host_admin(), controller=controller)
+        admin = _configured_deploy_admin(plan, controller)
         options = {'operation_id': args.operation_id} if args.operation_id is not None else {}
         receipt = deploy_from_host(admin, SshDeployRemote('ygg-' + args.channel), plan,
                                    qualified=lambda: require_qualification(controller),

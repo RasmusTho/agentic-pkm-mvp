@@ -60,8 +60,8 @@ class SecretAdminProvider(Protocol):
 @dataclass(frozen=True)
 class BwsAdminConfig:
     organization_id: str
-    non_prod_project_id: str
-    prod_project_id: str
+    non_prod_project_id: str | None
+    prod_project_id: str | None
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> BwsAdminConfig:
@@ -73,18 +73,37 @@ class BwsAdminConfig:
         except Exception:
             raise SecretAdminError() from None
 
+    @classmethod
+    def for_non_prod_target(cls, organization_id: str,
+                            non_prod_project_id: str) -> BwsAdminConfig:
+        try:
+            cfg = cls(organization_id, non_prod_project_id, None)
+            cfg.validate()
+            return cfg
+        except Exception:
+            raise SecretAdminError() from None
+
     def validate(self) -> None:
-        ids = [self.organization_id, self.non_prod_project_id, self.prod_project_id]
-        if len(set(ids)) != len(ids) or any(str(UUID(item)) != item for item in ids):
-            raise SecretAdminError()
+        try:
+            projects = self._project_mapping()
+            ids = [self.organization_id, *projects.values()]
+            if (not projects or len(set(ids)) != len(ids)
+                    or any(not isinstance(item, str) or str(UUID(item)) != item for item in ids)):
+                raise SecretAdminError()
+        except Exception:
+            raise SecretAdminError() from None
+
+    def _project_mapping(self) -> dict[str, str]:
+        projects: dict[str, str] = {}
+        if self.non_prod_project_id is not None:
+            projects['non-prod'] = self.non_prod_project_id
+        if self.prod_project_id is not None:
+            projects['prod'] = self.prod_project_id
+        return projects
 
     def projects(self) -> dict[str, str]:
         self.validate()
-        projects = {
-            'non-prod': self.non_prod_project_id,
-            'prod': self.prod_project_id,
-        }
-        return projects
+        return self._project_mapping()
 
 
 def _admin_token() -> str:
@@ -115,13 +134,15 @@ class BwsSecretAdmin:
         del token
         if not result.success or result.data is None or not result.data.authenticated:
             raise SecretAdminError()
-        response = client.projects().list(self.config.organization_id)
-        if not response.success or len(response.data.data) != len(self.config.projects()):
-            raise SecretAdminError()
-        projects = {item.name: str(item.id) for item in response.data.data
-                    if str(item.organization_id) == self.config.organization_id}
-        if projects != self.config.projects():
-            raise SecretAdminError()
+        project_api = client.projects()
+        for name, project_id in self.config.projects().items():
+            response = project_api.get(project_id)
+            if not response.success or response.data is None:
+                raise SecretAdminError()
+            item = response.data
+            if (str(item.id) != project_id or item.name != name
+                    or str(item.organization_id) != self.config.organization_id):
+                raise SecretAdminError()
         self._client = client
         return client
 
@@ -167,10 +188,20 @@ class BwsSecretAdmin:
             project_id = self._scope(project, identity)
             client = self._session()
             response = client.secrets().list(self.config.organization_id)
-            if not response.success:
+            if (not response.success or response.data is None
+                    or not isinstance(response.data.data, list)):
                 raise SecretAdminError()
-            matches = [item for item in response.data.data if item.key == identity
-                       and project_id in [str(p) for p in item.project_ids]]
+            matches = []
+            for item in response.data.data:
+                if item.key != identity or str(item.organization_id) != self.config.organization_id:
+                    continue
+                project_ids = [str(project) for project in item.project_ids]
+                if project_ids != [project_id]:
+                    continue
+                item_id = str(item.id)
+                if str(UUID(item_id)) != item_id:
+                    raise SecretAdminError()
+                matches.append(item)
             if not matches:
                 return None
             if len(matches) != 1:

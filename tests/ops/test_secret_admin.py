@@ -241,6 +241,35 @@ def test_typesafe_admin_check_uses_only_marr_project_and_exact_consumer_grant(se
     }
 
 
+def test_target_scoped_check_reads_only_selected_shared_copy(setup):
+    _, provider, controller = setup
+    provider.seed(projects=('non-prod',))
+    provider.seed(value='prod-copy-is-not-selected', projects=('prod',))
+    target_admin = SecretAdmin(provider, controller=controller, target_project_scope='non-prod')
+    with controller.admit('deploy', 'dev') as operation:
+        statuses = target_admin.check_selected(
+            operation, 'dev', ['builderops-model-inquiry']
+        )
+        operation.finish(TerminalEvidence(
+            operation.operation_id, 'deploy', 'dev', 'committed', 'remote-terminal'
+        ))
+    assert statuses == [{'secret': 'openai.api-key', 'status': 'ok'}]
+    assert provider.calls == [('read', 'non-prod', IDENTITY)]
+
+
+def test_generic_shared_check_still_reads_both_copies(setup):
+    admin, provider, _ = setup
+    provider.seed(projects=('non-prod',))
+    provider.seed(value='prod-copy-is-not-selected', projects=('prod',))
+    assert admin.check('dev', ['builderops-model-inquiry']) == [
+        {'secret': 'openai.api-key', 'status': 'divergent'}
+    ]
+    assert provider.calls == [
+        ('read', 'non-prod', IDENTITY),
+        ('read', 'prod', IDENTITY),
+    ]
+
+
 def test_typesafe_import_rejects_non_dev_scope_before_provider_access(setup):
     admin, provider, _ = setup
     with pytest.raises(SecretAdminError):
@@ -264,35 +293,121 @@ def test_admin_project_inventory_has_only_existing_channel_projects():
             current._scope(project, identity)
 
 
-def test_admin_session_requires_the_exact_configured_project_inventory():
+def test_bws_session_uses_project_get_for_configured_targets():
     org, nonprod, prod = [str(uuid4()) for _ in range(3)]
 
     def client_for(projects):
+        project_ids = dict(projects)
+        calls = []
         auth = NS(login_access_token=lambda *_: NS(
             success=True, data=NS(authenticated=True)
         ))
-        project_api = NS(list=lambda _organization: NS(
-            success=True,
-            data=NS(data=[NS(name=name, id=project_id, organization_id=org)
-                          for name, project_id in projects]),
-        ))
-        return NS(auth=lambda: auth, projects=lambda: project_api)
+        def get(project_id):
+            calls.append(('get', project_id))
+            name = next((name for name, candidate in projects if candidate == project_id), None)
+            return NS(success=True, data=NS(
+                name=name, id=project_id, organization_id=org,
+            ))
+        project_api = NS(get=get, list=lambda *_: pytest.fail('organization project list used'))
+        client = NS(auth=lambda: auth, projects=lambda: project_api)
+        client.calls = calls
+        client.project_ids = project_ids
+        return client
 
     two_projects = client_for([('non-prod', nonprod), ('prod', prod)])
     admin = BwsSecretAdmin(BwsAdminConfig(org, nonprod, prod),
                            client_factory=lambda: two_projects, token_reader=lambda: CANARY)
     assert admin._session() is two_projects
+    assert two_projects.calls == [('get', nonprod), ('get', prod)]
 
-    unexpected_marr_project = client_for(
-        [('non-prod', nonprod), ('prod', prod), ('unexpected', str(uuid4()))]
+    target = BwsAdminConfig.for_non_prod_target(org, nonprod)
+    target_client = client_for([('non-prod', nonprod), ('prod', prod)])
+    target_admin = BwsSecretAdmin(
+        target, client_factory=lambda: target_client, token_reader=lambda: CANARY,
     )
-    admin_without_marr = BwsSecretAdmin(
-        BwsAdminConfig(org, nonprod, prod),
-        client_factory=lambda: unexpected_marr_project,
-        token_reader=lambda: CANARY,
+    assert target_admin._session() is target_client
+    assert target_client.calls == [('get', nonprod)]
+    assert target.projects() == {'non-prod': nonprod}
+
+
+@pytest.mark.parametrize('mismatch', ('id', 'name', 'organization'))
+def test_bws_project_get_mismatch_refuses_before_secret_lookup(mismatch):
+    org, nonprod = str(uuid4()), str(uuid4())
+    auth = NS(login_access_token=lambda *_: NS(success=True, data=NS(authenticated=True)))
+    response = {
+        'id': str(uuid4()) if mismatch == 'id' else nonprod,
+        'name': 'unexpected' if mismatch == 'name' else 'non-prod',
+        'organization_id': str(uuid4()) if mismatch == 'organization' else org,
+    }
+    project_api = NS(get=lambda _project_id: NS(
+        success=True, data=NS(**response),
+    ), list=lambda *_: pytest.fail('organization project list used'))
+    secrets_api = NS(list=lambda *_: pytest.fail('secrets queried before project validation'))
+    client = NS(auth=lambda: auth, projects=lambda: project_api,
+                secrets=lambda: secrets_api)
+    admin = BwsSecretAdmin(
+        BwsAdminConfig.for_non_prod_target(org, nonprod),
+        client_factory=lambda: client, token_reader=lambda: CANARY,
     )
     with pytest.raises(SecretAdminError):
-        admin_without_marr._session()
+        admin.read('non-prod', IDENTITY)
+
+
+def test_secret_metadata_filters_before_value_get():
+    org, other_org, nonprod, prod = [str(uuid4()) for _ in range(4)]
+    valid_id = str(uuid4())
+    metadata = [
+        NS(id=str(uuid4()), key=IDENTITY, organization_id=other_org,
+           project_ids=[nonprod]),
+        NS(id=str(uuid4()), key=IDENTITY, organization_id=org,
+           project_ids=[prod]),
+        NS(id=str(uuid4()), key=IDENTITY, organization_id=org,
+           project_ids=[nonprod, prod]),
+        NS(id=str(uuid4()), key='shared/github.token', organization_id=org,
+           project_ids=[nonprod]),
+        NS(id=valid_id, key=IDENTITY, organization_id=org,
+           project_ids=[nonprod]),
+    ]
+    auth = NS(login_access_token=lambda *_: NS(success=True, data=NS(authenticated=True)))
+    project_api = NS(get=lambda project_id: NS(
+        success=True, data=NS(id=project_id, name='non-prod', organization_id=org),
+    ), list=lambda *_: pytest.fail('organization project list used'))
+    calls = []
+    secrets_api = NS(
+        list=lambda organization_id: NS(
+            success=True, data=NS(data=metadata),
+        ) if organization_id == org else pytest.fail('wrong organization listed'),
+        get=lambda item_id: calls.append(item_id) or NS(success=True, data=NS(
+            id=item_id, key=IDENTITY, organization_id=org, project_id=nonprod,
+            value=PRIOR, note='owner text',
+        )),
+    )
+    client = NS(auth=lambda: auth, projects=lambda: project_api,
+                secrets=lambda: secrets_api)
+    admin = BwsSecretAdmin(
+        BwsAdminConfig.for_non_prod_target(org, nonprod),
+        client_factory=lambda: client, token_reader=lambda: CANARY,
+    )
+    result = admin.read('non-prod', IDENTITY)
+    assert result is not None and result.value == PRIOR
+    assert calls == [valid_id]
+
+    for invalid in metadata[:-1]:
+        metadata[:] = [invalid]
+        calls.clear()
+        assert admin.read('non-prod', IDENTITY) is None
+        assert calls == []
+
+    metadata[:] = [NS(id='malformed-id', key=IDENTITY, organization_id=org,
+                      project_ids=[nonprod])]
+    with pytest.raises(SecretAdminError):
+        admin.read('non-prod', IDENTITY)
+    assert calls == []
+    metadata[:] = [NS(id=valid_id, key=IDENTITY, organization_id=org,
+                      project_ids=[nonprod])] * 2
+    with pytest.raises(SecretAdminError):
+        admin.read('non-prod', IDENTITY)
+    assert calls == []
 
 
 def test_shared_import_history_records_genesis_tombstone_before_first_provision(setup):
@@ -463,9 +578,11 @@ def test_sdk_adapter_authenticates_without_cache_and_uses_request_body(monkeypat
             if 'loginAccessToken' in command:
                 response['data'] = {'authenticated': True, 'resetMasterPassword': False, 'forcePasswordReset': False}
             elif 'projects' in command:
-                response['data'] = {'data': [{'id': pid, 'name': name, 'organizationId': org,
-                    'creationDate': '2026-01-01T00:00:00Z', 'revisionDate': '2026-01-01T00:00:00Z'}
-                    for name, pid in [('non-prod', nonprod), ('prod', prod)]]}
+                project_id = command['projects']['get']['id']
+                project_name = 'non-prod' if project_id == nonprod else 'prod'
+                response['data'] = {'id': project_id, 'name': project_name,
+                    'organizationId': org, 'creationDate': '2026-01-01T00:00:00Z',
+                    'revisionDate': '2026-01-01T00:00:00Z'}
             else:
                 request = command['secrets']['create']
                 response['data'] = {'id': item, 'key': request['key'], 'value': request['value'],
@@ -479,7 +596,10 @@ def test_sdk_adapter_authenticates_without_cache_and_uses_request_body(monkeypat
     adapter = BwsSecretAdmin(config, client_factory=lambda: client, token_reader=lambda: CANARY)
     result = adapter.put('non-prod', IDENTITY, None, PRIOR, 'owner\nmarker')
     assert result.value == PRIOR
-    assert len(commands) == 3
+    assert len(commands) == 4
+    assert [command['projects']['get']['id'] for command in commands if 'projects' in command] == [
+        nonprod, prod,
+    ]
     assert 'stateFile' not in json.dumps(commands[0])
     assert commands[-1]['secrets']['create']['value'] == PRIOR
     assert commands[-1]['secrets']['create']['projectIds'] == [nonprod]
