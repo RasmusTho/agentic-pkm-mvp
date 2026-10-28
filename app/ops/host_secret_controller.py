@@ -26,6 +26,10 @@ class HostSecretAdmissionError(RuntimeError):
         )
 
 
+class PreserveJournalBodyError(Exception):
+    """Marker for a typed downstream refusal that must survive journal scope."""
+
+
 _KINDS = {
     "check", "import", "token-push", "deploy", "bootstrap", "source-persistence",
     "operator-identity-restoration", "source-diagnostic",
@@ -47,6 +51,7 @@ _DEPLOY_ABSENCE_STAGE = "retired-before-admission"
 _SOURCE_PERSISTENCE_ABSENCE_SOURCE = "native-absence-proof"
 _OPERATOR_UNKNOWN_CLEANUP_RESULT = "reconciled-unknown"
 _OPERATOR_UNKNOWN_CLEANUP_SOURCE = "remote-terminal-unknown-cleanup-complete"
+_DEPLOY_UNKNOWN_FENCE_SOURCE = "remote-terminal-unknown-deploy-fenced"
 
 
 @dataclass(frozen=True)
@@ -172,6 +177,20 @@ class HostSecretOperation:
         ):
             valid_source = True
         if (
+            self.kind == "deploy"
+            and evidence.result == _OPERATOR_UNKNOWN_CLEANUP_RESULT
+            and evidence.source == _DEPLOY_UNKNOWN_FENCE_SOURCE
+            and self.allow_bootstrap is False
+            and (
+                self._mutation_started
+                or (
+                    self._completed_result == _OPERATOR_UNKNOWN_CLEANUP_RESULT
+                    and self._completed_source == _DEPLOY_UNKNOWN_FENCE_SOURCE
+                )
+            )
+        ):
+            valid_source = True
+        if (
             self.kind in {"source-persistence", "source-diagnostic"}
             and evidence.result == "failed"
             and evidence.source == _SOURCE_PERSISTENCE_ABSENCE_SOURCE
@@ -200,7 +219,11 @@ class HostSecretOperation:
             }
             or (
                 evidence.result == _OPERATOR_UNKNOWN_CLEANUP_RESULT
-                and self.kind != "operator-identity-restoration"
+                and self.kind not in {"operator-identity-restoration", "deploy"}
+            )
+            or (
+                evidence.result == _OPERATOR_UNKNOWN_CLEANUP_RESULT
+                and self.kind == "deploy" and self.allow_bootstrap is not False
             )
             or (
                 evidence.result == "failed"
@@ -256,6 +279,8 @@ class HostSecretController:
             os.fsync(directory_fd)
             yield journal_fd
         except HostSecretAdmissionError:
+            raise
+        except PreserveJournalBodyError:
             raise
         except Exception:
             raise HostSecretAdmissionError() from None
@@ -433,6 +458,8 @@ class HostSecretController:
                         terminal_stages.add("failed")
                     if record["kind"] == "operator-identity-restoration":
                         terminal_stages.add(_OPERATOR_UNKNOWN_CLEANUP_RESULT)
+                    if record["kind"] == "deploy":
+                        terminal_stages.add(_OPERATOR_UNKNOWN_CLEANUP_RESULT)
                     if (
                         record["stage"] not in terminal_stages
                         or not (
@@ -445,6 +472,14 @@ class HostSecretController:
                                 and record["stage"] == _OPERATOR_UNKNOWN_CLEANUP_RESULT
                                 and pending["stage"] == "sent"
                                 and record["source"] == _OPERATOR_UNKNOWN_CLEANUP_SOURCE
+                            )
+                            or (
+                                record["kind"] == "deploy"
+                                and record["stage"] == _OPERATOR_UNKNOWN_CLEANUP_RESULT
+                                and pending["stage"] == "sent"
+                                and pending.get("allow_bootstrap") is False
+                                and record.get("allow_bootstrap") is False
+                                and record["source"] == _DEPLOY_UNKNOWN_FENCE_SOURCE
                             )
                             or (
                                 record["kind"] in {"source-persistence", "source-diagnostic"}
@@ -858,6 +893,7 @@ class HostSecretController:
             if pending and operation_id is not None and pending['operation_id'] != operation_id:
                 raise HostSecretAdmissionError()
             completed = None
+            completed_source = None
             if operation_id is not None and pending is None:
                 # _pending has validated the entire durable history. An exact
                 # terminal ID is read-only; it cannot append another prepared or
@@ -868,15 +904,25 @@ class HostSecretController:
                 matches = [record for record in records if record['operation_id'] == operation_id]
                 if matches:
                     last = matches[-1]
+                    terminal_matches = (
+                        last['stage'] in {'committed', 'aborted', 'failed'}
+                        and last['source'] == 'remote-terminal'
+                    ) or (
+                        target in {'dev', 'test'}
+                        and last['stage'] == _OPERATOR_UNKNOWN_CLEANUP_RESULT
+                        and last['source'] == _DEPLOY_UNKNOWN_FENCE_SOURCE
+                    )
                     if (last['kind'] != 'deploy' or last['target'] != target
                         or last.get('allow_bootstrap') is not False
-                        or last['stage'] not in {'committed', 'aborted', 'failed'}
-                        or last['source'] != 'remote-terminal'):
+                        or not terminal_matches):
                         raise HostSecretAdmissionError()
                     completed = str(last['stage'])
+                    completed_source = str(last['source'])
             operation = HostSecretOperation(descriptor,
                 str(pending["operation_id"]) if pending else operation_id or str(uuid4()), "deploy", target,
-                allow_bootstrap=allow_bootstrap, completed_result=completed)
+                allow_bootstrap=allow_bootstrap,
+                mutation_started=bool(pending and pending.get('stage') == 'sent'),
+                completed_result=completed, completed_source=completed_source)
             # Read-only host preflight holds the same lock but does not leave a
             # pending mutation that would prevent importing a missing value.
             # prepare_mutation persists prepared + sent before the first RPC.
