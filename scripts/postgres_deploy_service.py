@@ -582,6 +582,25 @@ def _source_installation_request(raw: str) -> bool:
         return False
 
 
+def _source_installation_recovery_request(raw: str) -> bool:
+    """Recognize the read-only same-operation recovery request before imports."""
+    try:
+        request = json.loads(raw, object_pairs_hook=_unique_json_object)
+        return (type(request) is dict
+                and set(request) == {"action", "operation_id", "candidate_sha", "image_digest", "bundle_name"}
+                and request["action"] == "source-installation-reconcile"
+                and type(request["operation_id"]) is str
+                and str(UUID(request["operation_id"])) == request["operation_id"]
+                and type(request["candidate_sha"]) is str
+                and re.fullmatch(r"[0-9a-f]{40}", request["candidate_sha"]) is not None
+                and type(request["image_digest"]) is str
+                and re.fullmatch(r"sha256:[0-9a-f]{64}", request["image_digest"]) is not None
+                and type(request["bundle_name"]) is str
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", request["bundle_name"]) is not None)
+    except Exception:
+        return False
+
+
 def _candidate_checkout_root(candidate_sha: str) -> Path:
     """Accept only the clean exact checkout that launched this rpc process."""
     try:
@@ -697,8 +716,30 @@ def _execute_verified_candidate_entrypoint(
 def _dispatch(root: Path, channel: str, arguments: list[str], *, caller_checkout: Path | None = None) -> int:
     """Import the fixed app entrypoint only after reserving its source generation."""
     action = arguments[0]
-    reservation = _preimport_reservation(channel, action)
     previous_stdin = sys.stdin
+    prefetched_raw = None
+    source_recovery = False
+    if action == "rpc":
+        prefetched_raw = sys.stdin.read(65537)
+        if len(prefetched_raw) > 65536:
+            sys.stdin = previous_stdin
+            return 78
+        sys.stdin = io.StringIO(prefetched_raw)
+        source_recovery = channel in {"dev", "test"} and _source_installation_recovery_request(prefetched_raw)
+    try:
+        reservation = _preimport_reservation(channel, action)
+    except RuntimeError:
+        if source_recovery:
+            # A live source installer owns the global lock.  Recovery is a
+            # bounded read-only query and must report unresolved without
+            # importing or competing with that transaction.
+            print(json.dumps({
+                "source_installation": {"status": "unresolved", "reason": "global_lock_active"},
+            }, sort_keys=True))
+            sys.stdin = previous_stdin
+            return 0
+        sys.stdin = previous_stdin
+        raise
     source_finder = None
     source_installation = False
     source_root = root
@@ -706,7 +747,7 @@ def _dispatch(root: Path, channel: str, arguments: list[str], *, caller_checkout
         if reservation.skip_cleanup:
             return 0
         if action == "rpc":
-            raw = sys.stdin.read(65537)
+            raw = prefetched_raw if prefetched_raw is not None else sys.stdin.read(65537)
             if len(raw) > 65536:
                 return 78
             sys.stdin = io.StringIO(raw)
@@ -734,7 +775,7 @@ def _dispatch(root: Path, channel: str, arguments: list[str], *, caller_checkout
                 sys._yggdrasil_bws_candidate_checkout = str(source_root)
                 sys.path.insert(0, str(source_root))
         source_finder = _install_source_loader(source_root)
-        if source_installation:
+        if source_installation or source_recovery:
             import importlib
             importlib.import_module("app.ops.bws_installation_transaction")
             importlib.import_module("app.ops.bws_installation_admission")
@@ -747,7 +788,7 @@ def _dispatch(root: Path, channel: str, arguments: list[str], *, caller_checkout
                 with admission.shared_caller_reservation(channel):
                     pass
         from app.ops.postgres_deploy_linux import main
-        if source_installation or (action == "cleanup" and channel in {"dev", "test"}):
+        if source_installation or source_recovery or (action == "cleanup" and channel in {"dev", "test"}):
             reservation.release()
         if action == "serve":
             setattr(sys, _STARTUP_RELEASE_ATTRIBUTE, reservation.release)

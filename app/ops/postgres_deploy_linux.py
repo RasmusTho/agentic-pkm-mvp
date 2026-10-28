@@ -5153,6 +5153,12 @@ def rpc(channel: str, request: dict[str, Any]) -> dict[str, Any]:
         from app.ops.bws_installation_transaction import run_source_installation
 
         return run_source_installation(channel, request)
+    if isinstance(request, dict) and request.get('action') == 'source-installation-reconcile':
+        if channel not in {'dev', 'test'}:
+            raise PostgresDeployError()
+        from app.ops.bws_installation_transaction import reconcile_source_installation
+
+        return reconcile_source_installation(channel, request)
     from app.ops.bws_installation_admission import shared_caller_reservation
 
     with shared_caller_reservation(channel):

@@ -1970,6 +1970,72 @@ def test_profile_error_after_handle_close_stops_candidate_and_retains_owner():
     assert admission.receipt["status"] == "unknown"
 
 
+def test_source_installation_recovery_refuses_unknown_or_foreign_owner_without_effects(
+    tmp_path, monkeypatch,
+):
+    """Recovery never turns an unfinished or foreign marker into a transaction."""
+    from app.ops import bws_installation_admission as admission
+    from app.ops import postgres_deploy_linux as linux
+
+    runtime = tmp_path / "runtime"
+    receipts = tmp_path / "receipts"
+    runtime.mkdir(mode=0o700)
+    receipts.mkdir(mode=0o700)
+    monkeypatch.setattr(admission, "_RUNTIME_DIRECTORY", runtime)
+    monkeypatch.setattr(admission, "_RECEIPT_DIRECTORY", receipts)
+    monkeypatch.setattr(admission, "_OWNER_UID", os.geteuid())
+    monkeypatch.setattr(admission, "_OWNER_GID", os.getegid())
+    caller = {
+        "pid": os.getpid(), "uid": os.geteuid(), "gid": os.getegid(), "start_time": 42,
+        "argv_sha256": "1" * 64, "executable_sha256": "2" * 64, "launcher_sha256": "3" * 64,
+    }
+    monkeypatch.setattr(admission, "_fixed_caller_identity", lambda _channel: dict(caller))
+    monkeypatch.setattr(admission, "_proc_identity", lambda pid: {
+        "pid": pid, "start_time": caller["start_time"],
+        "argv_sha256": caller["argv_sha256"], "executable_sha256": caller["executable_sha256"],
+    })
+    monkeypatch.setattr(
+        admission, "_open_directory",
+        lambda path: (os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW), path.stat()),
+    )
+    operation_id = "019ff695-00a6-7072-a082-57cbf2b3ee22"
+    install_request = {
+        "channel": "dev", "mode": "exclusive", "operation_id": operation_id,
+        "candidate_sha": "a" * 40, "image_digest": "sha256:" + "b" * 64,
+        "bundle_name": "synthetic-recovery",
+    }
+    with pytest.raises(admission.InstallationAdmissionRefused):
+        with admission.installation_admission(**install_request):
+            pass
+    marker = runtime / "dev.source-installation.lock"
+    marker_before = marker.read_bytes()
+
+    monkeypatch.setattr(
+        linux.LinuxConfig, "load", staticmethod(
+            lambda _channel: pytest.fail("recovery must not construct effects for unproven evidence"),
+        ),
+    )
+    recovery = {
+        key: install_request[key]
+        for key in ("operation_id", "candidate_sha", "image_digest", "bundle_name")
+    }
+    recovery["action"] = "source-installation-reconcile"
+    result = transaction.reconcile_source_installation("dev", recovery)
+    assert result == {
+        "source_installation": {"status": "unresolved", "reason": "receipt_invalid"},
+    }
+    assert marker.read_bytes() == marker_before
+    assert not list(receipts.iterdir())
+
+    foreign = {**recovery, "candidate_sha": "f" * 40}
+    result = transaction.reconcile_source_installation("dev", foreign)
+    assert result == {
+        "source_installation": {"status": "unresolved", "reason": "owner_mismatch"},
+    }
+    assert marker.read_bytes() == marker_before
+    assert not list(receipts.iterdir())
+
+
 def test_cleanup_guards_validate_the_actual_deployment_entrypoint():
     deployment_path = Path(__file__).resolve().parents[2] / "app/ops/postgres_deploy_linux.py"
     source = deployment_path.read_bytes()
