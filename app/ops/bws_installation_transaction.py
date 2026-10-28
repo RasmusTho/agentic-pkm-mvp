@@ -1755,7 +1755,7 @@ def _current_writer_snapshot(effects: Any, request: dict[str, str]) -> _WriterSn
     except _PrebackupGateRefusal:
         raise
     except Exception:
-        _refuse_prebackup_gate("current_writer_snapshot")
+        _refuse()
 
 
 def _profile_response(channel: str, request: dict[str, Any]) -> dict[str, object]:

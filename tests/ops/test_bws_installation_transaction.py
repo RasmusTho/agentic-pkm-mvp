@@ -1129,6 +1129,7 @@ def test_live_preflight_keeps_existing_terminal_identity_separate_from_candidate
 
 def _transaction_fixture(
     *, preflight_error=False, preflight_gate_error: str | None = None,
+    preflight_error_at: int | None = None,
     terminal_identity_drift: str | None = None, apply_error=False,
     compensation_complete=True, profile_mismatch=False, profile_error=False, retire_error=False,
     channel_lock_error=False, preflight_drift_at: int | None = None,
@@ -1374,7 +1375,7 @@ def _transaction_fixture(
             events.append("preflight")
             if preflight_gate_error is not None:
                 transaction._refuse_prebackup_gate(preflight_gate_error)
-            if preflight_error:
+            if preflight_error or (preflight_error_at is not None and preflight_calls >= preflight_error_at):
                 raise RuntimeError("synthetic census refusal")
             terminal_revision = "c" * 40
             terminal_image_digest = "sha256:" + "d" * 64
@@ -1500,9 +1501,10 @@ def test_preflight_refuses_before_backup_or_stop_without_exact_owner_census_and_
 
 @pytest.mark.parametrize(("options", "expected_gate"), [
     ({"preflight_error": True}, "current_writer_snapshot"),
+    ({"preflight_error_at": 2}, "qualified_writer_snapshot"),
     ({"channel_lock_error": True}, "channel_lock_entry"),
     ({"preflight_gate_error": "authority_cutover"}, "authority_cutover"),
-], ids=["current_writer_snapshot", "channel_lock_entry", "authority_cutover"])
+], ids=["current_writer_snapshot", "qualified_writer_snapshot", "channel_lock_entry", "authority_cutover"])
 def test_prebackup_refusal_receipt_reports_finite_gate(options, expected_gate):
     request, ports, admission, _service, events, _old, _candidate = _transaction_fixture(**options)
 

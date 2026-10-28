@@ -99,6 +99,8 @@ replays an earlier operation, retries an unknown outcome, or routes to PROD. Thi
 does not authorize a live call or prove DEV/TEST acceptance; #3347 remains the owner gate. See the
 [detailed deployment contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery).
 
+#### BWS source-installation refusal diagnostics
+
 A caught `refused_before_backup` receipt includes the finite `prebackup_gate` diagnostic. Its values
 are `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
 `authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
