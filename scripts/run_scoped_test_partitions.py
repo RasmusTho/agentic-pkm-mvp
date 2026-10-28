@@ -120,9 +120,9 @@ def validate_execution_units(
 ) -> tuple[tuple[str, ...], ...]:
     """Authenticate a derived work-unit plan against selected targets.
 
-    The selected-target inventory remains the authority.  Non-deploy targets
-    are preserved exactly.  Deploy directories are the only expandable
-    targets, and their plan must contain the complete current-head file
+    The selected-target inventory remains the authority. Non-deploy targets
+    are preserved exactly, except the complete tests/ops directory may expand
+    to whole modules. Deploy directories also require the complete current-head file
     inventory exactly once.  Runner-generated options are never accepted as
     evidence of target coverage.
     """
@@ -143,6 +143,16 @@ def validate_execution_units(
         raise ValueError("execution-unit inventory contains duplicate work")
     if any(target.startswith("-") for target in actual):
         raise ValueError("execution-unit inventory must not contain pytest options")
+
+    if "tests/ops" in expected and "tests/ops" not in actual:
+        # Ops-only plans expand this one root into whole modules. Authenticate
+        # the complete inventory before accepting the unchanged serial runner.
+        ops_files = _deploy_test_files("tests/ops")
+        expected = tuple(dict.fromkeys(
+            item for target in expected
+            for item in (ops_files if target == "tests/ops" else (target,))
+            if target == "tests/ops" or not target.startswith("tests/ops/")
+        ))
 
     expected_deploy = tuple(
         target for target in expected if _is_deploy_target(target)
