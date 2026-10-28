@@ -80,6 +80,16 @@ missing or unqualified authority refuses before an effect and is never initializ
 a cached filesystem port or an admission probe. A retired scalar rollback target remains historical lineage
 and cannot be used by an older image.
 
+The dormant AUTOOPS-06 semantic composition additionally requires its trusted producer to hold
+the captured WSP selection-record window and the exact human-approval owner's effect fence,
+inside the existing principal/ownership/binding window, through both durable receipts. GOV's
+immutable human-review grant is not an approval/revocation store. The final source guard reads
+owned approval and selection state without blocking callbacks, then validates the exact token,
+context and immutable expiry after all waits. This opt-in consumer does not change ordinary WSP
+frozen-snapshot behavior, install semantic handlers, or initialize runtime authority. HKA's
+[ArtifactContract](ARTIFACT_CONTRACT.md#dormant-semantic-commands-autoops-06) owns the producer,
+lock-order, refusal and recovery boundary.
+
 ## Commands
 
 - Evaluate policy.

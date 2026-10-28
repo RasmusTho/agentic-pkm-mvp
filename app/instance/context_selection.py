@@ -37,7 +37,8 @@ import secrets
 import threading
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 
 from app.governance.binding_authority import (
@@ -151,9 +152,7 @@ class ContextSelectionRecord:
                 None if self.dimension_filter is None else self.dimension_filter.dimension_id
             ),
             "dimension_revision": (
-                None
-                if self.dimension_filter is None
-                else self.dimension_filter.dimension_revision
+                None if self.dimension_filter is None else self.dimension_filter.dimension_revision
             ),
             "expires_at": self.expires_at,
         }
@@ -277,9 +276,47 @@ class ContextSelectionStore:
         instance_identity: str,
     ) -> ContextSelectionRecord:
         with self._lock:
-            return self._require(
-                raw_id, principal=principal, instance_identity=instance_identity
-            )
+            return self._require(raw_id, principal=principal, instance_identity=instance_identity)
+
+    @contextmanager
+    def read_effect_window(
+        self,
+        raw_id: str,
+        *,
+        principal: PrincipalContext,
+        instance_identity: str,
+        expected_record: ContextSelectionRecord,
+    ) -> Iterator[Callable[[], None]]:
+        """Opt-in current-selection fence for an admitted semantic effect.
+
+        Ordinary consumers retain frozen in-flight snapshots. This narrower
+        consumer holds the existing record lock and checks the captured record
+        again at publication, including same-thread reentrant clear/replace.
+        Resolve the ActiveContextSet before entering: resolver -> store is the
+        existing lock order, so resolving inside this window would invert it.
+        """
+        with self._lock:
+            record = self._require(raw_id, principal=principal, instance_identity=instance_identity)
+            if record is not expected_record:
+                raise ReselectionRequiredError("captured selection is no longer current")
+            owning_thread = threading.get_ident()
+            active = True
+
+            def require_current() -> None:
+                # No resolver, clock/prune, filesystem or port callback here.
+                # Caller already holds the lock; time expiry is checked by GOV
+                # after all owner work at the actual source publication seam.
+                if (
+                    not active
+                    or threading.get_ident() != owning_thread
+                    or self._records.get(raw_id) is not expected_record
+                ):
+                    raise ReselectionRequiredError("captured selection changed during effect")
+
+            try:
+                yield require_current
+            finally:
+                active = False
 
     def replace_bindings(
         self,
@@ -539,9 +576,7 @@ class ActiveContextSelectionResolver:
                     previous_generation=generation,
                     generation=generation,
                     reason=f"binding_denied:{verdict.reason}",
-                    invalidated_identity=self._last_identity.get(
-                        (context_id, generation), ""
-                    ),
+                    invalidated_identity=self._last_identity.get((context_id, generation), ""),
                 )
                 self._last_identity.pop((context_id, generation), None)
                 raise error

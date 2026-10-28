@@ -147,6 +147,25 @@ generation unknown. A process-global mutable manager cannot safely represent con
   Raw bearer IDs are never logged, receipted, or embedded in cache keys.
 - Enforce GOV authorization independently for every resolved binding.
 
+### Opt-in semantic current-selection window (AUTOOPS-06)
+
+Ordinary in-flight consumers keep their immutable snapshots after a session switch. Dormant
+semantic source operations additionally require the captured selection record to remain current
+through source publication. Their trusted producer uses
+`ContextSelectionStore.read_effect_window(raw_selection_id, principal, instance_identity,
+expected_record)` inside the existing GOV binding window and before the approval owner's lock.
+The method holds the existing store lock and yields a nonblocking owned record guard. Concurrent
+clear/replace/invalidate waits; same-thread reentrant changes are detected by the final guard
+before this semantic effect. A guard used outside its window or owning thread refuses.
+
+Capture/resolve before entry; never call the resolver while holding this store lock, because
+resolution can invalidate the selection in resolver-to-store lock order. The final guard performs
+no resolver, clock/prune, registry, filesystem, or arbitrary callback. GOV checks the frozen
+snapshot's expiry last at the source seam; the lock cannot extend its lifetime. The exact raw
+record is retained separately from the resolved snapshot, whose generation can include resolver
+drift rotations. The raw bearer remains private to the server closure. This adds no authority
+fields to selection records, no new selection store, and no global change to snapshot semantics.
+
 ## Concretely
 
 Sessions S1 and S2 concurrently select vaults A and B. Each request receives one immutable context

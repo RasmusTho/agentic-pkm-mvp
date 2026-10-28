@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 import stat
 import sys
 import time
-from typing import Any, Callable, Iterator, cast
+from typing import Any, Callable, Iterator, TypedDict, cast
 from uuid import uuid4
 
 from app.governance.governed_write import (
@@ -60,6 +60,13 @@ _READ = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 _STATE = ".pkm-placement"
 _PHASES = {"reserved", "prepared", "publishing", "activated", "retiring", "committed"}
 _COMMITTED = {"activated", "retiring", "committed"}
+
+
+class _GrantBinding(TypedDict):
+    action: str
+    write_class: str
+    actor: str
+    resource: str
 
 
 @dataclass(frozen=True)
@@ -715,7 +722,7 @@ class KnowledgePlacementOwner:
             "active_context_digest": _digest(asdict(self.active_context)),
         }
 
-    def _grant_binding(self, intent: PlacementIntent) -> dict[str, str]:
+    def _grant_binding(self, intent: PlacementIntent) -> _GrantBinding:
         return {
             "action": f"operation.{intent.operation}",
             "write_class": "vault_placement",

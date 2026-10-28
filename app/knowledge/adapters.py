@@ -781,6 +781,9 @@ class FsVaultAdapter:
         # Races after this initial comparison retain the hardened atomic exchange,
         # rollback, displaced-inode, and fail-closed behavior.
         if expected_version is not None and note_class is NoteClass.REWRITTEN:
+            from app.instance.context_bound_write import require_effect_locator
+
+            require_effect_locator(root, locator.path)
             root_fd = -1
             parent_fd = -1
             conflict_fd = -1
@@ -857,6 +860,7 @@ class FsVaultAdapter:
                             conflict_fd,
                             locator,
                         )
+                        require_effect_locator(root, locator.path)
                         artifact_rel, artifact_stat = _stage_initial_stale_proposal(
                             parent_fd,
                             conflict_fd,
@@ -980,6 +984,7 @@ class FsVaultAdapter:
                     conflict_fd,
                     locator,
                 )
+                require_effect_locator(root, locator.path)
                 try:
                     _atomic_exchange_at(parent_fd, target.name, parent_fd, staged_name)
                 except KnowledgeCapabilityError as exc:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -21,22 +21,30 @@ from app.vault.active_context_v1 import ActiveContextSetV1
 from app.vault.manager import nearest_enclosing_vault_root
 
 
-_WRITE_BOUNDARY: ContextVar[tuple[Path, str] | None] = ContextVar(
+_WRITE_BOUNDARY: ContextVar[tuple[Path, str, Callable[[], None]] | None] = ContextVar(
     "governed_write_boundary", default=None
 )
+
+
+class ContextBoundSourceRefused(InvalidDecisionTokenError):
+    """The state-owner admission hook refused before publishing source bytes."""
 
 
 def require_effect_locator(root: Path, resource: str) -> None:
     boundary = _WRITE_BOUNDARY.get()
     if boundary is None:
         return
-    expected_root, expected_resource = boundary
+    expected_root, expected_resource, check = boundary
     if (
         root.resolve() != expected_root
         or resource != expected_resource
         or nearest_enclosing_vault_root(root / resource, search_root=expected_root) != expected_root
     ):
-        raise InvalidDecisionTokenError("write locator changed at the state-owner seam")
+        raise ContextBoundSourceRefused("write locator changed at the state-owner seam")
+    try:
+        check()
+    except InvalidDecisionTokenError as exc:
+        raise ContextBoundSourceRefused(str(exc)) from exc
 
 
 def require_selected_targets(context: ActiveContextSetV1, targets: tuple[str, ...]) -> None:
@@ -61,6 +69,7 @@ def context_bound_write_window(
     write_class: str,
     actor: str,
     resource: str,
+    effect_check: Callable[[], None] | None = None,
 ) -> Iterator[Path]:
     """Hold ownership → shared binding lease through effect and durable receipt.
 
@@ -111,7 +120,29 @@ def context_bound_write_window(
         )
         if runtime is None:
             raise InvalidDecisionTokenError("governed write requires a binding runtime")
-        boundary = _WRITE_BOUNDARY.set((root, resource))
+
+        def check() -> None:
+            # An authorized window does not extend the frozen selection's TTL.
+            # State owners call this again after their own waits, immediately
+            # before publishing source bytes.
+            if context.expires_at is not None and context.expires_at <= time.time():
+                raise InvalidDecisionTokenError("active context expired at the source seam")
+            if effect_check is not None:
+                effect_check()
+            adapter.validate_decision_token(
+                decision_token=token,
+                action=action,
+                write_class=write_class,
+                actor=actor,
+                resource=resource,
+            )
+            adapter.validate_context(token, context=context, target_binding_id=target_binding_id)
+            # The owner callback may itself wait on approval or source I/O.
+            # Observe expiry after that work, immediately before publication.
+            if context.expires_at is not None and context.expires_at <= time.time():
+                raise InvalidDecisionTokenError("active context expired at the source seam")
+
+        boundary = _WRITE_BOUNDARY.set((root, resource, check))
         try:
             with frozen_binding_effect(runtime):
                 yield root
