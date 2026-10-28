@@ -438,6 +438,52 @@ def test_source_installation_reexecs_exact_candidate_launcher_before_import(tmp_
     assert executed == [(binding, b'exact C1 source', raw, ['rpc', 'dev'])]
 
 
+def test_source_installation_recovery_reexecs_exact_candidate_before_import(tmp_path, monkeypatch):
+    old_root = tmp_path / "old-generation"
+    candidate_root = tmp_path / "candidate"
+    old_root.mkdir()
+    candidate_root.mkdir()
+    request = {
+        "action": "source-installation-reconcile",
+        "operation_id": "019ff695-00a6-7072-a082-57cbf2b3ee22",
+        "candidate_sha": "a" * 40,
+        "image_digest": "sha256:" + "b" * 64,
+        "bundle_name": "candidate-recovery",
+    }
+    raw = json.dumps(request)
+    released = []
+    executed = []
+
+    class Reservation:
+        skip_cleanup = False
+
+        def release(self):
+            released.append(True)
+
+    class CandidateReexec(Exception):
+        pass
+
+    binding = {
+        "candidate_sha": request["candidate_sha"], "checkout": str(candidate_root),
+        "script_sha256": "c" * 64,
+    }
+    monkeypatch.setattr(service, "_preimport_reservation", lambda *_args: Reservation())
+    monkeypatch.setattr(service, "_candidate_checkout_root", lambda _sha: candidate_root)
+    monkeypatch.setattr(service, "_candidate_launcher_binding", lambda *_args: (binding, b"exact recovery C1"))
+    monkeypatch.setattr(service.sys, "stdin", io.StringIO(raw))
+
+    def reexec(launcher_binding, source, request_raw, arguments):
+        assert released == [True]
+        executed.append((launcher_binding, source, request_raw, arguments))
+        raise CandidateReexec
+
+    monkeypatch.setattr(service, "_execute_verified_candidate_entrypoint", reexec)
+    with pytest.raises(CandidateReexec):
+        service._dispatch(old_root, "dev", ["rpc", "dev"], caller_checkout=old_root)
+
+    assert executed == [(binding, b"exact recovery C1", raw, ["rpc", "dev"])]
+
+
 def test_source_installation_transport_unknown_reconciles_only_exact_terminal_receipt(
     tmp_path, monkeypatch, capsys,
 ):
@@ -504,6 +550,14 @@ def test_source_installation_transport_unknown_reconciles_only_exact_terminal_re
     monkeypatch.setattr(service, "_preimport_reservation",
                         lambda _channel, _action: service._PreimportReservation(None))
     monkeypatch.setattr(service, "_install_source_loader", lambda _root: None)
+    binding = {
+        "candidate_sha": install_request["candidate_sha"],
+        "checkout": str(tmp_path), "script_sha256": "c" * 64,
+    }
+    monkeypatch.setattr(service, "_candidate_checkout_root", lambda _sha: tmp_path)
+    monkeypatch.setattr(service, "_candidate_launcher_binding",
+                        lambda *_args: (binding, b"synthetic candidate launcher"))
+    monkeypatch.setattr(service.sys, service._VERIFIED_CANDIDATE_ENTRYPOINT, binding, raising=False)
 
     request = {
         "action": "source-installation-reconcile", "operation_id": operation_id,

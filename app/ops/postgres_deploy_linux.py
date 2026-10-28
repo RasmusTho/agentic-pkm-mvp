@@ -2578,6 +2578,8 @@ class LinuxEffects:
                     dir_fd=parent_fd,
                 )
             except FileNotFoundError:
+                # The authenticated deployment parent exists, so absence of
+                # the channel lock entry is the only proven closed-lock state.
                 return None
             directory_info = os.fstat(directory_fd)
             if (
@@ -2602,8 +2604,6 @@ class LinuxEffects:
             if len(raw) > 4096 or set(os.listdir(directory_fd)) != {'bws-owner'}:
                 raise PostgresDeployError()
             return raw
-        except FileNotFoundError:
-            return None
         except Exception:
             raise PostgresDeployError() from None
         finally:

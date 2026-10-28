@@ -752,10 +752,10 @@ def _dispatch(root: Path, channel: str, arguments: list[str], *, caller_checkout
                 return 78
             sys.stdin = io.StringIO(raw)
             source_installation = channel in {"dev", "test"} and _source_installation_request(raw)
-            if source_installation:
+            if source_installation or source_recovery:
                 request = json.loads(raw, object_pairs_hook=_unique_json_object)
                 selected_root = _candidate_checkout_root(request["candidate_sha"])
-                if caller_checkout is None or selected_root != caller_checkout:
+                if source_installation and (caller_checkout is None or selected_root != caller_checkout):
                     raise RuntimeError("bws_candidate_checkout_refused")
                 binding, candidate_source = _candidate_launcher_binding(
                     selected_root, request["candidate_sha"],

@@ -2036,6 +2036,20 @@ def test_source_installation_recovery_refuses_unknown_or_foreign_owner_without_e
     assert not list(receipts.iterdir())
 
 
+def test_source_installation_recovery_rejects_missing_transaction_parent_as_unproven(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+
+    effects = linux.LinuxEffects.__new__(linux.LinuxEffects)
+    effects.config = SimpleNamespace(root=tmp_path / "missing-root", channel="dev")
+    with pytest.raises(linux.PostgresDeployError):
+        effects.channel_lock_owner()
+
+    deploy = tmp_path / "existing-root" / "config" / "deploy"
+    deploy.mkdir(parents=True)
+    effects.config = SimpleNamespace(root=tmp_path / "existing-root", channel="dev")
+    assert effects.channel_lock_owner() is None
+
+
 def test_cleanup_guards_validate_the_actual_deployment_entrypoint():
     deployment_path = Path(__file__).resolve().parents[2] / "app/ops/postgres_deploy_linux.py"
     source = deployment_path.read_bytes()
