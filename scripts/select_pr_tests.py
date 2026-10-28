@@ -1620,7 +1620,7 @@ def _is_test_only(paths: tuple[str, ...]) -> bool:
 @lru_cache(maxsize=4096)
 def _module_dependencies(
     path: Path, module: str, _mtime: int, _size: int, *, strict: bool = False,
-    metadata_literals: bool = False,
+    metadata_literals: bool = False, allow_dynamic_code: bool = False,
 ) -> tuple[frozenset[str], bool, bool]:
     """Cache parsed imports by source stat; strict censuses reject unreadable/invalid sources."""
     try:
@@ -1685,7 +1685,7 @@ def _module_dependencies(
                 return frozenset(), True, has_tests
             imports.add(base)
             imports.update(f"{base}.{alias.name}" for alias in node.names)
-            opaque |= any(alias.name == "*" for alias in node.names)
+            opaque |= not allow_dynamic_code and any(alias.name == "*" for alias in node.names)
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             if metadata_literals and id(node) not in literal_uses:
                 continue
@@ -1696,7 +1696,7 @@ def _module_dependencies(
                 imports.add(node.value.split("::", 1)[0].removesuffix(".py").replace("/", "."))
         elif isinstance(node, ast.Call):
             name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else ""
-            if name in {"__import__", "import_module", "spec_from_file_location", "run_module", "run_path", "exec", "eval"}:
+            if not allow_dynamic_code and name in {"__import__", "import_module", "spec_from_file_location", "run_module", "run_path", "exec", "eval"}:
                 opaque |= not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str)
                 if name in {"spec_from_file_location", "run_path", "exec", "eval"}:
                     opaque = True  # File/code loaders do not establish a module import edge.
@@ -1785,7 +1785,8 @@ def _test_module_targets(paths: tuple[str, ...]) -> tuple[str, ...] | None:
             check=True, capture_output=True, text=True,
         ).stdout.split("\0")
         modules = {path.removesuffix(".py").replace("/", "."): path for path in inventory if path}
-        selected = {path.removesuffix(".py").replace("/", ".") for path in paths}
+        changed_modules = {path.removesuffix(".py").replace("/", ".") for path in paths}
+        selected = set(changed_modules)
         if not selected <= modules.keys():
             return None
         dependencies = {}
@@ -1794,7 +1795,12 @@ def _test_module_targets(paths: tuple[str, ...]) -> tuple[str, ...] | None:
             if file.is_symlink():
                 return None
             stat = file.stat()
-            dependencies[module] = _module_dependencies(file, module, stat.st_mtime_ns, stat.st_size)
+            # Outgoing dynamic code does not identify additional incoming consumers.
+            # Hooks/plugins remain opaque even in these complete changed modules.
+            dependencies[module] = _module_dependencies(
+                file, module, stat.st_mtime_ns, stat.st_size,
+                allow_dynamic_code=module in changed_modules,
+            )
     except (OSError, subprocess.SubprocessError):
         return None
     while True:
