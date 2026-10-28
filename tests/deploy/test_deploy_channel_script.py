@@ -5859,6 +5859,10 @@ def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_pat
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(
+        host, '_configured_deploy_admin',
+        lambda _plan, selected: Admin(None, controller=selected),
+    )
     monkeypatch.setattr(host, 'SecretAdmin', Admin)
 
     assert host.main(['dev', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 78
