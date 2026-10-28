@@ -29,6 +29,7 @@ from app.model_access.catalog_discovery import OllamaCatalogDiscovery, codex_cat
 from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 from app.model_access.ollama_http import OllamaHttpAdapter, OllamaHttpError
 from app.model_access.provider_api import ProductProviderApiAdapter, ProviderApiError
+from app.ops.host_secret_bootstrap import load_runtime_secret_values
 from app.model_access.product_judgment_contract import (
     PRODUCT_JUDGMENT_REQUEST_BYTES, ProductJudgmentResult, validate_product_request,
 )
@@ -1094,6 +1095,19 @@ def serve_executor(app: FastAPI, *, host: str = "127.0.0.1", port: int = 8787) -
     )
 
 
+def provider_credential(name: str) -> str | None:
+    """Resolve a provider binding from the host-secret bootstrap, then ambient env.
+
+    The bootstrap hands declared bindings over through its runtime file only, so
+    the launcher's consumer grant is read first; an unbootstrapped process keeps
+    the previous ambient lookup. No value is logged or returned in errors.
+    """
+    value = load_runtime_secret_values().get(name)
+    if value and value.strip():
+        return value
+    return os.environ.get(name)
+
+
 def _repository_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -1132,7 +1146,7 @@ def main() -> None:
     )
     provider_api_adapter = ProductProviderApiAdapter(
         adapter_factory=factory,
-        credential_resolver=os.environ.get,
+        credential_resolver=provider_credential,
         timeout_seconds=120,
     )
     app = create_codex_executor_app(

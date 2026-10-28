@@ -411,6 +411,8 @@ def _validate_bws_contract(
         for consumer, secrets in _ENVIRONMENT_GRANTS.items()
         for secret in secrets
     } | {("dev", "marr-server-dev", "typesafe.api-key")} | {
+        ("dev", "model-access-executor", "openai.api-key")
+    } | {
         (channel, consumer, secret)
         for channel in ("dev", "test")
         for consumer, secrets in KARAKEEP_GRANTS.items()

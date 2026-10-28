@@ -2704,3 +2704,77 @@ def test_bws_probe_child_receives_only_temporary_webhook_binding(tmp_path, monke
     assert "ambient-token-must-not-reach-child" not in repr(child_environment)
     assert "unrelated-provider-token-must-not-reach-child" not in repr(child_environment)
     assert not Path(child_environment[HOST_SECRET_RUNTIME_ENV_FILE]).exists()
+
+
+def test_model_access_executor_launcher_uses_declared_consumer(tmp_path: Path) -> None:
+    from app.model_access.codex_executor_service import provider_credential
+
+    recorder = tmp_path / "python"
+    argv_log = tmp_path / "argv.json"
+    recorder.write_text(
+        "#!/bin/sh\n"
+        f'{sys.executable} -c "import json,sys; json.dump(sys.argv[1:], open(\'{argv_log}\', \'w\'))" "$@"\n'
+    )
+    recorder.chmod(0o700)
+    completed = subprocess.run(
+        ["/bin/bash", str(_REPO_ROOT / "scripts" / "start_model_access_executor.sh")],
+        env={"PATH": os.environ.get("PATH", ""), "MODEL_ACCESS_EXECUTOR_PYTHON": str(recorder)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(argv_log.read_text()) == [
+        "-m", "app.ops.host_secret_bootstrap",
+        "--provider", "keychain",
+        "--channel", "dev",
+        "--consumer", "model-access-executor",
+        "--run-on-credential-unavailable",
+        "--",
+        str(recorder), "-m", "app.model_access.codex_executor_service",
+    ]
+
+    # The same consumer through the production bootstrap reaches the executor resolver.
+    accounts: list[str] = []
+    resolved: dict[str, str | None] = {}
+
+    def lookup(_service: str, account: str) -> str:
+        accounts.append(account)
+        return _OPENAI_KEY
+
+    def runner(command: list[str], env: dict[str, str]) -> int:
+        assert _OPENAI_KEY not in " ".join(command)
+        assert "OPENAI_API_KEY" not in env
+        values = load_runtime_secret_values(env)
+        resolved["key"] = values.get("OPENAI_API_KEY")
+        return 0
+
+    assert run_with_host_secrets(
+        channel="dev", consumer="model-access-executor",
+        command=["executor"], keychain_lookup=lookup, runner=runner, directory=tmp_path,
+        run_on_credential_unavailable=True,
+    ) == 0
+    assert accounts == ["dev:model-access-executor:openai.api-key"]
+    assert resolved["key"] == _OPENAI_KEY
+
+    # A missing item still launches the executor, with only a value-free failure reference.
+    def absent(_service: str, _account: str) -> str:
+        raise OSError("keychain item is absent")
+
+    observed: dict[str, str] = {}
+    assert run_with_host_secrets(
+        channel="dev", consumer="model-access-executor",
+        command=["executor"], keychain_lookup=absent,
+        runner=lambda _command, env: observed.update(env) or 0,
+        directory=tmp_path, run_on_credential_unavailable=True,
+    ) == 0
+    assert observed[HOST_SECRET_BOOTSTRAP_FAILURE_REF] == "openai.api-key"
+    assert HOST_SECRET_RUNTIME_ENV_FILE not in observed
+    assert provider_credential.__module__ == "app.model_access.codex_executor_service"
+
+    for channel in ("test", "prod"):
+        with pytest.raises(HostSecretBootstrapError):
+            run_with_host_secrets(
+                channel=channel, consumer="model-access-executor", command=["executor"],
+                keychain_lookup=lookup, runner=lambda _c, _e: 0, directory=tmp_path,
+            )
