@@ -1129,7 +1129,6 @@ def test_live_preflight_keeps_existing_terminal_identity_separate_from_candidate
 
 def _transaction_fixture(
     *, preflight_error=False, preflight_gate_error: str | None = None,
-    preflight_error_at: int | None = None,
     terminal_identity_drift: str | None = None, apply_error=False,
     compensation_complete=True, profile_mismatch=False, profile_error=False, retire_error=False,
     channel_lock_error=False, preflight_drift_at: int | None = None,
@@ -1375,7 +1374,7 @@ def _transaction_fixture(
             events.append("preflight")
             if preflight_gate_error is not None:
                 transaction._refuse_prebackup_gate(preflight_gate_error)
-            if preflight_error or (preflight_error_at is not None and preflight_calls >= preflight_error_at):
+            if preflight_error:
                 raise RuntimeError("synthetic census refusal")
             terminal_revision = "c" * 40
             terminal_image_digest = "sha256:" + "d" * 64
@@ -1501,10 +1500,9 @@ def test_preflight_refuses_before_backup_or_stop_without_exact_owner_census_and_
 
 @pytest.mark.parametrize(("options", "expected_gate"), [
     ({"preflight_error": True}, "current_writer_snapshot"),
-    ({"preflight_error_at": 2}, "qualified_writer_snapshot"),
     ({"channel_lock_error": True}, "channel_lock_entry"),
     ({"preflight_gate_error": "authority_cutover"}, "authority_cutover"),
-], ids=["current_writer_snapshot", "qualified_writer_snapshot", "channel_lock_entry", "authority_cutover"])
+], ids=["current_writer_snapshot", "channel_lock_entry", "authority_cutover"])
 def test_prebackup_refusal_receipt_reports_finite_gate(options, expected_gate):
     request, ports, admission, _service, events, _old, _candidate = _transaction_fixture(**options)
 
@@ -1518,6 +1516,56 @@ def test_prebackup_refusal_receipt_reports_finite_gate(options, expected_gate):
     assert receipt["backup_manifest_sha256"] is None
     assert "prepare" not in events and "stop_old" not in events and "apply" not in events
     assert admission.receipt == receipt
+
+
+def test_second_native_writer_snapshot_error_reports_qualified_gate(monkeypatch):
+    from app.ops import native_source_admission
+
+    request, ports, admission, _service, events, _old, _candidate = _transaction_fixture()
+    effects = ports.effects(None)
+    config = ports.configuration("dev")
+    receipt = SimpleNamespace(
+        terminal_result="committed", operation_id=str(uuid.uuid4()), stage="committed",
+        require_profile=lambda _plan: None,
+    )
+    plan = SimpleNamespace(
+        revision="c" * 40,
+        image_digest="sha256:" + "d" * 64,
+        authority_cutover=SimpleNamespace(validate=lambda: None),
+    )
+    config.journal = SimpleNamespace(read=lambda: receipt, bound_plan=lambda _operation_id: plan)
+    effects.config = config
+
+    def fail_runtime_snapshot(*_args, **_kwargs):
+        raise RuntimeError("synthetic private writer census detail")
+
+    effects.source_identity_runtime_snapshot = fail_runtime_snapshot
+    effects.quiescent = lambda: True
+    monkeypatch.setattr(native_source_admission, "require_terminal_deployment", lambda _effects: None)
+
+    original_preflight = ports.preflight
+    preflight_calls = 0
+
+    def preflight(selected_effects, selected_request):
+        nonlocal preflight_calls
+        preflight_calls += 1
+        if preflight_calls == 2:
+            return transaction._current_writer_snapshot(selected_effects, selected_request)
+        return original_preflight(selected_effects, selected_request)
+
+    ports.preflight = preflight
+
+    result = transaction._execute_source_installation("dev", request, ports)
+
+    selected = result["source_installation"]
+    assert selected["status"] == "refused_before_backup"
+    assert selected["prebackup_gate"] == "qualified_writer_snapshot"
+    assert "synthetic private writer census detail" not in json.dumps(selected, sort_keys=True)
+    assert selected["old_generation_sha256"] is None
+    assert selected["new_generation_sha256"] is None
+    assert selected["backup_manifest_sha256"] is None
+    assert "prepare" not in events and "stop_old" not in events and "apply" not in events
+    assert admission.receipt == selected
 
 
 def test_prebackup_refusal_receipt_is_redacted_and_fail_closed():
