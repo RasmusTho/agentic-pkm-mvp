@@ -48,3 +48,35 @@ pickup eligible.
 Read the complete paginated Issue-comment stream. The newest comment carrying the receipt marker is
 the governing candidate: a malformed newer marker is invalid evidence and must trigger repair rather
 than being hidden by an older valid receipt.
+
+## Read-only unblock-candidate report
+
+`scripts/report_unblock_candidates.py --repo <owner/name> [--format markdown]` reads every open
+`agent:blocked` Issue and reports class-A candidates: `action:wait-dependency`, a current
+context-bound builder-owned receipt, every same-repository `dependency_refs` entry terminal-completed
+(Issue closed as `completed`, PR merged), and the current body classifying `ready_candidate` under its
+post-transition labels. Comment permalinks count as evidence, not dependencies; foreign or free-text
+refs make the Issue unresolvable. The report only reads GitHub. A candidate is input to the re-read
+above, not a transition, claim, or pickup authority, and a derived predicate still requires
+confirming that `unblocks_when` names no further evidence gate.
+
+## Proposed: `unblock_predicate` (not yet normative)
+
+Status: proposal. Writers are not required to emit it and no consumer may transition on it yet.
+`unblocks_when` stays free text for humans; the proposed line adds a machine-checkable subset:
+
+```yaml
+unblock_predicate: {"all_completed": ["#3860"], "readiness": "strict"}
+```
+
+- One single-line JSON object, so the existing line-oriented receipt parser stays sufficient.
+- `all_completed` (required, non-empty): same-repository Issue or PR refs that must be terminal-completed.
+- `readiness` (optional, only `strict`): the current body must classify `ready_candidate` under its
+  post-transition labels.
+- Any other key, value, or malformed line fails closed. Writers emit the line only when these
+  conditions are the complete unblock condition; a receipt that also needs a run, environment,
+  owner, or external evidence omits it.
+
+When present, the report uses it instead of `dependency_refs` and marks the predicate `declared`.
+Adoption would make this section normative, require writers to emit it where applicable, and decide
+separately whether a governed consumer may perform the re-read and transition.

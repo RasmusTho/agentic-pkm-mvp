@@ -42,7 +42,7 @@ def _request(plan, identifier, action='prepare', *, bootstrap=False):
 
 
 @pytest.fixture(params=['dev', 'test'])
-def native(tmp_path, monkeypatch, request):
+def native(tmp_path, monkeypatch, request, admitted_bws_caller):
     channel = request.param
     root = tmp_path / 'checkout'
     (root / 'config/deploy').mkdir(parents=True)
@@ -86,7 +86,7 @@ def native(tmp_path, monkeypatch, request):
                           journal=DeployJournal(tmp_path / 'journal', channel))
     controller = HostSecretController(tmp_path / 'host-controller')
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
-    monkeypatch.setattr(host, '_configured_host_admin', Provider)
+    monkeypatch.setattr(host, '_configured_host_admin', lambda _plan: Provider())
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _: cfg)
     monkeypatch.setattr(linux, 'PasswordSource', PasswordFile)
     monkeypatch.setattr(linux, 'password_authenticate', lambda env: (

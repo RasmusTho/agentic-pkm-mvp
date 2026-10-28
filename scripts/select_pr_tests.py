@@ -162,6 +162,7 @@ CI_GOVERNANCE_CONTRACT_PATHS = frozenset({
     "scripts/select_pr_tests.py",
     "scripts/replay_pr_test_selection.py",
     "scripts/run_scoped_test_partitions.py",
+    "scripts/plan_full_suite_node_shards.py",
     "scripts/await_pr_checks.sh",
     "scripts/ci_stall_classifier.py",
     "scripts/docs_guard_logic.py",
@@ -1342,6 +1343,17 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "quality_wave",
         ("tests/quality_wave/",),
         ("tests/quality_wave",),
+    ),
+    (
+        # The shipped picker controller driven over the real gateway and API
+        # (#6368). A test- or harness-only edit must run the module rather
+        # than fail closed as unowned; the harness alone has no tests.
+        "multi_vault_picker",
+        (
+            "tests/integration/test_multi_vault_picker_context.py",
+            "tests/_mvr05b_picker_browser.py",
+        ),
+        ("tests/integration/test_multi_vault_picker_context.py",),
     ),
     (
         "ops",

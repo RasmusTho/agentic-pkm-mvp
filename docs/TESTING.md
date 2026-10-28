@@ -194,6 +194,16 @@ which requires `allow_capture: true` and `allow_ask: false`; its bounded four-st
 after visible body-phrase discovery/click-open in the current and fresh browser contexts, so it
 does not require semantic-index freshness or ASK/model success. Run that mode explicitly with
 `tests/companion_ui/test_companion_ui_live_core_flow.py::test_04_capture_survives_new_browser_context`.
+That selected test requires all four exact PW-01–PW-04 results and the aggregate `passed` result,
+not merely PW-04. In an admitted `text-capture` activation, PW-01 requires the exact backend/gateway
+version and channel, unchanged native fixture/navigation admission, and successful API `/healthz`
+with the deployed `text-capture`/`full-channel-qualified: false` response headers. The gateway's
+health diagnostics must independently report that same scope and `full_channel_qualified: false`.
+The report retains `global_health` flags and failed required-check names, even when the scoped
+text journey passes; it never promotes degraded global health to a full-channel PASS. Missing or
+contradictory scoped evidence refuses before navigation or capture. A healthy ordinary full
+activation can still run capture-only, while the full eight-step journey retains its existing
+global-health requirement and independent per-step reporting.
 Operator-qualified non-production fixtures are distinct per
 channel. Before HTTP admission, native Docker reads bind the loopback gateway's running image,
 published port, exact startup configuration and resolved upstream address to the selected API

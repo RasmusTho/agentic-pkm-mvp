@@ -48,6 +48,7 @@ from companion_ui.workspace.overlay_frame import (
     overlay_frame_header,
     overlay_frame_root_attrs,
 )
+from companion_ui.workspace.standing_question_review import standing_question_review_markup
 
 # The normative callout (SYSTEM_ENTRY_POINT_SPEC.md; ADR-0009). The runtime
 # declares the same phrase on the queue payload (`review_callout`); the static
@@ -567,13 +568,22 @@ def memory_review_drawer_markup() -> str:
     inert
     aria-label="Memory candidate review">
     {_frame_header}
-    {guidance_callout_markup('memory')}
-    <p class="memory-review-callout" data-testid="memory-review-callout"
-      data-tone="advisory">{MEMORY_REVIEW_CALLOUT}</p>
-    <div class="memory-review-queue" data-testid="memory-review-queue"
-      data-loaded="false" data-source="agent_memory.review_queue">
-      <p class="memory-review-loading">Loading review queue…</p>
+    <nav class="memory-review-tabs" aria-label="Review views">
+      <button type="button" class="memory-review-tab" data-drawer-tab="memory"
+        aria-selected="true">Memory</button>
+      <button type="button" class="memory-review-tab" data-drawer-tab="standing-questions"
+        aria-selected="false">Standing questions</button>
+    </nav>
+    <div class="memory-review-view" data-drawer-view="memory">
+      {guidance_callout_markup('memory')}
+      <p class="memory-review-callout" data-testid="memory-review-callout"
+        data-tone="advisory">{MEMORY_REVIEW_CALLOUT}</p>
+      <div class="memory-review-queue" data-testid="memory-review-queue"
+        data-loaded="false" data-source="agent_memory.review_queue">
+        <p class="memory-review-loading">Loading review queue…</p>
+      </div>
     </div>
+    {standing_question_review_markup()}
   </aside>"""
 
 

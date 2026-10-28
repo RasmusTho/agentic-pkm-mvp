@@ -857,7 +857,7 @@ jobs:
         # tests/deploy in 45m51s, before the serial boundary hit the 60m ceiling.
         # Run 39865892884 then passed all 131 parallel shards but exhausted
         # this 75m bound during serial coverage; its deploy group took 51m18s.
-        # Reuse nightly's deploy-module scheduling instead of adding margin.
+        # Split the measured deploy module by collected node IDs under the existing four-worker cap.
         # The 120-second per-test timeout still catches individual hangs.
         timeout-minutes: 75
         env:
@@ -874,8 +874,10 @@ jobs:
           # contains tests that inspect host-wide process state and tests whose
           # fixtures intentionally retain process-global state. Run each
           # deploy module, other directory, or root-level module in its own
-          # serial process with bounded concurrency, then run the host/FD boundary
-          # tests after every shard has exited.
+          # process with bounded concurrency. Split only the measured long
+          # deploy module by collected node IDs; its two shared-checkout pin
+          # tests remain together in one process. Run the host/FD boundary only
+          # after every parallel process has exited.
           marker='not pg and not alpha_llm and not alpha_llm_live and not panel_llm_e2e and not eval and not browser_runtime and not human_uat and not uat_integrated_runtime'
           # Keep partial logs outside a temporary directory with an EXIT cleanup:
           # a cancelled step must still leave evidence for the always-run upload.
@@ -946,30 +948,88 @@ jobs:
               }
             ' > "$shard_list"
 
-          expected_shards="$(wc -l < "$shard_list")"
-          if (( expected_shards == 0 )); then
+          deploy_node_module='tests/deploy/test_deploy_channel_script.py'
+          deploy_node_dir="$shard_root/deploy-node-units"
+          deploy_node_work_items="$deploy_node_dir/work-items"
+          node_plan_ready=0
+          if grep -Fxq "$deploy_node_module" "$shard_list"; then
+            collection_log="$shard_root/deploy-node-collection.log"
+            set +e
+            python -m pytest --collect-only -q -m "$marker" "$deploy_node_module" \
+              --ignore=tests/invariants/test_vault_multiwriter.py > "$collection_log" 2>&1
+            collection_status=$?
+            set -e
+            if (( collection_status == 0 )); then
+              python3 scripts/plan_full_suite_node_shards.py \
+                --collected-output "$collection_log" \
+                --target "$deploy_node_module" \
+                --output-dir "$deploy_node_dir" \
+                --max-workers 4
+              node_plan_ready=1
+            elif (( collection_status == 5 )) && \
+              grep -Eq 'no tests ran|[0-9]+ deselected' "$collection_log"; then
+              echo "Deploy node collection selected no tests; retaining file-level deselection handling." >&2
+            else
+              echo "Deploy node collection failed ($collection_status): $deploy_node_module" >&2
+              cat "$collection_log" >&2
+              exit 1
+            fi
+          fi
+
+          execution_list="$shard_root/work-items"
+          : > "$execution_list"
+          while IFS= read -r shard; do
+            if [[ "$shard" == "$deploy_node_module" ]] && (( node_plan_ready )); then
+              cat "$deploy_node_work_items" >> "$execution_list"
+            else
+              printf '%s\n' "$shard" >> "$execution_list"
+            fi
+          done < "$shard_list"
+
+          expected_work_items="$(wc -l < "$execution_list")"
+          if (( expected_work_items == 0 )); then
             echo "No collectible not-pg process shards discovered" >&2
             exit 1
           fi
 
-          export marker log_dir status_file
+          export marker log_dir status_file deploy_node_dir node_plan_ready
           set +e
           xargs -r -n 1 -P 4 bash -c '
-            shard="$1"
-            safe="${shard//\//_}"
+            work_item="$1"
+            safe="${work_item//\//_}"
             log="$log_dir/$safe.log"
+            pytest_targets=("$work_item")
+            if [[ "$work_item" == deploy-node-unit-* ]]; then
+              if [[ "${node_plan_ready:-0}" != 1 ]]; then
+                echo "Missing authenticated node plan for $work_item" > "$log"
+                printf "1 %s\n" "$work_item" >> "$status_file"
+                exit 0
+              fi
+              pytest_verbosity=(-vv)
+              pytest_targets=()
+              while IFS= read -r node_target; do
+                [[ -n "$node_target" ]] && pytest_targets+=("$node_target")
+              done < "$deploy_node_dir/$work_item.targets"
+              if (( ${#pytest_targets[@]} == 0 )); then
+                echo "Empty collected-node work unit: $work_item" > "$log"
+                printf "1 %s\n" "$work_item" >> "$status_file"
+                exit 0
+              fi
+            else
+              pytest_verbosity=(-q)
+            fi
             started=$SECONDS
-            python -m pytest -q -m "$marker" "$shard" --durations=20 \
+            python -m pytest "${pytest_verbosity[@]}" -m "$marker" "${pytest_targets[@]}" --durations=20 \
               --ignore=tests/invariants/test_vault_multiwriter.py > "$log" 2>&1
             rc=$?
             if [[ "$rc" -eq 5 ]] && ! grep -Eq "FAILED|ERROR" "$log" && \
               grep -Eq "no tests ran|[0-9]+ deselected" "$log"; then
               rc=0
             fi
-            echo "SHARD FINISHED ($rc): $shard in $((SECONDS - started))s"
-            printf "%s %s\n" "$rc" "$shard" >> "$status_file"
+            echo "SHARD FINISHED ($rc): $work_item in $((SECONDS - started))s"
+            printf "%s %s\n" "$rc" "$work_item" >> "$status_file"
             exit 0
-          ' _ < "$shard_list"
+          ' _ < "$execution_list"
           xargs_status=$?
           set -e
           parallel_seconds=$((SECONDS - run_started))
@@ -977,21 +1037,28 @@ jobs:
           write_phase_receipt null
 
           actual_shards="$(wc -l < "$status_file" 2>/dev/null || true)"
-          if (( xargs_status != 0 || actual_shards != expected_shards )); then
-            echo "Process-shard runner incomplete (xargs=$xargs_status, expected=$expected_shards, actual=$actual_shards)" >&2
+          if (( xargs_status != 0 || actual_shards != expected_work_items )); then
+            echo "Process-shard runner incomplete (xargs=$xargs_status, expected=$expected_work_items, actual=$actual_shards)" >&2
             exit 1
           fi
 
           : > pytest-not-pg.log
           failed=0
-          while IFS=' ' read -r rc shard; do
-            cat "$log_dir/${shard//\//_}.log" >> pytest-not-pg.log
+          while IFS=' ' read -r rc work_item; do
+            cat "$log_dir/${work_item//\//_}.log" >> pytest-not-pg.log
             if (( rc != 0 )); then
-              echo "SHARD FAILED ($rc): $shard" >&2
-              cat "$log_dir/${shard//\//_}.log" >&2
+              echo "SHARD FAILED ($rc): $work_item" >&2
+              cat "$log_dir/${work_item//\//_}.log" >&2
               failed=1
             fi
           done < "$status_file"
+          if (( node_plan_ready )) && (( failed == 0 )); then
+            if ! python3 scripts/plan_full_suite_node_shards.py \
+              --verify-coverage "$deploy_node_dir/coverage.json" \
+              --logs-dir "$log_dir"; then
+              failed=1
+            fi
+          fi
           if (( failed != 0 )); then
             exit 1
           fi

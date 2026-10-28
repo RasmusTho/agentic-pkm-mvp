@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.panel.checkbox_projection as projection_module
+import app.auth as auth_module
 from app.api.app import app
 from app.api.routes.artifacts import _content_hash
 from app.panel.checkbox_projection import extract_panel_selectable_options
@@ -122,6 +123,55 @@ def test_projection_endpoint_checks_markdown_source_and_projects_checkbox(
     updated = note.read_text(encoding="utf-8")
     assert "- [x] Send email <!--ai:option_id=opt_abc-->" in updated
     assert "- [ ] ordinary task" in updated
+
+
+def test_checkbox_projection_rejects_remote_request_without_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setattr(auth_module.settings, "api_key", None)
+    note = _write_note(tmp_path)
+    body = _request_for(note)
+    client = TestClient(app, client=("203.0.113.10", 50000))
+
+    response = client.post("/api/panel/checkbox-projection", json=body)
+
+    assert response.status_code == 401
+    assert note.read_text(encoding="utf-8") == _panel_note()
+
+
+@pytest.mark.parametrize(
+    ("host", "headers"),
+    [
+        ("127.0.0.1", {}),
+        ("203.0.113.10", {"X-API-Key": "panel-test-key"}),
+    ],
+    ids=("loopback", "api-key"),
+)
+def test_checkbox_projection_allows_loopback_or_api_key(
+    host: str,
+    headers: dict[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setattr(auth_module.settings, "api_key", "panel-test-key")
+    note = _write_note(tmp_path)
+    monkeypatch.setattr(
+        projection_module,
+        "run_panel_note_execution",
+        MagicMock(return_value=MagicMock(runtime_results=[object()])),
+    )
+    client = TestClient(app, client=(host, 50000))
+
+    response = client.post(
+        "/api/panel/checkbox-projection",
+        json=_request_for(note),
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "projected"
 
 
 def test_projection_final_hash_read_rechecks_symlink_containment(

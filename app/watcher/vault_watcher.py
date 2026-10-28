@@ -203,6 +203,24 @@ def _standing_question_tick_inputs(
     return candidates, sources
 
 
+def _is_standing_question_note_path(path: Path, *, vault_root: Path) -> bool:
+    """Whether a changed/deleted path is a canonical Question note in this vault."""
+
+    from app.standing_questions.question_store import QUESTION_DIRECTORY
+
+    try:
+        candidate = path if path.is_absolute() else vault_root / path
+        relative = candidate.expanduser().resolve().relative_to(vault_root.expanduser().resolve())
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return (
+        len(relative.parts) == 2
+        and relative.parts[0] == QUESTION_DIRECTORY
+        and relative.name.startswith("sq-")
+        and relative.suffix == ".md"
+    )
+
+
 def _default_snapshot_path(vault_root: Path) -> Path:
     return vault_root / ".agentic-pkm" / "vault_watcher_state.json"
 
@@ -810,6 +828,26 @@ def run_watcher_tick(
 
     standing_questions_retry_paths: list[Path] = []
 
+    def _refresh_standing_questions_projection(paths: Iterable[Path]) -> None:
+        if dry_run or not runtime_database_is_named(os.environ):
+            return
+        try:
+            from app.instance.compatibility_binding import compatibility_binding_for_root
+            from app.standing_questions.projection import rebuild_standing_questions_projection
+
+            binding_id = compatibility_binding_for_root(vault_root)
+            projection = rebuild_standing_questions_projection(
+                vault_root,
+                vault_binding_id=binding_id,
+            )
+            summary["standing_questions_projection_rows"] = projection.inserted
+        except Exception as exc:  # the vault remains canonical; a later tick retries
+            summary["errors"] += 1
+            summary["standing_questions_projection_error"] = str(exc)
+            for path in paths:
+                if path not in standing_questions_retry_paths:
+                    standing_questions_retry_paths.append(path)
+
     def _finish_tick(*, preserve_changed_observations: bool = False) -> None:
         """Persist snapshot before its receipt, then retire reported terminals.
 
@@ -1006,6 +1044,13 @@ def run_watcher_tick(
 
     if summary["changed"] == 0:
         _reconcile_deletions()
+        question_deletions = [
+            path
+            for path in result.deleted
+            if _is_standing_question_note_path(path, vault_root=vault_root)
+        ]
+        if question_deletions:
+            _refresh_standing_questions_projection(question_deletions)
         _finish_tick()
         return summary, messages
 
@@ -1095,6 +1140,17 @@ def run_watcher_tick(
                 summary["errors"] += 1
                 summary["standing_questions_tick_error"] = str(exc)
                 standing_questions_retry_paths = list(result.changed)
+        question_note_changed = any(
+            _is_standing_question_note_path(path, vault_root=vault_root)
+            for path in result.changed
+        )
+        question_deletions = [
+            path
+            for path in result.deleted
+            if _is_standing_question_note_path(path, vault_root=vault_root)
+        ]
+        if standing_candidates or question_note_changed or question_deletions:
+            _refresh_standing_questions_projection([*result.changed, *question_deletions])
 
     if not skip_panel and policy_allowed_paths:
         store = ObjectStore()

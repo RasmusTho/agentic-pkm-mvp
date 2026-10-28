@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
-def target(tmp_path, monkeypatch, request):
+def target(tmp_path, monkeypatch, request, admitted_bws_caller):
     tmp_path = runtime_reachable_test_root(tmp_path, request).resolve()
     root = tmp_path / 'checkout'
     (root / 'config/deploy').mkdir(parents=True)
@@ -489,7 +489,7 @@ def test_host_cli_produces_explicit_cutover_without_inferred_ack(target, monkeyp
 
     captured = []
     monkeypatch.setattr(host, 'HostSecretController', lambda: object())
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'SshDeployRemote', lambda _: object())
     identifier = str(uuid4())

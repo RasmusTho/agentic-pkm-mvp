@@ -164,11 +164,20 @@ def assert_refusal(entrypoint, capsys):
 def test_host_entrypoint_recovers_installed_metadata(entrypoint, capsys, channel):
     environment_before = dict(os.environ)
     assert invoke(channel) == 0
-    assert entrypoint.events == ['read:dev', 'read:test', 'read:prod', 'admitted']
+    expected_reads = [f'read:{channel}'] if channel in {'dev', 'test'} else [
+        'read:dev', 'read:test', 'read:prod',
+    ]
+    assert entrypoint.events == [*expected_reads, 'admitted']
     admin, remote, plan, allow_bootstrap = entrypoint.admissions[0]
     config = admin.provider.config
-    assert (config.organization_id, config.non_prod_project_id, config.prod_project_id) == (
-        ORGANIZATION, NON_PROD, PROD)
+    if channel in {'dev', 'test'}:
+        assert (config.organization_id, config.non_prod_project_id, config.prod_project_id) == (
+            ORGANIZATION, NON_PROD, None)
+        assert admin.target_project_scope == 'non-prod'
+    else:
+        assert (config.organization_id, config.non_prod_project_id, config.prod_project_id) == (
+            ORGANIZATION, NON_PROD, PROD)
+        assert admin.target_project_scope is None
     assert remote.host == 'ygg-' + channel and plan.channel == channel
     assert plan.ack_forward_only is True and allow_bootstrap is False
     assert os.environ == environment_before
@@ -186,7 +195,7 @@ def test_explicit_metadata_preserves_route_and_rejects_partial_conflict(
     if 'complete' in scenario:
         for key, value in METADATA.items():
             monkeypatch.setenv(key, value)
-    else:
+    elif scenario != 'partial-conflict':
         monkeypatch.setenv('BWS_ORGANIZATION_ID', ORGANIZATION)
     if scenario == 'partial-conflict':
         monkeypatch.setenv('BWS_NON_PROD_PROJECT_ID', OTHER)
@@ -199,11 +208,46 @@ def test_explicit_metadata_preserves_route_and_rejects_partial_conflict(
     if scenario in {'complete', 'invalid-complete', 'invalid-partial'}:
         assert entrypoint.calls == []
     else:
-        assert len(entrypoint.calls) == 3
+        assert [argv[-1] for argv, _ in entrypoint.calls] == ['test']
     if expected:
         assert_refusal(entrypoint, capsys)
     else:
         assert len(entrypoint.admissions) == 1
+
+
+@pytest.mark.parametrize('channel', ('dev', 'test'))
+def test_nonprod_target_recovery_uses_only_selected_channel_metadata(entrypoint, capsys, channel):
+    assert invoke(channel) == 0
+    assert [argv[-1] for argv, _ in entrypoint.calls] == [channel]
+    admin, _, plan, _ = entrypoint.admissions[0]
+    assert plan.channel == channel
+    assert admin.provider.config.projects() == {'non-prod': NON_PROD}
+    output = capsys.readouterr()
+    assert SECRET_CANARY not in output.out + output.err
+
+
+def test_nonprod_target_env_ignores_prod_metadata_and_rejects_selected_conflict(
+    entrypoint, monkeypatch, capsys,
+):
+    monkeypatch.setenv('BWS_ORGANIZATION_ID', ORGANIZATION)
+    monkeypatch.setenv('BWS_NON_PROD_PROJECT_ID', NON_PROD)
+    # A malformed PROD-only value must not be inspected by the DEV/TEST route.
+    monkeypatch.setenv('BWS_PROD_PROJECT_ID', SECRET_CANARY)
+    assert invoke('test') == 0
+    assert entrypoint.calls == []
+    admin = entrypoint.admissions[0][0]
+    assert admin.provider.config.projects() == {'non-prod': NON_PROD}
+    output = capsys.readouterr()
+    assert SECRET_CANARY not in output.out + output.err
+
+    entrypoint.admissions.clear()
+    entrypoint.calls.clear()
+    entrypoint.events.clear()
+    monkeypatch.delenv('BWS_ORGANIZATION_ID')
+    monkeypatch.setenv('BWS_NON_PROD_PROJECT_ID', OTHER)
+    assert invoke('test') == 78
+    assert [argv[-1] for argv, _ in entrypoint.calls] == ['test']
+    assert_refusal(entrypoint, capsys)
 
 
 @pytest.mark.parametrize('failure', (
@@ -216,10 +260,16 @@ def test_explicit_metadata_preserves_route_and_rejects_partial_conflict(
     'duplicate-output', 'stderr-output',
 ))
 def test_metadata_bootstrap_refuses_untrusted_or_inconsistent_sources_value_free(
-    entrypoint, capsys, failure,
+    entrypoint, monkeypatch, capsys, failure,
 ):
     entrypoint.failure = failure
-    path = entrypoint.sources['dev']
+    channel = 'prod' if failure in {'different-test-project', 'same-prod-project'} else 'dev'
+    source_channel = {
+        'different-organization': 'test',
+        'different-test-project': 'test',
+        'same-prod-project': 'prod',
+    }.get(failure, channel)
+    path = entrypoint.sources[source_channel]
     if failure == 'permissions':
         path.chmod(0o640)
     elif failure in {'symlink', 'directory', 'fifo'}:
@@ -250,9 +300,6 @@ def test_metadata_bootstrap_refuses_untrusted_or_inconsistent_sources_value_free
         }[failure])
     elif failure in {'missing-field', 'secret-field', 'invalid-uuid', 'different-organization',
                      'different-test-project', 'same-prod-project', 'organization-is-project'}:
-        channel = {'different-organization': 'test', 'different-test-project': 'test',
-                   'same-prod-project': 'prod'}.get(failure, 'dev')
-        path = entrypoint.sources[channel]
         data = json.loads(path.read_text())
         if failure == 'missing-field':
             del data['project_id']
@@ -268,8 +315,11 @@ def test_metadata_bootstrap_refuses_untrusted_or_inconsistent_sources_value_free
                 'organization-is-project': ORGANIZATION,
             }[failure]
         path.write_text(json.dumps(data))
+        if failure == 'different-organization':
+            monkeypatch.setenv('BWS_ORGANIZATION_ID', ORGANIZATION)
+            channel = 'test'
     before = dict(os.environ)
-    assert invoke() == 78
+    assert invoke(channel) == 78
     assert entrypoint.calls  # Refusal must exercise the production metadata route.
     assert os.environ == before
     assert_refusal(entrypoint, capsys)

@@ -108,38 +108,49 @@ async function bootDocument(path='/workspace') {
   return html;
 }
 function button(path) {var attrs={'data-vault-path':path}; return {getAttribute:k=>attrs[k],setAttribute:(k,v)=>attrs[k]=v,removeAttribute:k=>delete attrs[k],attrs};}
-async function awaitNavigation(action, label, attrs) {
-  var timer;
-  var done=new Promise((resolve,reject)=>{
-    reloadResolve=resolve;reloadReject=reject;
-    // The real gateway includes durable registry/rebind I/O. Four seconds is
-    // not an admission deadline, especially beside the other CI shards.
-    timer=setTimeout(()=>reject(new Error(label+': '+JSON.stringify({attrs,error:visible.textContent,gatewayResponses}))),12000);
+// Wait on the controller's own terminal signals, never a wall-clock budget: the
+// reload it triggers settles `done`, and leaving its in-flight state without a
+// reload (e.g. data-affordance-status=blocked) fails with the controller attrs.
+// A real hang is bounded by the Node subprocess timeout.
+function untilReloaded(done, el, label) {
+  return new Promise((resolve,reject)=>{
+    var poll=setInterval(()=>{if(el.attrs['data-submitting']!=='true'){clearInterval(poll);reject(new Error(label+': '+JSON.stringify(el.attrs)));}},10);
+    done.then(value=>{clearInterval(poll);resolve(value);},error=>{clearInterval(poll);reject(error);});
   });
-  try {action();await done;}
-  finally {clearTimeout(timer);reloadResolve=null;reloadReject=null;}
+}
+async function whileAttr(el, name, value) {
+  while(el.attrs[name]===value)await new Promise(r=>setTimeout(r,10));
 }
 async function choose(path) {
   var b=button(path);
-  await awaitNavigation(()=>clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-row-select"]'?b:null}}),'picker selection failed',b.attrs);
+  var done=new Promise((resolve,reject)=>{reloadResolve=resolve;reloadReject=reject;});
+  clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-row-select"]'?b:null}});
+  await untilReloaded(done,b,'picker selection failed');
 }
 async function browseChoose(path) {
   var browse=element();
   clickHandler({preventDefault:()=>{},target:{closest:selector=>selector==='[data-testid="vault-picker-browse"]'?browse:null}});
-  for(var i=0;i<200 && fsMode.attrs['data-loading']==='true';i++)await new Promise(r=>setTimeout(r,10));
+  await whileAttr(fsMode,'data-loading','true');
   if(fsMode.hidden || !fsError.hidden)throw new Error('picker discovery failed: '+fsError.textContent);
   var row=fsList.children.find(item=>item.attrs['data-fs-path']===path);
   if(!row || row.innerHTML.indexOf('data-testid="vault-picker-fs-open"')===-1)throw new Error('sibling vault action missing: '+path);
   var open=element();open.attrs['data-fs-path']=row.attrs['data-fs-path'];
-  await awaitNavigation(()=>clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-fs-open"]'?open:null}}),'picker discovered selection failed',open.attrs);
+  var done=new Promise((resolve,reject)=>{reloadResolve=resolve;reloadReject=reject;});
+  clickHandler({target:{closest:selector=>selector==='[data-testid="vault-picker-fs-open"]'?open:null}});
+  await untilReloaded(done,open,'picker discovered selection failed');
 }
 async function initialize(path) {
   var b=button(path);
   function click(){clickHandler({target:{closest:selector=>selector==='.vault-picker-initialize-button'?b:null}});}
+  // A reload before the confirm round-trip is also terminal, not a wait.
+  var reloaded=false;
+  new Promise((resolve,reject)=>{reloadResolve=resolve;reloadReject=reject;}).then(()=>reloaded=true,()=>reloaded=true);
   click();
-  for(var i=0;i<100 && b.attrs['data-affordance-status']!=='confirm-required';i++)await new Promise(r=>setTimeout(r,10));
+  while(b.attrs['data-submitting']==='true' && !reloaded)await new Promise(r=>setTimeout(r,10));
   if(b.attrs['data-affordance-status']!=='confirm-required')throw new Error('no initialize confirmation: '+JSON.stringify(b.attrs));
-  await awaitNavigation(click,'initialize failed',b.attrs);
+  var done=new Promise((resolve,reject)=>{reloadResolve=resolve;reloadReject=reject;});
+  click();
+  await untilReloaded(done,b,'initialize failed');
 }
 '''.replace('INITIAL_COOKIE', json.dumps(cookie)).replace('ORIGIN', json.dumps(origin))
 
@@ -148,7 +159,9 @@ async function initialize(path) {
         if node is None:
             raise RuntimeError("Node is required to verify the production picker controller")
         program = setup + '\n' + '\n'.join(scripts) + '\n(async()=>{'+body+'\n})().catch(e=>{console.error(e);process.exitCode=1;});'
-        result = subprocess.run([node, '-e', program], capture_output=True, text=True, timeout=30)
+        # Hang guard only: the in-program waits are signal-driven, so this bounds a
+        # stuck controller rather than budgeting a slow but progressing one.
+        result = subprocess.run([node, '-e', program], capture_output=True, text=True, timeout=90)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 

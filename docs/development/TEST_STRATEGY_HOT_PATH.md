@@ -5,8 +5,8 @@ Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
-Last reviewed: 2026-10-25 UTC (exact BWS helper source contract scope)
-Last verified against: `scripts/dev_delivery_liveness.py`, `tests/governance/test_dev_delivery_liveness_workflow.py`, `tests/scripts/test_select_pr_tests.py::test_liveness_checker_source_selects_its_contract_tests`, `.github/workflows/ci-smoke.yaml`, `.github/workflows/import-linter.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py`, `tests/governance/test_governed_vault_profile_contract.py`, `tests/governance/test_governed_vault_profile_proposals.py`, `tests/agents/test_reviewer.py`, `tests/agents/test_reviewer_single_note.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`, `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`, Issue #5820 / PR #5838 candidate selector coverage and `tests/scripts/test_select_pr_tests.py::test_product_embedding_adapters_select_their_regression_coverage`, `scripts/await_pr_checks.sh`, `tests/scripts/test_await_pr_checks.py`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md :: Rules`
+Last reviewed: 2026-10-25 UTC (full-suite deploy-module node scheduling)
+Last verified against: `scripts/dev_delivery_liveness.py`, `tests/governance/test_dev_delivery_liveness_workflow.py`, `tests/scripts/test_select_pr_tests.py::test_liveness_checker_source_selects_its_contract_tests`, `.github/workflows/ci-smoke.yaml`, `.github/workflows/import-linter.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/plan_full_suite_node_shards.py`, `tests/scripts/test_select_pr_tests.py`, `tests/governance/test_issue_pr_governance.py`, `tests/governance/test_governed_vault_profile_contract.py`, `tests/governance/test_governed_vault_profile_proposals.py`, `tests/agents/test_reviewer.py`, `tests/agents/test_reviewer_single_note.py`, `scripts/docs_guard_logic.py`, `tests/scripts/test_docs_guard.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`, `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`, Issue #5820 / PR #5838 candidate selector coverage and `tests/scripts/test_select_pr_tests.py::test_product_embedding_adapters_select_their_regression_coverage`, `scripts/await_pr_checks.sh`, `tests/scripts/test_await_pr_checks.py`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md :: Rules`
 Last verified against (reasoning_expansion UAT selector): Issue #6293, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py::test_expansion_uat_paths_are_owned`, and the scoped Expansion runner suite; selector routing verified, live TEST remains opt-in and separate.
 
 # Test Strategy for the Hot Path
@@ -294,8 +294,17 @@ effort improved before adopting further changes.
   [#6311 run 39865892884](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39865892884/job/120127869151)
   then passed all 131 parallel shards in 57m46s, including the deploy group's 1,473 passing cases
   in 51m18s, but again exhausted 75 minutes during serial coverage. The bounded scheduling replan
-  reuses nightly's deploy-module grouping and starts the measured long deploy module first;
-  it retains the consumed margin history and every watchdog rather than increasing the ceiling.
+  collects node IDs only from the measured `tests/deploy/test_deploy_channel_script.py` module and
+  runs those IDs in disjoint process units under the existing four-process cap. The non-shared nodes
+  are count-balanced across up to three units; the two tests that temporarily remove the checkout's
+  `config/deploy/dev.previous.env` stay together in the small `deploy-node-unit-0`. The planner
+  checks that every collected node appears once. Other file and directory shards remain in the
+  same full-suite inventory. Collection or planning errors fail the lane before execution; node units emit verbose
+  per-node results, and a post-run verifier requires one result for every planned node. Per-unit
+  logs and the exact node plan are retained with the existing phase receipt.
+  The host-sensitive serial boundary still starts after every parallel unit exits. This replan uses
+  the measured module's collected-node inventory and preserves the 75-minute ceiling, marker,
+  watchdog, and serial boundary rather than changing selector coverage or timeout margin.
   Four-process concurrency remains unchanged; host-sensitive tests still start only after all
   parallel processes exit. The earlier changes supply execution margin,
   not a speedup or a completed-run duration measurement. The `required-unit-phase-margin.v1`
@@ -316,9 +325,11 @@ effort improved before adopting further changes.
 - When `tests/deploy` is retained pre-merge because a changed source triggers its heavy coverage,
   the selector preserves the authenticated target inventory and emits a derived
   `scoped_execution_units_json` plan. The slow deploy directory is expanded to stable test files,
-  directory/file overlap is removed, and the runner collects those files once after dependency
-  setup so node counts can weight the distribution of stable file targets across at most four
-  bounded work units.
+  directory/file overlap is removed, and the runner collects the effective parallel inventory once
+  after dependency setup, with the same marker and serial-boundary exclusions as execution.
+  Collected case counts weight both deploy work units and the unchanged atomic nondeploy roots
+  across at most four bounded processes; `tests/ops` and `tests/scripts` no longer each weigh one.
+  This single collection also supplies the measured deploy module's node plan.
   The selected-target union remains the authority: the runner rejects empty, missing, duplicate,
   escaped, incomplete, or non-exact collected coverage. Deploy and the remaining selected targets
   run with bounded parallelism; the bounded host-process/writer-census ops modules start only
@@ -326,7 +337,31 @@ effort improved before adopting further changes.
   the PR marker expression and 120-second per-test thread watchdog; each work unit remains within
   the unchanged 3300-second shard budget, and per-unit plus aggregate logs are retained. Any
   failed, timed-out, missing, duplicate, incomplete, or serial-boundary failure stays red under the
-  single required `Unit tests (not pg)` verdict. Other scoped selections retain the existing
+  single required `Unit tests (not pg)` verdict.
+  The measured `tests/deploy/test_deploy_channel_script.py` module reuses the full-suite node
+  planner when more than one worker is available. Its two shared-checkout rollback tests remain
+  together; its remaining collected nodes form disjoint units within the same four-process cap.
+  Other deploy files remain atomic. The runner authenticates the selected file inventory before
+  expansion, rejects duplicate collected nodes, and verifies one pytest result for every planned
+  node in its executing partition. Missing, duplicate, unexpected, or unrecognized node results
+  fail that partition. A single-worker invocation retains file execution.
+  Each completed failed partition emits its diagnostic log immediately, before waiting for other
+  workers or the serial boundary. The final aggregate retains every partition's log, and remaining
+  selected coverage still runs; prompt diagnostics do not turn partial execution into success.
+  [PR #6373 job 121343690509](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/40251333352/job/121343690509)
+  supplied the motivating measurement: the atomic deployment file took 2324.55 seconds and the
+  serial boundary took 892.48 seconds. An earlier partition finished red at 00:57:33 UTC, while its
+  detailed output was delayed until 01:47:34 UTC. That job had 87 failures across all five phases;
+  its final one-failure summary described only the serial phase. These historical timings justify
+  the bounded change but do not establish its resulting runtime or a ten-minute protected lane.
+  [PR #6373 job 121395691072](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/40268371054/job/121395691072)
+  reached this scoped node-splitting path but packed roughly 2603 ops cases with 232 deploy nodes
+  and other files because nondeploy roots still weighed one. That partition took 2932.76 seconds;
+  the subsequent serial boundary added about 12m34. The job failed with one fixture assertion and
+  four fixture setup errors. Correcting atomic-root weights avoids this packing defect without
+  splitting those roots or changing the serial boundary. Case counts are not measured durations;
+  the resulting protected-lane runtime and any ten-minute bound remain unproven.
+  Other scoped selections retain the existing
   single pytest invocation. This mechanism addresses the critical-path failure recorded by
   [failed job 117620023504](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39108712261/job/117620023504)
   from PR #6193. The closed #6206 balancing contract retained its 60-minute ceiling and accepted

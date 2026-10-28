@@ -120,6 +120,9 @@ from companion_ui.workspace.memory_review_drawer import (
     memory_review_queue_fragment,
     memory_review_unavailable_fragment,
 )
+from companion_ui.workspace.standing_question_review import (
+    standing_question_review_script,
+)
 from companion_ui.workspace.overlay_host import (
     DEFAULT_POSTURE_EMPHASIS,
     coarse_vault_posture,
@@ -15961,6 +15964,7 @@ def render_index_html(
   {_panel_apply_script()}
   {panel_palette_script()}
   {memory_review_drawer_script()}
+  {standing_question_review_script()}
   {calibration_revisit_script_html}
   {receipts_history_script()}
   {system_map_overlay_script()}
@@ -17213,6 +17217,29 @@ def make_handler(
             if parsed.path.startswith("/api/companion/tts/audio/"):
                 self._proxy_audio(parsed.path)
                 return
+            if parsed.path == "/api/standing-questions" or re.fullmatch(
+                r"/api/standing-questions/sq-[0-9a-f-]+", parsed.path
+            ):
+                params: dict[str, str] = {}
+                if parsed.query:
+                    query = parse_qs(parsed.query, keep_blank_values=True)
+                    values = query.get("include_resolved", [])
+                    if (
+                        set(query) != {"include_resolved"}
+                        or len(values) != 1
+                        or values[0].lower() not in {"true", "false"}
+                        or parsed.path != "/api/standing-questions"
+                    ):
+                        self._send_json(400, {"error": "invalid_query"})
+                        return
+                    params["include_resolved"] = values[0].lower()
+                try:
+                    data = self._client.get(parsed.path, params=params)
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             if parsed.path == MEMORY_REVIEW_FRAGMENT_ROUTE:
                 # Memory review drawer queue fragment (#1793, SEP-09b):
                 # server-rendered from the #1792 read endpoint (the /operator
@@ -17425,6 +17452,7 @@ def make_handler(
         # GET paths the page server proxies through to the runtime API.
         _GET_PROXY_PATHS = frozenset(
             {
+                "/api/standing-questions",
                 "/api/companion/orientation",
                 "/api/companion/briefing/today",
                 "/api/companion/workspace",
@@ -17442,6 +17470,7 @@ def make_handler(
             }
         )
         _GET_PROXY_PATTERNS = (
+            re.compile(r"^/api/standing-questions/sq-[0-9a-f-]+$"),
             re.compile(r"^/api/companion/tts/audio/[a-f0-9]{64}\.wav$"),
         )
 
@@ -17516,6 +17545,7 @@ def make_handler(
         # the served page can render the view-in-Panel handoff (intent_id) and
         # the provider-unavailable notice — server declares, UI renders.
         _POST_PROXY_PATTERNS = (
+            re.compile(r"^/api/standing-questions/sq-[0-9a-f-]+/(?:dismiss|close|reopen)$"),
             re.compile(r"^/api/canvas/sessions/[^/]+/coauthor$"),
             re.compile(r"^/api/canvas/sessions/[^/]+/edits$"),
             # Governed memory review decisions (#1793 -> #1792 endpoints).

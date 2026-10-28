@@ -12,10 +12,10 @@ from tests.deploy.test_postgres_deploy_authority_cutover import REPO, request, t
 
 
 @pytest.fixture
-def target(tmp_path, monkeypatch, request):
+def target(tmp_path, monkeypatch, request, admitted_bws_caller):
     # Register locally: an already-collected test module is not a reliable
     # global fixture plugin. Reuse its exact initialized-source fixture body.
-    return cutover_target.__wrapped__(tmp_path, monkeypatch, request)
+    return cutover_target.__wrapped__(tmp_path, monkeypatch, request, admitted_bws_caller)
 
 
 def _prepare(target, monkeypatch, *, admitted=True):

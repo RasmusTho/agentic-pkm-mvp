@@ -241,6 +241,35 @@ def test_typesafe_admin_check_uses_only_marr_project_and_exact_consumer_grant(se
     }
 
 
+def test_target_scoped_check_reads_only_selected_shared_copy(setup):
+    _, provider, controller = setup
+    provider.seed(projects=('non-prod',))
+    provider.seed(value='prod-copy-is-not-selected', projects=('prod',))
+    target_admin = SecretAdmin(provider, controller=controller, target_project_scope='non-prod')
+    with controller.admit('deploy', 'dev') as operation:
+        statuses = target_admin.check_selected(
+            operation, 'dev', ['builderops-model-inquiry']
+        )
+        operation.finish(TerminalEvidence(
+            operation.operation_id, 'deploy', 'dev', 'committed', 'remote-terminal'
+        ))
+    assert statuses == [{'secret': 'openai.api-key', 'status': 'ok'}]
+    assert provider.calls == [('read', 'non-prod', IDENTITY)]
+
+
+def test_generic_shared_check_still_reads_both_copies(setup):
+    admin, provider, _ = setup
+    provider.seed(projects=('non-prod',))
+    provider.seed(value='prod-copy-is-not-selected', projects=('prod',))
+    assert admin.check('dev', ['builderops-model-inquiry']) == [
+        {'secret': 'openai.api-key', 'status': 'divergent'}
+    ]
+    assert provider.calls == [
+        ('read', 'non-prod', IDENTITY),
+        ('read', 'prod', IDENTITY),
+    ]
+
+
 def test_typesafe_import_rejects_non_dev_scope_before_provider_access(setup):
     admin, provider, _ = setup
     with pytest.raises(SecretAdminError):
@@ -264,35 +293,121 @@ def test_admin_project_inventory_has_only_existing_channel_projects():
             current._scope(project, identity)
 
 
-def test_admin_session_requires_the_exact_configured_project_inventory():
+def test_bws_session_uses_project_get_for_configured_targets():
     org, nonprod, prod = [str(uuid4()) for _ in range(3)]
 
     def client_for(projects):
+        project_ids = dict(projects)
+        calls = []
         auth = NS(login_access_token=lambda *_: NS(
             success=True, data=NS(authenticated=True)
         ))
-        project_api = NS(list=lambda _organization: NS(
-            success=True,
-            data=NS(data=[NS(name=name, id=project_id, organization_id=org)
-                          for name, project_id in projects]),
-        ))
-        return NS(auth=lambda: auth, projects=lambda: project_api)
+        def get(project_id):
+            calls.append(('get', project_id))
+            name = next((name for name, candidate in projects if candidate == project_id), None)
+            return NS(success=True, data=NS(
+                name=name, id=project_id, organization_id=org,
+            ))
+        project_api = NS(get=get, list=lambda *_: pytest.fail('organization project list used'))
+        client = NS(auth=lambda: auth, projects=lambda: project_api)
+        client.calls = calls
+        client.project_ids = project_ids
+        return client
 
     two_projects = client_for([('non-prod', nonprod), ('prod', prod)])
     admin = BwsSecretAdmin(BwsAdminConfig(org, nonprod, prod),
                            client_factory=lambda: two_projects, token_reader=lambda: CANARY)
     assert admin._session() is two_projects
+    assert two_projects.calls == [('get', nonprod), ('get', prod)]
 
-    unexpected_marr_project = client_for(
-        [('non-prod', nonprod), ('prod', prod), ('unexpected', str(uuid4()))]
+    target = BwsAdminConfig.for_non_prod_target(org, nonprod)
+    target_client = client_for([('non-prod', nonprod), ('prod', prod)])
+    target_admin = BwsSecretAdmin(
+        target, client_factory=lambda: target_client, token_reader=lambda: CANARY,
     )
-    admin_without_marr = BwsSecretAdmin(
-        BwsAdminConfig(org, nonprod, prod),
-        client_factory=lambda: unexpected_marr_project,
-        token_reader=lambda: CANARY,
+    assert target_admin._session() is target_client
+    assert target_client.calls == [('get', nonprod)]
+    assert target.projects() == {'non-prod': nonprod}
+
+
+@pytest.mark.parametrize('mismatch', ('id', 'name', 'organization'))
+def test_bws_project_get_mismatch_refuses_before_secret_lookup(mismatch):
+    org, nonprod = str(uuid4()), str(uuid4())
+    auth = NS(login_access_token=lambda *_: NS(success=True, data=NS(authenticated=True)))
+    response = {
+        'id': str(uuid4()) if mismatch == 'id' else nonprod,
+        'name': 'unexpected' if mismatch == 'name' else 'non-prod',
+        'organization_id': str(uuid4()) if mismatch == 'organization' else org,
+    }
+    project_api = NS(get=lambda _project_id: NS(
+        success=True, data=NS(**response),
+    ), list=lambda *_: pytest.fail('organization project list used'))
+    secrets_api = NS(list=lambda *_: pytest.fail('secrets queried before project validation'))
+    client = NS(auth=lambda: auth, projects=lambda: project_api,
+                secrets=lambda: secrets_api)
+    admin = BwsSecretAdmin(
+        BwsAdminConfig.for_non_prod_target(org, nonprod),
+        client_factory=lambda: client, token_reader=lambda: CANARY,
     )
     with pytest.raises(SecretAdminError):
-        admin_without_marr._session()
+        admin.read('non-prod', IDENTITY)
+
+
+def test_secret_metadata_filters_before_value_get():
+    org, other_org, nonprod, prod = [str(uuid4()) for _ in range(4)]
+    valid_id = str(uuid4())
+    metadata = [
+        NS(id=str(uuid4()), key=IDENTITY, organization_id=other_org,
+           project_ids=[nonprod]),
+        NS(id=str(uuid4()), key=IDENTITY, organization_id=org,
+           project_ids=[prod]),
+        NS(id=str(uuid4()), key=IDENTITY, organization_id=org,
+           project_ids=[nonprod, prod]),
+        NS(id=str(uuid4()), key='shared/github.token', organization_id=org,
+           project_ids=[nonprod]),
+        NS(id=valid_id, key=IDENTITY, organization_id=org,
+           project_ids=[nonprod]),
+    ]
+    auth = NS(login_access_token=lambda *_: NS(success=True, data=NS(authenticated=True)))
+    project_api = NS(get=lambda project_id: NS(
+        success=True, data=NS(id=project_id, name='non-prod', organization_id=org),
+    ), list=lambda *_: pytest.fail('organization project list used'))
+    calls = []
+    secrets_api = NS(
+        list=lambda organization_id: NS(
+            success=True, data=NS(data=metadata),
+        ) if organization_id == org else pytest.fail('wrong organization listed'),
+        get=lambda item_id: calls.append(item_id) or NS(success=True, data=NS(
+            id=item_id, key=IDENTITY, organization_id=org, project_id=nonprod,
+            value=PRIOR, note='owner text',
+        )),
+    )
+    client = NS(auth=lambda: auth, projects=lambda: project_api,
+                secrets=lambda: secrets_api)
+    admin = BwsSecretAdmin(
+        BwsAdminConfig.for_non_prod_target(org, nonprod),
+        client_factory=lambda: client, token_reader=lambda: CANARY,
+    )
+    result = admin.read('non-prod', IDENTITY)
+    assert result is not None and result.value == PRIOR
+    assert calls == [valid_id]
+
+    for invalid in metadata[:-1]:
+        metadata[:] = [invalid]
+        calls.clear()
+        assert admin.read('non-prod', IDENTITY) is None
+        assert calls == []
+
+    metadata[:] = [NS(id='malformed-id', key=IDENTITY, organization_id=org,
+                      project_ids=[nonprod])]
+    with pytest.raises(SecretAdminError):
+        admin.read('non-prod', IDENTITY)
+    assert calls == []
+    metadata[:] = [NS(id=valid_id, key=IDENTITY, organization_id=org,
+                      project_ids=[nonprod])] * 2
+    with pytest.raises(SecretAdminError):
+        admin.read('non-prod', IDENTITY)
+    assert calls == []
 
 
 def test_shared_import_history_records_genesis_tombstone_before_first_provision(setup):
@@ -463,9 +578,11 @@ def test_sdk_adapter_authenticates_without_cache_and_uses_request_body(monkeypat
             if 'loginAccessToken' in command:
                 response['data'] = {'authenticated': True, 'resetMasterPassword': False, 'forcePasswordReset': False}
             elif 'projects' in command:
-                response['data'] = {'data': [{'id': pid, 'name': name, 'organizationId': org,
-                    'creationDate': '2026-01-01T00:00:00Z', 'revisionDate': '2026-01-01T00:00:00Z'}
-                    for name, pid in [('non-prod', nonprod), ('prod', prod)]]}
+                project_id = command['projects']['get']['id']
+                project_name = 'non-prod' if project_id == nonprod else 'prod'
+                response['data'] = {'id': project_id, 'name': project_name,
+                    'organizationId': org, 'creationDate': '2026-01-01T00:00:00Z',
+                    'revisionDate': '2026-01-01T00:00:00Z'}
             else:
                 request = command['secrets']['create']
                 response['data'] = {'id': item, 'key': request['key'], 'value': request['value'],
@@ -479,7 +596,10 @@ def test_sdk_adapter_authenticates_without_cache_and_uses_request_body(monkeypat
     adapter = BwsSecretAdmin(config, client_factory=lambda: client, token_reader=lambda: CANARY)
     result = adapter.put('non-prod', IDENTITY, None, PRIOR, 'owner\nmarker')
     assert result.value == PRIOR
-    assert len(commands) == 3
+    assert len(commands) == 4
+    assert [command['projects']['get']['id'] for command in commands if 'projects' in command] == [
+        nonprod, prod,
+    ]
     assert 'stateFile' not in json.dumps(commands[0])
     assert commands[-1]['secrets']['create']['value'] == PRIOR
     assert commands[-1]['secrets']['create']['projectIds'] == [nonprod]
@@ -571,3 +691,129 @@ def test_invalid_import_is_exact_not_stripped_and_never_reads_provider(setup):
     with pytest.raises(SecretAdminError):
         admin.import_stdin('dev', 'openai.api-key', StringIO(CANARY + '\n'))
     assert provider.calls == []
+
+
+ROUTE_CANARY = 'route-canary-value-that-must-never-be-read-123456'
+
+
+@pytest.fixture
+def route_tripwires(monkeypatch):
+    """Fail the test if the route path constructs any provider, admin, or value source."""
+    import subprocess
+
+    import app.ops.secret_admin as secret_admin
+
+    def tripwire(*_args, **_kwargs):
+        raise AssertionError('route must not construct a provider, admin, or value source')
+
+    for name in ('configured_admin', 'SecretAdmin', 'HostSecretController', 'TokenPushAdmin',
+                 'load_token_push_targets', 'validate_secret_value'):
+        monkeypatch.setattr(secret_admin, name, tripwire)
+    monkeypatch.setattr(subprocess, 'run', tripwire)
+    monkeypatch.setattr(subprocess, 'Popen', tripwire)
+    for binding in ('TYPESAFE_API_KEY', 'HEIMDAL_RAW_STORE_KEY', 'GITHUB_TOKEN', 'BWS_ACCESS_TOKEN'):
+        monkeypatch.setenv(binding, ROUTE_CANARY)
+
+
+def _route(capsys, *argv, contract=None):
+    code = main(['route', *argv], stdin=StringIO(ROUTE_CANARY), contract=contract)
+    out, err = capsys.readouterr()
+    assert ROUTE_CANARY not in out + err
+    return code, out, err
+
+
+def test_route_environment_consumers_is_local_metadata_only(route_tripwires, capsys):
+    from app.ops.host_secret_contract import HostSecretContract, load_host_secret_contract
+
+    synthetic = HostSecretContract(
+        keychain_service='yggdrasil.host-secrets',
+        keychain_account_template='{channel}:{consumer}:{secret}',
+        allowed=frozenset({('dev', 'heimdal-api-ingress', 'heimdal.raw-store-key'),
+                           ('dev', 'heimdal-api-ingress', 'github.token'),
+                           ('prod', 'heimdal-api-ingress', 'github.token')}),
+        secret_definitions=(('heimdal.raw-store-key', 'HEIMDAL_RAW_STORE_KEY', 'raw-store-key'),
+                            ('github.token', 'GITHUB_TOKEN', 'token')),
+        optional_secrets=frozenset({'github.token'}),
+    )
+    code, out, _ = _route(capsys, 'dev', '--consumer', 'heimdal-api-ingress', contract=synthetic)
+    assert code == 0
+    assert json.loads(out) == {
+        'channel': 'dev', 'consumer': 'heimdal-api-ingress',
+        'evidence': 'declared-contract-metadata', 'values_read': False, 'live_access_verified': False,
+        'routes': [
+            {'secret': 'github.token', 'project': 'non-prod', 'identity': 'shared/github.token',
+             'handoff': {'delivery': 'environment', 'binding': 'GITHUB_TOKEN'}, 'optional': True},
+            {'secret': 'heimdal.raw-store-key', 'project': 'non-prod',
+             'identity': 'dev/heimdal.raw-store-key',
+             'handoff': {'delivery': 'environment', 'binding': 'HEIMDAL_RAW_STORE_KEY'},
+             'optional': False},
+        ],
+    }
+    code, out, _ = _route(capsys, 'prod', '--consumer', 'heimdal-api-ingress', contract=synthetic)
+    assert code == 0
+    assert [r['secret'] for r in json.loads(out)['routes']] == ['github.token']
+
+    # Every declared environment tuple in the checked-in contract projects exactly its grants.
+    contract = load_host_secret_contract()
+    declared: dict[tuple[str, str], set[str]] = {}
+    for channel, consumer, secret in contract.allowed:
+        declared.setdefault((channel, consumer), set()).add(secret)
+    for (channel, consumer), secrets_ in sorted(declared.items()):
+        code, out, _ = _route(capsys, channel, '--consumer', consumer)
+        assert code == 0, (channel, consumer)
+        payload = json.loads(out)
+        assert {r['secret'] for r in payload['routes']} == secrets_
+        assert all(r['handoff']['delivery'] == 'environment' for r in payload['routes'])
+        assert payload['values_read'] is False and payload['live_access_verified'] is False
+    code, out, _ = _route(capsys, 'dev', '--consumer', 'marr-server-dev')
+    assert json.loads(out)['routes'] == [{
+        'secret': 'typesafe.api-key', 'project': 'non-prod', 'identity': 'dev/typesafe.api-key',
+        'handoff': {'delivery': 'environment', 'binding': 'TYPESAFE_API_KEY'}, 'optional': False}]
+
+
+def test_route_file_consumers_is_local_metadata_only(route_tripwires, capsys):
+    expected = {
+        'postgres-db': ('db', 'POSTGRES_PASSWORD_FILE'),
+        'postgres-migrate': ('migrate', 'DATABASE_PASSWORD_FILE'),
+        'postgres-api': ('api', 'DATABASE_PASSWORD_FILE'),
+        'postgres-worker': ('worker', 'DATABASE_PASSWORD_FILE'),
+        'postgres-watcher': ('watcher', 'DATABASE_PASSWORD_FILE'),
+        'postgres-capture-watch': ('heimdal-capture-watch', 'DATABASE_PASSWORD_FILE'),
+    }
+    projects = {'dev': 'non-prod', 'test': 'non-prod', 'prod': 'prod'}
+    for channel, project in projects.items():
+        for consumer, (service, path_binding) in expected.items():
+            code, out, _ = _route(capsys, channel, '--consumer', consumer)
+            assert code == 0, (channel, consumer)
+            assert json.loads(out) == {
+                'channel': channel, 'consumer': consumer,
+                'evidence': 'declared-contract-metadata',
+                'values_read': False, 'live_access_verified': False,
+                'routes': [{'secret': 'postgres.password', 'project': project,
+                            'identity': f'{channel}/postgres.password', 'optional': False,
+                            'handoff': {'delivery': 'file', 'service': service,
+                                        'path_binding': path_binding}}],
+            }
+    # The source-identity witness is declared for dev/test only.
+    code, out, _ = _route(capsys, 'test', '--consumer', 'postgres-source-witness')
+    assert code == 0
+    assert json.loads(out)['routes'][0]['handoff'] == {
+        'delivery': 'file', 'service': 'source-identity-db-witness',
+        'path_binding': 'DATABASE_PASSWORD_FILE'}
+    assert _route(capsys, 'prod', '--consumer', 'postgres-source-witness')[0] == 1
+
+
+@pytest.mark.parametrize('argv', [
+    ('prod', '--consumer', 'marr-server-dev'),
+    ('prod', '--consumer', 'karakeep-service-web'),
+    ('dev', '--consumer', 'undeclared-route-consumer'),
+    ('staging', '--consumer', 'postgres-api'),
+    ('staging', '--consumer', 'heimdal-api-ingress'),
+    ('dev',),
+])
+def test_route_undeclared_consumer_refuses_without_provider_access(route_tripwires, capsys, argv):
+    code, out, err = _route(capsys, *argv)
+    assert code == 1
+    assert out == ''
+    assert 'no secret operation was started' in err
+    assert 'pending' not in err

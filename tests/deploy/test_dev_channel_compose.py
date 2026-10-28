@@ -16,6 +16,7 @@ from app.release_channels.channel_isolation_preflight import (
     _resolve_key_through_chain,
     _service_env_file_layers,
 )
+from tests.deploy.compose_bind_support import effective_create_host_path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -617,7 +618,7 @@ def test_model_access_bindings_are_optional_and_scoped_to_product_callers(
         assert mount["read_only"] is True
         bind = mount.get("bind")
         assert isinstance(bind, dict)
-        assert bind["create_host_path"] is True
+        assert effective_create_host_path(bind) is True
 
     for name, service in overlay_services.items():
         if name in RUNTIME_SERVICES:

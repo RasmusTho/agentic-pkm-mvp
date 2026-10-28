@@ -319,6 +319,9 @@ def _run_full_suite_workflow(
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
+    planner = tmp_path / "scripts/plan_full_suite_node_shards.py"
+    planner.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPO_ROOT / "scripts/plan_full_suite_node_shards.py", planner)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake_python = bin_dir / "python"
@@ -330,6 +333,21 @@ import signal
 import sys
 import time
 args = sys.argv[1:]
+if "--collect-only" in args:
+    if os.environ.get("MODE") == "collect-failure":
+        print("synthetic deploy collection failure", file=sys.stderr, flush=True)
+        raise SystemExit(2)
+    target = next(arg for arg in args if arg == "tests/deploy/test_deploy_channel_script.py")
+    for node in [
+        target + "::test_rollback_dry_run_without_sha_parses_flag_and_skips_writes",
+        target + "::test_rollback_with_explicit_sha_still_allows_flags",
+        target + "::test_regular_a",
+        target + "::test_regular_b[param with space]",
+        target + "::test_regular_c",
+        target + "::test_regular_d",
+    ]:
+        print(node)
+    raise SystemExit(0)
 targets = [arg for arg in args if arg.startswith("tests/")]
 ignored = {arg.split("=", 1)[1] for arg in args if arg.startswith("--ignore=")}
 assert os.environ["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
@@ -338,6 +356,7 @@ assert args[args.index("-m", 2) + 1] == (
     "not pg and not alpha_llm and not alpha_llm_live and not panel_llm_e2e and not eval "
     "and not browser_runtime and not human_uat and not uat_integrated_runtime"
 )
+assert args[2] == ("-vv" if any("::" in target for target in targets) else "-q")
 active = Path("active")
 active.mkdir(exist_ok=True)
 token = active / str(os.getpid())
@@ -346,11 +365,33 @@ if targets[0] == "tests/ops":
 else:
     token.touch()
     time.sleep(0.05)
+state_path = Path(os.environ["FAKE_STATE"])
+state_path.parent.mkdir(exist_ok=True)
+state_path.touch(exist_ok=True)
+lock_path = state_path.with_suffix(".lock")
+with lock_path.open("a+", encoding="utf-8") as handle:
+    import fcntl
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    state = __import__("json").loads(state_path.read_text(encoding="utf-8") or "{}")
+    state["active"] = state.get("active", 0) + (targets[0] != "tests/ops")
+    state["max_active"] = max(state.get("max_active", 0), state["active"])
+    temporary_state = state_path.with_suffix(".tmp")
+    temporary_state.write_text(__import__("json").dumps(state), encoding="utf-8")
+    os.replace(temporary_state, state_path)
+    if os.environ.get("MODE") == "state-visible-before-unlock":
+        assert __import__("json").loads(state_path.read_text()) == state
+    fcntl.flock(handle, fcntl.LOCK_UN)
+print("ARGV " + __import__("json").dumps(targets))
 if os.environ.get("MODE") == "deploy-deselected" and targets[0] == "tests/deploy/nested/child_test.py":
     print("1 deselected")
     token.unlink()
     sys.exit(5)
 for target in targets:
+    if "::" in target:
+        if not (os.environ.get("MODE") == "incomplete-node-result" and "::test_regular_a" in target):
+            print(f"EXECUTED_NODE {target}")
+            print(f"{target} PASSED [synthetic]")
+        continue
     path = Path(target)
     if path.is_dir():
         files = sorted(file for file in path.rglob("*.py")
@@ -360,17 +401,33 @@ for target in targets:
     for file in files:
         if str(file) not in ignored:
             print(f"EXECUTED {file}")
-if os.environ.get("MODE") == "incomplete" and targets[0] == "tests/alpha":
+if (os.environ.get("MODE") == "incomplete" and targets[0] == "tests/alpha") or (
+    os.environ.get("MODE") == "incomplete-node"
+    and any("::test_regular_a" in target for target in targets)
+):
     print("PARTIAL synthetic regression", flush=True)
     token.unlink()
     os.kill(os.getppid(), signal.SIGKILL)
     sys.exit(1)
 if token.exists():
     token.unlink()
-if targets[0] == os.environ.get("FAILING_SHARD"):
+if targets[0] == os.environ.get("FAILING_SHARD") or any(
+    target == os.environ.get("FAILING_SHARD") for target in targets
+):
     print("FAILED synthetic regression")
     sys.exit(1)
 print("1 passed")
+if targets[0] != "tests/ops":
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        state = __import__("json").loads(state_path.read_text(encoding="utf-8") or "{}")
+        state["active"] -= 1
+        temporary_state = state_path.with_suffix(".tmp")
+        temporary_state.write_text(__import__("json").dumps(state), encoding="utf-8")
+        os.replace(temporary_state, state_path)
+        if os.environ.get("MODE") == "state-visible-before-unlock":
+            assert __import__("json").loads(state_path.read_text()) == state
+        fcntl.flock(handle, fcntl.LOCK_UN)
 ''', encoding="utf-8",
     )
     fake_python.chmod(0o755)
@@ -383,6 +440,7 @@ print("1 passed")
         env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
              **step["env"], "GITHUB_SHA": "fixture-sha", "MODE": mode,
              "DEFERRED_TARGETS": deferred_targets,
+             "FAKE_STATE": str(tmp_path / "state.json"),
              "RUNNER_TEMP": str(tmp_path / "runner"), "FAILING_SHARD": failing_shard},
         timeout=30,
     )
@@ -395,9 +453,16 @@ def test_full_suite_shards_cover_test_files_once(tmp_path: Path, deferred_target
     assert result.returncode == 0, result.stdout + result.stderr
     log = (tmp_path / "pytest-not-pg.log").read_text()
     executed = re.findall(r"^EXECUTED (.+)$", log, re.MULTILINE)
+    executed_nodes = re.findall(r"^EXECUTED_NODE (.+)$", log, re.MULTILINE)
+    node_module = "tests/deploy/test_deploy_channel_script.py"
     expected = [name for name in files if not name.startswith("tests/e2e/")
                 and not (deferred_targets and name.startswith(deferred_targets + "/"))]
-    assert sorted(executed) == sorted(expected)
+    assert sorted(executed) == sorted(name for name in expected if name != node_module)
+    if node_module in expected:
+        assert {node.split("::", 1)[0] for node in executed_nodes} == {node_module}
+        assert len(executed_nodes) == len(set(executed_nodes))
+    else:
+        assert not executed_nodes
     shards = (tmp_path / "runner/pytest-not-pg-shards/shards").read_text().splitlines()
     expected_shards = {name if name.startswith("tests/deploy/") or name.count("/") == 1
                        else "/".join(name.split("/")[:2])
@@ -411,11 +476,64 @@ def test_full_suite_shards_cover_test_files_once(tmp_path: Path, deferred_target
     else:
         assert shards[0] == "tests/deploy/test_deploy_channel_script.py"
         assert shards[1:] == sorted(set(shards[1:]))
+        coverage = json.loads(
+            (tmp_path / "runner/pytest-not-pg-shards/deploy-node-units/coverage.json").read_text()
+        )
+        planned_nodes = [
+            node for unit in coverage["work_items"] for node in unit["nodes"]
+        ]
+        assert sorted(executed_nodes) == sorted(planned_nodes)
+        assert len(coverage["work_items"]) <= 4
+        assert coverage["max_workers"] == 4
+        invocations = [
+            json.loads(line.removeprefix("ARGV "))
+            for line in log.splitlines()
+            if line.startswith("ARGV ")
+        ]
+        shared_nodes = {
+            "tests/deploy/test_deploy_channel_script.py::test_rollback_dry_run_without_sha_parses_flag_and_skips_writes",
+            "tests/deploy/test_deploy_channel_script.py::test_rollback_with_explicit_sha_still_allows_flags",
+        }
+        assert sum(shared_nodes <= set(invocation) for invocation in invocations) == 1
+        assert json.loads((tmp_path / "state.json").read_text())["max_active"] <= 4
     assert "SHARD FINISHED (0): tests/alpha in " in result.stdout
     # The host-sensitive tests run after parallel shards and are never duplicated.
     assert executed[-3:] == ["tests/ops/nested/test_host_child.py",
                              "tests/ops/test_host.py",
                              "tests/invariants/test_vault_multiwriter.py"]
+
+
+def test_full_suite_node_plan_covers_collected_nodes_once_and_binds_shared_state() -> None:
+    from scripts.plan_full_suite_node_shards import (
+        SHARED_CHECKOUT_NODES,
+        parse_collected_nodes,
+        plan_node_units,
+    )
+
+    module = "tests/deploy/test_deploy_channel_script.py"
+    nodes = (
+        SHARED_CHECKOUT_NODES[0],
+        module + "::test_regular_a",
+        SHARED_CHECKOUT_NODES[1],
+        module + "::test_regular_b[param with space]",
+        module + "::test_regular_c",
+        module + "::test_regular_d",
+    )
+    parsed = parse_collected_nodes("\n".join(nodes) + "\n6 tests collected", module)
+    assert parsed == nodes
+    units = plan_node_units(parsed, module, max_workers=4)
+    flattened = [node for unit in units for node in unit]
+    assert len(units) <= 4
+    assert len(flattened) == len(nodes)
+    assert sorted(flattened) == sorted(nodes)
+    assert all(len(unit) == len(set(unit)) for unit in units)
+    assert sum(set(SHARED_CHECKOUT_NODES) <= set(unit) for unit in units) == 1
+    with pytest.raises(ValueError, match="duplicates"):
+        plan_node_units((*nodes, nodes[0]), module, max_workers=4)
+    with pytest.raises(ValueError, match="shared-checkout node inventory is incomplete"):
+        plan_node_units(tuple(node for node in nodes if node != SHARED_CHECKOUT_NODES[0]), module)
+    with pytest.raises(ValueError, match="worker cap"):
+        plan_node_units(nodes, module, max_workers=5)
 
 
 def test_full_suite_records_fully_deselected_deploy_module(tmp_path: Path) -> None:
@@ -425,6 +543,43 @@ def test_full_suite_records_fully_deselected_deploy_module(tmp_path: Path) -> No
     assert "0 tests/deploy/nested/child_test.py" in (shard_root / "status").read_text().splitlines()
     log = (shard_root / "logs/tests_deploy_nested_child_test.py.log").read_text()
     assert "1 deselected" in log and "EXECUTED" not in log
+
+
+def test_full_suite_fake_shard_state_visible_before_unlock(tmp_path: Path) -> None:
+    result, _files, _job = _run_full_suite_workflow(tmp_path, mode="state-visible-before-unlock")
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["active"] == 0
+    assert state["max_active"] <= 4
+
+
+def test_full_suite_node_collection_failure_is_fail_red_and_retained(tmp_path: Path) -> None:
+    result, _files, _job = _run_full_suite_workflow(tmp_path, mode="collect-failure")
+    assert result.returncode == 1
+    shard_root = tmp_path / "runner/pytest-not-pg-shards"
+    receipt = json.loads((shard_root / "phase-margin.json").read_text())
+    assert receipt["exit_status"] == 1 and receipt["phase"] != "complete"
+    collection = (shard_root / "deploy-node-collection.log").read_text()
+    assert "synthetic deploy collection failure" in collection
+    assert "Deploy node collection failed (2)" in result.stderr
+    assert not (shard_root / "status").read_text().strip()
+
+
+def test_full_suite_missing_node_result_fails_red_after_complete_process_accounting(
+    tmp_path: Path,
+) -> None:
+    result, _files, _job = _run_full_suite_workflow(tmp_path, mode="incomplete-node-result")
+    assert result.returncode == 1
+    shard_root = tmp_path / "runner/pytest-not-pg-shards"
+    receipt = json.loads((shard_root / "phase-margin.json").read_text())
+    assert receipt["exit_status"] == 1 and receipt["phase"] != "complete"
+    assert "node execution evidence incomplete" in result.stderr
+    assert "\nEXECUTED_NODE tests/deploy/test_deploy_channel_script.py::test_regular_a\n" not in (
+        tmp_path / "pytest-not-pg.log"
+    ).read_text()
+    assert len((shard_root / "status").read_text().splitlines()) == len(
+        (shard_root / "work-items").read_text().splitlines()
+    )
 
 
 def test_required_unit_full_suite_phase_budget_preserves_complete_coverage(tmp_path: Path) -> None:
@@ -590,6 +745,8 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+if "--collect-only" in sys.argv:
+    raise SystemExit(0)
 target_text = " ".join(sys.argv[1:])
 print(target_text, flush=True)
 if active_dir_value := os.environ.get("FAKE_ACTIVE_DIR"):
@@ -762,6 +919,9 @@ import sys
 
 args = sys.argv[1:]
 node = "tests/scripts/test_publication.py::test_publish_pr_rejects_missing_governing_issue"
+if "--collect-only" in args:
+    print(node)
+    raise SystemExit(0)
 executions = 0
 if "tests/scripts" in args:
     executions += 1
@@ -1104,6 +1264,239 @@ if "TIMEOUT_SCOPED" in __import__("os").environ:
     assert "incomplete" in incomplete.stderr
 
 
+def _run_scoped_measured_fixture(tmp_path: Path, mode: str = "complete"):
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+
+    nodes = [*SHARED_CHECKOUT_NODES, *(
+        f"{TARGET_MODULE}::test_regular_{index}[value with space]" for index in range(9)
+    )]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(f"#!{sys.executable}\n" + r'''
+import fcntl
+import json
+import os
+from pathlib import Path
+import sys
+import time
+args = sys.argv[1:]
+nodes = json.loads(os.environ["FAKE_NODES"])
+mode = os.environ["FAKE_MODE"]
+if "--collect-only" in args:
+    print("\n".join(nodes))
+    raise SystemExit(0)
+state_path = Path(os.environ["FAKE_STATE"])
+serial = "tests/ops/test_native_journaling_acceptance.py" in args
+with state_path.open("a+") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    handle.seek(0)
+    raw = handle.read()
+    state = json.loads(raw) if raw else {"active": 0, "peak": 0, "invocations": []}
+    state["active"] += 1
+    state["peak"] = max(state["peak"], state["active"])
+    state["invocations"].append(args)
+    if serial:
+        state["serial_active"] = state["active"]
+        state["serial_invocation_count"] = len(state["invocations"])
+    handle.seek(0)
+    handle.truncate()
+    json.dump(state, handle)
+time.sleep(0.05)
+for node in args:
+    if node in nodes:
+        if mode == "missing" and node == nodes[-1]:
+            continue
+        print(node + " PASSED", flush=True)
+        if mode == "duplicate" and node == nodes[-1]:
+            print(node + " PASSED", flush=True)
+        if mode == "unexpected" and node == nodes[-1]:
+            print(node.split("::")[0] + "::test_unplanned PASSED", flush=True)
+with state_path.open("r+") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    state = json.load(handle)
+    state["active"] -= 1
+    handle.seek(0)
+    handle.truncate()
+    json.dump(state, handle)
+''', encoding="utf-8")
+    fake_pytest.chmod(0o755)
+    expected = [TARGET_MODULE, "tests/scripts", "tests/ops"]
+    state_path = tmp_path / "state.json"
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+         "--partitions-json", json.dumps([[target] for target in expected]),
+         "--expected-targets-json", json.dumps(expected),
+         "--execution-units-json", json.dumps([[target] for target in expected]),
+         "--log-dir", str(tmp_path / "logs"),
+         "--aggregate-log", str(tmp_path / "aggregate.log"),
+         "--jobs", "4", "--shard-timeout-seconds", "10",
+         "--serial-boundary-json", json.dumps(["tests/ops/test_native_journaling_acceptance.py"])],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             "FAKE_NODES": json.dumps(nodes), "FAKE_MODE": mode, "FAKE_STATE": str(state_path)},
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    return result, json.loads(state_path.read_text()), nodes
+
+
+def _weighted_root_fixture(tmp_path, monkeypatch, *, collection_code=0):
+    import scripts.run_scoped_test_partitions as runner
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+    from scripts.select_pr_tests import SCOPED_DEPLOY_SERIAL_BOUNDARY
+
+    serial = SCOPED_DEPLOY_SERIAL_BOUNDARY
+    deploy_nodes = (*SHARED_CHECKOUT_NODES, *(
+        f"{TARGET_MODULE}::test_regular_{index:04}" for index in range(696)
+    ))
+    nodes = (*deploy_nodes, *(
+        f"tests/ops/test_atomic.py::test_case[{index}]" for index in range(2603)
+    ), *(
+        f"tests/scripts/test_atomic.py::test_case[{index}]" for index in range(1310)
+    ))
+    collections = []
+    executed = []
+
+    class Collection:
+        pid = 123456789
+        returncode = collection_code
+
+        def communicate(self, timeout):
+            assert timeout == runner.COLLECTION_TIMEOUT_SECONDS
+            return "\n".join(nodes) if not collection_code else "collection failed", None
+
+    def collect(command, **kwargs):
+        assert "--collect-only" in command
+        collections.append(command)
+        return Collection()
+
+    def execute(index, targets, *, log_dir, timeout_seconds):
+        executed.append(tuple(targets))
+        log = log_dir / f"partition-{index}.log"
+        log.write_text("".join(f"{node} PASSED\n" for node in targets if node in deploy_nodes))
+        return index, 0, log, False
+
+    monkeypatch.setattr(runner.subprocess, "Popen", collect)
+    monkeypatch.setattr(runner, "_terminate_process_group", lambda _pid: None)
+    monkeypatch.setattr(runner, "_run_partition", execute)
+    expected = (TARGET_MODULE, "tests/ops", "tests/scripts")
+
+    def run():
+        return runner.run_partitions(
+            tuple((target,) for target in expected), log_dir=tmp_path / "logs",
+            aggregate_log=tmp_path / "aggregate.log", jobs=4, timeout_seconds=10,
+            serial_last=False, serial_boundary=serial,
+            execution_units=tuple((target,) for target in expected), expected_targets=expected,
+        )
+
+    return run, collections, executed, deploy_nodes, serial
+
+
+def test_scoped_runner_weights_atomic_roots_without_stacking_deploy_nodes(tmp_path, monkeypatch):
+    from scripts.select_pr_tests import PR_MARKER_EXPRESSION
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES
+
+    run, collections, executed, nodes, serial = _weighted_root_fixture(tmp_path, monkeypatch)
+    assert run() == 0
+    assert len(collections) == 1
+    collection = collections[0]
+    assert collection[collection.index("-m") + 1] == PR_MARKER_EXPRESSION
+    assert "tests/ops" in collection and "tests/scripts" in collection
+    assert all(f"--ignore={path}" in collection for path in serial)
+    assert executed[-1] == serial
+    parallel = executed[:-1]
+    assert len(parallel) == 4
+    ops = next(unit for unit in parallel if "tests/ops" in unit)
+    scripts = next(unit for unit in parallel if "tests/scripts" in unit)
+    assert ops != scripts
+    assert ops == ("tests/ops", *(f"--ignore={path}" for path in serial))
+    assert scripts == ("tests/scripts",)
+    assert sorted(target for unit in parallel for target in unit if target in nodes) == sorted(nodes)
+    assert sum(set(SHARED_CHECKOUT_NODES) <= set(unit) for unit in parallel) == 1
+    assert all(path not in unit for unit in parallel for path in serial)
+
+
+def test_scoped_runner_weight_collection_failure_stops_execution(tmp_path, monkeypatch):
+    run, collections, executed, _nodes, _serial = _weighted_root_fixture(
+        tmp_path, monkeypatch, collection_code=2,
+    )
+    with pytest.raises(RuntimeError, match="collection failed"):
+        run()
+    assert len(collections) == 1
+    assert executed == []
+
+
+def test_scoped_runner_splits_measured_module_with_exact_coverage(tmp_path: Path) -> None:
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+
+    result, state, nodes = _run_scoped_measured_fixture(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    invocations = state["invocations"]
+    actual = [target for args in invocations for target in args if target.startswith(TARGET_MODULE)]
+    assert sorted(actual) == sorted(nodes)
+    node_invocations = [args for args in invocations if any(node in args for node in nodes)]
+    assert 2 <= len(node_invocations) <= 4
+    assert sum(set(SHARED_CHECKOUT_NODES) <= set(args) for args in node_invocations) == 1
+    assert state["peak"] <= 4
+    assert state["serial_active"] == 1
+    assert state["serial_invocation_count"] == len(invocations)
+    assert all("--ignore=tests/ops/test_native_journaling_acceptance.py" in args
+               for args in invocations if "tests/ops" in args)
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert all(aggregate.count(node + " PASSED") == 1 for node in nodes)
+
+
+@pytest.mark.parametrize("mode", ["missing", "duplicate", "unexpected"])
+def test_scoped_runner_rejects_incomplete_measured_node_evidence(tmp_path: Path, mode: str) -> None:
+    result, _state, _nodes = _run_scoped_measured_fixture(tmp_path, mode)
+    assert result.returncode == 1
+    assert "Collected-node verification failed:" in result.stderr
+    assert "Collected-node verification failed:" in (tmp_path / "aggregate.log").read_text()
+
+
+def test_scoped_runner_reports_failure_before_other_partitions_finish(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(f"#!{sys.executable}\n" + r'''
+import os
+from pathlib import Path
+import sys
+import time
+if "tests/fast" in sys.argv:
+    print("early-diagnostic", flush=True)
+    raise SystemExit(7)
+release = Path(os.environ["FAKE_RELEASE"])
+while not release.exists():
+    time.sleep(0.01)
+print("slow-released-after-diagnostic", flush=True)
+''', encoding="utf-8")
+    fake_pytest.chmod(0o755)
+    release = tmp_path / "release"
+    process = subprocess.Popen(
+        [sys.executable, str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
+         "--partitions-json", json.dumps([["tests/fast"], ["tests/slow"]]),
+         "--expected-targets-json", json.dumps(["tests/fast", "tests/slow"]),
+         "--log-dir", str(tmp_path / "logs"),
+         "--aggregate-log", str(tmp_path / "aggregate.log"),
+         "--jobs", "2", "--shard-timeout-seconds", "5"],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_RELEASE": str(release)},
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    assert process.stdout is not None
+    output = []
+    for line in process.stdout:
+        output.append(line)
+        if "early-diagnostic" in line:
+            release.touch()
+    assert process.wait(timeout=15) == 1
+    assert "".join(output).count("early-diagnostic") == 1
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert "early-diagnostic" in aggregate
+    assert "slow-released-after-diagnostic" in aggregate
+    assert "PARTITION TIMED OUT" not in aggregate
+
 def test_scoped_runner_serial_last_failure_is_aggregated(tmp_path: Path) -> None:
     """The legacy serial-last path must remain fail-loud and observable."""
     bin_dir = tmp_path / "bin"
@@ -1151,7 +1544,9 @@ if "tests/ops" in args:
     ("mode", "failing_shard"),
     [("shard-failure", "tests/alpha"),
      ("deploy-shard-failure", "tests/deploy/test_short.py"),
-     ("incomplete", "tests/alpha"), ("serial-failure", "tests/ops")],
+     ("node-failure", "tests/deploy/test_deploy_channel_script.py::test_regular_a"),
+     ("incomplete", "tests/alpha"), ("incomplete-node", "tests/deploy/test_deploy_channel_script.py::test_regular_a"),
+     ("serial-failure", "tests/ops")],
 )
 def test_full_suite_shards_retain_failure_logs(tmp_path: Path, mode: str, failing_shard: str) -> None:
     result, _files, job = _run_full_suite_workflow(tmp_path, failing_shard=failing_shard, mode=mode)
@@ -1160,15 +1555,23 @@ def test_full_suite_shards_retain_failure_logs(tmp_path: Path, mode: str, failin
     receipt = json.loads((shard_root / "phase-margin.json").read_text())
     assert receipt["exit_status"] == 1
     assert receipt["phase"] != "complete"
-    if mode == "incomplete":
+    if mode in {"incomplete", "incomplete-node"}:
         assert "Process-shard runner incomplete" in result.stderr
-        assert "PARTIAL synthetic regression" in (shard_root / "logs/tests_alpha.log").read_text()
-        assert "tests/alpha" not in (shard_root / "status").read_text()
-    elif mode in {"shard-failure", "deploy-shard-failure"}:
-        assert f"SHARD FAILED (1): {failing_shard}" in result.stderr
-        log_name = failing_shard.replace("/", "_") + ".log"
-        assert "FAILED synthetic regression" in (shard_root / "logs" / log_name).read_text()
-        assert f"1 {failing_shard}" in (shard_root / "status").read_text()
+        partial_logs = [path for path in (shard_root / "logs").glob("*.log")
+                        if "PARTIAL synthetic regression" in path.read_text()]
+        assert len(partial_logs) == 1
+        expected_missing = "tests/alpha" if mode == "incomplete" else "deploy-node-unit-1"
+        assert expected_missing not in (shard_root / "status").read_text()
+    elif mode in {"shard-failure", "deploy-shard-failure", "node-failure"}:
+        if mode == "node-failure":
+            assert "SHARD FAILED (1): deploy-node-unit-1" in result.stderr
+            assert "FAILED synthetic regression" in (tmp_path / "pytest-not-pg.log").read_text()
+            assert "deploy-node-unit-1" in (shard_root / "status").read_text()
+        else:
+            assert f"SHARD FAILED (1): {failing_shard}" in result.stderr
+            log_name = failing_shard.replace("/", "_") + ".log"
+            assert "FAILED synthetic regression" in (shard_root / "logs" / log_name).read_text()
+            assert f"1 {failing_shard}" in (shard_root / "status").read_text()
         assert "FAILED synthetic regression" in (tmp_path / "pytest-not-pg.log").read_text()
     else:
         assert receipt["phase"] == "serial"

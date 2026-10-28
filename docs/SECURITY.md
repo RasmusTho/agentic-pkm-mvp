@@ -22,11 +22,10 @@ account, subscription, credential copy, or recurring human step unless the owner
 is required and an authorized decision accepts that cost. Keep verification to evidence that can
 change the decision; never weaken a boundary to save tokens or operator time.
 
-Where implemented for the selected consumer, `scripts/secrets route <channel> --consumer
-<consumer>` prints only local declared BWS metadata. It does not read secret values, contact BWS,
-grant access, or verify live access. Unsupported commands and file-secret consumers must stop at
-metadata; they do not authorize a value-reading substitute. The metadata helper observed in the
-2026-10-18 working checkout is not delivered by this documentation change.
+`scripts/secrets route <channel> --consumer <consumer>` (#6241) prints only local declared BWS
+metadata for declared environment consumers and PostgreSQL file consumers. It does not read secret
+values, contact BWS, grant access, or verify live access. An undeclared channel/consumer or an
+unsupported command stops at that metadata refusal; it does not authorize a value-reading substitute.
 
 The [2026-10-18 credential-route review](audits/SYSTEM_WIDE_CREDENTIAL_ROUTES_2026-10-18.md)
 records the inspected repositories, per-consumer routes, evidence limits, and exact remaining gaps.

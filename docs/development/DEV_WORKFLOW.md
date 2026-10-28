@@ -475,6 +475,8 @@ Use this lane only when:
   - `.github/workflows/issue-pr-governance.yml`
   - `Makefile`
   - `tests/architecture/test_requirements_consistency.py`
+  - `scripts/plan_full_suite_node_shards.py`
+  - `tests/ops/test_ci_workflow.py`
   - `scripts/select_pr_tests.py`
   - `tests/scripts/test_select_pr_tests.py`
   - `tests/architecture/test_handoff_fencing_governance.py`

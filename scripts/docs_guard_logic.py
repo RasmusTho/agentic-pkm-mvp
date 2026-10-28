@@ -180,6 +180,7 @@ GOVERNANCE_TEMPORAL_ENFORCEMENT = MappingProxyType(
         "scripts/select_pr_tests.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
         "scripts/replay_pr_test_selection.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
         "scripts/run_scoped_test_partitions.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
+        "scripts/plan_full_suite_node_shards.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
         "scripts/await_pr_checks.sh": "docs/development/TEST_STRATEGY_HOT_PATH.md",
         "scripts/ci_stall_classifier.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
         "app/builderops/publication.py": "docs/development/PR_HOT_PATH.md",

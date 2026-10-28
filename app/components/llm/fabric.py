@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 import os
+import time
 import weakref
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -29,6 +30,7 @@ from app.model_access.codex_remote_transport import (
     CodexRemoteTransport,
     RemoteCompletionError,
     RemoteEmbeddingError as RemoteEmbeddingError,
+    RemoteEmbeddingExecutorBusyError as RemoteEmbeddingExecutorBusyError,
     RemoteEmbeddingIdentityError,
     RemoteEmbeddingVectorError,
 )
@@ -1412,6 +1414,12 @@ def _product_embedding_client_for_identity(
     )
 
 
+# Bounded re-send schedule for the executor's pre-dispatch busy refusal only; it
+# covers a health preflight holding the shared slots (~31.5 s in total).
+_EXECUTOR_BUSY_RESEND_DELAYS_SECONDS = (0.5, 1.0, 2.0, 4.0, 8.0, 8.0, 8.0)
+_sleep = time.sleep
+
+
 class _RemoteProductEmbeddingClient:
     """Embedding client whose provider calls terminate only at the Mac Product API."""
 
@@ -1451,7 +1459,15 @@ class _RemoteProductEmbeddingClient:
             dimensions=self.identity.dim,
             input_text=text,
         )
-        path_result = self._remote_transport.embed_product(request)
+        for delay in _EXECUTOR_BUSY_RESEND_DELAYS_SECONDS:
+            try:
+                path_result = self._remote_transport.embed_product(request)
+                break
+            except RemoteEmbeddingExecutorBusyError:
+                # Refused before dispatch: re-sending cannot cause a second provider call.
+                _sleep(delay)
+        else:
+            path_result = self._remote_transport.embed_product(request)
         response = getattr(path_result, "response", path_result)
         route = response.route
         if (

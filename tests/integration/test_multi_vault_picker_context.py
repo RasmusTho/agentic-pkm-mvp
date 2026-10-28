@@ -1239,6 +1239,52 @@ console.log(JSON.stringify({{a,b,write:write.status,cookie,reloads,handoffs}}));
     assert 'X-Active-Context-Session' not in discovery[2]
 
 
+def test_picker_harness_waits_for_slow_selection_reload(tmp_path, monkeypatch):
+    """A slow but progressing selection is not a failure (#6368).
+
+    The harness once raced each selection against a fixed 4 s budget, which CI
+    load exceeded; it must wait for the controller's reload instead.
+    """
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _runtime, roots, binding_a, _b = _activated_picker_runtime(tmp_path, monkeypatch)
+
+    def slow_select(method, path):
+        if method == 'POST' and path == '/api/companion/vault/select':
+            time.sleep(4.5)
+
+    with picker_browser(monkeypatch, before_request=slow_select) as (run, _calls):
+        result = run(f'''
+await choose({json.dumps(str(roots[0]))});
+var a=await (await fetch('/api/companion/vault/notes/scoped')).json();
+console.log(JSON.stringify({{a,reloads}}));
+''')
+    assert result['reloads'] == 1
+    assert {note["vault_binding_id"] for note in result["a"]["notes"]} == {binding_a}
+
+
+def test_picker_harness_surfaces_blocked_selection(tmp_path, monkeypatch):
+    """A selection the controller rejects fails with its terminal attrs (#6368)."""
+    import json
+    from tests._mvr05b_picker_browser import picker_browser
+
+    _activated_picker_runtime(tmp_path, monkeypatch)
+    missing = tmp_path / 'not-a-vault'
+    with picker_browser(monkeypatch) as (run, _calls):
+        result = run(f'''
+var error=null;
+try{{await choose({json.dumps(str(missing))});}}catch(e){{error=e.message;}}
+console.log(JSON.stringify({{error,reloads,visible:!visible.hidden}}));
+''')
+    assert result['error'].startswith('picker selection failed: ')
+    attrs = json.loads(result['error'].removeprefix('picker selection failed: '))
+    assert attrs['data-affordance-status'] == 'blocked'
+    assert 'data-submitting' not in attrs
+    assert result['reloads'] == 0
+    assert result['visible'] is True
+
+
 @pytest.mark.parametrize("bindings", ["zero", "sole-default", "many", "ambiguous", "default-mismatched"])
 def test_stale_selection_restart_requires_visible_reselection(tmp_path, monkeypatch, bindings, caplog):
     from tests._mvr05b_picker_browser import picker_browser

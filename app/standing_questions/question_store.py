@@ -21,6 +21,7 @@ from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 WRITE_ACTION = "standing_questions.write_note"
 QUESTION_DIRECTORY = "questions"
 _HUMAN_OWNED_FIELDS = frozenset({"text", "status"})
+_REVIEW_FIELDS = frozenset({"status", "candidate_answer_ref", "standing_answer_ref"})
 _SYSTEM_OWNED_FIELDS = frozenset(
     {
         "evidence",
@@ -221,6 +222,10 @@ class HumanOwnedFieldMutationError(ValueError):
     """Raised before a write when an engine attempts to change human-owned content."""
 
 
+class InvalidQuestionReviewTransition(ValueError):
+    """Raised when a review action asks for a transition outside SQ-05's contract."""
+
+
 def mint_question_id() -> str:
     return f"sq-{uuid.uuid4()}"
 
@@ -355,6 +360,79 @@ class QuestionStore:
             question_id, current, updates, expected_version=expected_version
         )
 
+    def update_review_fields_if_unchanged(
+        self,
+        question_id: str,
+        expected: Mapping[str, Any],
+        updates: Mapping[str, Any],
+        *,
+        expected_version: str,
+    ) -> tuple[dict[str, Any], WriteReceipt]:
+        """Apply one explicit human review transition against exact Question bytes.
+
+        The ordinary engine seam deliberately cannot write ``status``. This
+        separately named seam admits only the bounded SQ-05 transitions and
+        still uses the exact-byte conditional write port, so an evidence refresh
+        or another review cannot be overwritten by a stale page observation.
+        """
+
+        content, current_version = read_note_text_with_version(self._path(question_id))
+        if current_version != expected_version:
+            raise KnowledgeWriteConflict(
+                f"Question note bytes changed before conditional review update: {question_id}"
+            )
+        current = parse_question_note(content)
+        if dict(current) != dict(expected):
+            raise KnowledgeWriteConflict(
+                f"Question note changed before conditional review update: {question_id}"
+            )
+
+        changes = dict(updates)
+        unknown = set(changes) - _REVIEW_FIELDS
+        if unknown:
+            raise HumanOwnedFieldMutationError(
+                "review transition cannot mutate Question fields: "
+                + ", ".join(sorted(unknown))
+            )
+        if not changes:
+            raise InvalidQuestionReviewTransition("review transition must change a field")
+
+        next_status = changes.get("status", current["status"])
+        next_candidate = changes.get("candidate_answer_ref", current.get("candidate_answer_ref"))
+        next_answer = changes.get("standing_answer_ref", current.get("standing_answer_ref"))
+        valid = False
+        if current["status"] == "open" and next_status == "answered":
+            valid = bool(
+                isinstance(next_answer, str)
+                and next_answer.strip()
+                and current.get("candidate_answer_ref")
+                and next_candidate is None
+            )
+        elif current["status"] == "open" and next_status == "closed":
+            valid = set(changes) == {"status"}
+        elif current["status"] == "closed" and next_status == "open":
+            # Reopening changes only the human-owned status. A prior standing
+            # answer remains attached to the Question and is not cleared by
+            # close/reopen.
+            valid = set(changes) == {"status"}
+        elif "status" not in changes:
+            valid = (
+                current["status"] == "open"
+                and isinstance(current.get("candidate_answer_ref"), str)
+                and next_candidate is None
+                and "candidate_answer_ref" in changes
+                and "standing_answer_ref" not in changes
+            )
+
+        if not valid:
+            raise InvalidQuestionReviewTransition(
+                f"invalid review transition from {current['status']!r}"
+            )
+
+        updated = {**current, **changes}
+        receipt = self._write(updated, expected_version=expected_version)
+        return updated, receipt
+
     def _update_system_fields_from_current(
         self,
         question_id: str,
@@ -409,6 +487,7 @@ __all__ = [
     "ANNOUNCED_LEAP_SECOND_TABLE_REVIEWED",
     "ANNOUNCED_LEAP_SECOND_UTC_DATES",
     "HumanOwnedFieldMutationError",
+    "InvalidQuestionReviewTransition",
     "QUESTION_DIRECTORY",
     "QuestionStore",
     "Rfc3339DateTime",

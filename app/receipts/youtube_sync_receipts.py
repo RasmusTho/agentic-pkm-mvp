@@ -7,7 +7,7 @@ state: callers can rebuild it from those durable sources after a restart.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -168,10 +168,17 @@ def _field(obj: Any, name: str, default: Any = None) -> Any:
 
 def _trigger(value: Any, *, fallback: Mapping[str, Any] | None = None) -> YouTubeSyncTrigger | None:
     data = value if isinstance(value, Mapping) else (fallback or {})
+    envelope = fallback or {}
     binding_id = first_str(data.get("binding_id"))
     collection_kind = first_str(data.get("collection_kind"), data.get("source_kind"))
     collection_ref = first_str(data.get("collection_ref"), data.get("source_ref"))
-    at = first_str(data.get("discovered_at"), data.get("at"), data.get("timestamp"))
+    at = first_str(
+        data.get("discovered_at"),
+        data.get("at"),
+        data.get("timestamp"),
+        envelope.get("timestamp"),
+        envelope.get("created_at"),
+    )
     trigger = first_str(data.get("trigger"))
     if not any((binding_id, collection_kind, collection_ref, at, trigger)):
         return None
@@ -183,6 +190,23 @@ def _trigger(value: Any, *, fallback: Mapping[str, Any] | None = None) -> YouTub
         trigger=trigger,
         playlist_item_id=first_str(data.get("playlist_item_id")),
     )
+
+
+def _trigger_identity(trigger: YouTubeSyncTrigger) -> tuple[str | None, str | None, str | None]:
+    """Identity follows the stored trigger contract, not projection timestamps."""
+
+    return (trigger.binding_id, trigger.trigger, trigger.playlist_item_id)
+
+
+def _merge_trigger(kept: YouTubeSyncTrigger, other: YouTubeSyncTrigger) -> YouTubeSyncTrigger:
+    """Fill fields the stored row omits (e.g. ``collection_ref``) from its event twin."""
+
+    missing = {
+        item.name: getattr(other, item.name)
+        for item in fields(kept)
+        if getattr(kept, item.name) is None and getattr(other, item.name) is not None
+    }
+    return replace(kept, **missing) if missing else kept
 
 
 def _request_rows(requests: Iterable[Any] | None) -> dict[str, Any]:
@@ -240,7 +264,7 @@ def _rows_from_records(
         if event == YOUTUBE_SOURCE_DISCOVERED:
             group = group_for(item_ref, request_id)
             if group is not None:
-                trigger = _trigger(payload)
+                trigger = _trigger(payload, fallback=record)
                 if trigger is not None:
                     group["triggers"].append(trigger)
                     group["events"].append(first_str(record.get("event_id")))
@@ -256,7 +280,21 @@ def _rows_from_records(
             continue
         group = group_for(item_ref, request_id)
         if group is None:
-            diagnostics.append({"event_id": first_str(record.get("event_id")), "trace_id": first_str(record.get("trace_id")), "reason": "missing_item_ref_and_request_id"})
+            if is_sync_event and not item_ref and not request_id:
+                diagnostics.append(
+                    {
+                        "event_id": first_str(record.get("event_id")),
+                        "trace_id": first_str(record.get("trace_id")),
+                        "event": event,
+                        "at": first_str(record.get("timestamp"), record.get("created_at"), payload.get("at")),
+                        "reason_code": first_str(payload.get("reason_code"), payload.get("code")),
+                        "reason": "source_level_sync_receipt",
+                        "binding_id": first_str(payload.get("binding_id")),
+                        "run_id": first_str(payload.get("run_id")),
+                    }
+                )
+            else:
+                diagnostics.append({"event_id": first_str(record.get("event_id")), "trace_id": first_str(record.get("trace_id")), "reason": "missing_item_ref_and_request_id"})
             continue
         group["events"].append(first_str(record.get("event_id")))
         event_channel_database = first_str(
@@ -279,12 +317,22 @@ def _rows_from_records(
         group = group_for(item_ref, request_id)
         if group is None:
             continue
-        triggers = []
-        for value in _field(request, "discovery_triggers", ()) or ():
-            trigger = _trigger(value)
-            if trigger is not None:
+        triggers: list[YouTubeSyncTrigger] = []
+        trigger_index: dict[tuple[str | None, str | None, str | None], int] = {}
+        stored = [_trigger(value) for value in _field(request, "discovery_triggers", ()) or ()]
+        for trigger in [*stored, *group["triggers"]]:
+            if trigger is None:
+                continue
+            identity = _trigger_identity(trigger)
+            if identity in trigger_index:
+                # The stored row stays authoritative; its event twin only
+                # supplies metadata the stored contract does not persist.
+                position = trigger_index[identity]
+                triggers[position] = _merge_trigger(triggers[position], trigger)
+            else:
+                trigger_index[identity] = len(triggers)
                 triggers.append(trigger)
-        group["triggers"] = triggers + [trigger for trigger in group["triggers"] if trigger not in triggers]
+        group["triggers"] = triggers
 
     rows: list[YouTubeSyncReceiptRow] = []
     for group in groups.values():
@@ -298,8 +346,8 @@ def _rows_from_records(
             sorted({trigger.binding_id for trigger in projected_triggers if trigger.binding_id})
         )
         account_binding_ids = set(group.get("account_binding_ids") or ())
-        source_successes: list[str] = []
-        frontiers: list[str] = []
+        source_successes: dict[str, str] = {}
+        source_frontiers: dict[str, str] = {}
         for binding_id in source_binding_ids:
             source = source_map.get(binding_id)
             if source is None:
@@ -308,14 +356,37 @@ def _rows_from_records(
             account_binding_ids.add(account_binding_id or binding_id)
             success = first_str(_field(source, "last_success_at"))
             if success:
-                source_successes.append(success)
+                source_successes[binding_id] = success
             cursor = _field(source, "cursor", {})
             if isinstance(cursor, Mapping):
-                frontier = first_str(cursor.get("frontier"), cursor.get("newest_published_at"), cursor.get("last_published_at"))
+                frontier = first_str(
+                    cursor.get("frontier_playlist_item_id"),
+                    cursor.get("frontier"),
+                    cursor.get("newest_published_seen"),
+                    cursor.get("newest_published_at"),
+                    cursor.get("last_published_at"),
+                )
                 if frontier:
-                    frontiers.append(frontier)
-        discovered_times = [trigger.discovered_at for trigger in projected_triggers if trigger.discovered_at]
-        cursor_advanced = bool(source_successes and (not discovered_times or max(source_successes) >= max(discovered_times)))
+                    source_frontiers[binding_id] = frontier
+        discovered_times_by_binding: dict[str, list[str]] = {}
+        for trigger in projected_triggers:
+            if trigger is None or not trigger.binding_id or not trigger.discovered_at:
+                continue
+            discovered_times_by_binding.setdefault(trigger.binding_id, []).append(
+                trigger.discovered_at
+            )
+        cursor_advanced = bool(source_binding_ids) and all(
+            binding_id in source_successes
+            and bool(discovered_times_by_binding.get(binding_id))
+            and source_successes[binding_id]
+            >= max(discovered_times_by_binding[binding_id])
+            for binding_id in source_binding_ids
+        )
+        cursor_frontier = (
+            source_frontiers.get(source_binding_ids[0])
+            if len(source_binding_ids) == 1
+            else None
+        )
         failures = group.get("failures") or []
         failure = failures[-1] if failures else None
         request_id = first_str(group.get("request_id"))
@@ -336,7 +407,7 @@ def _rows_from_records(
                 failure_reason_code=first_str(failure.get("reason_code")) if failure else None,
                 failure_at=first_str(failure.get("at")) if failure else None,
                 cursor_advanced=cursor_advanced,
-                cursor_frontier=max(frontiers) if frontiers else None,
+                cursor_frontier=cursor_frontier,
                 account_binding_ids=tuple(sorted(account_binding_ids)),
                 channel_database=first_str(
                     group.get("channel_database"), channel_database, active_environment()

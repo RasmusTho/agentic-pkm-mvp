@@ -71,6 +71,7 @@ EMBEDDING_PROBE_FAILURE_CODES = {
     'embedding_probe_cleanup_failed': 118,
     'embedding_probe_failed': 119,
     'embedding_guard_refused': 120,
+    'embedding_probe_executor_busy': 121,
 }
 SOURCE_PROJECTION_FAILURE_REASONS = frozenset(SOURCE_PROJECTION_FAILURE_CODES) | frozenset(
     EMBEDDING_PROBE_FAILURE_CODES

@@ -26,8 +26,8 @@ from app.ops.bws_secret_admin import (
 from app.ops.bws_token_push import TokenPushAdmin, load_token_push_targets
 from app.ops.host_secret_bootstrap import validate_secret_value
 from app.ops.host_secret_contract import (
-    BWS_IDENTITIES, CHANNEL_PROJECTS, DATABASE_CONSUMERS, KARAKEEP_SECRETS, HostSecretContract,
-    load_host_secret_contract,
+    BWS_IDENTITIES, CHANNEL_PROJECTS, DATABASE_CONSUMERS, KARAKEEP_SECRETS, SOURCE_WITNESS_CONSUMER,
+    HostSecretContract, load_host_secret_contract,
 )
 from app.ops.host_secret_controller import (
     HostSecretController, HostSecretOperation, TerminalEvidence,
@@ -127,10 +127,12 @@ class SecretHistory:
 class SecretAdmin:
     def __init__(self, provider: SecretAdminProvider, *,
                  controller: HostSecretController | None = None,
-                 contract: HostSecretContract | None = None) -> None:
+                 contract: HostSecretContract | None = None,
+                 target_project_scope: str | None = None) -> None:
         self.provider = provider
         self.controller = controller or HostSecretController()
         self.contract = contract or load_host_secret_contract()
+        self.target_project_scope = target_project_scope
 
     def _identity(self, channel: str, secret: str) -> tuple[str, tuple[str, ...]]:
         if (channel, secret) == (DEVUI_TARGET, DEVUI_SECRET):
@@ -159,6 +161,10 @@ class SecretAdmin:
         operation.require_active(channel)
         if operation.kind not in {'check', 'deploy'} or not consumers:
             raise SecretAdminError()
+        if (self.target_project_scope is not None
+                and (channel not in {'dev', 'test'}
+                     or self.target_project_scope != CHANNEL_PROJECTS[channel])):
+            raise SecretAdminError()
         selected: dict[str, set[str]] = {}
         for consumer in consumers:
             if consumer in DATABASE_CONSUMERS:
@@ -174,6 +180,10 @@ class SecretAdmin:
         statuses = []
         for secret in sorted(selected):
             identity, projects = self._identity(channel, secret)
+            if self.target_project_scope is not None:
+                if self.target_project_scope not in projects:
+                    raise SecretAdminError()
+                projects = (self.target_project_scope,)
             copies = [self.provider.read(project, identity) for project in projects]
             absent = sum(copy is None for copy in copies)
             status = 'ok'
@@ -323,6 +333,39 @@ class SecretAdmin:
                 self.import_stdin(channel, secret, StringIO(secrets.token_urlsafe(48)))
 
 
+def route_metadata(contract: HostSecretContract, channel: str, consumer: str) -> dict[str, Any]:
+    """Project declared BWS routes for one consumer from the local contract only.
+
+    No provider, admin, controller, Keychain, token, or value source is touched:
+    a declaration is not evidence that the identity exists or is readable.
+    """
+    routes = []
+    if consumer in DATABASE_CONSUMERS or consumer == SOURCE_WITNESS_CONSUMER:
+        secret = 'postgres.password'
+        service, path_binding = contract.file_binding(channel=channel, consumer=consumer, secret=secret)
+        project, identity = contract.bws_identity(channel=channel, consumer=consumer, secret=secret)
+        routes.append({'secret': secret, 'project': project, 'identity': identity,
+                       'handoff': {'delivery': 'file', 'service': service,
+                                   'path_binding': path_binding},
+                       'optional': False})
+    else:
+        if channel not in CHANNEL_PROJECTS:
+            raise SecretAdminError()
+        for secret in sorted(secret for ch, name, secret in contract.allowed
+                             if ch == channel and name == consumer):
+            project, identity = contract.bws_identity(channel=channel, consumer=consumer, secret=secret)
+            routes.append({'secret': secret, 'project': project, 'identity': identity,
+                           'handoff': {'delivery': 'environment',
+                                       'binding': contract.binding_for(secret)},
+                           'optional': contract.is_optional_for_consumer(
+                               channel=channel, consumer=consumer, secret=secret)})
+    if not routes:
+        raise SecretAdminError()
+    return {'channel': channel, 'consumer': consumer, 'routes': routes,
+            'evidence': 'declared-contract-metadata',
+            'values_read': False, 'live_access_verified': False}
+
+
 class _ValueFreeParser(argparse.ArgumentParser):
     def error(self, message: str) -> Never:
         # argparse normally repeats rejected arguments, which might be a value.
@@ -331,10 +374,17 @@ class _ValueFreeParser(argparse.ArgumentParser):
 
 def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
          stdin: TextIO | None = None,
-         token_push_admin: TokenPushAdmin | None = None) -> int:
+         token_push_admin: TokenPushAdmin | None = None,
+         contract: HostSecretContract | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    route_requested = argv[:1] == ['route']
     try:
         parser = _ValueFreeParser(prog='secrets')
         sub = parser.add_subparsers(dest='command', required=True)
+        route = sub.add_parser('route')
+        # Validated against the contract, so an unknown channel gets the route refusal.
+        route.add_argument('channel')
+        route.add_argument('--consumer', required=True)
         devui = sub.add_parser('devui')
         devui.add_argument('action', choices=('check', 'preflight', 'import', 'apply', 'reconcile', 'rotate'))
         devui.add_argument('--stdin', action='store_true')
@@ -354,6 +404,12 @@ def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
             if command == 'import':
                 cmd.add_argument('--stdin', action='store_true', required=True)
         args = parser.parse_args(argv)
+        if args.command == 'route':
+            # Handled before any admin/provider construction; output is metadata only.
+            metadata = route_metadata(contract or load_host_secret_contract(),
+                                      args.channel, args.consumer)
+            print(json.dumps(metadata, sort_keys=True))
+            return 0
         if args.command == 'builderops-alerts':
             from app.ops.builderops_alert_secret import run
             return run(args.action, admin=admin)
@@ -392,7 +448,11 @@ def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
         print(json.dumps({'status': 'imported'}))
         return 0
     except Exception:
-        print('secret administration refused; operation may remain pending', file=sys.stderr)
+        if route_requested:
+            print('secret route refused: no declared route for this channel and consumer; '
+                  'no secret operation was started', file=sys.stderr)
+        else:
+            print('secret administration refused; operation may remain pending', file=sys.stderr)
         return 1
 
 
