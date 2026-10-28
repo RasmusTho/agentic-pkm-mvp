@@ -157,6 +157,22 @@ def test_companion_ui_change_selects_companion_and_api_targets() -> None:
 @pytest.mark.parametrize(
     "changed",
     [
+        ["tests/integration/test_multi_vault_picker_context.py"],
+        ["tests/_mvr05b_picker_browser.py"],
+    ],
+)
+def test_picker_harness_edit_runs_picker_module(changed) -> None:
+    selection = select_tests(changed)
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert "multi_vault_picker" in selection.subsystems
+    assert "tests/integration/test_multi_vault_picker_context.py" in selection.targets
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
         "app/api/routes/capture.py",
         "app/agents/ask/graph.py",
         "app/mcp/vault_tools.py",

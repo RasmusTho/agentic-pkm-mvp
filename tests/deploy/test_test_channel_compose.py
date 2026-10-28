@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from app.release_channels.channel_isolation_preflight import _load_compose
+from tests.deploy.compose_bind_support import effective_create_host_path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -168,7 +169,7 @@ def test_model_access_bindings_are_optional_and_scoped_to_product_callers(
         assert identity_mount["read_only"] is True
         bind = identity_mount.get("bind")
         assert isinstance(bind, dict)
-        assert bind["create_host_path"] is True
+        assert effective_create_host_path(bind) is True
 
     for name, service in services.items():
         if name in {"api", "worker", "watcher"}:
