@@ -10,7 +10,9 @@ generation before the next snapshot is issued.
 from __future__ import annotations
 
 import ast
+from concurrent.futures import ThreadPoolExecutor
 import inspect
+from threading import Event
 
 import pytest
 
@@ -53,6 +55,80 @@ def _resolver(facts: dict[str, BindingFact], authorizer, *, revision: int = 7, i
         ),
         state,
     )
+
+
+def _effect_record(store):
+    return store.create(
+        principal=PRINCIPAL,
+        instance_identity="app-install-abc",
+        workspace=WorkspaceState.none(),
+        scope="default",
+        sphere_memberships=(),
+        situated_identity=None,
+        binding_ids=("bind-a",),
+    )
+
+
+@pytest.mark.parametrize("change", ["clear", "replace", "invalidate"])
+def test_selection_effect_window_detects_reentrant_change_before_publication(change):
+    store = ContextSelectionStore()
+    raw, record = _effect_record(store)
+    arguments = dict(principal=PRINCIPAL, instance_identity="app-install-abc")
+    with store.read_effect_window(raw, expected_record=record, **arguments) as require_current:
+        require_current()
+        if change == "clear":
+            store.clear(raw, **arguments)
+        elif change == "replace":
+            store.replace_bindings(raw, binding_ids=record.binding_ids, **arguments)
+        else:
+            store.invalidate_digest(record.selection_capability_digest)
+        with pytest.raises(ReselectionRequiredError):
+            require_current()
+    with pytest.raises(ReselectionRequiredError):
+        require_current()
+
+
+def test_selection_effect_window_blocks_other_threads_and_has_no_callback_in_final_guard():
+    calls = []
+
+    def clock():
+        calls.append(1)
+        return 1.0
+
+    store = ContextSelectionStore(clock=clock)
+    raw, record = _effect_record(store)
+    arguments = dict(principal=PRINCIPAL, instance_identity="app-install-abc")
+    attempting = Event()
+
+    def clear():
+        attempting.set()
+        store.clear(raw, **arguments)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with store.read_effect_window(raw, expected_record=record, **arguments) as require_current:
+            count = len(calls)
+            require_current()
+            require_current()
+            assert len(calls) == count
+            future = pool.submit(clear)
+            assert attempting.wait(5) and not future.done()
+        future.result(timeout=5)
+    with pytest.raises(ReselectionRequiredError):
+        store.inspect(raw, **arguments)
+
+
+def test_selection_effect_window_refuses_replaced_record_and_wrong_thread():
+    store = ContextSelectionStore()
+    raw, record = _effect_record(store)
+    arguments = dict(principal=PRINCIPAL, instance_identity="app-install-abc")
+    with store.read_effect_window(raw, expected_record=record, **arguments) as require_current:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with pytest.raises(ReselectionRequiredError):
+                pool.submit(require_current).result(timeout=5)
+    store.replace_bindings(raw, binding_ids=record.binding_ids, **arguments)
+    with pytest.raises(ReselectionRequiredError):
+        with store.read_effect_window(raw, expected_record=record, **arguments):
+            pass
 
 
 def test_selection_resolution_is_immutable_and_global_free() -> None:

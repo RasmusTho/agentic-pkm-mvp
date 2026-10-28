@@ -26,7 +26,12 @@ Delivered as dormant direct composition: `app/operations/semantic_operations.py`
 [ArtifactContract](../contracts/ARTIFACT_CONTRACT.md#dormant-semantic-commands-autoops-06) owns the
 exact admitted classification fields/values, tag normalization, and authored `member_order` UUID
 list. Reorder only permutes an existing complete source list in one expected-version HKA CAS.
-Explicit semantic approval and the current full selected-context GOV window remain mandatory;
+Explicit semantic approval and the current full selected-context GOV window remain mandatory.
+The direct producer also holds the captured WSP selection record and exact approval owner's
+effect fences through source/authority receipt persistence, with an owned nonblocking final guard
+after all potentially blocking work. The WSP record guard is opt-in for this semantic consumer;
+ordinary frozen in-flight snapshots keep their existing behavior. Decoded identity declarations
+remain visible when later YAML is malformed, while unrelated malformed notes remain isolated;
 generic body-edit grants and machine suggestions cannot authorize these changes. The handlers
 do not initialize lists or runtime authority, install a transport, or change Canvas body policy.
 Authenticated installation remains #5352 and capability acceptance remains #5329.

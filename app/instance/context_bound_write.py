@@ -26,6 +26,10 @@ _WRITE_BOUNDARY: ContextVar[tuple[Path, str, Callable[[], None]] | None] = Conte
 )
 
 
+class ContextBoundSourceRefused(InvalidDecisionTokenError):
+    """The state-owner admission hook refused before publishing source bytes."""
+
+
 def require_effect_locator(root: Path, resource: str) -> None:
     boundary = _WRITE_BOUNDARY.get()
     if boundary is None:
@@ -36,8 +40,11 @@ def require_effect_locator(root: Path, resource: str) -> None:
         or resource != expected_resource
         or nearest_enclosing_vault_root(root / resource, search_root=expected_root) != expected_root
     ):
-        raise InvalidDecisionTokenError("write locator changed at the state-owner seam")
-    check()
+        raise ContextBoundSourceRefused("write locator changed at the state-owner seam")
+    try:
+        check()
+    except InvalidDecisionTokenError as exc:
+        raise ContextBoundSourceRefused(str(exc)) from exc
 
 
 def require_selected_targets(context: ActiveContextSetV1, targets: tuple[str, ...]) -> None:

@@ -7,6 +7,7 @@ the selected fields, and uses the existing GOV window and rewritten-note CAS.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
@@ -27,7 +28,8 @@ from app.governance.governed_write import (
     InvalidDecisionTokenError,
 )
 from app.instance.context_bound_read import ContextBoundReadError
-from app.instance.context_bound_write import context_bound_write_window
+from app.instance.context_bound_write import ContextBoundSourceRefused, context_bound_write_window
+from app.instance.context_selection import ContextSelectionError
 from app.instance.errors import RegistryError
 from app.instance.vault_registry import VaultRegistryStore
 from app.knowledge import make_note_locator
@@ -94,6 +96,14 @@ class SemanticValidationError(ValueError):
     """An admitted semantic request or source has an invalid representation."""
 
 
+class _PreEffectRefusal(RuntimeError):
+    """Refusal from the actual pre-publication hook, with no source effect."""
+
+    def __init__(self, status: str, reason: str) -> None:
+        super().__init__(reason)
+        self.status = status
+
+
 class _UniqueLoader(yaml.SafeLoader):
     pass
 
@@ -109,6 +119,70 @@ def _mapping(loader: _UniqueLoader, node: yaml.MappingNode, deep: bool = False) 
 
 
 _UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
+
+
+class _IdentityProbeLoader(yaml.SafeLoader):
+    """Retain composed identity evidence if a later YAML item is malformed."""
+
+    def __init__(self, stream: str) -> None:
+        super().__init__(stream)
+        self.root_seen: Node | None = None
+        self.pending: list[tuple[Node, Any, Node]] = []
+        self._frame: tuple[Node | None, Any, bool] | None = None
+
+    def compose_node(self, parent: Node | None, index: Any) -> Node | None:
+        if self.root_seen is None and parent is not None:
+            self.root_seen = parent
+        # A collection is allocated before its children are composed. Retain
+        # a pending relevant parent edge too, so a decoded UUID inside a later
+        # failing uuid/merge collection does not disappear with that edge.
+        inherited = False if self._frame is None else self._frame[2]
+        if parent is not None and self._frame is not None:
+            previous_parent, previous_index, _ = self._frame
+            if inherited and previous_parent is not None and parent is not previous_parent:
+                edge = (previous_parent, previous_index, parent)
+                if not any(
+                    old[0] is edge[0] and old[1] is edge[1] and old[2] is edge[2]
+                    for old in self.pending
+                ):
+                    self.pending.append(edge)
+        relevant = (
+            inherited
+            or isinstance(parent, MappingNode)
+            and isinstance(index, ScalarNode)
+            and index.value in {"uuid", "<<"}
+        )
+        old_frame = self._frame
+        self._frame = (parent, index, relevant)
+        try:
+            return super().compose_node(parent, index)
+        finally:
+            self._frame = old_frame
+
+
+def _probe_identities(block: str) -> tuple[set[str], bool]:
+    loader = _IdentityProbeLoader(block)
+    try:
+        try:
+            root = loader.get_single_node()
+            malformed = False
+        except yaml.YAMLError:
+            root = loader.root_seen
+            malformed = True
+            # Attach only pending uuid/merge edges; unrelated incomplete
+            # structures cannot become artifact identity declarations.
+            for parent, key, child in loader.pending:
+                if (
+                    isinstance(parent, MappingNode)
+                    and isinstance(key, Node)
+                    and not any(k is key and v is child for k, v in parent.value)
+                ):
+                    parent.value.append((key, child))
+                elif isinstance(parent, SequenceNode) and key == len(parent.value):
+                    parent.value.append(child)
+        return _declared_identities(root), malformed
+    finally:
+        loader.dispose()
 
 
 def _metadata(text: str) -> tuple[dict[str, Any], re.Match[str]]:
@@ -270,8 +344,10 @@ class KnowledgeSemanticOwner:
     """Direct composition only; caller admission cannot manufacture semantic approval.
 
     ``authorize_semantic`` resolves the exact normalized intent to an existing
-    applicable human decision; ``authority_is_current`` checks that same approval
-    again at the CAS seam. Both ports are required, with no allow-by-default path.
+    applicable human decision. ``semantic_authority_window`` holds the captured
+    WSP selection and exact approval owner's fences through both durable receipts.
+    Its owned nonblocking final guard checks approval then selection after all
+    arbitrary owner work; no point-check-only compatibility path is admitted.
     """
 
     def __init__(
@@ -281,9 +357,10 @@ class KnowledgeSemanticOwner:
         active_context: ActiveContextSetV1,
         target_binding_id: str,
         registry_store: VaultRegistryStore,
-        context_is_current: Callable[[], bool],
         authorize_semantic: Callable[[SemanticIntent], GovernedWriteGrant | None],
-        authority_is_current: Callable[[SemanticIntent, GovernedWriteGrant], bool],
+        semantic_authority_window: Callable[
+            [SemanticIntent, GovernedWriteGrant], AbstractContextManager[Callable[[], None]]
+        ],
         receipt_path: Path,
         write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
         reconcile_projection: Callable[[Mapping[str, Any]], None] | None = None,
@@ -291,19 +368,15 @@ class KnowledgeSemanticOwner:
         self.root = Path(os.path.abspath(vault_root))
         if self.root.resolve() != self.root:
             raise KnowledgeCapabilityError("semantic source root must be canonical")
-        if not all(
-            callable(port)
-            for port in (context_is_current, authorize_semantic, authority_is_current)
-        ):
+        if not all(callable(port) for port in (authorize_semantic, semantic_authority_window)):
             raise KnowledgeCapabilityError(
-                "semantic composition requires explicit context and approval ports"
+                "semantic composition requires explicit approval and held authority window ports"
             )
         self.active_context = active_context
         self.target_binding_id = target_binding_id
         self.registry_store = registry_store
-        self.context_is_current = context_is_current
         self.authorize_semantic = authorize_semantic
-        self.authority_is_current = authority_is_current
+        self.semantic_authority_window = semantic_authority_window
         self.receipt_path = receipt_path
         self.write_guard = write_guard
         self.reconcile_projection = reconcile_projection
@@ -330,7 +403,7 @@ class KnowledgeSemanticOwner:
             raise InvalidDecisionTokenError("semantic root differs from the selected binding")
         # Registry/path reads above may block. Observe current selection and
         # lifetime after them; the GOV seam repeats expiry after approval too.
-        if not self.context_is_current() or (
+        if (
             self.active_context.expires_at is not None
             and self.active_context.expires_at <= time.time()
         ):
@@ -402,19 +475,13 @@ class KnowledgeSemanticOwner:
                 # preconditions on every unrelated human note in the vault.
                 # A matching candidate is then decoded strictly before it can
                 # supply identity, membership or mutation content.
-                try:
-                    candidate_ids = _declared_identities(
-                        yaml.compose(block[1], Loader=yaml.SafeLoader)
-                    )
-                except yaml.YAMLError:
-                    flattened = block[1].lower().replace("-", "")
-                    if any(identity.replace("-", "") in flattened for identity in artifact_ids):
-                        raise SemanticValidationError(
-                            "a matching source candidate has malformed frontmatter"
-                        )
-                    continue
+                candidate_ids, malformed = _probe_identities(block[1])
                 if not candidate_ids.intersection(artifact_ids):
                     continue
+                if malformed:
+                    raise SemanticValidationError(
+                        "a matching source candidate has malformed frontmatter"
+                    )
                 metadata, _ = _metadata(text)
                 identity = _uuid(metadata.get("uuid"))
                 if identity in artifact_ids:
@@ -541,13 +608,7 @@ class KnowledgeSemanticOwner:
                 "resource": resource,
             }
 
-            def check() -> None:
-                # Source and health checks can block. Complete them before
-                # observing the final current context and semantic approval.
-                if operation == REORDER:
-                    self._resolve_many(set(patch["member_order"]))
-                self.write_guard.assert_writes_allowed(binding["action"])
-                self._context()
+            def validate_grant() -> None:
                 if (
                     not isinstance(grant, GovernedWriteGrant)
                     or grant.policy_decision.source != "human_review"
@@ -556,7 +617,6 @@ class KnowledgeSemanticOwner:
                         getattr(grant.policy_decision, key) != value
                         for key, value in binding.items()
                     )
-                    or not self.authority_is_current(intent, grant)
                 ):
                     raise InvalidDecisionTokenError(
                         "applicable explicit semantic approval is required"
@@ -568,16 +628,46 @@ class KnowledgeSemanticOwner:
                     target_binding_id=self.target_binding_id,
                 )
 
-            check()
-            assert grant is not None
-            with context_bound_write_window(
-                self.active_context,
-                target_binding_id=self.target_binding_id,
-                token=grant.decision_token,
-                registry_store=self.registry_store,
-                effect_check=check,
-                **binding,
-            ) as selected_root:
+            require_current: Callable[[], None] | None = None
+
+            def check() -> None:
+                # Source and health checks can block. Complete them before
+                # the owned nonblocking guard under both held owner fences.
+                try:
+                    if operation == REORDER:
+                        self._resolve_many(set(patch["member_order"]))
+                    self.write_guard.assert_writes_allowed(binding["action"])
+                    self._context()
+                    validate_grant()
+                    if not callable(require_current):
+                        raise InvalidDecisionTokenError("semantic authority fences are not held")
+                    require_current()
+                except (SemanticValidationError, VaultPathOverlapError, yaml.YAMLError) as exc:
+                    raise _PreEffectRefusal("invalid", str(exc)) from exc
+                except (
+                    InvalidDecisionTokenError,
+                    ContextSelectionError,
+                    ContextBoundReadError,
+                    ActiveContextError,
+                    RegistryError,
+                    WritesBlockedError,
+                ) as exc:
+                    raise _PreEffectRefusal("rejected", str(exc)) from exc
+
+            validate_grant()
+            assert isinstance(grant, GovernedWriteGrant)
+            with (
+                context_bound_write_window(
+                    self.active_context,
+                    target_binding_id=self.target_binding_id,
+                    token=grant.decision_token,
+                    registry_store=self.registry_store,
+                    effect_check=check,
+                    **binding,
+                ) as selected_root,
+                self.semantic_authority_window(intent, grant) as held_guard,
+            ):
+                require_current = held_guard
                 if selected_root != self.root:
                     raise InvalidDecisionTokenError("selected semantic source root changed")
                 check()
@@ -665,10 +755,38 @@ class KnowledgeSemanticOwner:
                 receipt,
                 "source is receipted; rebuild Store/index/link from source",
             )
+        except ContextBoundSourceRefused as exc:
+            if source is None:
+                return SemanticResult("rejected", reason=str(exc))
+            return SemanticResult(
+                "recovery_required",
+                "committed" if source.outcome == "written" else "not_applied",
+                receipt or {"source_receipt": asdict(source)},
+                str(exc),
+            )
+        except _PreEffectRefusal as exc:
+            if source is None:
+                return SemanticResult(exc.status, reason=str(exc))
+            return SemanticResult(
+                "recovery_required",
+                "committed" if source.outcome == "written" else "not_applied",
+                receipt or {"source_receipt": asdict(source)},
+                str(exc),
+            )
         except (SemanticValidationError, VaultPathOverlapError, yaml.YAMLError) as exc:
+            if source_started:
+                return SemanticResult(
+                    "recovery_required",
+                    "committed"
+                    if source is not None and source.outcome == "written"
+                    else "unknown",
+                    receipt,
+                    str(exc),
+                )
             return SemanticResult("invalid", reason=str(exc))
         except (
             InvalidDecisionTokenError,
+            ContextSelectionError,
             ContextBoundReadError,
             ActiveContextError,
             RegistryError,
@@ -682,6 +800,8 @@ class KnowledgeSemanticOwner:
                     receipt or {"source_receipt": asdict(source)},
                     str(exc),
                 )
+            if source_started:
+                return SemanticResult("recovery_required", "unknown", receipt, str(exc))
             return SemanticResult("rejected", reason=str(exc))
         except KnowledgeAtomicExchangeNotApplied as exc:
             return SemanticResult("not_supported", reason=str(exc))

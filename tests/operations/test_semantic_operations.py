@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 import json
 from pathlib import Path
-from threading import Event
+from threading import Event, RLock, get_ident
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -14,10 +15,10 @@ from uuid import uuid4
 import pytest
 import yaml
 
-from app.governance.governed_write import GovernedWriteAdapter
+from app.governance.governed_write import GovernedWriteAdapter, InvalidDecisionTokenError
 from app.instance import context_bound_write
 from app.instance.active_context_service import ActiveContextSelectionService
-from app.instance.context_selection import ContextSelectionStore
+from app.instance.context_selection import ContextSelectionError, ContextSelectionStore
 from app.knowledge import adapters, semantic
 from app.knowledge.semantic import CLASSIFY, REORDER, TAGS_ADD, TAGS_REMOVE, KnowledgeSemanticOwner
 from app.knowledge.write_ops import read_note_text_with_version
@@ -45,7 +46,11 @@ class Harness:
     members: list[str]
     note: Path
     approvals: dict[str, tuple[dict[str, Any], Any]]
-    current: dict[str, bool]
+    approval_lock: Any
+    selections: ContextSelectionStore
+    selection_record: Any
+    bearer: str = field(repr=False)
+    hooks: dict[str, Any]
 
     @property
     def owner(self):
@@ -74,24 +79,56 @@ class Harness:
         grant = gov.bind_context(
             grant, context=self.owner.active_context, target_binding_id=self.owner.target_binding_id
         )
-        self.approvals[request.request_id] = (
-            {
-                "operation": request.operation_id,
-                "artifact_id": self.identity,
-                "expected_version": request.expected_version,
-                "changes": changes,
-                "resource": "Notes/collection.md",
-                "context_ref": self.config.context.active_context_ref,
-                "vault_generation": self.config.context.vault_generation,
-            },
-            grant,
-        )
+        with self.approval_lock:
+            self.approvals[request.request_id] = (
+                {
+                    "operation": request.operation_id,
+                    "artifact_id": self.identity,
+                    "expected_version": request.expected_version,
+                    "changes": json.loads(json.dumps(changes)),
+                    "resource": "Notes/collection.md",
+                    "context_ref": self.config.context.active_context_ref,
+                    "vault_generation": self.config.context.vault_generation,
+                },
+                grant,
+            )
         return request
+
+    def revoke_approval(self, request_id):
+        with self.approval_lock:
+            self.approvals.pop(request_id, None)
+
+    def change_selection(self, action="clear"):
+        arguments = dict(
+            principal=self.selection_record.principal,
+            instance_identity=self.selection_record.instance_identity,
+        )
+        if action == "clear":
+            self.selections.clear(self.bearer, **arguments)
+        elif action == "replace":
+            self.selections.replace_bindings(
+                self.bearer, binding_ids=self.selection_record.binding_ids, **arguments
+            )
+        else:
+            self.selections.invalidate_digest(self.selection_record.selection_capability_digest)
+
+    def selection_current(self):
+        try:
+            return (
+                self.selections.inspect(
+                    self.bearer,
+                    principal=self.selection_record.principal,
+                    instance_identity=self.selection_record.instance_identity,
+                )
+                is self.selection_record
+            )
+        except ContextSelectionError:
+            return False
 
     def kernel(self, *, config=None, store=None):
         config = config or self.config
         return OperationExecutionKernel(
-            context_resolver=lambda _: self.current["context"],
+            context_resolver=lambda _: self.selection_current(),
             policy_evaluator=lambda *_: PolicyDecision.allowed("policy-1"),
             handlers=build_semantic_operation_handlers(config),
             receipt_store=store
@@ -132,9 +169,7 @@ class Harness:
 def bound(tmp_path, monkeypatch):
     runtime, registration, _, principal = provisioned_instance(tmp_path / "instance")
     root = Path(registration.path)
-    manager = bind_initialized_vault(
-        monkeypatch, root, store_dir=tmp_path, channel=runtime.layout.channel_id
-    )
+    bind_initialized_vault(monkeypatch, root, store_dir=tmp_path, channel=runtime.layout.channel_id)
     runtime.complete_initialization(
         registration.vault_binding_id,
         vault_id="vault-" + registration.vault_binding_id,
@@ -149,7 +184,9 @@ def bound(tmp_path, monkeypatch):
         selection_store=ContextSelectionStore(),
     )
     derived = service.derive("trusted_loopback")
-    bearer, _ = service.create(derived=derived, binding_ids=[registration.vault_binding_id])
+    bearer, selection_record = service.create(
+        derived=derived, binding_ids=[registration.vault_binding_id]
+    )
     context = service.resolve_request_context(
         derived=derived,
         session_bearer=bearer,
@@ -176,25 +213,83 @@ def bound(tmp_path, monkeypatch):
         ).encode()
     )
     approvals: dict[str, tuple[dict[str, Any], Any]] = {}
-    current = {"context": True, "authority": True}
+    approval_lock = RLock()
+    hooks = {}
+
+    def matches(intent, approval):
+        return approval is not None and all(
+            getattr(intent, key) == value for key, value in approval[0].items()
+        )
 
     def authorize(intent):
-        approval = approvals.get(intent.request_id)
-        if approval is None or any(
-            getattr(intent, field) != value for field, value in approval[0].items()
+        with approval_lock:
+            approval = approvals.get(intent.request_id)
+            return approval[1] if matches(intent, approval) else None
+
+    @contextmanager
+    def authority_window(intent, grant):
+        # The real WSP API owns the record lock; the exact human approval
+        # producer owns this fixture-only data and every mutation of it.
+        # No resolver is called while either owner lock is held.
+        snapshot = owner.active_context
+        if (
+            snapshot.context_id != selection_record.context_id
+            or snapshot.selection_capability_digest != selection_record.selection_capability_digest
+            or snapshot.principal_context != selection_record.principal
+            or snapshot.instance_identity != selection_record.instance_identity
+            or snapshot.binding_ids != selection_record.binding_ids
+            or snapshot.workspace != selection_record.workspace
+            or snapshot.scope != selection_record.scope
+            or snapshot.sphere_memberships != selection_record.sphere_memberships
+            or snapshot.situated_identity != selection_record.situated_identity
+            or snapshot.dimension_filter != selection_record.dimension_filter
+            or snapshot.expires_at is None
+            or snapshot.expires_at > selection_record.expires_at
         ):
-            return None
-        return approval[1]
+            raise InvalidDecisionTokenError("selection record does not produce the frozen context")
+        with (
+            service.selection_store.read_effect_window(
+                bearer,
+                principal=selection_record.principal,
+                instance_identity=selection_record.instance_identity,
+                expected_record=selection_record,
+            ) as require_selection,
+            approval_lock,
+        ):
+            captured = approvals.get(intent.request_id)
+            if not matches(intent, captured) or captured[1] != grant:
+                raise InvalidDecisionTokenError("exact human approval is unavailable")
+            thread = get_ident()
+            active = True
+            if hooks.get("lookup") is not None:
+                hooks["lookup"](intent, grant)
+
+            def require_current():
+                # Owned, nonblocking reads only. Approval first, WSP record
+                # last: no foreign callback follows either final observation.
+                if (
+                    not active
+                    or get_ident() != thread
+                    or approvals.get(intent.request_id) is not captured
+                ):
+                    raise InvalidDecisionTokenError("exact human approval changed")
+                require_selection()
+
+            try:
+                require_current()
+                yield require_current
+            finally:
+                active = False
+                if hooks.get("exit_error") is not None:
+                    raise hooks["exit_error"]
 
     owner = KnowledgeSemanticOwner(
         vault_root=root,
         active_context=context,
         target_binding_id=registration.vault_binding_id,
         registry_store=runtime.registry,
-        context_is_current=lambda: current["context"] and manager.context.status == "selected",
         authorize_semantic=authorize,
-        authority_is_current=lambda intent, grant: current["authority"]
-        and authorize(intent) == grant,
+        semantic_authority_window=authority_window,
         receipt_path=tmp_path / "semantic-outbox.jsonl",
     )
     return Harness(
@@ -205,7 +300,11 @@ def bound(tmp_path, monkeypatch):
         members,
         note,
         approvals,
-        current,
+        approval_lock,
+        service.selection_store,
+        selection_record,
+        bearer,
+        hooks,
     )
 
 
@@ -328,9 +427,8 @@ def test_reorder_uses_hka_source_cas_and_durable_receipts(bound):
         active_context=previous.active_context,
         target_binding_id=previous.target_binding_id,
         registry_store=previous.registry_store,
-        context_is_current=previous.context_is_current,
         authorize_semantic=lambda _: pytest.fail("completed replay requested another approval"),
-        authority_is_current=lambda *_: False,
+        semantic_authority_window=previous.semantic_authority_window,
         receipt_path=previous.receipt_path,
     )
     restarted_config = replace(bound.config, owner=restarted)
@@ -488,8 +586,7 @@ def test_receiptless_effect_is_unknown_and_cannot_be_replayed(bound, monkeypatch
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("expired", [True, False])
-def test_authority_is_rechecked_after_hka_wait_before_source_exchange(bound, monkeypatch, expired):
+def test_authority_is_rechecked_after_hka_wait_before_source_exchange(bound, monkeypatch):
     request = bound.approve(bound.request())
     original = bound.note.read_bytes()
     entered, resume = Event(), Event()
@@ -512,10 +609,7 @@ def test_authority_is_rechecked_after_hka_wait_before_source_exchange(bound, mon
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(bound.run, request)
         assert entered.wait(10)
-        if expired:
-            clock.time = lambda: expiry + 1
-        else:
-            bound.current["authority"] = False
+        clock.time = lambda: expiry + 1
         resume.set()
         result = future.result(timeout=10)
     assert result.status is OperationStatus.REJECTED
@@ -573,17 +667,19 @@ def test_malformed_or_unaccepted_sources_cannot_gain_human_classification(bound,
     assert bound.note.read_bytes() == original and not bound.owner.receipt_path.exists()
 
 
-def test_semantic_producer_refuses_missing_approval_port_at_construction(bound):
+@pytest.mark.parametrize("missing", ["approval", "window"])
+def test_semantic_producer_refuses_missing_approval_port_at_construction(bound, missing):
     owner = bound.owner
-    with pytest.raises(semantic.KnowledgeCapabilityError, match="approval ports"):
+    with pytest.raises(semantic.KnowledgeCapabilityError, match="authority window ports"):
         KnowledgeSemanticOwner(
             vault_root=owner.root,
             active_context=owner.active_context,
             target_binding_id=owner.target_binding_id,
             registry_store=owner.registry_store,
-            context_is_current=owner.context_is_current,
-            authorize_semantic=None,
-            authority_is_current=owner.authority_is_current,
+            authorize_semantic=None if missing == "approval" else owner.authorize_semantic,
+            semantic_authority_window=None
+            if missing == "window"
+            else owner.semantic_authority_window,
             receipt_path=owner.receipt_path,
         )
 
@@ -643,7 +739,7 @@ def _observe_source_seam(bound, monkeypatch):
         return require(*args, **kwargs)
 
     def exchange_observed(*args, **kwargs):
-        observed["exchanges"].append((time.time(), bound.current["authority"]))
+        observed["exchanges"].append(time.time())
         return exchange(*args, **kwargs)
 
     monkeypatch.setattr(context_bound_write, "require_effect_locator", require_observed)
@@ -651,24 +747,20 @@ def _observe_source_seam(bound, monkeypatch):
     return observed
 
 
-def test_expiry_during_final_approval_callback_prevents_source_exchange(bound, monkeypatch):
+def test_expiry_during_approval_window_acquisition_prevents_source_exchange(bound, monkeypatch):
     # Keep the real clock, immutable context, GOV window, actual HKA CAS and
-    # approval result. Only the final trusted port is delayed past expiry.
+    # approval result. Delay the held approval acquisition past expiry.
     bound.owner.active_context = replace(bound.owner.active_context, expires_at=time.time() + 3)
     observed = _observe_source_seam(bound, monkeypatch)
-    current = bound.owner.authority_is_current
     waited = []
 
     def approval(intent, grant):
-        verdict = current(intent, grant)
-        if observed["final"]:
-            remaining = bound.owner.active_context.expires_at - time.time()
-            assert remaining > 0, "fixture expired before reaching the final approval callback"
-            waited.append(True)
-            time.sleep(remaining + 0.03)
-        return verdict
+        remaining = bound.owner.active_context.expires_at - time.time()
+        assert remaining > 0, "fixture expired before reaching approval acquisition"
+        waited.append(True)
+        time.sleep(remaining + 0.03)
 
-    bound.owner.authority_is_current = approval
+    bound.hooks["lookup"] = approval
     before = bound.note.read_bytes()
     result = bound.run(bound.approve(bound.request()))
     assert waited == [True]
@@ -678,22 +770,26 @@ def test_expiry_during_final_approval_callback_prevents_source_exchange(bound, m
     assert not bound.owner.receipt_path.exists()
 
 
-@pytest.mark.parametrize("revoke", ["approval", "context"])
+@pytest.mark.parametrize("revoke", ["approval", "clear", "replace", "invalidate"])
 def test_revocation_during_final_member_reads_prevents_source_exchange(bound, monkeypatch, revoke):
     observed = _observe_source_seam(bound, monkeypatch)
     resolve = bound.owner._resolve_many
     revoked = []
+    request = bound.approve(bound.request())
 
     def resolve_with_revocation(identities):
         result = resolve(identities)
         if observed["final"] and identities == set(bound.members):
-            bound.current["authority" if revoke == "approval" else "context"] = False
+            if revoke == "approval":
+                bound.revoke_approval(request.request_id)
+            else:
+                bound.change_selection(revoke)
             revoked.append(True)
         return result
 
     monkeypatch.setattr(bound.owner, "_resolve_many", resolve_with_revocation)
     before = bound.note.read_bytes()
-    result = bound.run(bound.approve(bound.request()))
+    result = bound.run(request)
     assert revoked == [True]
     assert result.status is OperationStatus.REJECTED
     assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
@@ -727,7 +823,7 @@ def test_context_revocation_during_final_registry_read_prevents_source_exchange(
     def read_then_revoke():
         snapshot = read()
         if observed["final"]:
-            bound.current["context"] = False
+            bound.change_selection()
             revoked.append(True)
         return snapshot
 
@@ -739,3 +835,137 @@ def test_context_revocation_during_final_registry_read_prevents_source_exchange(
     assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
     assert bound.note.read_bytes() == before and not observed["exchanges"]
     assert not bound.owner.receipt_path.exists()
+
+
+@pytest.mark.parametrize("change", ["clear", "replace", "invalidate", "approval"])
+def test_public_selection_or_approval_change_during_held_lookup_refuses(bound, monkeypatch, change):
+    observed = _observe_source_seam(bound, monkeypatch)
+    request = bound.approve(bound.request())
+    before = bound.note.read_bytes()
+
+    def lookup(intent, grant):
+        if change == "approval":
+            bound.revoke_approval(request.request_id)
+        else:
+            bound.change_selection(change)
+
+    bound.hooks["lookup"] = lookup
+    result = bound.run(request)
+    assert result.status is OperationStatus.REJECTED
+    assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
+    assert bound.note.read_bytes() == before and not observed["exchanges"]
+    assert not bound.owner.receipt_path.exists()
+
+
+def test_joint_owner_windows_hold_concurrent_mutations_until_durable_receipts(bound, monkeypatch):
+    request = bound.approve(bound.request())
+    entered, resume, clearing, revoking = Event(), Event(), Event(), Event()
+    exchange = adapters._atomic_exchange_at
+
+    def pause(*args):
+        entered.set()
+        assert resume.wait(10)
+        return exchange(*args)
+
+    def clear():
+        clearing.set()
+        bound.change_selection()
+
+    def revoke():
+        revoking.set()
+        bound.revoke_approval(request.request_id)
+
+    monkeypatch.setattr(adapters, "_atomic_exchange_at", pause)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        effect = pool.submit(bound.run, request)
+        assert entered.wait(10)
+        clear_future, revoke_future = pool.submit(clear), pool.submit(revoke)
+        assert clearing.wait(10) and revoking.wait(10)
+        assert not clear_future.done() and not revoke_future.done()
+        resume.set()
+        result = effect.result(timeout=10)
+        clear_future.result(timeout=10)
+        revoke_future.result(timeout=10)
+    assert result.status is OperationStatus.CONVERGENCE_PENDING
+    assert result.convergence.source_effect is SourceEffectStatus.COMMITTED
+    assert len(bound.records()) == 1
+    assert bound.records()[0]["authority_receipt"]["outcome"] == "applied"
+    assert not bound.selection_current() and request.request_id not in bound.approvals
+    # Current revocation cannot erase the original historical outcome.
+    assert bound.run(request).to_dict() == result.to_dict()
+
+
+@pytest.mark.parametrize("receipt_known", [True, False])
+def test_window_exit_failure_preserves_prior_effect_truth(bound, monkeypatch, receipt_known):
+    request = bound.approve(bound.request())
+    bound.hooks["exit_error"] = ContextSelectionError("window release failed")
+    if not receipt_known:
+        exchange = adapters._atomic_exchange_at
+
+        def lose_receipt(*args):
+            exchange(*args)
+            raise OSError("interrupted after exchange")
+
+        monkeypatch.setattr(adapters, "_atomic_exchange_at", lose_receipt)
+    result = bound.run(request)
+    assert result.status is OperationStatus.RECOVERY_REQUIRED
+    assert result.convergence.source_effect is (
+        SourceEffectStatus.COMMITTED if receipt_known else SourceEffectStatus.UNKNOWN
+    )
+    if receipt_known:
+        assert result.receipt.extensions["write"]["source_receipt"]["outcome"] == "written"
+        assert result.receipt.extensions["write"]["authority_receipt"]["outcome"] == "applied"
+    assert bound.run(request).to_dict() == result.to_dict()
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "escaped",
+        "escaped-key",
+        "duplicate",
+        "merge",
+        "alias",
+        "flow",
+        "pending-uuid",
+        "pending-nested-uuid",
+        "pending-merge",
+        "pending-merge-list",
+    ],
+)
+def test_decoded_matching_uuid_survives_later_malformed_yaml(bound, shape):
+    identity = bound.members[0]
+    escaped = '"' + "".join(f"\\u{ord(char):04x}" for char in identity) + '"'
+    definitions = {
+        "escaped": f"uuid: {escaped}\nbroken: [yaml\n",
+        "escaped-key": f'"\\u0075uid": {escaped}\nbroken: [yaml\n',
+        "duplicate": f"uuid: {escaped}\nuuid: {uuid4()}\nbroken: [yaml\n",
+        "merge": f"base: &base {{uuid: {escaped}}}\n<<: *base\nbroken: [yaml\n",
+        "alias": f"identity: &identity {escaped}\nuuid: *identity\nbroken: [yaml\n",
+        "flow": f"{{uuid: {escaped}, broken: [yaml\n",
+        "pending-uuid": f"uuid: [{escaped}, [broken\n",
+        "pending-nested-uuid": f"uuid: [[{escaped}, [broken\n",
+        "pending-merge": f"<<: {{uuid: {escaped}, broken: [yaml\n",
+        "pending-merge-list": f"<<: [{{uuid: {escaped}, broken: [yaml\n",
+    }
+    (bound.owner.root / "Notes/malformed.md").write_text(
+        f"---\n{definitions[shape]}---\nMalformed relevant identity.\n"
+    )
+    before = bound.note.read_bytes()
+    result = bound.run(bound.approve(bound.request()))
+    assert result.status is OperationStatus.INVALID
+    assert result.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
+    assert bound.note.read_bytes() == before and not bound.owner.receipt_path.exists()
+
+
+@pytest.mark.parametrize("field", ["summary", "nested"])
+def test_decoded_uuid_in_unrelated_malformed_field_is_not_identity(bound, field):
+    identity = bound.members[0]
+    escaped = '"' + "".join(f"\\u{ord(char):04x}" for char in identity) + '"'
+    reference = f"summary: {escaped}" if field == "summary" else f"example: {{uuid: {escaped}}}"
+    (bound.owner.root / "Notes/unrelated.md").write_text(
+        f"---\nuuid: {uuid4()}\n{reference}\nbroken: [yaml\n---\nUnrelated draft.\n"
+    )
+    request = bound.approve(bound.request())
+    assert bound.run(request).status is OperationStatus.CONVERGENCE_PENDING
+    assert bound.metadata()["member_order"] == bound.members[::-1]

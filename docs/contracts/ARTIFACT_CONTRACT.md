@@ -91,18 +91,47 @@ preserving source body bytes, UUID, provenance, and unrelated frontmatter bytes/
 is no arbitrary metadata writer.
 
 The trusted composition must supply the exact normalized `SemanticIntent`'s applicable explicit
-human semantic approval as an existing GOV `GovernedWriteGrant`, plus current-context and
-current-approval checks. Construction refuses missing ports. The grant must carry a human-review
+human semantic approval as an existing GOV `GovernedWriteGrant`, plus a mandatory held
+`semantic_authority_window(intent, grant)`. Construction refuses missing approval/window ports;
+point-check-only booleans and a no-op window are not supported producers. The grant must carry a human-review
 decision and match actor, action (`operation.<operation_id>`), `vault_semantic_edit`, source
 resource, complete immutable `ActiveContextSetV1`, and selected target binding. A generic body-edit
 grant, machine suggestion, kernel policy allow, or relation edge cannot substitute for this
 approval. Human-present Canvas keeps its accepted body-only policy (#4932).
 
-The existing context-bound GOV write window holds principal, ownership, and binding leases through
-the HKA CAS and durable receipt event. The rewritten-note source seam rechecks the frozen
-context's expiry and the same semantic approval immediately before exchange, after owner waits;
-an entry-time approval never extends the lifetime. `write_note_from_absolute` routes the selected
+The existing context-bound GOV write window holds principal, ownership, and binding leases. Inside
+it, the trusted producer holds WSP's opt-in `ContextSelectionStore.read_effect_window` over the
+captured immutable selection record, then the exact approval owner's read/effect fence. Every
+approval mutation must use that same owner's lock and copy-on-write record. The producer binds
+the raw record to the exact resolved snapshot and original grant; resolver-adjusted snapshot
+generation is not compared directly with the raw selection generation. Raw bearers remain in the
+server closure and never enter source or receipts. No new approval store, issuer, TTL, or token
+refresh is supplied here.
+
+The yielded final guard reads the captured approval record, then the captured selection record,
+under their held locks. It is owned, nonblocking, and performs no resolver, clock/prune,
+filesystem, or arbitrary port callback. Concurrent selection/approval changes wait for the window;
+same-thread reentrant clear, replacement, or revocation invalidates this guard before publication.
+This is an opt-in semantic current-selection requirement; ordinary WSP consumers retain their
+existing frozen in-flight snapshots. Resolve before taking the selection-store lock: resolver
+resolution can invalidate a selection and therefore already takes locks in resolver-to-store order.
+Approval mutations must not hold their lock while entering selection/resolver/binding operations.
+
+Both windows span the HKA CAS and durable source/authority receipt event. At the rewritten-note
+seam, member, health, registry and approval lookup work finishes before the final owned guards;
+only static exact GOV token/context validation and immutable expiry checking follow them,
+immediately before exchange or staged-conflict publication. An entry-time approval or held lock
+never extends the lifetime. A typed state-owner pre-publication refusal is distinct from an
+unproven receiptless effect. A window exit failure preserves any prior committed/unknown effect
+and original receipts for recovery. `write_note_from_absolute` routes the selected
 binding explicitly into its locator; the existing adapter owns filesystem mechanics.
+
+Identity discovery retains decoded YAML nodes, including duplicate declarations and completed
+UUID/merge children inside a later failing collection. A later syntax error cannot hide an earlier
+decoded requested UUID through quoted escapes. Partial nodes identify candidates for refusal;
+they never supply authorized identity, membership, or mutation content. Matching candidates still
+require complete strict metadata. UUID-looking prose or unrelated nested fields do not make an
+unrelated malformed note a matching candidate or impose a whole-vault repair requirement.
 
 Source `WriteReceipt`, policy/token, immutable `AuthorityReceipt`, operation/actor/context/target,
 input/result versions, and normalized changes are preserved in the existing durable outbox event
