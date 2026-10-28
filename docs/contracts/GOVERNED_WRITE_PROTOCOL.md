@@ -96,6 +96,11 @@ guard and placement/recovery seams. A clock-only comparison can narrow existing 
 not issue, refresh or rebind authority, alter WSP policy, or initialize runtime state. Kernel
 recovery verifies the original non-secret decision digest before a native recovery can perform
 another effect. Refused/expired recovery retains original source/receipt/repair truth.
+The existing kernel journal records uncertainty before a new native recovery attempt, preserving
+any already-committed proof but superseding obsolete `not_applied` observations. The durable batch
+copy can retain previously observed native/GOV evidence across a weaker kernel refusal without
+authorizing another effect or acknowledging success. A shared original-request execution window
+covers initial and recovery invocations; current admission follows that wait.
 
 ## Commands
 

@@ -241,6 +241,9 @@ class BatchOperationCoordinator:
                     # Re-read so a cancellation recorded during the owner call
                     # cannot be overwritten by an older in-memory snapshot.
                     state = self._load(batch_id, expected_digest)
+                    previous = state["items"][index]["outcome"]
+                    if previous is not None:
+                        outcome = _retain_observed_source(OperationOutcome.from_dict(previous), outcome)
                     state["items"][index] = {
                         "state": "recoverable" if outcome.status in _RECOVERABLE else "terminal",
                         "outcome": outcome.to_dict(),
@@ -305,14 +308,35 @@ class BatchOperationCoordinator:
         ))
 
 
-def _require_owner_evidence(outcome: OperationOutcome) -> OperationOutcome:
-    """Require preserved owner proof; kernel summary/diagnostics are insufficient.
+def _retain_observed_source(previous: OperationOutcome, current: OperationOutcome) -> OperationOutcome:
+    """Keep actual observed native proof across a weaker recovery response.
 
-    Owners remain responsible for interpreting their receipts and GOV remains
-    responsible for authority. This check only refuses absent chain stages.
+    This never acknowledges success or creates a receipt. In particular it
+    must NOT preserve old NOT_APPLIED across a newly journaled recovery attempt.
     """
-    if outcome.status not in _APPLIED:
-        return outcome
+    source = previous.convergence.source_effect if previous.convergence else None
+    current_source = current.convergence.source_effect if current.convergence else None
+    preserve = (source is SourceEffectStatus.COMMITTED and current_source is not SourceEffectStatus.COMMITTED
+                or source is SourceEffectStatus.UNKNOWN and current.convergence is None)
+    old_native, old_authority, old_source = _native_evidence(previous)
+    new_native, new_authority, new_source = _native_evidence(current)
+    richer_receipt = (bool(old_native) and
+                      (not new_native or bool(old_authority) and not new_authority
+                       or bool(old_source) and not new_source))
+    if not preserve and not (source in {SourceEffectStatus.COMMITTED, SourceEffectStatus.UNKNOWN} and richer_receipt):
+        return current
+    return replace(
+        current, status=OperationStatus.RECOVERY_REQUIRED,
+        convergence=previous.convergence if preserve else current.convergence or previous.convergence,
+        receipt=previous.receipt,
+        extensions={**previous.extensions, **current.extensions,
+                    "recovery_result": current.status.value, "observed_source_retained": True},
+        warnings=tuple(dict.fromkeys(previous.warnings + current.warnings +
+                                    ("previously observed native source/receipt evidence retained; current recovery is unresolved",))),
+    )
+
+
+def _native_evidence(outcome: OperationOutcome) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
     receipt = outcome.receipt
     evidence = {} if receipt is None else receipt.extensions
     native = evidence.get("write") or evidence.get("placement") or {}
@@ -322,7 +346,19 @@ def _require_owner_evidence(outcome: OperationOutcome) -> OperationOutcome:
     authority = governed.get("authority_receipt", {})
     authority = authority if isinstance(authority, Mapping) else {}
     source = native.get("source_receipt", {})
-    if (not isinstance(source, Mapping) or source.get("outcome") != "written"
+    return native, authority, source if isinstance(source, Mapping) else {}
+
+
+def _require_owner_evidence(outcome: OperationOutcome) -> OperationOutcome:
+    """Require preserved owner proof; kernel summary/diagnostics are insufficient.
+
+    Owners remain responsible for interpreting their receipts and GOV remains
+    responsible for authority. This check only refuses absent chain stages.
+    """
+    if outcome.status not in _APPLIED:
+        return outcome
+    native, authority, source = _native_evidence(outcome)
+    if (source.get("outcome") != "written"
             or not authority.get("receipt_id") or authority.get("effect_id") != outcome.request_id
             or authority.get("outcome") != "applied" or not authority.get("source_receipt_ref")
             or outcome.convergence is None or outcome.convergence.source_effect is not SourceEffectStatus.COMMITTED

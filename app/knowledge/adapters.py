@@ -491,6 +491,7 @@ def _stage_initial_stale_proposal(
     staged_stat: os.stat_result,
     writer_identity: str,
     written_at: datetime,
+    publication_check: Callable[[], None] | None = None,
 ) -> tuple[PurePosixPath, os.stat_result]:
     """Publish a durable, no-clobber sibling artifact for an initially stale write."""
 
@@ -533,6 +534,11 @@ def _stage_initial_stale_proposal(
                 writer_identity=artifact_writer,
                 written_at=written_at,
             )
+            # Payload persistence and a collision retry can outlive admission.
+            # The state owner supplies its existing final guard; no arbitrary
+            # policy callback or new authority is introduced by this helper.
+            if publication_check is not None:
+                publication_check()
             try:
                 os.link(
                     candidate_name,
@@ -869,6 +875,14 @@ class FsVaultAdapter:
                         )
                         require_effect_locator(root, locator.path)
                         require_authority_deadline(admission_deadline)
+
+                        def check_conflict_publication() -> None:
+                            _require_anchored_directory_identity(
+                                root_fd, root, relative_parent, parent_fd, conflict_fd, locator
+                            )
+                            require_effect_locator(root, locator.path)
+                            require_authority_deadline(admission_deadline)
+
                         artifact_rel, artifact_stat = _stage_initial_stale_proposal(
                             parent_fd,
                             conflict_fd,
@@ -879,6 +893,7 @@ class FsVaultAdapter:
                             staged_stat=staged_stat,
                             writer_identity=effective_writer_identity,
                             written_at=written_at,
+                            publication_check=check_conflict_publication,
                         )
                         staged_name = artifact_rel.name
                         staged_dir_fd = parent_fd

@@ -219,10 +219,13 @@ def test_recovery_persistence_failure_retains_newly_verified_native_evidence(sem
             execute(batch, frozen)
     restarted = coordinator(semantic_bound, restart=True)
     durable_finalize = restarted.store.finalize
+    finalizations = []
 
     def unavailable(request_id, *args):
         if request_id == requests[0].request_id:
-            raise OSError("kernel still unavailable after native receipt read")
+            finalizations.append(request_id)
+            if len(finalizations) == 2:
+                raise OSError("kernel still unavailable after native receipt read")
         return durable_finalize(request_id, *args)
 
     with monkeypatch.context() as patch:

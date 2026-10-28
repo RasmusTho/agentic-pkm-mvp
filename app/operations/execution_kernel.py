@@ -22,6 +22,7 @@ from typing import Any, Callable, Iterator, Mapping, Protocol
 from app.archival.contracts import ArtifactClass, LivenessState, PolicyProfile, TransitionStage
 
 from .contracts import (
+    ConvergenceState,
     OperationItemOutcome,
     OperationConvergence,
     OperationOutcome,
@@ -29,6 +30,7 @@ from .contracts import (
     OperationRequest,
     OperationStatus,
     ReceiptStatus,
+    SourceEffectStatus,
 )
 
 
@@ -216,6 +218,24 @@ class JsonReceiptStore:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     @contextmanager
+    def effect_window(self, request_id: str) -> Iterator[None]:
+        """Serialize one batch effect and its recovery, including across batches.
+
+        The global journal lock is never held through owner work/cancellation.
+        Process loss releases this fence; the durable UNKNOWN attempt remains.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        identity = sha256(request_id.encode()).hexdigest()
+        with (self.path.parent / f".{self.path.name}.effect-{identity}.lock").open(
+            "a+", encoding="utf-8"
+        ) as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
     def _process_lock(self) -> Iterator[None]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with (self.path.parent / f".{self.path.name}.lock").open(
@@ -285,6 +305,20 @@ class OperationExecutionKernel:
     token_validator: TokenValidator = field(default=lambda request, decision: False)
 
     def execute(
+        self, request: OperationRequest, delegation: Mapping[str, Any] | None = None,
+        *, reconcile: OwnerHandler | None = None, bind_owner_delegation: bool = False,
+    ) -> OperationOutcome:
+        if isinstance(self.receipt_store, JsonReceiptStore) and (bind_owner_delegation or reconcile is not None):
+            # One existing-journal effect fence spans initial reservation,
+            # owner work and finalization as well as recovery. A waiter reads
+            # the current record only after the prior invocation has exited.
+            with self.receipt_store.effect_window(request.request_id):
+                return self._execute(request, delegation, reconcile=reconcile,
+                                     bind_owner_delegation=bind_owner_delegation)
+        return self._execute(request, delegation, reconcile=reconcile,
+                             bind_owner_delegation=bind_owner_delegation)
+
+    def _execute(
         self, request: OperationRequest, delegation: Mapping[str, Any] | None = None,
         *, reconcile: OwnerHandler | None = None, bind_owner_delegation: bool = False,
     ) -> OperationOutcome:
@@ -429,6 +463,9 @@ class OperationExecutionKernel:
         effect. The owner must verify its original source/effect evidence; this
         seam never clears a reservation or invokes the ordinary handler again.
         """
+        if not isinstance(self.receipt_store, JsonReceiptStore):
+            return replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                           warnings=prior.outcome.warnings + ("native recovery requires the durable receipt journal",))
         refusal = self._precondition_refusal(request, delegation)
         try:
             decision = self.policy_evaluator(request, delegation) if refusal is None else None
@@ -449,6 +486,33 @@ class OperationExecutionKernel:
             return replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
                            extensions={**prior.outcome.extensions, "recovery_admission": "decision_rebinding_refused"},
                            warnings=prior.outcome.warnings + ("recovery cannot replace the originally captured kernel decision",))
+        # A new native recovery may itself perform proven namespace effects.
+        # Record uncertainty BEFORE handing off. An older NOT_APPLIED result
+        # cannot describe this new attempt after a crash. Already COMMITTED
+        # source/receipts remain immutable historical facts.
+        convergence = prior.outcome.convergence
+        if convergence is None:
+            convergence = OperationConvergence(SourceEffectStatus.UNKNOWN,
+                                               store=ConvergenceState.REBUILD_REQUIRED,
+                                               index=ConvergenceState.REBUILD_REQUIRED,
+                                               link=ConvergenceState.REBUILD_REQUIRED)
+        elif convergence.source_effect is not SourceEffectStatus.COMMITTED:
+            convergence = replace(convergence, source_effect=SourceEffectStatus.UNKNOWN,
+                                  store=ConvergenceState.REBUILD_REQUIRED,
+                                  index=ConvergenceState.REBUILD_REQUIRED,
+                                  link=ConvergenceState.REBUILD_REQUIRED)
+        pending = replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                          convergence=convergence,
+                          receipt=replace(prior.outcome.receipt, status=ReceiptStatus.PENDING)
+                          if prior.outcome.receipt else None,
+                          warnings=tuple(dict.fromkeys(prior.outcome.warnings +
+                              ("native recovery may start; reconcile its current receipt before another attempt",))))
+        try:
+            self.receipt_store.finalize(request.request_id, prior.intent_digest, pending)
+        except Exception:
+            return replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                           warnings=prior.outcome.warnings + ("recovery attempt was not durably reserved; owner was not called",))
+        prior = replace(prior, outcome=pending, in_flight=True)
         try:
             result = reconcile(owner_request)
             outcome = self._owner_outcome(

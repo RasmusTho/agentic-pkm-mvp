@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-28 (#6384 target-scoped BWS host-admin reads, repository-only; no live BWS or channel verification)
+Last reviewed: 2026-10-28 (#6384 target-scoped BWS host-admin reads and #5337 dormant batch availability/recovery; repository-only; no live BWS, batch installation or channel verification)
 Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; this is not a new deployment, release or functional-acceptance receipt.
 Infrastructure reference review: 2026-10-21; other sections retain their individual verification dates.
 Local Colima startup entry reviewed 2026-10-24 against scripts/start_full_system.sh, tests/ops/test_colima_runtime_readiness.py and the isolated/default runtime receipts on Issue #4899; no TARS verification or placement change.
@@ -1388,3 +1388,23 @@ with `mimer-mcp --transport stdio`; it calls only the existing
 loopback Mimer HTTP API. It opens no network listener, accepts no bind, TLS, or
 authentication configuration, and exits when its client closes stdio. Network
 transports and per-device authentication are separately gated follow-ons.
+
+## Batch operation availability
+
+AUTOOPS-08 provides dormant direct composition over the existing execution kernel and finite
+versioned body-edit, placement and semantic owners. It installs no operator HTTP, GUI, MCP or CLI
+endpoint, runtime singleton or scheduler. Authenticated installation remains with #5352 and
+cross-surface capability acceptance with #5329. The [batch owner specification](YGGDRASIL_AUTONOMOUS_OPERATIONS/DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md#dormant-implementation-and-supported-boundary)
+defines the exact supported/refused kinds and original authority boundaries.
+
+For an interrupted directly composed batch, preserve its frozen batch/request identities and native
+receipts. Cancellation durably suppresses pending starts; already-started work reconciles through
+the existing owner/kernel path. A refused recovery retains committed or unknown source evidence;
+a new recovery attempt is durably uncertain before another native effect can start. Diagnostic,
+queued or projection state is insufficient for source success, and an uncertain effect is never
+blindly retried or a valid committed item automatically rolled back.
+
+Repository evidence (2026-10-28): `app/operations/batch_operations.py`, the delivered native owner
+bindings, and `tests/operations/test_batch_operations*.py` exercise isolated synthetic vaults,
+durable native/GOV receipts, real source guards, cancellation and restart. This is repository proof,
+not a production installation, deployment or channel-acceptance receipt.

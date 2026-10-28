@@ -42,6 +42,10 @@ The dormant AUTOOPS-08 versioned local body-edit path may pass an optional origi
 it after native admission at actual CAS/conflict publication. A deadline cannot authorize a write
 or extend a native token/context; unsupported non-CAS and Obsidian CLI routes refuse that opt-in
 before effects. Existing callers without it retain their behavior.
+The shared initially-stale conflict publisher invokes the FS owner's existing final guard after
+candidate persistence and at every actual public-link attempt. This includes semantic owned
+approval/selection checks when present, as well as the optional original deadline. Already-public
+evidence is preserved for native receipt/accountability even when later work crosses expiry.
 
 ### Dormant semantic commands (AUTOOPS-06)
 

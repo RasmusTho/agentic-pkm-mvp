@@ -60,7 +60,11 @@ deadline. This is a per-call constraint, not an ambient callback or a new author
 Batch snapshots are a bounded extension inside the existing kernel JSON journal, not mutation
 receipts. Atomic file replacement and file/directory synchronization precede acknowledgement.
 A process-held run fence serializes consumers of one batch. A separate snapshot fence protects
-progress and cancellation; neither fence is held across an owner effect. The durable start marker
+progress and cancellation; the snapshot and global journal locks are released before owner work.
+One original-request effect window additionally spans initial reservation, native work and kernel
+finalization as well as recovery. A competing consumer reads current history after that same window
+wait, so it cannot reconcile a still-running initial effect or overwrite completed proof with a
+stale recovery snapshot. No independent lease or registry is added. The durable start marker
 distinguishes an in-flight item from a pending item. Cancellation persists before pending starts
 are suppressed, while already-started items retain receipt reconciliation. A competing executor
 rechecks cancellation after its run-fence wait. The coordinator re-reads state after each owner
@@ -78,6 +82,18 @@ No new issuer, TTL, authority refresh, rollback, or recovery policy is introduce
 The existing kernel reservation/outcome also records a non-secret digest of its original policy
 decision identity. Recovery may veto that decision but cannot replace it with a same-version new
 token. Missing original binding remains recoverable without starting another source effect.
+Before any potentially mutating native recovery callback, the existing kernel journal durably
+records an uncertain new attempt. An older `not_applied` result cannot describe that attempt after
+process loss. Failure to persist the marker prevents the callback. Previously committed source
+and native/GOV receipt evidence remains immutable and is retained from the batch's durable copy
+when a kernel reservation or current refusal is weaker. That retained proof never becomes a new
+success acknowledgement; current recovery admission and source/repair truth remain separate.
+
+For an initially stale source, HKA's shared conflict publisher repeats the native final guard and
+original deadline after candidate write/flush/fsync and before each actual public link, including
+collision retries. A valid already-public conflict artifact is retained and accounted for if its
+subsequent verification or durability work crosses expiry. No blanket post-effect rejection or
+rollback erases that evidence.
 
 Successful mutating items require the preserved native source receipt and applicable durable GOV
 AuthorityReceipt. A kernel summary, diagnostic, queued effect, or completed projection is
