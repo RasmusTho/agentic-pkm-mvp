@@ -48,6 +48,9 @@ operation arguments cannot supply arbitrary filesystem targets or artifact schem
 editing preserves the source frontmatter and rejects metadata fields. Metadata requests must name
 an existing Panel proposal and retain its field/schema, action allowlist, confirmation, and APPLY
 gates. Classification/tagging ownership remains #5335.
+If the existing raw frontmatter splitter cannot preserve an identity-recognized source boundary
+(for example CR-only frontmatter), the dormant body-edit handler returns invalid before GOV or
+source effects. It never substitutes an empty metadata prefix.
 
 Panel source writeback now uses HKA CAS and returns its original `WriteReceipt`. A supplied caller
 version is checked before graph preparation and passed unchanged to the final write. Source

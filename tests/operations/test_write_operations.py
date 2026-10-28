@@ -510,6 +510,38 @@ def test_body_edit_preserves_metadata_only_frontmatter_at_eof(
     assert writes.split_frontmatter(updated)[0] == writes.split_frontmatter(prefix)[0]
 
 
+@pytest.mark.parametrize("source_has_body", [False, True])
+@pytest.mark.parametrize("body", ["Replacement body.", ""])
+def test_unpreservable_owner_recognized_frontmatter_is_refused_before_gov(
+    bound, monkeypatch, source_has_body, body
+) -> None:
+    from app.services.artifact_identity import resolve_note_artifact_identity
+
+    original = "\r".join([
+        "---", f"uuid: {bound.artifact_id}", "kind: note", "trust: human", "---",
+    ]) + ("\rOriginal body." if source_has_body else "")
+    bound.note_path.write_bytes(original.encode())
+    identity = resolve_note_artifact_identity(
+        artifact_path=bound.note_path, vault_root=bound.vault_root,
+        safe_note_path="Notes/note.md", body=original, heal_missing_uuid=False,
+    )
+    assert identity.owns_identity and identity.artifact_id == bound.artifact_id
+    gov_calls = []
+    original_gov = writes.GovernedWriteAdapter
+
+    def record_gov():
+        gov_calls.append(True)
+        return original_gov()
+
+    monkeypatch.setattr(writes, "GovernedWriteAdapter", record_gov)
+    result = _run(
+        bound, _request(bound, writes.UPDATE_OPERATION_ID, arguments={"body": body})
+    )
+    assert result.status is OperationStatus.INVALID
+    assert bound.note_path.read_bytes() == original.encode()
+    assert gov_calls == [] and _events(bound) == []
+
+
 def test_source_identity_and_metadata_remain_with_their_owners(bound) -> None:
     request = _request(
         bound,

@@ -301,7 +301,9 @@ def _update_body(
     if isinstance(current, OwnerExecutionResult):
         return current
     frontmatter, old_body = split_frontmatter(current)
-    prefix = current[: len(current) - len(old_body)] if frontmatter is not None else ""
+    if frontmatter is None:
+        return _refuse(OperationStatus.INVALID, "source frontmatter boundary cannot be preserved")
+    prefix = current[: len(current) - len(old_body)]
     if prefix and body and not prefix.endswith("\n"):
         # A metadata-only note may close at EOF. Keep its delimiter separate
         # from the replacement body without changing any frontmatter bytes.
