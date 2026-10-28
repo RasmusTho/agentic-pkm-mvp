@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Any, Callable, Mapping, cast
@@ -327,6 +328,7 @@ def _update_body(
             action=binding["action"],
             expected_version=str(request.expected_version),
             writer_identity=config.actor,
+            admission_deadline=None if request.delegation is None else request.delegation.get("expires_at"),
         )
     except KnowledgeWriteConflict as exc:
         if exc.receipt is None or exc.receipt.outcome != "conflict_staged":
@@ -519,6 +521,8 @@ def _record_and_complete(
     request: OperationRequest, source: Mapping[str, Any], governed: Mapping[str, Any], **kwargs: Any
 ) -> OwnerExecutionResult:
     result = _completed(request, source_receipt=source, governed=governed, **kwargs)
+    if isinstance(result.effect_receipt, dict):
+        result.effect_receipt["write"]["intent_digest"] = _request_digest(request)
     # Existing outbox accountability, not a second journal or AuthorityReceipt.
     try:
         event = make_outbox_event(
@@ -544,6 +548,59 @@ def _record_and_complete(
             ),
         )
     return result
+
+
+def _request_digest(request: OperationRequest) -> str:
+    return hashlib.sha256(json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def reconcile_write_operation(
+    request: OperationRequest, config: WriteOperationServerConfig,
+) -> OwnerExecutionResult:
+    """Inspect an exact durable body-edit receipt; never retry the source write."""
+    if request.operation_id != UPDATE_OPERATION_ID or "proposal_id" in request.arguments:
+        return _refuse(OperationStatus.NOT_SUPPORTED, "only source body-edit receipt lookup is supported")
+    if request.context != config.context:
+        return _refuse(OperationStatus.REJECTED, "original write context differs from server binding")
+    try:
+        path = _target(request, config)
+        if isinstance(path, OwnerExecutionResult):
+            return path
+        records = [json.loads(line) for line in
+                   Path(os.getenv("INDEX_OUTBOX_PATH") or INDEX_OUTBOX_PATH).read_text().splitlines()]
+        matches = [record["payload"] for record in records
+                   if record.get("trace_id") == request.request_id
+                   and record.get("source") == "operations.write"
+                   and record.get("event") == "governance.authority_receipt.recorded"]
+        if len(matches) != 1:
+            return OwnerExecutionResult.ambiguous()
+        evidence = matches[0]
+        write = evidence.get("write", {})
+        authority = write.get("authority_receipt", {})
+        if (write.get("intent_digest") != _request_digest(request)
+                or write.get("owner") != WRITE_OWNERS[UPDATE_OPERATION_ID]
+                or write.get("input_version") != request.expected_version
+                or authority.get("effect_id") != request.request_id
+                or authority.get("actor") != config.actor
+                or authority.get("action") != "operation.artifact.update"
+                or authority.get("resource") != path.relative_to(config.vault_root.resolve()).as_posix()
+                or authority.get("receipt_id") != evidence.get("receipt_id")
+                or not authority.get("receipt_id")):
+            return OwnerExecutionResult.ambiguous()
+        conflict = write.get("effect_state") == "source_conflict_staged"
+        result = _completed(
+            request, source_receipt=write["source_receipt"], governed=write,
+            resulting_version=write.get("resulting_version"),
+            effect_state=write.get("effect_state", "unverified"),
+            outcome_status=OperationStatus.CONFLICTED if conflict else OperationStatus.CONVERGENCE_PENDING,
+            source_effect=SourceEffectStatus.NOT_APPLIED if conflict else SourceEffectStatus.COMMITTED,
+        )
+        if not conflict and read_note_text_with_version(path)[1] != write.get("resulting_version"):
+            return replace(result, status=OperationStatus.RECOVERY_REQUIRED,
+                           warnings=("receipted body edit has later source changes; preserve source and repair truth",))
+        return result
+    except Exception:
+        return OwnerExecutionResult.ambiguous()
 
 
 def _completed(

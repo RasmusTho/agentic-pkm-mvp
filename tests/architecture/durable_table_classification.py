@@ -1560,6 +1560,8 @@ def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
             func = resolver.enclosing_function(node)
             if _is_bounded_codex_model_execute(relative, func, node):
                 continue
+            if _is_bounded_batch_kernel_execute(relative, resolver, func, node):
+                continue
             if _reaches_durable_database(relative, resolver, func) is not durable_source:
                 continue
             resolved = False
@@ -1617,6 +1619,50 @@ def codex_model_execute_call_count() -> int:
             _CODEX_MODEL_EXECUTE_PATH,
             resolver.enclosing_function(node),
             node,
+        )
+    )
+
+
+_BATCH_KERNEL_EXECUTE_PATH = "app/operations/batch_operations.py"
+_BATCH_KERNEL_EXECUTE_CALL = ast.dump(ast.parse(
+    "self.kernel.execute(request, delegation, "
+    "reconcile=self.reconcile_owner if recovering else None, "
+    "bind_owner_delegation=True)", mode="eval"
+).body, include_attributes=False)
+
+
+def _is_bounded_batch_kernel_execute(
+    relative_path: str,
+    resolver: _ModuleResolver,
+    func: ast.FunctionDef | ast.AsyncFunctionDef | None,
+    node: ast.Call,
+) -> bool:
+    """Recognize only the declared non-SQL batch-to-operation-kernel call.
+
+    This request/delegation/reconciliation API is not a SQL cursor API. Bind
+    the complete call shape and enclosing method rather than exempting the
+    module, receiver name, or every operation named execute. Other calls and
+    all resolved SQL strings still go through the ordinary inventory scans.
+    """
+    enclosing_class = resolver._parent.get(func) if func is not None else None
+    return (
+        relative_path == _BATCH_KERNEL_EXECUTE_PATH
+        and func is not None
+        and func.name == "execute"
+        and isinstance(enclosing_class, ast.ClassDef)
+        and enclosing_class.name == "BatchOperationCoordinator"
+        and ast.dump(node, include_attributes=False) == _BATCH_KERNEL_EXECUTE_CALL
+    )
+
+
+def batch_kernel_execute_call_count() -> int:
+    """Measured population of the precisely bound non-SQL operation call."""
+    resolver = _resolver(REPO_ROOT / _BATCH_KERNEL_EXECUTE_PATH)
+    return sum(
+        1 for node in ast.walk(resolver.tree)
+        if isinstance(node, ast.Call)
+        and _is_bounded_batch_kernel_execute(
+            _BATCH_KERNEL_EXECUTE_PATH, resolver, resolver.enclosing_function(node), node
         )
     )
 

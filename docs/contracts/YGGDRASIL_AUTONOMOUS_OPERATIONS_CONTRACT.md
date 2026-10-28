@@ -281,6 +281,14 @@ The system never calls a partially applied batch wholly successful. Restart resu
 from durable per-item state. A GUI can request one confirmation for the frozen batch; an agent cannot
 add targets after confirmation without a new delegation or human gate.
 
+The dormant AUTOOPS-08 direct composition implements independent per-item execution over the
+finite versioned write/placement/semantic kinds documented in
+[`DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md`](../YGGDRASIL_AUTONOMOUS_OPERATIONS/DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md#dormant-implementation-and-supported-boundary).
+Its existing kernel journal carries frozen intent/progress and cancellation, while native owner
+receipts and GOV AuthorityReceipts remain separate source/accountability evidence. Restart uses
+the original operation identities and owner recovery seams. This enabling seam does not install
+runtime exposure, extend authority lifetimes, or establish cross-surface capability acceptance.
+
 ## Source, Store, index, and link convergence
 
 Source-of-truth mutation and derived-state convergence are separate result dimensions. Successful

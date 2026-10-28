@@ -64,6 +64,7 @@ class KnowledgePort(Protocol):
         *,
         expected_version: str | None = None,
         writer_identity: str | None = None,
+        admission_deadline: float | None = None,
     ) -> WriteReceipt: ...
 
     def append_note(self, locator: NoteLocator, content: str) -> WriteReceipt: ...

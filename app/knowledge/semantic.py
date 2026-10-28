@@ -26,6 +26,7 @@ from app.governance.governed_write import (
     GovernedWriteAdapter,
     GovernedWriteGrant,
     InvalidDecisionTokenError,
+    require_authority_deadline,
 )
 from app.instance.context_bound_read import ContextBoundReadError
 from app.instance.context_bound_write import ContextBoundSourceRefused, context_bound_write_window
@@ -565,6 +566,7 @@ class KnowledgeSemanticOwner:
         artifact_id: str,
         expected_version: str,
         arguments: Mapping[str, Any],
+        admission_deadline: float | None = None,
     ) -> SemanticResult:
         source: WriteReceipt | None = None
         receipt: dict[str, Any] | None = None
@@ -647,6 +649,10 @@ class KnowledgeSemanticOwner:
                     if not callable(require_current):
                         raise InvalidDecisionTokenError("semantic authority fences are not held")
                     require_current()
+                    # The captured caller ceiling can be earlier than WSP's
+                    # snapshot. Only a nonblocking original-deadline check
+                    # follows the owned approval/selection guard.
+                    require_authority_deadline(admission_deadline)
                 except (SemanticValidationError, VaultPathOverlapError, yaml.YAMLError) as exc:
                     raise _PreEffectRefusal("invalid", str(exc)) from exc
                 except (
@@ -713,6 +719,9 @@ class KnowledgeSemanticOwner:
                                 "effect_state": "source_applied"
                                 if source.outcome == "written"
                                 else "source_conflict_staged",
+                                "intent_digest": self._intent_digest(
+                                    request_id, operation, identity, expected_version, arguments, admission_deadline
+                                ),
                             }
                         )
                     ),
@@ -835,6 +844,76 @@ class KnowledgeSemanticOwner:
                 receipt,
                 f"reconcile source and receipts before retry ({type(exc).__name__})",
             )
+
+    def _intent_digest(
+        self, request_id: str, operation: str, artifact_id: str,
+        expected_version: str, arguments: Mapping[str, Any],
+        admission_deadline: float | None = None,
+    ) -> str:
+        return sha256(json.dumps({
+            "request_id": request_id, "operation": operation, "artifact_id": artifact_id,
+            "expected_version": expected_version, "arguments": dict(arguments),
+            "context_ref": self.active_context.context_id,
+            "vault_generation": str(self.active_context.generation),
+            "admission_deadline": admission_deadline,
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    def reconcile(
+        self, *, request_id: str, operation: str, artifact_id: str,
+        expected_version: str, arguments: Mapping[str, Any],
+        admission_deadline: float | None = None,
+    ) -> SemanticResult:
+        """Read exact owner evidence; never repeat a semantic source mutation.
+
+        A source/authority receipt absent from this owner's durable outbox is
+        still pending. A later source edit cannot be overwritten to make an
+        old intent appear successful. Original approval/token policy is intact.
+        """
+        receipt: dict[str, Any] | None = None
+        try:
+            self._context()
+            identity = _uuid(artifact_id)
+            records = [json.loads(line) for line in self.receipt_path.read_text().splitlines()]
+            matches = [record["payload"] for record in records
+                       if record.get("trace_id") == request_id
+                       and record.get("source") == "operations.semantic"
+                       and record.get("event") == "governance.authority_receipt.recorded"]
+            if len(matches) != 1:
+                return SemanticResult("recovery_required", "unknown", reason="exact durable semantic receipt is pending or ambiguous")
+            receipt = matches[0]
+            if not isinstance(receipt, dict):
+                return SemanticResult("recovery_required", "unknown", reason="semantic receipt is malformed")
+            authority = receipt.get("authority_receipt", {})
+            if (receipt.get("intent_digest") != self._intent_digest(
+                    request_id, operation, identity, expected_version, arguments, admission_deadline)
+                    or not authority.get("receipt_id") or authority.get("effect_id") != request_id
+                    or authority.get("actor") != self.actor
+                    or authority.get("target_binding_id") != self.target_binding_id
+                    or receipt.get("request_id") != request_id
+                    or receipt.get("operation") != operation or receipt.get("artifact_id") != identity
+                    or receipt.get("input_version") != expected_version
+                    or receipt.get("receipt_id") != authority["receipt_id"]):
+                return SemanticResult("recovery_required", "unknown", receipt, "semantic receipt binding differs from original intent")
+            source = receipt.get("source_receipt", {})
+            if (source.get("locator", {}).get("vault") != self.target_binding_id
+                    or source.get("locator", {}).get("path") != authority.get("resource")
+                    or authority.get("decision_token_id") != receipt.get("decision_token", {}).get("token_id")):
+                return SemanticResult("recovery_required", "unknown", receipt, "semantic source/authority chain differs")
+            if source.get("outcome") == "conflict_staged" and authority.get("outcome") == "failed":
+                return SemanticResult("conflicted", "not_applied", receipt)
+            if source.get("outcome") != "written" or authority.get("outcome") != "applied":
+                return SemanticResult("recovery_required", "unknown", receipt, "native semantic effect is not acknowledged")
+            from app.instance.context_bound_read import context_bound_read_window
+
+            with context_bound_read_window(self.active_context, registry_store=self.registry_store):
+                _, _, version, _ = self._resolve(identity)
+            if version != receipt.get("resulting_version"):
+                return SemanticResult("recovery_required", "committed", receipt, "receipted semantic source has changed; preserve later source and repair truth")
+            return SemanticResult("convergence_pending", "committed", receipt,
+                                  "native receipts verified; Store/index/link repair remains owner work")
+        except Exception:
+            return SemanticResult("recovery_required", "unknown", receipt,
+                                  "semantic evidence unavailable; do not repeat source mutation")
 
 
 __all__ = ["KnowledgeSemanticOwner", "SemanticIntent", "SemanticResult", "SEMANTIC_OPERATIONS"]

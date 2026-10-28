@@ -32,7 +32,7 @@ def build_semantic_operation_handlers(
 
 
 def _execute(
-    request: OperationRequest, config: SemanticOperationServerConfig
+    request: OperationRequest, config: SemanticOperationServerConfig, *, recover: bool = False
 ) -> OwnerExecutionResult:
     def refuse(status: OperationStatus, reason: str) -> OwnerExecutionResult:
         return OwnerExecutionResult(status, warnings=(reason,))
@@ -58,12 +58,13 @@ def _execute(
         return refuse(OperationStatus.INVALID, "one stable artifact or container UUID is required")
     if not isinstance(request.expected_version, str) or not request.expected_version:
         return refuse(OperationStatus.CONFLICTED, "expected raw-byte source version is required")
-    result = config.owner.apply(
+    result = (config.owner.reconcile if recover else config.owner.apply)(
         request_id=request.request_id,
         operation=request.operation_id,
         artifact_id=request.targets[0]["artifact_id"],
         expected_version=request.expected_version,
         arguments=request.arguments,
+        admission_deadline=None if request.delegation is None else request.delegation.get("expires_at"),
     )
     source = SourceEffectStatus(result.source_effect)
     projection = (
@@ -94,3 +95,10 @@ def _execute(
         ),
         warnings=(result.reason,) if result.reason else (),
     )
+
+
+def reconcile_semantic_operation(
+    request: OperationRequest, config: SemanticOperationServerConfig,
+) -> OwnerExecutionResult:
+    """Read/verify-first recovery through the existing semantic receipt owner."""
+    return _execute(request, config, recover=True)

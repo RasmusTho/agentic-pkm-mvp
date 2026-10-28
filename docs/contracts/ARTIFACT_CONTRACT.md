@@ -37,6 +37,16 @@ Protect durable human-authored and human-accepted knowledge artifacts so human k
 - Migrate representation.
 - Export or recover artifact.
 
+The dormant AUTOOPS-08 versioned local body-edit path may pass an optional original
+`admission_deadline` through KnowledgePort and the existing absolute writer. The FS adapter checks
+it after native admission at actual CAS/conflict publication. A deadline cannot authorize a write
+or extend a native token/context; unsupported non-CAS and Obsidian CLI routes refuse that opt-in
+before effects. Existing callers without it retain their behavior.
+The shared initially-stale conflict publisher invokes the FS owner's existing final guard after
+candidate persistence and at every actual public-link attempt. This includes semantic owned
+approval/selection checks when present, as well as the optional original deadline. Already-public
+evidence is preserved for native receipt/accountability even when later work crosses expiry.
+
 ### Dormant semantic commands (AUTOOPS-06)
 
 `app.knowledge.semantic.KnowledgeSemanticOwner` owns the source semantics for the directly
@@ -150,6 +160,17 @@ explicit DRI reconciliation may return `succeeded`. Kernel replay after restart 
 original operation outcome and receipts without invoking another source effect. Indeterminate
 reservations require receipt reconciliation, never source inference or a fresh operation identity
 as a retry shortcut.
+
+AUTOOPS-08 adds `KnowledgeSemanticOwner.reconcile` and
+`semantic_operations.reconcile_semantic_operation` as explicit read/verify-first seams. Newly
+recorded semantic receipts bind the original request, arguments, context, identity and version by
+intent digest. Reconciliation reads the exact durable owner event and verifies that chain and its
+source result. It never repeats semantic mutation or manufactures missing accountability. Absent,
+malformed, mismatched or historical receipts without that binding remain recoverable; later human
+source edits are preserved. Current kernel admission and all existing mutation-time WSP/GOV and
+human-approval windows retain their meanings. Native single-operation replay remains historical.
+Semantic mutation receives the same optional per-call original deadline and checks it after its
+owned final approval/selection guard; no arbitrary kernel callback runs inside those locks.
 
 ## Queries
 

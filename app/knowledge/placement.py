@@ -25,6 +25,7 @@ from app.governance.governed_write import (
     GovernedWriteAdapter,
     GovernedWriteGrant,
     InvalidDecisionTokenError,
+    require_authority_deadline,
 )
 from app.instance.channel_transfer import require_source_root_ingress
 from app.instance.context_bound_read import ContextBoundReadError
@@ -564,7 +565,10 @@ class KnowledgePlacementOwner:
                     pass
             os.fsync(state)
 
-    def place_artifact(self, intent: PlacementIntent, *, recover: bool = False) -> PlacementResult:
+    def place_artifact(
+        self, intent: PlacementIntent, *, recover: bool = False,
+        admission_deadline: float | None = None,
+    ) -> PlacementResult:
         """Execute once, read an existing result, or explicitly reconcile one intent.
 
         Ordinary replay never re-enters an uncertain source effect. ``recover``
@@ -613,11 +617,13 @@ class KnowledgePlacementOwner:
                         )
                     if not recover:
                         return self._result(record)
+                    require_authority_deadline(admission_deadline)
                 else:
                     if recover:
                         return PlacementResult(
                             "not_found", reason="placement has no durable recovery intent"
                         )
+                    require_authority_deadline(admission_deadline)
                     for other_name in os.listdir(state):
                         if not other_name.endswith(".json"):
                             continue
@@ -682,7 +688,8 @@ class KnowledgePlacementOwner:
                 with self._parents(root, source, destination) as (src, dst):
                     transaction = _private_directory(state, name.removesuffix(".json"))
                     try:
-                        self._advance(root, state, transaction, src, dst, name, record, intent)
+                        self._advance(root, state, transaction, src, dst, name, record, intent,
+                                      admission_deadline=admission_deadline)
                     finally:
                         os.close(transaction)
                 return self._result(record)
@@ -764,6 +771,7 @@ class KnowledgePlacementOwner:
         dst: int,
         record: dict[str, Any],
         intent: PlacementIntent,
+        admission_deadline: float | None = None,
     ) -> None:
         self._live(root, state)
         self._path(intent.source)
@@ -783,6 +791,7 @@ class KnowledgePlacementOwner:
             ]:
                 raise KnowledgeWriteConflict("placement parent generation changed")
         self._unexpired()
+        require_authority_deadline(admission_deadline)
 
     def _advance(
         self,
@@ -794,6 +803,7 @@ class KnowledgePlacementOwner:
         name: str,
         record: dict[str, Any],
         intent: PlacementIntent,
+        *, admission_deadline: float | None = None,
     ) -> None:
         source, destination = PurePosixPath(intent.source), PurePosixPath(intent.destination)
         expected = record["snapshot"]
@@ -808,13 +818,13 @@ class KnowledgePlacementOwner:
             record["phase"] = phase
             self._store(root, state, name, record)
 
-        self._seam(root, state, src, dst, record, intent)
+        self._seam(root, state, src, dst, record, intent, admission_deadline)
         if record["phase"] == "reserved":
             require(src, source.name)
             if self._absent_generation(dst, destination) != intent.expected_destination_generation:
                 raise KnowledgeWriteConflict("placement destination generation changed")
             if _entry(transaction, "original") is None:
-                self._seam(root, state, src, dst, record, intent)
+                self._seam(root, state, src, dst, record, intent, admission_deadline)
                 os.link(
                     source.name,
                     "original",
@@ -834,12 +844,12 @@ class KnowledgePlacementOwner:
         if record["phase"] == "prepared":
             # Persist uncertainty before entering the public namespace syscall.
             # A failed link/fsync/phase write cannot later look safely unapplied.
-            self._seam(root, state, src, dst, record, intent)
+            self._seam(root, state, src, dst, record, intent, admission_deadline)
             advance("publishing")
         if record["phase"] == "publishing":
             require(transaction, "original")
             require(src, source.name)
-            self._seam(root, state, src, dst, record, intent)
+            self._seam(root, state, src, dst, record, intent, admission_deadline)
             try:
                 os.link(
                     "original",
@@ -855,7 +865,7 @@ class KnowledgePlacementOwner:
             os.fsync(dst)
             require(src, source.name)
             require(dst, destination.name)
-            self._seam(root, state, src, dst, record, intent)
+            self._seam(root, state, src, dst, record, intent, admission_deadline)
             advance("activated")
         if record["phase"] == "activated":
             require(dst, destination.name)
@@ -865,7 +875,7 @@ class KnowledgePlacementOwner:
             require(dst, destination.name)
             if _entry(transaction, "retired") is None:
                 require(src, source.name)
-                self._seam(root, state, src, dst, record, intent)
+                self._seam(root, state, src, dst, record, intent, admission_deadline)
                 _atomic_rename_noreplace_at(src, source.name, transaction, "retired")
             # Reassert both namespace barriers on recovery, including when the
             # retained entry proves the rename happened in an earlier process.
@@ -875,7 +885,7 @@ class KnowledgePlacementOwner:
                 # Preserve a replacement that won the source name. Restore it
                 # only with no-replace semantics; a second winner stays intact.
                 try:
-                    self._seam(root, state, src, dst, record, intent)
+                    self._seam(root, state, src, dst, record, intent, admission_deadline)
                     _atomic_rename_noreplace_at(transaction, "retired", src, source.name)
                     os.fsync(src)
                     os.fsync(transaction)
@@ -889,7 +899,7 @@ class KnowledgePlacementOwner:
                     "source name was reused; do not remove the new artifact"
                 )
             require(dst, destination.name)
-            self._seam(root, state, src, dst, record, intent)
+            self._seam(root, state, src, dst, record, intent, admission_deadline)
             mutation = WriteReceipt(
                 intent.operation,
                 make_note_locator(intent.destination, vault=self.target_binding_id),
@@ -928,7 +938,7 @@ class KnowledgePlacementOwner:
                 if retained is not None:
                     if retained["inode"] != expected["inode"]:
                         raise KnowledgeWriteConflict("private recovery entry changed; preserve it")
-                    self._seam(root, state, src, dst, record, intent)
+                    self._seam(root, state, src, dst, record, intent, admission_deadline)
                     os.unlink(leaf, dir_fd=transaction)
             os.fsync(transaction)
             record["cleanup_complete"] = True

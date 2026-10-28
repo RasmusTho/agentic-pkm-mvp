@@ -12,6 +12,7 @@ from contextlib import contextmanager
 import fcntl
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import RLock
@@ -21,6 +22,7 @@ from typing import Any, Callable, Iterator, Mapping, Protocol
 from app.archival.contracts import ArtifactClass, LivenessState, PolicyProfile, TransitionStage
 
 from .contracts import (
+    ConvergenceState,
     OperationItemOutcome,
     OperationConvergence,
     OperationOutcome,
@@ -28,6 +30,7 @@ from .contracts import (
     OperationRequest,
     OperationStatus,
     ReceiptStatus,
+    SourceEffectStatus,
 )
 
 
@@ -195,6 +198,44 @@ class JsonReceiptStore:
                 self._write(records)
 
     @contextmanager
+    def batch_window(self, batch_id: str, *, running: bool = False) -> Iterator[None]:
+        """Bounded AUTOOPS-08 snapshot/run exclusion; no domain or retry authority.
+
+        The run fence is independent of snapshot exclusion, so cancellation can
+        persist while an already-started owner holds its own effect window.
+        Process loss releases both fences without guessing whether an effect ran.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        identity = sha256(batch_id.encode()).hexdigest()
+        suffix = "run" if running else "state"
+        with (self.path.parent / f".{self.path.name}.batch-{identity}.{suffix}.lock").open(
+            "a+", encoding="utf-8"
+        ) as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
+    def effect_window(self, request_id: str) -> Iterator[None]:
+        """Serialize one batch effect and its recovery, including across batches.
+
+        The global journal lock is never held through owner work/cancellation.
+        Process loss releases this fence; the durable UNKNOWN attempt remains.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        identity = sha256(request_id.encode()).hexdigest()
+        with (self.path.parent / f".{self.path.name}.effect-{identity}.lock").open(
+            "a+", encoding="utf-8"
+        ) as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
     def _process_lock(self) -> Iterator[None]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with (self.path.parent / f".{self.path.name}.lock").open(
@@ -234,7 +275,13 @@ class JsonReceiptStore:
         ) as temporary:
             json.dump(payload, temporary, sort_keys=True, separators=(",", ":"))
             temporary.flush()
+            os.fsync(temporary.fileno())
             Path(temporary.name).replace(self.path)
+        directory = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
 
 ContextResolver = Callable[[OperationRequest], bool]
@@ -258,7 +305,22 @@ class OperationExecutionKernel:
     token_validator: TokenValidator = field(default=lambda request, decision: False)
 
     def execute(
-        self, request: OperationRequest, delegation: Mapping[str, Any] | None = None
+        self, request: OperationRequest, delegation: Mapping[str, Any] | None = None,
+        *, reconcile: OwnerHandler | None = None, bind_owner_delegation: bool = False,
+    ) -> OperationOutcome:
+        if isinstance(self.receipt_store, JsonReceiptStore) and (bind_owner_delegation or reconcile is not None):
+            # One existing-journal effect fence spans initial reservation,
+            # owner work and finalization as well as recovery. A waiter reads
+            # the current record only after the prior invocation has exited.
+            with self.receipt_store.effect_window(request.request_id):
+                return self._execute(request, delegation, reconcile=reconcile,
+                                     bind_owner_delegation=bind_owner_delegation)
+        return self._execute(request, delegation, reconcile=reconcile,
+                             bind_owner_delegation=bind_owner_delegation)
+
+    def _execute(
+        self, request: OperationRequest, delegation: Mapping[str, Any] | None = None,
+        *, reconcile: OwnerHandler | None = None, bind_owner_delegation: bool = False,
     ) -> OperationOutcome:
         delegation = delegation if delegation is not None else request.delegation
         if delegation is None:
@@ -267,6 +329,10 @@ class OperationExecutionKernel:
             )
         request = _with_delegated_batch_policy(request, delegation)
         intent_digest = _intent_digest(request, delegation)
+        # Opt-in batch composition hands the original immutable ceiling to the
+        # native owner's final checks. Historical single-operation inputs and
+        # replay digests retain their default semantics.
+        owner_request = replace(request, delegation=dict(delegation)) if bind_owner_delegation else request
         try:
             prior = self.receipt_store.lookup(request.request_id)
         except Exception:
@@ -277,7 +343,11 @@ class OperationExecutionKernel:
             )
         if prior is not None:
             if prior.intent_digest == intent_digest:
-                return prior.outcome
+                if reconcile is None or prior.outcome.status not in {
+                    OperationStatus.RECOVERY_REQUIRED, OperationStatus.NOT_ACKNOWLEDGED
+                }:
+                    return prior.outcome
+                return self._reconcile(request, delegation, prior, reconcile, owner_request)
             return self._outcome(
                 request,
                 OperationStatus.CONFLICTED,
@@ -333,6 +403,8 @@ class OperationExecutionKernel:
             ),
             warnings=("owner effect may have started; reconcile receipt before retry",),
         )
+        if bind_owner_delegation:
+            pending = replace(pending, extensions={"admission_decision_digest": _decision_digest(decision)})
         try:
             reservation, stored = self.receipt_store.reserve(
                 request.request_id, intent_digest, pending
@@ -361,13 +433,16 @@ class OperationExecutionKernel:
             )
         else:
             try:
-                owner_result = handler(request)
+                owner_result = handler(owner_request)
             except Exception:
                 owner_result = OwnerExecutionResult.ambiguous()
             outcome = self._owner_outcome(
                 request, decision.policy_version, intent_digest, owner_result, delegation
             )
             outcome = replace(outcome, convergence=owner_result.convergence)
+        if bind_owner_delegation:
+            outcome = replace(outcome, extensions={**outcome.extensions,
+                                                   "admission_decision_digest": _decision_digest(decision)})
         try:
             self.receipt_store.finalize(request.request_id, intent_digest, outcome)
         except Exception:
@@ -375,6 +450,96 @@ class OperationExecutionKernel:
                 outcome, status=OperationStatus.RECOVERY_REQUIRED,
                 receipt=replace(outcome.receipt, status=ReceiptStatus.PENDING, payload={**outcome.receipt.payload, "state": "applied_receipt_pending", "recovery": "read_receipt_before_retry"}) if outcome.receipt else None,
                 warnings=outcome.warnings + ("owner result requires durable receipt reconciliation",),
+            )
+        return outcome
+
+    def _reconcile(
+        self, request: OperationRequest, delegation: Mapping[str, Any],
+        prior: _StoredOutcome, reconcile: OwnerHandler, owner_request: OperationRequest,
+    ) -> OperationOutcome:
+        """Owner recovery after current admission, retaining original intent/CAS.
+
+        A version checker for a new effect cannot validate an already-applied
+        effect. The owner must verify its original source/effect evidence; this
+        seam never clears a reservation or invokes the ordinary handler again.
+        """
+        if not isinstance(self.receipt_store, JsonReceiptStore):
+            return replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                           warnings=prior.outcome.warnings + ("native recovery requires the durable receipt journal",))
+        refusal = self._precondition_refusal(request, delegation)
+        try:
+            decision = self.policy_evaluator(request, delegation) if refusal is None else None
+            admitted = (
+                decision is not None and decision.admitted
+                and decision.policy_version == delegation.get("policy_version")
+                and self.token_validator(request, decision)
+            )
+        except Exception:
+            admitted = False
+        if not admitted:
+            return replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                           extensions={**prior.outcome.extensions, "recovery_admission": "refused"},
+                           warnings=prior.outcome.warnings + ("current recovery admission refused; historical effect truth retained",))
+        if (not prior.outcome.extensions.get("admission_decision_digest")
+                or decision is None
+                or _decision_digest(decision) != prior.outcome.extensions["admission_decision_digest"]):
+            return replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                           extensions={**prior.outcome.extensions, "recovery_admission": "decision_rebinding_refused"},
+                           warnings=prior.outcome.warnings + ("recovery cannot replace the originally captured kernel decision",))
+        # A new native recovery may itself perform proven namespace effects.
+        # Record uncertainty BEFORE handing off. An older NOT_APPLIED result
+        # cannot describe this new attempt after a crash. Already COMMITTED
+        # source/receipts remain immutable historical facts.
+        convergence = prior.outcome.convergence
+        if convergence is None:
+            convergence = OperationConvergence(SourceEffectStatus.UNKNOWN,
+                                               store=ConvergenceState.REBUILD_REQUIRED,
+                                               index=ConvergenceState.REBUILD_REQUIRED,
+                                               link=ConvergenceState.REBUILD_REQUIRED)
+        elif convergence.source_effect is not SourceEffectStatus.COMMITTED:
+            convergence = replace(convergence, source_effect=SourceEffectStatus.UNKNOWN,
+                                  store=ConvergenceState.REBUILD_REQUIRED,
+                                  index=ConvergenceState.REBUILD_REQUIRED,
+                                  link=ConvergenceState.REBUILD_REQUIRED)
+        pending = replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                          convergence=convergence,
+                          receipt=replace(prior.outcome.receipt, status=ReceiptStatus.PENDING)
+                          if prior.outcome.receipt else None,
+                          warnings=tuple(dict.fromkeys(prior.outcome.warnings +
+                              ("native recovery may start; reconcile its current receipt before another attempt",))))
+        try:
+            self.receipt_store.finalize(request.request_id, prior.intent_digest, pending)
+        except Exception:
+            return replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                           warnings=prior.outcome.warnings + ("recovery attempt was not durably reserved; owner was not called",))
+        prior = replace(prior, outcome=pending, in_flight=True)
+        try:
+            result = reconcile(owner_request)
+            outcome = self._owner_outcome(
+                request, str(delegation["policy_version"]), prior.intent_digest, result, delegation
+            )
+            outcome = replace(outcome, convergence=result.convergence,
+                              extensions={**outcome.extensions, "admission_decision_digest": prior.outcome.extensions["admission_decision_digest"]})
+            if result.status in {OperationStatus.REJECTED, OperationStatus.INVALID,
+                                 OperationStatus.NOT_FOUND, OperationStatus.NOT_SUPPORTED}:
+                return replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                               extensions={**prior.outcome.extensions, "recovery_admission": result.status.value},
+                               warnings=prior.outcome.warnings + result.warnings)
+            if (result.effect_receipt is None or prior.outcome.convergence is not None
+                    and prior.outcome.convergence.source_effect.value == "committed"
+                    and (outcome.convergence is None or outcome.convergence.source_effect.value != "committed")):
+                return replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                               warnings=prior.outcome.warnings + result.warnings)
+        except Exception:
+            return replace(prior.outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                           warnings=prior.outcome.warnings + ("owner receipt reconciliation remains unresolved",))
+        try:
+            self.receipt_store.finalize(request.request_id, prior.intent_digest, outcome)
+        except Exception:
+            return replace(
+                outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                receipt=replace(outcome.receipt, status=ReceiptStatus.PENDING) if outcome.receipt else None,
+                warnings=outcome.warnings + ("reconciled owner evidence is known; kernel persistence remains pending",),
             )
         return outcome
 
@@ -563,6 +728,13 @@ def _intent_digest(request: OperationRequest, delegation: Mapping[str, Any]) -> 
     return sha256(encoded).hexdigest()
 
 
+def _decision_digest(decision: PolicyDecision) -> str:
+    """Non-secret original admission identity, not a token or new authority."""
+    return sha256(json.dumps({"policy_version": decision.policy_version,
+                              "decision_token": decision.decision_token},
+                             sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def _receipt(
     request: OperationRequest,
     policy_version: str,
@@ -639,11 +811,14 @@ def _effect_receipt_extensions(value: Mapping[str, Any] | None) -> Mapping[str, 
     archival = value.get("archival")
     if isinstance(archival, Mapping):
         extensions["archival"] = dict(archival)
+    placement = value.get("placement")
+    if isinstance(placement, Mapping):
+        extensions["placement"] = dict(placement)
     write = value.get("write")
     if isinstance(write, Mapping):
         # Only server-composed, content-free owner metadata crosses into the
         # kernel summary. Arguments and bodies are never copied here.
-        fields = {"owner", "source_receipt", "policy_decision", "decision_token", "authority_receipt", "input_version", "resulting_version", "projection_repair", "effect_state"}
+        fields = {"owner", "source_receipt", "policy_decision", "decision_token", "authority_receipt", "input_version", "resulting_version", "projection_repair", "effect_state", "intent_digest"}
         extensions["write"] = {key: write[key] for key in fields if key in write}
     return extensions
 

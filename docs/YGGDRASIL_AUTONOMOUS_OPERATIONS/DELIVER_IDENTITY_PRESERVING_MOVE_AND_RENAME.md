@@ -84,6 +84,11 @@ Expired/revoked/stale/missing context, unbound token, wrong instance/root/select
 source ingress refuse. All new direct-composition producers and fixtures use the existing WSP/GOV
 selection and instance owners; no bearer, default selection, registry, role or effect lease is minted
 by the placement owner. Kernel admission still owns bounded delegation and policy.
+The dormant AUTOOPS-08 caller additionally supplies its original absolute delegation deadline as
+per-call data to `place_artifact`, `_advance` and `_seam`, including prepared recovery. This only
+narrows the existing native window. It is checked after the placement lock and at the final
+namespace/receipt/cleanup guards; it neither changes the persisted intent/generations/grant nor
+refreshes a token. Expiry retains already-applied/unknown effect evidence and owner repair truth.
 
 This bounded interface supports ordinary rewritten Markdown human notes with an existing identity.
 Receipt locators use the existing central KnowledgePort factory; paths with outer padding are
