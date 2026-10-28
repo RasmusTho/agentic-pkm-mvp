@@ -127,6 +127,35 @@ cannot establish every computed dependency; broad nightly/manual coverage remain
 `tests/scripts/test_select_pr_tests.py::test_bws_control_source_contract_keeps_ops_runtime_and_complete_proof`
 and its consumer/refusal regressions cover this exact boundary.
 
+### Native deployment-control serial coverage
+
+A diff containing at least one of `app/ops/host_secret_controller.py`,
+`app/ops/postgres_deploy.py`, `app/ops/postgres_deploy_linux.py` or
+`app/ops/postgres_deploy_host.py` may omit seven unrelated serial sibling modules.
+The complete changed-path set must fit `NATIVE_DEPLOY_CONTROL_PATHS` in the selector:
+the four sources, their explicitly listed existing test modules, and only
+`docs/OPERATIONS.md`, `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` or
+`docs/CLOUD_SECRET_PROVISIONING/README.md`. Missing/deleted or symlinked inputs,
+launcher changes, shared fixtures/helpers, excluded tests, their instance/startup/git
+producers, and any other co-change retain normal routing.
+
+This route expands the normal `tests/ops` target to its complete current test-file
+inventory, excluding only `test_git_hygiene.py`,
+`test_dormant_ownership_initialization.py`, `test_instance_state_deployment_lease.py`,
+`test_instance_state_volume_contract.py`, `test_instance_state_writer_inventory.py`,
+`test_mvr05_mixed_version_fence.py` and `test_start_full_runtime_health.py`.
+All other selected targets and runtime checks remain; `test_native_journaling_acceptance.py`
+still runs after parallel work under the unchanged serial-boundary rules. Changed tests
+remain selected. The existing bounded partitioner receives the explicit remaining Ops
+modules; the omitted modules are not moved into parallel execution.
+
+[PR #6385 CI2](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/40618058533/job/122585111569)
+measured 63m08 for Unit: its critical parallel shard took 2470.14 seconds, followed by
+1149.26 seconds for the eight-module serial boundary. The CI-only #6378 run selected
+1822 tests without that boundary and is not comparable protected-source coverage.
+Removing unrelated serial work does not establish a ten-minute supervisor/recovery
+check or a measured saving; the relevant process, journal and recovery tests remain.
+
 ## Test-only scope
 
 Ordinary changes confined to existing test modules run those complete modules, their transitive
