@@ -80,7 +80,7 @@ def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS)
                 if not isinstance(answer, dict):
                     raise ValueError("invalid answer")
                 case_id = answer.get("case_id")
-                if not isinstance(case_id, str) or case_id not in expected_ids or case_id in indexed:
+                if not isinstance(case_id, str) or case_id not in expected_ids or opaque_to_local[case_id] in indexed:
                     raise ValueError("coverage mismatch")
                 indexed[opaque_to_local[case_id]] = json.dumps({k: v for k, v in answer.items() if k != "case_id"})
 
