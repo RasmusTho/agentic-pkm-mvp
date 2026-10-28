@@ -32,7 +32,7 @@ from app.operations.read_operations import (
 
     RequestContextCarrier,
 )
-from app.retrieval.hybrid import get_store
+from app.retrieval.hybrid import get_store, reset_durable_rebuild_state
 from tests._mvr03_principal_harness import provisioned_instance
 
 ALPHA_ID = "8f6d2c1e-0000-4000-8000-00000000a1fa"
@@ -44,6 +44,9 @@ PROVENANCE = OperationProvenance(actor="operator", client="test-client", surface
 def _isolated_globals(monkeypatch: pytest.MonkeyPatch):
     import app.vault.manager as vault_manager_module
 
+    # The fixture seeds a synthetic cache, not the durable index. A retained
+    # durable-generation lineage must not rebuild it from another test's store.
+    reset_durable_rebuild_state()
     monkeypatch.setattr(vault_manager_module, "_GLOBAL_MANAGER", None)
     monkeypatch.setattr("app.retrieval.hybrid.embed_text", lambda text, language=None: [0.1, 0.1, 0.1])
     monkeypatch.setattr(
@@ -51,6 +54,7 @@ def _isolated_globals(monkeypatch: pytest.MonkeyPatch):
     )
     yield
     get_store().set_documents([])
+    reset_durable_rebuild_state()
 
 
 @pytest.fixture()
