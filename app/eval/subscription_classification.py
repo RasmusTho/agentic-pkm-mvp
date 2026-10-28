@@ -16,7 +16,7 @@ from app.eval.classification import (
     evaluate_classification_golden_set, load_classification_cases,
 )
 from app.eval.live_classification import _CLASSIFICATION_PROVIDER_OUTPUT_SCHEMA
-from app.model_access.codex_cli import CodexCliExecutor
+from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 
 MODELS = ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
 EFFORT = "low"
@@ -52,6 +52,9 @@ def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS)
     answer_schema = dict(_CLASSIFICATION_PROVIDER_OUTPUT_SCHEMA)
     answer_schema["properties"] = dict(answer_schema["properties"], case_id={"type": "string"})
     answer_schema["required"] = [*answer_schema["required"], "case_id"]
+    # The Codex safe profile permits nullable type arrays, not API anyOf schemas.
+    for field in ("action_type", "rationale"):
+        answer_schema["properties"][field] = {"type": ["string", "null"]}
     schema = {"type": "object", "properties": {"answers": {
         "type": "array", "items": answer_schema}}, "required": ["answers"],
         "additionalProperties": False}
@@ -93,7 +96,8 @@ def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS)
             run.update(complete=True, completed_cases=len(indexed), metrics=metrics,
                        hard_gate_passed=not metrics["mutation_side_confusions"],
                        cli_version=result.cli_version, safe_profile_ref=result.safe_profile_ref)
-        except Exception:
+        except Exception as exc:
+            run["failure_code"] = exc.failure_code if isinstance(exc, CodexCliError) else "invalid_response"
             # Drop provider text, partial answers, filesystem locations and errors.
             run["failure"] = "subscription_run_failed_or_invalid_coverage"
         run["batch_elapsed_seconds"] = round(time.monotonic() - start, 3)

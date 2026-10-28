@@ -19,6 +19,8 @@ class FakeExecutor:
                 if m != self.missing]
 
     def execute(self, **kwargs):
+        from app.model_access.codex_cli import _bounded_schema_snapshot
+        _bounded_schema_snapshot(kwargs["output_schema_ref"], kwargs["output_schema"], max_bytes=100000)
         self.calls.append(kwargs)
         cases_by_text = {c.utterance: c for c in load_classification_cases()}
         answers = [{"case_id": item["case_id"],
