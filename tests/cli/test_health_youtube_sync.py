@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -85,6 +86,96 @@ def test_doctor_check_reason_codes_and_redaction(monkeypatch: pytest.MonkeyPatch
     reasons = set(result["data"]["reason_codes"])
     assert {"auth_revoked", "quota_exhausted", "runner_offline", "dead_letters_present"} <= reasons
     assert "00" * 32 not in str(result)
+
+
+def test_doctor_resolves_accepted_gates_from_active_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.knowledge_acquisition.sync_observability as observed
+
+    context = object()
+    captured = {}
+
+    monkeypatch.setattr(observed, "resolve_active_vault_context", lambda: context)
+
+    def collect(**kwargs):
+        captured["vault_context"] = kwargs.get("vault_context")
+        return {
+            "status": "connected",
+            "ok": True,
+            "enabled": True,
+            "runner_enabled": True,
+            "reason_code": None,
+            "reason_codes": [],
+            "suggested_actions": [],
+        }
+
+    monkeypatch.setattr(observed, "collect_youtube_sync_status", collect)
+
+    result = _check_youtube_sync()
+
+    assert captured["vault_context"] is context
+    assert result["ok"] is True
+    assert result["data"]["enabled"] is True
+
+
+def test_resolve_active_vault_context_loads_last_active_inside_selection_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.knowledge_acquisition.sync_observability as observed
+    import app.vault.manager as vault_manager
+
+    class Manager:
+        def __init__(self) -> None:
+            self.context = SimpleNamespace(status="none")
+            self.in_selection_window = False
+            self.load_calls = 0
+
+        @contextmanager
+        def selection_window(self):
+            self.in_selection_window = True
+            try:
+                yield
+            finally:
+                self.in_selection_window = False
+
+        def load_last_active(self):
+            assert self.in_selection_window is True
+            self.load_calls += 1
+            self.context = SimpleNamespace(status="selected")
+            return self.context
+
+    manager = Manager()
+    monkeypatch.setattr(vault_manager, "get_vault_manager", lambda: manager)
+
+    context = observed.resolve_active_vault_context()
+
+    assert context is manager.context
+    assert context.status == "selected"
+    assert manager.load_calls == 1
+
+
+def test_accepted_gates_use_the_selected_vault_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.knowledge_acquisition.sync_observability as observed
+    from app.vault.settings_service import SettingsService
+
+    context = object()
+
+    def accepted(_service, received_context):
+        assert received_context is context
+        return {
+            "youtubeSync.enabled": SimpleNamespace(value=True),
+            "youtubeSync.runnerEnabled": SimpleNamespace(value=True),
+        }
+
+    monkeypatch.setattr(SettingsService, "resolve_accepted_runtime_gating", accepted)
+
+    gates = observed._accepted_gates(context)
+
+    assert gates["youtubeSync.enabled"] is True
+    assert gates["youtubeSync.runnerEnabled"] is True
 
 
 def test_stale_runner_never_reads_up_to_date() -> None:
