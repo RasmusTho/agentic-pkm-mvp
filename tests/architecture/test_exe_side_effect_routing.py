@@ -189,10 +189,10 @@ ALLOWED_DIRECT_SIDE_EFFECTS: dict[SideEffectCall, AllowedSideEffect] = {
     SideEffectCall(
         "app/agents/panel_agent/runtime.py",
         "_apply_note_writeback",
-        "note_file.write_text",
+        "write_note_from_absolute",
     ): AllowedSideEffect(
         1,
-        "Legacy panel note writeback for checkbox removal and receipts.",
+        "AUTOOPS-04 replaces the direct filesystem write with HKA expected-version CAS; autonomous composition persists GOV accountability before downstream acknowledgement.",
     ),
     SideEffectCall(
         "app/agents/panel_agent/runtime.py",

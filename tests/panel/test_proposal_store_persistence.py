@@ -81,7 +81,7 @@ def _request(
 
 
 def _runtime_result() -> MagicMock:
-    result = MagicMock()
+    result = MagicMock(spec=["actions", "emitted_events"])
     result.actions = [
         PanelRuntimeActionResult(
             id="queue_review",

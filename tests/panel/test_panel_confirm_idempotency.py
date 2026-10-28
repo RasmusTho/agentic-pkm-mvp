@@ -45,7 +45,7 @@ def _make_intent(
 
 def _mock_result(action_label: str = "tag note") -> MagicMock:
     aid = stable_action_id(action_label)
-    result = MagicMock()
+    result = MagicMock(spec=["actions", "emitted_events"])
     result.actions = [
         PanelRuntimeActionResult(id=aid, label=action_label, checked=True, status="triggered")
     ]

@@ -32,6 +32,19 @@ _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 logger = logging.getLogger(__name__)
 _TRUST_VERBS = {"ASSERT", "SUGGEST", "APPLY"}
 
+
+def _mark_action(state: PanelAgentState, note_id: str, action_id: str) -> None:
+    # The runtime commits acknowledgement only after its source CAS succeeds.
+    # Direct graph consumers retain their existing in-memory dedup behavior.
+    if not state.policy_flags.get("defer_action_acknowledgement"):
+        _IDEMPOTENCY_GUARD.mark_action(note_id, action_id)
+
+
+def commit_action_acknowledgements(state: PanelAgentState) -> None:
+    for result in state.action_results:
+        if result.checked and result.status in {"triggered", "logged"}:
+            _IDEMPOTENCY_GUARD.mark_action(state.note.uuid, result.id)
+
 # Governance-bearing capability classes / authority classes per
 # docs/CAPABILITY_CONTRACT_MODEL.md (`Cognitive mediation capability
 # classes`). Freeform LLM-proposed actions whose catalog descriptor falls in
@@ -100,10 +113,13 @@ def _build_action_result(
     status: str,
     emitted: list[str],
     reason: str | None = None,
+    admitted_owner_handoff: bool = False,
 ) -> PanelRuntimeActionResult:
     details: dict[str, Any] = {}
     if reason:
         details["reason"] = reason
+    if admitted_owner_handoff:
+        details["admitted_owner_handoff"] = True
     return PanelRuntimeActionResult(
         id=action.id,
         label=action.label,
@@ -310,7 +326,7 @@ def _handle_action(
         )
         emitted.append(logged)
         emitted_names.append(logged.event)
-        _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
+        _mark_action(state, note_id, action_to_use.id)
         return (
             _build_action_result(
                 action_to_use,
@@ -327,7 +343,7 @@ def _handle_action(
         triggered_event = _action_triggered_event(intent_event, action_to_use, target_event=target)
         emitted.extend([promote_event, triggered_event])
         emitted_names.extend([promote_event.event, triggered_event.event])
-        _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
+        _mark_action(state, note_id, action_to_use.id)
         return _build_action_result(action_to_use, status="triggered", emitted=emitted_names), emitted
 
     logged_reason = reason or "unhandled_action"
@@ -340,10 +356,11 @@ def _handle_action(
     )
     emitted.append(logged)
     emitted_names.append(logged.event)
-    _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
+    _mark_action(state, note_id, action_to_use.id)
     return (
         _build_action_result(
-            action_to_use, status="logged", emitted=emitted_names, reason=logged.payload.get("reason")
+            action_to_use, status="logged", emitted=emitted_names, reason=logged.payload.get("reason"),
+            admitted_owner_handoff=mapping is not None,
         ),
         emitted,
     )

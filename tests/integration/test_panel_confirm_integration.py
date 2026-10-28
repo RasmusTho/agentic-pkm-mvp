@@ -61,6 +61,10 @@ def client() -> TestClient:
 def _redirect_outbox(tmp_path: pathlib.Path, monkeypatch):
     outbox_file = tmp_path / "outbox.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_file))
+    # Production note writeback now uses the HKA vault-bound CAS seam. The
+    # integration fixture must name its isolated vault rather than relying on
+    # the old direct-filesystem writer accepting an unbound absolute path.
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
 
 
 # ---------------------------------------------------------------------------

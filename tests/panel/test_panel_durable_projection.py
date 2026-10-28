@@ -31,6 +31,13 @@ from app.panel.confirmation import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_source_vault(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -96,7 +103,7 @@ def _mock_execute_result(
     inverse_action_id: str | None = None,
 ) -> MagicMock:
     _id = stable_action_id(action_label)
-    result = MagicMock()
+    result = MagicMock(spec=["actions", "emitted_events"])
     details: dict = {}
     if inverse_action_id:
         details["inverse_action_id"] = inverse_action_id

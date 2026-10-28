@@ -107,7 +107,7 @@ def test_governed_mutation_receipt_is_distinct_from_event_trace(monkeypatch) -> 
     service, proposal_id, artifact_id = _make_service_with_proposal(proposal_id, artifact_id)
 
     # Patch execute_panel_intent so we do not need a real vault/LLM
-    mock_result = MagicMock()
+    mock_result = MagicMock(spec=["actions", "emitted_events"])
     mock_result.emitted_events = [{"event": "panel.intent.executed"}]
     mock_action = MagicMock()
     mock_action.checked = True

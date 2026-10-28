@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -19,11 +20,15 @@ from app.stores.plan_store import get_plan_store, reset_plan_store
 
 
 def _seed_note(note_uuid: str, markdown: str) -> None:
+    # Source writeback uses real HKA CAS; the warm mirror alone is not source.
+    source = Path(os.environ["VAULT_ROOT"]) / "vault" / f"{note_uuid}.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(markdown, encoding="utf-8")
     obj = DomainObject(
         uuid=note_uuid,
         kind="note",
         payload={"raw_text": markdown, "origin": "vault"},
-        source_ref="vault/Note.md",
+        source_ref=str(source),
         created_at=datetime.now(timezone.utc),
     )
     ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-panel-planner")
@@ -81,7 +86,10 @@ def _read_outbox(outbox_path: Path) -> list[dict]:
 
 
 @pytest.fixture(autouse=True)
-def clear_stores() -> None:
+def clear_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
     object_store_module._MEMORY_STORE.clear()
     reset_plan_store()
 
@@ -228,7 +236,7 @@ def test_execute_panel_intent_planner_creates_plan(tmp_path: Path, monkeypatch: 
     assert plan.steps[0].metadata["ordered_contract"] == "panel.ordered.v1"
 
 
-def test_execute_panel_intent_planner_includes_logged_selected_actions(
+def test_execute_panel_intent_planner_excludes_unmapped_logged_actions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     note_uuid = str(uuid4())
@@ -255,10 +263,6 @@ def test_execute_panel_intent_planner_includes_logged_selected_actions(
     plans = store.list_by_event(events[0].event_id)
     assert len(plans) == 1
     plan = plans[0]
-    assert [step.id for step in plan.steps] == ["step-1", "step-2"]
-    assert [step.metadata["action_id"] for step in plan.steps] == [
-        "promote.evergreen",
-        "archive this note",
-    ]
-    assert plan.steps[1].kind == "note"
-    assert plan.steps[1].depends_on == ["step-1"]
+    assert [step.id for step in plan.steps] == ["step-1"]
+    assert [step.metadata["action_id"] for step in plan.steps] == ["promote.evergreen"]
+    assert not any(step.metadata.get("action_id") == "archive this note" for step in plan.steps)

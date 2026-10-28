@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from html.parser import HTMLParser
 import json
@@ -214,8 +215,10 @@ def test_panel_confirmation_requires_actual_triggered_action_for_execution(
     assert ('data-receipt-state="applied"' in html) is (case == "triggered")
 
 
+@pytest.mark.parametrize("sink_failure", ["raise", "refuse"])
 def test_unacknowledged_service_result_cannot_repeat_from_another_ui_clone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product_model_access_gateway: Any,
+    sink_failure: str,
 ) -> None:
     """Actual route/service/proxy proof; no qualified live execution is claimed."""
     from fastapi.testclient import TestClient
@@ -257,6 +260,8 @@ def test_unacknowledged_service_result_cannot_repeat_from_another_ui_clone(
     def receipt_failure(path, event, **kwargs):
         if event.event == "panel.action.logged":
             receipt_attempts.append(event)
+            if sink_failure == "refuse":
+                return False
             raise confirmation.PanelReceiptPersistenceError("bounded receipt sink fault")
         return append(path, event, **kwargs)
 
@@ -289,7 +294,19 @@ def test_unacknowledged_service_result_cannot_repeat_from_another_ui_clone(
         server.server_close()
     assert statuses == [500] and len(executions) == 1
     assert len(receipt_attempts) == 1
-    assert store.get(proposal) is not None and idem.get("key-1") is None
+    recovery = idem.get("key-1")
+    assert store.get(proposal) is None
+    assert recovery is not None and recovery.status == "recovery_required"
+    assert recovery.source_state == "committed" and recovery.source_receipt is not None
+    # The source was committed before the sink fault. A second consumer must
+    # receive the same withheld acknowledgement without executing it again.
+    replay = api.post("/api/panel/confirm", json={
+        "proposal_id": proposal, "artifact_id": artifact,
+        "action": "confirm", "idempotency_key": "key-1",
+    })
+    assert replay.status_code == 500
+    assert replay.json()["detail"]["source_receipt"] == asdict(recovery.source_receipt)
+    assert len(executions) == 1 and len(receipt_attempts) == 1
     assert sum(c["options"]["method"] == "POST" for c in result["calls"]) == 1
     assert all(r["disabled"] == "true" and r["html"] is None for r in result["rows"])
 

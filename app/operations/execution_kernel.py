@@ -22,6 +22,7 @@ from app.archival.contracts import ArtifactClass, LivenessState, PolicyProfile, 
 
 from .contracts import (
     OperationItemOutcome,
+    OperationConvergence,
     OperationOutcome,
     OperationReceipt,
     OperationRequest,
@@ -59,6 +60,7 @@ class OwnerExecutionResult:
     warnings: tuple[str, ...] = ()
     effect_id: str | None = None
     effect_receipt: Mapping[str, Any] | None = None
+    convergence: OperationConvergence | None = None
 
     @classmethod
     def succeeded(
@@ -365,16 +367,14 @@ class OperationExecutionKernel:
             outcome = self._owner_outcome(
                 request, decision.policy_version, intent_digest, owner_result, delegation
             )
+            outcome = replace(outcome, convergence=owner_result.convergence)
         try:
             self.receipt_store.finalize(request.request_id, intent_digest, outcome)
         except Exception:
-            return self._outcome(
-                request,
-                OperationStatus.RECOVERY_REQUIRED,
-                receipt=_receipt(
-                    request, decision.policy_version, intent_digest, "applied_receipt_pending"
-                ),
-                warnings=("owner result requires durable receipt reconciliation",),
+            return replace(
+                outcome, status=OperationStatus.RECOVERY_REQUIRED,
+                receipt=replace(outcome.receipt, status=ReceiptStatus.PENDING, payload={**outcome.receipt.payload, "state": "applied_receipt_pending", "recovery": "read_receipt_before_retry"}) if outcome.receipt else None,
+                warnings=outcome.warnings + ("owner result requires durable receipt reconciliation",),
             )
         return outcome
 
@@ -475,7 +475,7 @@ class OperationExecutionKernel:
         result: OwnerExecutionResult,
         delegation: Mapping[str, Any],
     ) -> OperationOutcome:
-        if result.status is OperationStatus.SUCCEEDED:
+        if result.status in {OperationStatus.SUCCEEDED, OperationStatus.CONVERGENCE_PENDING}:
             if not _has_durable_owner_effect_receipt(result):
                 return self._outcome(
                     request,
@@ -504,7 +504,7 @@ class OperationExecutionKernel:
                     request,
                     policy_version,
                     intent_digest,
-                    "completed",
+                    "completed" if result.status is OperationStatus.SUCCEEDED else "convergence_pending",
                     delegation,
                     result.effect_id,
                     result.effect_receipt,
@@ -517,7 +517,8 @@ class OperationExecutionKernel:
                 result.status,
                 items=_redact_items(result.items),
                 receipt=_receipt(
-                    request, policy_version, intent_digest, "recovery_required", delegation
+                    request, policy_version, intent_digest, "recovery_required", delegation,
+                    result.effect_id, result.effect_receipt,
                 ),
                 warnings=result.warnings + ("read receipt before retry",),
             )
@@ -526,7 +527,8 @@ class OperationExecutionKernel:
             result.status,
             items=_redact_items(result.items),
             receipt=_receipt(
-                request, policy_version, intent_digest, "not_acknowledged", delegation
+                request, policy_version, intent_digest, "not_acknowledged", delegation,
+                result.effect_id, result.effect_receipt,
             ),
             warnings=result.warnings,
         )
@@ -545,6 +547,7 @@ class OperationExecutionKernel:
             status,
             request.operation_id,
             request.context,
+            provenance=request.provenance,
             items=items,
             receipt=receipt,
             warnings=warnings,
@@ -574,7 +577,7 @@ def _receipt(
         receipt_id=None
         if delegation is None or delegation.get("receipt_ref") is None
         else str(delegation["receipt_ref"]),
-        status=ReceiptStatus.COMMITTED if state == "completed" else ReceiptStatus.PENDING,
+        status=ReceiptStatus.COMMITTED if state in {"completed", "convergence_pending"} else ReceiptStatus.PENDING,
         payload={
             "request_id": request.request_id,
             "operation_id": request.operation_id,
@@ -632,10 +635,17 @@ def _effect_receipt_extensions(value: Mapping[str, Any] | None) -> Mapping[str, 
     """
     if not isinstance(value, Mapping):
         return {}
+    extensions: dict[str, Any] = {}
     archival = value.get("archival")
-    if not isinstance(archival, Mapping):
-        return {}
-    return {"archival": dict(archival)}
+    if isinstance(archival, Mapping):
+        extensions["archival"] = dict(archival)
+    write = value.get("write")
+    if isinstance(write, Mapping):
+        # Only server-composed, content-free owner metadata crosses into the
+        # kernel summary. Arguments and bodies are never copied here.
+        fields = {"owner", "source_receipt", "policy_decision", "decision_token", "authority_receipt", "input_version", "resulting_version", "projection_repair", "effect_state"}
+        extensions["write"] = {key: write[key] for key in fields if key in write}
+    return extensions
 
 
 def _has_durable_owner_effect_receipt(result: OwnerExecutionResult) -> bool:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -94,7 +95,16 @@ async def panel_confirm(
         # target under the seal: fail closed rather than let confirm run.
         raise capability_not_ready()
     try:
-        return confirm_module._service.confirm(request)
+        response = confirm_module._service.confirm(request)
+        if response.status == "recovery_required":
+            raise HTTPException(status_code=500, detail={
+                "error": response.error or "panel_recovery_required", "state": "not_acknowledged",
+                "message": "The source or confirmation accountability requires reconciliation; do not retry the source.",
+                "trace_id": response.trace_id,
+                "source_state": response.source_state,
+                "source_receipt": asdict(response.source_receipt) if response.source_receipt else None,
+            })
+        return response
     except RestageRequiredError as exc:
         raise HTTPException(
             status_code=409,

@@ -20,7 +20,7 @@ from app.agents.panel.writeback import (
     write_receipts,
 )
 from app.agents.panel.parser import parse_panel
-from app.agents.panel_agent.graph import run_panel_graph
+from app.agents.panel_agent.graph import commit_action_acknowledgements, run_panel_graph
 from app.agents.panel_agent.intent import PanelActionIntent
 from app.agents.panel_agent.planning import plan_panel_actions
 from app.agents.panel_agent.settings import get_panel_agent_decider, get_panel_agent_pipeline
@@ -39,12 +39,19 @@ from app.services.outbox import (
     write_outbox_event,
 )
 from app.objects import ObjectStore
-from app.write_guard import DEFAULT_WRITE_GUARD
+from app.knowledge.contracts import WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
+from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 logger = logging.getLogger(__name__)
 
 # No-match dedup marker (issue #1012). Char class follows #979 pattern: [A-Za-z0-9_.-]+
 _NO_MATCH_MARKER_TPL = "<!--ai:no-match={hash}-->"
+_FALLBACK_REASONS = {
+    "unmapped_action", "unknown_mapping", "ambiguous_action", "watcher_not_allowed",
+    "trust_verb_missing", "trust_verb_invalid", "admission_required",
+}
 
 
 def _no_match_marker(instruction: str) -> str:
@@ -119,6 +126,12 @@ class PanelRuntimeResult(BaseModel):
     actions: list[PanelRuntimeActionResult] = Field(default_factory=list)
     emitted_events: list[Any] = Field(default_factory=list)
     log_entry: PanelLogEntry | None = None
+    source_receipt: WriteReceipt | None = None
+    source_state: str = "not_applied"
+    source_failure: str | None = None
+    projection_state: str = "not_required"
+    downstream_state: str = "not_required"
+    acknowledgement_error: str | None = None
 
 
 def execute_panel_intent(
@@ -129,6 +142,8 @@ def execute_panel_intent(
     vault_uuid: str | None = None,
     allow_legacy_promotion_without_trust_verb: bool = False,
     producing_binding_id: str | None = None,
+    expected_version: str | None = None,
+    source_receipt_sink: Callable[[WriteReceipt], None] | None = None,
 ) -> PanelRuntimeResult:
     # Guard-at-seam (#2808, formal-model.md Divergence F-A): assert WriteGuard
     # here, at the write seam itself, before any filesystem mutation. API
@@ -146,6 +161,7 @@ def execute_panel_intent(
     policy_flags = {
         "execution_mode": "watcher" if intent_event.source.trigger == "watcher" else "manual",
         "allow_legacy_promotion_without_trust_verb": allow_legacy_promotion_without_trust_verb,
+        "defer_action_acknowledgement": True,
     }
     resolved_outbox = _resolve_outbox_path(outbox_path)
     catalog = load_panel_action_catalog()
@@ -205,6 +221,17 @@ def execute_panel_intent(
         except VaultRootMisconfiguredError:
             vault_root = None
 
+    # An operation caller's version is a precondition, never a hint to replace
+    # with a newer read. Check before preparing any downstream effects; HKA
+    # repeats the comparison atomically at the source mutation boundary.
+    if expected_version is not None:
+        note_file = _resolve_note_file(source_intent_event.payload.note.path, vault_root)
+        if note_file is None or vault_root is None:
+            return PanelRuntimeResult(intent=intent_event, source_failure="not_found")
+        _, observed_version = read_note_text_with_version(note_file)
+        if observed_version != expected_version:
+            return PanelRuntimeResult(intent=intent_event, source_failure="conflicted")
+
     if any(action.id == "profile.apply_proposal" for action in source_actions):
         from app.agents.profile_agent.runtime import execute_profile_panel_actions
 
@@ -258,11 +285,22 @@ def execute_panel_intent(
     )
     state = run_panel_graph(initial_state, decider_mode=decider_mode)
 
+    # Admission belongs to the graph. A logged result may be its explicit
+    # catalogue-authorized async owner handoff, or a refusal. Reuse one set
+    # for direct and planner dispatch instead of interpreting status as policy.
+    admitted_action_ids = {
+        result.id for result in state.action_results
+        if result.checked and (
+            result.status == "triggered"
+            or (result.details or {}).get("admitted_owner_handoff") is True
+        )
+    }
+
     pipeline_mode = get_panel_agent_pipeline()
     if pipeline_mode == "planner":
         planned_action_ids: list[str] = []
         for result in state.action_results:
-            if not result.checked or result.status not in {"triggered", "logged"}:
+            if result.id not in admitted_action_ids:
                 continue
             if result.id not in planned_action_ids:
                 planned_action_ids.append(result.id)
@@ -275,7 +313,6 @@ def execute_panel_intent(
                 resolved_actions=resolved_actions,
                 source="panel_agent",
             )
-            plan_panel_actions(state.panel_action_intent, event_id=intent_event.event_id, trace_id=intent_event.trace_id)
 
     emitted_events = list(state.emitted_events or [])
     existing_topics = {
@@ -283,7 +320,7 @@ def execute_panel_intent(
         for event in emitted_events
     }
     for action in intent_event.payload.actions:
-        if not action.checked:
+        if not action.checked or action.id not in admitted_action_ids:
             continue
         mapping = getattr(action, "mapping", None)
         downstream = getattr(mapping, "downstream_event", None) if mapping is not None else None
@@ -304,7 +341,7 @@ def execute_panel_intent(
         )
     if not emitted_events:
         for action in intent_event.payload.actions:
-            if not action.checked:
+            if not action.checked or action.id not in admitted_action_ids:
                 continue
             mapping = getattr(action, "mapping", None)
             downstream = getattr(mapping, "downstream_event", None) if mapping is not None else None
@@ -342,20 +379,70 @@ def execute_panel_intent(
             )
         ]
 
-    _write_db_outbox_events(emitted_events)
-    for event in emitted_events:
-        append_jsonl_outbox_event(resolved_outbox, event, default_source="panel_agent.runtime")
-    if state.log_entry:
-        _persist_log(intent_event.payload.note, state.log_entry)
+    # Prepare above, source write below, acknowledgement last. A staged conflict
+    # is a known refusal; receiptless CAS failures can have linearized already.
+    try:
+        source_receipt = _apply_note_writeback(
+            state, note_text, vault_root, vault_uuid=vault_uuid,
+            expected_version=expected_version,
+            acknowledgement_pending=source_receipt_sink is not None,
+        )
+    except KnowledgeWriteConflict as exc:
+        staged = exc.receipt is not None and exc.receipt.outcome == "conflict_staged"
+        return PanelRuntimeResult(
+            intent=intent_event, actions=state.action_results,
+            source_receipt=exc.receipt,
+            source_state="not_applied" if staged else "unknown",
+            source_failure="conflicted" if staged else "recovery_required",
+        )
+    except WritesBlockedError:
+        return PanelRuntimeResult(intent=intent_event, actions=state.action_results, source_failure="rejected")
+    except Exception:
+        return PanelRuntimeResult(intent=intent_event, actions=state.action_results, source_state="unknown", source_failure="recovery_required")
 
-    # --- Panel writeback: remove executed checkboxes and write receipts ---
-    _apply_note_writeback(state, note_text, vault_root, vault_uuid=vault_uuid)
+    acknowledgement_error = None
+    try:
+        # A dormant autonomous composition supplies existing GOV accountability
+        # here, after HKA's receipt and before any notification/acknowledgement.
+        # Human Panel/Canvas paths acquire no new mandatory token or callback.
+        if source_receipt is not None and source_receipt_sink is not None:
+            source_receipt_sink(source_receipt)
+        if source_receipt is not None:
+            done = [r.label for r in state.action_results if r.checked and r.status in {"triggered", "logged"} and (r.details or {}).get("reason") not in _FALLBACK_REASONS]
+            upsert_executed_ids(state.note.uuid, [stable_action_id(label) for label in done])
+            note_file = _resolve_note_file(state.note.path, vault_root)
+            if note_file is not None:
+                _refresh_companion_hash(vault_uuid or state.note.uuid, note_file.read_text(encoding="utf-8"), vault_root, note_file)
+        if pipeline_mode == "planner" and state.panel_action_intent is not None:
+            plan_panel_actions(state.panel_action_intent, event_id=intent_event.event_id, trace_id=intent_event.trace_id)
+        _write_db_outbox_events(emitted_events)
+        acknowledgement_error = "authority_receipt_persistence_failed"
+        for event in emitted_events:
+            if not append_jsonl_outbox_event(resolved_outbox, event, default_source="panel_agent.runtime"):
+                raise RuntimeError("Panel notification was not persisted")
+        acknowledgement_error = None
+        if state.log_entry:
+            _persist_log(intent_event.payload.note, state.log_entry)
+        commit_action_acknowledgements(state)
+    except Exception:
+        return PanelRuntimeResult(
+            intent=intent_event, actions=state.action_results,
+            source_receipt=source_receipt,
+            source_state="committed" if source_receipt else "not_applied",
+            source_failure="recovery_required", projection_state="rebuild_required",
+            downstream_state="unknown",
+            acknowledgement_error=acknowledgement_error,
+        )
 
     return PanelRuntimeResult(
         intent=intent_event,
         actions=state.action_results,
         emitted_events=emitted_events,
         log_entry=state.log_entry,
+        source_receipt=source_receipt,
+        source_state="committed" if source_receipt else "not_applied",
+        projection_state="pending" if source_receipt else "not_required",
+        downstream_state="queued" if admitted_action_ids else "not_required",
     )
 
 
@@ -531,7 +618,9 @@ def _apply_note_writeback(
     vault_root: Path | None,
     *,
     vault_uuid: str | None = None,
-) -> None:
+    expected_version: str | None = None,
+    acknowledgement_pending: bool = False,
+) -> WriteReceipt | None:
     """Remove executed checkboxes, write proposal suggestions, write receipts, and persist to vault file.
 
     This mirrors the writeback contract that ``handle_note_update`` applies in the
@@ -559,16 +648,6 @@ def _apply_note_writeback(
     # as bounded fallback receipts (#980). Other "logged" outcomes (e.g. zone_move
     # routed through the action layer) are treated as queued, matching pre-#980
     # behavior.
-    _FALLBACK_REASONS = {
-        "unmapped_action",
-        "unknown_mapping",
-        "ambiguous_action",
-        "watcher_not_allowed",
-        "trust_verb_missing",
-        "trust_verb_invalid",
-        "admission_required",
-    }
-
     for result in state.action_results:
         if result.checked and result.status in {"triggered", "logged"}:
             reason = str((result.details or {}).get("reason") or "")
@@ -602,24 +681,15 @@ def _apply_note_writeback(
     ):
         return
 
-    note_uuid = state.note.uuid
     note_path_str = state.note.path
 
     note_file = _resolve_note_file(note_path_str, vault_root)
     if note_file is None:
-        logger.warning(
-            "panel writeback skipped (cannot resolve note file) note_uuid=%s note_path=%s",
-            note_uuid,
-            note_path_str,
-        )
-        return
+        raise FileNotFoundError("Panel source note is unavailable")
 
     # Re-read current file content to pick up any concurrent changes (e.g. uuid healing).
-    try:
-        current_text = note_file.read_text(encoding="utf-8")
-    except OSError:
-        logger.warning("panel writeback skipped (cannot read note) note_path=%s", note_file)
-        return
+    current_text, observed_version = read_note_text_with_version(note_file)
+    expected_version = expected_version if expected_version is not None else observed_version
 
     # Suppress duplicate no-match receipt when instruction is unchanged (#1012).
     _instruction = state.panel.instruction or ""
@@ -681,6 +751,10 @@ def _apply_note_writeback(
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     receipts = [f"\u2705 {label} ({now_str})" for label in executed_labels]
     receipts += [f"\u23f3 {label} (queued, {now_str})" for label in queued_labels]
+    if acknowledgement_pending:
+        # The operation's GOV/notification checkpoint follows this very source
+        # write. Its diagnostic block cannot already claim queued or executed.
+        receipts = [f"\u23f3 {label} (pending owner acknowledgement, {now_str})" for label in executed_labels + queued_labels]
     # Proposal-offered receipts: visible suggestion line in AI status block.
     # Only emit for proposals that are newly inserted this pass; duplicate
     # proposals on rerun stay silent so receipt blocks remain bounded.
@@ -708,19 +782,12 @@ def _apply_note_writeback(
 
     updated = write_receipts(updated, receipts, preferred_index=preferred_index)
 
-    # Write to disk.
-    try:
-        note_file.write_text(updated, encoding="utf-8")
-    except OSError:
-        logger.warning("panel writeback failed (write error) note_path=%s", note_file)
-        return
-
-    # Persist executed/queued IDs so reruns are idempotent.
-    all_done_labels = executed_labels + queued_labels
-    upsert_executed_ids(note_uuid, [stable_action_id(label) for label in all_done_labels])
-
-    # Refresh companion content_hash so it reflects the post-writeback content.
-    _refresh_companion_hash(vault_uuid or note_uuid, updated, vault_root, note_file)
+    if vault_root is None:
+        raise FileNotFoundError("Panel source vault is unavailable")
+    source_receipt = write_note_from_absolute(
+        note_file, updated, vault_root=vault_root, action="panel.writeback",
+        expected_version=expected_version, writer_identity="panel_agent.runtime",
+    )
 
     logger.info(
         "panel writeback applied note_path=%s removed=%d receipts=%d proposals=%d fallbacks=%d no_match=%s",
@@ -731,6 +798,7 @@ def _apply_note_writeback(
         len(fallback_labels),
         no_match_visible,
     )
+    return source_receipt
 
 
 def _refresh_companion_hash(
@@ -779,7 +847,8 @@ def _refresh_companion_hash(
         companion.content_hash = new_hash
         write_companion(vault_root, companion)
     except Exception:
-        logger.debug("companion hash refresh skipped note_uuid=%s", note_uuid, exc_info=True)
+        logger.debug("companion hash refresh failed note_uuid=%s", note_uuid, exc_info=True)
+        raise
 
 
 __all__ = ["execute_panel_intent", "PanelRuntimeResult"]

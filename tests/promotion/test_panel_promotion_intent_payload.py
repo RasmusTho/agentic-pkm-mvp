@@ -10,6 +10,7 @@ import pytest
 from app.agents.panel_agent import execute_panel_intent, run_panel_intent_for_note
 from app import objects as object_store_module
 from app.objects import DomainObject, ObjectStore
+from tests.api._vault_test_helpers import bind_initialized_vault
 
 pytestmark = pytest.mark.not_pg
 
@@ -30,13 +31,19 @@ def test_panel_promote_intent_payload_is_queue_compatible(tmp_path: Path, monkey
     object_store_module._MEMORY_STORE.clear()
 
     note_uuid = str(uuid4())
-    markdown = """%% AI:Start %%
+    markdown = f"---\nuuid: {note_uuid}\nkind: note\n---\n" + """%% AI:Start %%
 ## AI-instruktion
 Please promote this note.
 ## AI-åtgärder
 - [x] Gör denna anteckning evergreen
 %% AI:End %%
 """
+    # The real runtime now commits through HKA CAS before releasing this event.
+    # An ObjectStore row alone is not an authoritative source note.
+    bind_initialized_vault(monkeypatch, tmp_path)
+    note_path = tmp_path / "vault/Note.md"
+    note_path.parent.mkdir()
+    note_path.write_text(markdown, encoding="utf-8")
     _seed_note(note_uuid, markdown)
 
     settings_path = tmp_path / "panel-actions.md"

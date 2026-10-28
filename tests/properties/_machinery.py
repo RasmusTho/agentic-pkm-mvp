@@ -74,7 +74,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "note refresh; the mutating vault-sync path (T-sync) already emitted "
         "ingest.object.* for this note earlier in the same tick."
     ),
-    ("app/agents/panel_agent/runtime.py", 112): (
+    ("app/agents/panel_agent/runtime.py", 119): (
         "_persist_log: appends an in-payload panel_logs entry (observability, not new "
         "domain content); the panel action itself emits panel.action.logged/blocked "
         "via _write_db_outbox_events in the same runtime module."
@@ -1751,7 +1751,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "preserves_existing_payload: panel execution updates from dict(existing.payload or {}); "
         "save_object -> store_objects."
     ),
-    ("app/agents/panel_agent/runtime.py", 112): (
+    ("app/agents/panel_agent/runtime.py", 119): (
         "preserves_existing_payload: _persist_log appends to dict(existing.payload); save_object -> "
         "store_objects; episode_ref preserved."
     ),

@@ -457,7 +457,7 @@ def test_note_move_workbench_downstream_event_is_wired() -> None:
     )
 
 
-def test_execute_panel_intent_emits_note_move_workbench(tmp_path: Path) -> None:
+def test_execute_panel_intent_emits_note_move_workbench(tmp_path: Path, monkeypatch) -> None:
     """execute_panel_intent must emit note.move.workbench when a zone_move action is checked.
 
     Addresses Codex review concern: the graph logs 'unhandled_action' for zone_move intent
@@ -466,6 +466,10 @@ def test_execute_panel_intent_emits_note_move_workbench(tmp_path: Path) -> None:
     """
     import uuid
     from unittest.mock import patch, MagicMock as _MagicMock
+
+    # This is an admitted rule-path handoff test; cognition refusal has separate
+    # coverage and must not be bypassed by unconditional downstream emission.
+    monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
 
     from app.agents.panel_agent import execute_panel_intent
     from app.components.settings.panel_actions_loader import (
@@ -514,7 +518,7 @@ def test_execute_panel_intent_emits_note_move_workbench(tmp_path: Path) -> None:
         patch("app.agents.panel_agent.runtime.ObjectStore", return_value=dummy_store),
         patch("app.agents.panel_agent.runtime._write_db_outbox_events"),
         patch("app.agents.panel_agent.runtime._persist_log"),
-        patch("app.agents.panel_agent.runtime._apply_note_writeback"),
+        patch("app.agents.panel_agent.runtime._apply_note_writeback", return_value=None),
         patch("app.agents.panel_agent.runtime.load_panel_action_catalog", return_value=PanelActionCatalog.from_descriptors([
             PanelActionDescriptor(
                 id="note.move.workbench",

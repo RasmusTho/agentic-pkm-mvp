@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -32,6 +32,7 @@ from app.events.schema import make_outbox_event
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.instance.compatibility_binding import legacy_view_bindings, live_compatibility_binding_id
 from app.outbox.events import INDEX_OUTBOX_PATH
+from app.knowledge.contracts import WriteReceipt
 from app.receipts.artifact_receipts import stamp_producing_binding
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
@@ -244,6 +245,7 @@ class ConfirmRequest(BaseModel):
     action: str
     idempotency_key: str = Field(min_length=1)
     correction: CorrectionFields | None = None
+    expected_version: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _validate_action(self) -> "ConfirmRequest":
@@ -294,6 +296,11 @@ class ConfirmResponse(BaseModel):
     error: str | None = None
     idempotency_key: str
     events_emitted: list[str] = Field(default_factory=list)
+    source_receipt: WriteReceipt | None = None
+    source_state: str = "not_applied"
+    projection_state: str = "not_required"
+    downstream_state: str = "not_required"
+    trace_id: str | None = None
     # Receipt-visibility posture for the operational loop. Derived from status
     # when not explicitly provided; the UI surfaces this as visibility, not as
     # durable approval/execution authority.
@@ -934,6 +941,109 @@ def _write_blocked_projection(
         logger.debug("blocked projection vault write failed note_path=%s", note_path)
 
 
+def _build_confirmation_response(request: ConfirmRequest, proposal: StagedProposal, result: Any) -> ConfirmResponse:
+    emitted_events = list(result.emitted_events or [])
+    events = [_event_name(e) for e in emitted_events]
+
+    # Execution requires a checked action that actually triggered. Empty
+    # results and no-match/log events record a decision, not execution.
+    checked_actions = [a for a in result.actions if a.checked]
+    any_triggered = any(a.status == "triggered" for a in checked_actions)
+
+    now_iso = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+    is_corrected = bool(request.correction and request.correction.enabled)
+    correction_note = "corrected" if is_corrected else None
+    receipt_id: str | None
+
+    if not any_triggered:
+        # Logged outcome: emit panel.action.logged if not already present
+        if "panel.action.logged" not in events:
+            receipt_id = _emit_projection_event(
+                "panel.action.logged",
+                {
+                    "note_uuid": proposal.intent_event.payload.note.uuid,
+                    "note_path": proposal.intent_event.payload.note.path,
+                    "proposal_id": request.proposal_id,
+                },
+                trace_id=proposal.trace_id or request.idempotency_key,
+            )
+            events.append("panel.action.logged")
+        else:
+            receipt_id = _first_event_receipt_id(emitted_events, "panel.action.logged")
+            if receipt_id is None:
+                receipt_id = _emit_projection_event(
+                    "panel.action.logged",
+                    {
+                        "note_uuid": proposal.intent_event.payload.note.uuid,
+                        "note_path": proposal.intent_event.payload.note.path,
+                        "proposal_id": request.proposal_id,
+                    },
+                    trace_id=proposal.trace_id or request.idempotency_key,
+                )
+        receipt = Receipt(
+            receipt_id=receipt_id,
+            action_taken="confirm",
+            outcome="logged",
+            timestamp=now_iso,
+            message=correction_note,
+        )
+        resp = ConfirmResponse(
+            proposal_id=request.proposal_id,
+            artifact_id=request.artifact_id,
+            status="logged",
+            outcome="logged",
+            receipt=receipt,
+            idempotency_key=request.idempotency_key,
+            events_emitted=events,
+        )
+    else:
+        # Executed outcome: extract inverse_action from result if declared.
+        inverse_action: str | None = None
+        for action_result in result.actions:
+            inv = (action_result.details or {}).get("inverse_action_id")
+            if inv:
+                inverse_action = str(inv)
+                break
+
+        receipt_id = request.idempotency_key
+        if "panel.action.logged" not in events:
+            receipt_id = _emit_projection_event(
+                "panel.action.logged",
+                {
+                    "note_uuid": proposal.intent_event.payload.note.uuid,
+                    "note_path": proposal.intent_event.payload.note.path,
+                    "proposal_id": request.proposal_id,
+                    "status": "success",
+                    "outcome": "success",
+                },
+                trace_id=proposal.trace_id or request.idempotency_key,
+            )
+            events.append("panel.action.logged")
+        else:
+            receipt_id = _first_event_receipt_id(emitted_events, "panel.action.logged") or receipt_id
+
+        receipt = Receipt(
+            receipt_id=receipt_id,
+            action_taken="confirm",
+            outcome="success",
+            timestamp=now_iso,
+            inverse_action=inverse_action,
+            message=correction_note,
+        )
+        resp = ConfirmResponse(
+            proposal_id=request.proposal_id,
+            artifact_id=request.artifact_id,
+            status="executed",
+            outcome="success",
+            receipt=receipt,
+            idempotency_key=request.idempotency_key,
+            events_emitted=events,
+        )
+
+    return resp
+
+
 class PanelConfirmationService:
     def __init__(
         self,
@@ -947,7 +1057,7 @@ class PanelConfirmationService:
         self._guard = write_guard or DEFAULT_WRITE_GUARD
         self._ttl = same_turn_ttl
 
-    def confirm(self, request: ConfirmRequest) -> ConfirmResponse:
+    def confirm(self, request: ConfirmRequest, *, vault_root: Path | None = None, source_receipt_sink: Callable[[WriteReceipt], None] | None = None) -> ConfirmResponse:
         live = live_compatibility_binding_id()
         # Once a registry binding is live, only a response stamped with that exact
         # binding is a replay of this vault's operation; an unstamped or other-binding
@@ -1039,110 +1149,60 @@ class PanelConfirmationService:
 
         import app.panel.confirmation as _self_mod
 
+        event = proposal.intent_event
         if request.correction and request.correction.enabled:
-            corrected_event = _apply_correction(proposal.intent_event, request.correction)
-            result = _self_mod.execute_panel_intent(corrected_event)
-        else:
-            result = _self_mod.execute_panel_intent(proposal.intent_event)
-        emitted_events = list(result.emitted_events or [])
-        events = [_event_name(e) for e in emitted_events]
-
-        # Execution requires a checked action that actually triggered. Empty
-        # results and no-match/log events record a decision, not execution.
-        checked_actions = [a for a in result.actions if a.checked]
-        any_triggered = any(a.status == "triggered" for a in checked_actions)
-
-        now_iso = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
-
-        is_corrected = bool(request.correction and request.correction.enabled)
-        correction_note = "corrected" if is_corrected else None
-        receipt_id: str | None
-
-        if not any_triggered:
-            # Logged outcome: emit panel.action.logged if not already present
-            if "panel.action.logged" not in events:
-                receipt_id = _emit_projection_event(
-                    "panel.action.logged",
-                    {
-                        "note_uuid": proposal.intent_event.payload.note.uuid,
-                        "note_path": proposal.intent_event.payload.note.path,
-                        "proposal_id": request.proposal_id,
-                    },
-                    trace_id=proposal.trace_id or request.idempotency_key,
-                )
-                events.append("panel.action.logged")
-            else:
-                receipt_id = _first_event_receipt_id(emitted_events, "panel.action.logged")
-                if receipt_id is None:
-                    receipt_id = _emit_projection_event(
-                        "panel.action.logged",
-                        {
-                            "note_uuid": proposal.intent_event.payload.note.uuid,
-                            "note_path": proposal.intent_event.payload.note.path,
-                            "proposal_id": request.proposal_id,
-                        },
-                        trace_id=proposal.trace_id or request.idempotency_key,
-                    )
-            receipt = Receipt(
-                receipt_id=receipt_id,
-                action_taken="confirm",
-                outcome="logged",
-                timestamp=now_iso,
-                message=correction_note,
-            )
+            event = _apply_correction(event, request.correction)
+        # Preserve legacy direct consumers while threading a supplied source
+        # precondition unchanged into the real writer. The root is server-owned.
+        runtime_kwargs: dict[str, Any] = {}
+        if request.expected_version is not None:
+            runtime_kwargs["expected_version"] = request.expected_version
+        if vault_root is not None:
+            runtime_kwargs["vault_root"] = vault_root
+        if source_receipt_sink is not None:
+            runtime_kwargs["source_receipt_sink"] = source_receipt_sink
+        result = _self_mod.execute_panel_intent(event, **runtime_kwargs)
+        source_receipt = getattr(result, "source_receipt", None)
+        source_state = getattr(result, "source_state", "not_applied")
+        projection_state = getattr(result, "projection_state", "not_required")
+        source_failure = getattr(result, "source_failure", None)
+        if source_failure:
             resp = ConfirmResponse(
-                proposal_id=request.proposal_id,
-                artifact_id=request.artifact_id,
-                status="logged",
-                outcome="logged",
-                receipt=receipt,
+                proposal_id=request.proposal_id, artifact_id=request.artifact_id,
+                status=source_failure, outcome=source_failure,
+                error=getattr(result, "acknowledgement_error", None) or "panel_source_reconciliation_required",
+                trace_id=proposal.trace_id or request.idempotency_key,
                 idempotency_key=request.idempotency_key,
-                events_emitted=events,
+                source_receipt=source_receipt, source_state=source_state,
+                projection_state=projection_state,
+                downstream_state=getattr(result, "downstream_state", "unknown"),
             )
-        else:
-            # Executed outcome: extract inverse_action from result if declared.
-            inverse_action: str | None = None
-            for action_result in result.actions:
-                inv = (action_result.details or {}).get("inverse_action_id")
-                if inv:
-                    inverse_action = str(inv)
-                    break
-
-            receipt_id = request.idempotency_key
-            if "panel.action.logged" not in events:
-                receipt_id = _emit_projection_event(
-                    "panel.action.logged",
-                    {
-                        "note_uuid": proposal.intent_event.payload.note.uuid,
-                        "note_path": proposal.intent_event.payload.note.path,
-                        "proposal_id": request.proposal_id,
-                        "status": "success",
-                        "outcome": "success",
-                    },
-                    trace_id=proposal.trace_id or request.idempotency_key,
-                )
-                events.append("panel.action.logged")
-            else:
-                receipt_id = _first_event_receipt_id(emitted_events, "panel.action.logged") or receipt_id
-
-            receipt = Receipt(
-                receipt_id=receipt_id,
-                action_taken="confirm",
-                outcome="success",
-                timestamp=now_iso,
-                inverse_action=inverse_action,
-                message=correction_note,
-            )
+            self._idempotency.set(request.idempotency_key, resp, binding=live)
+            if source_state in {"committed", "unknown"}:
+                self._proposals.remove(request.proposal_id)
+            return resp
+        try:
+            resp = _build_confirmation_response(request, proposal, result)
+        except Exception as exc:
+            # All confirmation acknowledgement follows the known source result.
+            # Retain/cache that factual receipt before returning a recoverable
+            # outcome; it must never become a fresh pending proposal again.
+            if source_receipt is None and source_state != "unknown":
+                raise
             resp = ConfirmResponse(
-                proposal_id=request.proposal_id,
-                artifact_id=request.artifact_id,
-                status="executed",
-                outcome="success",
-                receipt=receipt,
+                proposal_id=request.proposal_id, artifact_id=request.artifact_id,
+                status="recovery_required", outcome="recovery_required",
+                error="authority_receipt_persistence_failed" if isinstance(exc, PanelReceiptPersistenceError) else "confirmation_acknowledgement_failed",
+                trace_id=getattr(exc, "trace_id", None) or proposal.trace_id or request.idempotency_key,
                 idempotency_key=request.idempotency_key,
-                events_emitted=events,
+                source_receipt=source_receipt, source_state=source_state,
+                projection_state="rebuild_required", downstream_state=getattr(result, "downstream_state", "unknown"),
             )
-
+        resp.source_receipt = source_receipt
+        resp.source_state = source_state
+        if resp.status != "recovery_required":
+            resp.projection_state = projection_state
+        resp.downstream_state = getattr(result, "downstream_state", "not_required")
         self._idempotency.set(request.idempotency_key, resp, binding=live)
         self._proposals.remove(request.proposal_id)
         return resp

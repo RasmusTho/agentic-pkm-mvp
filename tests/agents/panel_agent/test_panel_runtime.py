@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -30,8 +31,15 @@ def _seed_note(
     markdown: str,
     *,
     executed_action_ids: list[str] | None = None,
-    source_ref: str = "vault/Note.md",
+    source_ref: str | None = None,
 ) -> None:
+    if source_ref is None:
+        # The production runtime acknowledges only after a real vault-bound
+        # source CAS. ObjectStore-only fixtures cannot stand in for that source.
+        note_file = Path(os.environ["VAULT_ROOT"]) / "vault" / f"{note_uuid}.md"
+        note_file.parent.mkdir(parents=True, exist_ok=True)
+        note_file.write_text(markdown, encoding="utf-8")
+        source_ref = str(note_file)
     payload = {"raw_text": markdown, "origin": "vault"}
     if executed_action_ids:
         payload["executed_action_ids"] = list(executed_action_ids)
@@ -111,8 +119,9 @@ def _read_outbox(outbox_path: Path) -> list[dict]:
 
 
 @pytest.fixture(autouse=True)
-def clear_memory_store() -> None:
+def clear_memory_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     object_store_module._MEMORY_STORE.clear()
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
 
 
 def test_runtime_emits_promotion_intent_and_execution_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

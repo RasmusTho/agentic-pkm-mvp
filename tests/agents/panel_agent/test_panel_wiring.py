@@ -15,12 +15,12 @@ from app.objects import DomainObject, ObjectStore
 pytestmark = pytest.mark.not_pg
 
 
-def _seed_note(note_uuid: str, markdown: str) -> None:
+def _seed_note(note_uuid: str, markdown: str, *, source_ref: str = "vault/Note.md") -> None:
     obj = DomainObject(
         uuid=note_uuid,
         kind="note",
         payload={"raw_text": markdown, "origin": "vault"},
-        source_ref="vault/Note.md",
+        source_ref=source_ref,
         created_at=datetime.now(timezone.utc),
     )
     ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-panel-wiring")
@@ -67,7 +67,9 @@ Promote this note.
 - [x] Gör denna anteckning evergreen
 %% AI:End %%
 """
-    _seed_note(note_uuid, markdown)
+    source = tmp_path / "Note.md"
+    source.write_text(markdown, encoding="utf-8")
+    _seed_note(note_uuid, markdown, source_ref=str(source))
 
     monkeypatch.delenv("PANEL_ACTION_WIRING_PATH", raising=False)
     monkeypatch.delenv("VAULT_ROOT", raising=False)
@@ -76,7 +78,7 @@ Promote this note.
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
 
     events = run_panel_intent_for_note(note_uuid, trace_id="trace-default")
-    runtime_result = execute_panel_intent(events[0], outbox_path=outbox_path)
+    runtime_result = execute_panel_intent(events[0], outbox_path=outbox_path, vault_root=tmp_path)
     topics = {getattr(ev, "event", "") for ev in runtime_result.emitted_events}
 
     assert "promote.intent.created" in topics

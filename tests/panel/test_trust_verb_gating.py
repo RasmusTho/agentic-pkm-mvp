@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -14,16 +15,23 @@ from app.objects import DomainObject, ObjectStore
 
 
 @pytest.fixture(autouse=True)
-def _clear_memory_store() -> None:
+def _clear_memory_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
     object_store_module._MEMORY_STORE.clear()
 
 
 def _seed_note(note_uuid: str, markdown: str) -> None:
+    # Source writeback uses real HKA CAS; the warm mirror alone is not source.
+    source = Path(os.environ["VAULT_ROOT"]) / "vault" / f"{note_uuid}.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(markdown, encoding="utf-8")
     obj = DomainObject(
         uuid=note_uuid,
         kind="note",
         payload={"raw_text": markdown, "origin": "vault"},
-        source_ref="vault/Note.md",
+        source_ref=str(source),
         created_at=datetime.now(timezone.utc),
     )
     ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-test")
