@@ -174,8 +174,10 @@ routes are unchanged. `scripts/start_model_access_executor.sh` launches the exec
 a missing item still starts it with that transport reporting `credential_unavailable`. The owner
 provisions the item once, interactively, so the value never enters argv, shell history, or an agent:
 `security add-generic-password -U -s yggdrasil.host-secrets -a dev:model-access-executor:openai.api-key -w`
-(with `-w` last, `security` prompts for the value). This repository support is not live activation:
-the running launchd job must separately be switched to this launcher from a release that contains it.
+(with `-w` last, `security` prompts for the value). The launcher refuses to start unless
+`MODEL_ACCESS_EXECUTOR_PYTHON` names the executor's interpreter. This repository support is not live
+activation: the running launchd job must separately be switched to this launcher from a release that
+contains it.
 
 The Discord binding is granted only to the Heimdal-owned `heimdal-external-alerts` consumer on
 `dev`, `test`, and `prod`, and is one-way notification transport only. Creating, rotating, deleting,

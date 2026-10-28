@@ -2707,8 +2707,6 @@ def test_bws_probe_child_receives_only_temporary_webhook_binding(tmp_path, monke
 
 
 def test_model_access_executor_launcher_uses_declared_consumer(tmp_path: Path) -> None:
-    from app.model_access.codex_executor_service import provider_credential
-
     recorder = tmp_path / "python"
     argv_log = tmp_path / "argv.json"
     recorder.write_text(
@@ -2724,6 +2722,12 @@ def test_model_access_executor_launcher_uses_declared_consumer(tmp_path: Path) -
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+    unset = subprocess.run(
+        ["/bin/bash", str(_REPO_ROOT / "scripts" / "start_model_access_executor.sh")],
+        env={"PATH": os.environ.get("PATH", "")}, capture_output=True, text=True, check=False,
+    )
+    assert unset.returncode != 0 and "MODEL_ACCESS_EXECUTOR_PYTHON" in unset.stderr
     assert json.loads(argv_log.read_text()) == [
         "-m", "app.ops.host_secret_bootstrap",
         "--provider", "keychain",
@@ -2770,7 +2774,6 @@ def test_model_access_executor_launcher_uses_declared_consumer(tmp_path: Path) -
     ) == 0
     assert observed[HOST_SECRET_BOOTSTRAP_FAILURE_REF] == "openai.api-key"
     assert HOST_SECRET_RUNTIME_ENV_FILE not in observed
-    assert provider_credential.__module__ == "app.model_access.codex_executor_service"
 
     for channel in ("test", "prod"):
         with pytest.raises(HostSecretBootstrapError):

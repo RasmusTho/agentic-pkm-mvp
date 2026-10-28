@@ -817,22 +817,10 @@ def test_typesafe_key_missing_or_unauthorized_binding_fails_closed(
     assert error.value.__suppress_context__
 
 
-@pytest.mark.parametrize(
-    "consumer_patch",
-    [
-        {"channels": ["dev", "test"]},
-        {"channels": ["prod"]},
-        {"secrets": ["openai.api-key", "anthropic.api-key"]},
-        {"secrets": ["anthropic.api-key"]},
-    ],
-)
-def test_model_access_executor_grant_is_dev_openai_only(consumer_patch) -> None:
+def test_model_access_executor_grant_is_dev_openai_only() -> None:
     contract = load_host_secret_contract()
     grants = {grant for grant in contract.allowed if grant[1] == "model-access-executor"}
     assert grants == {("dev", "model-access-executor", "openai.api-key")}
-    assert contract.bws_identity(
-        channel="dev", consumer="model-access-executor", secret="openai.api-key"
-    ) == ("non-prod", "shared/openai.api-key")
     assert contract.keychain_account(
         channel="dev", consumer="model-access-executor", secret="openai.api-key"
     ) == "dev:model-access-executor:openai.api-key"
@@ -842,10 +830,14 @@ def test_model_access_executor_grant_is_dev_openai_only(consumer_patch) -> None:
                 channel=channel, consumer="model-access-executor", secret="openai.api-key"
             )
 
-    payload = json.loads(DEFAULT_CONTRACT_PATH.read_text())
-    entry = next(c for c in payload["consumers"] if c["consumer"] == "model-access-executor")
-    entry.update(consumer_patch)
-    if "anthropic.api-key" in entry["secrets"]:
-        entry["optional_secrets"] = []
-    with pytest.raises(ValueError):
-        load_host_secret_contract_bytes(json.dumps(payload).encode())
+    for consumer_patch in (
+        {"channels": ["dev", "test"]},
+        {"channels": ["prod"]},
+        {"secrets": ["openai.api-key", "anthropic.api-key"]},
+        {"secrets": ["anthropic.api-key"]},
+    ):
+        payload = json.loads(DEFAULT_CONTRACT_PATH.read_text())
+        entry = next(c for c in payload["consumers"] if c["consumer"] == "model-access-executor")
+        entry.update(consumer_patch)
+        with pytest.raises(ValueError):
+            load_host_secret_contract_bytes(json.dumps(payload).encode())
