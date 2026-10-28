@@ -32,6 +32,14 @@ activation, and operation-bound one-shot quiescence is required before recovery 
 The deployment owner document defines the finite timeout and strict source/readiness/index gates.
 This repository support does not establish live BWS or Product acceptance.
 
+Metadata-only route projection (#6241): `scripts/secrets route <channel> --consumer <consumer>` prints the
+declared logical credential, BWS project and identity, and handoff binding for each declared environment consumer
+and for the six PostgreSQL file consumers on dev/test/prod (plus the dev/test source-identity witness). It reads only
+the local host-secret contract, is handled before any admin, provider, controller, or value source is constructed,
+and reports `values_read: false` and `live_access_verified: false`. An undeclared channel/consumer is refused as a
+metadata gap with no pending secret operation. This is declaration metadata, not credential access, a live check,
+or channel qualification.
+
 The delegated policy decision recorded on #5667 (#5868385351) defers production `heimdal.raw-store-key` rotation or deletion until a bounded rekey path is delivered. Keep the current key active and refuse protected writes: the current raw record format has one configured AES key and no key identifier or multi-key read path, so changing it could make earlier ciphertext unreadable. Heimdal `archive-pass` remains separately protected pending its own lifecycle policy.
 
 The [2026-10-11 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) accepts the normal-writer boundary for this one-owner setup. Broader BWS deployment/runtime qualification remains open. A Product deployment explicitly run with `--existing-secrets-only` may read and validate existing selected values without the write-qualification file; it must stop before RPC when the required PostgreSQL password is missing and must never call the BWS writer. Bootstrap still requires the existing local qualification receipt described by the deployment owner; this documentation reconciliation does not install it.

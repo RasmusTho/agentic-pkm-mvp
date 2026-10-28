@@ -691,3 +691,129 @@ def test_invalid_import_is_exact_not_stripped_and_never_reads_provider(setup):
     with pytest.raises(SecretAdminError):
         admin.import_stdin('dev', 'openai.api-key', StringIO(CANARY + '\n'))
     assert provider.calls == []
+
+
+ROUTE_CANARY = 'route-canary-value-that-must-never-be-read-123456'
+
+
+@pytest.fixture
+def route_tripwires(monkeypatch):
+    """Fail the test if the route path constructs any provider, admin, or value source."""
+    import subprocess
+
+    import app.ops.secret_admin as secret_admin
+
+    def tripwire(*_args, **_kwargs):
+        raise AssertionError('route must not construct a provider, admin, or value source')
+
+    for name in ('configured_admin', 'SecretAdmin', 'HostSecretController', 'TokenPushAdmin',
+                 'load_token_push_targets', 'validate_secret_value'):
+        monkeypatch.setattr(secret_admin, name, tripwire)
+    monkeypatch.setattr(subprocess, 'run', tripwire)
+    monkeypatch.setattr(subprocess, 'Popen', tripwire)
+    for binding in ('TYPESAFE_API_KEY', 'HEIMDAL_RAW_STORE_KEY', 'GITHUB_TOKEN', 'BWS_ACCESS_TOKEN'):
+        monkeypatch.setenv(binding, ROUTE_CANARY)
+
+
+def _route(capsys, *argv, contract=None):
+    code = main(['route', *argv], stdin=StringIO(ROUTE_CANARY), contract=contract)
+    out, err = capsys.readouterr()
+    assert ROUTE_CANARY not in out + err
+    return code, out, err
+
+
+def test_route_environment_consumers_is_local_metadata_only(route_tripwires, capsys):
+    from app.ops.host_secret_contract import HostSecretContract, load_host_secret_contract
+
+    synthetic = HostSecretContract(
+        keychain_service='yggdrasil.host-secrets',
+        keychain_account_template='{channel}:{consumer}:{secret}',
+        allowed=frozenset({('dev', 'heimdal-api-ingress', 'heimdal.raw-store-key'),
+                           ('dev', 'heimdal-api-ingress', 'github.token'),
+                           ('prod', 'heimdal-api-ingress', 'github.token')}),
+        secret_definitions=(('heimdal.raw-store-key', 'HEIMDAL_RAW_STORE_KEY', 'raw-store-key'),
+                            ('github.token', 'GITHUB_TOKEN', 'token')),
+        optional_secrets=frozenset({'github.token'}),
+    )
+    code, out, _ = _route(capsys, 'dev', '--consumer', 'heimdal-api-ingress', contract=synthetic)
+    assert code == 0
+    assert json.loads(out) == {
+        'channel': 'dev', 'consumer': 'heimdal-api-ingress',
+        'evidence': 'declared-contract-metadata', 'values_read': False, 'live_access_verified': False,
+        'routes': [
+            {'secret': 'github.token', 'project': 'non-prod', 'identity': 'shared/github.token',
+             'handoff': {'delivery': 'environment', 'binding': 'GITHUB_TOKEN'}, 'optional': True},
+            {'secret': 'heimdal.raw-store-key', 'project': 'non-prod',
+             'identity': 'dev/heimdal.raw-store-key',
+             'handoff': {'delivery': 'environment', 'binding': 'HEIMDAL_RAW_STORE_KEY'},
+             'optional': False},
+        ],
+    }
+    code, out, _ = _route(capsys, 'prod', '--consumer', 'heimdal-api-ingress', contract=synthetic)
+    assert code == 0
+    assert [r['secret'] for r in json.loads(out)['routes']] == ['github.token']
+
+    # Every declared environment tuple in the checked-in contract projects exactly its grants.
+    contract = load_host_secret_contract()
+    declared: dict[tuple[str, str], set[str]] = {}
+    for channel, consumer, secret in contract.allowed:
+        declared.setdefault((channel, consumer), set()).add(secret)
+    for (channel, consumer), secrets_ in sorted(declared.items()):
+        code, out, _ = _route(capsys, channel, '--consumer', consumer)
+        assert code == 0, (channel, consumer)
+        payload = json.loads(out)
+        assert {r['secret'] for r in payload['routes']} == secrets_
+        assert all(r['handoff']['delivery'] == 'environment' for r in payload['routes'])
+        assert payload['values_read'] is False and payload['live_access_verified'] is False
+    code, out, _ = _route(capsys, 'dev', '--consumer', 'marr-server-dev')
+    assert json.loads(out)['routes'] == [{
+        'secret': 'typesafe.api-key', 'project': 'non-prod', 'identity': 'dev/typesafe.api-key',
+        'handoff': {'delivery': 'environment', 'binding': 'TYPESAFE_API_KEY'}, 'optional': False}]
+
+
+def test_route_file_consumers_is_local_metadata_only(route_tripwires, capsys):
+    expected = {
+        'postgres-db': ('db', 'POSTGRES_PASSWORD_FILE'),
+        'postgres-migrate': ('migrate', 'DATABASE_PASSWORD_FILE'),
+        'postgres-api': ('api', 'DATABASE_PASSWORD_FILE'),
+        'postgres-worker': ('worker', 'DATABASE_PASSWORD_FILE'),
+        'postgres-watcher': ('watcher', 'DATABASE_PASSWORD_FILE'),
+        'postgres-capture-watch': ('heimdal-capture-watch', 'DATABASE_PASSWORD_FILE'),
+    }
+    projects = {'dev': 'non-prod', 'test': 'non-prod', 'prod': 'prod'}
+    for channel, project in projects.items():
+        for consumer, (service, path_binding) in expected.items():
+            code, out, _ = _route(capsys, channel, '--consumer', consumer)
+            assert code == 0, (channel, consumer)
+            assert json.loads(out) == {
+                'channel': channel, 'consumer': consumer,
+                'evidence': 'declared-contract-metadata',
+                'values_read': False, 'live_access_verified': False,
+                'routes': [{'secret': 'postgres.password', 'project': project,
+                            'identity': f'{channel}/postgres.password', 'optional': False,
+                            'handoff': {'delivery': 'file', 'service': service,
+                                        'path_binding': path_binding}}],
+            }
+    # The source-identity witness is declared for dev/test only.
+    code, out, _ = _route(capsys, 'test', '--consumer', 'postgres-source-witness')
+    assert code == 0
+    assert json.loads(out)['routes'][0]['handoff'] == {
+        'delivery': 'file', 'service': 'source-identity-db-witness',
+        'path_binding': 'DATABASE_PASSWORD_FILE'}
+    assert _route(capsys, 'prod', '--consumer', 'postgres-source-witness')[0] == 1
+
+
+@pytest.mark.parametrize('argv', [
+    ('prod', '--consumer', 'marr-server-dev'),
+    ('prod', '--consumer', 'karakeep-service-web'),
+    ('dev', '--consumer', 'undeclared-route-consumer'),
+    ('staging', '--consumer', 'postgres-api'),
+    ('staging', '--consumer', 'heimdal-api-ingress'),
+    ('dev',),
+])
+def test_route_undeclared_consumer_refuses_without_provider_access(route_tripwires, capsys, argv):
+    code, out, err = _route(capsys, *argv)
+    assert code == 1
+    assert out == ''
+    assert 'no secret operation was started' in err
+    assert 'pending' not in err
