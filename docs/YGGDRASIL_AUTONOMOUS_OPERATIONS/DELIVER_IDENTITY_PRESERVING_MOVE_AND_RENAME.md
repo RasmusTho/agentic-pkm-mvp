@@ -96,6 +96,10 @@ edits/replacements and destination creation are handled by generation/identity c
 mechanics; privileged/same-user tampering with private recovery evidence or uncoordinated directory
 reparenting is outside the supported storage contract. Each seam reopens and checks the current
 root/parent route; detected topology drift stops recovery rather than guessing another root.
+Protected system/capture zones use the existing filesystem-aware overlap rules, including aliases
+of an absent capture leaf. Descriptor walks also require exact directory-entry spelling for every
+parent and existing source leaf, so case or Unicode lookup aliases cannot become another authority
+path on normalization-insensitive or case-insensitive filesystems.
 
 The fixed private `.pkm-placement/` directory contains per-request placement intents, reservations,
 phase records and GOV/source receipts. It is specific recovery evidence for this operation, not a
@@ -112,7 +116,8 @@ inode is verified; interrupted cleanup remains explicitly recoverable.
 | Before reservation: unsupported filesystem, missing authority/context, wrong identity, stale source/absent-destination generation, collision, cross-vault or unsafe path | Original untouched; no source effect acknowledged | Typed refusal; changed intent uses a new request ID |
 | `reserved`: exact intent, authority, generations and parent identities synchronized | Original source authoritative; destination reserved among participating owners | Explicit recovery may retain the exact original inode if source and destination preconditions still agree |
 | `prepared`: synchronized original hardlink, source generation verified | Original source authoritative; retained representation survives restart | No-clobber link publication of that retained inode; a foreign destination remains untouched |
-| Link returned ambiguously, phase still `prepared` | Source remains authoritative; destination may contain the exact retained inode | Reconcile exact inode/generation; equal bytes at a different inode are insufficient; never overwrite a winner |
+| `publishing`: publication intent synchronized before the public link syscall | Source remains authoritative; public namespace effect is unknown until verified activation | Reconcile exact inode/generation; equal bytes at a different inode are insufficient; never overwrite a winner |
+| Link/fsync/activation-phase persistence returned ambiguously, phase `publishing` | Source retained; destination may contain the exact retained inode | Report source effect `unknown` and locator/Store/index/link repair required; ordinary replay never re-enters the effect |
 | `activated`: destination identity/generation verified and phase synchronized | Destination is authoritative; original source still retained | Record retirement intent, then capture the source name with no-replace rename into private recovery storage |
 | `retiring`: crash before/after source capture | Destination and retained original identify the effect; a captured source is inspectable | Resume only when exact source/retired-name evidence proves the transition; missing source alone is never success |
 | Source replacement wins the retirement syscall | Expected artifact remains retained; raced replacement is retained separately | Restore the replacement only with no-replace semantics; preserve a second winner; return recovery-required |

@@ -113,9 +113,11 @@ def _map(result: PlacementResult, request: OperationRequest) -> OwnerExecutionRe
     )
     if result.status == "recovery_required" and not record:
         source = SourceEffectStatus.UNKNOWN
+    if record.get("phase") == "publishing":
+        source = SourceEffectStatus.UNKNOWN
     projection = (
         ConvergenceState.REBUILD_REQUIRED
-        if result.source_committed
+        if source is not SourceEffectStatus.NOT_APPLIED
         else ConvergenceState.NOT_REQUIRED
     )
     return OwnerExecutionResult(
@@ -143,6 +145,8 @@ def _map(result: PlacementResult, request: OperationRequest) -> OwnerExecutionRe
                 "phase": record.get("phase"),
                 "locator_repair": "source-backed replay"
                 if result.source_committed
+                else "reconcile placement evidence before source-backed repair"
+                if source is SourceEffectStatus.UNKNOWN
                 else "not_required",
             },
         ),

@@ -4,13 +4,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from hashlib import sha256
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from uuid import UUID, uuid4
 
 import pytest
 
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.knowledge import placement
+from app.knowledge.errors import KnowledgeCapabilityError
 from app.knowledge.placement import KnowledgePlacementOwner
 from app.operations import (
     JsonReceiptStore,
@@ -24,6 +25,7 @@ from app.operations.contracts import ConvergenceState, OperationProvenance, Sour
 from app.operations import placement_operations as operations
 from app.services.companion_note import read_companion
 from app.stores import get_object_store, reset_store_backends
+from app.vault.paths import get_vault_capture_note_rel, get_vault_system_dir_rel
 from tests.api._vault_test_helpers import bind_initialized_vault
 
 
@@ -270,7 +272,7 @@ def test_partial_move_preserves_original_and_recovers_idempotently(bound, monkey
     assert operations.reconcile_placement_operation(request, _restart(bound)) == recovered
 
 
-@pytest.mark.parametrize("phase", ["reserved", "activated", "retiring", "committed"])
+@pytest.mark.parametrize("phase", ["reserved", "publishing", "activated", "retiring", "committed"])
 def test_restart_at_each_durable_transition_uses_exact_evidence(bound, monkeypatch, phase):
     request = _request(bound)
     raw = (bound.owner.root / bound.source).read_bytes()
@@ -558,7 +560,7 @@ def test_in_place_save_during_activation_remains_authoritative_at_source(bound, 
 
     monkeypatch.setattr(placement.os, "link", save_before_link)
     assert _run(bound, request).status is OperationStatus.RECOVERY_REQUIRED
-    assert _record(bound)["phase"] == "prepared"
+    assert _record(bound)["phase"] == "publishing"
     assert source.read_bytes() == saved
     assert (bound.owner.root / "Projects/moved.md").read_bytes() == saved
     monkeypatch.setattr(placement.os, "link", link)
@@ -608,3 +610,106 @@ def test_canvas_and_retained_artifacts_cannot_borrow_placement_authority(bound):
     refused = _run(bound, replace(request, request_id="canvas", expected_version=version))
     assert refused.status is OperationStatus.NOT_SUPPORTED
     assert source.exists() and not (bound.owner.root / "Projects/moved.md").exists()
+
+
+def test_filesystem_aliases_cannot_enter_system_or_capture_authority(bound):
+    root = bound.owner.root
+    system = get_vault_system_dir_rel(root)
+    alias = system.swapcase()
+    if not (root / alias).is_dir() or not (root / alias).samefile(root / system):
+        pytest.skip("actual case-insensitive lookup is required for this platform boundary")
+    source = root / bound.source
+    raw = source.read_bytes()
+    request = _request(bound)
+    # Both the read/preflight API and actual operation owner refuse the alias.
+    with pytest.raises(KnowledgeCapabilityError):
+        bound.owner.destination_generation(f"{alias}/moved.md")
+    for destination in (f"{system}/moved.md", f"{alias}/moved.md"):
+        wrong = replace(
+            request,
+            request_id=destination,
+            arguments={"destination": destination, "destination_generation": "absent"},
+        )
+        assert _run(bound, wrong).status is OperationStatus.NOT_SUPPORTED
+    # Source membership uses the same physical-zone rule.
+    system_source = root / system / "human.md"
+    system_source.write_bytes(raw)
+    source_alias = replace(bound, source=f"{alias}/human.md")
+    assert (
+        _run(source_alias, replace(request, request_id="system-source")).status
+        is OperationStatus.NOT_SUPPORTED
+    )
+    assert system_source.read_bytes() == raw
+    capture = PurePosixPath(get_vault_capture_note_rel(root))
+    root.joinpath(*capture.parent.parts).mkdir(parents=True, exist_ok=True)
+    capture_alias = str(capture.with_name(capture.name.swapcase()))
+    # The capture leaf need not exist: filesystem lookup semantics still protect
+    # its reserved name from a normal human-note placement.
+    wrong = replace(
+        request,
+        request_id="capture-alias",
+        arguments={"destination": capture_alias, "destination_generation": "absent"},
+    )
+    assert _run(bound, wrong).status is OperationStatus.NOT_SUPPORTED
+    assert source.read_bytes() == raw and not (root / system / "moved.md").exists()
+    assert not root.joinpath(*capture.parts).exists()
+    assert not list((root / ".pkm-placement").glob("*.json"))
+
+
+def test_parent_and_source_leaf_aliases_refuse_before_reservation(bound):
+    root = bound.owner.root
+    if not (root / "pROJECTS").is_dir() or not (root / "pROJECTS").samefile(root / "Projects"):
+        pytest.skip("actual case-insensitive lookup is required for this platform boundary")
+    request = _request(bound)
+    with pytest.raises(KnowledgeCapabilityError):
+        bound.owner.destination_generation("pROJECTS/moved.md")
+    with pytest.raises(KnowledgeCapabilityError):
+        bound.owner.source_generation("Notes/ORIGINAL.md", bound.artifact_id)
+    destination_alias = replace(
+        request, arguments={**request.arguments, "destination": "pROJECTS/moved.md"}
+    )
+    assert _run(bound, destination_alias).status is OperationStatus.NOT_SUPPORTED
+    source_alias = replace(bound, source="Notes/ORIGINAL.md")
+    assert (
+        _run(source_alias, replace(request, request_id="source-leaf-alias")).status
+        is OperationStatus.NOT_SUPPORTED
+    )
+    assert (root / bound.source).exists() and not (root / "Projects/moved.md").exists()
+    assert not list((root / ".pkm-placement").glob("*.json"))
+
+
+def test_post_publication_fsync_failure_preserves_unknown_effect_and_repair(bound, monkeypatch):
+    request = _request(bound)
+    source = bound.owner.root / bound.source
+    destination = bound.owner.root / "Projects/moved.md"
+    raw = source.read_bytes()
+    fsync = placement.os.fsync
+    fail_once = True
+
+    def fail_published_directory(fd):
+        nonlocal fail_once
+        if (
+            fail_once
+            and destination.exists()
+            and placement.os.fstat(fd).st_ino == destination.parent.stat().st_ino
+        ):
+            fail_once = False
+            raise OSError("destination-directory fsync failed after real link publication")
+        return fsync(fd)
+
+    monkeypatch.setattr(placement.os, "fsync", fail_published_directory)
+    outcome = _run(bound, request)
+    assert outcome.status is OperationStatus.RECOVERY_REQUIRED
+    assert source.samefile(destination) and source.read_bytes() == raw
+    assert _record(bound)["phase"] == "publishing"
+    assert outcome.convergence.source_effect is SourceEffectStatus.UNKNOWN
+    assert all(
+        getattr(outcome.convergence, item) is ConvergenceState.REBUILD_REQUIRED
+        for item in ("store", "index", "link")
+    )
+    assert outcome.convergence.extensions["locator_repair"] != "not_required"
+    assert _run(_restart(bound), request) == outcome
+    recovered = operations.reconcile_placement_operation(request, _restart(bound))
+    assert recovered.status is OperationStatus.CONVERGENCE_PENDING
+    assert recovered.convergence.source_effect is SourceEffectStatus.COMMITTED
+    assert not source.exists() and destination.read_bytes() == raw

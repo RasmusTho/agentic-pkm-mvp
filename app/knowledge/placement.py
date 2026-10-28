@@ -16,13 +16,12 @@ import os
 from pathlib import Path, PurePosixPath
 import stat
 import sys
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, cast
 from uuid import uuid4
 
 from app.governance.governed_write import DecisionToken, GovernedWriteAdapter
 from app.knowledge.adapters import (
     _atomic_rename_noreplace_at,
-    _open_directory_from_root,
     _read_stable_descriptor,
 )
 from app.knowledge.contracts import NoteLocator, WriteReceipt
@@ -30,8 +29,12 @@ from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflic
 from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note_in_vault
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.vault.manager import nearest_enclosing_vault_root
+from app.vault.path_overlap import (
+    VaultPathOverlapError,
+    assert_targets_do_not_overlap_capture_note,
+    vault_path_is_within,
+)
 from app.vault.paths import (
-    get_vault_capture_note_rel,
     get_vault_sources_dir_rel,
     get_vault_system_dir_rel,
 )
@@ -41,7 +44,7 @@ from scripts.yaml_roundtrip import load_frontmatter
 _DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _READ = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 _STATE = ".pkm-placement"
-_PHASES = {"reserved", "prepared", "activated", "retiring", "committed"}
+_PHASES = {"reserved", "prepared", "publishing", "activated", "retiring", "committed"}
 _COMMITTED = {"activated", "retiring", "committed"}
 
 
@@ -119,6 +122,32 @@ def _private_directory(parent: int, name: str) -> int:
     return fd
 
 
+def _canonical_leaf(parent: int, name: str) -> None:
+    if name in os.listdir(parent):
+        return
+    try:
+        os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    raise KnowledgeCapabilityError("placement cannot address a filesystem name through an alias")
+
+
+def _canonical_directory(root: int, path: PurePosixPath) -> int:
+    """Require the actual directory-entry spelling as well as no-follow opens."""
+    current = os.dup(root)
+    try:
+        for part in path.parts:
+            if part not in os.listdir(current):
+                raise KnowledgeCapabilityError("placement parent is unavailable or aliased")
+            following = os.open(part, _DIRECTORY, dir_fd=current)
+            os.close(current)
+            current = following
+        return current
+    except Exception:
+        os.close(current)
+        raise
+
+
 class KnowledgePlacementOwner:
     """One trusted, immutable selected-vault binding for normal Markdown notes.
 
@@ -181,12 +210,16 @@ class KnowledgePlacementOwner:
             raise KnowledgeCapabilityError(
                 "placement requires a canonical vault-relative human-note path"
             )
-        if path.is_relative_to(PurePosixPath(get_vault_system_dir_rel(self.root))) or str(
-            path
-        ) == get_vault_capture_note_rel(self.root):
+        if vault_path_is_within(value, get_vault_system_dir_rel(self.root), vault_root=self.root):
             raise KnowledgeCapabilityError(
-                "placement cannot borrow system or capture-append authority"
+                "placement cannot borrow system authority through a filesystem alias"
             )
+        try:
+            assert_targets_do_not_overlap_capture_note([value], vault_root=self.root)
+        except VaultPathOverlapError as exc:
+            raise KnowledgeCapabilityError(
+                "placement cannot borrow capture-append authority through a filesystem alias"
+            ) from exc
         absolute = self.root.joinpath(*path.parts)
         if nearest_enclosing_vault_root(absolute, search_root=self.root) != self.root:
             raise KnowledgeCapabilityError("placement cannot cross a nested-vault boundary")
@@ -210,7 +243,8 @@ class KnowledgePlacementOwner:
         root = os.open(self.root, _DIRECTORY)
         parent = -1
         try:
-            parent = _open_directory_from_root(root, path.parent)
+            parent = _canonical_directory(root, path.parent)
+            _canonical_leaf(parent, path.name)
             fd = os.open(path.name, _READ, dir_fd=parent)
             try:
                 if os.fstat(fd).st_nlink != 1:
@@ -233,7 +267,7 @@ class KnowledgePlacementOwner:
         root = os.open(self.root, _DIRECTORY)
         parent = -1
         try:
-            parent = _open_directory_from_root(root, path.parent)
+            parent = _canonical_directory(root, path.parent)
             return self._absent_generation(parent, path)
         finally:
             if parent >= 0:
@@ -581,10 +615,11 @@ class KnowledgePlacementOwner:
     def _parents(
         self, root: int, source: PurePosixPath, destination: PurePosixPath
     ) -> Iterator[tuple[int, int]]:
-        src = _open_directory_from_root(root, source.parent)
+        src = _canonical_directory(root, source.parent)
         dst = -1
         try:
-            dst = _open_directory_from_root(root, destination.parent)
+            dst = _canonical_directory(root, destination.parent)
+            _canonical_leaf(src, source.name)
             if not (os.fstat(src).st_dev == os.fstat(dst).st_dev == os.fstat(root).st_dev):
                 raise KnowledgeCapabilityError("placement cannot cross filesystem mounts")
             yield src, dst
@@ -668,6 +703,11 @@ class KnowledgePlacementOwner:
                 os.close(retained_fd)
             advance("prepared")
         if record["phase"] == "prepared":
+            # Persist uncertainty before entering the public namespace syscall.
+            # A failed link/fsync/phase write cannot later look safely unapplied.
+            self._seam(root, state, src, dst, record, intent)
+            advance("publishing")
+        if record["phase"] == "publishing":
             require(transaction, "original")
             require(src, source.name)
             self._seam(root, state, src, dst, record, intent)
@@ -727,7 +767,7 @@ class KnowledgePlacementOwner:
             )
             authority = GovernedWriteAdapter().record_authority_receipt(
                 decision_token=DecisionToken(**record["grant"]["decision_token"]),
-                mutation_receipt=mutation,
+                mutation_receipt=cast(Any, mutation),
                 state_owner="knowledge",
                 resource=intent.source,
                 trace_id=intent.request_id,
