@@ -631,6 +631,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # boundary. Keep its focused architecture regression owned without
             # widening vault to all architecture tests.
             "tests/architecture/test_mvr05_authority_recovery.py",
+            # The Sources-zone census protects the selected vault's layout and
+            # knowledge writers. Keep its exact module on the vault proof.
+            "tests/architecture/test_sources_zone_writers.py",
             # The semanticmd vault-note merge driver/resolver (#4505): cross-
             # device vault-note merging is its real job (uuid: frontmatter
             # identity, near-duplicate/"prefer concise" heuristics), so it was
@@ -655,6 +658,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/watcher/test_vault_watcher_delete_required_outbox.py",
             "tests/architecture/test_no_hardcoded_vault_layout.py",
             "tests/architecture/test_mvr05_authority_recovery.py",
+            "tests/architecture/test_sources_zone_writers.py",
             "tests/agents/test_merge_resolver.py",
             "tests/agents/test_merge_resolver_repo_docs.py",
             "tests/cli/test_merge_driver.py",
