@@ -7782,8 +7782,7 @@ fi
     ), encoding="utf-8")
     site = tmp_path / "api-python-fixture"
     site.mkdir()
-    (site / "sitecustomize.py").write_text(
-        '''import os
+    product_patches = '''import os
 from pathlib import Path
 from types import SimpleNamespace
 from app.config import paths
@@ -7807,9 +7806,9 @@ objects.resolve_object_store_port = resolve_object_store_port
 rebuildability.evaluate_product_store_readiness = lambda root, rows: SimpleNamespace(
     ready=Path(os.environ["FAKE_API_READY_FILE"]).exists(),
     state="ready" if Path(os.environ["FAKE_API_READY_FILE"]).exists() else "refused")
-''', encoding="utf-8",
-    )
-    (root / "app/cli.py").write_text(
+'''
+    cli = root / "app/cli.py"
+    cli.write_text(
         '''import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
@@ -7854,6 +7853,29 @@ elif args[:2] == ["settings", "validate"]:
 else:
     raise SystemExit(78)
 ''', encoding="utf-8",
+    )
+    # Bootstrap and replaced/real CLI entries still need these Product patches.
+    # Only the exact stdlib fake CLI has no consumers of the heavy imports.
+    (site / "sitecustomize.py").write_text(
+        f"""import hashlib
+import importlib.util
+import sys
+from pathlib import Path
+fake_cli = False
+if sys.orig_argv[1:3] == ["-m", "app.cli"]:
+    try:
+        spec = importlib.util.find_spec("app.cli")
+        fake_cli = (spec is not None and spec.origin == {str(cli)!r}
+                    and hashlib.sha256(Path(spec.origin).read_bytes()).hexdigest()
+                    == {hashlib.sha256(cli.read_bytes()).hexdigest()!r})
+    except (ImportError, OSError, ValueError):
+        pass
+product_patches = '''
+""" + product_patches + "'''\n" + '''
+if not fake_cli:
+    exec(product_patches, globals())
+''',
+        encoding="utf-8",
     )
     ready_file = tmp_path / "projection-ready"
     if ready:
@@ -7937,6 +7959,70 @@ case "$*" in
     )
     docker.write_text(text, encoding="utf-8")
     return root, env, sha
+
+
+NATIVE_SOURCE_FIXTURE_PATCH_MODULES = {"app.objects", "app.rebuildability", "app.instance.runtime"}
+
+
+def _run_profiled_native_fixture_python(
+    root: Path, env: dict[str, str], *arguments: str,
+) -> tuple[subprocess.CompletedProcess[str], set[str]]:
+    result = subprocess.run(
+        [sys.executable, "-m", *arguments], cwd=root,
+        env={**env, "PYTHONPATH": env["FAKE_API_PYTHONPATH"], "PYTHONPROFILEIMPORTTIME": "1"},
+        capture_output=True, text=True, check=False,
+    )
+    modules = {
+        line.rsplit("|", 1)[-1].strip()
+        for line in result.stderr.splitlines()
+        if line.startswith("import time:")
+    }
+    assert "Error in sitecustomize" not in result.stderr, result.stderr
+    return result, modules
+
+
+@pytest.mark.parametrize("entrypoint", ["fake-cli", "bootstrap"])
+def test_native_source_fixture_imports_match_actual_entrypoint(
+    tmp_path: Path, entrypoint: str,
+) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    selector = f"dev:{sha}"
+    env["NATIVE_SOURCE_BOOTSTRAP"] = selector
+    arguments = (
+        ("app.cli", "settings", "validate", "--json")
+        if entrypoint == "fake-cli"
+        else ("app.ops.native_source_bootstrap", "--preflight", selector)
+    )
+
+    result, modules = _run_profiled_native_fixture_python(root, env, *arguments)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    if entrypoint == "fake-cli":
+        assert result.stdout.strip() == "{}"
+        assert not NATIVE_SOURCE_FIXTURE_PATCH_MODULES & modules
+    else:
+        assert NATIVE_SOURCE_FIXTURE_PATCH_MODULES <= modules
+
+
+@pytest.mark.parametrize("replacement", ["changed-bytes", "package-shadow"])
+def test_replaced_cli_never_uses_fake_only_import_path(
+    tmp_path: Path, replacement: str,
+) -> None:
+    root, env, _ = _native_source_harness(tmp_path, channel="dev", ready=True)
+    cli = root / "app/cli.py"
+    if replacement == "changed-bytes":
+        cli.write_text(cli.read_text(encoding="utf-8") + "\n# Replaced CLI bytes.\n", encoding="utf-8")
+    else:
+        package = root / "app/cli"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "__main__.py").write_text("print('{}')\n", encoding="utf-8")
+
+    result, modules = _run_profiled_native_fixture_python(root, env, "app.cli", "settings", "validate", "--json")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "{}"
+    assert NATIVE_SOURCE_FIXTURE_PATCH_MODULES <= modules
 
 
 def _native_source_harness_with_prior_deployment(
