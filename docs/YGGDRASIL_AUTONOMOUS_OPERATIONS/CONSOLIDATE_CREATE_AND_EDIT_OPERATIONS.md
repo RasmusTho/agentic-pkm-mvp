@@ -111,6 +111,16 @@ Additional owner-boundary proof:
 Committed source effects and receipts survive restart. An unacknowledged response is recoverable by
 operation identity; restart never turns uncertainty into a retry.
 
+The dormant AUTOOPS-08 body-edit composition can explicitly call
+`reconcile_write_operation` through the kernel's recovery mode. Newly recorded body-edit outbox
+receipts include an original-request digest. Recovery reads the exact native source/GOV receipt,
+verifies original identity/context/arguments/version and the resulting source version, and reports
+remaining projection repair. Missing, legacy-unbound, or changed-source evidence stays recoverable;
+the function never retries a body write. Capture/create/proposal recovery is not added by this seam.
+For batch body edits, the original delegated deadline travels through the existing absolute writer
+and KnowledgePort to FS CAS/conflict publication. It is checked after all native blocking work,
+without extending native authority or installing a scoped-capture/production binding.
+
 ## Related Docs
 
 - `docs/contracts/YGGDRASIL_AUTONOMOUS_OPERATIONS_CONTRACT.md`

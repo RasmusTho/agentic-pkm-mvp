@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import math
+from time import time
 from typing import Literal, Protocol
 from uuid import uuid4
 
@@ -30,6 +32,19 @@ class MissingAuthorityReceiptError(GovernedWriteProtocolError):
 
 class InvalidDecisionTokenError(GovernedWriteProtocolError):
     """Raised when a token is not valid for the mutation receipt being recorded."""
+
+
+def require_authority_deadline(deadline: float | None) -> None:
+    """Refuse an elapsed original caller ceiling; never issue/refresh authority.
+
+    Optional for existing producers. Native state owners call this after their
+    waits, alongside their existing GOV/context guards. Passing a deadline can
+    only constrain an otherwise-authorized effect.
+    """
+    if deadline is not None and (
+        type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline <= time()
+    ):
+        raise InvalidDecisionTokenError("original delegated authority expired at the source seam")
 
 
 class _MutationLocator(Protocol):

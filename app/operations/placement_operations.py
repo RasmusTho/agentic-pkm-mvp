@@ -102,7 +102,10 @@ def _execute(
         config.context.active_context_ref,
         config.context.vault_generation or "",
     )
-    return _map(config.owner.place_artifact(intent, recover=recover), request, recover=recover)
+    return _map(config.owner.place_artifact(
+        intent, recover=recover,
+        admission_deadline=None if request.delegation is None else request.delegation.get("expires_at"),
+    ), request, recover=recover)
 
 
 def _map(

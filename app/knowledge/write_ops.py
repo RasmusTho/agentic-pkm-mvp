@@ -15,7 +15,7 @@ import stat
 import sys
 import tempfile
 import threading
-from typing import TYPE_CHECKING, Callable, Iterator, Literal
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal
 import uuid
 
 from app.knowledge.adapters import (
@@ -1396,6 +1396,7 @@ def write_note_from_absolute(
     writer_identity: str | None = None,
     accept_staged_conflict: bool = False,
     vault: str | None = None,
+    admission_deadline: float | None = None,
 ) -> WriteReceipt:
     # Guard-at-seam (#2910): assert WriteGuard inside the port itself, before
     # any path resolution or filesystem mutation, so a blocked write is
@@ -1438,11 +1439,13 @@ def write_note_from_absolute(
         locator = make_note_locator(relative_path.as_posix(), vault=vault)
     # Absolute path writes target the local filesystem boundary directly.
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())
-    kwargs: dict[str, str] = {}
+    kwargs: dict[str, Any] = {}
     if expected_version is not None:
         kwargs["expected_version"] = expected_version
     if writer_identity is not None:
         kwargs["writer_identity"] = writer_identity
+    if admission_deadline is not None:
+        kwargs["admission_deadline"] = admission_deadline
     receipt = port.write_note(locator, content, **kwargs)
     return _require_canonical_write(
         receipt,
@@ -1537,7 +1540,7 @@ def write_note_relative(
     resolved_root = Path(vault_root).expanduser().resolve()
     locator = make_note_locator(note_rel_path)
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())
-    kwargs: dict[str, str] = {}
+    kwargs: dict[str, Any] = {}
     if expected_version is not None:
         kwargs["expected_version"] = expected_version
     if writer_identity is not None:

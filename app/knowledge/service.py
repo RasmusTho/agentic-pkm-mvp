@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, TypeVar, cast
+from typing import Any, Callable, TypeVar, cast
 
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.knowledge.adapters import FsVaultAdapter, ObsidianCliAdapter
@@ -89,12 +89,15 @@ class HybridKnowledgePort:
         *,
         expected_version: str | None = None,
         writer_identity: str | None = None,
+        admission_deadline: float | None = None,
     ) -> WriteReceipt:
-        kwargs: dict[str, str] = {}
+        kwargs: dict[str, Any] = {}
         if expected_version is not None:
             kwargs["expected_version"] = expected_version
         if writer_identity is not None:
             kwargs["writer_identity"] = writer_identity
+        if admission_deadline is not None:
+            kwargs["admission_deadline"] = admission_deadline
         return self._execute_with_fallback(
             "write_note",
             lambda port: port.write_note(locator, content, **kwargs),
