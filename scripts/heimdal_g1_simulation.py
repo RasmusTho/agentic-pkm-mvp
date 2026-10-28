@@ -89,7 +89,7 @@ ENCODER_ARGS = (
 WEARABLE_UNPROVEN: Tuple[Dict[str, str], ...] = (
     {"question": "battery_life", "why": "no pendant radio or battery is in the loop; a replayed trace draws no device power"},
     {"question": "ble_link_dropout_and_reconnect", "why": "segments enter at the phone-tier uploader; no BLE link, frame loss or reconnect exists in the run"},
-    {"question": "phone_presence_and_background_audio", "why": "no iPhone app receives or holds the stream; iOS background/suspension behaviour is unexercised (the BLE receiver is Bifrost B3 scope, G3)"},
+    {"question": "phone_presence_and_background_audio", "why": "no iPhone app receives or holds the stream; iOS background/suspension behaviour is unexercised (the BLE receiver is B3 native capture client scope, G3)"},
     {"question": "wearability_and_real_wearing_sessions", "why": "nothing is worn; comfort, placement, audio pickup quality and real-day usage are unobserved"},
 )
 
@@ -765,7 +765,7 @@ def build_receipt(main_run: Dict[str, Any], calibration_run: Optional[Dict[str, 
         "loan_materiality": (
             "material, later and narrowly: the simulated path leaves only the four device-specific "
             "questions above open. A short loan of a compatible BLE wearable should measure exactly "
-            "those, and is only meaningful once a local BLE receive client exists (Bifrost B3 / G3), "
+            "those, and is only meaningful once a local BLE receive client exists (B3 native capture client / G3), "
             "because a vendor app's cloud path would violate the local-only constraint."
         ),
     }
