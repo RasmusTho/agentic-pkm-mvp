@@ -610,10 +610,18 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
   and follows the documented pin/marker compensation path. Repository tests establish this support;
   live channel qualification remains separate. See the [Deploy procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure)
   for the exact sequence.
-- If an existing-secrets-only Linux BWS deployment remains pending after worker loss, follow the
-  same-ID recovery procedure in [Deployment and environments](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#linux-channel-secret-provisioning)
-  before starting a new deployment. A `failed` receipt leaves deployment unverified and does not
-  claim rollback or absence of partial effects.
+- If an existing-secrets-only Linux BWS deployment remains pending after worker loss, first use
+  its exact plan and ID with the same-ID terminal recovery procedure in [Deployment and
+  environments](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#linux-channel-secret-provisioning). If
+  its terminal result is absent and the current channel ID differs, the mismatch proves no ordering
+  or outcome. The narrow DEV/TEST unknown-fence path requires the original plan, existing host and
+  channel locks, ended worker/thread, quiescent owned one-offs, and a durable exact-ID replay fence.
+  Its host projection stays `unknown`; it is not deployment acceptance, success, failure, rollback,
+  or proof of no effects. If any predicate is missing, leave the host operation pending and report
+  its value-free `missing_predicate`. The change does not install or restart the VM supervisor; a
+  live call requires the approved source-installation path to load this implementation first. A
+  later deployment is a separate new operation and retains the regular candidate, migration,
+  backup, and health gates.
 - Explicit manual nonprod MVR-01C authority cutover uses the immutable native request described in
   [Multi-vault instance-state rollout boundary](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#multi-vault-instance-state-rollout-boundary).
   Supply the already-qualified binding/source/ownership-state inputs under the existing mandate;

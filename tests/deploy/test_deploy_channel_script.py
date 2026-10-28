@@ -5735,6 +5735,782 @@ def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescen
     lock_dir.rmdir()
 
 
+def test_deploy_journal_retains_superseded_request_and_terminal_by_operation_id(tmp_path):
+    from uuid import uuid4
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    first_id, second_id = str(uuid4()), str(uuid4())
+    first_plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',))
+    second_plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',))
+    journal.bind_request(first_id, first_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(first_id, stage)
+    first_terminal = journal.write(first_id, 'failed')
+
+    journal.bind_request(second_id, second_plan, False, create=True)
+    journal.write(second_id, 'prepared')
+
+    assert journal.read().operation_id == second_id
+    assert journal.operation_request(first_id)[1] == first_plan
+    with pytest.raises(PostgresDeployError):
+        journal.bound_plan(first_id)
+    assert journal.operation_receipt(first_id).payload() == first_terminal.payload()
+    assert (journal.directory / f'{first_id}.request.json').stat().st_mode & 0o777 == 0o600
+    assert (journal.directory / f'{first_id}.receipt.json').stat().st_mode & 0o777 == 0o600
+    with pytest.raises(PostgresDeployError):
+        journal.bind_request(first_id, first_plan, False, create=True)
+
+
+@pytest.mark.parametrize('terminal_stage', ['committed', 'failed'])
+@pytest.mark.parametrize('action', ['join', 'reconcile-failed'])
+@pytest.mark.parametrize('successor_stage', ['request-published', 'prepared'])
+def test_deploy_journal_returns_archived_terminal_without_touching_current_operation(
+    tmp_path, monkeypatch, terminal_stage, action, successor_stage,
+):
+    import fcntl
+    import json
+    import os
+    import threading
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops.postgres_deploy import DeployPlan
+
+    journal, first_plan, first_id, supervisor, lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch,
+    )
+    journal.bind_request(first_id, first_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(first_id, stage)
+    archived = journal.write(first_id, terminal_stage)
+
+    current_id = str(uuid4())
+    current_plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',))
+    journal.bind_request(current_id, current_plan, False, create=True)
+    if successor_stage == 'prepared':
+        journal.write(current_id, 'prepared')
+    marker = lock_dir / 'bws-owner'
+    marker.write_text(json.dumps({'operation_id': current_id}) + '\n')
+    lock_fd = os.open(marker, os.O_RDWR)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    supervisor.operation = SimpleNamespace(
+        operation_id=current_id, plan=current_plan, bootstrap=False,
+        finished=threading.Event(), thread=SimpleNamespace(is_alive=lambda: True),
+    )
+
+    request_snapshot = (journal.directory / 'test.request.json').read_bytes()
+    receipt_snapshot = (journal.directory / 'test.json').read_bytes()
+    archive_request = (journal.directory / f'{first_id}.request.json').read_bytes()
+    archive_receipt = (journal.directory / f'{first_id}.receipt.json').read_bytes()
+    marker_snapshot = marker.read_bytes()
+    lock_info = lock_dir.stat()
+    try:
+        result = supervisor.request({
+            'action': action, 'operation_id': first_id,
+            'plan': first_plan.payload(), 'bootstrap': False,
+        })
+    finally:
+        os.close(lock_fd)
+
+    assert result == {'receipt': archived.payload()}
+    assert (journal.directory / 'test.request.json').read_bytes() == request_snapshot
+    assert (journal.directory / 'test.json').read_bytes() == receipt_snapshot
+    assert (journal.directory / f'{first_id}.request.json').read_bytes() == archive_request
+    assert (journal.directory / f'{first_id}.receipt.json').read_bytes() == archive_receipt
+    assert marker.read_bytes() == marker_snapshot
+    current_lock = lock_dir.stat()
+    assert (current_lock.st_dev, current_lock.st_ino, current_lock.st_ctime_ns) == (
+        lock_info.st_dev, lock_info.st_ino, lock_info.st_ctime_ns,
+    )
+
+
+@pytest.mark.parametrize('mismatch', ['revision', 'bootstrap'])
+def test_archived_failed_reconciliation_requires_the_original_request(
+    tmp_path, monkeypatch, mismatch,
+):
+    import fcntl
+    import os
+    from uuid import uuid4
+    from app.ops.postgres_deploy import DeployPlan, PostgresDeployError
+
+    journal, first_plan, first_id, supervisor, lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch,
+    )
+    journal.bind_request(first_id, first_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(first_id, stage)
+    journal.write(first_id, 'failed')
+
+    current_id = str(uuid4())
+    current_plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',))
+    journal.bind_request(current_id, current_plan, False, create=True)
+    journal.write(current_id, 'prepared')
+    marker = lock_dir / 'bws-owner'
+    lock_fd = os.open(marker, os.O_RDWR)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    request_snapshot = (journal.directory / 'test.request.json').read_bytes()
+    receipt_snapshot = (journal.directory / 'test.json').read_bytes()
+    marker_snapshot = marker.read_bytes()
+    try:
+        selected_plan = (
+            DeployPlan('test', 'c' * 40, first_plan.services, first_plan.consumers)
+            if mismatch == 'revision' else first_plan
+        )
+        bootstrap = mismatch == 'bootstrap'
+        with pytest.raises(PostgresDeployError):
+            supervisor.request({
+                'action': 'reconcile-failed', 'operation_id': first_id,
+                'plan': selected_plan.payload(), 'bootstrap': bootstrap,
+            })
+    finally:
+        os.close(lock_fd)
+
+    assert (journal.directory / 'test.request.json').read_bytes() == request_snapshot
+    assert (journal.directory / 'test.json').read_bytes() == receipt_snapshot
+    assert marker.read_bytes() == marker_snapshot
+    assert journal.operation_receipt(first_id).terminal_result == 'failed'
+
+
+@pytest.mark.parametrize('bootstrap,cutover', [
+    ('false', False), (0, False), (True, True),
+])
+def test_bound_plan_rejects_malformed_or_incompatible_current_bootstrap(
+    tmp_path, bootstrap, cutover,
+):
+    import json
+    from uuid import uuid4
+    from app.ops.postgres_deploy import AuthorityCutover, DeployJournal, DeployPlan, PostgresDeployError
+
+    operation_id = str(uuid4())
+    selected = AuthorityCutover('selected', '/srv/selected', '/srv/owners') if cutover else None
+    plan = DeployPlan(
+        'test', 'a' * 40, ('db',), ('postgres-db',), authority_cutover=selected,
+    )
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    journal._write_json('test.request.json', json.loads(json.dumps({
+        'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': bootstrap,
+    })))
+
+    with pytest.raises(PostgresDeployError):
+        journal.bound_plan(operation_id)
+
+
+def test_source_terminal_admission_rejects_malformed_current_bootstrap(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from app.ops.native_source_admission import require_terminal_deployment
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    journal, plan, operation_id, _supervisor, _lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch, lock=False,
+    )
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    journal.write(operation_id, 'failed')
+    journal._write_json('test.request.json', json.loads(json.dumps({
+        'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': 'false',
+    })))
+    effects = SimpleNamespace(config=SimpleNamespace(journal=journal))
+
+    with pytest.raises(PostgresDeployError):
+        require_terminal_deployment(effects)
+
+
+def test_deploy_journal_does_not_expose_terminal_archive_before_latest_write(tmp_path, monkeypatch):
+    from uuid import uuid4
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',))
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    before = journal.read()
+    assert before.stage == 'activating'
+
+    def fail_latest_write(_receipt):
+        raise PostgresDeployError()
+
+    monkeypatch.setattr(journal, '_persist', fail_latest_write)
+    with pytest.raises(PostgresDeployError):
+        journal.write(operation_id, 'failed')
+
+    assert journal.read().payload() == before.payload()
+    assert journal.operation_receipt(operation_id) is None
+    assert not (journal.directory / f'{operation_id}.receipt.json').exists()
+
+
+def test_deploy_journal_retains_karakeep_request_shape_without_postgres_profile(tmp_path):
+    from uuid import uuid4
+    from app.ops.karakeep_deploy import KarakeepPlan
+    from app.ops.postgres_deploy import DeployJournal
+
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    first_id, second_id = str(uuid4()), str(uuid4())
+    first_plan = KarakeepPlan('test', 'a' * 40)
+    second_plan = KarakeepPlan('test', 'b' * 40)
+    journal.bind_request(first_id, first_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(first_id, stage)
+    first_terminal = journal.write(first_id, 'committed')
+
+    journal.bind_request(second_id, second_plan, False, create=True)
+    journal.write(second_id, 'prepared')
+
+    assert journal.operation_request(first_id) == ({
+        'operation_id': first_id, 'plan': first_plan.payload(), 'bootstrap': False,
+    }, first_plan)
+    assert journal.operation_receipt(first_id).payload() == first_terminal.payload()
+    assert journal.read().operation_id == second_id
+
+
+def test_deploy_journal_retains_late_source_failure_on_failed_terminal(tmp_path):
+    from uuid import uuid4
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan
+
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    first_id, second_id = str(uuid4()), str(uuid4())
+    first_plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',))
+    second_plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',))
+    journal.bind_request(first_id, first_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(first_id, stage)
+    journal.write(first_id, 'failed')
+
+    journal.record_source_failure(first_id, first_plan.revision, 'legacy_source_refused')
+    retained = journal.operation_receipt(first_id)
+    assert retained.source_failure == 'legacy_source_refused'
+
+    journal.bind_request(second_id, second_plan, False, create=True)
+    journal.write(second_id, 'prepared')
+    assert journal.operation_receipt(first_id).payload() == retained.payload()
+
+
+def _unknown_deploy_supervisor(
+    tmp_path, monkeypatch, *, latest_mismatch=False, predecessor_terminal=False, lock=True,
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan
+
+    root = tmp_path / 'checkout'
+    deploy_dir = root / 'config/deploy'
+    deploy_dir.mkdir(parents=True)
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',))
+    if predecessor_terminal:
+        prior_id = str(uuid4())
+        prior_plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',))
+        journal.bind_request(prior_id, prior_plan, False, create=True)
+        for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+            journal.write(prior_id, stage)
+        journal.write(prior_id, 'committed')
+    if latest_mismatch:
+        latest_id = str(uuid4())
+        latest_plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',))
+        journal.bind_request(latest_id, latest_plan, False, create=True)
+        journal.write(latest_id, 'prepared')
+    lock_dir = deploy_dir / 'test.env.lock'
+    if lock:
+        lock_dir.mkdir(mode=0o700)
+        (lock_dir / 'bws-owner').touch(mode=0o600)
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    monkeypatch.setattr(linux.LinuxEffects, 'compose', lambda _self, *_args: '[]')
+    monkeypatch.setattr(linux.LinuxEffects, '_running_one_shots', lambda _self: False)
+    return journal, plan, operation_id, linux.DeploymentSupervisor(config), lock_dir
+
+
+def test_unknown_deploy_reconciliation_fences_exact_id_without_newer_terminal(tmp_path, monkeypatch):
+    import json
+    from app.ops.postgres_deploy import DeployJournal
+
+    journal, plan, operation_id, supervisor, lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch, latest_mismatch=True,
+    )
+    latest_request = (journal.directory / 'test.request.json').read_bytes()
+    latest_receipt = (journal.directory / 'test.json').read_bytes()
+    assert journal.read().operation_id != operation_id
+    assert journal.read().terminal_result is None
+
+    result = supervisor.request({
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': plan.payload(), 'bootstrap': False,
+    })
+
+    assert result['outcome'] == 'unknown'
+    assert result['operation_id'] == operation_id
+    assert result['plan_sha256'] == DeployJournal.plan_fingerprint(plan)
+    assert not lock_dir.exists()
+    assert (journal.directory / 'test.request.json').read_bytes() == latest_request
+    assert (journal.directory / 'test.json').read_bytes() == latest_receipt
+    tombstone = json.loads((journal.directory / f'{operation_id}.unknown.json').read_text())
+    assert tombstone['outcome'] == 'unknown'
+    assert tombstone['plan'] == json.loads(json.dumps(plan.payload()))
+    assert not (journal.directory / f'{operation_id}.request.json').exists()
+    assert tombstone['proof']['channel_lock_acquired'] is True
+    assert set(tombstone['proof']['channel_lock_identity']) == {'device', 'inode', 'changed_ns'}
+    assert all(type(value) is int for value in tombstone['proof']['channel_lock_identity'].values())
+    assert tombstone['proof']['worker_quiescent'] is True
+    assert tombstone['proof']['owned_one_offs_quiescent'] is True
+    assert tombstone['proof']['replay_fence_durable'] is True
+
+
+@pytest.mark.parametrize('blocker', [
+    'active-worker', 'live-thread', 'held-channel-lock', 'non-quiescent-one-off', 'missing-channel-lock',
+    'conflicting-request', 'existing-terminal', 'malformed-plan', 'bootstrap', 'prod',
+])
+def test_unknown_deploy_reconciliation_refuses_unproven_or_out_of_scope_state(
+    tmp_path, monkeypatch, blocker,
+):
+    import fcntl
+    import json
+    import os
+    import threading
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployPlan, PostgresDeployError
+
+    journal, plan, operation_id, supervisor, lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch, lock=blocker != 'missing-channel-lock',
+    )
+    expected_predicates = {
+        'active-worker': 'worker_is_quiescent',
+        'live-thread': 'worker_thread_is_absent',
+        'held-channel-lock': 'channel_lock_is_acquired',
+        'non-quiescent-one-off': 'compose_and_owned_one_offs_are_quiescent',
+        'missing-channel-lock': 'channel_lock_is_acquired',
+        'conflicting-request': 'original_plan_matches_retained_request',
+        'existing-terminal': 'operation_has_no_terminal_receipt',
+        'malformed-plan': 'supplied_plan_is_valid',
+        'bootstrap': 'request_scope_is_allowed',
+        'prod': 'request_scope_is_allowed',
+    }
+    held_fd = None
+    submitted_plan = plan
+    bootstrap = False
+    if blocker in {'active-worker', 'live-thread'}:
+        finished = threading.Event()
+        if blocker == 'live-thread':
+            finished.set()
+        supervisor.operation = SimpleNamespace(
+            operation_id=operation_id, plan=plan, bootstrap=False,
+            finished=finished, thread=SimpleNamespace(is_alive=lambda: True),
+        )
+    elif blocker == 'held-channel-lock':
+        held_fd = os.open(lock_dir / 'bws-owner', os.O_RDWR)
+        fcntl.flock(held_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    elif blocker == 'non-quiescent-one-off':
+        monkeypatch.setattr(
+            linux.LinuxEffects, 'compose',
+            lambda _self, *_args: json.dumps([{'Service': 'migrate', 'State': 'running', 'Health': ''}]),
+        )
+    elif blocker == 'conflicting-request':
+        conflicting_plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',))
+        journal.bind_request(operation_id, conflicting_plan, False, create=True)
+        journal.write(operation_id, 'prepared')
+        submitted_plan = plan
+    elif blocker == 'existing-terminal':
+        journal.bind_request(operation_id, plan, False, create=True)
+        for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+            journal.write(operation_id, stage)
+        journal.write(operation_id, 'committed')
+    elif blocker == 'malformed-plan':
+        submitted_plan = {'unexpected': True}
+    elif blocker == 'bootstrap':
+        bootstrap = True
+    elif blocker == 'prod':
+        submitted_plan = DeployPlan('prod', 'a' * 40, ('db',), ('postgres-db',))
+
+    request_snapshot = (
+        (journal.directory / 'test.request.json').read_bytes()
+        if (journal.directory / 'test.request.json').exists() else None
+    )
+    receipt_snapshot = (
+        (journal.directory / 'test.json').read_bytes()
+        if (journal.directory / 'test.json').exists() else None
+    )
+    try:
+        with pytest.raises(PostgresDeployError) as error:
+            supervisor.request({
+                'action': 'reconcile-unknown', 'operation_id': operation_id,
+                'plan': submitted_plan.payload() if isinstance(submitted_plan, DeployPlan) else submitted_plan,
+                'bootstrap': bootstrap,
+            })
+        assert isinstance(error.value, linux.UnknownDeployFenceRefused)
+        assert error.value.missing_predicate == expected_predicates[blocker]
+    finally:
+        if held_fd is not None:
+            os.close(held_fd)
+
+    assert not (journal.directory / f'{operation_id}.unknown.json').exists()
+    assert ((journal.directory / 'test.request.json').read_bytes() if request_snapshot is not None else None) == request_snapshot
+    assert ((journal.directory / 'test.json').read_bytes() if receipt_snapshot is not None else None) == receipt_snapshot
+
+
+def test_reconciled_unknown_deploy_is_idempotent_and_cannot_replay(tmp_path, monkeypatch):
+    from app.ops.postgres_deploy import DeployPlan, PostgresDeployError
+
+    journal, plan, operation_id, supervisor, _lock_dir = _unknown_deploy_supervisor(tmp_path, monkeypatch)
+    request = {
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': plan.payload(), 'bootstrap': False,
+    }
+    first = supervisor.request(request)
+    assert supervisor.request(request) == first
+    different_plan = DeployPlan('test', 'b' * 40, plan.services, plan.consumers)
+    with pytest.raises(PostgresDeployError) as changed_plan:
+        supervisor.request({**request, 'plan': different_plan.payload()})
+    assert changed_plan.value.missing_predicate == 'unknown_tombstone_matches_supplied_plan'
+    for action in ('prepare', 'activate', 'join', 'reconcile-failed', 'prove-absence'):
+        with pytest.raises(PostgresDeployError):
+            supervisor.request({**request, 'action': action})
+    with pytest.raises(PostgresDeployError):
+        journal.bind_request(operation_id, plan, False, create=True)
+
+
+def test_unknown_fenced_latest_allows_fresh_id_without_terminalizing_old_id(tmp_path, monkeypatch):
+    from threading import Event
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployPlan
+
+    journal, plan, operation_id, supervisor, _lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch,
+    )
+    journal.bind_request(operation_id, plan, False, create=True)
+    journal.write(operation_id, 'prepared')
+    request = {
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': plan.payload(), 'bootstrap': False,
+    }
+    assert supervisor.request(request)['outcome'] == 'unknown'
+
+    new_id = str(uuid4())
+    new_plan = DeployPlan('test', 'b' * 40, plan.services, plan.consumers)
+    assert journal._has_unknown_fence_for_request(operation_id)
+    assert journal.can_admit_request_after_current(new_id, journal.read())
+
+    class ReadyOperation:
+        def __init__(self, _effects, selected_id, selected_plan, bootstrap):
+            self.operation_id = selected_id
+            self.plan = selected_plan
+            self.bootstrap = bootstrap
+            self.ready = Event()
+            self.finished = Event()
+            self.failed = False
+            self.thread = SimpleNamespace(start=self.start, is_alive=lambda: False)
+
+        def start(self):
+            journal.bind_request(new_id, new_plan, False, create=True)
+            journal.write(new_id, 'prepared')
+            self.ready.set()
+
+        def result(self):
+            return {'ready': self.ready.is_set()}
+
+    monkeypatch.setattr(linux, 'SupervisedOperation', ReadyOperation)
+    assert supervisor.request({
+        'action': 'prepare', 'operation_id': new_id,
+        'plan': new_plan.payload(), 'bootstrap': False,
+    }) == {'ready': True}
+    assert journal.read().operation_id == new_id
+    assert journal.read().stage == 'prepared'
+    assert journal.unknown_tombstone(operation_id) is not None
+    assert journal.operation_receipt(operation_id) is None
+    assert journal.operation_request(operation_id)[1] == plan
+
+
+def test_unknown_fenced_interrupted_request_preserves_prior_terminal_and_allows_new_id(
+    tmp_path, monkeypatch,
+):
+    from uuid import uuid4
+    from app.ops.postgres_deploy import DeployPlan
+
+    journal, plan, operation_id, supervisor, _lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch, predecessor_terminal=True,
+    )
+    prior = journal.read()
+    assert prior is not None and prior.terminal_result == 'committed'
+    journal.bind_request(operation_id, plan, False, create=True)
+    prior = journal.operation_receipt(prior.operation_id)
+    assert prior is not None
+
+    request = {
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': plan.payload(), 'bootstrap': False,
+    }
+    assert supervisor.request(request)['outcome'] == 'unknown'
+    new_id = str(uuid4())
+    new_plan = DeployPlan('test', 'c' * 40, plan.services, plan.consumers)
+    journal.bind_request(new_id, new_plan, False, create=True)
+    journal.write(new_id, 'prepared')
+
+    assert journal.read().operation_id == new_id
+    assert journal.operation_request(operation_id)[1] == plan
+    assert journal.unknown_tombstone(operation_id) is not None
+    assert journal.operation_receipt(operation_id) is None
+    assert journal.operation_receipt(prior.operation_id).payload() == prior.payload()
+
+
+def test_unknown_deploy_fence_retry_retires_lock_after_durable_tombstone(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    journal, plan, operation_id, supervisor, lock_dir = _unknown_deploy_supervisor(tmp_path, monkeypatch)
+    request = {
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': plan.payload(), 'bootstrap': False,
+    }
+    retire = linux.LinuxEffects.retire_reconciled_channel_lock
+
+    def fail_retirement(*_args, **_kwargs):
+        raise PostgresDeployError()
+
+    monkeypatch.setattr(linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(fail_retirement))
+    with pytest.raises(linux.UnknownDeployFenceRefused) as refusal:
+        supervisor.request(request)
+    assert refusal.value.missing_predicate == 'channel_lock_is_retired'
+    assert (journal.directory / f'{operation_id}.unknown.json').exists()
+    assert lock_dir.exists()
+
+    monkeypatch.setattr(linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(retire))
+    response = supervisor.request(request)
+    assert response['outcome'] == 'unknown'
+    assert not lock_dir.exists()
+
+
+def test_unknown_fence_write_failure_cannot_replay_retained_id_without_lock(
+    tmp_path, monkeypatch,
+):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    journal, plan, operation_id, supervisor, lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch, predecessor_terminal=True,
+    )
+    request_payload = json.loads(json.dumps({
+        'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': False,
+    }))
+    # Model a crash after the latest request rename but before its per-ID copy.
+    journal._write_json('test.request.json', json.loads(json.dumps(request_payload)))
+    original_write = journal._write_json
+
+    def fail_tombstone_write(name, payload):
+        if name == f'{operation_id}.unknown.json':
+            raise PostgresDeployError()
+        original_write(name, payload)
+
+    monkeypatch.setattr(journal, '_write_json', fail_tombstone_write)
+    with pytest.raises(linux.UnknownDeployFenceRefused) as refusal:
+        supervisor.request({
+            'action': 'reconcile-unknown', 'operation_id': operation_id,
+            'plan': plan.payload(), 'bootstrap': False,
+        })
+    assert refusal.value.missing_predicate == 'durable_replay_fence_is_written'
+    assert journal.operation_request(operation_id)[0] == request_payload
+    assert journal.unknown_tombstone(operation_id) is None
+
+    # A vanished lock must not become implicit permission to restart the ID.
+    (lock_dir / 'bws-owner').unlink()
+    lock_dir.rmdir()
+    monkeypatch.setattr(linux, 'SupervisedOperation', lambda *_args: pytest.fail(
+        'retained operation ID must not start a second worker',
+    ))
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({
+            'action': 'prepare', 'operation_id': operation_id,
+            'plan': plan.payload(), 'bootstrap': False,
+        })
+    assert journal.read().operation_id != operation_id
+    assert not (journal.directory / f'{operation_id}.unknown.json').exists()
+
+
+def test_retained_nonterminal_id_is_refused_before_worker_or_lock_creation(tmp_path, monkeypatch):
+    import json
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    journal, plan, operation_id, supervisor, lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch, latest_mismatch=True,
+    )
+    latest = journal.read()
+    assert latest is not None and latest.terminal_result is None
+    for stage in ('preflighted', 'materialized', 'activating'):
+        journal.write(latest.operation_id, stage)
+    journal.write(latest.operation_id, 'failed')
+    journal._write_json(f'{operation_id}.request.json', json.loads(json.dumps({
+        'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': False,
+    })))
+    request_snapshot = (journal.directory / 'test.request.json').read_bytes()
+    receipt_snapshot = (journal.directory / 'test.json').read_bytes()
+    (lock_dir / 'bws-owner').unlink()
+    lock_dir.rmdir()
+
+    class UnexpectedWorker:
+        def __init__(self, *_args, **_kwargs):
+            pytest.fail('retained request must be refused before worker construction')
+
+    monkeypatch.setattr(linux, 'SupervisedOperation', UnexpectedWorker)
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({
+            'action': 'prepare', 'operation_id': operation_id,
+            'plan': plan.payload(), 'bootstrap': False,
+        })
+
+    assert not lock_dir.exists()
+    assert (journal.directory / 'test.request.json').read_bytes() == request_snapshot
+    assert (journal.directory / 'test.json').read_bytes() == receipt_snapshot
+
+
+def test_unknown_fence_retry_refuses_unverifiable_channel_lock_identity(tmp_path, monkeypatch):
+    import os
+    from app.ops import postgres_deploy_linux as linux
+
+    journal, plan, operation_id, supervisor, lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch,
+    )
+    request = {
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': plan.payload(), 'bootstrap': False,
+    }
+    def fail_retirement(*_args, **_kwargs):
+        raise linux.PostgresDeployError()
+
+    monkeypatch.setattr(linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(fail_retirement))
+    with pytest.raises(linux.UnknownDeployFenceRefused) as first_refusal:
+        supervisor.request(request)
+    assert first_refusal.value.missing_predicate == 'channel_lock_is_retired'
+    assert journal.unknown_tombstone(operation_id) is not None
+    assert lock_dir.exists()
+
+    lock_path = lock_dir
+    original_stat = os.stat
+
+    def fail_lock_stat(path, *args, **kwargs):
+        if os.fspath(path) == os.fspath(lock_path):
+            raise PermissionError('injected channel lock stat refusal')
+        return original_stat(path, *args, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(linux.os, 'stat', fail_lock_stat)
+        with pytest.raises(linux.UnknownDeployFenceRefused) as retry_refusal:
+            supervisor.request(request)
+    assert retry_refusal.value.missing_predicate == 'channel_lock_identity_is_verifiable'
+    assert lock_dir.is_dir()
+    assert journal.unknown_tombstone(operation_id) is not None
+
+
+def test_absence_reconciliation_refuses_an_archived_request_for_that_id(tmp_path, monkeypatch):
+    from uuid import uuid4
+    from app.ops.postgres_deploy import DeployPlan, PostgresDeployError
+
+    journal, target_plan, target_id, supervisor, _lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch, lock=False,
+    )
+    journal.bind_request(target_id, target_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(target_id, stage)
+    journal.write(target_id, 'failed')
+
+    current_id = str(uuid4())
+    current_plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',))
+    journal.bind_request(current_id, current_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(current_id, stage)
+    journal.write(current_id, 'failed')
+
+    with pytest.raises(PostgresDeployError):
+        supervisor._prove_absence(target_id, target_plan)
+    assert journal.operation_request(target_id)[1] == target_plan
+    assert journal.operation_receipt(target_id).terminal_result == 'failed'
+    assert journal.read().operation_id == current_id
+
+
+def test_unknown_deploy_retry_reestablishes_tombstone_directory_durability(tmp_path, monkeypatch):
+    import os
+    import stat
+    from app.ops import postgres_deploy_linux as linux
+
+    journal, plan, operation_id, supervisor, lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch,
+    )
+    request = {
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': plan.payload(), 'bootstrap': False,
+    }
+    original_fsync = os.fsync
+    failed = {'directory': False}
+    journal.directory.mkdir(mode=0o700)
+    journal_info = journal.directory.stat()
+    tombstone_path = journal.directory / f'{operation_id}.unknown.json'
+
+    def fail_one_directory_fsync(descriptor):
+        info = os.fstat(descriptor)
+        if (stat.S_ISDIR(info.st_mode)
+            and (info.st_dev, info.st_ino) == (journal_info.st_dev, journal_info.st_ino)
+            and tombstone_path.exists() and not failed['directory']):
+            failed['directory'] = True
+            raise OSError('injected journal directory fsync failure')
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(os, 'fsync', fail_one_directory_fsync)
+    with pytest.raises(linux.UnknownDeployFenceRefused) as refused:
+        supervisor.request(request)
+    assert refused.value.missing_predicate == 'durable_replay_fence_is_written'
+    assert (journal.directory / f'{operation_id}.unknown.json').exists()
+    assert lock_dir.exists()
+
+    response = supervisor.request(request)
+    assert response['outcome'] == 'unknown'
+    assert not lock_dir.exists()
+
+
+def test_unknown_fence_retry_preserves_a_later_operation_lock(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployPlan
+
+    journal, plan, operation_id, supervisor, lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch,
+    )
+    request = {
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': plan.payload(), 'bootstrap': False,
+    }
+    assert supervisor.request(request)['outcome'] == 'unknown'
+    new_id = str(uuid4())
+    new_plan = DeployPlan('test', 'b' * 40, plan.services, plan.consumers)
+    journal.bind_request(new_id, new_plan, False, create=True)
+    journal.write(new_id, 'prepared')
+    effects = linux.LinuxEffects(supervisor.config)
+    effects.operation_id = new_id
+    with effects.channel_lock():
+        pass
+    supervisor.operation = SimpleNamespace(
+        operation_id=new_id, plan=new_plan, bootstrap=False,
+        finished=threading.Event(), thread=SimpleNamespace(is_alive=lambda: False),
+    )
+    supervisor.operation.finished.set()
+    later_lock = lock_dir.stat()
+
+    assert supervisor.request(request)['outcome'] == 'unknown'
+    assert lock_dir.is_dir()
+    current_lock = lock_dir.stat()
+    assert (current_lock.st_dev, current_lock.st_ino, current_lock.st_ctime_ns) == (
+        later_lock.st_dev, later_lock.st_ino, later_lock.st_ctime_ns,
+    )
+    assert journal.read().operation_id == new_id
+    assert journal.read().stage == 'prepared'
+
+
 @pytest.mark.parametrize('blocker', [
     'live-worker', 'held-lock', 'non-quiescent', 'running-migrate',
     'running-instance-state-init', 'changed-request', 'different-operation', 'malformed-journal',
@@ -5881,6 +6657,301 @@ def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_pat
     assert captured == [operation_id]
     with controller._locked_journal() as descriptor:
         assert controller._pending(descriptor) is None
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+def test_host_reconciles_unknown_deploy_only_after_exact_native_fence(
+    monkeypatch, tmp_path, capsys, channel,
+):
+    import json
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan
+
+    controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation(channel, allow_bootstrap=False) as (operation, resumed):
+        assert not resumed
+        operation_id = operation.operation_id
+        operation.prepare_mutation()
+    expected_plan = DeployPlan(
+        channel, 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'),
+    )
+    remote_calls = []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-' + channel
+
+        def reconcile_unknown(self, selected_id, plan):
+            assert selected_id == operation_id
+            assert plan == expected_plan
+            remote_calls.append(selected_id)
+            return {
+                'contract': 'native-unknown-deploy-fence.v1',
+                'operation_id': selected_id,
+                'channel': channel,
+                'candidate_sha': plan.revision,
+                'image_digest': '',
+                'plan_sha256': DeployJournal.plan_fingerprint(plan),
+                'outcome': 'unknown',
+                'native_worker_quiescent_at_fence': True,
+                'native_thread_absent_at_fence': True,
+                'native_channel_lock_acquired_at_fence': True,
+                'native_owned_one_offs_quiescent_at_fence': True,
+                'native_replay_fence_durable': True,
+            }
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    argv = [
+        channel, 'a' * 40, '--existing-secrets-only', '--reconcile-unknown-pending',
+        '--operation-id', operation_id,
+    ]
+    assert host.main(argv) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output['outcome'] == 'unknown'
+    assert output['host_operation_reconciled'] is True
+    with controller._locked_journal() as descriptor:
+        assert controller._pending(descriptor) is None
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        with os.fdopen(os.dup(descriptor), 'r', encoding='utf-8') as source:
+            records = [json.loads(line) for line in source]
+    assert records[-1]['stage'] == 'reconciled-unknown'
+    assert records[-1]['source'] == 'remote-terminal-unknown-deploy-fenced'
+    assert records[-1]['target'] == channel
+    assert records[-1]['allow_bootstrap'] is False
+
+    assert host.main(argv) == 0
+    capsys.readouterr()
+    assert remote_calls == [operation_id, operation_id]
+    with controller._locked_journal() as descriptor:
+        with os.fdopen(os.dup(descriptor), 'r', encoding='utf-8') as source:
+            assert len(list(source)) == 3
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+def test_host_preserves_native_unknown_refusal_and_pending_journal(
+    monkeypatch, tmp_path, capsys, channel,
+):
+    from app.ops import postgres_deploy_host as host
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_controller import HostSecretController
+
+    controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation(channel, allow_bootstrap=False) as (operation, resumed):
+        assert not resumed
+        operation_id = operation.operation_id
+        operation.prepare_mutation()
+    journal_path = controller.directory / 'operations.jsonl'
+    before = journal_path.read_bytes()
+
+    class RefusingRemote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-' + channel
+
+        def reconcile_unknown(self, selected_id, _plan):
+            assert selected_id == operation_id
+            raise linux.UnknownDeployFenceRefused('worker_is_quiescent')
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', RefusingRemote)
+    argv = [
+        channel, 'a' * 40, '--existing-secrets-only', '--reconcile-unknown-pending',
+        '--operation-id', operation_id,
+    ]
+    assert host.main(argv) == 78
+    assert 'missing predicate: worker_is_quiescent' in capsys.readouterr().err
+    assert journal_path.read_bytes() == before
+    with controller._locked_journal() as descriptor:
+        pending = controller._pending(descriptor)
+    assert pending is not None
+    assert pending['operation_id'] == operation_id
+    assert pending['stage'] == 'sent'
+
+
+@pytest.mark.parametrize('host_state', ['prepared', 'committed', 'aborted', 'failed'])
+def test_host_unknown_reconciliation_refuses_non_sent_or_known_terminal_before_native_call(
+    monkeypatch, tmp_path, capsys, host_state,
+):
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import TerminalEvidence
+
+    channel = 'test'
+    controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation(channel, allow_bootstrap=False) as (operation, resumed):
+        assert not resumed
+        if host_state == 'prepared':
+            operation._record('prepared')
+        else:
+            operation.prepare_mutation()
+            operation.finish(TerminalEvidence(
+                operation.operation_id, 'deploy', channel, host_state, 'remote-terminal',
+            ))
+        operation_id = operation.operation_id
+    before = (controller.directory / 'operations.jsonl').read_bytes()
+    remote_calls = []
+
+    class UnexpectedRemote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-' + channel
+
+        def reconcile_unknown(self, selected_id, _plan):
+            remote_calls.append(selected_id)
+            raise AssertionError('host state must be rejected before the native RPC')
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', UnexpectedRemote)
+    result = host.main([
+        channel, 'a' * 40, '--existing-secrets-only', '--reconcile-unknown-pending',
+        '--operation-id', operation_id,
+    ])
+
+    assert result == 78
+    assert 'missing predicate: host_operation_is_sent_or_reconciled_unknown' in capsys.readouterr().err
+    assert remote_calls == []
+    assert (controller.directory / 'operations.jsonl').read_bytes() == before
+
+
+@pytest.mark.parametrize('adjacent_mode', [
+    pytest.param(['--principal-cutover'], id='principal-cutover'),
+    pytest.param(['--authority-cutover-binding', 'qualified-binding'], id='authority-cutover'),
+    pytest.param(['--promotion-plan', '/tmp/unused-promotion-plan.json'], id='promotion'),
+    pytest.param(['--persist-source-identity'], id='source-persistence'),
+    pytest.param(['--diagnose-source-identity'], id='source-diagnostic'),
+    pytest.param(['--current-state-source'], id='current-state-source'),
+    pytest.param(['--restore-operator-source-identity'], id='source-restoration'),
+    pytest.param(['--recover-test-source'], id='test-source-recovery'),
+])
+def test_host_unknown_reconciliation_refuses_adjacent_operation_modes_before_native_call(
+    monkeypatch, tmp_path, capsys, adjacent_mode,
+):
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+
+    channel = 'dev'
+    controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation(channel, allow_bootstrap=False) as (operation, resumed):
+        assert not resumed
+        operation.prepare_mutation()
+        operation_id = operation.operation_id
+    before = (controller.directory / 'operations.jsonl').read_bytes()
+    remote_calls = []
+
+    class UnexpectedRemote:
+        def __init__(self, _hostname):
+            pass
+
+        def reconcile_unknown(self, selected_id, _plan):
+            remote_calls.append(selected_id)
+            raise AssertionError('adjacent modes must be rejected before the native RPC')
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', UnexpectedRemote)
+    result = host.main([
+        channel, 'a' * 40, '--existing-secrets-only', '--reconcile-unknown-pending',
+        '--operation-id', operation_id, *adjacent_mode,
+    ])
+
+    assert result == 78
+    assert 'missing predicate: request_scope_is_allowed' in capsys.readouterr().err
+    assert remote_calls == []
+    assert (controller.directory / 'operations.jsonl').read_bytes() == before
+
+
+def test_ssh_reconcile_unknown_requires_exact_fence_response(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',))
+    expected = {
+        'contract': 'native-unknown-deploy-fence.v1',
+        'operation_id': operation_id,
+        'channel': 'test',
+        'candidate_sha': plan.revision,
+        'image_digest': '',
+        'plan_sha256': DeployJournal.plan_fingerprint(plan),
+        'outcome': 'unknown',
+        'native_worker_quiescent_at_fence': True,
+        'native_thread_absent_at_fence': True,
+        'native_channel_lock_acquired_at_fence': True,
+        'native_owned_one_offs_quiescent_at_fence': True,
+        'native_replay_fence_durable': True,
+    }
+    calls = []
+
+    def ssh(argv, **kwargs):
+        calls.append((argv, json.loads(kwargs['input'])))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(expected))
+
+    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    remote = linux.SshDeployRemote('ygg-test')
+    assert remote.reconcile_unknown(operation_id, plan) == expected
+    assert calls[0][1] == {
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': json.loads(json.dumps(plan.payload())), 'bootstrap': False,
+    }
+
+    monkeypatch.setattr(linux.subprocess, 'run', lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0, stdout=json.dumps({**expected, 'native_replay_fence_durable': False}),
+    ))
+    with pytest.raises(PostgresDeployError) as invalid_receipt:
+        remote.reconcile_unknown(operation_id, plan)
+    assert invalid_receipt.value.missing_predicate == 'durable_replay_fence_is_written'
+
+    monkeypatch.setattr(linux.subprocess, 'run', lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0, stdout=json.dumps({'refused': True, 'missing_predicate': 'worker_is_quiescent'}),
+    ))
+    with pytest.raises(linux.UnknownDeployFenceRefused) as refusal:
+        remote.reconcile_unknown(operation_id, plan)
+    assert refusal.value.missing_predicate == 'worker_is_quiescent'
+
+    monkeypatch.setattr(linux.subprocess, 'run', lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0, stdout=json.dumps({'refused': True}),
+    ))
+    with pytest.raises(linux.UnknownDeployFenceRefused) as unsupported:
+        remote.reconcile_unknown(operation_id, plan)
+    assert unsupported.value.missing_predicate == 'native_rpc_returns_fence_evidence'
+
+
+def test_ssh_reconcile_unknown_preserves_native_main_refusal(tmp_path, monkeypatch):
+    import io
+    from contextlib import redirect_stderr, redirect_stdout
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployPlan
+
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',))
+
+    def refused(channel, request):
+        assert channel == 'test'
+        assert request['action'] == 'reconcile-unknown'
+        raise linux.UnknownDeployFenceRefused('worker_is_quiescent')
+
+    def ssh(_argv, *, input, **_kwargs):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        original_stdin = linux.sys.stdin
+        try:
+            linux.sys.stdin = io.StringIO(input)
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                returncode = linux.main(['rpc', 'test'])
+        finally:
+            linux.sys.stdin = original_stdin
+        return SimpleNamespace(returncode=returncode, stdout=stdout.getvalue(), stderr=stderr.getvalue())
+
+    monkeypatch.setattr(linux, 'rpc', refused)
+    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    with pytest.raises(linux.UnknownDeployFenceRefused) as refusal:
+        linux.SshDeployRemote('ygg-test').reconcile_unknown(operation_id, plan)
+    assert refusal.value.missing_predicate == 'worker_is_quiescent'
 
 
 def test_ssh_reconcile_failed_sends_exact_same_id_and_existing_secrets_mode(monkeypatch):

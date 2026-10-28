@@ -1969,6 +1969,7 @@ prove BWS permissions, token installation, host cleanup, deployment, or live cha
 | VM reader-token recovery | `scripts/secrets push-token <vm>`; the `bws_token_push` actions (`token-push-inspect`, `token-push`, `token-push-worker`, `token-push-status`) via the installed `yggdrasil-bws-deploy` launcher | Existing target mapping; root-owned supervised launcher and systemd credential contract; stdin-only token handoff; same operation ID, generation, per-channel lock, and durable remote terminal receipt; no SSH-session ownership assumption. | `tests/deploy/test_secret_token_push.py` covers stdin/redaction, generation, lock, worker, systemd binding, and terminality. The live receipt #6114638077 verifies active encrypted reader services and matching pointers on all three channel VMs; integrated deployment/runtime acceptance remains #5667. |
 | Existing-password dev/test deployment | `python3 -m app.ops.postgres_deploy_host <channel> <revision> --existing-secrets-only` | Existing selected PostgreSQL password must pass host and VM checks before remote or local mutation; request mode is journal-bound before RPC; no BWS bootstrap is allowed; promotion/migration acknowledgement and target identity still come from this document and release-channel owners. | `tests/deploy/test_deploy_channel_script.py` and `tests/deploy/test_deploy_channel.py` cover preflight ordering, file-backed secret use, and target coupling. Live VM/Compose readiness remains #4913 and #5667. |
 | Interrupted existing-secrets-only deployment | `python3 -m app.ops.postgres_deploy_host <channel> <exact-request-revision> --existing-secrets-only --reconcile-pending [--ack-forward-only]` | Use the revision and forward-only acknowledgement from the exact persisted request. The authenticated same-ID RPC refuses a live worker, mismatched request or receipt, held channel lock, malformed lock state, or non-quiescent Compose state, including a still-running `migrate` or `instance-state-init` one-shot. It records `failed` only after the worker ended and the existing lock is acquired; reconciliation changes no pin, migration marker, container, database, vault, or BWS value. | `tests/deploy/test_deploy_channel_script.py::test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescence`, `::test_failed_bws_activation_reconciliation_preserves_ambiguous_state`, `::test_linux_quiescence_waits_for_one_shot_compose_services`, and `::test_host_reconciles_matching_failed_bws_deploy_receipt` cover the receipt and refusal boundaries. |
+| Exact-ID unknown deployment fence | `python3 -m app.ops.postgres_deploy_host <channel> <exact-request-revision> --existing-secrets-only --reconcile-unknown-pending --operation-id <id> [original plan flags]` | DEV/TEST only; exact pending `deploy` ID, original plan matching any retained per-ID request, `allow_bootstrap=false`, and no cutovers. Host lock stays held through native fence and host projection. Native supervisor mutex, existing channel lock, ended worker/thread, quiescent Compose and one-offs, and durable ID tombstone are mandatory. The tombstone records the exact lock identity so retry retires only that lock; a later operation's lock is preserved. Mismatch alone proves nothing. Result is `unknown`, never success/failure/rollback/no-effects; the fence leaves latest channel slots unchanged and same-ID replay is refused. A fresh ID may supersede only that exact tombstoned predecessor; the old request and tombstone remain, and no terminal receipt is invented. A different unfenced nonterminal latest ID continues to block admission. If any predicate is unavailable, remain pending and report its finite, value-free `missing_predicate`. | `tests/deploy/test_deploy_channel_script.py::test_unknown_deploy_reconciliation_fences_exact_id_without_newer_terminal`, `::test_unknown_deploy_reconciliation_refuses_unproven_or_out_of_scope_state`, `::test_reconciled_unknown_deploy_is_idempotent_and_cannot_replay`, `::test_unknown_fenced_latest_allows_fresh_id_without_terminalizing_old_id`, `::test_unknown_fenced_interrupted_request_preserves_prior_terminal_and_allows_new_id`, `::test_unknown_fence_retry_preserves_a_later_operation_lock`, `::test_unknown_deploy_fence_retry_retires_lock_after_durable_tombstone`, and `::test_host_reconciles_unknown_deploy_only_after_exact_native_fence` cover the fence and refusal boundaries. |
 | First initialization / recovery | The same host entrypoint without `--existing-secrets-only`, supervised by `scripts/postgres_deploy_service.py` and `app.ops.postgres_deploy_linux` | Only an actually empty managed database directory qualifies; agent-host and VM locks are acquired in order; absence tombstone and prepared ID are durable; one generated value is written and marker/readback verified before deployment-state mutation. The host config JSON is opened as a root-owned regular `0600` file with `O_NOFOLLOW` and a single-link check; its configured runtime-env reference must be absolute and regular. Pending-marker parsing rejects symlinked, non-regular, unreadable, or malformed markers on the Linux preflight, while an absent marker is the documented no-pending baseline. Generated runtime env is published through a private temporary file and rename. The managed root/data paths must be absolute and non-symlinked; the source directory must be an absolute root-owned `0700` tmpfs path, and the password source must be root-owned `0440` with the configured service group; the file-backed consumer map must match. | `tests/deploy/test_deploy_channel.py::test_postgres_secret_source_uses_root_only_tmpfs_and_service_gid`, `::test_postgres_secret_is_readable_by_configured_non_root_service_user`, `::test_bws_runtime_export_produces_only_credential_free_database_defaults`, and `tests/ops/test_host_secret_bootstrap.py::test_runtime_secret_reader_rejects_unsafe_files` cover related source/runtime-file protections; `::test_missing_bws_access_token_file_fails_before_provider_request` covers token-file fail-closed behavior. No focused test currently exercises the Linux host-config JSON, pending-marker symlink branches, or atomic runtime-env publication; that qualification gap remains with #5667/#4913. |
 | Channel wrapper / end-to-end acceptance | `scripts/deploy_channel.sh <channel>` with `scripts/export_runtime_env.sh` and the BWS guard | Request-bound candidate and migration acknowledgement; explicit channel environment; `/etc/yggdrasil/bws-deploy/<channel>.json`; selected capture-watch/raw-migration consumers; BWS guard before temporary state, pin, or Docker mutation; first healthy release and rollback receipts remain authoritative. | `tests/deploy/test_deploy_channel_script.py` and `tests/deploy/test_deploy_channel.py` cover ordering and failure isolation. Startup receipt and immutable target coupling remain #4913; TARS host/executor qualification remains #5052. |
 
@@ -2039,19 +2040,40 @@ controller, VM journal/lock, exact request reconciliation, existing-secrets-only
 bootstrap/prod acknowledgment gates retain their existing authority. Repository tests establish
 this recovery path; live channel qualification remains with #5667.
 
-When such a deployment remains pending after its supervised worker has ended, reconcile only the
-same operation using its exact request revision and original `--ack-forward-only` choice. The
-`--reconcile-pending` command is limited to a pending `--existing-secrets-only` operation and asks
-the remote supervisor for authenticated terminal evidence under the same operation ID. Ordinary
-same-ID `prepare`, `activate`, or `join` retries run the same lock-reconciliation proof before they
-return an existing `failed` receipt, so a receipt cannot clear host state while a retained lock still
-blocks the channel. A `failed` receipt means deployment was not verified and effects may need the
-normal deployment reconciliation;
-it does not mean the deployment was rolled back or that no effects occurred. The supervisor requires
-the worker to be inactive, the existing per-channel lock to be available, and Compose state to be
-quiescent before writing that receipt. Any unavailable or mismatched proof leaves the local operation
-pending. A later deploy uses a new operation ID and still runs the regular candidate, migration,
-backup, and health gates.
+When such a deployment remains pending after its supervised worker has ended, first use
+`--reconcile-pending` with the same operation ID, exact request revision, original
+`--ack-forward-only` choice, and other original plan inputs. It asks the remote supervisor for
+authenticated terminal evidence under that ID. Ordinary same-ID `prepare`, `activate`, or `join`
+requests return only the exact retained operation result; an unknown-fenced ID is refused. A
+`failed` receipt means deployment was not verified and effects may need the normal deployment
+reconciliation; it does not mean rollback or absence of effects.
+
+If the host's exact pending deploy ID has no terminal result and the current channel receipt or
+request names another ID, the mismatch proves neither ordering nor terminality. The owner may use
+`--reconcile-unknown-pending` only with the original, exact plan and operation ID, and only for an
+existing-secrets-only DEV/TEST deploy with no authority or principal cutover. Keep the host journal
+lock through the native call and host append. The native supervisor serializes admission, checks the
+exact in-memory worker/thread, acquires the existing channel lock, and verifies Compose and owned
+one-off quiescence. It then durably records an ID-bound `unknown` tombstone, including the exact
+channel-lock identity, before releasing that lock. Any retained per-ID request must match the supplied
+plan. This writes a host-only
+`reconciled-unknown` projection; the outcome remains unknown and is not deployment acceptance,
+success, failure, rollback, or proof of no effects. It does not replace the current channel request
+or receipt, infer chronology, or change pins, migrations, services, database, vault, or BWS values.
+If prior per-ID history is absent, the tombstone records only this new exact-ID fence and supplied
+plan; it does not claim that a prior request or receipt existed.
+Every later `prepare`, `activate`, or `join` for the tombstoned ID is refused. A new operation may
+replace an exact tombstoned latest request only after verifying the tombstone; it preserves the old
+request and does not fabricate a terminal receipt. A separate unfenced nonterminal latest ID still
+blocks admission. On retry, cleanup compares the saved lock identity and leaves any later operation's
+lock untouched. If the original plan,
+worker/thread state, channel lock, one-off census, or replay fence cannot be established, leave the
+host operation pending and report its finite, value-free `missing_predicate`. After fencing, a
+separate fresh deployment uses a new ID and passes the regular candidate, migration, backup, and
+health gates; same-image DEV-to-TEST adoption remains the owner's separate acceptance step. This
+repository change does not install or restart the VM supervisor. A live call requires the approved
+source-installation path to load this implementation first; if its exact writer and authority
+preconditions are unavailable, leave the operation pending rather than bypassing that gate.
 
 The root-owned `config/systemd/yggdrasil-bws-deploy@.service` and installed
 `scripts/postgres_deploy_service.py` launcher supervise VM work independently of SSH. Operator setup

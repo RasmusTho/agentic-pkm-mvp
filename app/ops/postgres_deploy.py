@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import os
 import re
@@ -432,6 +433,324 @@ class DeployJournal:
                     raise PostgresDeployError()
                 return receipt
 
+    def _read_json(self, name: str, *, limit: int) -> dict[str, Any] | None:
+        if not self.directory.exists() and not self.directory.is_symlink():
+            return None
+        with self._directory() as directory:
+            try:
+                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            except FileNotFoundError:
+                return None
+            with os.fdopen(descriptor, 'r') as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > limit or info.st_nlink != 1):
+                    raise PostgresDeployError()
+                try:
+                    payload = json.load(source)
+                    if not isinstance(payload, dict):
+                        raise ValueError
+                    return payload
+                except Exception:
+                    raise PostgresDeployError() from None
+
+    def _write_json(self, name: str, payload: dict[str, Any]) -> None:
+        with self._directory() as directory:
+            temporary = name + '.' + str(uuid4()) + '.tmp'
+            descriptor = os.open(
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                dir_fd=directory,
+            )
+            try:
+                with os.fdopen(descriptor, 'wb') as target:
+                    target.write((json.dumps(payload, sort_keys=True) + '\n').encode())
+                    target.flush()
+                    os.fsync(target.fileno())
+                os.rename(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+                os.fsync(directory)
+            finally:
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+
+    def _store_exact_json(self, name: str, payload: dict[str, Any], *, limit: int) -> None:
+        prior = self._read_json(name, limit=limit)
+        if prior is not None:
+            if prior != payload:
+                raise PostgresDeployError()
+            return
+        self._write_json(name, payload)
+
+    @staticmethod
+    def _operation_name(operation_id: str, suffix: str) -> str:
+        try:
+            valid = type(operation_id) is str and str(UUID(operation_id)) == operation_id
+        except (ValueError, TypeError, AttributeError):
+            valid = False
+        if not valid:
+            raise PostgresDeployError()
+        return f'{operation_id}.{suffix}.json'
+
+    @staticmethod
+    def _request_plan(raw: Any) -> DeployPlan | KarakeepPlan:
+        if isinstance(raw, dict) and set(raw) == {'channel', 'revision'}:
+            from app.ops.karakeep_deploy import KarakeepPlan
+
+            plan = KarakeepPlan(raw['channel'], raw['revision'])
+            plan.validate()
+            return plan
+        return DeployPlan.from_payload(raw)
+
+    def _validated_request(
+        self, raw: Any, *, operation_id: str | None = None,
+    ) -> tuple[dict[str, Any], DeployPlan | KarakeepPlan]:
+        if (not isinstance(raw, dict) or set(raw) != {'operation_id', 'plan', 'bootstrap'}
+            or type(raw.get('bootstrap')) is not bool):
+            raise PostgresDeployError()
+        try:
+            selected_id = str(raw['operation_id'])
+            if str(UUID(selected_id)) != selected_id or (
+                operation_id is not None and selected_id != operation_id
+            ):
+                raise PostgresDeployError()
+            plan = self._request_plan(raw['plan'])
+        except Exception:
+            raise PostgresDeployError() from None
+        if plan.channel != self.channel:
+            raise PostgresDeployError()
+        canonical = json.loads(json.dumps({
+            'operation_id': selected_id,
+            'plan': plan.payload(),
+            'bootstrap': raw['bootstrap'],
+        }))
+        if canonical != raw:
+            raise PostgresDeployError()
+        return canonical, plan
+
+    def operation_request(
+        self, operation_id: str,
+    ) -> tuple[dict[str, Any], DeployPlan | KarakeepPlan] | None:
+        """Read the exact historical request for one ID, if retained."""
+        name = self._operation_name(operation_id, 'request')
+        stored = self._read_json(name, limit=8192)
+        if stored is not None:
+            return self._validated_request(stored, operation_id=operation_id)
+        current = self._read_json(self.channel + '.request.json', limit=8192)
+        if current is None:
+            return None
+        validated = self._validated_request(current)
+        return validated if validated[0]['operation_id'] == operation_id else None
+
+    def current_request(self) -> tuple[dict[str, Any], DeployPlan | KarakeepPlan] | None:
+        """Read and validate only the latest request slot, without historical fallback."""
+        current = self._read_json(self.channel + '.request.json', limit=8192)
+        return None if current is None else self._validated_request(current)
+
+    def operation_receipt(self, operation_id: str) -> DeployReceipt | None:
+        name = self._operation_name(operation_id, 'receipt')
+        stored = self._read_json(name, limit=4096)
+        receipt = None
+        if stored is not None:
+            try:
+                receipt = DeployReceipt(**stored)
+                receipt.validate()
+            except Exception:
+                raise PostgresDeployError() from None
+            if (receipt.operation_id != operation_id or receipt.channel != self.channel
+                or receipt.terminal_result not in {'committed', 'aborted', 'failed'}):
+                raise PostgresDeployError()
+        else:
+            current = self.read()
+            if current is not None and current.operation_id == operation_id and current.terminal_result is not None:
+                receipt = current
+        if receipt is not None:
+            request = self.operation_request(operation_id)
+            if request is not None and isinstance(request[1], DeployPlan):
+                receipt.require_profile(request[1])
+        return receipt
+
+    @staticmethod
+    def plan_fingerprint(plan: DeployPlan) -> str:
+        canonical = json.dumps(plan.payload(), sort_keys=True, separators=(',', ':')).encode()
+        return hashlib.sha256(canonical).hexdigest()
+
+    def unknown_tombstone(self, operation_id: str) -> dict[str, Any] | None:
+        name = self._operation_name(operation_id, 'unknown')
+        raw = self._read_json(name, limit=16384)
+        if raw is None:
+            return None
+        if not isinstance(raw, dict) or set(raw) != {
+            'contract', 'operation_id', 'channel', 'plan', 'plan_sha256', 'bootstrap', 'outcome', 'proof',
+        }:
+            raise PostgresDeployError()
+        try:
+            plan = self._request_plan(raw['plan'])
+        except Exception:
+            raise PostgresDeployError() from None
+        proof = raw.get('proof')
+        identity = proof.get('channel_lock_identity') if isinstance(proof, dict) else None
+        if (not isinstance(identity, dict) or set(identity) != {'device', 'inode', 'changed_ns'}
+            or any(type(identity.get(key)) is not int or identity[key] < 0
+                   for key in ('device', 'inode', 'changed_ns'))):
+            raise PostgresDeployError()
+        if not isinstance(plan, DeployPlan):
+            raise PostgresDeployError()
+        expected = {
+            'contract': 'native-unknown-deploy-fence.v1',
+            'operation_id': operation_id,
+            'channel': self.channel,
+            'plan': plan.payload(),
+            'plan_sha256': self.plan_fingerprint(plan),
+            'bootstrap': False,
+            'outcome': 'unknown',
+            'proof': {
+                'channel_lock_acquired': True,
+                'channel_lock_identity': identity,
+                'worker_quiescent': True,
+                'owned_one_offs_quiescent': True,
+                'replay_fence_durable': True,
+            },
+        }
+        if (plan.channel != self.channel or raw != json.loads(json.dumps(expected))
+            or plan.authority_cutover is not None or plan.principal_cutover
+            or plan.channel not in {'dev', 'test'}):
+            raise PostgresDeployError()
+        return raw
+
+    def _has_unknown_fence_for_request(self, operation_id: str) -> bool:
+        tombstone = self.unknown_tombstone(operation_id)
+        if tombstone is None:
+            return False
+        request = self.operation_request(operation_id)
+        if request is None:
+            return True
+        return (
+            isinstance(request[1], DeployPlan)
+            and request[0]['bootstrap'] is False
+            and json.loads(json.dumps(request[1].payload())) == tombstone['plan']
+        )
+
+    def _has_retained_terminal(self, receipt: DeployReceipt) -> bool:
+        request_name = self._operation_name(receipt.operation_id, 'request')
+        receipt_name = self._operation_name(receipt.operation_id, 'receipt')
+        raw_request = self._read_json(request_name, limit=8192)
+        raw_receipt = self._read_json(receipt_name, limit=4096)
+        if raw_request is None or raw_receipt is None:
+            return False
+        try:
+            request, plan = self._validated_request(raw_request, operation_id=receipt.operation_id)
+            retained = DeployReceipt(**raw_receipt)
+            retained.validate()
+        except Exception:
+            return False
+        if (plan.channel != self.channel or retained.payload() != receipt.payload()):
+            return False
+        if isinstance(plan, DeployPlan):
+            try:
+                retained.require_profile(plan)
+            except Exception:
+                return False
+        self._store_exact_json(request_name, raw_request, limit=8192)
+        self._store_exact_json(receipt_name, raw_receipt, limit=4096)
+        return True
+
+    def _unknown_fence_allows_request_supersession(
+        self, request_id: str, receipt: DeployReceipt | None,
+    ) -> bool:
+        if not self._has_unknown_fence_for_request(request_id):
+            return False
+        if receipt is None:
+            return True
+        if receipt.operation_id == request_id:
+            return receipt.terminal_result is None
+        if receipt.terminal_result is None:
+            return False
+        return self._has_retained_terminal(receipt)
+
+    def can_admit_request_after_current(self, operation_id: str, receipt: DeployReceipt | None) -> bool:
+        """Check whether latest request/receipt state permits this exact new ID."""
+        current = self._read_json(self.channel + '.request.json', limit=8192)
+        current_id = None
+        if current is not None:
+            validated, _plan = self._validated_request(current)
+            current_id = validated['operation_id']
+        if current_id == operation_id:
+            # This ID already occupies the current request slot. Treating a
+            # missing or foreign receipt as admission evidence would replay a
+            # retained operation after worker loss.
+            return receipt is not None and receipt.operation_id == operation_id
+        if current_id is None:
+            if receipt is None:
+                return True
+            if receipt.terminal_result is None:
+                return self._has_unknown_fence_for_request(receipt.operation_id)
+            return self._has_retained_terminal(receipt)
+        if receipt is not None and current_id == receipt.operation_id:
+            if receipt.terminal_result is None:
+                return self._has_unknown_fence_for_request(receipt.operation_id)
+            return True
+        if not self._has_unknown_fence_for_request(current_id):
+            return False
+        if receipt is None:
+            return True
+        if receipt.terminal_result is None:
+            return False
+        return self._has_retained_terminal(receipt)
+
+    def fence_unknown(
+        self, operation_id: str, plan: DeployPlan, *,
+        channel_lock_identity: tuple[int, int, int],
+    ) -> dict[str, Any]:
+        plan.validate()
+        if (not isinstance(channel_lock_identity, tuple) or len(channel_lock_identity) != 3
+            or any(type(value) is not int or value < 0 for value in channel_lock_identity)):
+            raise PostgresDeployError()
+        if (plan.channel != self.channel or plan.channel not in {'dev', 'test'}
+            or plan.authority_cutover is not None or plan.principal_cutover):
+            raise PostgresDeployError()
+        existing = self.unknown_tombstone(operation_id)
+        if existing is not None:
+            if existing['plan_sha256'] != self.plan_fingerprint(plan):
+                raise PostgresDeployError()
+            return existing
+        if self.operation_receipt(operation_id) is not None:
+            raise PostgresDeployError()
+        request = self.operation_request(operation_id)
+        if request is not None and (
+            not isinstance(request[1], DeployPlan)
+            or request[1] != plan or request[0]['bootstrap'] is not False
+        ):
+            raise PostgresDeployError()
+        if request is not None:
+            request_payload = json.loads(json.dumps({
+                'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': False,
+            }))
+            self._store_exact_json(self._operation_name(operation_id, 'request'), request_payload, limit=8192)
+        tombstone = {
+            'contract': 'native-unknown-deploy-fence.v1',
+            'operation_id': operation_id,
+            'channel': self.channel,
+            'plan': plan.payload(),
+            'plan_sha256': self.plan_fingerprint(plan),
+            'bootstrap': False,
+            'outcome': 'unknown',
+            'proof': {
+                'channel_lock_acquired': True,
+                'channel_lock_identity': {
+                    'device': channel_lock_identity[0],
+                    'inode': channel_lock_identity[1],
+                    'changed_ns': channel_lock_identity[2],
+                },
+                'worker_quiescent': True,
+                'owned_one_offs_quiescent': True,
+                'replay_fence_durable': True,
+            },
+        }
+        self._store_exact_json(self._operation_name(operation_id, 'unknown'),
+                               json.loads(json.dumps(tombstone)), limit=16384)
+        return tombstone
+
     def bind_request(self, operation_id: str, plan: DeployPlan | KarakeepPlan, bootstrap: bool, *, create: bool = False) -> None:
         """Bind the same-ID receipt to immutable, value-free request inputs.
 
@@ -447,6 +766,30 @@ class DeployJournal:
         expected = {'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': bootstrap}
         # Normalize tuples to the on-disk JSON representation before comparison.
         expected = json.loads(json.dumps(expected))
+        if self.unknown_tombstone(operation_id) is not None:
+            raise PostgresDeployError()
+        retained = self._read_json(self._operation_name(operation_id, 'request'), limit=8192)
+        if retained is not None:
+            prior_retained, retained_plan = self._validated_request(retained, operation_id=operation_id)
+            if prior_retained != expected or retained_plan != plan:
+                raise PostgresDeployError()
+            if create:
+                # A retained request is durable evidence that this ID was
+                # already admitted. It may be read or reconciled, never used
+                # to create another worker.
+                raise PostgresDeployError()
+            terminal = self.operation_receipt(operation_id)
+            if terminal is not None:
+                if isinstance(plan, DeployPlan):
+                    terminal.require_profile(plan)
+                return
+            current = self._read_json(self.channel + '.request.json', limit=8192)
+            if current is None or self._validated_request(current)[0] != expected:
+                raise PostgresDeployError()
+            current_receipt = self.read()
+            if current_receipt is not None and current_receipt.operation_id != operation_id:
+                raise PostgresDeployError()
+            return
         with self._directory() as directory:
             name = self.channel + '.request.json'
             try:
@@ -460,12 +803,42 @@ class DeployJournal:
                         or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 8192 or info.st_nlink != 1):
                         raise PostgresDeployError()
                     prior = json.load(source)
+            if prior is not None:
+                prior, prior_plan = self._validated_request(prior)
             if prior == expected:
+                if create:
+                    raise PostgresDeployError()
+                self._store_exact_json(self._operation_name(operation_id, 'request'), expected, limit=8192)
                 return
             if not create or (prior and prior.get('operation_id') == operation_id):
                 raise PostgresDeployError()
             receipt = self.read()
-            if receipt and (receipt.terminal_result is None or receipt.operation_id == operation_id):
+            if prior is None and receipt is not None:
+                raise PostgresDeployError()
+            if prior is not None and receipt is None:
+                if not self._unknown_fence_allows_request_supersession(prior['operation_id'], None):
+                    raise PostgresDeployError()
+            elif prior is not None and receipt is not None:
+                if receipt.operation_id == prior['operation_id']:
+                    if (receipt.terminal_result is None
+                        and not self._unknown_fence_allows_request_supersession(
+                            prior['operation_id'], receipt,
+                        )):
+                        raise PostgresDeployError()
+                    if receipt.terminal_result is not None:
+                        if isinstance(prior_plan, DeployPlan):
+                            receipt.require_profile(prior_plan)
+                        self._store_exact_json(
+                            self._operation_name(receipt.operation_id, 'receipt'),
+                            json.loads(json.dumps(receipt.payload())), limit=4096,
+                        )
+                elif not self._unknown_fence_allows_request_supersession(prior['operation_id'], receipt):
+                    raise PostgresDeployError()
+            if prior is not None:
+                self._store_exact_json(self._operation_name(prior['operation_id'], 'request'), prior, limit=8192)
+                if prior_plan.channel != self.channel:
+                    raise PostgresDeployError()
+            elif receipt is not None:
                 raise PostgresDeployError()
             temporary = name + '.' + str(uuid4()) + '.tmp'
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
@@ -481,6 +854,7 @@ class DeployJournal:
                     os.unlink(temporary, dir_fd=directory)
                 except FileNotFoundError:
                     pass
+            self._store_exact_json(self._operation_name(operation_id, 'request'), expected, limit=8192)
 
     def _bound_request(self, operation_id: str | None) -> dict[str, Any]:
         with self._directory() as directory:
@@ -498,25 +872,40 @@ class DeployJournal:
         return request
 
     def bound_plan(self, operation_id: str) -> DeployPlan:
-        """Load the private native request, then revalidate its exact coupling."""
+        """Load and validate the exact current request used by authority checks."""
         request = self._bound_request(operation_id)
-        plan = DeployPlan.from_payload(request['plan'])
-        if plan.channel != self.channel:
+        canonical, selected = self._validated_request(request, operation_id=operation_id)
+        if not isinstance(selected, DeployPlan):
             raise PostgresDeployError()
-        self.bind_request(operation_id, plan, request['bootstrap'])
-        return plan
+        if ((selected.authority_cutover is not None or selected.principal_cutover)
+            and canonical['bootstrap']):
+            raise PostgresDeployError()
+        if self.unknown_tombstone(operation_id) is not None:
+            raise PostgresDeployError()
+        retained = self._read_json(self._operation_name(operation_id, 'request'), limit=8192)
+        if retained is not None:
+            retained_request, retained_plan = self._validated_request(
+                retained, operation_id=operation_id,
+            )
+            if retained_request != canonical or retained_plan != selected:
+                raise PostgresDeployError()
+        return selected
 
     def write(self, operation_id: str, stage: str,
               pg_acceptance: dict[str, Any] | None = None) -> DeployReceipt:
+        if self.unknown_tombstone(operation_id) is not None:
+            raise PostgresDeployError()
         scope = 'full'
-        if (self.directory / (self.channel + '.request.json')).exists():
-            request = self._bound_request(None)
-            if request['operation_id'] == operation_id:
-                scope = request['plan'].get('activation_scope', 'full')
+        current_request = self._read_json(self.channel + '.request.json', limit=8192)
+        if current_request is not None:
+            current_request, current_plan = self._validated_request(current_request)
+            if current_request['operation_id'] == operation_id and isinstance(current_plan, DeployPlan):
+                scope = current_plan.activation_scope
         receipt = DeployReceipt(operation_id, self.channel, 'deploy', stage,
                                 stage if stage in {'committed', 'aborted', 'failed'} else None, pg_acceptance,
                                 activation_scope=scope)
         previous = self.read()
+        request_bound = self.operation_request(operation_id)
         if previous and previous.operation_id == operation_id and previous.source_failure is not None:
             receipt = DeployReceipt(operation_id, self.channel, 'deploy', stage,
                                     receipt.terminal_result, pg_acceptance, previous.source_failure, scope)
@@ -528,7 +917,18 @@ class DeployJournal:
             'verifying': {'committed', 'failed'},
         }
         if previous and previous.terminal_result is None:
-            if previous.operation_id != operation_id or stage not in successors.get(previous.stage, set()):
+            advancing = (
+                previous.operation_id == operation_id
+                and stage in successors.get(previous.stage, set())
+            )
+            superseding_unknown = (
+                previous.operation_id != operation_id
+                and stage == 'prepared'
+                and request_bound is not None
+                and request_bound[0]['operation_id'] == operation_id
+                and self._unknown_fence_allows_request_supersession(previous.operation_id, previous)
+            )
+            if not advancing and not superseding_unknown:
                 raise PostgresDeployError()
         elif stage != 'prepared' or (previous and previous.operation_id == operation_id):
             raise PostgresDeployError()
@@ -541,11 +941,52 @@ class DeployJournal:
             or plan.revision != revision or previous.source_failure not in {None, reason}):
             raise PostgresDeployError()
         if previous.source_failure == reason:
+            if previous.terminal_result == 'failed':
+                self._retain_source_failure_receipt(previous, previous)
             return
         receipt = DeployReceipt(operation_id, self.channel, 'deploy', previous.stage, previous.terminal_result,
                                 source_failure=reason, activation_scope=plan.activation_scope)
         receipt.validate()
+        if receipt.terminal_result == 'failed':
+            self._retain_source_failure_receipt(previous, receipt)
         self._persist(receipt)
+
+    def _retain_source_failure_receipt(
+        self, previous: DeployReceipt, updated: DeployReceipt,
+    ) -> None:
+        """Allow only the supported late source diagnostic on a failed terminal."""
+        if (previous.operation_id != updated.operation_id
+            or previous.channel != self.channel or updated.channel != self.channel
+            or previous.terminal_result != 'failed' or updated.terminal_result != 'failed'
+            or previous.stage != 'failed' or updated.stage != 'failed'
+            or previous.source_failure not in {None, updated.source_failure}
+            or updated.source_failure is None):
+            raise PostgresDeployError()
+        previous.validate()
+        updated.validate()
+        name = self._operation_name(updated.operation_id, 'receipt')
+        expected = json.loads(json.dumps(updated.payload()))
+        stored = self._read_json(name, limit=4096)
+        if stored is None:
+            self._store_exact_json(name, expected, limit=4096)
+            return
+        try:
+            retained = DeployReceipt(**stored)
+            retained.validate()
+        except Exception:
+            raise PostgresDeployError() from None
+        if retained.operation_id != updated.operation_id or retained.channel != self.channel:
+            raise PostgresDeployError()
+        if retained.payload() == expected:
+            self._store_exact_json(name, expected, limit=4096)
+            return
+        baseline = DeployReceipt(
+            updated.operation_id, updated.channel, updated.kind, updated.stage,
+            updated.terminal_result, updated.pg_acceptance, activation_scope=updated.activation_scope,
+        )
+        if retained.payload() != json.loads(json.dumps(baseline.payload())):
+            raise PostgresDeployError()
+        self._write_json(name, expected)
 
     def _persist(self, receipt: DeployReceipt) -> DeployReceipt:
         with self._directory() as directory:
@@ -754,6 +1195,7 @@ class DeployRemote(Protocol):
     def activate(self, operation_id: str, plan: DeployPlan) -> DeployReceipt: ...
     def join(self, operation_id: str, plan: DeployPlan) -> DeployReceipt: ...
     def reconcile_failed(self, operation_id: str, plan: DeployPlan) -> DeployReceipt: ...
+    def reconcile_unknown(self, operation_id: str, plan: DeployPlan) -> dict[str, Any]: ...
     def prove_absence(self, operation_id: str, plan: DeployPlan) -> dict[str, str | bool]: ...
 
 

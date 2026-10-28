@@ -37,6 +37,7 @@ from app.config.database import (
 )
 from app.ops.bws_secret_reader import BwsReaderConfig, BwsSecretReader
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
+from app.ops.host_secret_controller import PreserveJournalBodyError
 from app.ops.native_web_acceptance import NativeWebRefusal, WEB_PROFILE
 from app.ops.postgres_deploy import (
     AuthorityCutover, DeployJournal, DeployPlan, DeployReceipt, DeployWorker, PostgresDeployError,
@@ -47,6 +48,25 @@ from app.ops.postgres_deploy import (
 _ONE_SHOT_COMPOSE_SERVICES = frozenset({'instance-state-init', 'migrate'})
 _CUTOVER_ENV = ('MVR01C_ROLLBACK_VAULT_BINDING_ID', 'MVR01C_ROLLBACK_VAULT_ROOT')
 _DEPLOY_JOURNAL_SOCKET = '/run/systemd/journal/socket'
+_UNKNOWN_DEPLOY_FENCE_PREDICATES = frozenset({
+    'current_configuration_matches',
+    'request_scope_is_allowed',
+    'supplied_plan_is_valid',
+    'host_pending_operation_matches_requested_id',
+    'host_operation_is_sent_or_reconciled_unknown',
+    'unknown_tombstone_matches_supplied_plan',
+    'unknown_tombstone_is_valid',
+    'original_plan_matches_retained_request',
+    'operation_has_no_terminal_receipt',
+    'worker_is_quiescent',
+    'worker_thread_is_absent',
+    'channel_lock_is_acquired',
+    'channel_lock_identity_is_verifiable',
+    'compose_and_owned_one_offs_are_quiescent',
+    'durable_replay_fence_is_written',
+    'channel_lock_is_retired',
+    'native_rpc_returns_fence_evidence',
+})
 _DEPLOY_FAILURE_STAGES = frozenset({
     'preflight', 'runtime_identity', 'model_access', 'migration_inventory',
     'migration_ack', 'runtime_prepare', 'pin_write', 'image_pull',
@@ -54,6 +74,17 @@ _DEPLOY_FAILURE_STAGES = frozenset({
     'scalar_runtime', 'embedding_configuration', 'health', 'version',
     'fleet_fitness', 'ui_smoke', 'capture_watch', 'receipt',
 })
+
+
+class UnknownDeployFenceRefused(PostgresDeployError, PreserveJournalBodyError):
+    """A value-free, finite explanation for a refused unknown-outcome fence."""
+
+    def __init__(self, missing_predicate: str) -> None:
+        if (type(missing_predicate) is not str
+            or missing_predicate not in _UNKNOWN_DEPLOY_FENCE_PREDICATES):
+            missing_predicate = 'durable_replay_fence_is_written'
+        self.missing_predicate = missing_predicate
+        super().__init__()
 _SOURCE_PROJECTION_FAILURE_REASONS = frozenset({
     'legacy_producer_policy_refused', 'legacy_source_refused', 'legacy_admission_refused',
     'legacy_identity_refused', 'legacy_race_refused', 'legacy_write_failed',
@@ -410,6 +441,9 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
         if receipt is None or receipt.stage != 'activating' or receipt.operation_id != os.environ.get('BWS_DEPLOY_OPERATION_ID'):
             raise PostgresDeployError()
         checkpoint['name'] = 'authority_request_binding'
+        current_request = cfg.journal._bound_request(None)
+        if current_request.get('operation_id') != receipt.operation_id:
+            raise PostgresDeployError()
         bound_plan = cfg.journal.bound_plan(receipt.operation_id)
         if os.environ.get('BWS_DEPLOY_ACTIVATION_SCOPE', 'full') != bound_plan.activation_scope:
             raise PostgresDeployError()
@@ -4180,6 +4214,8 @@ class LinuxEffects:
             if set(os.listdir(directory_fd)) != {'bws-owner'}:
                 raise PostgresDeployError()
             yield path, parent_fd, directory_fd, lock_fd
+        except UnknownDeployFenceRefused:
+            raise
         except Exception:
             raise PostgresDeployError() from None
         finally:
@@ -4232,7 +4268,12 @@ class SupervisedOperation:
 
     def _run_locked(self) -> None:
         previous = self.effects.config.journal.read()
-        if previous and previous.terminal_result is None:
+        if previous and previous.terminal_result is None and (
+            previous.operation_id == self.operation_id
+            or not self.effects.config.journal.can_admit_request_after_current(
+                self.operation_id, previous,
+            )
+        ):
             raise PostgresDeployError()
         self.effects.config.journal.bind_request(self.operation_id, self.plan, self.bootstrap, create=True)
         worker = DeployWorker(self.effects.config.journal, self.effects)
@@ -4318,13 +4359,36 @@ class DeploymentSupervisor:
 
     def _reconcile_failed(self, operation_id: str, plan: DeployPlan, bootstrap: bool) -> dict[str, Any]:
         self._require_current_config()
-        previous = self.config.journal.read()
-        if previous is None or previous.operation_id != operation_id:
+        current = self.config.journal.read()
+        previous = self.config.journal.operation_receipt(operation_id)
+        if previous is None and current is not None and current.operation_id == operation_id:
+            previous = current
+        if previous is None:
             raise PostgresDeployError()
         self.config.journal.bind_request(operation_id, plan, bootstrap)
         previous.require_profile(plan)
+        if previous.terminal_result is not None:
+            if current is None or current.operation_id != operation_id:
+                # A superseded terminal is historical evidence. Returning it
+                # must not inspect, retire, or otherwise affect the current
+                # operation's shared channel lock or journal slots.
+                return {'receipt': previous.payload()}
+            current_request = self.config.journal.current_request()
+            if current_request is None:
+                raise PostgresDeployError()
+            bound, current_plan = current_request
+            if bound['operation_id'] != operation_id:
+                # Request publication precedes the successor's prepared
+                # receipt. A crash in that window still makes this terminal
+                # historical, so do not inspect the successor's lock.
+                return {'receipt': previous.payload()}
+            if (not isinstance(current_plan, DeployPlan) or current_plan != plan
+                or bound['bootstrap'] != bootstrap):
+                raise PostgresDeployError()
         operation = self.operation
-        if operation is not None and operation.operation_id != operation_id:
+        if operation is not None and operation.operation_id != operation_id and (
+            not operation.finished.is_set() or operation.thread.is_alive()
+        ):
             raise PostgresDeployError()
         if previous.terminal_result is not None:
             if previous.terminal_result == 'failed':
@@ -4369,6 +4433,161 @@ class DeploymentSupervisor:
             effects.retire_reconciled_channel_lock(lock)
         return {'receipt': receipt.payload()}
 
+    def _reconcile_unknown(self, operation_id: str, plan: DeployPlan, bootstrap: bool) -> dict[str, Any]:
+        """Fence one unknown ordinary deploy ID without changing channel history."""
+        def refuse(predicate: str) -> None:
+            raise UnknownDeployFenceRefused(predicate)
+
+        try:
+            self._require_current_config()
+        except Exception:
+            refuse('current_configuration_matches')
+        if (bootstrap is not False or plan.channel not in {'dev', 'test'}
+            or plan.authority_cutover is not None or plan.principal_cutover
+            or plan.promotion_plan is not None):
+            refuse('request_scope_is_allowed')
+
+        def response(tombstone: dict[str, Any]) -> dict[str, Any]:
+            return {
+                'contract': 'native-unknown-deploy-fence.v1',
+                'operation_id': operation_id,
+                'channel': plan.channel,
+                'candidate_sha': plan.revision,
+                'image_digest': plan.image_digest or '',
+                'plan_sha256': tombstone['plan_sha256'],
+                'outcome': 'unknown',
+                'native_worker_quiescent_at_fence': True,
+                'native_thread_absent_at_fence': True,
+                'native_channel_lock_acquired_at_fence': True,
+                'native_owned_one_offs_quiescent_at_fence': True,
+                'native_replay_fence_durable': True,
+            }
+
+        try:
+            existing = self.config.journal.unknown_tombstone(operation_id)
+        except Exception:
+            refuse('unknown_tombstone_is_valid')
+        if existing is not None:
+            if existing['plan_sha256'] != self.config.journal.plan_fingerprint(plan):
+                refuse('unknown_tombstone_matches_supplied_plan')
+            identity = existing['proof']['channel_lock_identity']
+            expected_identity = (identity['device'], identity['inode'], identity['changed_ns'])
+            # A crash may leave the exact old lock directory after the durable
+            # fence. A replacement lock belongs to a later operation and is not
+            # part of this retry's cleanup authority.
+            lock_path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
+            try:
+                current = os.stat(lock_path, follow_symlinks=False)
+            except FileNotFoundError:
+                return response(existing)
+            except Exception:
+                refuse('channel_lock_identity_is_verifiable')
+            if (current.st_dev, current.st_ino, current.st_ctime_ns) != expected_identity:
+                return response(existing)
+            operation = self.operation
+            if operation is not None:
+                if not operation.finished.is_set():
+                    refuse('worker_is_quiescent')
+                if operation.thread.is_alive():
+                    refuse('worker_thread_is_absent')
+            if operation is not None and operation.operation_id == operation_id:
+                if operation.plan != plan or operation.bootstrap is not False:
+                    refuse('original_plan_matches_retained_request')
+            effects = LinuxEffects(self.config)
+            try:
+                with effects.failed_reconciliation_lock() as lock:
+                    opened = os.fstat(lock[2])
+                    if (opened.st_dev, opened.st_ino, opened.st_ctime_ns) != expected_identity:
+                        return response(existing)
+                    try:
+                        quiescent = effects.quiescent()
+                    except Exception:
+                        refuse('compose_and_owned_one_offs_are_quiescent')
+                    if not quiescent:
+                        refuse('compose_and_owned_one_offs_are_quiescent')
+                    try:
+                        effects.retire_reconciled_channel_lock(lock)
+                    except Exception:
+                        refuse('channel_lock_is_retired')
+            except UnknownDeployFenceRefused:
+                raise
+            except Exception:
+                refuse('channel_lock_is_acquired')
+            return response(existing)
+
+        try:
+            if self.config.journal.operation_receipt(operation_id) is not None:
+                refuse('operation_has_no_terminal_receipt')
+        except UnknownDeployFenceRefused:
+            raise
+        except Exception:
+            refuse('operation_has_no_terminal_receipt')
+        try:
+            request = self.config.journal.operation_request(operation_id)
+        except Exception:
+            refuse('original_plan_matches_retained_request')
+        if request is not None and (
+            request[1] != plan or request[0]['bootstrap'] is not False
+        ):
+            refuse('original_plan_matches_retained_request')
+        operation = self.operation
+        if operation is not None:
+            if not operation.finished.is_set():
+                refuse('worker_is_quiescent')
+            if operation.thread.is_alive():
+                refuse('worker_thread_is_absent')
+            if operation.operation_id == operation_id and (
+                operation.plan != plan or operation.bootstrap is not False
+            ):
+                refuse('original_plan_matches_retained_request')
+
+        effects = LinuxEffects(self.config)
+        try:
+            with effects.failed_reconciliation_lock() as lock:
+                # Recheck after acquiring the channel fence. The worker releases
+                # this same lock immediately before its thread publishes `finished`.
+                operation = self.operation
+                if operation is not None:
+                    if not operation.finished.is_set():
+                        refuse('worker_is_quiescent')
+                    if operation.thread.is_alive():
+                        refuse('worker_thread_is_absent')
+                    if operation.operation_id == operation_id and (
+                        operation.plan != plan or operation.bootstrap is not False
+                    ):
+                        refuse('original_plan_matches_retained_request')
+                try:
+                    quiescent = effects.quiescent()
+                except Exception:
+                    refuse('compose_and_owned_one_offs_are_quiescent')
+                if not quiescent:
+                    refuse('compose_and_owned_one_offs_are_quiescent')
+                try:
+                    request = self.config.journal.operation_request(operation_id)
+                except Exception:
+                    refuse('original_plan_matches_retained_request')
+                if request is not None and (
+                    request[1] != plan or request[0]['bootstrap'] is not False
+                ):
+                    refuse('original_plan_matches_retained_request')
+                lock_info = os.fstat(lock[2])
+                lock_identity = (lock_info.st_dev, lock_info.st_ino, lock_info.st_ctime_ns)
+                try:
+                    tombstone = self.config.journal.fence_unknown(
+                        operation_id, plan, channel_lock_identity=lock_identity,
+                    )
+                except Exception:
+                    refuse('durable_replay_fence_is_written')
+                try:
+                    effects.retire_reconciled_channel_lock(lock)
+                except Exception:
+                    refuse('channel_lock_is_retired')
+        except UnknownDeployFenceRefused:
+            raise
+        except Exception:
+            refuse('channel_lock_is_acquired')
+        return response(tombstone)
+
     def _prove_absence(self, operation_id: str, plan: DeployPlan) -> dict[str, Any]:
         """Return only fixed fields after proving this ID has no native footprint."""
         self._require_current_config()
@@ -4382,6 +4601,12 @@ class DeploymentSupervisor:
         # The private request must remain exactly bound to the foreign terminal
         # receipt. A missing, malformed, or differently bound request is ambiguous.
         self.config.journal.bound_plan(previous.operation_id)
+        if (
+            self.config.journal.operation_request(operation_id) is not None
+            or self.config.journal.operation_receipt(operation_id) is not None
+            or self.config.journal.unknown_tombstone(operation_id) is not None
+        ):
+            raise PostgresDeployError()
         lock_path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
         try:
             os.stat(lock_path, follow_symlinks=False)
@@ -4740,25 +4965,62 @@ class DeploymentSupervisor:
                 )
                 return {'source_identity_absence': proof}
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
+            if data.get('action') == 'reconcile-unknown':
+                raise UnknownDeployFenceRefused('request_scope_is_allowed')
             raise PostgresDeployError()
-        operation_id = str(data['operation_id'])
-        if str(UUID(operation_id)) != operation_id or type(data['bootstrap']) is not bool:
-            raise PostgresDeployError()
-        plan = DeployPlan.from_payload(data['plan'])
+        try:
+            operation_id = str(data['operation_id'])
+            if str(UUID(operation_id)) != operation_id or type(data['bootstrap']) is not bool:
+                raise ValueError
+        except (ValueError, TypeError, AttributeError):
+            if data['action'] == 'reconcile-unknown':
+                raise UnknownDeployFenceRefused('request_scope_is_allowed')
+            raise PostgresDeployError() from None
+        try:
+            plan = DeployPlan.from_payload(data['plan'])
+        except Exception:
+            if data['action'] == 'reconcile-unknown':
+                raise UnknownDeployFenceRefused('supplied_plan_is_valid') from None
+            raise
         if (plan.automatic or plan.authority_cutover is not None or plan.principal_cutover) and data['bootstrap']:
+            if data['action'] == 'reconcile-unknown':
+                raise UnknownDeployFenceRefused('request_scope_is_allowed')
             raise PostgresDeployError()
         if plan.channel != self.config.channel or data['action'] not in {
-            'prepare', 'activate', 'join', 'reconcile-failed', 'prove-absence'
+            'prepare', 'activate', 'join', 'reconcile-failed', 'reconcile-unknown', 'prove-absence'
         }:
+            if data['action'] == 'reconcile-unknown':
+                raise UnknownDeployFenceRefused('request_scope_is_allowed')
             raise PostgresDeployError()
         with self.mutex:
+            if (data['action'] != 'reconcile-unknown'
+                and self.config.journal.unknown_tombstone(operation_id) is not None):
+                raise PostgresDeployError()
             if data['action'] == 'prove-absence':
                 if data['bootstrap'] is not False or not plan.automatic:
                     raise PostgresDeployError()
                 return self._prove_absence(operation_id, plan)
             if data['action'] == 'reconcile-failed':
                 return self._reconcile_failed(operation_id, plan, data['bootstrap'])
+            if data['action'] == 'reconcile-unknown':
+                if data['bootstrap'] is not False:
+                    raise UnknownDeployFenceRefused('request_scope_is_allowed')
+                return self._reconcile_unknown(operation_id, plan, data['bootstrap'])
+            terminal = self.config.journal.operation_receipt(operation_id)
+            if terminal is not None:
+                self.config.journal.bind_request(operation_id, plan, data['bootstrap'])
+                terminal.require_profile(plan)
+                if terminal.terminal_result == 'failed':
+                    return self._reconcile_failed(operation_id, plan, data['bootstrap'])
+                return {'receipt': terminal.payload()}
             previous = self.config.journal.read()
+            retained_request = self.config.journal.operation_request(operation_id)
+            if (retained_request is not None
+                and (previous is None or previous.operation_id != operation_id)):
+                # A fresh-ID predicate applies only to an ID without retained
+                # history. Never construct a worker (and its channel lock) for
+                # a prior nonterminal request whose terminal evidence is absent.
+                raise PostgresDeployError()
             if previous and previous.operation_id == operation_id:
                 self.config.journal.bind_request(operation_id, plan, data['bootstrap'])
                 if ((plan.authority_cutover is not None or plan.principal_cutover)
@@ -4779,8 +5041,13 @@ class DeploymentSupervisor:
                 self.operation = None
             if self.operation is None:
                 # A daemon loss without a receipt never authorizes another worker.
-                # Only a new operation with no pending predecessor can be created.
-                if data['action'] != 'prepare' or (previous and previous.terminal_result is None):
+                # A new operation may supersede only an exactly fenced predecessor.
+                if (data['action'] != 'prepare'
+                    or (previous and previous.terminal_result is None
+                        and (previous.operation_id == operation_id
+                             or not self.config.journal.can_admit_request_after_current(
+                                 operation_id, previous,
+                             )))):
                     raise PostgresDeployError()
                 # The service binds its root-owned channel config at startup.
                 # Refuse stale config before admitting a request or starting a worker;
@@ -4843,6 +5110,8 @@ def serve(config: LinuxConfig) -> None:
 
                     with shared_caller_reservation(config.channel):
                         result = supervisor.request(request)
+            except UnknownDeployFenceRefused as exc:
+                result = {'refused': True, 'missing_predicate': exc.missing_predicate}
             except Exception:
                 result = {'refused': True}
             self.wfile.write((json.dumps(result, sort_keys=True) + '\n').encode())
@@ -4907,8 +5176,24 @@ def _rpc_via_supervisor(channel: str, request: dict[str, Any]) -> dict[str, Any]
             raw = stream.readline(response_limit + 1)
             if not raw.endswith(b'\n') or len(raw) > response_limit:
                 raise PostgresDeployError()
-    result = json.loads(raw)
-    if not isinstance(result, dict) or result.get('refused'):
+    try:
+        result = json.loads(raw)
+    except Exception:
+        if request.get('action') == 'reconcile-unknown':
+            raise UnknownDeployFenceRefused('native_rpc_returns_fence_evidence') from None
+        raise PostgresDeployError() from None
+    if isinstance(result, dict) and result.get('refused'):
+        predicate = result.get('missing_predicate')
+        if (request.get('action') == 'reconcile-unknown'
+            and type(predicate) is str
+            and predicate in _UNKNOWN_DEPLOY_FENCE_PREDICATES):
+            raise UnknownDeployFenceRefused(predicate)
+        if request.get('action') == 'reconcile-unknown':
+            raise UnknownDeployFenceRefused('native_rpc_returns_fence_evidence')
+        raise PostgresDeployError()
+    if not isinstance(result, dict):
+        if request.get('action') == 'reconcile-unknown':
+            raise UnknownDeployFenceRefused('native_rpc_returns_fence_evidence')
         raise PostgresDeployError()
     return result
 
@@ -4927,9 +5212,37 @@ class SshDeployRemote:
             'sudo', '-n', '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', plan.channel],
             input=json.dumps(request) + '\n', text=True, capture_output=True, check=False)
         if result.returncode:
+            if action == 'reconcile-unknown':
+                if result.returncode == 78:
+                    try:
+                        refused = json.loads(result.stdout)
+                    except Exception:
+                        refused = None
+                    if (isinstance(refused, dict) and set(refused) == {'refused', 'missing_predicate'}
+                        and refused.get('refused') is True
+                        and type(refused.get('missing_predicate')) is str
+                        and refused['missing_predicate'] in _UNKNOWN_DEPLOY_FENCE_PREDICATES):
+                        raise UnknownDeployFenceRefused(refused['missing_predicate'])
+                raise UnknownDeployFenceRefused('native_rpc_returns_fence_evidence')
             raise PostgresDeployError()
-        response = json.loads(result.stdout)
-        if not isinstance(response, dict) or response.get('refused'):
+        try:
+            response = json.loads(result.stdout)
+        except Exception:
+            if action == 'reconcile-unknown':
+                raise UnknownDeployFenceRefused('native_rpc_returns_fence_evidence') from None
+            raise PostgresDeployError() from None
+        if isinstance(response, dict) and response.get('refused'):
+            predicate = response.get('missing_predicate')
+            if (action == 'reconcile-unknown'
+                and type(predicate) is str
+                and predicate in _UNKNOWN_DEPLOY_FENCE_PREDICATES):
+                raise UnknownDeployFenceRefused(predicate)
+            if action == 'reconcile-unknown':
+                raise UnknownDeployFenceRefused('native_rpc_returns_fence_evidence')
+            raise PostgresDeployError()
+        if not isinstance(response, dict):
+            if action == 'reconcile-unknown':
+                raise UnknownDeployFenceRefused('native_rpc_returns_fence_evidence')
             raise PostgresDeployError()
         return response
 
@@ -5357,6 +5670,28 @@ class SshDeployRemote:
             raise PostgresDeployError()
         return receipt
 
+    def reconcile_unknown(self, operation_id: str, plan: DeployPlan) -> dict[str, Any]:
+        """Read back a durable ID-specific UNKNOWN fence, never a deploy result."""
+        self.bootstrap = False
+        response = self._request('reconcile-unknown', operation_id, plan)
+        expected: dict[str, Any] = {
+            'contract': 'native-unknown-deploy-fence.v1',
+            'operation_id': operation_id,
+            'channel': plan.channel,
+            'candidate_sha': plan.revision,
+            'image_digest': plan.image_digest or '',
+            'plan_sha256': DeployJournal.plan_fingerprint(plan),
+            'outcome': 'unknown',
+            'native_worker_quiescent_at_fence': True,
+            'native_thread_absent_at_fence': True,
+            'native_channel_lock_acquired_at_fence': True,
+            'native_owned_one_offs_quiescent_at_fence': True,
+            'native_replay_fence_durable': True,
+        }
+        if response != expected:
+            raise UnknownDeployFenceRefused('durable_replay_fence_is_written')
+        return expected
+
     def prove_absence(self, operation_id: str, plan: DeployPlan) -> dict[str, str | bool]:
         self.bootstrap = False
         response = self._request('prove-absence', operation_id, plan)
@@ -5415,6 +5750,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--compose-command')
     args = parser.parse_args(argv)
     journaling_started = False
+    rpc_request = None
     admissions = ExitStack()
     try:
         if args.action not in {'serve', 'rpc', 'cleanup'}:
@@ -5516,9 +5852,17 @@ def main(argv: list[str] | None = None) -> int:
                 effects.source.cleanup(all_consumers_stopped=True)
         else:
             request = json.load(sys.stdin)
+            rpc_request = request
             result = rpc(args.channel, request)
             print(json.dumps(result, sort_keys=True))
         return 0
+    except UnknownDeployFenceRefused as exc:
+        if (args.action == 'rpc' and isinstance(rpc_request, dict)
+            and rpc_request.get('action') == 'reconcile-unknown'):
+            print(json.dumps({'refused': True, 'missing_predicate': exc.missing_predicate}, sort_keys=True))
+        else:
+            print('database deployment refused; operation remains pending', file=sys.stderr)
+        return 78
     except NativeWebRefusal as exc:
         if args.action == 'qualify-journaling':
             from app.ops.native_journaling_acceptance import PROFILE

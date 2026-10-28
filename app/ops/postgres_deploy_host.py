@@ -15,12 +15,16 @@ from uuid import UUID, uuid4
 
 from app.ops.bws_secret_admin import BwsAdminConfig, BwsSecretAdmin
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
-from app.ops.host_secret_controller import HostSecretController, TerminalEvidence
+from app.ops.host_secret_controller import (
+    HostSecretAdmissionError, HostSecretController, TerminalEvidence,
+)
 from app.ops.postgres_deploy import (
     AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
     deploy_from_host,
 )
-from app.ops.postgres_deploy_linux import SshDeployRemote, source_identity_request_fingerprint
+from app.ops.postgres_deploy_linux import (
+    SshDeployRemote, UnknownDeployFenceRefused, source_identity_request_fingerprint,
+)
 from app.ops.secret_admin import SecretAdmin
 
 
@@ -426,6 +430,10 @@ def main(argv: list[str] | None = None) -> int:
         help='reconcile this exact existing-secrets-only operation after remote terminal evidence',
     )
     parser.add_argument(
+        '--reconcile-unknown-pending', action='store_true',
+        help='fence one exact existing-secrets-only DEV/TEST deploy as unknown after worker quiescence',
+    )
+    parser.add_argument(
         '--prove-never-admitted', action='store_true',
         help='prove this exact automatic operation left no host or native mutation footprint',
     )
@@ -478,6 +486,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
+        if args.reconcile_unknown_pending and (
+            not args.existing_secrets_only or args.channel not in {'dev', 'test'}
+            or args.operation_id is None or args.reconcile_pending
+            or args.prove_never_admitted or args.persist_source_identity
+            or args.diagnose_source_identity or args.current_state_source
+            or args.preflight_source_persistence_admission
+            or args.restore_operator_source_identity or args.resume_unattempted_operator_restoration
+            or args.reconcile_operator_unknown_cleanup or args.prove_source_persistence_never_admitted
+            or args.recover_test_source or args.reconstruct_missing_instance_state
+            or args.failed_operation_id is not None
+            or any(value is not None for value in (
+                args.authority_cutover_binding, args.authority_cutover_root,
+                args.authority_cutover_ownership_root, args.promotion_plan,
+            ))
+            or args.principal_cutover
+        ):
+            raise UnknownDeployFenceRefused('request_scope_is_allowed')
         if args.activation_scope != 'full' and (
             args.channel not in {'dev', 'test'} or not args.automatic or not args.existing_secrets_only
             or args.principal_cutover or args.promotion_plan is not None
@@ -555,11 +580,17 @@ def main(argv: list[str] | None = None) -> int:
             and args.source_producer_kind != 'vault-alpha'
         ):
             raise PostgresDeployError()
-        if args.operation_id is not None and (
-            not (args.automatic or cutover is not None or args.principal_cutover)
-            or str(UUID(args.operation_id)) != args.operation_id
-        ):
-            raise PostgresDeployError()
+        if args.operation_id is not None:
+            try:
+                operation_id_valid = str(UUID(args.operation_id)) == args.operation_id
+            except (ValueError, TypeError, AttributeError):
+                operation_id_valid = False
+            if (not (args.automatic or cutover is not None or args.principal_cutover
+                     or args.reconcile_unknown_pending)
+                or not operation_id_valid):
+                if args.reconcile_unknown_pending:
+                    raise UnknownDeployFenceRefused('request_scope_is_allowed')
+                raise PostgresDeployError()
         current_source_request = None
         request_fingerprint = None
         if args.current_state_source and cutover is not None:
@@ -855,7 +886,39 @@ def main(argv: list[str] | None = None) -> int:
                 raise PostgresDeployError()
             recovery_request = TestRecoveryRequest(failed_operation_id, plan, selected_authority)
             recovery_request.validate()
-        plan.validate()
+        try:
+            plan.validate()
+        except Exception:
+            if args.reconcile_unknown_pending:
+                raise UnknownDeployFenceRefused('supplied_plan_is_valid') from None
+            raise
+        if args.reconcile_unknown_pending:
+            remote = SshDeployRemote('ygg-' + args.channel)
+            try:
+                with controller.deploy_operation(
+                    args.channel, allow_bootstrap=False, operation_id=args.operation_id,
+                ) as (operation, resumed):
+                    if not resumed:
+                        raise UnknownDeployFenceRefused('host_pending_operation_matches_requested_id')
+                    if operation.completed_result is None:
+                        if not operation.mutation_started:
+                            raise UnknownDeployFenceRefused(
+                                'host_operation_is_sent_or_reconciled_unknown'
+                            )
+                    elif (operation.completed_result != 'reconciled-unknown'
+                          or operation.completed_source != 'remote-terminal-unknown-deploy-fenced'):
+                        raise UnknownDeployFenceRefused(
+                            'host_operation_is_sent_or_reconciled_unknown'
+                        )
+                    fence = remote.reconcile_unknown(operation.operation_id, plan)
+                    operation.finish(TerminalEvidence(
+                        operation.operation_id, 'deploy', args.channel,
+                        'reconciled-unknown', 'remote-terminal-unknown-deploy-fenced',
+                    ))
+            except HostSecretAdmissionError:
+                raise UnknownDeployFenceRefused('host_pending_operation_matches_requested_id') from None
+            print(json.dumps({**fence, 'host_operation_reconciled': True}, sort_keys=True))
+            return 0
         if args.prove_never_admitted:
             if (
                 not args.existing_secrets_only
@@ -1029,6 +1092,13 @@ def main(argv: list[str] | None = None) -> int:
                                    allow_bootstrap=not args.existing_secrets_only, **options)
         print(json.dumps(receipt.payload(), sort_keys=True))
         return 0 if receipt.terminal_result == 'committed' else 78
+    except UnknownDeployFenceRefused as exc:
+        print(
+            'unknown deployment reconciliation refused; missing predicate: '
+            + exc.missing_predicate,
+            file=sys.stderr,
+        )
+        return 78
     except Exception:
         print('database deployment refused; inspect value-free operation status', file=sys.stderr)
         return 78
