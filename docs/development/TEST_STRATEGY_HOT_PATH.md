@@ -129,6 +129,33 @@ and its consumer/refusal regressions cover this exact boundary.
 
 ### Native deployment-control serial coverage
 
+Ops-only selections use the existing bounded process runner with complete whole-module
+execution units. Their eight host-sensitive modules still start only after all parallel
+processes exit. Shared configuration and mixed subsystem routing retain their existing paths.
+The runner authenticates expansion of the complete Ops directory before execution.
+
+An additional closed source-installation profile permits only
+`app/ops/bws_installation_transaction.py`, `app/ops/postgres_deploy_linux.py`,
+`tests/ops/test_bws_installation_transaction.py`, and
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, with at least one source changed and
+regular nonsymlink inputs. It omits only `test_dormant_ownership_initialization.py`;
+all other Ops modules and seven serial boundaries remain. Unknown cochanges retain broad
+coverage. The pre-existing native deployment-control profile below has precedence.
+
+Dormant initialization protects Product/Runtime TEST vault and ledger ownership. Its actual
+CLI is `app.instance.runtime`, not the generic application CLI. A conservative static import
+closure of 453 local modules did not reach either source-installation module; the remaining
+nonliteral import iterates five fixed runtime/ledger/inventory module names in
+`legacy_owner_recovery.py`. Copying the source tree and checking its Git identity supplies
+source-integrity evidence, not BWS behavior coverage. This is a specific independence claim,
+not general Ops isolation; source/type/integrity checks remain required.
+
+[PR #6411 Unit](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/40694697597/job/122838247994)
+completed in 28m56s, with 4434 passing tests in 1619.93s. Within-module log timestamps give
+an eight-module serial lower bound of 841s, including 672s for dormant initialization.
+These historical measurements do not establish a speedup or a ten-minute bound for the new route.
+
+
 A diff containing at least one of `app/ops/host_secret_controller.py`,
 `app/ops/postgres_deploy.py`, `app/ops/postgres_deploy_linux.py` or
 `app/ops/postgres_deploy_host.py` may omit seven unrelated serial sibling modules.

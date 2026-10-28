@@ -3140,3 +3140,83 @@ def test_pinned_controller_bootstrap_selects_real_runtime_and_liveness_coverage(
     fields = dict(line.split('=', 1) for line in output.read_text().splitlines())
     assert 'tests/deploy' in fields['pytest_args'].split()
     assert 'tests/governance/test_dev_delivery_liveness_workflow.py' in fields['pytest_args'].split()
+
+
+@pytest.mark.parametrize("changed", [
+    ["app/ops/bws_installation_transaction.py", "tests/ops/test_bws_installation_lifecycle.py"],
+    ["app/ops/bws_installation_transaction.py", "app/ops/postgres_deploy_linux.py",
+     "tests/ops/test_bws_installation_transaction.py", "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md"],
+])
+def test_ops_only_execution_preserves_complete_coverage(changed, tmp_path):
+    from scripts.run_scoped_test_partitions import validate_execution_units, _serial_safe_candidates
+
+    selection = select_tests(changed)
+    assert selection.subsystems == ("ops",)
+    assert "tests/deploy" not in selection.targets
+    partitions = selector.scoped_deploy_partitions(selection)
+    assert [target for part in partitions for target in part] == list(selection.targets)
+    units = selector.scoped_deploy_execution_units(selection)
+    flattened = [target for unit in units for target in unit]
+    ops = set(selector._ops_test_files())
+    dormant = "tests/ops/test_dormant_ownership_initialization.py"
+    expected = set(selection.targets)
+    if "tests/ops" in expected:
+        expected = expected - {"tests/ops"} | ops
+    assert set(flattened) == expected
+    assert len(flattened) == len(set(flattened))
+    assert len(units) <= 4
+    assert all("::" not in path for path in flattened if path.startswith("tests/ops/"))
+    assert validate_execution_units([list(unit) for unit in units], list(selection.targets)) == units
+    boundary = tuple(path for path in selector.SCOPED_DEPLOY_SERIAL_BOUNDARY if path in expected)
+    assert len(boundary) == (8 if dormant in expected else 7)
+    candidates, serial = _serial_safe_candidates(flattened, boundary)
+    assert serial == boundary
+    assert not set(serial).intersection(target for candidate in candidates for target in candidate)
+    assert units[-1] == boundary
+    output = tmp_path / "output"
+    selector._write_github_output(str(output), selection)
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert json.loads(fields["scoped_serial_boundary_json"]) == list(boundary)
+    assert selector.requires_runtime_checks(changed)
+
+
+@pytest.mark.parametrize("extra", [None, "app/instance/runtime.py", "app/instance/legacy_owner_recovery.py",
+    "scripts/instance_state_writer_inventory.py", "tests/conftest.py", "tests/ops/conftest.py",
+    "tests/helpers/runtime_start_harness.py", "docs/ENVIRONMENTS.md", "app/ops/host_secret_controller.py",
+    "tests/ops/test_dormant_ownership_initialization.py"])
+def test_bws_source_profile_omits_only_dormant(extra, monkeypatch):
+    changed = sorted(selector.BWS_SOURCE_INSTALLATION_PATHS)
+    if extra:
+        changed.append(extra)
+    with monkeypatch.context() as context:
+        context.setattr(selector, "_bws_source_installation_selection", lambda selection, paths: selection)
+        baseline = select_tests(changed)
+    actual = select_tests(changed)
+    if extra:
+        assert actual == baseline
+        return
+    expected = set(baseline.targets) - {"tests/ops"} | set(selector._ops_test_files())
+    expected.remove("tests/ops/test_dormant_ownership_initialization.py")
+    assert set(actual.targets) == expected
+    assert actual.subsystems == baseline.subsystems
+    assert actual.deferred_targets == baseline.deferred_targets
+
+
+@pytest.mark.parametrize("failure", ["missing", "symlink", "no-source", "missing-boundary"])
+def test_bws_source_profile_requires_complete_regular_source_inputs(failure, monkeypatch):
+    paths = ["app/ops/bws_installation_transaction.py", "tests/ops/test_bws_installation_transaction.py"]
+    if failure == "no-source":
+        paths = paths[1:]
+    else:
+        target = paths[0] if failure != "missing-boundary" else selector.SCOPED_DEPLOY_SERIAL_BOUNDARY[0]
+        method = "is_symlink" if failure == "symlink" else "is_file"
+        original = getattr(Path, method)
+        monkeypatch.setattr(Path, method, lambda path: failure == "symlink" if str(path) == target else original(path))
+    assert "BWS source installation scope" not in select_tests(paths).reason
+
+
+def test_ops_only_shared_configuration_keeps_broad_execution():
+    selection = select_tests(["app/ops/bws_installation_transaction.py", "pyproject.toml"])
+    assert selection.full_suite
+    assert selector.scoped_deploy_partitions(selection) == ()
+    assert selector.scoped_deploy_execution_units(selection) == ()
