@@ -1170,7 +1170,8 @@ class PanelConfirmationService:
             resp = ConfirmResponse(
                 proposal_id=request.proposal_id, artifact_id=request.artifact_id,
                 status=source_failure, outcome=source_failure,
-                error="Panel source or acknowledgement requires reconciliation",
+                error=getattr(result, "acknowledgement_error", None) or "panel_source_reconciliation_required",
+                trace_id=proposal.trace_id or request.idempotency_key,
                 idempotency_key=request.idempotency_key,
                 source_receipt=source_receipt, source_state=source_state,
                 projection_state=projection_state,

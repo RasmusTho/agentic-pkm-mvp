@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import Request
 import pytest
 
+from app.api.routes import capture as capture_route
 from app.agents.panel_agent import runtime as panel_runtime
 from app.agents.panel_agent import graph as panel_graph
 from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError
@@ -49,6 +50,12 @@ from app.write_guard import WritesBlockedError
 from tests.api._vault_test_helpers import bind_initialized_vault
 
 
+def _capture_owner(arguments, request):
+    return capture_route.capture_to_inbox(
+        capture_route.CaptureRequest.model_validate(arguments), request
+    )
+
+
 @pytest.fixture
 def bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> writes.WriteOperationServerConfig:
     root = tmp_path / "vault"
@@ -68,7 +75,7 @@ def bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> writes.WriteOperat
         "app.orchestrator.executor.INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl")
     )
     # External cognition is irrelevant to the capture write/receipt contract.
-    monkeypatch.setattr(writes.capture, "_offer_question_registration_proposal", lambda **_: None)
+    monkeypatch.setattr(capture_route, "_offer_question_registration_proposal", lambda **_: None)
     note = root / "Notes" / "note.md"
     note.parent.mkdir()
     artifact_id = str(uuid4())
@@ -85,6 +92,7 @@ def bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> writes.WriteOperat
         artifact_id,
         request,
         PanelConfirmationService(ProposalStore(), ConfirmIdempotencyStore(), same_turn_ttl=0),
+        capture_owner=_capture_owner,
     )
 
 
@@ -191,7 +199,7 @@ def _rule_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_write_operations_invoke_only_governed_owner_entrypoints(bound, monkeypatch) -> None:
     observed: list[str] = []
     for owner, name in [
-        (writes.capture, "capture_to_inbox"),
+        (capture_route, "capture_to_inbox"),
         (writes, "execute_plan_step"),
         (writes, "write_note_from_absolute"),
     ]:
@@ -238,6 +246,15 @@ def test_write_operations_invoke_only_governed_owner_entrypoints(bound, monkeypa
     assert len(created) == 1 and "Created via EXE" in created[0].read_text()
     assert "Changed body." in bound.note_path.read_text()
     assert "trust: human" in bound.note_path.read_text()
+
+
+def test_capture_requires_explicit_server_owner_binding(bound) -> None:
+    result = _run(
+        replace(bound, capture_owner=None),
+        _request(bound, writes.CAPTURE_OPERATION_ID, arguments={"text": "unbound"}),
+    )
+    assert result.status is OperationStatus.REJECTED
+    assert not (bound.vault_root / "Inbox/inbox.md").exists()
 
 
 def test_write_failures_preserve_conflict_denial_validation_and_ambiguity(

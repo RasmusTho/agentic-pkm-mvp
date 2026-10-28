@@ -96,10 +96,10 @@ async def panel_confirm(
         raise capability_not_ready()
     try:
         response = confirm_module._service.confirm(request)
-        if response.error == "authority_receipt_persistence_failed":
+        if response.status == "recovery_required":
             raise HTTPException(status_code=500, detail={
-                "error": response.error, "state": "not_acknowledged",
-                "message": "The source was written but confirmation accountability requires reconciliation; do not retry the source.",
+                "error": response.error or "panel_recovery_required", "state": "not_acknowledged",
+                "message": "The source or confirmation accountability requires reconciliation; do not retry the source.",
                 "trace_id": response.trace_id,
                 "source_state": response.source_state,
                 "source_receipt": asdict(response.source_receipt) if response.source_receipt else None,

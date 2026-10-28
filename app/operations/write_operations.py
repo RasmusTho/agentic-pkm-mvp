@@ -17,7 +17,6 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from app.api.routes import capture
 from app.events.schema import make_outbox_event
 from app.governance.governed_write import (
     GovernedWriteAdapter,
@@ -76,7 +75,9 @@ class WriteOperationServerConfig:
     The note locator/identity pair comes from the state owner, never operation
     arguments. It pins a single existing note, rather than adding a registry or
     accepting arbitrary filesystem paths. Capture consumes an existing server
-    Request and retains its compatibility seal, including pre-05C refusal.
+    Request and the server's existing capture-owner binding, retaining its
+    compatibility seal, including pre-05C refusal. The interaction layer binds
+    that owner; this execution module never imports or installs a route.
     """
 
     vault_root: Path
@@ -86,6 +87,7 @@ class WriteOperationServerConfig:
     artifact_id: str | None = None
     capture_request: Request | None = None
     confirmation_service: PanelConfirmationService | None = None
+    capture_owner: Callable[[Mapping[str, Any], Request], Any] | None = None
 
 
 def build_write_operation_handlers(
@@ -154,8 +156,8 @@ def _execute(request: OperationRequest, config: WriteOperationServerConfig) -> O
 
 
 def _capture(request: OperationRequest, config: WriteOperationServerConfig) -> OwnerExecutionResult:
-    if config.capture_request is None:
-        return _refuse(OperationStatus.REJECTED, "server capture request is required")
+    if config.capture_request is None or config.capture_owner is None:
+        return _refuse(OperationStatus.REJECTED, "server capture owner and request are required")
     if request.targets or request.expected_version is not None:
         return _refuse(OperationStatus.INVALID, "capture does not rewrite an existing target")
     # Require the trusted Request's existing target fence. Do not create or
@@ -163,9 +165,9 @@ def _capture(request: OperationRequest, config: WriteOperationServerConfig) -> O
     sealed_root = getattr(config.capture_request.state, "compatibility_write_root", None)
     if sealed_root is None or Path(sealed_root).resolve() != config.vault_root.resolve():
         return _refuse(OperationStatus.REJECTED, "capture target is not server-sealed")
-    response = capture.capture_to_inbox(
-        capture.CaptureRequest.model_validate(dict(request.arguments)), config.capture_request
-    )
+    # The trusted composition supplies existing capture validation and execution
+    # together; no operation argument can choose or replace this owner.
+    response = config.capture_owner(dict(request.arguments), config.capture_request)
     if isinstance(response, JSONResponse):
         return _refuse(OperationStatus.REJECTED, "capture context is unavailable")
     governed = response.governed_write or {}

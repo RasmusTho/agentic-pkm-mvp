@@ -131,6 +131,7 @@ class PanelRuntimeResult(BaseModel):
     source_failure: str | None = None
     projection_state: str = "not_required"
     downstream_state: str = "not_required"
+    acknowledgement_error: str | None = None
 
 
 def execute_panel_intent(
@@ -399,6 +400,7 @@ def execute_panel_intent(
     except Exception:
         return PanelRuntimeResult(intent=intent_event, actions=state.action_results, source_state="unknown", source_failure="recovery_required")
 
+    acknowledgement_error = None
     try:
         # A dormant autonomous composition supplies existing GOV accountability
         # here, after HKA's receipt and before any notification/acknowledgement.
@@ -414,9 +416,11 @@ def execute_panel_intent(
         if pipeline_mode == "planner" and state.panel_action_intent is not None:
             plan_panel_actions(state.panel_action_intent, event_id=intent_event.event_id, trace_id=intent_event.trace_id)
         _write_db_outbox_events(emitted_events)
+        acknowledgement_error = "authority_receipt_persistence_failed"
         for event in emitted_events:
             if not append_jsonl_outbox_event(resolved_outbox, event, default_source="panel_agent.runtime"):
                 raise RuntimeError("Panel notification was not persisted")
+        acknowledgement_error = None
         if state.log_entry:
             _persist_log(intent_event.payload.note, state.log_entry)
         commit_action_acknowledgements(state)
@@ -427,6 +431,7 @@ def execute_panel_intent(
             source_state="committed" if source_receipt else "not_applied",
             source_failure="recovery_required", projection_state="rebuild_required",
             downstream_state="unknown",
+            acknowledgement_error=acknowledgement_error,
         )
 
     return PanelRuntimeResult(

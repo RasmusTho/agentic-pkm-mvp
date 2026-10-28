@@ -41,6 +41,8 @@ write-activation prerequisite and the existing pre-05C seal remains in force.
 The finite owners are the existing governed capture entrypoint, the EXE/GOV
 `mcp.vault.append_note` chain for typed `kind=note` creation, GOV plus HKA's versioned writer for
 body editing, and `PanelConfirmationService.confirm` for an existing owner-validated proposal.
+The server explicitly binds existing capture schema validation and `capture_to_inbox` execution;
+the operations module imports no interaction route and refuses an absent binding.
 The server pins context/generation, actor, vault root, and the existing note identity/locator;
 operation arguments cannot supply arbitrary filesystem targets or artifact schemas. Direct body
 editing preserves the source frontmatter and rejects metadata fields. Metadata requests must name
