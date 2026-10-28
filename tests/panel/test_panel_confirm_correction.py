@@ -191,7 +191,7 @@ def test_correction_confirm_executes_corrected_intent() -> None:
 
     def _fake_execute(event: PanelIntentEvent):
         captured.append(event)
-        result = MagicMock()
+        result = MagicMock(spec=["actions", "emitted_events"])
         result.actions = []
         result.emitted_events = []
         return result
@@ -225,7 +225,7 @@ def test_correction_confirm_receipt_is_marked_corrected() -> None:
         ),
     )
 
-    mock_result = MagicMock()
+    mock_result = MagicMock(spec=["actions", "emitted_events"])
     mock_result.actions = []
     mock_result.emitted_events = []
 
@@ -258,7 +258,7 @@ def test_plain_confirm_receipt_has_no_correction_message() -> None:
         ),
     )
 
-    mock_result = MagicMock()
+    mock_result = MagicMock(spec=["actions", "emitted_events"])
     mock_result.actions = []
     mock_result.emitted_events = []
 
@@ -287,7 +287,7 @@ def test_correction_idempotency_returns_same_response() -> None:
         ),
     )
 
-    mock_result = MagicMock()
+    mock_result = MagicMock(spec=["actions", "emitted_events"])
     mock_result.actions = []
     mock_result.emitted_events = []
 
