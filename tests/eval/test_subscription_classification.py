@@ -20,9 +20,12 @@ class FakeExecutor:
 
     def execute(self, **kwargs):
         self.calls.append(kwargs)
-        answers = [{"case_id": c.id, "intent_class": c.expected_intent,
-                    "action_type": c.expected_action_type, "rationale": "PRIVATE-COMPLETION-CANARY"}
-                   for c in load_classification_cases()]
+        cases_by_text = {c.utterance: c for c in load_classification_cases()}
+        answers = [{"case_id": item["case_id"],
+                    "intent_class": cases_by_text[item["intent"]].expected_intent,
+                    "action_type": cases_by_text[item["intent"]].expected_action_type,
+                    "rationale": "PRIVATE-COMPLETION-CANARY"}
+                   for item in json.loads(kwargs["user_prompt"])]
         if self.invalid == "duplicate":
             answers[-1] = answers[0]
         elif self.invalid == "missing":
@@ -70,6 +73,10 @@ def test_subscription_receipt_is_content_free_and_billing_unavailable():
         assert call["reasoning_effort"] == "low"
         assert all(set(c) == {"case_id", "intent"} for c in json.loads(call["user_prompt"]))
         assert "expected_intent" not in call["user_prompt"]
+        source_ids = {c.id for c in load_classification_cases()}
+        assert not (source_ids & {item["case_id"] for item in json.loads(call["user_prompt"])})
+        assert [item["intent"] for item in json.loads(call["user_prompt"])] != [
+            c.utterance for c in load_classification_cases()]
         assert run["batch_elapsed_seconds"] >= 0
 
 

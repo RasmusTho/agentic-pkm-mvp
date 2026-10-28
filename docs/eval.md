@@ -295,7 +295,7 @@ python -m app.eval.subscription_classification --run
 Run on the Mac executor host with its pinned Codex CLI on PATH and its existing subscription login.
 The command uses the existing no-tools `CodexCliExecutor`, checks the entire account-visible catalog
 before inference, and dispatches exactly `gpt-5.6-luna`, `gpt-5.6-terra`, and `gpt-5.6-sol` at `low`
-reasoning. It sends one batch of the 68 checked-in intents per model, with case IDs but no expected
+reasoning. It sends one batch of the 68 checked-in intents per model, with shuffled opaque IDs but no source IDs or expected
 labels, then validates exact coverage and scores each answer through the legacy comparator seam.
 This is a batched subscription comparison; its timing is per batch, and it is not the independent
 API-call protocol above. No Product classifier route or default changes.

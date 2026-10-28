@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import random
 from pathlib import Path
 import time
 from typing import Any
@@ -42,8 +43,12 @@ def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS)
     catalog = preflight_targets(executor, models)
     cases = load_classification_cases()
     # No labels, acceptable alternatives, or expected action types leave this process.
-    inputs = [{"case_id": c.id, "intent": c.utterance} for c in cases]
-    expected_ids = {c.id for c in cases}
+    shuffled = list(cases)
+    random.Random(3429).shuffle(shuffled)
+    opaque_to_local = {f"case-{i:03d}": c.id for i, c in enumerate(shuffled)}
+    inputs = [{"case_id": opaque, "intent": c.utterance}
+              for opaque, c in zip(opaque_to_local, shuffled)]
+    expected_ids = set(opaque_to_local)
     answer_schema = dict(_CLASSIFICATION_PROVIDER_OUTPUT_SCHEMA)
     answer_schema["properties"] = dict(answer_schema["properties"], case_id={"type": "string"})
     answer_schema["required"] = [*answer_schema["required"], "case_id"]
@@ -77,7 +82,7 @@ def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS)
                 case_id = answer.get("case_id")
                 if not isinstance(case_id, str) or case_id not in expected_ids or case_id in indexed:
                     raise ValueError("coverage mismatch")
-                indexed[case_id] = json.dumps({k: v for k, v in answer.items() if k != "case_id"})
+                indexed[opaque_to_local[case_id]] = json.dumps({k: v for k, v in answer.items() if k != "case_id"})
 
             def complete(*, trace_id: str | None = None, **_kwargs: Any) -> str:
                 if trace_id is None or not trace_id.startswith("eval-cls-"):
