@@ -73,6 +73,10 @@ binds its own DecisionToken through GOV, and enters the existing `context_bound_
 its vault lock. The principal read fence, host ownership fence and shared selected-binding lease
 remain held through source, AuthorityReceipt persistence and cleanup. Callback policy checks only
 narrow this authority; they cannot replace the context/window or widen the selected set.
+The owner also rechecks the snapshot's existing expiry after its separately blocking placement lock
+and at each later effect/receipt seam, including compensation and cleanup. A held lease or durable
+phase does not extend the original context's lifetime. Expiry after a partial effect preserves its
+observed source/repair state and refuses further continuation.
 
 Recovery revalidates the persisted token against the exact trusted typed snapshot and selected target
 and re-enters the same current GOV effect window. JSON evidence cannot construct a new context.

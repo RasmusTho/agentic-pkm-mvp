@@ -198,6 +198,13 @@ Recovery posture:
 - runtime DB/index state is rebuildable from that set
 - runtime state may help recover a missing companion note, but it is not semantically primary
 
+Same-vault move/rename source support is owned by the dormant HKA placement port. It preserves the
+artifact bytes and identity through durable reservation, verified no-clobber activation and explicit
+recovery under the full selected MVR/GOV context; locator/Store/index/link repair remains derived.
+The [AUTOOPS-05 owner document](YGGDRASIL_AUTONOMOUS_OPERATIONS/DELIVER_IDENTITY_PRESERVING_MOVE_AND_RENAME.md)
+owns the supported-filesystem and transition matrix. Authenticated operations installation remains
+with #5352.
+
 ## Fitness Functions
 
 Fitness functions capture the high-level criteria that must hold true for the runtime to be considered healthy.

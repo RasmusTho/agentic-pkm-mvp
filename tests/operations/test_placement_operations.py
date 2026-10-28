@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import replace
+import fcntl
 from hashlib import sha256
 import json
+import os
 from pathlib import Path, PurePosixPath
 from threading import Event
+import time
 from uuid import UUID, uuid4
 
 import pytest
@@ -1070,3 +1073,130 @@ def test_mvr_effect_window_covers_source_and_durable_authority_receipt(bound, mo
         == bound.owner.active_context.principal_context.revision
     )
     assert not (bound.owner.root / bound.source).exists()
+
+
+@pytest.mark.parametrize("recover", [False, True])
+def test_context_expiry_during_real_placement_lock_wait_refuses_effect(
+    bound, monkeypatch, recover
+):
+    # Only shorten the real server-derived snapshot. Real GOV/MVR authority,
+    # filesystem locking and the clock remain in the production path.
+    expiry = time.time() + 5
+    bound.owner.active_context = replace(bound.owner.active_context, expires_at=expiry)
+    request = _request(bound)
+    source = bound.owner.root / bound.source
+    destination = bound.owner.root / "Projects/moved.md"
+    raw = source.read_bytes()
+    prior = None
+    if recover:
+        store = bound.owner._store
+
+        def interrupt(root, state, name, record):
+            store(root, state, name, record)
+            if record["phase"] == "prepared":
+                raise Interrupted()
+
+        monkeypatch.setattr(bound.owner, "_store", interrupt)
+        with pytest.raises(Interrupted):
+            _run(bound, request)
+        prior = _record(bound)
+        bound = _restart(bound)
+
+    state = bound.owner.root / ".pkm-placement"
+    state.mkdir(mode=0o700, exist_ok=True)
+    holder = os.open(state / "lock", os.O_RDWR | os.O_CREAT, 0o600)
+    flock = fcntl.flock
+    flock(holder, fcntl.LOCK_EX)
+    lock_inode = os.fstat(holder).st_ino
+    queued = Event()
+    arrived = []
+
+    def observe_wait(fd, operation):
+        if fd != holder and os.fstat(fd).st_ino == lock_inode:
+            arrived.append(time.time())
+            queued.set()
+        return flock(fd, operation)
+
+    monkeypatch.setattr(placement.fcntl, "flock", observe_wait)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            call = operations.reconcile_placement_operation if recover else lambda r, c: _run(c, r)
+            pending = pool.submit(call, request, bound)
+            try:
+                assert queued.wait(timeout=4), "production request never reached the held flock"
+                assert arrived[0] < expiry
+                time.sleep(max(0, expiry - time.time()) + 0.05)
+            finally:
+                flock(holder, fcntl.LOCK_UN)
+            outcome = pending.result(timeout=5)
+    finally:
+        os.close(holder)
+
+    assert source.read_bytes() == raw and not destination.exists()
+    assert outcome.status is OperationStatus.REJECTED
+    if recover:
+        assert _record(bound) == prior
+        assert outcome.convergence.source_effect is SourceEffectStatus.UNKNOWN
+        assert outcome.convergence.store is ConvergenceState.REBUILD_REQUIRED
+    else:
+        assert not list(state.glob("*.json"))
+        assert outcome.convergence.source_effect is SourceEffectStatus.NOT_APPLIED
+
+
+@pytest.mark.parametrize("phase", ["prepared", "publishing", "retiring", "committed"])
+def test_context_expiry_at_later_effect_seams_preserves_observed_truth(
+    bound, monkeypatch, phase
+):
+    expiry = time.time() + 3
+    bound.owner.active_context = replace(bound.owner.active_context, expires_at=expiry)
+    request = _request(bound)
+    source = bound.owner.root / bound.source
+    destination = bound.owner.root / "Projects/moved.md"
+    raw = source.read_bytes()
+    store, fsync = bound.owner._store, placement.os.fsync
+    waited = False
+
+    def expire():
+        nonlocal waited
+        if not waited:
+            assert time.time() < expiry, "fixture did not reach the selected live effect seam"
+            waited = True
+            time.sleep(max(0, expiry - time.time()) + 0.05)
+
+    def persist(root, state, name, record):
+        store(root, state, name, record)
+        if phase in {"prepared", "committed"} and record["phase"] == phase:
+            expire()
+
+    def synchronize(fd):
+        fsync(fd)
+        inode = os.fstat(fd).st_ino
+        if phase == "publishing" and destination.exists() and inode == destination.parent.stat().st_ino:
+            expire()
+        if phase == "retiring" and not source.exists() and inode == source.parent.stat().st_ino:
+            expire()
+
+    monkeypatch.setattr(bound.owner, "_store", persist)
+    monkeypatch.setattr(placement.os, "fsync", synchronize)
+    outcome = _run(bound, request)
+    assert waited and outcome.status is OperationStatus.RECOVERY_REQUIRED
+    record = _record(bound)
+    assert record["phase"] == phase
+    assert bool(record["receipt"]) == (phase == "committed")
+    assert not record["cleanup_complete"]
+    assert source.exists() == (phase in {"prepared", "publishing"})
+    assert destination.exists() == (phase != "prepared")
+    assert (source if source.exists() else destination).read_bytes() == raw
+    expected = {
+        "prepared": SourceEffectStatus.NOT_APPLIED,
+        "publishing": SourceEffectStatus.UNKNOWN,
+        "retiring": SourceEffectStatus.COMMITTED,
+        "committed": SourceEffectStatus.COMMITTED,
+    }
+    assert outcome.convergence.source_effect is expected[phase]
+    transaction = bound.owner.root / ".pkm-placement" / sha256(request.request_id.encode()).hexdigest()
+    assert (transaction / "original").exists()
+    assert (transaction / "retired").exists() == (phase in {"retiring", "committed"})
+    if phase != "prepared":
+        assert outcome.convergence.store is ConvergenceState.REBUILD_REQUIRED
+        assert outcome.convergence.extensions["locator_repair"] != "not_required"

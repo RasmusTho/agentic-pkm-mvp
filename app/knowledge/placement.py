@@ -16,6 +16,7 @@ import os
 from pathlib import Path, PurePosixPath
 import stat
 import sys
+import time
 from typing import Any, Callable, Iterator, cast
 from uuid import uuid4
 
@@ -252,6 +253,16 @@ class KnowledgePlacementOwner:
             raise WritesBlockedError(
                 "rejected", "placement source ingress is unavailable", "placement"
             ) from exc
+        self._unexpired()
+
+    def _unexpired(self) -> None:
+        # Match GOV's bound-context rule at HKA's additional waits/effect seams.
+        # Holding a lease never extends the immutable snapshot's lifetime.
+        if (
+            self.active_context.expires_at is not None
+            and self.active_context.expires_at <= time.time()
+        ):
+            raise InvalidDecisionTokenError("active context expired at the placement seam")
 
     @contextmanager
     def _effect_window(self, intent: PlacementIntent) -> Iterator[GovernedWriteGrant]:
@@ -290,6 +301,7 @@ class KnowledgePlacementOwner:
         GovernedWriteAdapter().validate_context(
             token, context=self.active_context, target_binding_id=self.target_binding_id
         )
+        self._unexpired()
         return token
 
     def _path(self, value: str) -> PurePosixPath:
@@ -440,6 +452,7 @@ class KnowledgePlacementOwner:
             os.stat(_STATE, dir_fd=root, follow_symlinks=False)
         ) != _inode(os.fstat(state)):
             raise KnowledgeWriteConflict("placement recovery namespace changed")
+        self._unexpired()
 
     def _load(self, state: int, name: str) -> dict[str, Any] | None:
         try:
@@ -760,6 +773,7 @@ class KnowledgePlacementOwner:
                 _inode(os.fstat(dst)),
             ]:
                 raise KnowledgeWriteConflict("placement parent generation changed")
+        self._unexpired()
 
     def _advance(
         self,
@@ -852,6 +866,7 @@ class KnowledgePlacementOwner:
                 # Preserve a replacement that won the source name. Restore it
                 # only with no-replace semantics; a second winner stays intact.
                 try:
+                    self._seam(root, state, src, dst, record, intent)
                     _atomic_rename_noreplace_at(transaction, "retired", src, source.name)
                     os.fsync(src)
                     os.fsync(transaction)
@@ -904,6 +919,7 @@ class KnowledgePlacementOwner:
                 if retained is not None:
                     if retained["inode"] != expected["inode"]:
                         raise KnowledgeWriteConflict("private recovery entry changed; preserve it")
+                    self._seam(root, state, src, dst, record, intent)
                     os.unlink(leaf, dir_fd=transaction)
             os.fsync(transaction)
             record["cleanup_complete"] = True
