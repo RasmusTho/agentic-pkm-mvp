@@ -1337,8 +1337,12 @@ and the live RPC process, including the checkout identity and launcher-script di
 supervisor may use the legacy launcher and may not support a source-profile RPC or source-byte
 loader; the transaction does not query one. It records the old process/kernel token, unit
 configuration, public-root identities, complete on-disk Python inventory under `app/` and
-`scripts/`, separately validated JSON contract, and fixed launcher bytes. This is old-state disk
-evidence; it does not claim which bytes the old process loaded.
+`scripts/`, the old JSON contract bytes, and fixed launcher bytes. This is old-state disk evidence;
+it does not claim which bytes the old process loaded. The old contract is read as opaque
+before-state bytes: its exact digest and mode are recorded and later rechecked, without applying
+current candidate grant policy. Those historical bytes do not grant authority to a candidate. The
+candidate Git contract is still parsed under current policy, and invalid candidate bytes refuse
+before writes.
 
 Intermediate directories traversed to reach the candidate checkout or authenticated roots may use
 mode `0750` when the existing owner checks pass and the directory is not group/world-writable. The

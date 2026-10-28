@@ -16,7 +16,11 @@ import pytest
 from app.ops.bws_control_installation import Change, Root
 from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
-from app.ops import bws_installation_lifecycle, bws_installation_transaction as transaction
+from app.ops import (
+    bws_installation_lifecycle,
+    bws_installation_transaction as transaction,
+    host_secret_contract,
+)
 
 _DEPLOYMENT_SOURCE = (
     "from contextlib import ExitStack\n"
@@ -899,8 +903,12 @@ def test_source_payload_inventory_is_exact_and_independent_json(monkeypatch, tmp
     control_module.write_bytes(control_old)
     contract_path = app_root / "config/secrets/host_secret_contract.json"
     _owned_dir(contract_path.parent)
-    old_contract = b'{"contract":"old"}\n'
-    candidate_contract = b'{"contract":"candidate"}\n'
+    old_contract = (Path(__file__).parent / "fixtures" / "host_secret_contract_legacy.json").read_bytes()
+    assert hashlib.sha256(old_contract).hexdigest() == (
+        "b10ab9cd6674a732cfaa991e4d8c1e90d00a640079e78a5aeea9d32487f3d323"
+    )
+    candidate_contract = (Path(__file__).resolve().parents[2]
+                          / "config/secrets/host_secret_contract.json").read_bytes()
     contract_path.write_bytes(old_contract)
     contract_path.chmod(0o644)
 
@@ -927,8 +935,13 @@ def test_source_payload_inventory_is_exact_and_independent_json(monkeypatch, tmp
     old_launcher = b"legacy launcher bytes\n"
     monkeypatch.setattr(bws_installation_lifecycle, "_public_launcher_bytes", lambda: old_launcher)
     contract_validation: list[bytes] = []
-    monkeypatch.setattr("app.ops.host_secret_contract.load_host_secret_contract_bytes",
-                        lambda raw: contract_validation.append(raw))
+    load_contract = host_secret_contract.load_host_secret_contract_bytes
+
+    def validate_candidate_contract(raw):
+        contract_validation.append(raw)
+        return load_contract(raw)
+
+    monkeypatch.setattr(host_secret_contract, "load_host_secret_contract_bytes", validate_candidate_contract)
     monkeypatch.setattr(transaction, "_require_source_only_launcher", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(transaction, "_require_launcher_imports", lambda *_args: None)
     monkeypatch.setattr(transaction, "_require_cleanup_shared_reservation", lambda *_args: None)
@@ -945,6 +958,14 @@ def test_source_payload_inventory_is_exact_and_independent_json(monkeypatch, tmp
     request = {"operation_id": str(uuid.uuid4()), "channel": "dev", "candidate_sha": revision,
                "image_digest": "sha256:" + "b" * 64}
     old_state = transaction._old_disk_state(SimpleNamespace(channel="dev", root=app_root), request)
+    assert old_state["contract_sha256"] == hashlib.sha256(old_contract).hexdigest()
+    assert old_state["contract_mode"] == 0o644
+    test_state = transaction._old_disk_state(
+        SimpleNamespace(channel="test", root=app_root), {**request, "channel": "test"}
+    )
+    assert test_state["contract_sha256"] == old_state["contract_sha256"]
+    assert test_state["contract_mode"] == old_state["contract_mode"]
+    assert contract_validation == []
     roots = {
         "application": Root(str(app_root), **transaction._root_identity(app_root)),
         "control": Root(str(control_root), **transaction._root_identity(control_root)),
@@ -976,8 +997,20 @@ def test_source_payload_inventory_is_exact_and_independent_json(monkeypatch, tmp
     assert any(change.root == "application" and change.path == "app/ops/new_dynamic.py"
                and change.before_sha256 is None for change in changes)
     assert proof["candidate_files"] and proof["contract_mode"] == 0o644
-    assert contract_validation == [old_contract, candidate_contract]
+    assert contract_validation == [candidate_contract]
     assert "app.ops.new_dynamic" not in sys.modules
+
+    with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+        transaction.candidate_manifest(
+            old_state, revision=revision, roots=roots, backup_root=backup,
+            git_show=lambda selected_revision, relative: (
+                b"{}" if relative == "config/secrets/host_secret_contract.json"
+                else transaction._git_show(checkout, selected_revision, relative)
+            ),
+            git_source_files=lambda selected_revision: transaction._git_source_files(checkout, selected_revision),
+            git_file_mode=lambda selected_revision, relative: transaction._git_mode(checkout, selected_revision, relative),
+        )
+    assert contract_validation[-1] == b"{}"
 
     tree = transaction._git_source_files(checkout, revision)
     deleted = dict(tree)
@@ -1008,6 +1041,16 @@ def test_source_payload_inventory_is_exact_and_independent_json(monkeypatch, tmp
             git_source_files=lambda selected_revision: transaction._git_source_files(checkout, selected_revision),
             git_file_mode=lambda selected_revision, relative: transaction._git_mode(checkout, selected_revision, relative),
         )
+
+    contract_path.unlink()
+    link_target = tmp_path / "legacy-contract-target.json"
+    link_target.write_bytes(old_contract)
+    contract_path.symlink_to(link_target)
+    with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+        transaction._old_disk_state(SimpleNamespace(channel="dev", root=app_root), request)
+    contract_path.unlink()
+    contract_path.write_bytes(old_contract)
+    contract_path.chmod(0o644)
 
 
 def test_candidate_checkout_recheck_rejects_contract_json_worktree_drift(monkeypatch, secure_tmp_path):
