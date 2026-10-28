@@ -123,7 +123,7 @@ class RemoteCatalogError(RuntimeError):
 
 
 class RemoteEmbeddingError(RuntimeError):
-    """Sanitized one-attempt embedding failure; sent requests are never retried."""
+    """Sanitized one-attempt embedding failure; only a pre-dispatch busy refusal is re-sent."""
 
     def __init__(self, code: str, *, indeterminate: bool = False) -> None:
         self.code = code
@@ -137,6 +137,33 @@ class RemoteEmbeddingIdentityError(RemoteEmbeddingError):
 
 class RemoteEmbeddingVectorError(RemoteEmbeddingError):
     """Fixed diagnostic subtype for response vector/dimension disagreement."""
+
+
+class RemoteEmbeddingExecutorBusyError(RemoteEmbeddingError):
+    """The executor refused before route resolution or provider dispatch."""
+
+    def __init__(self) -> None:
+        super().__init__("embedding_executor_busy", indeterminate=False)
+
+
+# The executor acquires its concurrency slot before resolving the route or calling
+# a provider, so only this exact refusal proves that nothing was dispatched.
+_EXECUTOR_BUSY_BODY = {"error": {"code": "executor_busy"}}
+_EXECUTOR_BUSY_MAX_BODY_BYTES = 256
+
+
+def _is_executor_busy_refusal(response: httpx.Response) -> bool:
+    if response.status_code != 429:
+        return False
+    raw = _read_bounded_response_body(response, max_bytes=_EXECUTOR_BUSY_MAX_BODY_BYTES)
+    if raw is None:
+        return False
+    try:
+        return json.loads(bytes(raw).decode("utf-8", errors="strict"),
+                          object_pairs_hook=_strict_object_pairs,
+                          parse_constant=_reject_json_constant) == _EXECUTOR_BUSY_BODY
+    except (UnicodeError, ValueError):
+        return False
 
 
 def _validate_private_https_endpoint(endpoint: str) -> str:
@@ -709,7 +736,11 @@ class CodexRemoteTransport:
     def embed_product(
         self, request: ProductEmbeddingRequest
     ) -> ProductEmbeddingResponse:
-        """Send one logical Product embedding request without retries or provider details."""
+        """Send one logical Product embedding request without retries or provider details.
+
+        An exact executor-busy refusal is typed so the caller may re-send it; every
+        other non-200 response remains indeterminate.
+        """
         try:
             request_body = json.dumps(
                 request.model_dump(mode="json"),
@@ -731,6 +762,8 @@ class CodexRemoteTransport:
                 headers={"Content-Type": "application/json"},
             ) as response:
                 if response.status_code != 200:
+                    if _is_executor_busy_refusal(response):
+                        raise RemoteEmbeddingExecutorBusyError()
                     # The host may have reached inference before returning an error.
                     raise RemoteEmbeddingError(
                         f"embedding_http_{response.status_code}", indeterminate=True
