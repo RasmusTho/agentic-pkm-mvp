@@ -17,7 +17,7 @@ from typing import Any
 
 from jsonschema import ValidationError
 
-from app.db.db import conn_rw
+from app.db.db import conn_ro, conn_rw
 from app.db.replay_projection_schema import assert_replay_projection_schema
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.standing_questions.question_store import (
@@ -45,6 +45,33 @@ class QuestionsDirectoryMissingError(FileNotFoundError):
 class ProjectionRebuildSummary:
     inserted: int
     skipped_invalid: tuple[dict[str, Any], ...] = ()
+
+
+def read_standing_questions_projection(vault_binding_id: str) -> list[dict[str, Any]]:
+    """Read projected Question rows for one binding.
+
+    The projection module owns SQL access; API routes consume this narrow
+    binding-scoped query rather than opening database connections themselves.
+    """
+
+    with conn_ro() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT question_id, scope, text, status,
+                       (created_at AT TIME ZONE 'UTC')::text AS created_at,
+                       registered_via,
+                       standing_answer_ref, candidate_answer_ref, evidence,
+                       (last_matched_at AT TIME ZONE 'UTC')::text AS last_matched_at,
+                       (last_refreshed_at AT TIME ZONE 'UTC')::text AS last_refreshed_at,
+                       source_path
+                FROM standing_questions
+                WHERE vault_binding_id = %s
+                ORDER BY created_at, question_id
+                """,
+                (vault_binding_id,),
+            )
+            return [dict(row) for row in cur.fetchall()]
 
 
 def _read_question_notes(
@@ -220,5 +247,6 @@ __all__ = [
     "QuestionsDirectoryMissingError",
     "STANDING_QUESTIONS_TABLE",
     "iter_question_notes",
+    "read_standing_questions_projection",
     "rebuild_standing_questions_projection",
 ]

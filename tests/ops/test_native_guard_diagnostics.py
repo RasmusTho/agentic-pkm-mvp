@@ -72,8 +72,11 @@ def test_supervised_native_source_reason_is_redacted_and_allowlisted(
 def _run_guard_child(socket_path: Path) -> subprocess.CompletedProcess[str]:
     child = """
 import sys
+from contextlib import nullcontext
+from app.ops import bws_installation_admission
 from app.ops import postgres_deploy_linux as linux
 
+bws_installation_admission.shared_caller_reservation = lambda _channel: nullcontext()
 linux._DEPLOY_JOURNAL_SOCKET = sys.argv[1]
 
 def fail(_channel):

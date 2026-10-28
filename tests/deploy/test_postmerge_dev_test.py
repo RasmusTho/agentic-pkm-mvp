@@ -290,7 +290,8 @@ def test_native_child_keeps_github_token_outside_deployment(monkeypatch):
 
 @pytest.mark.parametrize('reason', ['embedding_probe_client_failed', 'embedding_probe_identity_mismatch',
     'embedding_probe_generation_failed', 'embedding_probe_vector_invalid', 'embedding_probe_cleanup_failed',
-    'embedding_probe_failed', 'embedding_guard_refused', 'source_worker_timeout'])
+    'embedding_probe_executor_busy', 'embedding_probe_failed', 'embedding_guard_refused',
+    'source_worker_timeout'])
 @pytest.mark.parametrize('resume', [False, True])
 def test_embedding_probe_subreason_survives_controller_receipt_and_checkpoint(tmp_path, monkeypatch, capsys, resume, reason):
     tmp_path.chmod(0o700)

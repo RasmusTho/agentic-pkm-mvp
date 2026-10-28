@@ -48,6 +48,22 @@ def _setting_value(settings: Mapping[str, Any], key: str, default: bool = False)
     return value if isinstance(value, bool) else default
 
 
+def resolve_active_vault_context() -> Any:
+    """Resolve the current vault context, loading the persisted selection lazily."""
+
+    try:
+        from app.vault.manager import get_vault_manager
+
+        manager = get_vault_manager()
+        with manager.selection_window():
+            context = manager.context
+            if getattr(context, "status", None) == "none":
+                context = manager.load_last_active()
+            return context
+    except Exception:
+        return None
+
+
 def _accepted_gates(vault_context: Any = None) -> dict[str, bool]:
     """Read the existing accepted settings seam, failing closed on absence."""
 
@@ -445,4 +461,8 @@ def _suggested_actions(reason_codes: list[str]) -> list[dict[str, str]]:
     return actions
 
 
-__all__ = ["RUNNER_STALE_SECONDS", "collect_youtube_sync_status"]
+__all__ = [
+    "RUNNER_STALE_SECONDS",
+    "collect_youtube_sync_status",
+    "resolve_active_vault_context",
+]

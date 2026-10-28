@@ -3073,7 +3073,7 @@ def test_bws_deploy_requires_raw_key_for_active_capture():
 
 @pytest.mark.parametrize('quiescent', [True, False])
 def test_missing_active_raw_key_stops_supervisor_before_activation(
-    tmp_path, monkeypatch, quiescent
+    tmp_path, monkeypatch, quiescent, admitted_bws_caller
 ):
     from types import SimpleNamespace
     from uuid import uuid4
@@ -3488,7 +3488,9 @@ def test_bws_runtime_env_config_preflight_fails_before_mutation(tmp_path, monkey
 
 
 @pytest.mark.parametrize('runtime_path_state', ['absent', 'malformed', 'missing_file', 'unreadable_file'])
-def test_bws_token_push_does_not_require_runtime_env_config(tmp_path, monkeypatch, runtime_path_state):
+def test_bws_token_push_does_not_require_runtime_env_config(
+    tmp_path, monkeypatch, runtime_path_state, admitted_bws_caller
+):
     from app.ops import bws_token_push
     from app.ops import postgres_deploy_linux as linux
 
@@ -3605,7 +3607,9 @@ def test_vm_and_deploy_shell_reject_directory_runtime_selector_source(tmp_path):
     assert result.returncode != 0
 
 
-def test_vm_selector_failure_records_abort_and_releases_channel_lock(tmp_path, monkeypatch):
+def test_vm_selector_failure_records_abort_and_releases_channel_lock(
+    tmp_path, monkeypatch, admitted_bws_caller
+):
     from types import SimpleNamespace
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import PostgresDeployError
@@ -3761,7 +3765,9 @@ def test_postgres_bootstrap_ambiguous_create_without_matching_operation_note_rem
         assert admin.controller._pending(descriptor) is not None
 
 
-def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(tmp_path, monkeypatch):
+def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(
+    tmp_path, monkeypatch, admitted_bws_caller
+):
     from contextlib import contextmanager
     from dataclasses import asdict, replace
     from types import SimpleNamespace
@@ -3823,7 +3829,7 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
     controller = SimpleNamespace(directory=tmp_path)
     captured = []
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'SshDeployRemote', lambda _host: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
@@ -4486,7 +4492,7 @@ def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_p
     controller.deploy_operation = deploy_operation
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
     monkeypatch.setattr(host, 'deploy_from_host', deploy)
@@ -4581,7 +4587,7 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
 
@@ -4772,7 +4778,7 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
 
@@ -4941,21 +4947,35 @@ def test_recover_test_source_rejects_plan_mismatch_before_host_marker(monkeypatc
     from app.ops import postgres_deploy_host as host
     from app.ops.host_secret_controller import HostSecretController
     from app.ops.postgres_deploy import AuthorityCutover, PostgresDeployError
-    from uuid import uuid4
 
-    failed_operation_id = str(uuid4())
     controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert resumed is False
+        failed_operation_id = operation.operation_id
+        operation.prepare_mutation()
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    retained_failed_revision = 'b' * 40
+    reset_requests = []
+    admin_resolutions = []
 
     class Remote:
         def __init__(self, hostname):
             assert hostname == 'ygg-test'
 
-        def test_recovery_reset(self, _request):
+        def test_recovery_reset(self, request):
+            # Model the VM refusing the candidate because it does not match the
+            # retained failed plan. The host must not publish a ready marker.
+            reset_requests.append(request)
+            assert request.plan.revision == 'a' * 40
+            assert request.plan.revision != retained_failed_revision
             raise PostgresDeployError()
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(
+        host, '_configured_deploy_admin',
+        lambda plan, selected: admin_resolutions.append((plan.channel, selected)) or object(),
+    )
     args = [
         'test', 'a' * 40, '--automatic', '--image-digest', 'sha256:' + 'a' * 64,
         '--existing-secrets-only', '--recover-test-source',
@@ -4966,6 +4986,10 @@ def test_recover_test_source_rejects_plan_mismatch_before_host_marker(monkeypatc
     ]
 
     assert host.main(args) == 78
+    assert admin_resolutions == [('test', controller)]
+    assert len(reset_requests) == 1
+    assert reset_requests[0].failed_operation_id == failed_operation_id
+    assert reset_requests[0].authority_cutover == authority
     marker = controller.directory / ('test-source-recovery-' + failed_operation_id + '.json')
     assert not marker.exists()
 
@@ -5003,17 +5027,13 @@ def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monke
             recovered.append(selected)
             return DeployReceipt(failed_operation_id, 'test', 'deploy', 'failed', 'failed')
 
-    admin_attempts = 0
-
-    def configured_admin():
-        nonlocal admin_attempts
-        admin_attempts += 1
-        if admin_attempts == 1:
-            # Crash after reset/reconciliation but before fresh deployment.
-            raise RuntimeError('simulated host setup interruption')
-        return object()
+    deploy_attempts: list[str] = []
 
     def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap, operation_id):
+        deploy_attempts.append(operation_id)
+        if len(deploy_attempts) == 1:
+            # Crash after reset checkpoint, at the fresh-deploy boundary.
+            raise RuntimeError('simulated host interruption before fresh deploy')
         qualified()
         assert selected == plan
         assert allow_bootstrap is False
@@ -5022,7 +5042,7 @@ def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monke
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, '_configured_host_admin', configured_admin)
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
     monkeypatch.setattr(host, 'deploy_from_host', deploy)
@@ -5040,11 +5060,13 @@ def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monke
     assert marker is not None and marker['state'] == 'ready'
     fresh_operation_id = marker['fresh_operation_id']
     assert recovered == [request]
+    assert deploy_attempts == [fresh_operation_id]
     with controller._locked_journal() as descriptor:
         assert controller._pending(descriptor) is None
 
     assert host.main(args) == 0
     assert recovered == [request]
+    assert deploy_attempts == [fresh_operation_id, fresh_operation_id]
     assert deployed == [fresh_operation_id]
 
 
@@ -5837,7 +5859,10 @@ def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_pat
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(
+        host, '_configured_deploy_admin',
+        lambda _plan, selected: Admin(None, controller=selected),
+    )
     monkeypatch.setattr(host, 'SecretAdmin', Admin)
 
     assert host.main(['dev', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 78
@@ -9959,12 +9984,16 @@ _EMBEDDING_PROBE_REASONS = [
     'embedding_probe_generation_failed', 'embedding_probe_vector_invalid',
     'embedding_probe_cleanup_failed',
 ]
+_EMBEDDING_PROBE_STATUSES = list(enumerate(_EMBEDDING_PROBE_REASONS, 114)) + [
+    (121, 'embedding_probe_executor_busy')]
 
 
 @pytest.mark.parametrize('fault,status', [
     ('client', 114), ('identity', 114), ('mismatch', 115), ('generation', 116),
     ('dimension', 117), ('shape', 117), ('nan', 0), ('cleanup', 118),
     ('generation_cleanup', 116), ('unexpected', 78), ('success', 0),
+    # A candidate image without the busy type keeps the generic generation status.
+    ('busy', 121), ('busy_cleanup', 121), ('busy_old_image', 116),
 ])
 def test_native_embedding_probe_subreasons_cover_production_call_site(tmp_path, fault, status):
     assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
@@ -9988,11 +10017,12 @@ class Client:
         events.append('embed')
         assert text == 'Yggdrasil deployment preflight'
         if fault in {'generation', 'generation_cleanup'}: fail()
+        if fault.startswith('busy'): raise Busy('embedding_executor_busy')
         if fault == 'unexpected': raise SystemExit(78)
         return {'dimension': [0.0], 'shape': 'xx', 'nan': [float('nan'), 0.0]}.get(fault, [0.0, 1.0])
     def close(self):
         events.append('close')
-        if fault in {'cleanup', 'generation_cleanup'}: fail()
+        if fault in {'cleanup', 'generation_cleanup', 'busy_cleanup'}: fail()
 def factory():
     events.append('client')
     if fault == 'client': fail()
@@ -10001,6 +10031,9 @@ module = types.ModuleType('app.components.llm.fabric')
 module.get_product_embedding_client = factory
 module.RemoteEmbeddingIdentityError = type('RemoteEmbeddingIdentityError', (Exception,), {})
 module.RemoteEmbeddingVectorError = type('RemoteEmbeddingVectorError', (Exception,), {})
+Busy = type('RemoteEmbeddingExecutorBusyError', (Exception,), {})
+if fault != 'busy_old_image':
+    module.RemoteEmbeddingExecutorBusyError = Busy
 sys.modules['app.components.llm.fabric'] = module
 '''
     # Even refusal must close an acquired client; no exception payload escapes.
@@ -10015,7 +10048,7 @@ sys.modules['app.components.llm.fabric'] = module
     assert result.stdout == result.stderr == ''
 
 
-@pytest.mark.parametrize('status,reason', list(enumerate(_EMBEDDING_PROBE_REASONS, 114)) + [(42, 'embedding_probe_failed')])
+@pytest.mark.parametrize('status,reason', _EMBEDDING_PROBE_STATUSES + [(42, 'embedding_probe_failed')])
 def test_native_embedding_probe_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, status, reason):
     from dataclasses import asdict
     from app.ops import postgres_deploy_linux as linux

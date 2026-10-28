@@ -71,6 +71,13 @@ The **persisted** chat-session transcript survives a restart (it is a file in `v
 - [ ] Live validation on the qualified TARS TEST Product channel: ≥1 synthetic spoken question in sv and en answered end-to-end with audible output through the actual configured routes, receipt posted to parent #3335. This follows the parent's current topology and automated-acceptance contract; Mac mini remains model/controller infrastructure. Verify: parent-issue validation receipt (qualified TARS TEST Product channel and exact candidate)
 - [ ] Owner-doc promotion only after acceptance: `docs/contracts/MIMER_CLIENT_CONTRACT.md §4` callable-surface table gains the voice-ask row as delivered truth. Verify: doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: 4. Callable HTTP surface`
 
+The live TEST validation above is produced by `python -m app.ops.voice_test_channel_acceptance
+--qualification <voice_test_channel_qualification.v1 JSON> --out <receipt>` (#6234). It binds to
+the exact qualified candidate (observed `/version` SHA plus the image digest from a fresh TEST
+`product_tars_channel_topology.v1` observation) and route/instance evidence, refuses PROD, mismatched, unqualified or
+unavailable targets before any voice turn, and emits a secret-free `voice_test_channel_acceptance.v1`
+receipt for #3335. Its repository tests use HTTP doubles and do not themselves satisfy that criterion.
+
 ## Relationship to GitHub issues
 
 **Filed 2026-07-07.**

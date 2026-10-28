@@ -82,7 +82,9 @@ ADR; ``docs/testing/invariant-tests.md`` names these invariants):
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -92,9 +94,11 @@ from uuid import uuid4
 
 from app.expansion.create import (
     UnresolvableCitationError,
+    standing_question_acceptance_option_id,
 )
-from app.services.outbox import append_jsonl_outbox_event
-from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+from app.knowledge.write_ops import _atomic_rename_noreplace_at
+from app.services.outbox import append_jsonl_outbox_event, iter_jsonl_outbox_records
+from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
 # --- named, WriteGuard-gated action (dotted <module>.<verb> convention) ------
 ACCEPT_MATERIALIZE_WRITE_ACTION = "expansion.create.accept_materialize"
@@ -135,6 +139,10 @@ class DraftNotAcceptedError(AcceptError):
     """
 
 
+class DraftContentChangedError(AcceptError):
+    """The loaded staged draft does not match the bytes a caller approved."""
+
+
 class ModifyExistingRequiresAskError(AcceptError):
     """The resolved destination is an existing canonical note.
 
@@ -144,6 +152,21 @@ class ModifyExistingRequiresAskError(AcceptError):
     at a lighter tier. The checkbox for that variant *is* the ask, handled by a
     separate governed edit flow — not by this new-note materialization path.
     """
+
+
+class AcceptanceReconciliationError(AcceptError):
+    """A durable transition exists but its receipt-bound state is unresolved."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        receipt_id: str | None = None,
+        recovery_paths: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.receipt_id = receipt_id
+        self.recovery_paths = recovery_paths
 
 
 class MalformedDraftError(AcceptError):
@@ -270,6 +293,10 @@ def _is_checked(text: str, draft_id: str) -> bool:
     into the exact label, and duplicate/malformed copies fail closed.
     """
     expected_label = f"Accept this draft into the vault (draft {draft_id[:12]})"
+    question_option_suffix = (
+        f" <!--ai:option_id={standing_question_acceptance_option_id(draft_id)}--> "
+        "<!--ai:proposed=exp4-->"
+    )
     # A visible checked copy must not stand in for the generated unchecked
     # control when that original is hidden in a comment, code block, or HTML.
     # The draft-bound label is unique, so any duplicate occurrence is an
@@ -347,8 +374,15 @@ def _is_checked(text: str, draft_id: str) -> bool:
         # Do not normalize non-ASCII whitespace into the generated control.
         marker = original_line
         has_comment_delimiter = "<!--" in original_line or "-->" in original_line
+        generated_question_control = marker in {
+            f"- [ ] {expected_label}{question_option_suffix}",
+            f"- [x] {expected_label}{question_option_suffix}",
+            f"- [X] {expected_label}{question_option_suffix}",
+        }
         exact_visible_line = (
-            not comment_was_active and not in_html_comment and not has_comment_delimiter
+            not comment_was_active
+            and not in_html_comment
+            and (not has_comment_delimiter or generated_question_control)
         )
         fence_marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
         if fence_marker:
@@ -374,9 +408,17 @@ def _is_checked(text: str, draft_id: str) -> bool:
             continue
         if not in_ai_panel:
             continue
-        if marker == f"- [ ] {expected_label}":
+        if marker in {
+            f"- [ ] {expected_label}",
+            f"- [ ] {expected_label}{question_option_suffix}",
+        }:
             matches.append(False)
-        elif marker in {f"- [x] {expected_label}", f"- [X] {expected_label}"}:
+        elif marker in {
+            f"- [x] {expected_label}",
+            f"- [X] {expected_label}",
+            f"- [x] {expected_label}{question_option_suffix}",
+            f"- [X] {expected_label}{question_option_suffix}",
+        }:
             matches.append(True)
     return (
         fence is None
@@ -433,6 +475,7 @@ class AcceptResult:
     receipt_id: str | None
     decision_token_ref: str | None
     transition_id: str | None
+    materialized_content_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -452,31 +495,551 @@ class _LoadedDraft:
     body: str
     raw_text: str
     checked: bool
+    raw_content: bytes
+    raw_content_sha256: str
+    file_identity: tuple[int, int, int, int]
 
 
-def _load_draft(draft_path: Path) -> _LoadedDraft:
+_EXP4_RETIREMENT_MARKER = ".exp4-retire-"
+_EXP4_RETIRED_MARKER = ".exp4-retired-"
+
+
+def _draft_stat_identity(info: os.stat_result) -> tuple[int, int, int, int]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_size,
+        info.st_mtime_ns,
+    )
+
+
+def _draft_read_stability(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (*_draft_stat_identity(info), info.st_ctime_ns)
+
+
+def _open_draft_parent(draft_path: Path) -> tuple[int, str, Path]:
+    parent = draft_path.parent.resolve(strict=True)
+    directory_fd = os.open(
+        parent,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+        os.close(directory_fd)
+        raise OSError("staged draft parent is not a stable directory")
+    return directory_fd, draft_path.name, parent / draft_path.name
+
+
+def _read_named_draft(directory_fd: int, name: str) -> tuple[bytes, os.stat_result]:
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=directory_fd,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(named.st_mode)
+            or opened.st_nlink != 1
+            or named.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise OSError("staged draft must be one stable regular file")
+
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        named_after = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if (
+            _draft_read_stability(opened) != _draft_read_stability(after)
+            or not stat.S_ISREG(named_after.st_mode)
+            or named_after.st_nlink != 1
+            or (after.st_dev, after.st_ino)
+            != (named_after.st_dev, named_after.st_ino)
+            or after.st_size != len(raw)
+        ):
+            raise OSError("staged draft changed while it was read")
+        return raw, after
+    finally:
+        os.close(descriptor)
+
+
+def _load_draft(
+    draft_path: Path,
+    *,
+    expected_content_sha256: str | None = None,
+) -> _LoadedDraft:
     from scripts.yaml_roundtrip import load_frontmatter
 
+    directory_fd: int | None = None
     try:
-        raw_text = draft_path.read_text(encoding="utf-8")
-    except OSError as exc:
+        directory_fd, name, canonical_path = _open_draft_parent(draft_path)
+        raw_bytes, before = _read_named_draft(directory_fd, name)
+    except FileNotFoundError as exc:
         raise DraftNotFoundError(f"staged draft {draft_path} is not readable: {exc}") from exc
+    except (OSError, RuntimeError) as exc:
+        raise DraftContentChangedError(
+            f"staged draft {draft_path} is not a stable regular file: {exc}"
+        ) from exc
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+    raw_content_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    if (
+        expected_content_sha256 is not None
+        and raw_content_sha256 != expected_content_sha256
+    ):
+        raise DraftContentChangedError(
+            f"staged draft {draft_path} changed after its human approval control was loaded"
+        )
+    raw_text = raw_bytes.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     frontmatter, body = load_frontmatter(raw_text)
     frontmatter = frontmatter or {}
     draft_id = str(frontmatter.get("uuid") or draft_path.stem)
     return _LoadedDraft(
-        path=draft_path,
+        path=canonical_path,
         frontmatter=frontmatter,
         body=body,
         raw_text=raw_text,
         # Frontmatter is metadata, not rendered acceptance content. Only the
         # parsed Markdown body can carry the governed checkbox.
         checked=_is_checked(body, draft_id),
+        raw_content=raw_bytes,
+        raw_content_sha256=raw_content_sha256,
+        file_identity=_draft_stat_identity(before),
     )
 
 
 def _draft_id_of(loaded: _LoadedDraft) -> str:
     return str(loaded.frontmatter.get("uuid") or loaded.path.stem)
+
+
+def _receipt_retirement_names(draft_name: str, receipt_id: str) -> tuple[str, str]:
+    receipt_tag = hashlib.sha256(receipt_id.encode("utf-8")).hexdigest()
+    return (
+        f".{draft_name}{_EXP4_RETIREMENT_MARKER}{receipt_tag}.pending",
+        f".{draft_name}{_EXP4_RETIRED_MARKER}{receipt_tag}.recovery",
+    )
+
+
+def _named_entry_exists(directory_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _retirement_conflict(
+    message: str,
+    *,
+    receipt_id: str,
+    parent: Path,
+    names: tuple[str, ...],
+) -> AcceptanceReconciliationError:
+    paths = tuple(str(parent / name) for name in names if name)
+    return AcceptanceReconciliationError(
+        message,
+        receipt_id=receipt_id,
+        recovery_paths=paths,
+    )
+
+
+def _loaded_file_matches(loaded: _LoadedDraft, raw: bytes, info: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(info.st_mode)
+        and info.st_nlink == 1
+        and _draft_stat_identity(info) == loaded.file_identity
+        and raw == loaded.raw_content
+    )
+
+
+def _restore_retirement_if_absent(
+    directory_fd: int,
+    *,
+    source_name: str,
+    original_name: str,
+) -> bool:
+    if _named_entry_exists(directory_fd, original_name):
+        return False
+    try:
+        _atomic_rename_noreplace_at(
+            directory_fd,
+            source_name,
+            directory_fd,
+            original_name,
+        )
+    except FileExistsError:
+        return False
+    os.fsync(directory_fd)
+    return True
+
+
+def _retire_loaded_draft_if_unchanged(
+    loaded: _LoadedDraft,
+    *,
+    receipt_id: str,
+) -> str:
+    """Receipt-bind an unchanged staged snapshot into an inert retained archive.
+
+    The rename to a pending name happens before verification, so a concurrent
+    replacement cannot slip between a path check and deletion.  A mismatch is
+    restored only when the original name is free; otherwise both versions are
+    kept and named in the reconciliation error.
+    """
+
+    try:
+        directory_fd, original_name, canonical_path = _open_draft_parent(loaded.path)
+    except (OSError, RuntimeError) as exc:
+        raise _retirement_conflict(
+            "the staged draft directory cannot be opened for receipt-bound retirement",
+            receipt_id=receipt_id,
+            parent=loaded.path.parent,
+            names=(loaded.path.name,),
+        ) from exc
+    pending_name, retired_name = _receipt_retirement_names(original_name, receipt_id)
+    parent = canonical_path.parent
+    try:
+        pending_exists = _named_entry_exists(directory_fd, pending_name)
+        retired_exists = _named_entry_exists(directory_fd, retired_name)
+        original_exists = _named_entry_exists(directory_fd, original_name)
+
+        if pending_exists and retired_exists:
+            raise _retirement_conflict(
+                "both pending and retired draft evidence exist for this receipt",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, pending_name, retired_name),
+            )
+        if retired_exists:
+            if original_exists:
+                raise _retirement_conflict(
+                    "a new staged file occupies the path of an already-retired draft",
+                    receipt_id=receipt_id,
+                    parent=parent,
+                    names=(original_name, retired_name),
+                )
+            try:
+                archived, info = _read_named_draft(directory_fd, retired_name)
+            except OSError as exc:
+                raise _retirement_conflict(
+                    "the receipt-bound retired draft cannot be inspected safely",
+                    receipt_id=receipt_id,
+                    parent=parent,
+                    names=(retired_name,),
+                ) from exc
+            if not _loaded_file_matches(loaded, archived, info):
+                raise _retirement_conflict(
+                    "the receipt-bound retired draft differs from the loaded snapshot",
+                    receipt_id=receipt_id,
+                    parent=parent,
+                    names=(retired_name,),
+                )
+            if _named_entry_exists(directory_fd, original_name):
+                raise _retirement_conflict(
+                    "a new staged file appeared while the retired archive was being checked",
+                    receipt_id=receipt_id,
+                    parent=parent,
+                    names=(original_name, retired_name),
+                )
+            return str(parent / retired_name)
+
+        if pending_exists:
+            if original_exists:
+                raise _retirement_conflict(
+                    "a new staged file appeared while receipt-bound retirement is pending",
+                    receipt_id=receipt_id,
+                    parent=parent,
+                    names=(original_name, pending_name),
+                )
+        else:
+            if not original_exists:
+                raise _retirement_conflict(
+                    "the staged draft disappeared before receipt-bound retirement",
+                    receipt_id=receipt_id,
+                    parent=parent,
+                    names=(original_name,),
+                )
+            try:
+                _atomic_rename_noreplace_at(
+                    directory_fd,
+                    original_name,
+                    directory_fd,
+                    pending_name,
+                )
+            except FileExistsError as exc:
+                raise _retirement_conflict(
+                    "the receipt-bound pending draft path already exists",
+                    receipt_id=receipt_id,
+                    parent=parent,
+                    names=(original_name, pending_name),
+                ) from exc
+            os.fsync(directory_fd)
+
+        try:
+            pending, info = _read_named_draft(directory_fd, pending_name)
+        except OSError as exc:
+            _restore_retirement_if_absent(
+                directory_fd,
+                source_name=pending_name,
+                original_name=original_name,
+            )
+            raise _retirement_conflict(
+                "the pending staged draft cannot be inspected safely",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, pending_name),
+            ) from exc
+        if not _loaded_file_matches(loaded, pending, info):
+            _restore_retirement_if_absent(
+                directory_fd,
+                source_name=pending_name,
+                original_name=original_name,
+            )
+            raise _retirement_conflict(
+                "the staged draft changed during conditional retirement; its current bytes were preserved",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, pending_name),
+            )
+        if _named_entry_exists(directory_fd, original_name):
+            raise _retirement_conflict(
+                "a new staged file appeared before the accepted snapshot could be archived",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, pending_name),
+            )
+        try:
+            _atomic_rename_noreplace_at(
+                directory_fd,
+                pending_name,
+                directory_fd,
+                retired_name,
+            )
+        except FileExistsError as exc:
+            raise _retirement_conflict(
+                "the receipt-bound retired archive path already exists",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(pending_name, retired_name),
+            ) from exc
+        os.fsync(directory_fd)
+
+        try:
+            archived, archived_info = _read_named_draft(directory_fd, retired_name)
+        except OSError as exc:
+            _restore_retirement_if_absent(
+                directory_fd,
+                source_name=retired_name,
+                original_name=original_name,
+            )
+            raise _retirement_conflict(
+                "the retired draft archive cannot be inspected safely",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, retired_name),
+            ) from exc
+        if not _loaded_file_matches(loaded, archived, archived_info):
+            _restore_retirement_if_absent(
+                directory_fd,
+                source_name=retired_name,
+                original_name=original_name,
+            )
+            raise _retirement_conflict(
+                "the staged draft changed during final retirement; its current bytes were preserved",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, retired_name),
+            )
+        if _named_entry_exists(directory_fd, original_name):
+            raise _retirement_conflict(
+                "a new staged file appeared while the final archive was being checked",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, retired_name),
+            )
+        return str(parent / retired_name)
+    except AcceptanceReconciliationError:
+        raise
+    except WritesBlockedError:
+        raise
+    except Exception as exc:
+        raise _retirement_conflict(
+            "receipt-bound staged draft retirement did not complete safely",
+            receipt_id=receipt_id,
+            parent=parent,
+            names=(original_name, pending_name, retired_name),
+        ) from exc
+    finally:
+        os.close(directory_fd)
+
+
+def reconcile_missing_draft_retirement(
+    draft_path: Path,
+    *,
+    receipt_id: str,
+    expected_content_sha256: str | None,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    write_action: str = ACCEPT_MATERIALIZE_WRITE_ACTION,
+) -> str | None:
+    """Finish or verify receipt-bound retirement after the staged name vanished.
+
+    ``None`` is returned only for a legacy receipt that predates draft hashes
+    and has no retirement marker. New receipts require matching pending or
+    retired evidence before Question acknowledgement can proceed.
+    """
+
+    try:
+        directory_fd, original_name, canonical_path = _open_draft_parent(draft_path)
+    except (OSError, RuntimeError) as exc:
+        raise _retirement_conflict(
+            "the staged draft directory cannot be opened for receipt reconciliation",
+            receipt_id=receipt_id,
+            parent=draft_path.parent,
+            names=(draft_path.name,),
+        ) from exc
+    pending_name, retired_name = _receipt_retirement_names(original_name, receipt_id)
+    parent = canonical_path.parent
+    try:
+        if _named_entry_exists(directory_fd, original_name):
+            raise _retirement_conflict(
+                "a staged file now occupies the path whose receipt is being reconciled",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, pending_name, retired_name),
+            )
+        pending_exists = _named_entry_exists(directory_fd, pending_name)
+        retired_exists = _named_entry_exists(directory_fd, retired_name)
+        if pending_exists and retired_exists:
+            raise _retirement_conflict(
+                "both pending and retired draft evidence exist for this receipt",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(pending_name, retired_name),
+            )
+        if not pending_exists and not retired_exists:
+            if expected_content_sha256 is None:
+                return None
+            raise _retirement_conflict(
+                "the staged draft is missing without receipt-bound retirement evidence",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name,),
+            )
+        if expected_content_sha256 is None:
+            raise _retirement_conflict(
+                "retired draft evidence cannot be verified against this legacy receipt",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(pending_name, retired_name),
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_content_sha256):
+            raise _retirement_conflict(
+                "receipt-bound staged-draft digest has an invalid format",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(pending_name, retired_name),
+            )
+
+        current_name = pending_name if pending_exists else retired_name
+        try:
+            raw, info = _read_named_draft(directory_fd, current_name)
+        except OSError as exc:
+            raise _retirement_conflict(
+                "receipt-bound draft evidence cannot be inspected safely",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(current_name,),
+            ) from exc
+        if hashlib.sha256(raw).hexdigest() != expected_content_sha256:
+            if pending_exists:
+                write_guard.assert_writes_allowed(write_action)
+                _restore_retirement_if_absent(
+                    directory_fd,
+                    source_name=pending_name,
+                    original_name=original_name,
+                )
+            raise _retirement_conflict(
+                "receipt-bound draft evidence differs from the bytes accepted by EXP-4",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, current_name),
+            )
+        if retired_exists:
+            if _named_entry_exists(directory_fd, original_name):
+                raise _retirement_conflict(
+                    "a staged file appeared while its receipt-bound archive was being checked",
+                    receipt_id=receipt_id,
+                    parent=parent,
+                    names=(original_name, retired_name),
+                )
+            return str(parent / retired_name)
+
+        if _named_entry_exists(directory_fd, original_name):
+            raise _retirement_conflict(
+                "a staged file appeared before pending draft evidence could be archived",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, pending_name),
+            )
+
+        write_guard.assert_writes_allowed(write_action)
+        try:
+            _atomic_rename_noreplace_at(
+                directory_fd,
+                pending_name,
+                directory_fd,
+                retired_name,
+            )
+        except FileExistsError as exc:
+            raise _retirement_conflict(
+                "the receipt-bound retired archive path appeared during reconciliation",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(pending_name, retired_name),
+            ) from exc
+        os.fsync(directory_fd)
+        archived, archived_info = _read_named_draft(directory_fd, retired_name)
+        if (
+            hashlib.sha256(archived).hexdigest() != expected_content_sha256
+            or not stat.S_ISREG(archived_info.st_mode)
+            or archived_info.st_nlink != 1
+        ):
+            raise _retirement_conflict(
+                "the receipt-bound archive changed during reconciliation",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(retired_name,),
+            )
+        if _named_entry_exists(directory_fd, original_name):
+            raise _retirement_conflict(
+                "a staged file appeared while its reconciled archive was being checked",
+                receipt_id=receipt_id,
+                parent=parent,
+                names=(original_name, retired_name),
+            )
+        return str(parent / retired_name)
+    except AcceptanceReconciliationError:
+        raise
+    except WritesBlockedError:
+        raise
+    except Exception as exc:
+        raise _retirement_conflict(
+            "receipt-bound staged draft retirement could not be reconciled safely",
+            receipt_id=receipt_id,
+            parent=parent,
+            names=(original_name, pending_name, retired_name),
+        ) from exc
+    finally:
+        os.close(directory_fd)
 
 
 def _sources_of(loaded: _LoadedDraft) -> tuple[str, ...]:
@@ -647,18 +1210,261 @@ def _emit_receipt(
     *,
     outbox_path: Path,
     trace_id: str | None,
+    event_id: str | None = None,
+    timestamp: str | None = None,
 ) -> str:
-    event_id = uuid4().hex
+    event_id = event_id or uuid4().hex
     record = {
         "event": event,
         "event_id": event_id,
         "trace_id": trace_id or uuid4().hex,
         "source": ACCEPT_EVENT_SOURCE,
-        "timestamp": _iso(_now()),
+        "timestamp": timestamp or _iso(_now()),
         "payload": payload,
     }
     append_jsonl_outbox_event(outbox_path, record, default_source=ACCEPT_EVENT_SOURCE)
     return event_id
+
+
+def _write_all(descriptor: int, data: bytes) -> None:
+    offset = 0
+    while offset < len(data):
+        written = os.write(descriptor, data[offset:])
+        if written <= 0:
+            raise OSError("canonical note write made no progress")
+        offset += written
+
+
+def _fsync_directory(path: Path) -> None:
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if directory_flag is None:
+        return
+    descriptor = os.open(path, os.O_RDONLY | directory_flag)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _install_new_canonical_note(destination_path: Path, data: bytes) -> bool:
+    """Atomically publish a fully written note without replacing a destination."""
+
+    temporary_path = destination_path.parent / f".{destination_path.name}.{uuid4().hex}.tmp"
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    temporary_created = False
+    try:
+        descriptor = os.open(temporary_path, flags, 0o666)
+        temporary_created = True
+        try:
+            _write_all(descriptor, data)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+        try:
+            os.link(temporary_path, destination_path, follow_symlinks=False)
+        except FileExistsError:
+            return False
+        _fsync_directory(destination_path.parent)
+        return True
+    finally:
+        if temporary_created:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _cleanup_linked_acceptance_temps(destination_path: Path) -> None:
+    """Retire only a leftover staging name that is the canonical note's inode."""
+
+    target = destination_path.stat(follow_symlinks=False)
+    if not stat.S_ISREG(target.st_mode):
+        raise AcceptanceReconciliationError("the accepted destination is not a regular file")
+    removed = False
+    for candidate in destination_path.parent.glob(f".{destination_path.name}.*.tmp"):
+        try:
+            info = candidate.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if (
+            stat.S_ISREG(info.st_mode)
+            and (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino)
+        ):
+            candidate.unlink()
+            removed = True
+    if removed:
+        _fsync_directory(destination_path.parent)
+
+
+def _recover_materialized_question_acceptance(
+    loaded: _LoadedDraft,
+    *,
+    destination_path: Path,
+    vault_root: Path,
+    outbox_path: Path,
+    write_guard: WriteGuard,
+) -> AcceptResult | None:
+    """Recover only an exact SQ answer materialized by an earlier attempt.
+
+    EXP-4 writes the canonical note, then its outbox receipt, then removes the
+    staged draft. A process exit between those operations leaves enough evidence
+    to retry safely while the draft still exists. The accepted note must match
+    every draft field and the checkbox-stripped body; an unrelated destination
+    remains the existing ask-you case.
+    """
+
+    if (
+        loaded.frontmatter.get("create_kind") != "create.answer_note"
+        or not isinstance(loaded.frontmatter.get("question_id"), str)
+        or not loaded.frontmatter.get("question_id")
+    ):
+        return None
+
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    try:
+        accepted_bytes = destination_path.read_bytes()
+        accepted_text = accepted_bytes.decode("utf-8")
+        accepted_frontmatter, accepted_body = load_frontmatter(accepted_text)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise AcceptanceReconciliationError(
+            "the existing answer destination cannot be inspected safely"
+        ) from exc
+    accepted_frontmatter = accepted_frontmatter or {}
+    receipt_id = accepted_frontmatter.get("acceptance_receipt_id")
+    token_ref = accepted_frontmatter.get("decision_token_ref")
+    accepted_at_value = accepted_frontmatter.get("accepted_at")
+
+    def reject_ambiguous_same_draft() -> None:
+        if (
+            accepted_frontmatter.get("uuid") == _draft_id_of(loaded)
+            or destination_path.stem == _draft_id_of(loaded)
+        ):
+            raise AcceptanceReconciliationError(
+                "the existing answer appears to belong to this draft but has incomplete acceptance metadata"
+            )
+
+    if not isinstance(receipt_id, str) or not receipt_id.strip():
+        reject_ambiguous_same_draft()
+        return None
+    if not isinstance(token_ref, str) or not token_ref.strip():
+        reject_ambiguous_same_draft()
+        return None
+    if isinstance(accepted_at_value, datetime):
+        accepted_at = accepted_at_value
+    elif isinstance(accepted_at_value, str):
+        try:
+            accepted_at = datetime.fromisoformat(accepted_at_value.replace("Z", "+00:00"))
+        except ValueError:
+            reject_ambiguous_same_draft()
+            return None
+    else:
+        reject_ambiguous_same_draft()
+        return None
+    if accepted_at.tzinfo is None:
+        reject_ambiguous_same_draft()
+        return None
+
+    expected_frontmatter = _build_accepted_frontmatter(
+        loaded,
+        receipt_id=receipt_id,
+        decision_token_ref=token_ref,
+        accepted_at=accepted_at,
+    )
+    comparable_frontmatter = dict(accepted_frontmatter)
+    comparable_frontmatter["accepted_at"] = _iso(accepted_at)
+    if (
+        comparable_frontmatter != expected_frontmatter
+        or accepted_body != _strip_acceptance_checkbox(loaded.body)
+    ):
+        if (
+            accepted_frontmatter.get("uuid") == _draft_id_of(loaded)
+            or destination_path.stem == _draft_id_of(loaded)
+        ):
+            raise AcceptanceReconciliationError(
+                "the existing answer appears to belong to this draft but is not an exact materialization"
+            )
+        return None
+
+    # Recovery may remove a leftover staging link and retire the draft below,
+    # so gate it even when the exact acceptance receipt already exists.
+    write_guard.assert_writes_allowed(ACCEPT_MATERIALIZE_WRITE_ACTION)
+    _cleanup_linked_acceptance_temps(destination_path)
+
+    try:
+        final_rel = destination_path.resolve().relative_to(vault_root).as_posix()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise AcceptanceReconciliationError(
+            "the existing answer destination is outside the selected vault"
+        ) from exc
+    payload = {
+        "draft_id": _draft_id_of(loaded),
+        "final_note_path": final_rel,
+        "draft_content_sha256": loaded.raw_content_sha256,
+        "sources": list(_sources_of(loaded)),
+        "decision_token_ref": token_ref,
+        "authority_receipt_id": receipt_id,
+        "accepted_by": "human",
+        "authority_state": ACCEPTED_AUTHORITY_STATE,
+        "materialized_content_sha256": hashlib.sha256(accepted_bytes).hexdigest(),
+    }
+
+    try:
+        matching = [
+            record
+            for record in iter_jsonl_outbox_records(outbox_path)
+            if record.get("event") == CREATE_ACCEPTED_EVENT
+            and isinstance(record.get("payload"), dict)
+            and record["payload"].get("draft_id") == payload["draft_id"]
+        ]
+        if matching:
+            if (
+                len(matching) != 1
+                or matching[0].get("payload") != payload
+                or matching[0].get("source") != ACCEPT_EVENT_SOURCE
+                or matching[0].get("trace_id") != payload["draft_id"]
+            ):
+                raise AcceptanceReconciliationError(
+                    "the accepted answer has a conflicting or duplicate receipt"
+                )
+            event_id = matching[0].get("event_id")
+            if not isinstance(event_id, str) or not event_id:
+                raise AcceptanceReconciliationError(
+                    "the accepted answer receipt has no event identity"
+                )
+        else:
+            event_id = hashlib.sha256(
+                f"{CREATE_ACCEPTED_EVENT}\x1f{payload['draft_id']}\x1f{receipt_id}".encode("utf-8")
+            ).hexdigest()
+            _emit_receipt(
+                CREATE_ACCEPTED_EVENT,
+                payload,
+                outbox_path=outbox_path,
+                trace_id=str(payload["draft_id"]),
+                event_id=event_id,
+                timestamp=_iso(accepted_at),
+            )
+    except AcceptanceReconciliationError:
+        raise
+    except Exception as exc:
+        raise AcceptanceReconciliationError(
+            "the accepted answer receipt could not be reconciled safely"
+        ) from exc
+
+    _retire_loaded_draft_if_unchanged(loaded, receipt_id=receipt_id)
+    return AcceptResult(
+        status="accepted",
+        draft_id=_draft_id_of(loaded),
+        final_note_path=final_rel,
+        receipt_id=receipt_id,
+        decision_token_ref=token_ref,
+        transition_id=None,
+        materialized_content_sha256=hashlib.sha256(accepted_bytes).hexdigest(),
+    )
 
 
 def _build_authority_transition(
@@ -707,6 +1513,7 @@ def accept_draft(
     outbox_path: Path,
     destination: str | None = None,
     live_source_ids: set[str] | None = None,
+    expected_draft_content_sha256: str | None = None,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     now: datetime | None = None,
 ) -> AcceptResult:
@@ -723,6 +1530,11 @@ def accept_draft(
     ``live_source_ids`` — when given, the set of source object ids that still
     resolve; a cited source outside it blocks acceptance loudly. When None, the
     caller asserts the draft's source set is unchanged since EXP-3 validated it.
+
+    ``expected_draft_content_sha256`` — when given by a source-bound human review
+    flow, pins the exact UTF-8 bytes loaded for EXP-4 to the bytes that flow
+    preflighted. A concurrent edit before this load refuses materialization; an
+    edit after this load cannot change the immutable content EXP-4 materializes.
     """
     now = now or _now()
     vault_root = Path(vault_root).expanduser().resolve()
@@ -730,7 +1542,10 @@ def accept_draft(
     if not draft_path.is_absolute():
         draft_path = (vault_root / draft_path).resolve()
 
-    loaded = _load_draft(draft_path)
+    loaded = _load_draft(
+        draft_path,
+        expected_content_sha256=expected_draft_content_sha256,
+    )
     draft_id = _draft_id_of(loaded)
 
     # Idempotency: an already-accepted draft never double-materializes.
@@ -759,6 +1574,15 @@ def accept_draft(
     )
     # modify-existing-note variant stays ask-you: never overwrite an existing note.
     if destination_path.exists():
+        recovered = _recover_materialized_question_acceptance(
+            loaded,
+            destination_path=destination_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            write_guard=write_guard,
+        )
+        if recovered is not None:
+            return recovered
         raise ModifyExistingRequiresAskError(
             f"destination {destination_path.relative_to(vault_root)} already exists; materializing over "
             "an existing canonical note is a body edit held at 'ask-you' — not this new-note path"
@@ -787,7 +1611,22 @@ def accept_draft(
     note_text = dump_frontmatter(accepted_frontmatter, materialized_body)
 
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    destination_path.write_text(note_text, encoding="utf-8")
+    materialized_bytes = note_text.encode("utf-8")
+    if not _install_new_canonical_note(destination_path, materialized_bytes):
+        recovered = _recover_materialized_question_acceptance(
+            loaded,
+            destination_path=destination_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            write_guard=write_guard,
+        )
+        if recovered is not None:
+            return recovered
+        raise ModifyExistingRequiresAskError(
+            f"destination {destination_path.relative_to(vault_root)} already exists; materializing over "
+            "an existing canonical note is a body edit held at 'ask-you' — not this new-note path"
+        )
+    materialized_content_sha256 = hashlib.sha256(materialized_bytes).hexdigest()
 
     final_rel = str(destination_path.relative_to(vault_root))
     sources = _sources_of(loaded)
@@ -799,11 +1638,18 @@ def accept_draft(
         {
             "draft_id": draft_id,
             "final_note_path": final_rel,
+            "draft_content_sha256": loaded.raw_content_sha256,
             "sources": list(sources),
             "decision_token_ref": token.token_ref,
             "authority_receipt_id": receipt_id,
             "accepted_by": "human",
             "authority_state": ACCEPTED_AUTHORITY_STATE,
+            **(
+                {"materialized_content_sha256": materialized_content_sha256}
+                if loaded.frontmatter.get("create_kind") == "create.answer_note"
+                and loaded.frontmatter.get("question_id")
+                else {}
+            ),
         },
         outbox_path=outbox_path,
         trace_id=draft_id,
@@ -820,10 +1666,7 @@ def accept_draft(
 
     # The staged draft has served its purpose; remove it so it is not re-swept
     # or re-accepted. The canonical note + receipt carry the durable record.
-    try:
-        loaded.path.unlink()
-    except OSError:
-        pass
+    _retire_loaded_draft_if_unchanged(loaded, receipt_id=receipt_id)
 
     return AcceptResult(
         status="accepted",
@@ -832,6 +1675,7 @@ def accept_draft(
         receipt_id=receipt_id,
         decision_token_ref=token.token_ref,
         transition_id=transition["transition_id"],
+        materialized_content_sha256=materialized_content_sha256,
     )
 
 
@@ -858,6 +1702,12 @@ def decline_draft(
 
     loaded = _load_draft(draft_path)
     draft_id = _draft_id_of(loaded)
+    try:
+        draft_rel = loaded.path.relative_to(vault_root).as_posix()
+    except ValueError as exc:
+        raise MalformedDraftError(
+            "staged draft must be inside the selected vault before it can be declined"
+        ) from exc
 
     if declined_ledger is None:
         from app.proposals.declined_ledger import default_declined_ledger
@@ -880,6 +1730,8 @@ def decline_draft(
         CREATE_DECLINED_EVENT,
         {
             "draft_id": draft_id,
+            "draft_path": draft_rel,
+            "draft_content_sha256": loaded.raw_content_sha256,
             "reason": reason,
             "sources": list(_sources_of(loaded)),
         },
@@ -889,10 +1741,7 @@ def decline_draft(
 
     # Remove the staged draft (no canonical note produced). The decline receipt
     # + ledger entry are the durable record.
-    try:
-        loaded.path.unlink()
-    except OSError:
-        pass
+    _retire_loaded_draft_if_unchanged(loaded, receipt_id=receipt_id)
 
     return DeclineResult(
         status="declined",
@@ -908,6 +1757,7 @@ __all__ = [
     "ACCEPT_MATERIALIZE_WRITE_ACTION",
     "ACCEPT_OPERATION_TYPE",
     "ACCEPTED_AUTHORITY_STATE",
+    "AcceptanceReconciliationError",
     "CREATE_ACCEPTED_EVENT",
     "CREATE_DECLINED_EVENT",
     "PROPOSAL_AUTHORITY_STATE",

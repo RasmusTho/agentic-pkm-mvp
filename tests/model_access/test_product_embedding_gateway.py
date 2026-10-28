@@ -14,8 +14,14 @@ from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.codex_executor_service import create_codex_executor_app
 from app.model_access.ollama_http import OllamaHttpAdapter, OllamaHttpCatalogModel
 from app.model_access.provider_api import ProductProviderApiAdapter
-from app.model_access.codex_remote_transport import CodexRemoteTransport, RemoteEmbeddingError
+from app.model_access.codex_remote_transport import (
+    CodexRemoteTransport,
+    RemoteEmbeddingError,
+    RemoteEmbeddingExecutorBusyError,
+)
 from app.model_access.remote_contract import ProductEmbeddingRequest
+from app.components.embeddings import EmbeddingIdentity
+from app.components.llm import fabric
 
 
 GEMINI_KEY = "synthetic-gemini-key-never-return"
@@ -305,3 +311,151 @@ def test_product_catalog_refresh_obeys_executor_concurrency_bound() -> None:
     assert first_response.status_code == 200
     assert second_response.status_code == 429
     assert second_response.json()["error"]["code"] == "executor_busy"
+
+
+def _embedding_client(transport: httpx.BaseTransport) -> Any:
+    remote = CodexRemoteTransport(
+        endpoint="https://synthetic-executor.test.ts.net", transport=transport
+    )
+    return fabric._RemoteProductEmbeddingClient(
+        identity=EmbeddingIdentity(provider="ollama", model="nomic-embed-text:latest", dim=768),
+        request_model="nomic-embed-text:latest",
+        expected_transport="ollama_http",
+        remote_transport=remote,  # type: ignore[arg-type]
+    )
+
+
+def test_product_embedding_resends_after_executor_busy_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    embeds: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "nomic-embed-text:latest"}]})
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json={"capabilities": ["embedding"]})
+        assert request.url.path == "/api/embed"
+        embeds.append(json.loads(request.content)["input"])
+        if len(embeds) == 1:
+            # The holder occupies the only executor slot until the client backs off.
+            entered.set()
+            assert release.wait(timeout=5)
+        return httpx.Response(
+            200, json={"model": "nomic-embed-text:latest", "embeddings": [[0.5] * 768]}
+        )
+
+    app = create_codex_executor_app(
+        codex_executor=_Codex(),  # type: ignore[arg-type]
+        ollama_adapter=OllamaHttpAdapter(
+            base_url="http://127.0.0.1:11434", transport=httpx.MockTransport(handler)
+        ),
+        adapter_factory=_factory(),
+        max_concurrency=1,
+    )
+    holder_status: list[int] = []
+
+    def hold_slot() -> None:
+        # No lifespan context here: its shutdown would close the shared adapter.
+        holder_status.append(_client(app).post(
+            "/v1/product/embed",
+            json=_request(provider="ollama", model="nomic-embed-text:latest"),
+        ).status_code)
+
+    holder = threading.Thread(target=hold_slot)
+    holder.start()
+    assert entered.wait(timeout=5)
+    sleeps: list[float] = []
+
+    def back_off(delay: float) -> None:
+        sleeps.append(delay)
+        release.set()
+        holder.join(timeout=5)
+
+    monkeypatch.setattr(fabric, "_sleep", back_off)
+    statuses: list[int] = []
+    with _client(app) as client:
+        def portal(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v1/product/embed"
+            response = client.post(
+                request.url.path, content=request.content,
+                headers={"Content-Type": request.headers["Content-Type"]},
+            )
+            statuses.append(response.status_code)
+            return httpx.Response(response.status_code, content=response.content)
+
+        embedding = _embedding_client(httpx.MockTransport(portal))
+        try:
+            vector = embedding.embed_text(_INPUT)
+        finally:
+            embedding.close()
+            release.set()
+            holder.join(timeout=5)
+
+    assert len(vector) == 768
+    assert statuses == [429, 200]
+    assert sleeps == [fabric._EXECUTOR_BUSY_RESEND_DELAYS_SECONDS[0]]
+    # The refused attempt never reached the provider: one holder call plus one resend.
+    assert embeds == [_INPUT, _INPUT]
+    assert holder_status == [200]
+
+
+def test_product_embedding_busy_retry_is_bounded_and_typed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[bytes] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(fabric, "_sleep", sleeps.append)
+
+    def portal(request: httpx.Request) -> httpx.Response:
+        sent.append(request.content)
+        return httpx.Response(429, json={"error": {"code": "executor_busy"}})
+
+    embedding = _embedding_client(httpx.MockTransport(portal))
+    try:
+        with pytest.raises(RemoteEmbeddingExecutorBusyError) as caught:
+            embedding.embed_text(_INPUT)
+    finally:
+        embedding.close()
+
+    delays = fabric._EXECUTOR_BUSY_RESEND_DELAYS_SECONDS
+    assert caught.value.code == "embedding_executor_busy"
+    assert caught.value.indeterminate is False
+    assert isinstance(caught.value, RemoteEmbeddingError)
+    assert fabric.RemoteEmbeddingExecutorBusyError is RemoteEmbeddingExecutorBusyError
+    assert sleeps == list(delays) and sum(delays) < 60
+    assert len(sent) == len(delays) + 1 and len(set(sent)) == 1
+
+
+@pytest.mark.parametrize("reply", [
+    lambda request: httpx.Response(429, json={"error": {"code": "rate_limited"}}),
+    lambda request: httpx.Response(429, content=b"executor_busy"),
+    lambda request: httpx.Response(
+        429, json={"error": {"code": "executor_busy"}, "detail": "extra"}
+    ),
+    lambda request: httpx.Response(503, json={"error": {"code": "executor_busy"}}),
+    lambda request: httpx.Response(503, json={"error": {"code": "ollama_timeout"}}),
+    lambda request: (_ for _ in ()).throw(httpx.ReadTimeout("synthetic", request=request)),
+], ids=["429-other-code", "429-not-json", "429-extra-field", "503-busy-code", "503", "timeout"])
+def test_product_embedding_non_busy_failures_stay_single_dispatch(
+    monkeypatch: pytest.MonkeyPatch, reply: Any,
+) -> None:
+    sent: list[httpx.Request] = []
+    monkeypatch.setattr(fabric, "_sleep", lambda delay: pytest.fail("no resend after dispatch"))
+
+    def portal(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return reply(request)
+
+    embedding = _embedding_client(httpx.MockTransport(portal))
+    try:
+        with pytest.raises(RemoteEmbeddingError) as caught:
+            embedding.embed_text(_INPUT)
+    finally:
+        embedding.close()
+
+    assert not isinstance(caught.value, RemoteEmbeddingExecutorBusyError)
+    assert caught.value.indeterminate is True
+    assert len(sent) == 1

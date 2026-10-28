@@ -238,7 +238,10 @@ class DiscordChannel:
         request = urllib.request.Request(
             self._webhook_url,
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "DiscordBot (https://github.com/RasmusTho/agentic-pkm-mvp, 1.0)",
+            },
             method="POST",
         )
         try:

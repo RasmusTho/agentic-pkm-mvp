@@ -120,6 +120,15 @@ removes direct operational-store access from builder clients.
 
 ## Client setup (secret-safe)
 
+As of 2026-10-26, the bounded #6347 qualification uses a private opt-in Mac API profile
+containing only the qualified origin and existing normal-token file reference. Apply it only
+to the intended consumer child invocation/subshell. Actual wrapper, API CLI and verification
+reader checks matched bob-1 schema5/epoch77627680301974; missing mutation routes fail closed.
+No global API environment/LaunchAgent publication changed existing dispatcher claims or the
+separate Vault store. DDO/executor admission remains unactivated with its existing gates, and
+the installed inactive local-SQLite scheduler is inapplicable to the API. The finite
+[consumer matrix](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#issuecomment-6405523126) records these dispositions; this is not full BCP-06 cutover.
+
 BuilderOps coordination operations (tasks, leases, attempts, promotions,
 receipts, and status) use the authenticated control-plane API, through
 `python -m app.builderops.control_plane <command>` or the

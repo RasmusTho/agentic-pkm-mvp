@@ -96,6 +96,9 @@ def test_discord_posts_redacted_webhook_payload(
 
     request = urlopen.call_args.args[0]
     assert request.full_url == DISCORD_WEBHOOK
+    assert request.get_header("User-agent") == (
+        "DiscordBot (https://github.com/RasmusTho/agentic-pkm-mvp, 1.0)"
+    )
     assert json.loads(request.data.decode("utf-8")) == {
         "content": "**Prod down - Yggdrasil**\nreadyz failed"
     }

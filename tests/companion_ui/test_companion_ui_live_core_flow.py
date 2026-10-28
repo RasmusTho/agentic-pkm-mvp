@@ -44,6 +44,14 @@ def test_03_capture_acknowledged_once(flow_report: dict[str, Any]) -> None:
 
 
 def test_04_capture_survives_new_browser_context(flow_report: dict[str, Any]) -> None:
+    if flow_report.get("execution_mode") == "capture_only":
+        assert [step["id"] for step in flow_report["steps"]] == [
+            "PW-01", "PW-02", "PW-03", "PW-04"
+        ], "capture_only_requires_exact_four_steps"
+        for number in range(1, 5):
+            _assert_step(flow_report, number)
+        assert flow_report.get("passed") is True, "capture_only_aggregate_failed"
+        return
     _assert_step(flow_report, 4)
 
 

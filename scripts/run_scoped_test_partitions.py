@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.select_pr_tests import PR_MARKER_EXPRESSION
+from scripts.plan_full_suite_node_shards import TARGET_MODULE, plan_node_units, verify_node_results
 
 MAX_PARTITIONS = 4
 MAX_SHARD_TIMEOUT_SECONDS = 3300
@@ -225,19 +226,15 @@ def _run_partition(
             return index, 124, log_path, True
 
 
-def _collect_deploy_nodes(target: str, *, cache: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
-    """Collect deploy nodes once so a slow file can be split across workers."""
-
-    path = _target_file(target)
-    if path in cache:
-        return cache[path]
+def _collect_parallel_nodes(targets: Sequence[str]) -> tuple[str, ...]:
+    """Collect the parallel inventory once for node splitting and atomic weights."""
     command = [
         "pytest",
         "--collect-only",
         "-q",
         "-m",
         PR_MARKER_EXPRESSION,
-        target,
+        *targets,
     ]
     process = subprocess.Popen(
         command,
@@ -253,24 +250,21 @@ def _collect_deploy_nodes(target: str, *, cache: dict[str, tuple[str, ...]]) -> 
         _terminate_process_group(process.pid)
         process.wait()
         raise RuntimeError(
-            f"deploy work-unit collection timed out after {COLLECTION_TIMEOUT_SECONDS}s: {target}"
+            f"parallel work-unit collection timed out after {COLLECTION_TIMEOUT_SECONDS}s"
         ) from exc
     finally:
         _terminate_process_group(process.pid)
     if process.returncode not in (0, 5):
         raise RuntimeError(
-            f"deploy work-unit collection failed ({process.returncode}): {target}\n{output}"
+            f"parallel work-unit collection failed ({process.returncode})\n{output}"
         )
-    nodes = tuple(
-        sorted(
-            {
-                line.strip()
-                for line in output.splitlines()
-                if line.strip().startswith(path) and "::" in line.strip()
-            }
-        )
-    )
-    cache[path] = nodes
+    nodes = tuple(sorted(
+        line.strip()
+        for line in output.splitlines()
+        if line.strip().startswith("tests/") and "::" in line.strip()
+    ))
+    if len(set(nodes)) != len(nodes):
+        raise ValueError("collected parallel node inventory contains duplicates")
     return nodes
 
 
@@ -314,31 +308,7 @@ def _expand_and_balance_parallel(
     jobs: int,
     expected_targets: Sequence[str] = (),
 ) -> tuple[tuple[str, ...], ...]:
-    """Weight deploy files by collected nodes and balance atomic candidates."""
-
-    cache: dict[str, tuple[str, ...]] = {}
-    # Collect selected deploy directories before their file-level execution
-    # units.  Collection supplies weights only; the stable current-head file
-    # expansion remains the authenticated execution inventory.
-    for target in expected_targets:
-        path = _target_file(target)
-        if _is_deploy_target(target):
-            if not path.endswith(".py"):
-                _collect_deploy_nodes(target, cache=cache)
-
-    def deploy_nodes_for_target(target: str) -> tuple[str, ...]:
-        path = _target_file(target)
-        if path in cache:
-            return cache[path]
-        for root, nodes in cache.items():
-            if root == "tests/deploy" or path.startswith(f"{root}/"):
-                return tuple(
-                    node
-                    for node in nodes
-                    if _target_file(node) == path
-                    or _target_file(node).startswith(f"{path}/")
-                )
-        return _collect_deploy_nodes(target, cache=cache)
+    """Split the measured module safely, then balance bounded atomic candidates."""
 
     positional_targets = tuple(
         target
@@ -354,29 +324,44 @@ def _expand_and_balance_parallel(
         in effective_targets
     )
 
+    # One collection includes the same serial exclusions as execution. Directory
+    # roots remain atomic; their case count is a packing weight, not a new shard.
+    collected = _collect_parallel_nodes(tuple(
+        argument for candidate in candidates for argument in candidate
+    )) if candidates else ()
+
+    def nodes_for_target(target: str) -> tuple[str, ...]:
+        return tuple(node for node in collected if node == target or _strictly_covers(target, node))
+
     expanded: list[tuple[str, ...]] = []
     seen_targets: set[str] = set()
-    deploy_node_weight: dict[str, int] = {}
+    node_weight: dict[str, int] = {}
     for candidate in candidates:
         positional = tuple(target for target in candidate if not target.startswith("-"))
         options = tuple(target for target in candidate if target.startswith("-"))
         if len(positional) != 1:
             raise ValueError("each execution candidate must contain one positional target")
         target = positional[0]
-        path = _target_file(target)
         if _is_deploy_target(target):
             if options:
                 raise ValueError("deploy execution candidates must not contain pytest options")
-            nodes = deploy_nodes_for_target(target)
+            nodes = nodes_for_target(target)
             files = _deploy_test_files(target)
+            deploy_units: list[tuple[str, ...]] = []
             for file_path in files:
-                deploy_node_weight[file_path] = max(
-                    1,
-                    sum(_target_file(node) == file_path for node in nodes),
-                )
-            refined = tuple((file_path,) for file_path in files)
+                file_nodes = tuple(node for node in nodes if _target_file(node) == file_path)
+                if file_path == TARGET_MODULE and file_nodes and jobs > 1:
+                    units = plan_node_units(file_nodes, TARGET_MODULE, max_workers=jobs)
+                    deploy_units.extend(units)
+                    for unit in units:
+                        node_weight[unit[0]] = len(unit)
+                else:
+                    deploy_units.append((file_path,))
+                    node_weight[file_path] = max(1, len(file_nodes))
+            refined = tuple(deploy_units)
         else:
             refined = (tuple(candidate),)
+            node_weight[target] = max(1, len(nodes_for_target(target)))
         for item in refined:
             positional_target = next(value for value in item if not value.startswith("-"))
             if positional_target in seen_targets:
@@ -390,10 +375,10 @@ def _expand_and_balance_parallel(
         for file_path in _deploy_test_files(target)
     }
     actual_deploy_files = {
-        target
+        _target_file(target)
         for candidate in expanded
         for target in candidate
-        if target.startswith("tests/deploy/") and target.endswith(".py")
+        if _is_deploy_target(target)
     }
     if expected_deploy_files and actual_deploy_files != expected_deploy_files:
         raise ValueError(
@@ -406,13 +391,34 @@ def _expand_and_balance_parallel(
 
     def candidate_weight(candidate: tuple[str, ...]) -> int:
         positional = next(target for target in candidate if not target.startswith("-"))
-        return deploy_node_weight.get(positional, 1)
+        return node_weight.get(positional, 1)
 
     for candidate in sorted(expanded, key=lambda item: (-candidate_weight(item), item)):
         index = min(range(len(buckets)), key=lambda item: (weights[item], item))
         buckets[index].extend(candidate)
         weights[index] += candidate_weight(candidate)
     return tuple(tuple(bucket) for bucket in buckets if bucket)
+
+
+def _report_partition_result(
+    result: tuple[int, int, Path, bool], targets: Sequence[str], *, label: str
+) -> tuple[int, int, Path, bool]:
+    """Validate collected-node evidence and surface a completed failure now."""
+
+    index, returncode, log_path, timed_out = result
+    nodes = tuple(target for target in targets if target.startswith(f"{TARGET_MODULE}::"))
+    if nodes:
+        try:
+            verify_node_results(nodes, TARGET_MODULE, log_path.read_text(encoding="utf-8").splitlines())
+        except (OSError, ValueError) as exc:
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write(f"\nCollected-node verification failed: {exc}\n")
+            returncode = returncode or 1
+    if returncode != 0 or timed_out:
+        log = log_path.read_text(encoding="utf-8")
+        print(f"{label} FAILED ({returncode}): {index}", file=sys.stderr, flush=True)
+        print(log, file=sys.stderr, end="" if log.endswith("\n") else "\n", flush=True)
+    return index, returncode, log_path, timed_out
 
 
 def run_partitions(
@@ -486,7 +492,10 @@ def run_partitions(
                 for index, targets in runnable_partitions
             }
             for future in as_completed(futures):
-                index, returncode, log_path, timed_out = future.result()
+                index = futures[future]
+                index, returncode, log_path, timed_out = _report_partition_result(
+                    future.result(), parallel_partitions[index], label="PARTITION"
+                )
                 results[index] = (returncode, log_path, timed_out)
                 print(
                     f"PARTITION FINISHED ({returncode}): {index} "
@@ -502,6 +511,10 @@ def run_partitions(
             log_dir=log_dir,
             timeout_seconds=timeout_seconds,
         )
+        result_index, returncode, log_path, timed_out = _report_partition_result(
+            (result_index, returncode, log_path, timed_out), source_partitions[-1],
+            label="SERIAL PARTITION",
+        )
         results[result_index] = (returncode, log_path, timed_out)
         print(
             f"SERIAL PARTITION FINISHED ({returncode}): {serial_last_index} "
@@ -516,6 +529,10 @@ def run_partitions(
             boundary_targets,
             log_dir=log_dir,
             timeout_seconds=timeout_seconds,
+        )
+        result_index, returncode, log_path, timed_out = _report_partition_result(
+            (result_index, returncode, log_path, timed_out), boundary_targets,
+            label="SERIAL BOUNDARY",
         )
         results[result_index] = (returncode, log_path, timed_out)
         print(
@@ -542,8 +559,6 @@ def run_partitions(
                 aggregate.write("\n")
             if returncode != 0 or timed_out:
                 failed = True
-                print(f"PARTITION FAILED ({returncode}): {index}", file=sys.stderr)
-                print(log, file=sys.stderr, end="" if log.endswith("\n") else "\n")
         if serial_last_index is not None:
             returncode, log_path, timed_out = results[serial_last_index]
             log = log_path.read_text(encoding="utf-8")
@@ -552,11 +567,6 @@ def run_partitions(
                 aggregate.write("\n")
             if returncode != 0 or timed_out:
                 failed = True
-                print(
-                    f"SERIAL PARTITION FAILED ({returncode}): {serial_last_index}",
-                    file=sys.stderr,
-                )
-                print(log, file=sys.stderr, end="" if log.endswith("\n") else "\n")
         if boundary_index is not None:
             returncode, log_path, timed_out = results[boundary_index]
             log = log_path.read_text(encoding="utf-8")
@@ -565,8 +575,6 @@ def run_partitions(
                 aggregate.write("\n")
             if returncode != 0 or timed_out:
                 failed = True
-                print(f"SERIAL BOUNDARY FAILED ({returncode})", file=sys.stderr)
-                print(log, file=sys.stderr, end="" if log.endswith("\n") else "\n")
     return 1 if failed else 0
 
 

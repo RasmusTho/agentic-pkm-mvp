@@ -1287,9 +1287,16 @@ def _get_heimdal_ingress_status():
 def _get_youtube_sync_status() -> YouTubeSyncStatus:
     """Project YSS-09 signals without making status depend on sync runtime."""
     try:
-        from app.knowledge_acquisition.sync_observability import collect_youtube_sync_status
+        from app.knowledge_acquisition.sync_observability import (
+            collect_youtube_sync_status,
+            resolve_active_vault_context,
+        )
 
-        return YouTubeSyncStatus(**collect_youtube_sync_status())
+        return YouTubeSyncStatus(
+            **collect_youtube_sync_status(
+                vault_context=resolve_active_vault_context()
+            )
+        )
     except Exception:
         # Optional status must never take down the existing status route. Keep
         # the fallback bounded and secret-free.

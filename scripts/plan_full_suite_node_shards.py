@@ -118,6 +118,43 @@ def write_plan(
     return tuple(work_items)
 
 
+def verify_node_results(
+    expected: Sequence[str], target: str, lines: Sequence[str]
+) -> tuple[str, ...]:
+    """Require exactly one recognizable pytest result for each planned node."""
+
+    statuses = {"PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS"}
+    expected_set = set(expected)
+    observed: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        matched = False
+        for node in expected_set:
+            prefix = f"{node} "
+            if stripped.startswith(prefix):
+                matched = True
+                status_parts = stripped[len(prefix):].split(maxsplit=1)
+                status = status_parts[0] if status_parts else ""
+                if status not in statuses:
+                    raise ValueError("unrecognized pytest result for a collected node")
+                observed.append(node)
+                break
+        if not matched and stripped.startswith(f"{target}::") and any(
+            token in statuses for token in stripped.split()
+        ):
+            raise ValueError("unexpected pytest result for an unplanned node")
+    if sorted(observed) != sorted(expected):
+        missing = sorted(expected_set - set(observed))
+        duplicate = sorted(node for node in set(observed) if observed.count(node) > 1)
+        details = []
+        if missing:
+            details.append("missing=" + ", ".join(missing[:3]))
+        if duplicate:
+            details.append("duplicate=" + ", ".join(duplicate[:3]))
+        raise ValueError("node execution evidence incomplete: " + "; ".join(details))
+    return tuple(observed)
+
+
 def verify_executed_nodes(coverage_path: Path, logs_dir: Path) -> tuple[str, ...]:
     """Require one pytest result line for every planned node in its own unit log."""
 
@@ -158,48 +195,17 @@ def verify_executed_nodes(coverage_path: Path, logs_dir: Path) -> tuple[str, ...
     if len(set(expected_nodes)) != len(expected_nodes):
         raise ValueError("collected-node plan contains duplicate nodes")
 
-    statuses = {"PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS"}
-    observed_by_unit: dict[str, list[str]] = {}
+    observed_by_unit: dict[str, tuple[str, ...]] = {}
     for identifier, expected_nodes_for_unit in expected_by_unit.items():
         log_path = logs_dir / f"{identifier}.log"
         try:
             lines = log_path.read_text(encoding="utf-8").splitlines()
         except OSError as exc:
             raise ValueError(f"missing collected-node execution log: {identifier}") from exc
-        expected_set = set(expected_nodes_for_unit)
-        observed: list[str] = []
-        for line in lines:
-            stripped = line.strip()
-            matched = False
-            for node in expected_set:
-                prefix = f"{node} "
-                if stripped.startswith(prefix):
-                    matched = True
-                    status_parts = stripped[len(prefix):].split(maxsplit=1)
-                    status = status_parts[0] if status_parts else ""
-                    if status in statuses:
-                        observed.append(node)
-                    else:
-                        raise ValueError(
-                            f"unrecognized pytest result for a collected node in {identifier}"
-                        )
-                    break
-            if not matched and stripped.startswith(f"{target}::") and any(
-                token in statuses for token in stripped.split()
-            ):
-                raise ValueError(f"unexpected pytest result for an unplanned node in {identifier}")
-        if sorted(observed) != sorted(expected_nodes_for_unit):
-            missing = sorted(set(expected_nodes_for_unit) - set(observed))
-            duplicate = sorted(node for node in set(observed) if observed.count(node) > 1)
-            details = []
-            if missing:
-                details.append("missing=" + ", ".join(missing[:3]))
-            if duplicate:
-                details.append("duplicate=" + ", ".join(duplicate[:3]))
-            raise ValueError(
-                f"node execution evidence incomplete for {identifier}: " + "; ".join(details)
-            )
-        observed_by_unit[identifier] = observed
+        try:
+            observed_by_unit[identifier] = verify_node_results(expected_nodes_for_unit, target, lines)
+        except ValueError as exc:
+            raise ValueError(f"{identifier}: {exc}") from exc
 
     observed_nodes = tuple(node for nodes in observed_by_unit.values() for node in nodes)
     if len(observed_nodes) != len(expected_nodes) or set(observed_nodes) != set(expected_nodes):
