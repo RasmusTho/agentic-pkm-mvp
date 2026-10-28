@@ -178,6 +178,11 @@ def test_backlog_episode_and_keep_up_checks() -> None:
     ]
     assert sim.interpret(summary, 60)["checks"]["backlog_recovers"] is True
 
+    # A segment that waited behind a draining backlog is recovery traffic, not steady state.
+    behind = _run([_record(0), _record(1, queue_wait_s=24.0, e2e_wall_s=24.5)])
+    latency = sim.summarize(behind)["latency_s"]
+    assert latency["steady_e2e"]["n"] == 1 and latency["recovery_tail_e2e"]["max"] == 24.5
+
     slow = [_record(i, e2e_wall_s=75.0) for i in range(4)]
     assert sim.interpret(sim.summarize(_run(slow)), 60)["checks"]["keeps_up_with_real_time"] is False
 
@@ -187,6 +192,8 @@ def test_durable_outputs_carry_no_segment_identifiers() -> None:
     redacted = sim.strip_private(run)
     text = json.dumps(sim.build_receipt(redacted, None, {})) + json.dumps(redacted)
     assert "cid-" not in text and "rcp-" not in text
+    assert sim.summarize(redacted)["counts"] == sim.summarize(run)["counts"]
+    assert sim.summarize(redacted)["counts"]["admitted"] == 3
     markdown = sim.render_markdown(sim.build_receipt(redacted, None, {}))
     assert "G1 status: unmet" in markdown
     assert "battery" in markdown

@@ -60,6 +60,7 @@ MEDIA_PATH = "/api/heimdal/capture/media"
 RECEIPTS_PATH = "/api/heimdal/capture/receipts"
 RECEIPT_QUERY_MAX_IDS = 100
 NULL_CAPTURE_ID = "00000000-0000-4000-8000-000000000000"
+RECOVERY_QUEUE_WAIT_S = 1.0
 
 ACTIVITY_CLASSES = ("conversation", "solo_speech", "ambient", "quiet", "silence")
 
@@ -590,11 +591,18 @@ def gap_runs(indexes: Sequence[int]) -> List[Tuple[int, int]]:
 def summarize(run: Dict[str, Any]) -> Dict[str, Any]:
     records = run["records"]
     segment_s = run["segment_seconds"]
-    sent = [r for r in records if r.get("capture_id")]
+    # Keyed on `attempts`, not `capture_id`: summaries also run over redacted runs.
+    sent = [r for r in records if "attempts" in r]
     admitted = [r for r in sent if r.get("outcome") == "admitted"]
     failed = [r for r in sent if r.get("outcome") != "admitted"]
     dropped = [r["index"] for r in records if r.get("outcome") == "dropped_by_design"]
-    steady = [r for r in admitted if not r["buffered_by_outage"] and r["attempts"] == 1]
+    # Steady state: delivered on first try and sent as soon as ready. A segment that
+    # became ready while a backlog or restart was still draining is recovery traffic.
+    steady = [
+        r for r in admitted
+        if not r["buffered_by_outage"] and r["attempts"] == 1 and r["queue_wait_s"] < RECOVERY_QUEUE_WAIT_S
+    ]
+    recovery = [r for r in admitted if r not in steady and not r["buffered_by_outage"]]
     buffered = [r for r in admitted if r["buffered_by_outage"]]
     retried = [r for r in admitted if r["attempts"] > 1]
     dups = [r["duplicate"] for r in records if r.get("duplicate")]
@@ -603,7 +611,7 @@ def summarize(run: Dict[str, Any]) -> Dict[str, Any]:
 
     backlog = []
     for outage in run["outages"]:
-        held = [r for r in buffered if outage["start_s"] < r["ready_sim_s"] <= outage["start_s"] + outage["duration_s"]]
+        held = [r for r in buffered if outage["start_s"] <= r["ready_sim_s"] < outage["start_s"] + outage["duration_s"]]
         if held:
             backlog.append({
                 "outage_sim_s": outage["duration_s"],
@@ -651,6 +659,7 @@ def summarize(run: Dict[str, Any]) -> Dict[str, Any]:
             "steady_connect": dist(r["connect_s"] for r in steady),
             "steady_upload_write": dist(r["upload_s"] for r in steady),
             "steady_server_ttfb": dist(r["server_s"] for r in steady),
+            "recovery_tail_e2e": dist(r["e2e_wall_s"] for r in recovery),
             "all_e2e_equiv": dist(r["e2e_equiv_s"] for r in admitted),
             "rtt_probe": dist(run.get("probes_s", [])),
         },
@@ -783,6 +792,7 @@ def render_markdown(receipt: Dict[str, Any]) -> str:
         f"- Segments {c['segments']}: admitted {c['admitted']}, failed {c['failed']}, dropped by design {c['dropped_by_design']}, reconciled admitted {c['reconciled_admitted']}",
         f"- Duplicates: {c['duplicates_idempotent']}/{c['duplicates_sent']} idempotent replays; hash-echo mismatches {c['hash_echo_mismatches']}; retried segments {c['retried_segments']}",
         f"- Steady-state end-to-end (segment ready → durable receipt): p50 {lat['steady_e2e']['p50']} s, p90 {lat['steady_e2e']['p90']} s, p99 {lat['steady_e2e']['p99']} s, max {lat['steady_e2e']['max']} s (n={lat['steady_e2e']['n']})",
+        f"- Recovery tail (ready while a backlog/restart drained, first-try delivery): p50 {lat['recovery_tail_e2e']['p50']} s, max {lat['recovery_tail_e2e']['max']} s (n={lat['recovery_tail_e2e']['n']})",
         f"- Request split (p50): connect {lat['steady_connect']['p50']} s, upload write {lat['steady_upload_write']['p50']} s, server TTFB {lat['steady_server_ttfb']['p50']} s; RTT probe p50 {lat['rtt_probe']['p50']} s",
         f"- Transfer: {m['transfer']['admitted_mb']} MB admitted, effective {m['transfer']['effective_rate_kbit_s']} kbit/s per request",
     ]
