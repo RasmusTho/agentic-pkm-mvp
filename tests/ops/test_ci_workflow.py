@@ -3132,3 +3132,22 @@ def test_integration_nightly_runs_yss01_pg_contract_targets() -> None:
         "tests/migrations/test_yss01_source_registry_schema_parity.py::"
         "test_yss01_migration_bootstrap_parity_and_legacy_repair"
     ) in NIGHTLY_SELECTORS
+
+
+@pytest.mark.parametrize("change", ["missing", "duplicate", "foreign", "node"])
+def test_scoped_ops_execution_rejects_incomplete_or_nonmodule_inventory(change):
+    from scripts.run_scoped_test_partitions import validate_execution_units
+
+    files = sorted(str(path.relative_to(REPO_ROOT)) for path in (REPO_ROOT / "tests/ops").rglob("*.py")
+                   if path.name.startswith("test_") or path.name.endswith("_test.py"))
+    assert validate_execution_units([files], ["tests/ops"]) == (tuple(files),)
+    if change == "missing":
+        files.pop()
+    elif change == "duplicate":
+        files.append(files[0])
+    elif change == "foreign":
+        files.append("tests/scripts/test_select_pr_tests.py")
+    else:
+        files[0] += "::test_one"
+    with pytest.raises(ValueError):
+        validate_execution_units([files], ["tests/ops"])

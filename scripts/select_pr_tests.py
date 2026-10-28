@@ -1915,8 +1915,10 @@ def _defer_heavy(selection: Selection, paths: tuple[str, ...]) -> Selection:
 
 def scoped_deploy_partitions(selection: Selection) -> tuple[tuple[str, ...], ...]:
     """Partition source-triggered deploy coverage without changing its targets."""
-    if selection.full_suite or "tests/deploy" not in selection.targets:
+    if selection.full_suite:
         return ()
+    if "tests/deploy" not in selection.targets:
+        return (selection.targets,) if selection.subsystems == ("ops",) and _ops_test_files() else ()
     buckets: list[list[str]] = [[] for _ in SCOPED_DEPLOY_PARALLEL_ROOTS]
     remainder: list[str] = []
     serial: list[str] = []
@@ -1939,6 +1941,16 @@ def scoped_deploy_partitions(selection: Selection) -> tuple[tuple[str, ...], ...
     if serial:
         partitions.append(tuple(serial))
     return tuple(partitions)
+
+
+def _ops_test_files() -> tuple[str, ...]:
+    root = Path("tests/ops")
+    if not root.is_dir() or root.is_symlink():
+        return ()
+    files = tuple(str(path) for path in sorted(root.rglob("*.py")) if _is_test_module(str(path)))
+    if any(not Path(path).is_file() or Path(path).is_symlink() for path in files):
+        return ()
+    return files
 
 
 def _scoped_deploy_test_files() -> tuple[str, ...]:
@@ -2008,6 +2020,19 @@ def scoped_deploy_execution_units(selection: Selection) -> tuple[tuple[str, ...]
     partitions = scoped_deploy_partitions(selection)
     if not partitions:
         return ()
+
+    if "tests/deploy" not in selection.targets and selection.subsystems == ("ops",):
+        files = _ops_test_files()
+        expanded = _dedupe([
+            item for target in selection.targets
+            for item in (files if target == "tests/ops" else (target,))
+            if "tests/ops" not in selection.targets or target == "tests/ops"
+            or not target.startswith("tests/ops/")
+        ])
+        serial = tuple(path for path in SCOPED_DEPLOY_SERIAL_BOUNDARY if path in expanded)
+        parallel = [path for path in expanded if path not in serial]
+        units = _balanced_work_units(parallel, max_units=SCOPED_EXECUTION_MAX_WORK_UNITS - bool(serial))
+        return (*units, serial) if serial else units
 
     serial = partitions[-1] if any(
         target.split("::", 1)[0] == SCOPED_DEPLOY_SERIAL_ROOT
@@ -2128,6 +2153,35 @@ def _native_deploy_control_selection(selection: Selection, paths: tuple[str, ...
         if item.split("::", 1)[0] not in NATIVE_DEPLOY_UNRELATED_SERIAL
     ])
     return replace(selection, targets=targets, reason=selection.reason + "; native deploy control scope")
+
+
+BWS_SOURCE_INSTALLATION_SOURCES = frozenset({
+    "app/ops/bws_installation_transaction.py", "app/ops/postgres_deploy_linux.py",
+})
+BWS_SOURCE_INSTALLATION_PATHS = BWS_SOURCE_INSTALLATION_SOURCES | frozenset({
+    "tests/ops/test_bws_installation_transaction.py",
+    "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+})
+
+
+def _bws_source_installation_selection(selection: Selection, paths: tuple[str, ...]) -> Selection:
+    # The pre-existing native control profile has precedence. This additional
+    # closed profile excludes only the independent dormant TEST initializer.
+    if (selection.full_suite or "tests/ops" not in selection.targets
+        or not BWS_SOURCE_INSTALLATION_SOURCES.intersection(paths)
+        or not set(paths) <= BWS_SOURCE_INSTALLATION_PATHS
+        or any(not Path(path).is_file() or Path(path).is_symlink() for path in paths)):
+        return selection
+    files = _ops_test_files()
+    dormant = "tests/ops/test_dormant_ownership_initialization.py"
+    if not set(SCOPED_DEPLOY_SERIAL_BOUNDARY) <= set(files):
+        return selection
+    targets = _dedupe([
+        item for target in selection.targets
+        for item in (files if target == "tests/ops" else (target,))
+        if item != dormant
+    ])
+    return replace(selection, targets=targets, reason=selection.reason + "; BWS source installation scope")
 
 
 def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
@@ -2272,7 +2326,7 @@ def select_tests(changed_files: list[str]) -> Selection:
     selection = _defer_heavy(
         Selection(False, subsystems, _pr_targets([*targets, *changed_tests]), reason), paths
     )
-    return _native_deploy_control_selection(selection, paths)
+    return _bws_source_installation_selection(_native_deploy_control_selection(selection, paths), paths)
 
 
 def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
