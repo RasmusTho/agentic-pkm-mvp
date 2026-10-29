@@ -85,6 +85,7 @@ from tests.architecture.durable_table_classification import (
     foreign_key_target_candidates,
     load_manifest,
     production_kernel_execute_call_count,
+    production_batch_execute_call_count,
     stale_classifications,
     stale_producer_entries,
     unclassified_mutation_paths,
@@ -1531,3 +1532,71 @@ def test_the_manifest_is_checked_in_and_machine_readable() -> None:
     assert set(document) == {"tables"}
     assert MANIFEST_PATH.is_relative_to(REPO_ROOT)
     assert APP_ROOT.exists()
+
+
+
+def test_production_batch_execute_population_has_only_two_closed_bindings():
+    assert production_batch_execute_call_count() == 2
+    assert not any(site.startswith(("app/api/batch_operation_runtime.py:", "app/api/routes/operations.py:"))
+                   for site in unresolvable_statement_sites())
+
+
+@pytest.mark.parametrize(("path", "owner", "method", "call"), [
+    ("app/api/other.py", "ProductionBatchRuntime", "execute", "coordinator.execute(batch_id, expected_digest=expected_digest)"),
+    ("app/api/batch_operation_runtime.py", "SqlWriter", "execute", "coordinator.execute(batch_id, expected_digest=expected_digest)"),
+    ("app/api/batch_operation_runtime.py", "ProductionBatchRuntime", "persist", "coordinator.execute(batch_id, expected_digest=expected_digest)"),
+    ("app/api/batch_operation_runtime.py", "ProductionBatchRuntime", "execute", "connection.execute(batch_id, expected_digest=expected_digest)"),
+    ("app/api/batch_operation_runtime.py", "ProductionBatchRuntime", "execute", "coordinator.execute(statement, expected_digest=expected_digest)"),
+    ("app/api/batch_operation_runtime.py", "ProductionBatchRuntime", "execute", "coordinator.execute(batch_id, expected_digest=other_digest)"),
+    ("app/api/routes/other.py", None, "batch_execute", "runtime.execute(batch_id, expected_digest=command.expected_digest)"),
+    ("app/api/routes/operations.py", "SqlWriter", "batch_execute", "runtime.execute(batch_id, expected_digest=command.expected_digest)"),
+    ("app/api/routes/operations.py", None, "other_execute", "runtime.execute(batch_id, expected_digest=command.expected_digest)"),
+    ("app/api/routes/operations.py", None, "batch_execute", "runtime.execute(statement, expected_digest=command.expected_digest)"),
+])
+def test_production_batch_sql_exclusion_requires_exact_path_owner_method_and_ast(tmp_path, monkeypatch, path, owner, method, call):
+    module = tmp_path / path
+    module.parent.mkdir(parents=True)
+    header = f"class {owner}:\n" if owner else ""
+    indent = "    " if owner else ""
+    module.write_text(header + f"{indent}def {method}(self, batch_id, expected_digest, statement, command):\n"
+                      + f"{indent}    {call}\n")
+    monkeypatch.setattr(durable_sql_inventory, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(durable_sql_inventory, "APP_ROOT", tmp_path / "app")
+    monkeypatch.setattr(durable_sql_inventory, "_app_modules", lambda: iter((module,)))
+    durable_sql_inventory._statement_sites.cache_clear()
+    try:
+        assert len(durable_sql_inventory.unresolvable_statement_sites()) == 1
+    finally:
+        durable_sql_inventory._statement_sites.cache_clear()
+
+
+@pytest.mark.parametrize("surface", ["runtime", "route"])
+@pytest.mark.parametrize("sql", ["neighbor_dynamic", "nested", "resolved"])
+def test_production_batch_sql_exclusion_keeps_neighbor_nested_resolved_and_dynamic_sql(tmp_path, monkeypatch, surface, sql):
+    path = "app/api/batch_operation_runtime.py" if surface == "runtime" else "app/api/routes/operations.py"
+    module = tmp_path / path
+    module.parent.mkdir(parents=True)
+    good = ("coordinator.execute(batch_id, expected_digest=expected_digest)" if surface == "runtime"
+            else "runtime.execute(batch_id, expected_digest=command.expected_digest)")
+    header = "class ProductionBatchRuntime:\n    def execute(self, batch_id, expected_digest, statement):\n" if surface == "runtime" else "def batch_execute(batch_id, command, statement):\n"
+    indent = "        " if surface == "runtime" else "    "
+    statement = "INSERT INTO store_objects (uuid) VALUES ('fixture')"
+    if sql == "nested":
+        calls = [good.replace("expected_digest=expected_digest", "expected_digest=connection.execute(statement)")
+                 if surface == "runtime" else good.replace("command.expected_digest", "connection.execute(statement)")]
+    elif sql == "resolved":
+        calls = [good, f"connection.execute({statement!r})"]
+    else:
+        calls = [good, "connection.execute(statement)"]
+    module.write_text(header + "".join(indent + call + "\n" for call in calls))
+    monkeypatch.setattr(durable_sql_inventory, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(durable_sql_inventory, "APP_ROOT", tmp_path / "app")
+    monkeypatch.setattr(durable_sql_inventory, "_app_modules", lambda: iter((module,)))
+    durable_sql_inventory._statement_sites.cache_clear()
+    try:
+        sites = durable_sql_inventory.unresolvable_statement_sites()
+        assert len(sites) == {"neighbor_dynamic": 1, "nested": 2, "resolved": 0}[sql]
+        if sql == "resolved":
+            assert statement in {value.text for value in _resolver(module).sql_statements()}
+    finally:
+        durable_sql_inventory._statement_sites.cache_clear()

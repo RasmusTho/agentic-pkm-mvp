@@ -1564,6 +1564,8 @@ def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
                 continue
             if _is_bounded_production_kernel_execute(relative, resolver, func, node):
                 continue
+            if _is_bounded_production_batch_execute(relative, resolver, func, node):
+                continue
             if _reaches_durable_database(relative, resolver, func) is not durable_source:
                 continue
             resolved = False
@@ -1703,6 +1705,39 @@ def production_kernel_execute_call_count() -> int:
             _PRODUCTION_KERNEL_EXECUTE_PATH, resolver, resolver.enclosing_function(node), node
         )
     )
+
+
+_PRODUCTION_BATCH_EXECUTE_CALLS = {
+    ("app/api/batch_operation_runtime.py", "ProductionBatchRuntime", "execute"): ast.dump(ast.parse(
+        "coordinator.execute(batch_id, expected_digest=expected_digest)", mode="eval"
+    ).body, include_attributes=False),
+    ("app/api/routes/operations.py", None, "batch_execute"): ast.dump(ast.parse(
+        "runtime.execute(batch_id, expected_digest=command.expected_digest)", mode="eval"
+    ).body, include_attributes=False),
+}
+
+
+def _is_bounded_production_batch_execute(
+    relative_path: str, resolver: _ModuleResolver,
+    func: ast.FunctionDef | ast.AsyncFunctionDef | None, node: ast.Call,
+) -> bool:
+    """Two exact finite HTTP/coordinator calls, with no SQL-name exemption."""
+    enclosing = resolver._parent.get(func) if func is not None else None
+    if func is None or not isinstance(enclosing, (ast.Module, ast.ClassDef)):
+        return False
+    owner = enclosing.name if isinstance(enclosing, ast.ClassDef) else None
+    expected = _PRODUCTION_BATCH_EXECUTE_CALLS.get((relative_path, owner, func.name))
+    return expected is not None and ast.dump(node, include_attributes=False) == expected
+
+
+def production_batch_execute_call_count() -> int:
+    """Measure both exact call sites, rather than accepting a claimed population."""
+    count = 0
+    for relative in {key[0] for key in _PRODUCTION_BATCH_EXECUTE_CALLS}:
+        resolver = _resolver(REPO_ROOT / relative)
+        count += sum(1 for node in ast.walk(resolver.tree) if isinstance(node, ast.Call)
+            and _is_bounded_production_batch_execute(relative, resolver, resolver.enclosing_function(node), node))
+    return count
 
 
 # --------------------------------------------------------------------------- #
