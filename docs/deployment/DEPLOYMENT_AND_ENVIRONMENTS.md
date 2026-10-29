@@ -1334,6 +1334,16 @@ Any existing bundle name refuses reuse; incomplete/published bundles and histori
 retained. A partial install compensates only exact inodes written by that invocation, restoring
 actual before bytes/modes or removing its own newly created target. Foreign/drifted targets and
 missing, malformed or substituted backup material refuse compensation without overwrite.
+The expanded full-source path validates every backup hash and bundle entry before apply, after apply,
+and before compensation. Before each target effect, including compensation, it retains the existing
+complete per-target check: all held roots and ancestors, bundle inventory, manifest and every saved
+before-file are rechecked by identity, version, and content hash. This preserves refusal when any
+different saved file drifts between target effects. The regression uses the public example's
+8,102,989 aggregate changed-payload bytes, 229 entries and 169 prior files. Apply plus compensation
+perform 461 complete bundle checks, reading 78,370 backup-file contents (2,765,700,811 bytes) in
+the synthetic filesystem. This is the measured finite availability cost under the existing source
+ceilings; it does not add a runtime work limit. The generic 192-entry path keeps the same complete
+per-target check.
 Explicit compensation raises a typed refusal with its live handle and per-target outcomes on
 any failure; invalid backup material refuses even when every target was already matching.
 The invocation-local handle exposes refusal/compensation outcomes and must be closed to release
@@ -1343,6 +1353,45 @@ there is no retry/adoption/replay loader, CLI, automatic post-merge hook or live
 These are **file mechanics only**, proved with temporary-filesystem tests. The caller must
 already hold authenticated exclusion of other writers for the complete handle lifetime;
 component directory flocks serialize cooperating component calls only, not native admission.
+
+The fixed full-source caller uses a finite source-manifest budget separate from the generic
+public-file and loaded-module limits. The old disk inventory and candidate Git tree each retain the
+4096-file and 64 MiB source bounds, with the existing 8 MiB per-file bound. Before backup, the
+transaction also checks the prospective combined application/control Python inventory against the
+same 4096-file and 64 MiB limits. Its maximum manifest size is derived from the two bounded source
+inventories plus the fixed contract and launcher entries: `2 * 4096 + 2 = 8194`. This counts at
+most one entry per old or candidate source path, covering create/update/delete accounting, plus the
+contract and launcher entries. Candidate verification still refuses deleted sources under its
+existing contract. Before backup it also adds the created application/control source files to the
+measured current 32,768 directory-entry count and refuses a prospective overflow. The file
+transaction never creates parent directories, so each new source file adds one entry and updates
+add none. The lower full-source validator repeats the manifest-entry and 64 MiB aggregate-payload
+checks before backup; the generic public-file path retains its 192-entry limit, and loaded-module
+provenance retains its independent 190-module limit. These budgets do not change file/path,
+ownership, root identity, hash, mode, writer, caller, generation, admission, or compensation guards.
+
+Before constructing the service lifecycle or allocating a backup, the fixed source path reads the
+current process's open-descriptor count and soft `RLIMIT_NOFILE`. Missing, unreadable, or insufficient
+headroom refuses before effects. Required peak headroom is derived from the actual changed roots,
+target parent paths, and prior-file count: retained roots/ancestors and target parents, prior and
+backup files, bundle and manifest, one applied inode descriptor per change, and up to two additional
+descriptors for each restored prior target. It adds nine bounded transient descriptors: one held
+runtime file, the seven parent-side descriptors that `subprocess.Popen` can hold while starting the
+fixed command with `DEVNULL` stdin and captured stdout/stderr, and one backup-directory enumeration
+descriptor. These transients are summed even though the current serial lifecycle does not overlap
+the listing and subprocess. The production source manifest also carries the measured descriptor
+peak of the complete installed-inventory walk. That peak includes root ancestors, recursive directory
+descriptors, the second parent chain opened for each source read, and deep empty directories; file
+application does not create or remove directories. Admission includes that walk while the prepared
+handle and runtime reader remain held. Admission also includes the maximum retained descriptor set
+for one service-configuration control-root projection while that handle and runtime reader remain
+held. The projection bounds 16 public path hints at 32 components each and includes two retained
+anchor probes at each possible ancestor (`4 + 16 * (32 + 2 * 33) = 1572` descriptors). Repeated
+configuration checks are serial and close each projection's descriptors before the next call. The
+descriptor census conservatively counts one extra
+descriptor for its own enumeration. The validator repeats this check immediately before opening
+roots or allocating the bundle. The 8194-entry manifest ceiling does not promise capacity under
+arbitrary process limits, and no process/system limit is raised.
 
 The fixed DEV/TEST caller in `app.ops.bws_installation_transaction` composes those file mechanics
 with the existing BWS operation reservation, current writer/caller census, authenticated public
@@ -1432,7 +1481,7 @@ observer or a permission to operate a native host.
 New caught `refused_before_backup` receipts carry a value-free `prebackup_gate` from this finite
 set: `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
 `authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
-`backup_roots`, `source_manifest`, `candidate_profile`, `old_kernel_qualification`,
+`backup_roots`, `source_manifest`, `descriptor_capacity`, `candidate_profile`, `old_kernel_qualification`,
 `qualified_writer_snapshot`, or `generation_qualification`. The field classifies the producer gate
 that refused without storing exception text or request values. `authority_cutover` classifies
 validation of a present cutover selection after `bound_plan`; ordinary-terminal owner/context

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -611,6 +612,142 @@ def _empty_control_manifest_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     )
 
 
+def _full_source_manifest_case(
+    monkeypatch: pytest.MonkeyPatch, secure_tmp_path: Path, *, channel: str,
+    generated_count: int = 205, generated_update_count: int = 0,
+    control_source: bytes | None = None,
+    unchanged_core: tuple[str, ...] = (),
+    delta_payload_total_bytes: int | None = None,
+    generated_directory: str = "app/ops",
+) -> SimpleNamespace:
+    """Build a shallow-checkout-safe Git candidate with real guarded core sources."""
+    control_module = importlib.import_module("app.ops.bws_control_installation")
+    monkeypatch.setattr(control_module, "_source_descriptor_capacity_snapshot",
+                        lambda: (0, 1_000_000))
+    monkeypatch.setattr(transaction, "_OWNER_UID", os.geteuid())
+    monkeypatch.setattr(transaction, "_OWNER_GID", os.getegid())
+    target = _owned_dir(secure_tmp_path / f"target-{channel}")
+    app_root = _owned_dir(target / "application")
+    control_root = _owned_dir(target / "control")
+    launcher_root = _owned_dir(target / "launcher")
+    backup_root = _owned_dir(target / "backup")
+    monkeypatch.setattr(transaction, "_CONTROL_DIRECTORY", control_root)
+    monkeypatch.setattr(transaction, "_BACKUP_DIRECTORY", backup_root)
+    launcher_path = launcher_root / "yggdrasil-bws-deploy"
+    monkeypatch.setattr(transaction, "_LAUNCHER", launcher_path)
+
+    repository = Path(__file__).resolve().parents[2]
+    core_paths = (
+        "app/__init__.py",
+        "app/ops/__init__.py",
+        "app/ops/postgres_deploy_linux.py",
+        "app/ops/bws_installation_admission.py",
+        "scripts/__init__.py",
+        "scripts/postgres_deploy_service.py",
+    )
+    candidate_sources = {relative: (repository / relative).read_bytes() for relative in core_paths}
+    candidate_contract = (repository / "config/secrets/host_secret_contract.json").read_bytes()
+    if delta_payload_total_bytes is None:
+        generated_payload_sizes = [None] * generated_count
+    else:
+        fixed_payload_bytes = sum(len(candidate_sources[path]) for path in (
+            "app/ops/postgres_deploy_linux.py", "app/ops/bws_installation_admission.py",
+            "scripts/postgres_deploy_service.py",
+        )) + len(candidate_contract)
+        generated_total_bytes = delta_payload_total_bytes - fixed_payload_bytes
+        assert generated_total_bytes >= generated_count
+        base_size, extra_bytes = divmod(generated_total_bytes, generated_count)
+        generated_payload_sizes = [base_size + (index < extra_bytes)
+                                   for index in range(generated_count)]
+    generated_paths = [
+        f"{generated_directory}/generated_budget_{index:04d}.py"
+        for index in range(generated_count)
+    ]
+    for index in range(generated_count):
+        variant = index % 8
+        path = generated_paths[index]
+        prefix = f"GENERATED_SOURCE = {variant}\n".encode()
+        target_size = generated_payload_sizes[index]
+        candidate_sources[path] = prefix + b"#" * (
+            variant * 7 if target_size is None else target_size - len(prefix)
+        )
+
+    checkout = _owned_dir(secure_tmp_path / f"candidate-{channel}")
+    git_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@example.invalid",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@example.invalid",
+    }
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True, env=git_env)
+    for relative, raw in candidate_sources.items():
+        path = checkout / relative
+        _owned_dir(path.parent)
+        path.write_bytes(raw)
+        path.chmod(0o755 if relative == "scripts/postgres_deploy_service.py" else 0o644)
+    contract_path = checkout / "config/secrets/host_secret_contract.json"
+    _owned_dir(contract_path.parent)
+    contract_path.write_bytes(candidate_contract)
+    contract_path.chmod(0o644)
+    subprocess.run(["git", "-C", str(checkout), "add", "app", "scripts", "config"],
+                   check=True, env=git_env)
+    subprocess.run(["git", "-C", str(checkout), "commit", "-q", "-m", "generated source candidate"],
+                   check=True, env=git_env)
+    revision = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"], check=True,
+                              capture_output=True, text=True, env=git_env).stdout.strip()
+
+    generated_path_set = set(generated_paths)
+    old_sources = {relative: raw for relative, raw in candidate_sources.items()
+                   if relative not in generated_path_set}
+    for index in range(generated_update_count):
+        variant = index % 8
+        path = generated_paths[index]
+        prefix = f"PREVIOUS_SOURCE = {variant}\n".encode()
+        target_size = len(candidate_sources[path])
+        old_sources[path] = prefix + b"!" * (variant * 7 if delta_payload_total_bytes is None
+                                               else target_size - len(prefix))
+    for relative in ("app/ops/postgres_deploy_linux.py", "app/ops/bws_installation_admission.py"):
+        if relative not in unchanged_core:
+            old_sources[relative] = b"# previous installed source\n" + old_sources[relative]
+    for relative in generated_paths:
+        _owned_dir((app_root / relative).parent)
+    for relative, raw in old_sources.items():
+        path = app_root / relative
+        _owned_dir(path.parent)
+        path.write_bytes(raw)
+        path.chmod(0o755 if relative == "scripts/postgres_deploy_service.py" else 0o644)
+
+    old_contract = (Path(__file__).parent / "fixtures" / "host_secret_contract_legacy.json").read_bytes()
+    installed_contract = app_root / "config/secrets/host_secret_contract.json"
+    _owned_dir(installed_contract.parent)
+    installed_contract.write_bytes(old_contract)
+    installed_contract.chmod(0o644)
+    old_launcher = b"old launcher bytes\n"
+    launcher_path.write_bytes(old_launcher)
+    launcher_path.chmod(0o755)
+    monkeypatch.setattr(bws_installation_lifecycle, "_public_launcher_bytes", lambda: old_launcher)
+
+    if control_source is not None:
+        control_file = control_root / "app/ops/postgres_deploy_linux.py"
+        _owned_dir(control_file.parent)
+        control_file.write_bytes(control_source)
+        control_file.chmod(0o644)
+
+    config = SimpleNamespace(channel=channel, root=app_root)
+    request = {"operation_id": str(uuid.uuid4()), "channel": channel, "candidate_sha": revision,
+               "image_digest": "sha256:" + "b" * 64, "bundle_name": f"source-budget-{channel}"}
+    profile = transaction._old_disk_state(config, request)
+    roots, backup = transaction._roots(config, profile)
+    monkeypatch.setattr(sys, "_yggdrasil_bws_candidate_checkout", str(checkout), raising=False)
+    ports = transaction._NativePorts()
+    return SimpleNamespace(
+        app_root=app_root, backup_root=backup_root, checkout=checkout, config=config,
+        request=request, profile=profile, roots=roots, backup=backup, ports=ports,
+        candidate_sources=candidate_sources,
+    )
+
+
 def _loaded_module(path: Path) -> SimpleNamespace:
     filename = str(path)
     source = path.read_bytes() if path.exists() else b""
@@ -988,6 +1125,392 @@ def test_first_install_manifest_refuses_control_source_drift(monkeypatch, tmp_pa
         case.invoke()
 
 
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_full_source_large_delta_reaches_prepare(monkeypatch, secure_tmp_path, channel):
+    # Mirror the public 229-change transition with 165 existing-source updates,
+    # 60 creates, two guarded core updates, contract and launcher. The real
+    # lower prepare retains the resulting target, before-file and backup handles.
+    case = _full_source_manifest_case(
+        monkeypatch, secure_tmp_path, channel=channel, generated_count=225,
+        generated_update_count=165, delta_payload_total_bytes=8_102_989,
+    )
+
+    changes, payloads, proof = case.ports.source_manifest(
+        case.profile, case.config, case.request, case.roots, case.backup,
+    )
+
+    assert len(changes) == 229
+    assert any(change.before_sha256 is None for change in changes)
+    assert any(change.root == "application"
+               and change.path == "config/secrets/host_secret_contract.json" for change in changes)
+    assert any(change.root == "launcher" and change.path == "yggdrasil-bws-deploy"
+               for change in changes)
+    assert sum(len(payload) for payload in payloads.values()) == 8_102_989
+    assert case.profile["source_packages"]["control"] == []
+    assert all(change.root != "control" for change in changes)
+    assert len(proof["candidate_files"]) <= transaction._MAX_SOURCE_FILES
+    assert sum(row["size"] for row in proof["candidate_files"]) <= transaction._MAX_TOTAL_SOURCE_BYTES
+    generated_rows = [row for row in proof["candidate_files"]
+                      if str(row["path"]).startswith("app/ops/generated_budget_")]
+    assert len({row["sha256"] for row in generated_rows}) == 16
+    assert len({row["size"] for row in generated_rows}) == 2
+
+    changed_roots = {change.root for change in changes}
+    prepare_roots = {name: root for name, root in case.roots.items() if name in changed_roots}
+    handle = case.ports.prepare(prepare_roots, changes, payloads, case.backup, "large-source-delta")
+    try:
+        assert handle.state == "prepared"
+        assert len(handle._targets) == len(changes)
+        assert (case.backup_root / "large-source-delta" / "manifest.json").is_file()
+    finally:
+        handle.close()
+
+    assert not any(f"app.ops.generated_budget_{index:04d}" in sys.modules
+                   for index in range(225))
+
+
+@pytest.mark.parametrize("budget", ["count", "bytes", "entries", "manifest"])
+def test_source_manifest_combined_inventory_budget_refuses_before_backup(
+    monkeypatch, secure_tmp_path, budget,
+):
+    control_source = b"CONTROL_OLD = True\n"
+    if budget == "count":
+        # The old and Git inventories are each seven files; the prospective
+        # application plus retained control copies need an eighth combined slot.
+        monkeypatch.setattr(transaction, "_MAX_SOURCE_FILES", 8)
+    case = _full_source_manifest_case(
+        monkeypatch, secure_tmp_path, channel="dev", generated_count=1,
+        control_source=control_source,
+        unchanged_core=("app/ops/bws_installation_admission.py",) if budget == "bytes" else (),
+    )
+    if budget == "entries":
+        current_paths = {
+            str(row["path"]) for row in case.profile["source_files"]
+            if row["root"] == "application"
+        }
+        assert "app/ops/generated_budget_0000.py" not in current_paths
+        current_entries = transaction._source_file_inventory(
+            {"application": case.app_root, "control": Path(case.roots["control"].path)},
+        )[3]
+        monkeypatch.setattr(transaction, "_MAX_SOURCE_ENTRIES", current_entries)
+        with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+            case.ports.source_manifest(case.profile, case.config, case.request, case.roots, case.backup)
+        assert not list(case.backup_root.iterdir())
+        return
+    if budget == "manifest":
+        control_module = importlib.import_module("app.ops.bws_control_installation")
+        payload = b"bounded source\n"
+        digest = hashlib.sha256(payload).hexdigest()
+        changes = tuple(
+            control_module.Change("application", f"app/ops/generated_limit_{index:04d}.py",
+                                  None, None, digest, 0o644)
+            for index in range(transaction._MAX_SOURCE_MANIFEST_CHANGES + 1)
+        )
+        payloads = {(change.root, change.path): payload for change in changes}
+        with pytest.raises(control_module.InstallationRefused, match="manifest_refused"):
+            case.ports.prepare(
+                {"application": case.roots["application"]}, changes, payloads,
+                case.backup, "over-source-manifest",
+            )
+        assert not list(case.backup_root.iterdir())
+        return
+    if budget == "count":
+        _changes, _payloads, proof = case.ports.source_manifest(
+            case.profile, case.config, case.request, case.roots, case.backup,
+        )
+        assert len(case.profile["source_files"]) == 7
+        assert len(case.candidate_sources) == 7
+        assert len(proof["candidate_files"]) == 8
+        assert not list(case.backup_root.iterdir())
+        monkeypatch.setattr(transaction, "_MAX_SOURCE_FILES", 7)
+    if budget == "bytes":
+        candidate_inventory_bytes = (
+            sum(len(raw) for raw in case.candidate_sources.values())
+            + len(case.candidate_sources["app/ops/postgres_deploy_linux.py"])
+        )
+        old_inventory_bytes = sum(row["size"] for row in case.profile["source_files"])
+        candidate_tree_bytes = sum(len(raw) for raw in case.candidate_sources.values())
+        assert old_inventory_bytes < candidate_inventory_bytes - 1
+        assert candidate_tree_bytes < candidate_inventory_bytes - 1
+        monkeypatch.setattr(transaction, "_MAX_TOTAL_SOURCE_BYTES", candidate_inventory_bytes)
+        _changes, _payloads, proof = case.ports.source_manifest(
+            case.profile, case.config, case.request, case.roots, case.backup,
+        )
+        assert sum(row["size"] for row in proof["candidate_files"]) == candidate_inventory_bytes
+        assert not list(case.backup_root.iterdir())
+        monkeypatch.setattr(transaction, "_MAX_TOTAL_SOURCE_BYTES", candidate_inventory_bytes - 1)
+
+    with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+        case.ports.source_manifest(case.profile, case.config, case.request, case.roots, case.backup)
+
+    assert not list(case.backup_root.iterdir())
+
+
+@pytest.mark.parametrize(
+    "capacity", ["unknown", "insufficient", "inventory-insufficient",
+                 "control-projection-insufficient"],
+)
+def test_source_descriptor_capacity_refuses_before_backup(
+    monkeypatch, secure_tmp_path, capacity,
+):
+    case = _full_source_manifest_case(
+        monkeypatch, secure_tmp_path, channel="dev", generated_count=225,
+        generated_update_count=165,
+    )
+    control_module = importlib.import_module("app.ops.bws_control_installation")
+    changes, payloads, proof = case.ports.source_manifest(
+        case.profile, case.config, case.request, case.roots, case.backup,
+    )
+    prepare_roots = {name: root for name, root in case.roots.items()
+                     if name in proof["changed_roots"]}
+    inventory_fd_peak = proof["source_inventory_fd_peak"]
+    inventory_peak_for_capacity = inventory_fd_peak
+    required = control_module._source_descriptor_peak(
+        prepare_roots, changes, case.backup, inventory_peak_for_capacity,
+    )
+    if capacity == "unknown":
+        snapshot = lambda: None
+        reason = "descriptor_capacity_unknown"
+    elif capacity == "inventory-insufficient":
+        lifecycle_module = importlib.import_module("app.ops.bws_installation_lifecycle")
+        inventory_peak_for_capacity = lifecycle_module._control_projection_descriptor_bound() + 1
+        required = control_module._source_descriptor_peak(
+            prepare_roots, changes, case.backup, inventory_peak_for_capacity,
+        )
+        required_without_inventory = control_module._source_descriptor_peak(
+            prepare_roots, changes, case.backup,
+        )
+        assert required > required_without_inventory
+        snapshot = lambda: (128, 128 + required_without_inventory)
+        reason = "descriptor_capacity_insufficient"
+    elif capacity == "control-projection-insufficient":
+        lifecycle_module = importlib.import_module("app.ops.bws_installation_lifecycle")
+        with monkeypatch.context() as no_projection:
+            no_projection.setattr(
+                lifecycle_module, "_control_projection_descriptor_bound", lambda: 0,
+            )
+            required_without_projection = control_module._source_descriptor_peak(
+                prepare_roots, changes, case.backup, inventory_fd_peak,
+            )
+        assert required > required_without_projection
+        snapshot = lambda: (128, 128 + required_without_projection)
+        reason = "descriptor_capacity_insufficient"
+    else:
+        snapshot = lambda: (128, 128 + required - 1)
+        reason = "descriptor_capacity_insufficient"
+    monkeypatch.setattr(control_module, "_source_descriptor_capacity_snapshot", snapshot)
+
+    with pytest.raises(control_module.InstallationRefused, match=reason):
+        case.ports.preflight_source_descriptor_capacity(
+            prepare_roots, changes, case.backup, inventory_peak_for_capacity,
+        )
+    with pytest.raises(control_module.InstallationRefused, match=reason):
+        case.ports.prepare(
+            prepare_roots, changes, payloads, case.backup, "insufficient-headroom",
+            source_inventory_fd_peak=inventory_peak_for_capacity,
+        )
+
+    assert not list(case.backup_root.iterdir())
+
+
+def test_source_descriptor_capacity_covers_control_discovery_peak(secure_tmp_path):
+    module = importlib.import_module("app.ops.bws_control_installation")
+    lifecycle = importlib.import_module("app.ops.bws_installation_lifecycle")
+    backup_path = secure_tmp_path / "descriptor-bound"
+    backup_path.mkdir(mode=0o755)
+    backup_info = backup_path.stat()
+    backup_root = module.Root(
+        str(backup_path), backup_info.st_dev, backup_info.st_ino,
+        backup_info.st_uid, backup_info.st_gid, stat.S_IMODE(backup_info.st_mode),
+    )
+    projection_peak = lifecycle._control_projection_descriptor_bound()
+    assert projection_peak == 4 + 16 * (32 + 2 * 33) == 1572
+
+    handle_peak = 1 + len(module._path(backup_root.path, absolute=True)) + 2
+    assert module._source_descriptor_peak({}, (), backup_root) == handle_peak + 1 + projection_peak
+    assert module._source_descriptor_peak(
+        {}, (), backup_root, runtime_fd_already_open=True,
+    ) == handle_peak + projection_peak
+
+
+def test_source_inventory_descriptor_peak_covers_actual_open_stack(monkeypatch, secure_tmp_path):
+    monkeypatch.setattr(transaction, "_OWNER_UID", os.geteuid())
+    monkeypatch.setattr(transaction, "_OWNER_GID", os.getegid())
+    application = _owned_dir(secure_tmp_path / "inventory" / "application")
+    control = _owned_dir(secure_tmp_path / "inventory" / "control")
+    app_root = _owned_dir(application / "app")
+    _owned_dir(application / "scripts")
+    nested = app_root / "ops"
+    nested.mkdir(mode=0o755)
+    nested.chmod(0o755)
+    for index in range(6):
+        nested = nested / f"unchanged_{index}"
+        nested.mkdir(mode=0o755)
+        nested.chmod(0o755)
+    source = nested / "inventory_source.py"
+    source.write_bytes(b"SOURCE = True\n")
+    source.chmod(0o644)
+    empty = app_root / "deep_empty"
+    empty.mkdir(mode=0o755)
+    empty.chmod(0o755)
+    for index in range(9):
+        empty = empty / f"empty_{index}"
+        empty.mkdir(mode=0o755)
+        empty.chmod(0o755)
+
+    original_open, original_close = os.open, os.close
+    open_descriptors: set[int] = set()
+    observed_peak = 0
+
+    def tracked_open(*args, **kwargs):
+        nonlocal observed_peak
+        descriptor = original_open(*args, **kwargs)
+        open_descriptors.add(descriptor)
+        observed_peak = max(observed_peak, len(open_descriptors))
+        return descriptor
+
+    def tracked_close(descriptor):
+        open_descriptors.discard(descriptor)
+        return original_close(descriptor)
+
+    with monkeypatch.context() as descriptor_ports:
+        descriptor_ports.setattr(os, "open", tracked_open)
+        descriptor_ports.setattr(os, "close", tracked_close)
+        rows, packages, measured_peak, entry_count = transaction._source_file_inventory(
+            {"application": application, "control": control},
+        )
+
+    assert len(rows) == 1
+    assert packages == {"application": ["app", "scripts"], "control": []}
+    assert observed_peak > 0
+    assert measured_peak >= observed_peak
+    assert entry_count >= len(rows)
+    assert not open_descriptors
+
+
+def test_created_deep_source_preflights_held_profile_rescan_capacity(
+    monkeypatch, secure_tmp_path,
+):
+    deep_directory = "app/ops/" + "/".join(["d"] * 40)
+    case = _full_source_manifest_case(
+        monkeypatch, secure_tmp_path, channel="dev", generated_count=1,
+        unchanged_core=("app/ops/postgres_deploy_linux.py",
+                        "app/ops/bws_installation_admission.py"),
+        generated_directory=deep_directory,
+    )
+    control_module = importlib.import_module("app.ops.bws_control_installation")
+    current_roots = {
+        "application": case.app_root,
+        "control": Path(case.roots["control"].path),
+    }
+    _old_files, _old_packages, current_fd_peak, _old_entries = (
+        transaction._source_file_inventory(current_roots)
+    )
+    changes, payloads, proof = case.ports.source_manifest(
+        case.profile, case.config, case.request, case.roots, case.backup,
+    )
+    assert len(changes) == 3
+    assert any(change.before_sha256 is None for change in changes)
+    assert proof["source_inventory_fd_peak"] > current_fd_peak
+    prepare_roots = {name: root for name, root in case.roots.items()
+                     if name in proof["changed_roots"]}
+    required = control_module._source_descriptor_peak(
+        prepare_roots, changes, case.backup, proof["source_inventory_fd_peak"],
+    )
+    monkeypatch.setattr(control_module, "_source_descriptor_capacity_snapshot",
+                        lambda: (0, required))
+    assert not list(case.backup_root.iterdir())
+    before_state = {}
+    for change in changes:
+        path = Path(prepare_roots[change.root].path) / change.path
+        before_state[(change.root, change.path)] = (
+            None if change.before_sha256 is None else path.read_bytes(),
+            None if change.before_sha256 is None else stat.S_IMODE(path.stat().st_mode),
+        )
+
+    original_open, original_close = os.open, os.close
+    open_descriptors: set[int] = set()
+    peak_open_descriptors = 0
+
+    def tracked_open(*args, **kwargs):
+        nonlocal peak_open_descriptors
+        descriptor = original_open(*args, **kwargs)
+        open_descriptors.add(descriptor)
+        peak_open_descriptors = max(peak_open_descriptors, len(open_descriptors))
+        if len(open_descriptors) > required:
+            open_descriptors.remove(descriptor)
+            original_close(descriptor)
+            raise OSError("synthetic descriptor capacity exceeded")
+        return descriptor
+
+    def tracked_close(descriptor):
+        open_descriptors.discard(descriptor)
+        return original_close(descriptor)
+
+    with monkeypatch.context() as descriptor_ports:
+        descriptor_ports.setattr(os, "open", tracked_open)
+        descriptor_ports.setattr(os, "close", tracked_close)
+        case.ports.preflight_source_descriptor_capacity(
+            prepare_roots, changes, case.backup, proof["source_inventory_fd_peak"],
+        )
+        handle = case.ports.prepare(
+            prepare_roots, changes, payloads, case.backup, "deep-rescan-capacity",
+            source_inventory_fd_peak=proof["source_inventory_fd_peak"],
+            runtime_fd_already_open=True,
+        )
+        try:
+            case.ports.apply(handle)
+            rows, packages, measured_fd_peak, entry_count = transaction._source_file_inventory(
+                current_roots,
+            )
+            assert rows == proof["candidate_files"]
+            assert packages == {"application": ["app", "scripts"], "control": []}
+            assert measured_fd_peak == proof["source_inventory_fd_peak"]
+            assert entry_count <= transaction._MAX_SOURCE_ENTRIES
+            outcomes = case.ports.compensate(handle)
+            assert all(outcome != "refused" for _path, outcome in outcomes)
+        finally:
+            handle.close()
+
+    assert peak_open_descriptors <= required
+    assert not open_descriptors
+    assert handle.state == "closed"
+    for change in changes:
+        path = Path(prepare_roots[change.root].path) / change.path
+        before, mode = before_state[(change.root, change.path)]
+        if before is None:
+            assert not path.exists()
+        else:
+            assert path.read_bytes() == before
+            assert stat.S_IMODE(path.stat().st_mode) == mode
+    assert (case.backup_root / "deep-rescan-capacity" / "manifest.json").is_file()
+
+
+def test_source_manifest_budget_preserves_provenance_and_file_guards(
+    monkeypatch, secure_tmp_path,
+):
+    control_module = importlib.import_module("app.ops.bws_control_installation")
+    assert transaction._MAX_MODULES == 190
+    assert transaction._MAX_SOURCE_MANIFEST_CHANGES == 2 * transaction._MAX_SOURCE_FILES + 2
+    assert transaction._MAX_SOURCE_FILES == control_module._MAX_SOURCE_FILES
+    assert transaction._MAX_SOURCE_BYTES == control_module._MAX_SOURCE_FILE_BYTES
+    assert transaction._MAX_TOTAL_SOURCE_BYTES == control_module._MAX_TOTAL_SOURCE_BYTES
+    assert transaction._MAX_SOURCE_MANIFEST_CHANGES == control_module._MAX_SOURCE_MANIFEST_CHANGES
+    case = _full_source_manifest_case(monkeypatch, secure_tmp_path, channel="test")
+    changes, payloads, _proof = case.ports.source_manifest(
+        case.profile, case.config, case.request, case.roots, case.backup,
+    )
+    assert len(changes) > 192
+
+    old_source = case.app_root / "app/ops/postgres_deploy_linux.py"
+    old_source.write_bytes(old_source.read_bytes() + b"# post-snapshot drift\n")
+    with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+        case.ports.source_manifest(case.profile, case.config, case.request, case.roots, case.backup)
+
+    assert payloads
+    assert not list(case.backup_root.iterdir())
+
+
 def test_source_payload_inventory_is_exact_and_independent_json(monkeypatch, tmp_path):
     monkeypatch.setattr(transaction, "_OWNER_UID", os.geteuid())
     monkeypatch.setattr(transaction, "_OWNER_GID", os.getegid())
@@ -1295,6 +1818,7 @@ def test_live_preflight_keeps_existing_terminal_identity_separate_from_candidate
 def _transaction_fixture(
     *, channel="dev", config_override=None,
     preflight_error=False, preflight_gate_error: str | None = None,
+    descriptor_capacity_error=False,
     terminal_identity_drift: str | None = None, apply_error=False,
     compensation_complete=True, profile_mismatch=False, profile_error=False, retire_error=False,
     channel_lock_error=False, preflight_drift_at: int | None = None,
@@ -1355,6 +1879,7 @@ def _transaction_fixture(
     }
     proof = {"candidate_files": candidate_files, "candidate_modules": [], "contract_mode": 0o644,
              "new_generation_sha256": "8" * 64,
+             "source_inventory_fd_peak": 0,
              "changed_roots": ["application", "launcher"]}
     candidate = transaction._candidate_profile(old_state, payloads, proof)
     actual_candidate = {**candidate, "modules": candidate_modules}
@@ -1585,13 +2110,18 @@ def _transaction_fixture(
             events.append("source_manifest")
             return changes, payloads, proof
 
+        def preflight_source_descriptor_capacity(self, *_args):
+            events.append("descriptor_capacity")
+            if descriptor_capacity_error:
+                transaction._refuse_prebackup_gate("descriptor_capacity")
+
         def service(self, _channel):
             return service
 
         def verify_caller_sources(self, _request):
             events.append("verify_caller_sources")
 
-        def prepare(self, *_args):
+        def prepare(self, *_args, **_kwargs):
             events.append("prepare")
             return handle
 
@@ -1718,7 +2248,7 @@ def test_empty_control_root_qualifies_through_lifecycle_gate(secure_tmp_path, mo
 
     service.revalidate_empty_control_configuration = track_revalidation
 
-    def stop_before_synthetic_backup(*_args):
+    def stop_before_synthetic_backup(*_args, **_kwargs):
         events.append("synthetic_stop_before_backup")
         raise RuntimeError("synthetic stop after empty-root revalidation")
 
@@ -2118,7 +2648,8 @@ def test_preflight_refuses_before_backup_or_stop_without_exact_owner_census_and_
     ({"preflight_error": True}, "current_writer_snapshot"),
     ({"channel_lock_error": True}, "channel_lock_entry"),
     ({"preflight_gate_error": "authority_cutover"}, "authority_cutover"),
-], ids=["current_writer_snapshot", "channel_lock_entry", "authority_cutover"])
+    ({"descriptor_capacity_error": True}, "descriptor_capacity"),
+], ids=["current_writer_snapshot", "channel_lock_entry", "authority_cutover", "descriptor_capacity"])
 def test_prebackup_refusal_receipt_reports_finite_gate(options, expected_gate):
     request, ports, admission, _service, events, _old, _candidate = _transaction_fixture(**options)
 
@@ -2131,6 +2662,9 @@ def test_prebackup_refusal_receipt_reports_finite_gate(options, expected_gate):
     assert receipt["new_generation_sha256"] is None
     assert receipt["backup_manifest_sha256"] is None
     assert "prepare" not in events and "stop_old" not in events and "apply" not in events
+    if expected_gate == "descriptor_capacity":
+        assert events.index("source_manifest") < events.index("descriptor_capacity")
+        assert "qualified_old" not in events
     assert admission.receipt == receipt
 
 
