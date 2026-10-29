@@ -1042,3 +1042,20 @@ def test_swedish_alert_time_and_recovery(tmp_path, monkeypatch, utc, local):
     _, fallback = _assembled_alert(tmp_path, monkeypatch, {"required_ok": False})
     assert "UTC (lokal tidszon saknas)" in fallback
     assert f"timestamp_utc: {utc}" in fallback
+
+
+@pytest.mark.parametrize("aggregate", [None, "false", 0, [], {}])
+def test_swedish_alert_malformed_aggregate_has_unknown_cause(tmp_path, monkeypatch, aggregate):
+    _, body = _assembled_alert(tmp_path, monkeypatch, {
+        "required_ok": aggregate,
+        "checks": {"embedding_index": {"ok": False, "required": True}},
+        "runtime": {"db": {"ok": False}},
+    })
+    assert "Obligatorisk hälsa: UNKNOWN" in body
+    assert "sökindex" not in body and "databas" not in body
+    (tmp_path / "swedish.state").unlink()
+    _, body = _assembled_alert(tmp_path, monkeypatch, {
+        "checks": {"embedding_index": {"ok": False, "required": True}},
+    })
+    assert "Obligatorisk hälsa: UNKNOWN" in body
+    assert "sökindex" not in body

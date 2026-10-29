@@ -169,6 +169,8 @@ def _health_failure_reason(body: dict[str, Any]) -> str:
     db/worker/llm are mandatory in _runtime_ok. Watcher is conditional on a
     producer-local setting absent from this payload, so do not infer its role.
     """
+    if body.get("required_ok") is not False:
+        return "health required_ok=false"
     tokens = []
     checks = body.get("checks")
     runtime = body.get("runtime")
