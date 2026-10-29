@@ -157,12 +157,22 @@ or a ten-minute completion bound.
 An additional closed source-installation profile permits only
 `app/ops/bws_installation_transaction.py`, `app/ops/postgres_deploy_linux.py`,
 `app/ops/bws_installation_lifecycle.py`, `tests/ops/test_bws_installation_lifecycle.py`,
+`app/ops/bws_installation_admission.py`, `tests/ops/test_bws_installation_admission.py`,
 `tests/ops/test_bws_installation_transaction.py`, `tests/ops/test_bws_control_installation.py`,
+`tests/deploy/test_bws_source_rpc_assembly.py`, `docs/OPERATIONS.md`,
 the exact test-data path `tests/ops/fixtures/host_secret_contract_legacy.json`, and
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, with at least one transaction or Linux-deploy source changed and
 regular nonsymlink inputs. It omits only `test_dormant_ownership_initialization.py`;
 all other Ops modules and seven serial boundaries remain. Unknown cochanges retain broad
 coverage. The pre-existing native deployment-control profile below has precedence.
+
+The admission/receipt and verified-RPC cochanges retain this same closed profile. The complete
+RPC test file adds `ops_deploy` ownership even when the whole deploy directory is deferred;
+successful profile qualification keeps the existing bounded execution route in that case.
+Subsystem labels and deferred targets remain unchanged. The full RPC file stays in the nonserial
+inventory with its per-case temporary roots and disposable resource-limited subprocess; all seven
+existing serial suites still follow successful parallel work and node-evidence validation.
+No unknown production/test module or shared-fixture cochange gains this profile.
 
 The control-installation module tests the Source transaction's public-file compensation port
 with temporary files and explicit process/network/Product import guards. Its legacy contract
