@@ -215,6 +215,13 @@ def _lease_readback(lease_id: str, *, rendering_successor: bool = False) -> dict
     if rendering_successor:
         issue_number, body_sha = RENDERING_INSTALLATION_ISSUE, RENDERING_INSTALLATION_BODY_SHA256
         session = os.environ.get("CODEX_THREAD_ID", "")
+        holder = session  # This fixed live pickup uses --agent "$CODEX_THREAD_ID".
+        if not session or Path.cwd().resolve() != REPOSITORY_ROOT:
+            raise CarrierRefusal(
+                "rendering installation requires its actual owner runtime worktree"
+            )
+        if _git("rev-parse", "--show-toplevel") != str(REPOSITORY_ROOT):
+            raise CarrierRefusal("rendering installation Git worktree differs from its runtime")
         branch = _git("branch", "--show-current")
         if _git("status", "--porcelain"):
             raise CarrierRefusal("rendering installation requires a clean source checkout")
@@ -234,8 +241,6 @@ def _lease_readback(lease_id: str, *, rendering_successor: bool = False) -> dict
     try:
         payload = json.loads(result.stdout)
         task, lease = payload["task"], payload["lease"]
-        if rendering_successor:
-            holder = task["claimed_by"]
         expiry = datetime.fromisoformat(lease["expires_at"].replace("Z", "+00:00"))
         valid = (
             payload["ok"] is True
@@ -255,16 +260,30 @@ def _lease_readback(lease_id: str, *, rendering_successor: bool = False) -> dict
         raise CarrierRefusal("dispatcher lease is not owned by this operation")
     if str(REPOSITORY_ROOT) not in sys.path:
         sys.path.insert(0, str(REPOSITORY_ROOT))
-    from scripts.agent_worktree import load_lifecycle_records
+    from scripts.agent_worktree import (
+        WorktreeLifecycleError,
+        load_lifecycle_authority,
+        load_lifecycle_records,
+    )
 
     records = load_lifecycle_records(REPOSITORY_ROOT)
     record = records.get(str(REPOSITORY_ROOT))
+    if rendering_successor:
+        try:
+            record = load_lifecycle_authority(REPOSITORY_ROOT, candidate_branch=branch).get(
+                str(REPOSITORY_ROOT)
+            )
+        except (WorktreeLifecycleError, OSError, RuntimeError, subprocess.SubprocessError):
+            raise CarrierRefusal(
+                "rendering installation worktree authority is unqualified"
+            ) from None
     if (
         not record
         or record.get("owner") != session
         or record.get("branch") != branch
         or record.get("status") != "active"
         or record.get("expires_at", 0) <= time.time()
+        or (rendering_successor and record.get("path") != str(REPOSITORY_ROOT))
     ):
         raise CarrierRefusal("sole registered worktree is not owned by the successor")
     if (

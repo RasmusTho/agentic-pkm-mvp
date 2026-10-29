@@ -1203,9 +1203,13 @@ actual installation is the separate scope of
 The carrier's `--rendering-successor` path is fixed to #6476 and contract-body SHA-256
 `7ef11ac405db559eec87c507c11eab13bf794a8421d6cd13e0aec98bcaa8ae1c`. Before a later operation,
 its normal Issue claim must be open/in-progress with the exact unexpired dispatcher lease.
-The actual holder, branch and worktree must agree with that claim and its sole active registry
-record; owner identity comes from `CODEX_THREAD_ID`, not an inherited session label. The clean
-checkout's current committed carrier/core/helper bytes and head are bound into the frozen request.
+For this fixed installation, the normal pickup uses the actual `CODEX_THREAD_ID` as both
+`--agent` and `--session`; the dispatcher holder must equal that native owner identity.
+The carrier must run from that same registered worktree root. Its current Git branch and
+generation-bound lifecycle authority must agree with the sole active owner registration;
+an inherited session label, a different runtime cwd or another owned worktree cannot supply the
+binding. The clean checkout's current committed carrier/core/helper bytes and head are bound into
+the frozen request.
 Names, a new operation ID, source CI, a historical receipt or the closed #6475 lease supply none of
 this authority. The later owner must retain the reviewed source/program binding and original
 new-operation handle for follow/reconciliation.
@@ -1217,8 +1221,11 @@ configuration/effective unit, interpreter/launcher/private child, normal invocat
 and latest incident. A fixed `rendering-successor.json` selector retains the original `active.json`
 bytes; both paths acquire the same `resource.lock`, whose inode and request/admission binding are
 rechecked before stop, replacement, start and compensation. The original pinned follow remains
-read-only and usable. Unqualified or partial evidence, foreign ownership and concurrent writers
-refuse admission. A lost response follows the same successor handle; unresolved start ownership
+read-only and usable. The admitted normal invocation remains the identity for the first stop,
+including after execution qualification and durable stop intent. Every present successor selector
+must qualify; an empty selector or a missing selector alongside prior attempt metadata never opens
+a new operation. Unqualified or partial evidence, foreign ownership and concurrent writers refuse
+admission. A lost response follows the same successor handle; unresolved start ownership
 stays UNKNOWN. Existing finite helper limits, descriptor custody and code-only compensation apply,
 retaining current incident acknowledgments, correlation/history and qualified caches.
 The later actual receipt must verify installation and completed normal cycles before these docs

@@ -378,6 +378,7 @@ def _rendering_authority(value: Any) -> dict[str, Any]:
         or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{1,127}", value["holder"])
         or not isinstance(value["session"], str)
         or not re.fullmatch(r"[0-9a-f-]{36}", value["session"])
+        or value["holder"] != value["session"]
         or not isinstance(value["branch"], str)
         or not re.fullmatch(r"codex/[A-Za-z0-9_-]+", value["branch"])
         or not isinstance(value["worktree"], str)
@@ -1402,12 +1403,13 @@ def run(
     new_bytes: bytes,
     journal: Callable[[dict[str, Any]], None] | None = None,
     resource_guard: Callable[[], None] | None = None,
+    admitted_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     packet = _parse_packet(packet)
     rendering = "installation_authority" in packet
     old_sha, new_sha, manifest_sha = _script_binding(packet)
-    if rendering and resource_guard is None:
-        raise OperationFailure("successor_owned_resource_guard_required")
+    if rendering and (resource_guard is None or admitted_identity is None):
+        raise OperationFailure("successor_owned_resource_and_identity_required")
     if (
         hashlib.sha256(old_bytes).hexdigest() != old_sha
         or hashlib.sha256(new_bytes).hexdigest() != new_sha
@@ -1453,7 +1455,10 @@ def run(
             resource_guard()
         _target_and_consumers()
         _guard_source(before_manifest)
-        old = _active_identity(_unit_fields())
+        old = admitted_identity if rendering else _active_identity(_unit_fields())
+        assert old is not None
+        if rendering:
+            _same_active(old)
         _additional_consumers(old["cgroup"])
         report["old_invocation_sha256"] = _identity_digest(old)
         report["effective_unit_before"] = _unit_projection(_unit_fields())
@@ -1825,12 +1830,13 @@ def _rendering_resource_guard(request: dict[str, Any], request_sha: str, lock: i
         raise OperationFailure("successor_shared_lock_changed", unknown=True)
 
 
-def _rendering_entry_guard(request: dict[str, Any], request_sha: str, lock: int) -> None:
+def _rendering_entry_guard(request: dict[str, Any], request_sha: str, lock: int) -> dict[str, Any]:
     _rendering_resource_guard(request, request_sha, lock)
     admission = _metadata_read(OPERATION_ROOT / request["packet"]["operation"] / "admission.json")
     current = _rendering_current_state(request["before_manifest"])
     if _identity_key(current["identity"]) != _identity_key(admission["current_state"]["identity"]):
         raise OperationFailure("successor_normal_invocation_changed", unknown=True)
+    return admission["current_state"]["identity"]
 
 
 def _operation_name(operation: str) -> str:
@@ -2228,7 +2234,15 @@ def remote_entry(
             if rendering and root.exists():
                 return _status(operation, request_sha)  # Follow the frozen request; never replay.
             expected = {"operation": operation, "request_sha256": request_sha}
-            if rendering and active:
+            if rendering and active is None:
+                # A genuinely first selector has no earlier successor namespace.
+                # A lost pointer after any attempt is ambiguous, never a new ID.
+                if any(
+                    path.name not in {ORIGINAL_OPERATION, "active.json", "resource.lock"}
+                    for path in OPERATION_ROOT.iterdir()
+                ):
+                    raise OperationFailure("successor_selection_missing_with_history", unknown=True)
+            if rendering and active is not None:
                 if (
                     set(active) != {"operation", "request_sha256", "admission_sha256"}
                     or not isinstance(active.get("operation"), str)
@@ -2255,7 +2269,8 @@ def remote_entry(
                     and active.get("operation") == operation
                     and active.get("request_sha256") == request_sha
                 )
-            if active and not same_request:
+            has_predecessor = active is not None if rendering else bool(active)
+            if has_predecessor and not same_request:
                 previous = _status(active["operation"], active["request_sha256"])
                 if previous["status"] not in {"refused", "rolled_back"} or not previous.get(
                     "supervisor", {}
@@ -2509,8 +2524,9 @@ def worker_main(operation: str) -> int:
         signal.signal(signal.SIGALRM, deadline_signal)
         signal.alarm(90 if recovery else 300)
         try:
+            admitted_identity = None
             if rendering and not recovery:
-                _rendering_entry_guard(request, request_sha, lock)
+                admitted_identity = _rendering_entry_guard(request, request_sha, lock)
             if recovery:
                 result = _recover(
                     context,
@@ -2534,6 +2550,7 @@ def worker_main(operation: str) -> int:
                     new_bytes=new_bytes,
                     journal=journal,
                     resource_guard=resource_guard if rendering else None,
+                    admitted_identity=admitted_identity,
                 )
         except BaseException as error:
             result = {

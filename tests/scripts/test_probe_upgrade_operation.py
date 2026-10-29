@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import signal
 import stat
+import subprocess
 import sys
 import time
 from types import ModuleType, SimpleNamespace
@@ -118,6 +119,14 @@ class OfflineHost:
             **self.original_pins,
         }.items():
             self.monkeypatch.setattr(module, name, value, raising=False)
+
+        def native_port(argv, **kwargs):
+            try:
+                return self.command(argv, **kwargs)
+            except operation.OperationFailure as error:
+                raise module.OperationFailure(error.reason, unknown=error.unknown) from None
+
+        self.monkeypatch.setattr(module, "_safe_command", native_port)
 
     def open_directory(self, path):
         # The substituted trust root is private pytest storage. Descendants and
@@ -427,7 +436,7 @@ def rendering_authority():
     return {
         "issue": operation.RENDERING_INSTALLATION_ISSUE,
         "body_sha256": operation.RENDERING_INSTALLATION_BODY_SHA256,
-        "holder": "synthetic-verified-installation-owner",
+        "holder": "11111111-1111-4111-8111-111111111111",
         "session": "11111111-1111-4111-8111-111111111111",
         "branch": "codex/issue-6476-probe-rendering-install",
         "worktree": str(ROOT),
@@ -749,6 +758,9 @@ def test_successor_unknown_and_recovery_preserve_latest_incident(
         assert host.events == ["stop", "start", "stop", "start"]
     else:
         assert result["status"] == "unknown", result
+        assert result["failure"] == "lost_successor_start_ack"
+        assert result["phase"] == "start_intent"
+        assert result["recovery_failure"] == "original_start_ownership_unproven"
         previous = host.events[:]
         again = carrier.run("lease-abcdef", "a" * 32, "reconcile")
         assert again["status"] == "unknown" and host.events == previous
@@ -844,7 +856,16 @@ def test_successor_authorization_requalifies_persisted_admission(
 
 @pytest.mark.parametrize(
     "changed",
-    ["live_issue", "source_issue", "live_body", "target_source", "before_manifest", "after_bytes"],
+    [
+        "live_issue",
+        "source_issue",
+        "live_body",
+        "target_source",
+        "before_manifest",
+        "after_bytes",
+        "owner_session",
+        "packet_holder",
+    ],
 )
 def test_successor_rejects_alternate_authority_or_source_before_host_contact(
     successor_host, monkeypatch, changed
@@ -860,6 +881,10 @@ def test_successor_rejects_alternate_authority_or_source_before_host_contact(
         request["packet"]["source_merge"] = operation.SOURCE_MERGE
     elif changed == "before_manifest":
         request["before_manifest"][operation.SCRIPT_REL]["sha256"] = operation.OLD_SCRIPT_SHA256
+    elif changed == "owner_session":
+        request["packet"]["installation_authority"]["session"] = "2" * 36
+    elif changed == "packet_holder":
+        request["packet"]["claim_holder"] = "foreign-claimant"
     else:
         request["new_base64"] = request["old_base64"]
     monkeypatch.setattr(
@@ -888,9 +913,14 @@ def test_successor_rejects_alternate_authority_or_source_before_host_contact(
         "duplicate_worktree",
         "dirty",
         "program",
+        "coherent_foreign_claim",
+        "runtime_cwd",
+        "record_path",
     ],
 )
-def test_successor_carrier_authenticates_fixed_live_claim_and_actual_session(monkeypatch, drift):
+def test_successor_carrier_authenticates_fixed_live_claim_and_actual_session(
+    monkeypatch, tmp_path, drift
+):
     from scripts import agent_worktree
 
     body = "synthetic exact installation contract for the one fixed transition"
@@ -901,8 +931,11 @@ def test_successor_carrier_authenticates_fixed_live_claim_and_actual_session(mon
     branch = "codex/issue-6476-probe-rendering-install"
     monkeypatch.setenv("CODEX_THREAD_ID", "2" * 36 if drift == "session" else session)
     monkeypatch.setenv("CODEX_SESSION_ID", "inherited-root-is-not-the-owner")
+    if drift == "runtime_cwd":
+        monkeypatch.chdir(tmp_path)
     registry = {
         str(ROOT): {
+            "path": str(ROOT),
             "owner": session,
             "branch": branch,
             "status": "active",
@@ -912,9 +945,14 @@ def test_successor_carrier_authenticates_fixed_live_claim_and_actual_session(mon
     }
     if drift == "registration":
         registry[str(ROOT)]["branch"] = "codex/foreign"
+    if drift == "record_path":
+        registry[str(ROOT)]["path"] = "/synthetic/other-worktree"
     if drift == "duplicate_worktree":
         registry["/synthetic/other-worktree"] = dict(registry[str(ROOT)])
     monkeypatch.setattr(agent_worktree, "load_lifecycle_records", lambda _: registry)
+    monkeypatch.setattr(
+        agent_worktree, "load_lifecycle_authority", lambda *_args, **_kwargs: registry
+    )
     head = "8" * 40
 
     def git_port(*args):
@@ -922,6 +960,7 @@ def test_successor_carrier_authenticates_fixed_live_claim_and_actual_session(mon
             ("branch", "--show-current"): branch,
             ("status", "--porcelain"): "M script" if drift == "dirty" else "",
             ("rev-parse", "HEAD"): head,
+            ("rev-parse", "--show-toplevel"): str(ROOT),
         }[args]
 
     monkeypatch.setattr(carrier, "_git", git_port)
@@ -936,7 +975,7 @@ def test_successor_carrier_authenticates_fixed_live_claim_and_actual_session(mon
         "repo": "RasmusTho/agentic-pkm-mvp",
         "issue_number": 6476,
         "status": "claimed",
-        "claimed_by": "synthetic-current-holder",
+        "claimed_by": session,
         "lease_id": "lease-abcdef",
     }
     lease = {
@@ -956,6 +995,8 @@ def test_successor_carrier_authenticates_fixed_live_claim_and_actual_session(mon
         lease["resource"] = "issue:6475"
     elif drift == "foreign_holder":
         lease["holder"] = "foreign"
+    elif drift == "coherent_foreign_claim":
+        task["claimed_by"] = lease["holder"] = "foreign-current-holder"
     elif drift == "expired":
         lease["expires_at"] = "2000-01-01T00:00:00Z"
     elif drift == "released":
@@ -987,6 +1028,57 @@ def test_successor_carrier_authenticates_fixed_live_claim_and_actual_session(mon
         assert authority["branch"] == branch and authority["worktree"] == str(ROOT)
         assert authority["body_sha256"] == body_sha
     assert all("issue-6475" not in arg for argv in calls for arg in argv)
+
+
+@pytest.mark.parametrize("window", ["post_entry", "durable_stop_intent"])
+def test_successor_cannot_adopt_invocation_after_worker_entry(successor_host, monkeypatch, window):
+    host = successor_host
+    native = host.command
+    reads = 0
+
+    def change_after_entry(argv, **kwargs):
+        nonlocal reads
+        if argv[0] == "/usr/bin/docker":
+            reads += 1
+            if reads == 4 and window == "post_entry":
+                host.set_active("9" * 32, 900)
+        return native(argv, **kwargs)
+
+    host.command = change_after_entry
+
+    def replace_at_stop_intent(phase, _module):
+        if phase == "stop_intent" and window == "durable_stop_intent":
+            host.set_active("9" * 32, 900)
+
+    bind_successor_carrier(host, monkeypatch, phase_hook=replace_at_stop_intent)
+    result = carrier.run("lease-abcdef", "a" * 32, rendering_successor=True)
+    assert result["status"] in {"refused", "unknown"}, result
+    assert host.events == [] and host.fields["InvocationID"] == "9" * 32
+    assert sha(host.script.read_bytes()) == operation.NEW_SCRIPT_SHA256
+    assert_original_preserved(host)
+
+
+@pytest.mark.parametrize("selector", [{}, {"operation": "a" * 32}, None])
+def test_successor_unknown_predecessor_cannot_lose_its_selector(
+    successor_host, monkeypatch, selector
+):
+    host = successor_host
+    request = successor_request(host)
+    operation.remote_entry("prepare", request, programs=carrier._programs())
+    host.finish_supervisor()
+    before = operation.remote_entry("status", request)
+    assert before["status"] == "unknown" and before["failure"] == "missing_terminal_result"
+    pointer = host.operation_root / "rendering-successor.json"
+    if selector is None:
+        pointer.unlink()
+    else:
+        operation._metadata_write(pointer, selector)
+    bind_successor_carrier(host, monkeypatch)
+    result = carrier.run("lease-abcdef", "e" * 32, rendering_successor=True)
+    assert result["status"] in {"refused", "unknown"}, result
+    assert host.events == [] and not (host.operation_root / ("e" * 32)).exists()
+    assert operation.remote_entry("status", request)["status"] == "unknown"
+    assert_original_preserved(host)
 
 
 @pytest.mark.parametrize(
@@ -1022,6 +1114,111 @@ def test_successor_rechecks_resource_custody_at_each_effect(
         operation.RENDERING_SCRIPT_SHA256 if new_script else operation.NEW_SCRIPT_SHA256
     )
     assert_original_preserved(host)
+
+
+@pytest.mark.parametrize(
+    "drift", [None, "runtime_cwd", "owned_other", "duplicate_owner", "generation"]
+)
+def test_successor_claim_binds_supported_runtime_worktree(tmp_path, monkeypatch, drift):
+    """Real local Git registration/generation APIs; only hub read ports vary."""
+    from scripts import agent_worktree
+
+    seed, worktree, other = tmp_path / "seed", tmp_path / "runtime", tmp_path / "other"
+    seed.mkdir()
+
+    def git(*args, cwd=seed):
+        return subprocess.check_output(
+            ["git", "-c", "core.hooksPath=/dev/null", *args],
+            cwd=cwd,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+
+    git("init", "--initial-branch=main")
+    for name in (
+        "probe_script_swap_core.py",
+        "probe_upgrade_operation.py",
+        "upgrade_host_probe.py",
+    ):
+        target = seed / "scripts" / name
+        target.parent.mkdir(exist_ok=True)
+        target.write_bytes((ROOT / "scripts" / name).read_bytes())
+    git("add", "scripts")
+    git(
+        "-c",
+        "user.name=synthetic",
+        "-c",
+        "user.email=synthetic@example.invalid",
+        "commit",
+        "-qm",
+        "synthetic source",
+    )
+    git("worktree", "add", "-b", "codex/claim-6476-fixture", str(worktree), "HEAD")
+    session = "11111111-1111-4111-8111-111111111111"
+    agent_worktree.register_worktree(seed, worktree=worktree, owner=session)
+    if drift in {"owned_other", "duplicate_owner"}:
+        git("worktree", "add", "-b", "codex/other-6476-fixture", str(other), "HEAD")
+        agent_worktree.register_worktree(seed, worktree=other, owner=session)
+        if drift == "owned_other":
+            agent_worktree.release_worktree(seed, worktree=worktree, owner=session)
+    if drift == "generation":
+        marker = Path(
+            git("rev-parse", "--git-path", agent_worktree.GENERATION_MARKER, cwd=worktree)
+        )
+        marker.write_text("f" * 32)
+    monkeypatch.chdir(seed if drift == "runtime_cwd" else worktree)
+    monkeypatch.syspath_prepend(str(worktree))
+    monkeypatch.setenv("CODEX_THREAD_ID", session)
+    monkeypatch.setenv("CODEX_SESSION_ID", "foreign-inherited-root")
+    for name, value in {
+        "REPOSITORY_ROOT": worktree.resolve(),
+        "CORE_PATH": worktree / "scripts/probe_script_swap_core.py",
+        "OPERATION_PATH": worktree / "scripts/probe_upgrade_operation.py",
+        "__file__": str(worktree / "scripts/upgrade_host_probe.py"),
+    }.items():
+        monkeypatch.setattr(carrier, name, value)
+    body = "synthetic current fixed installation contract"
+    monkeypatch.setattr(carrier, "RENDERING_INSTALLATION_BODY_SHA256", sha(body.encode()))
+    monkeypatch.setattr(operation, "RENDERING_INSTALLATION_BODY_SHA256", sha(body.encode()))
+    task = {
+        "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-6476",
+        "repo": "RasmusTho/agentic-pkm-mvp",
+        "issue_number": 6476,
+        "status": "claimed",
+        "claimed_by": session,
+        "lease_id": "lease-abcdef",
+    }
+    lease = {
+        "lease_id": "lease-abcdef",
+        "resource": "issue:6476",
+        "holder": session,
+        "expires_at": "2099-01-01T00:00:00Z",
+        "released_at": None,
+    }
+    issue = {
+        "body": body,
+        "state": "OPEN",
+        "labels": [{"name": name} for name in ("type:task", "prio:high", "agent:in-progress")],
+    }
+
+    def hub_read(argv, **_kwargs):
+        value = (
+            {"ok": True, "task": task, "lease": lease}
+            if argv[1:3] == ["-m", "app.dispatcher"]
+            else issue
+        )
+        return SimpleNamespace(returncode=0, stderr=b"", stdout=json.dumps(value).encode())
+
+    monkeypatch.setattr(carrier, "_bounded_process", hub_read)
+    if drift:
+        with pytest.raises(carrier.CarrierRefusal):
+            carrier._lease_readback("lease-abcdef", rendering_successor=True)
+    else:
+        result = carrier._lease_readback("lease-abcdef", rendering_successor=True)
+        authority = result["installation_authority"]
+        assert authority["holder"] == authority["session"] == session
+        assert authority["worktree"] == str(worktree.resolve())
+        assert authority["source_head"] == git("rev-parse", "HEAD", cwd=worktree)
 
 
 def test_real_operation_keeps_incident_source_closure_and_new_incarnation(host):

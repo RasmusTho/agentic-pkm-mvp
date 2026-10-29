@@ -98,14 +98,16 @@ fixed successor admission for the verified Swedish rendering from source
 with after-manifest `317f99b147d23dcf20c3e59be2d542cd9f3f74aeca98d519ba2393a9eab3a635`.
 This is source/protocol support; the last verified installation remains `0172…` and the 43-cycle
 receipt above. [Installation Issue #6476](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6476)
-owns any later actual installation and receipt. Its fixed contract, fresh normal claim and actual
-registered owner are required; the closing #6475 source lease cannot authorize installation.
+owns any later actual installation and receipt. Its fixed contract and fresh normal claim must bind
+the lease holder to the actual native owner UUID and the same runtime/registered worktree;
+the closing #6475 source lease cannot authorize installation.
 
 The successor reads and pins the original request, programs, authorization, phase, handle and
 UNKNOWN result, freshly proves helper/cgroup quiescence, and qualifies the current source,
 configuration, unit, normal invocation and latest incident. It preserves the original `active.json`
 fence and uses a separate fixed successor selector under the same physical `resource.lock` as
-the legacy protocol. Admission and source custody are rechecked before probe effects; lost
+the legacy protocol. The admitted normal identity remains bound through the first stop, and an
+empty or missing prior selector cannot open another operation. Admission and source custody are rechecked before probe effects; lost
 responses follow the same new handle, with finite, code-only recovery preserving the latest
 incident. Missing, changed, foreign or incomplete proof refuses admission. See
 [the operator prerequisites](../OPERATIONS.md#prod-probe-and-push-alert-scheduled-backstop).
