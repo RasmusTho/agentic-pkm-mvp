@@ -2215,7 +2215,7 @@ def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     )
 
 
-def select_tests(changed_files: list[str]) -> Selection:
+def select_tests(changed_files: list[str], *, baseline: str | None = None) -> Selection:
     paths = tuple(path for path in (_normalize(item) for item in changed_files) if path)
     if not paths:
         return Selection(True, (), (), "no changed files were provided")
@@ -2342,7 +2342,63 @@ def select_tests(changed_files: list[str]) -> Selection:
     selection = _defer_heavy(
         Selection(False, subsystems, _pr_targets([*targets, *changed_tests]), reason), paths
     )
-    return _bws_source_installation_selection(_native_deploy_control_selection(selection, paths), paths)
+    selection = _native_deploy_control_selection(selection, paths)
+    if baseline:
+        selection = _bws_neutral_test_selection(selection, paths, baseline)
+    return _bws_source_installation_selection(selection, paths)
+
+
+def _bws_neutral_test_selection(selection: Selection, paths: tuple[str, ...], baseline: str) -> Selection:
+    """Admit existing whole test modules, not a general proof of their consumers."""
+    extra = tuple(path for path in paths if path not in BWS_SOURCE_INSTALLATION_PATHS)
+    if not extra or any(
+        not path.startswith("tests/") or not _is_test_module(path)
+        or {"..", "helpers", "fixtures", "support", "utils", "_shared"}.intersection(Path(path).parts)
+        or not Path(path).is_file() or Path(path).is_symlink()
+        for path in extra
+    ):
+        return selection
+    core = tuple(path for path in paths if path in BWS_SOURCE_INSTALLATION_PATHS)
+    retained = select_tests(list(core))  # No baseline: extras cannot enroll their own coverage.
+    whole = tuple(target for target in retained.targets if "::" not in target)
+    if (not retained.reason.endswith("; BWS source installation scope")
+        or any(not _within_target_dirs(path, whole) for path in extra)):
+        return selection
+    try:
+        # Only immutable commit IDs are baseline evidence; refs may move between calls.
+        if len(baseline) != 40 or any(char not in "0123456789abcdef" for char in baseline):
+            return selection
+        entries = subprocess.run(
+            ["git", "--literal-pathspecs", "ls-tree", "-z", f"{baseline}^{{commit}}", "--", *extra],
+            check=True, capture_output=True, text=True,
+        ).stdout.split("\0")
+        regular = {
+            path for entry in entries if entry
+            for metadata, path in [entry.split("\t", 1)]
+            if metadata.split()[:2] in (["100644", "blob"], ["100755", "blob"])
+        }
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return selection
+    if not set(extra) <= regular:
+        return selection
+    # Preserve original subsystem ownership and all extra targets. The existing
+    # profile still removes only Dormant and retains the runner's serial guards.
+    return _bws_source_installation_selection(selection, core)
+
+
+def _locked_diff_baseline(base_ref: str, head_ref: str) -> tuple[str, str] | None:
+    try:
+        commits = [subprocess.run(
+            ["git", "rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip() for ref in (base_ref, head_ref)]
+        bases = subprocess.run(
+            ["git", "merge-base", "--all", *commits],
+            check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (bases[0], commits[1]) if len(bases) == 1 else None
 
 
 def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
@@ -2444,10 +2500,15 @@ def main() -> int:
         return 0
 
     changed = args.changed_file
+    locked = _locked_diff_baseline(args.base_ref, args.head_ref) if args.base_ref else None
     if not changed and args.base_ref:
-        changed = changed_files_from_git(args.base_ref, args.head_ref)
+        try:
+            changed = changed_files_from_git(*(locked or (args.base_ref, args.head_ref)))
+        except (OSError, subprocess.SubprocessError):
+            changed = []  # Unknown diff requires the full suite, never a partial plan.
+            locked = None
 
-    selection = select_tests(changed)
+    selection = select_tests(changed, baseline=locked[0] if locked else None)
     if not selection.full_suite:
         selection = Selection(
             selection.full_suite,

@@ -3426,3 +3426,176 @@ def test_episode_debrief_cli_selects_existing_episodes_coverage() -> None:
     assert "tests/episode_debrief" in selection.targets
     assert "tests/invariants" in selection.targets
     assert select_tests(["app/cli/unknown_episode_command.py"]).unowned_paths == ("app/cli/unknown_episode_command.py",)
+
+
+BWS_RECEIPT_CHANGES = [
+    'app/ops/bws_installation_admission.py',
+    'app/ops/bws_installation_lifecycle.py',
+    'app/ops/bws_installation_transaction.py',
+    'docs/OPERATIONS.md',
+    'docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md',
+    'tests/deploy/test_bws_source_rpc_assembly.py',
+    'tests/ops/test_bws_installation_admission.py',
+    'tests/ops/test_bws_installation_lifecycle.py',
+    'tests/ops/test_bws_installation_transaction.py',
+]
+BWS_NEUTRAL_PROBE = 'tests/scripts/test_probe_upgrade_operation.py'
+
+
+def test_bws_existing_neutral_test_cochange(monkeypatch):
+    from scripts.run_scoped_test_partitions import (
+        _effective_targets, _serial_safe_candidates, validate_execution_units, validate_inventory,
+    )
+
+    base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+    changed = [*BWS_RECEIPT_CHANGES, BWS_NEUTRAL_PROBE]
+    with monkeypatch.context() as context:
+        context.setattr(selector, '_bws_source_installation_selection', lambda selection, paths: selection)
+        original = select_tests(changed)
+    retained = select_tests(BWS_RECEIPT_CHANGES)
+    assert 'tests/scripts' in retained.targets  # Coverage exists before the cochange.
+    actual = select_tests(changed, baseline=base)
+    dormant = 'tests/ops/test_dormant_ownership_initialization.py'
+    expected = selector._dedupe([
+        item for target in original.targets
+        for item in (selector._ops_test_files() if target == 'tests/ops' else (target,))
+        if item != dormant
+    ])
+    assert actual.targets == expected
+    assert actual.subsystems == original.subsystems == ('ops', 'ops_deploy')
+    assert actual.deferred_targets == original.deferred_targets
+    assert actual.reason.endswith('; BWS source installation scope')
+    partitions = selector.scoped_deploy_partitions(actual)
+    units = selector.scoped_deploy_execution_units(actual)
+    assert partitions and 0 < len(units) <= 4
+    assert validate_inventory([list(p) for p in partitions], list(actual.targets)) == partitions
+    assert validate_execution_units([list(u) for u in units], list(actual.targets)) == units
+    flat = tuple(target for unit in units for target in unit)
+    assert len(flat) == len(set(flat))
+    effective = _effective_targets(flat)
+    assert 'tests/scripts' in effective and BWS_NEUTRAL_PROBE not in effective
+    boundary = tuple(path for path in selector.SCOPED_DEPLOY_SERIAL_BOUNDARY if path != dormant)
+    assert len(boundary) == 7 and units[-1] == boundary
+    candidates, serial = _serial_safe_candidates(flat, boundary)
+    assert serial == boundary
+    assert ('tests/deploy/test_bws_source_rpc_assembly.py',) in candidates
+    with pytest.raises(ValueError, match='serial boundary is not fully covered'):
+        _serial_safe_candidates(tuple(p for p in flat if p != boundary[0]), boundary)
+
+
+@pytest.mark.parametrize('failure', [
+    'no-base', 'moving-ref', 'bad-base', 'tree-base', 'new-test', 'base-symlink', 'base-directory',
+    'git-error', 'missing-test', 'symlink-test', 'helpers', 'fixtures', 'conftest',
+    'config', 'dormant', 'unknown-prod', 'no-source', 'partial', 'self-enrollment',
+])
+def test_bws_neutral_cochange_refusals(failure, monkeypatch):
+    base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+    changed = [*BWS_RECEIPT_CHANGES, BWS_NEUTRAL_PROBE]
+    if failure == 'no-base':
+        base = None
+    elif failure == 'moving-ref':
+        base = 'HEAD'
+    elif failure == 'bad-base':
+        base = '0' * 40
+    elif failure == 'tree-base':
+        base = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+    elif failure == 'no-source':
+        changed.remove('app/ops/bws_installation_transaction.py')
+    elif failure in {'new-test', 'helpers', 'fixtures', 'conftest', 'config', 'dormant', 'unknown-prod', 'self-enrollment'}:
+        extra = {
+            'new-test': 'tests/scripts/test_new_bws_neutral.py',
+            'helpers': 'tests/scripts/helpers/test_shared.py',
+            'fixtures': 'tests/scripts/fixtures/test_shared.py',
+            'conftest': 'tests/scripts/conftest.py',
+            'config': 'tests/scripts/pytest.ini',
+            'dormant': 'tests/ops/test_dormant_ownership_initialization.py',
+            'unknown-prod': 'app/ops/new_bws_neutral.py',
+            'self-enrollment': 'tests/deploy/test_ci_image_build.py',
+        }[failure]
+        changed[-1] = extra
+        original = Path.is_file
+        monkeypatch.setattr(Path, 'is_file', lambda path: str(path) == extra or original(path))
+    elif failure in {'missing-test', 'symlink-test'}:
+        method = 'is_file' if failure == 'missing-test' else 'is_symlink'
+        original = getattr(Path, method)
+        monkeypatch.setattr(Path, method, lambda path:
+            failure != 'missing-test' if str(path) == BWS_NEUTRAL_PROBE else original(path))
+    elif failure in {'base-symlink', 'base-directory', 'git-error'}:
+        original_run = subprocess.run
+        def git_result(args, **kwargs):
+            if 'ls-tree' in args:
+                if failure == 'git-error':
+                    raise subprocess.CalledProcessError(128, args)
+                mode, kind = ('120000', 'blob') if failure == 'base-symlink' else ('040000', 'tree')
+                return subprocess.CompletedProcess(args, 0, f'{mode} {kind} abc\t{BWS_NEUTRAL_PROBE}\0')
+            return original_run(args, **kwargs)
+        monkeypatch.setattr(subprocess, 'run', git_result)
+    elif failure == 'partial':
+        original_select = selector.select_tests
+        def partial_core(paths, **kwargs):
+            selected = original_select(paths, **kwargs)
+            if paths == BWS_RECEIPT_CHANGES:
+                from dataclasses import replace
+                return replace(selected, targets=tuple(
+                    BWS_NEUTRAL_PROBE + '::test_one' if p == 'tests/scripts' else p
+                    for p in selected.targets
+                ))
+            return selected
+        monkeypatch.setattr(selector, 'select_tests', partial_core)
+    with monkeypatch.context() as context:
+        context.setattr(selector, '_bws_source_installation_selection', lambda selection, paths: selection)
+        broad_selection = select_tests(changed)
+    assert select_tests(changed, baseline=base) == broad_selection
+
+
+@pytest.mark.parametrize('evidence', ['existing', 'moving-refs', 'new', 'ambiguous', 'unavailable', 'unknown-diff'])
+def test_bws_cli_baseline_evidence(evidence, tmp_path, monkeypatch):
+    # Exercise real Git and main(), with no production imports or pytest collection.
+    ops = selector._ops_test_files()
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(tmp_path), *args], text=True).strip()
+    git('init', '-q')
+    git('config', 'user.name', 'CI fixture')
+    git('config', 'user.email', 'ci@example.invalid')
+    for path in {*BWS_RECEIPT_CHANGES, *ops} | ({BWS_NEUTRAL_PROBE} if evidence != 'new' else set()):
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('# baseline\n')
+    git('add', '.')
+    git('commit', '-qm', 'base')
+    base = git('rev-parse', 'HEAD')
+    for path in [*BWS_RECEIPT_CHANGES, BWS_NEUTRAL_PROBE]:
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('# changed\n')
+    git('add', '.')
+    git('commit', '-qm', 'head')
+    head = git('rev-parse', 'HEAD')
+    git('branch', 'diff-base', base)
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / 'output'
+    monkeypatch.setattr(sys, 'argv', ['select_pr_tests.py', '--base-ref', 'diff-base',
+        '--head-ref', 'HEAD', '--github-output', str(output)])
+    original_run = subprocess.run
+    observed_diffs = []
+    def observe(args, **kwargs):
+        if args[:2] == ['git', 'diff']:
+            observed_diffs.append(args[-1])
+            if evidence == 'unknown-diff':
+                raise subprocess.CalledProcessError(128, args)
+        if args[:3] == ['git', 'merge-base', '--all']:
+            if evidence == 'moving-refs':
+                original_run(['git', 'branch', '-f', 'diff-base', head], check=True)
+            if evidence == 'ambiguous':
+                return subprocess.CompletedProcess(args, 0, base + '\n' + head + '\n')
+            if evidence == 'unavailable':
+                raise subprocess.CalledProcessError(128, args)
+        return original_run(args, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', observe)
+    assert selector.main() == 0
+    fields = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    assert observed_diffs == ([f'{base}...{head}'] if evidence not in {'ambiguous', 'unavailable'}
+                              else ['diff-base...HEAD'])
+    assert fields['full_suite'] == ('true' if evidence == 'unknown-diff' else 'false')
+    assert fields['reason'].endswith('; BWS source installation scope') == (evidence in {'existing', 'moving-refs'})
+    assert bool(json.loads(fields['scoped_execution_units_json'])) == (evidence in {'existing', 'moving-refs'})

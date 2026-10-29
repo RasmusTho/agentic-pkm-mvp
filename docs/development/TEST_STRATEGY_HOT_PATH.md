@@ -172,7 +172,22 @@ successful profile qualification keeps the existing bounded execution route in t
 Subsystem labels and deferred targets remain unchanged. The full RPC file stays in the nonserial
 inventory with its per-case temporary roots and disposable resource-limited subprocess; all seven
 existing serial suites still follow successful parallel work and node-evidence validation.
-No unknown production/test module or shared-fixture cochange gains this profile.
+Unknown production paths and shared-fixture cochanges retain normal routing.
+
+With explicit baseline evidence, an additional ordinary test module can be a neutral cochange
+only when the unchanged closed BWS paths already qualify and their retained selection covers
+the whole module before that cochange is considered. Partial node targets cannot supply this
+proof. The CLI locks its base/head revisions and uses their unique merge-base; each extra module
+must be a regular file in that commit and a regular nonsymlink file in the checkout. New modules,
+missing or unavailable baseline evidence, ambiguous merge-bases, known helpers/fixtures/support
+paths, conftest/configuration and the omitted Dormant module retain broader selection. Direct
+selector calls without an explicit immutable baseline keep the exact path policy above.
+The original subsystem labels and complete target union are preserved after qualification.
+
+This is a bounded CI policy for ordinary test modules, not a complete dependency proof: a normally
+named test module could have undeclared shared-helper consumers. That residual risk is accepted
+within this profile because the changed module still runs in full and production paths remain
+closed. Module-local fixtures are permitted; shared fixture paths and runtime gates are unchanged.
 
 The control-installation module tests the Source transaction's public-file compensation port
 with temporary files and explicit process/network/Product import guards. Its legacy contract
