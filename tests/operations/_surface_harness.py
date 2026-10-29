@@ -13,8 +13,6 @@ import sys
 from threading import Thread
 
 import httpx
-from mcp import ClientSession, types
-from mcp.client.stdio import StdioServerParameters, stdio_client
 from starlette.requests import Request
 
 from app.api.operation_runtime import build_production_operation_runtime
@@ -102,10 +100,13 @@ class ExternalMcpClient:
         self.ready = Future()
 
     async def _run(self):
-        parameters = StdioServerParameters(command=sys.executable,
-            args=["-m", "mimer_mcp_sidecar", "--base-url", self.url, "--profile", self.profile],
-            env={**os.environ, "PYTHONPATH": str(SIDECAR)})
         try:
+            from mcp import ClientSession, types
+            from mcp.client.stdio import StdioServerParameters, stdio_client
+
+            parameters = StdioServerParameters(command=sys.executable,
+                args=["-m", "mimer_mcp_sidecar", "--base-url", self.url, "--profile", self.profile],
+                env={**os.environ, "PYTHONPATH": str(SIDECAR)})
             async with stdio_client(parameters) as (reader, writer), ClientSession(reader, writer) as session:
                 initialized = await session.initialize()
                 self.ready.set_result(initialized)
