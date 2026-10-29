@@ -185,6 +185,7 @@ class SynthesisArtifact:
     provenance_ref: str
     content_hash: str | None = None
     observed_at: float | None = None
+    state_fingerprint: str | None = None
 
 
 def canonical_note_identity(vault_uuid: str, *, vault_binding_id: str) -> str:
@@ -226,7 +227,15 @@ def resolve_synthesis_artifact(
         fields, body = load_frontmatter(raw)
         note_identity = resolve_vault_note_identity(path, vault_root=vault_root, frontmatter=fields, body=body)
         identity = canonical_note_identity(note_identity.note_uuid, vault_binding_id=vault_binding_id)
-    return SynthesisArtifact(identity, ref, payload.get('hash'), payload.get('mtime'))
+    from app.episode_debrief.evidence import commitment_state_fingerprint
+    extensions = payload.get("extensions") or {}
+    state_fingerprint = extensions.get("episode_debrief_state_fingerprint")
+    if isinstance(payload.get("frontmatter"), dict):
+        state_fingerprint = commitment_state_fingerprint(payload["frontmatter"])
+    observed_at = payload.get("mtime")
+    if observed_at is None and extensions.get("observed_at"):
+        observed_at = datetime.fromisoformat(extensions["observed_at"].replace("Z", "+00:00")).timestamp()
+    return SynthesisArtifact(identity, ref, payload.get('hash'), observed_at, state_fingerprint)
 
 
 def trigger_for_episode(episode_id: str, *, vault_binding_id: str) -> dict[str, Any]:

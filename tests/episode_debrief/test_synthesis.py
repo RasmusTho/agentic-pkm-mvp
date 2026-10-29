@@ -340,6 +340,8 @@ def _install_watcher_binding(db, ep, doc, *, binding=None):
     payload = ingest_vault_changed_payload(vault_root=db.root, relative_path=Path(relative),
         mtime=datetime(2026, 10, 13, 9, tzinfo=timezone.utc).timestamp(),
         content_hash=hashlib.sha256(path.read_bytes()).hexdigest(), watcher='fixture')
+    from app.events.topic_schema_registry import validate_topic_payload
+    validate_topic_payload('ingest.vault.changed', payload)
     db.execute("INSERT INTO outbox(id,topic,payload,vault_binding_id) VALUES(%s,'ingest.vault.changed',%s,%s)", (event, Jsonb(payload), binding))
     db.execute("INSERT INTO episode_artifact_binding(vault_binding_id,artifact_ref,episode_id,scope,basis,confidence,binding_state,rule) VALUES(%s,%s,%s,'work','time_overlap',1,'active','fixture')", (binding,'vault.activity:'+event,ep))
     return event
@@ -437,9 +439,19 @@ def test_native_worker_consumes_compatibility_projection_trigger(episode, monkey
 
 
 def _refresh_observation(db, path):
-    import hashlib
+    # A revision is a new immutable event, never a rewrite of historical evidence.
+    from app.watcher.registry import ingest_vault_changed_payload
     from psycopg.types.json import Jsonb
-    db.execute("UPDATE outbox SET payload=jsonb_set(payload,'{hash}',%s::jsonb) WHERE topic='ingest.vault.changed' AND payload->>'relative_path'=%s", (Jsonb(hashlib.sha256(path.read_bytes()).hexdigest()), str(path.relative_to(db.root))))
+    import hashlib
+    relative = str(path.relative_to(db.root))
+    ep = db.execute("SELECT episode_id FROM episode_artifact_binding LIMIT 1")[0][0]
+    event = str(uuid4())
+    payload = ingest_vault_changed_payload(vault_root=db.root, relative_path=Path(relative),
+        mtime=datetime(2026,10,13,9,1,tzinfo=timezone.utc).timestamp(),
+        content_hash=hashlib.sha256(path.read_bytes()).hexdigest(), watcher='fixture')
+    db.execute("INSERT INTO outbox(id,topic,payload) VALUES(%s,'ingest.vault.changed',%s)", (event, Jsonb(payload)))
+    db.execute("INSERT INTO episode_artifact_binding(vault_binding_id,artifact_ref,episode_id,scope,basis,confidence,binding_state,rule) VALUES('legacy-compatibility-binding',%s,%s,'work','time_overlap',1,'active','fixture')", ('vault.activity:'+event,ep))
+
 
 
 @pytest.mark.parametrize('change', ['scope', 'membership'])
@@ -475,6 +487,96 @@ def test_closure_state_requires_matching_observation(episode, change):
         path.write_text(dump_frontmatter(fields, body))
     else:
         key, value = ('hash', None) if change == 'missing_hash' else ('mtime', datetime(2026,10,14,tzinfo=timezone.utc).timestamp())
-        db.execute("UPDATE outbox SET payload=jsonb_set(payload,ARRAY[%s],%s::jsonb) WHERE topic='ingest.vault.changed' AND payload->>'relative_path'=%s", (key, Jsonb(value), relative))
+        db.execute("UPDATE outbox SET payload=jsonb_set(payload - 'extensions',ARRAY[%s],%s::jsonb) WHERE topic='ingest.vault.changed' AND payload->>'relative_path'=%s", (key, Jsonb(value), relative))
     with pytest.raises(create.UnresolvableCitationError):
         run(episode)
+
+
+@pytest.mark.parametrize('leaf', ['activation.jsonl', 'outbox.jsonl', '.outbox.jsonl.append.lock'])
+def test_receipt_leaf_symlink_refuses_before_any_effect(episode, tmp_path_factory, leaf):
+    db, _, _, _ = episode
+    outside = tmp_path_factory.mktemp('foreign-receipt')
+    victim = outside / 'keep'
+    victim.write_text('untouched')
+    directory = db.root / '_system/episode-debriefs'
+    directory.mkdir(parents=True)
+    (directory / leaf).symlink_to(victim)
+    with pytest.raises(RuntimeError, match='outside'):
+        run(episode)
+    assert victim.read_text() == 'untouched'
+    assert sorted(p.name for p in outside.iterdir()) == ['keep']
+    assert sorted(p.name for p in directory.iterdir()) == [leaf]
+
+
+def test_cold_worker_rebuilds_from_durable_index_port(episode, monkeypatch):
+    from types import SimpleNamespace
+    from app.workers.outbox_worker import _dispatch_topic
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+    import app.stores
+    db, ep, payload, docs = episode
+    reads = []
+    def rows():
+        reads.append('rows')
+        return [dict(object_id=d['doc_id'], source_ref=d['source_ref'],
+                     payload={**d['payload'], 'text':d['text']}, embedding=[1.0]) for d in docs]
+    index = SimpleNamespace(generation=lambda:'cold', all_rows=rows)
+    monkeypatch.setattr(app.stores, 'get_vector_index', lambda:index)
+    monkeypatch.setattr(hybrid, '_REBUILT_FROM_DURABLE_INDEX', False)
+    hybrid._STORE.set_documents([])
+    _dispatch_topic('debrief.trigger.created', payload, trace_id='cold',
+        message={'vault_binding_id':COMPATIBILITY_BINDING_ID,'payload_schema':'debrief.trigger.created.v1'}, vault_root=db.root)
+    assert reads == ['rows']
+    assert (db.root / '_system/episode-debriefs' / f'{debrief_id_for_episode(ep)}.md').exists()
+
+
+def test_real_assignment_stamping_and_multiple_observations_preserve_state_proof(episode):
+    from app.episodes.assignment import AssignmentDecision, commit_assignment_diff
+    db, ep, _, docs = episode
+    relative = docs[1]['payload']['note_path']
+    event = db.execute("SELECT id FROM outbox WHERE payload->>'relative_path'=%s", (relative,))[0][0]
+    path = db.root / relative
+    before = path.read_bytes()
+    commit_assignment_diff([AssignmentDecision('vault.activity:'+str(event),ep,'work','time_overlap',1.0)], [], vault_root=db.root, write_guard=ALLOW)
+    assert before != path.read_bytes()
+    assert run(episode)['status'] == 'created'
+
+
+def test_real_vault_sync_created_commitment_and_watcher_coexist(episode):
+    from app.services.vault_sync import upsert_object_from_note
+    from app.episodes.assignment import AssignmentDecision, commit_assignment_diff
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+    import os
+    db, ep, _, docs = episode
+    path = db.root / docs[1]['payload']['note_path']
+    stamp = datetime(2026,10,13,9,1,tzinfo=timezone.utc).timestamp()
+    os.utime(path, (stamp,stamp))
+    fields, body = load_frontmatter(path.read_text())
+    upsert_object_from_note(str(path), fields, body, True, True, vault_root=db.root)
+    event = db.execute("SELECT id,payload FROM outbox WHERE topic='ingest.object.created' AND vault_binding_id=%s",(COMPATIBILITY_BINDING_ID,))[0]
+    assert event[1].get('payload',event[1]).get('extensions',{}).get('observed_at')
+    commit_assignment_diff([AssignmentDecision('vault.activity:'+str(event[0]),ep,'work','time_overlap',1.0)], [], vault_root=db.root, write_guard=ALLOW)
+    assert run(episode)['status'] == 'created'
+
+
+@pytest.mark.parametrize('foreign', [False, True])
+def test_mixed_episode_reads_actual_heimdal_publish_and_binding(episode, foreign):
+    from app.heimdal.publish import publish_full_observation
+    from tests.heimdal.test_publish import _build_payload
+    from app.episodes.segmenter import _signal_from_heimdal_row
+    from app.episodes.assignment import AssignmentDecision, commit_assignment_diff
+    db, ep, _, _ = episode
+    oid = str(uuid4())
+    payload = _build_payload(observation_id=oid, episode_id=ep, content='Captured speech from the live observation log.')
+    payload.update(scope_hint='private' if foreign else 'work', observed_at_start='2026-10-13T09:00:00Z', observed_at_end='2026-10-13T09:01:00Z')
+    row = publish_full_observation(topic='heimdal.observation.published', payload=payload, source='test')
+    signal = _signal_from_heimdal_row(row)
+    commit_assignment_diff([AssignmentDecision(signal.provenance_ref,ep,'work','time_overlap',1.0)], [], vault_root=db.root, write_guard=ALLOW)
+    if foreign:
+        with pytest.raises(ValueError, match='in-scope'):
+            run(episode)
+    else:
+        report = run(episode)
+        fm, body = load_frontmatter((db.root / report['draft']).read_text())
+        assert 'Captured speech from the live observation log.' in body
+        assert signal.provenance_ref in fm['provenance_refs']
+        assert any(ref.get('note_path') is None for ref in fm['debrief_source_refs'])

@@ -106,11 +106,24 @@ def _sources(
 ) -> tuple[tuple[create.SourceInput, ...], tuple[tuple[str, tuple[str, ...]], ...]]:
     if not members or any(member_scope != scope for _, member_scope in members):
         raise DebriefSynthesisError("cross_scope_no_flow: active binding scope differs from trigger")
-    artifacts = tuple(store.resolve_synthesis_artifact(ref, vault_binding_id=source_binding_id, vault_root=root) for ref, _ in members)
+    from datetime import datetime
+    times = episode_fields["time"]
+    start = datetime.fromisoformat(str(times["start"]).replace("Z", "+00:00"))
+    end = datetime.fromisoformat(str(times["end"]).replace("Z", "+00:00")) if times.get("end") else None
+    observations = tuple(store.resolve_synthesis_artifact(ref, vault_binding_id=source_binding_id, vault_root=root) for ref, _ in members)
+    # Multiple active activity refs can describe one logical source. Choose its
+    # latest in-interval observation, not a stale pre-assignment duplicate.
+    grouped: dict[str, list[store.SynthesisArtifact]] = {}
+    for observation in observations:
+        grouped.setdefault(observation.identity, []).append(observation)
+    artifacts = tuple(max((item for item in items if item.observed_at is not None
+        and item.observed_at >= start.timestamp() and (end is None or item.observed_at <= end.timestamp())),
+        key=lambda item: (item.observed_at or 0, item.provenance_ref), default=items[0])
+        for items in grouped.values())
     identities = tuple(item.identity for item in artifacts)
     response = retrieve(RetrievalRequest(
         query=episode_id, scope=scope, domain=scope, k=len(identities),
-        artifact_ids=identities, artifact_binding_ids=(source_binding_id,) if source_binding_id != COMPATIBILITY_BINDING_ID else None,
+        artifact_episode_id=episode_id, artifact_ids=identities, artifact_binding_ids=(source_binding_id,) if source_binding_id != COMPATIBILITY_BINDING_ID else None,
     ))
     by_identity: dict[str, RetrievalHit] = {}
     for hit in response.hits:
@@ -127,10 +140,6 @@ def _sources(
                 by_identity[identity] = hit
     if set(by_identity) != set(identities):
         raise create.UnresolvableCitationError("one or more bound citations cannot be resolved in scope")
-    from datetime import datetime
-    times = episode_fields["time"]
-    start = datetime.fromisoformat(str(times["start"]).replace("Z", "+00:00"))
-    end = datetime.fromisoformat(str(times["end"]).replace("Z", "+00:00")) if times.get("end") else None
     receipts_by_object: dict[str, list[dict[str, Any]]] = {}
     for record in iter_decision_receipts(root):
         if record.get("object_id") not in {hit.object_id for hit in response.hits}:
@@ -142,10 +151,19 @@ def _sources(
         except (KeyError, ValueError, TypeError) as exc:
             raise create.UnresolvableCitationError("bound decision receipt has no resolvable time") from exc
         receipts_by_object.setdefault(record["object_id"], []).append(record)
-    selected = []
+    selected: list[tuple[RetrievalHit, str, str, str | None, str]] = []
     sections: dict[str, list[int]] = {name: [] for name in SECTIONS}
     for index, identity in enumerate(identities):
         hit = by_identity[identity]
+        heimdal_observation = hit.payload.get("heimdal_observation")
+        if heimdal_observation is not None:
+            at = datetime.fromisoformat(str(heimdal_observation["observed_at_start"]).replace("Z", "+00:00"))
+            if at < start or (end is not None and at > end):
+                raise create.UnresolvableCitationError("bound Heimdal observation is outside Episode bounds")
+            raw_observation = json.dumps(heimdal_observation, sort_keys=True, ensure_ascii=False)
+            sections["key_captures"].append(len(selected))
+            selected.append((hit, raw_observation, hit.text, None, identity))
+            continue
         note_path = hit.payload.get("note_path") or hit.payload.get("path")
         if not isinstance(note_path, str):
             raise create.UnresolvableCitationError("bound source has no retained note path")
@@ -181,7 +199,9 @@ def _sources(
             # admitted by the Episode binding, not today's mutable note alone.
             artifact = artifacts[index]
             digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-            if not artifact.content_hash or artifact.content_hash != digest or artifact.observed_at is None:
+            from app.episode_debrief.evidence import commitment_state_fingerprint
+            state_matches = (artifact.state_fingerprint == commitment_state_fingerprint(fields)) if artifact.state_fingerprint else (artifact.content_hash == digest)
+            if not state_matches or artifact.observed_at is None:
                 raise create.UnresolvableCitationError("closure-time commitment state has no matching bound observation")
             from datetime import timezone
             observed = datetime.fromtimestamp(artifact.observed_at, timezone.utc)
@@ -241,9 +261,17 @@ def synthesize_debrief(
         if not decision.activatable:
             return {"status": "blocked", "reasons": list(decision.blocked_reasons)}
         draft_path = root / "_system/episode-debriefs" / f"{debrief_id}.md"
-        _assert_selected_vault_owns_path(root, draft_path.resolve(), "debrief draft")
-        expansion_records.emit_expansion_gate_receipt(decision, receipt_path=root / "_system/episode-debriefs/activation.jsonl")
+        activation_path = root / "_system/episode-debriefs/activation.jsonl"
         outbox_path = root / "_system/episode-debriefs/outbox.jsonl"
+        # Validate each resolved leaf before the first effect, including lock
+        # sidecars; containment of the directory or draft is not sufficient.
+        destinations = [draft_path, activation_path, outbox_path, create._draft_integrity_path(draft_path),
+            draft_path.with_name(f".{draft_path.name}.publication.lock"),
+            path.with_name(f".{path.name}.publication.lock"),
+            outbox_path.with_name(f".{outbox_path.name}.append.lock")]
+        for destination in destinations:
+            _assert_selected_vault_owns_path(root, destination.resolve(), "debrief destination")
+        expansion_records.emit_expansion_gate_receipt(decision, receipt_path=activation_path)
         receipt_id = str(uuid5(NAMESPACE_URL, f"episode-debrief:{binding}:{debrief_id}"))
         with create._draft_publication_lock(path):
             raw, version, fields = _read_episode(path, episode_id, scope)

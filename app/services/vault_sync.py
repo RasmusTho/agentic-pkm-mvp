@@ -889,6 +889,7 @@ def upsert_object_from_note(
                 "title": title,
                 "review_state": review_state,
                 "content": body,
+                "extensions": {"observed_at": mtime.isoformat()},
                 "path": path_str,
                 "frontmatter": normalized_frontmatter,
                 # ERE-03: the event surface must carry the same post-merge
@@ -1048,6 +1049,7 @@ def _sync_markdown(
             "frontmatter": normalized_frontmatter,
             "episode_ref": episode_ref_from_frontmatter(normalized_frontmatter),
             "replay": replay,
+            "extensions": {"observed_at": mtime.isoformat()},
         }
 
         topic = (

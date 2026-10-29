@@ -161,9 +161,18 @@ One issue: `[Episode Debrief] synthesize-debrief-note: Create-engine debrief syn
 Episode note`. DEBRIEF-01 is delivered in #6362; DEBRIEF-03 remains separate.
 
 
-Closure-state evidence: a commitment/open-loop state is admitted only when a bound watcher
-observation lies within the Episode interval and its immutable content hash matches the retained
-note. Missing or stale historical state fails loudly instead of presenting current state as
-closure-time truth. Unlinked recovery revalidates membership, scope, retained content and request
-integrity; linking also rechecks admission after cognition. Reasoning mirrors use the selected
-vault binding, including when the configured scalar vault consumes a compatibility projection.
+Closure-state evidence uses the latest bound observation within the Episode interval for each
+logical source. Registry watcher events carry an optional semantic commitment-state fingerprint
+under the existing `extensions` object, derived only when their raw content hash matches the
+observed bytes. This survives ERE's mechanical `episode_ref` stamp. Vault-sync created events
+carry their observed file time under `extensions.observed_at`; their immutable frontmatter provides
+state evidence. Legacy watcher events can prove state only while their full-file hash still matches.
+Missing or stale historical proof fails loudly instead of presenting today's state as closure truth.
+
+Worker and CLI membership lookup initializes the durable retrieval cache when cold. Heimdal
+observations resolve from the append-only log through exact active Episode membership and scope,
+with canonical content-hash validation and background evidence role; they acquire no invented
+vault path or index identity. Unlinked recovery and the final link both revalidate membership,
+scope, retained content and request integrity. Reasoning mirrors use the selected vault binding,
+including when the configured scalar vault consumes a compatibility projection. Every proposal,
+receipt and lock destination is checked for resolved containment before the first file effect.

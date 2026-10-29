@@ -74,6 +74,7 @@ class RetrievalRequest:
     # Explicit membership retrieval: no ranking may replace a bound source.
     artifact_ids: tuple[str, ...] | None = None
     artifact_binding_ids: tuple[str, ...] | None = None
+    artifact_episode_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,7 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
         scoped = scoped_artifact_lookup(
             request.artifact_ids, scope=request.scope,
             allowed_binding_ids=set(request.artifact_binding_ids) if request.artifact_binding_ids is not None else None,
+            episode_id=request.artifact_episode_id,
         )
     else:
         scoped = scoped_hybrid_search(
