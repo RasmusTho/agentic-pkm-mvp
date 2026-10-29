@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.agent_memory.candidate import MemoryCandidate, MemoryType, ReviewState
 from app.agent_memory.materialization import materialize_promoted_memory
 from app.agent_memory.recall_explanation import (
@@ -22,9 +24,19 @@ from app.agent_memory.review_decision_store import ReviewDecisionStore
 from app.agent_memory.review_queue import MemoryCandidateReviewQueue, ReviewDecision
 from app.agents.ask import graph as ask_graph
 from app.agents.ask.graph import run_ask_graph
+from app.instance.vault_registry import AppLocalSettingsStore
 from app.retrieval.capability import RetrievalHit, RetrievalResponse
-from app.vault.manager import VaultContext
+from app.vault.manager import VaultContext, VaultManager
 from app.write_guard import WriteGuard
+
+
+@pytest.fixture(autouse=True)
+def _isolated_ask_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep prior process selections and persisted settings out of this recall journey."""
+    manager = VaultManager(
+        app_local_store=AppLocalSettingsStore(path=tmp_path / "app-local.md"),
+    )
+    monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
 
 
 def _vault(root: Path) -> VaultContext:

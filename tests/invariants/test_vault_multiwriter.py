@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from types import TracebackType
@@ -387,8 +388,10 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
         staged_stat: os.stat_result,
         writer_identity: str,
         written_at: datetime,
+        publication_check: Callable[[], None] | None = None,
     ) -> tuple[PurePosixPath, os.stat_result]:
         nonlocal racer_entry_name
+        assert publication_check is not None
         assert _has_open_file_identity(staged_stat)
         os.unlink(staged_name, dir_fd=parent_fd)
         replacement_fd = os.open(
@@ -413,6 +416,7 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
             staged_stat=staged_stat,
             writer_identity=writer_identity,
             written_at=written_at,
+            publication_check=publication_check,
         )
 
     def observe_candidate_guard(
