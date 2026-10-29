@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import random
 from typing import Any, Callable
 
 import yaml
@@ -92,7 +93,13 @@ def summarize_validation(trials: list[dict[str, Any]]) -> dict[str, Any]:
         if receipt["schema_sha256"] != plan["schema_sha256"]:
             raise ValueError("mixed schemas")
         input_hash = receipt["input_sha256"]
-        if not re.fullmatch(r"[0-9a-f]{64}", input_hash) or input_hash in seen_inputs[corpus]:
+        ordered = list(load_classification_cases(CORPORA[corpus]))
+        random.Random(spec["seed"]).shuffle(ordered)
+        expected_inputs = [{"case_id": f"case-{i:03d}", "intent": c.utterance,
+                            "context": {"surface": c.surface, "note_state": c.note_state}}
+                           for i, c in enumerate(ordered)]
+        expected_hash = hashlib.sha256(json.dumps(expected_inputs, ensure_ascii=False).encode()).hexdigest()
+        if input_hash != expected_hash or input_hash in seen_inputs[corpus]:
             raise ValueError("duplicate or invalid input order")
         seen_inputs[corpus].add(input_hash)
         runs = receipt["runs"]
@@ -194,6 +201,7 @@ def run_validation(executor: CodexCliExecutor, *,
         trials.append(trial)
         if on_trial is not None:
             on_trial(trial)
+        summarize_validation(trials)  # Validate the saved prefix before any next trial.
         if receipt["complete"] is not True:
             break  # Terminal transport/protocol failure. A quality failure is retained, not retried.
     if validation_plan() != plan:

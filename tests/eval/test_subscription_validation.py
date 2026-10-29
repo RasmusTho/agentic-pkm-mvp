@@ -80,7 +80,7 @@ def test_repeated_validation_preserves_failures_and_variation(correct_trials):
     assert group["all_repeats_passed"] is False
 
 
-@pytest.mark.parametrize("tamper", ["duplicate", "corpus", "prompt", "schema", "seed", "score", "model", "route", "order"])
+@pytest.mark.parametrize("tamper", ["duplicate", "corpus", "prompt", "schema", "seed", "score", "model", "route", "order", "fingerprint"])
 def test_invalid_or_partial_trials_cannot_claim_robustness(correct_trials, tamper):
     trials = copy.deepcopy(correct_trials)
     r = trials[0]["receipt"]
@@ -100,6 +100,8 @@ def test_invalid_or_partial_trials_cannot_claim_robustness(correct_trials, tampe
         r["runs"][0]["model"] = MODELS[1]
     elif tamper == "route":
         r["runs"][0]["reasoning_effort"] = "high"
+    elif tamper == "fingerprint":
+        r["input_sha256"] = "0" * 64
     elif tamper == "order":
         trials[3]["receipt"]["input_sha256"] = trials[0]["receipt"]["input_sha256"]
     with pytest.raises(ValueError):
@@ -158,3 +160,19 @@ def test_plan_drift_refuses_before_inference(monkeypatch):
     with pytest.raises(ValueError, match="experiment changed"):
         run_validation(executor)
     assert executor.calls == []
+
+
+def test_runtime_metadata_drift_stops_before_next_trial():
+    class DriftExecutor(MixedExecutor):
+        def execute(self, **kwargs):
+            result = super().execute(**kwargs)
+            if len(self.calls) >= 4:
+                result.cli_version = "unexpected-runtime"
+            return result
+
+    executor = DriftExecutor()
+    saved = []
+    with pytest.raises(ValueError, match="mixed runtime identity"):
+        run_validation(executor, on_trial=saved.append)
+    assert len(executor.calls) == 6 and len(saved) == 2
+    assert saved[-1]["receipt"]["runs"][0]["cli_version"] == "unexpected-runtime"
