@@ -70,20 +70,27 @@ else:
     # configuration, identity, dependency, notification adapter and state paths run.
     harness = tmp_path / "run.py"
     harness.write_text("""
-import json, os, sys, urllib.request
+import io, json, os, socket, sys, urllib.request
+from email.message import Message
 from urllib.error import HTTPError
+from urllib.response import addinfourl
+def unexpected_connection(*args, **kwargs):
+    raise AssertionError('unexpected network effect')
+socket.create_connection=unexpected_connection
 class Response:
     status=200
-    def __init__(self, data): self.data=data
+    def __init__(self, data, status=200): self.data=data; self.status=status
     def __enter__(self): return self
     def __exit__(self,*a): pass
     def read(self,*a): return json.dumps(self.data).encode()
 def transport(request, timeout=0):
     mode=os.environ.get('CASE','')
     if request.get_method() == 'POST':
+        assert request.full_url == 'https://discord.com/api/webhooks/123/private-webhook?wait=true'
         with open(os.environ['CALLS'],'a') as f: f.write(json.dumps({'kind':'notification'})+'\\n')
         if mode in ('delivery-failure','down-delivery-failure'): raise OSError('private-webhook private-probe-token')
-        return Response({})
+        if mode in ('unconfirmed-down','unconfirmed-recovery'): return Response({},204)
+        return Response({'id':'456','channel_id':'789','webhook_id':'123'})
     assert request.full_url == 'http://127.0.0.1:18100/readyz'
     assert request.get_header('Authorization') == 'Bearer private-probe-token'
     if mode in ('api-401','api-503'): raise HTTPError(request.full_url,int(mode[-3:]),'private-probe-token',{},None)
@@ -91,7 +98,7 @@ def transport(request, timeout=0):
       'lineage':{'matches_release':True},'authority_bootstrap':{'status':'converged','writers_enabled':True},
       'executor_heartbeat':{'state':'healthy'},'outbox':{'pending':0,'oldest_age_seconds':0,'dead_letters':0,'authority_threatening':False},
       'durability':{'posture':'rebuildable'}}
-    if mode in ('worker-stale','down-delivery-failure'): payload['executor_heartbeat']['state']='stale'
+    if mode in ('worker-stale','down-delivery-failure','unconfirmed-down'): payload['executor_heartbeat']['state']='stale'
     if mode == 'epoch-mismatch': payload['database']['authority_epoch']=41
     if mode == 'schema-mismatch': payload['database']['schema_version']=4
     if mode == 'not-bootstrapped': payload['authority_bootstrap']['writers_enabled']=False
@@ -106,6 +113,7 @@ if os.environ.get('CASE') == 'redirect':
     def wire(handler, request):
         host=request.host
         category='api' if host=='127.0.0.1:18100' else 'alert' if host=='discord.com' else 'unexpected'
+        assert category != 'unexpected'
         with open(os.environ['CALLS'],'a') as f: f.write(json.dumps({'kind':'wire','target':category})+'\\n')
         headers=Message()
         code=204 if category=='alert' else 302
@@ -116,6 +124,13 @@ if os.environ.get('CASE') == 'redirect':
     urllib.request.HTTPHandler.http_open=wire
     urllib.request.HTTPSHandler.https_open=wire
 else:
+    def https_wire(handler, request):
+        assert request.type == 'https' and request.host == 'discord.com'
+        response=transport(request, timeout=request.timeout)
+        wire=addinfourl(io.BytesIO(response.read()),Message(),request.full_url,response.status)
+        wire.msg='OK'
+        return wire
+    urllib.request.HTTPSHandler.https_open=https_wire
     urllib.request.urlopen=transport
 from app.ops.builderops_probe import main
 raise SystemExit(main(sys.argv[1:]))
@@ -284,6 +299,22 @@ def test_failed_down_delivery_remains_retryable(tmp_path: Path) -> None:
     assert invoke(env, "worker-stale").returncode == 1
     assert invoke(env, "worker-stale").returncode == 1
     assert sum(x["kind"] == "notification" for x in events(env)) == 2
+
+
+def test_unconfirmed_shared_delivery_preserves_builderops_retry_and_correlation(tmp_path: Path) -> None:
+    env = setup_probe(tmp_path)
+    state = tmp_path / "state" / "alert.json"
+    assert invoke(env, "unconfirmed-down").returncode == 1
+    assert not state.exists()
+    assert invoke(env, "worker-stale").returncode == 1
+    incident = json.loads(state.read_text())["incident_id"]
+    assert invoke(env, "worker-stale").returncode == 1
+    assert sum(x["kind"] == "notification" for x in events(env)) == 2
+    assert invoke(env, "unconfirmed-recovery").returncode == 1
+    assert json.loads(state.read_text())["incident_id"] == incident
+    assert invoke(env).returncode == 0
+    assert not state.exists()
+    assert sum(x["kind"] == "notification" for x in events(env)) == 4
 
 
 def test_assembled_transport_blocks_redirects_and_ambient_proxies(tmp_path: Path) -> None:
