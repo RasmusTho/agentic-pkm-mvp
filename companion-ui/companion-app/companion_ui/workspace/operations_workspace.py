@@ -108,7 +108,9 @@ def operations_workspace_script() -> str:
     d.dataset.disclosure=(parent.dataset.resultKey||'aggregate')+':'+label;
     d.append(s,node('pre',json(value))); parent.append(d);
   }
-  function message(value) { if(el('state').textContent!==value) el('state').textContent=value; }
+  var statusFromObservation=false;
+  function message(value) {statusFromObservation=false;if(el('state').textContent!==value)el('state').textContent=value;}
+  function observedMessage(value) {message(value);statusFromObservation=true;}
   function id() {
     // Same nonauthority identity fallback as the shipped shell's idempotencyKey.
     if(window.crypto && window.crypto.randomUUID)return 'companion-'+window.crypto.randomUUID();
@@ -303,7 +305,10 @@ def operations_workspace_script() -> str:
   }
   function renderResult(result) {
     var restoredRead=readbackUnknown;readbackUnknown=false;freshRequired=false;
-    if(lastResult && json(lastResult)===json(result) && !restoredRead) {reconcileControls();observePending();return;}
+    if(lastResult && json(lastResult)===json(result) && !restoredRead) {
+      if(!statusFromObservation)observedMessage(aggregateAnnouncement);
+      reconcileControls();observePending();return;
+    }
     var parent=el('progress'),active=document.activeElement;
     var focused=parent.contains(active),disclosure=focused && active.closest('details[data-disclosure]');
     var focusedKey=disclosure && disclosure.dataset.disclosure;
@@ -346,7 +351,7 @@ def operations_workspace_script() -> str:
     }
     var aggregate='Operation '+(result.status||'unknown')+(result.counts?' · '+Object.entries(result.counts).map(function(p){return p.join(': ');}).join(', '):'')+
       (result.cancel_requested!==undefined?' · cancellation requested: '+result.cancel_requested:'')+(result.current_admission?' · admission: '+result.current_admission:'');
-    if(changes.length || aggregate!==aggregateAnnouncement || restoredRead)message(aggregate+(changes.length?' · '+changes.join('; '):'')+(restoredRead?' · Durable readback restored.':''));
+    if(changes.length || aggregate!==aggregateAnnouncement || restoredRead || !statusFromObservation)observedMessage(aggregate+(changes.length?' · '+changes.join('; '):'')+(restoredRead?' · Durable readback restored.':''));
     aggregateAnnouncement=aggregate;observePending();
   }
   async function inspect(quiet, force) {

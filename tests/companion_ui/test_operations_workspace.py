@@ -788,11 +788,21 @@ def test_failed_mutation_forces_post_settlement_read_without_stale_effect_eligib
         page.wait_for_timeout(40)
         assert page.locator('#operations-resume').is_hidden() and page.locator('#operations-cancel').is_hidden()
         assert page.locator('#operations-new').is_enabled()
+        summary=page.locator('section[aria-label="Result target-A"] details').last.locator('summary')
+        summary.click()
+        page.evaluate("window.liveUpdates=[];new MutationObserver(()=>liveUpdates.push(document.querySelector('#operations-state').textContent)).observe(document.querySelector('#operations-state'),{childList:true,subtree:true,characterData:true})")
         held[1].fulfill(json=retained_snapshot())
         page.locator('#operations-resume:enabled').wait_for()
+        assert page.locator('#operations-state').text_content().startswith('Operation pending')
+        assert len(page.evaluate('liveUpdates'))==1
+        assert summary.evaluate('(e)=>e===document.activeElement && e.parentElement.open')
+        page.locator('#operations-inspect').click();page.wait_for_timeout(40)
+        assert len(held)==3
+        held[2].fulfill(json=retained_snapshot());page.wait_for_timeout(40)
+        assert len(page.evaluate('liveUpdates'))==1, 'Identical inspection after settlement remains silent'
         page.wait_for_timeout(1100)
-        assert len(held)==3, 'Fresh pending readback restores one passive observer'
-        held[2].fulfill(json=retained_snapshot(state='succeeded'))
+        assert len(held)==4, 'Fresh pending readback restores one passive observer'
+        held[3].fulfill(json=retained_snapshot(state='succeeded'))
         page.get_by_text('Runtime status: succeeded',exact=True).wait_for()
         assert len(transport[mutation])==1
         evidence(page,'failed-guard-'+mutation+'-'+failure,external,errors)
@@ -1098,4 +1108,42 @@ def test_superseded_read_finally_and_removed_disclosure_preserve_current_ownersh
         page.get_by_text('Runtime status: succeeded',exact=True).wait_for()
         assert page.locator('#operations-results').evaluate('(e)=>e===document.activeElement')
         assert page.locator('section[aria-label="Result target-A"]').count()==0
+        assert errors==[] and external==[]
+
+
+def test_successful_resume_with_unchanged_nonpending_result_settles_live_status_once(tmp_path,monkeypatch):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        transport=install_retained_transport(page,retained_snapshot())
+        recovery=retained_snapshot()
+        recovery.update(status='recovery_required',counts={'pending':0,'recoverable':1})
+        recovery['items'][1].update(state='recoverable',outcome={'request_id':'receipt-B','status':'recovery_required',
+            'operation_id':'artifact.update','recovery':{'action':'inspect_receipt','instructions':'Inspect retained native evidence'},
+            'convergence':{'source_effect':'unknown','store':'pending'}})
+        transport['snapshot']=recovery
+        page.locator('#operations-inspect').click()
+        page.get_by_text('Runtime status: recovery_required',exact=True).wait_for()
+        reads=transport['reads']
+        with page.expect_request('**/retained-A/execute'):page.locator('#operations-resume').click()
+        page.wait_for_timeout(40)
+        assert 'Awaiting owner receipt' in page.locator('#operations-state').text_content()
+        summary=page.locator('section[aria-label="Result target-A"] details').last.locator('summary')
+        summary.click()
+        page.evaluate("window.liveUpdates=[];new MutationObserver(()=>liveUpdates.push(document.querySelector('#operations-state').textContent)).observe(document.querySelector('#operations-state'),{childList:true,subtree:true,characterData:true})")
+        transport['execute'][0].fulfill(json=recovery)
+        page.locator('#operations-new:enabled').wait_for()
+        assert page.locator('#operations-state').text_content().startswith('Operation recovery_required')
+        assert len(page.evaluate('liveUpdates'))==1
+        assert summary.evaluate('(e)=>e===document.activeElement && e.parentElement.open')
+        assert transport['reads']==reads, 'Nonpending ACK requires no invented observer or retry'
+        for _ in range(2):
+            page.locator('#operations-inspect').click();page.wait_for_timeout(50)
+            assert len(page.evaluate('liveUpdates'))==1
+            assert summary.evaluate('(e)=>e.parentElement.open')
+        assert len(transport['execute'])==1 and not transport['cancel']
+        evidence(page,'unchanged-nonpending-settlement',external,errors)
+        page.locator('#operations-new').click()
+        page.locator('#operations-resources input[type=checkbox]:enabled').first.wait_for()
+        assert 'operation_request' not in parse_qs(urlparse(page.url).query)
         assert errors==[] and external==[]
