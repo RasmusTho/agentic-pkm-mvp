@@ -112,7 +112,7 @@ def operations_workspace_script() -> str:
   function id() { return 'companion-' + crypto.randomUUID(); }
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
   var context=null, capabilities=[], resources=[], selection=new Map(), frozen=null, reference=null;
-  var cancelBusy=false, busy=false, submitted=false, timer=null, generation=0, lastResult=null, readbackUnknown=false, readEpoch=0, effectEpoch=0, announcedItems=new Map(), aggregateAnnouncement='';
+  var cancelBusy=false, busy=false, submitted=false, timer=null, generation=0, lastResult=null, readbackUnknown=false, readEpoch=0, pendingRead=null, effectEpoch=0, announcedItems=new Map(), aggregateAnnouncement='';
   var labels={'artifact.create':'Create','artifact.capture':'Capture','artifact.update':'Edit body',
     'artifact.move':'Move','artifact.rename':'Rename','artifact.classify':'Classify',
     'artifact.tags.add':'Add tags','artifact.tags.remove':'Remove tags','collection.reorder':'Order',
@@ -198,6 +198,9 @@ def operations_workspace_script() -> str:
   function remember(ref) {
     if(!reference || reference.id!==ref.id || reference.digest!==ref.digest) {
       ++readEpoch;announcedItems.clear();aggregateAnnouncement='';lastResult=null;readbackUnknown=false;
+      stopObserving();el('progress').textContent='';el('cancel').hidden=true;el('resume').hidden=true;
+      el('results').hidden=false;message('Loading durable state for '+ref.id+'…');
+      if(!root.hidden)el('results').focus();
     }
     reference=clone(ref);el('reference').value=ref.id;el('digest').value=ref.digest||'';
     var url=new URL(window.location.href);url.searchParams.set('operation_request',ref.id);
@@ -306,29 +309,37 @@ def operations_workspace_script() -> str:
     if(changes.length || aggregate!==aggregateAnnouncement || restoredRead)message(aggregate+(changes.length?' · '+changes.join('; '):'')+(restoredRead?' · Durable readback restored.':''));
     aggregateAnnouncement=aggregate;observePending();
   }
-  async function inspect(quiet) {
-    if(!reference)return;
-    var epoch=++readEpoch;
+  async function inspect(quiet, force) {
+    if(!reference || (quiet&&!force&&pendingRead===readEpoch))return;
+    var epoch=++readEpoch;pendingRead=epoch;
     try {var result=reference.digest?await api.inspectBatch(reference.id,reference.digest):await api.receipt(reference.id);if(epoch!==readEpoch)return;renderResult(result);if(!quiet&&!root.hidden)el('results').focus();return result;}
-    catch(error){if(epoch!==readEpoch)return;stopObserving();readbackUnknown=true;el('cancel').hidden=true;el('resume').hidden=true;message('Current readback unavailable; latest progress unknown. Retained reference '+reference.id+'. '+error.message);if(!quiet)el('results').focus();}
+    catch(error){if(epoch!==readEpoch)return;stopObserving();readbackUnknown=true;el('cancel').hidden=true;el('resume').hidden=true;
+      el('results').hidden=false;
+      if(!lastResult){el('progress').textContent='';el('progress').append(node('p','No durable state was returned by this read. Nothing has been retried.'));}
+      message('Current readback unavailable; latest progress unknown. Retained reference '+reference.id+'. '+error.message);
+      if(!quiet&&!root.hidden)el('results').focus();}
+    finally {if(pendingRead===epoch)pendingRead=null;}
   }
   async function execute(resume) {
-    if(busy || (!resume && (!frozen||submitted)))return;
+    if(busy || cancelBusy || (!resume && (!frozen||submitted)))return;
     if(resume && (!lastResult || el('resume').hidden))return;
     var effect=++effectEpoch;++readEpoch;
     busy=true;submitted=true;lock(true);el('confirm').disabled=true;el('resume').disabled=true;
     el('preview-region').hidden=true;el('results').hidden=false;el('results').focus();message('Execution requested. Awaiting owner receipt…');
     if(!resume)remember(frozen.batch?{id:frozen.batch.batch_id,digest:frozen.batch.digest}:{id:frozen.commands[0].request_id});
+    message('Execution requested. Awaiting owner receipt…');
     clearInterval(timer);timer=setInterval(function(){inspect(true);},1000);
-    try {var result=reference.digest?await api.executeBatch(reference.id,reference.digest):await api.invoke(frozen.commands[0]);if(effect===effectEpoch){++readEpoch;renderResult(result);}}
+    var observed=readEpoch;
+    try {var result=reference.digest?await api.executeBatch(reference.id,reference.digest):await api.invoke(frozen.commands[0]);
+      if(effect===effectEpoch){if(observed===readEpoch){++readEpoch;renderResult(result);}else await inspect(true,true);}}
     catch(error){if(effect===effectEpoch){message('Execution response unavailable; inspecting durable state. '+error.message);await inspect(true);}}
     finally {busy=false;el('resume').disabled=cancelBusy;}
   }
   async function cancel() {
     if(cancelBusy || !reference || !reference.digest || el('cancel').hidden)return;
-    ++effectEpoch;++readEpoch;cancelBusy=true;el('new').disabled=true;
+    ++effectEpoch;++readEpoch;var observed=readEpoch;cancelBusy=true;el('new').disabled=true;
     el('cancel').disabled=true;el('results').focus();
-    try {var result=await api.cancelBatch(reference.id,reference.digest);++readEpoch;renderResult(result);if(!root.hidden)el('results').focus();}
+    try {var result=await api.cancelBatch(reference.id,reference.digest);if(observed===readEpoch){++readEpoch;renderResult(result);}else await inspect(true,true);if(!root.hidden)el('results').focus();}
     catch(error){message('Cancellation outcome unknown. '+error.message);await inspect(true);}
     finally {cancelBusy=false;el('new').disabled=false;el('cancel').disabled=false;el('resume').disabled=busy;}
   }

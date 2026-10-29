@@ -535,3 +535,166 @@ def test_reopens_a_native_receipt_with_a_colon_identity(tmp_path,monkeypatch):
         page.get_by_text('Source effect: committed',exact=False).wait_for()
         assert any(c[0]=='GET' and c[1]=='/api/operations/receipts/retained:external' for c in client.calls)
         assert errors==[] and external==[]
+
+
+def test_newer_cancellation_readback_survives_a_late_execute_acknowledgement(tmp_path,monkeypatch):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        transport=install_retained_transport(page,retained_snapshot())
+        with page.expect_request('**/retained-A/execute'):
+            page.locator('#operations-resume').click()
+        page.wait_for_timeout(50)
+        recovery=retained_snapshot()
+        recovery.update(status='recovery_required',cancel_requested=True)
+        recovery['counts'].update(pending=0,recoverable=1)
+        recovery['items'][1].update(state='recoverable',outcome={
+            'request_id':'receipt-B','status':'recovery_required','operation_id':'artifact.update',
+            'convergence':{'source_effect':'unknown','index':'pending'}})
+        transport['snapshot']=recovery
+        page.locator('#operations-inspect').click()
+        page.get_by_text('Runtime status: recovery_required',exact=True).wait_for()
+        assert 'Cancellation requested: true' in page.locator('#operations-progress').text_content()
+        assert page.locator('#operations-resume').is_hidden()
+        stale=json.loads(json.dumps(recovery));stale['cancel_requested']=False
+        reads=transport['reads']
+        transport['execute'][0].fulfill(json=stale)
+        page.wait_for_function("!document.querySelector('#operations-resume').disabled")
+        assert transport['reads']>reads
+        assert 'Cancellation requested: true' in page.locator('#operations-progress').text_content()
+        assert page.locator('#operations-resume').is_hidden()
+        assert not transport['cancel']
+        evidence(page,'cancellation-from-readback',external,errors)
+        assert errors==[] and external==[]
+
+
+def test_slow_passive_read_is_not_superseded_by_the_polling_interval(tmp_path,monkeypatch):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        install_retained_transport(page,retained_snapshot())
+        held=[]
+        def slow_read(route):
+            assert route.request.method=='GET'
+            held.append(route)
+        page.route('**/api/operations/batches/retained-*',slow_read)
+        page.wait_for_timeout(1200)
+        assert len(held)==1
+        page.wait_for_timeout(1600)
+        assert len(held)==1, 'A passive read must settle before another starts'
+        held[0].fulfill(json=retained_snapshot(state='succeeded'))
+        page.get_by_text('Runtime status: succeeded',exact=True).wait_for()
+        page.wait_for_timeout(1200)
+        assert len(held)==1
+        evidence(page,'slow-read-terminal',external,errors)
+        assert not [c for c in client.calls if c[1].endswith('/execute')]
+        assert errors==[] and external==[]
+
+
+def test_initial_unavailable_retained_read_exposes_safe_reset_and_focus(tmp_path,monkeypatch):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        page.route('**/api/operations/batches/retained-unavailable*',
+            lambda route:route.fulfill(status=503,json={'detail':'batch_state_unavailable'}))
+        page.goto(page.url+'?operation_request=retained-unavailable&operation_digest='+'f'*64)
+        page.get_by_test_id('operations-open').click()
+        page.get_by_text('Current readback unavailable;',exact=False).wait_for()
+        assert page.locator('#operations-results').is_visible()
+        assert page.locator('#operations-results').evaluate('(e)=>e===document.activeElement')
+        assert page.locator('#operations-new').is_visible()
+        assert page.locator('#operations-inspect').is_visible()
+        assert page.locator('#operations-cancel').is_hidden() and page.locator('#operations-resume').is_hidden()
+        evidence(page,'initial-unavailable-recovery',external,errors)
+        page.locator('#operations-new').click()
+        page.locator('#operations-resources input[type=checkbox]:enabled').first.wait_for()
+        assert page.locator('#operations-discover').is_enabled()
+        assert page.locator('#operations-intent').is_enabled()
+        assert 'operation_request' not in parse_qs(urlparse(page.url).query)
+        assert not [c for c in client.calls if c[1].endswith('/execute')]
+        assert host.note.read_text().endswith('Original.\n')
+        assert errors==[] and external==[]
+
+
+@pytest.mark.parametrize('mutation',['execute','cancel'])
+def test_overlapping_mutation_ack_reads_fresh_state_before_rendering(tmp_path,monkeypatch,mutation):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        transport=install_retained_transport(page,retained_snapshot())
+        button='resume' if mutation=='execute' else 'cancel'
+        with page.expect_request('**/retained-A/'+mutation):
+            page.locator('#operations-'+button).click()
+        page.wait_for_timeout(50)
+        held=[]
+        page.route('**/api/operations/batches/retained-*',lambda route:held.append(route))
+        page.locator('#operations-inspect').click()
+        page.wait_for_timeout(50)
+        assert len(held)==1
+        old=retained_snapshot()
+        if mutation=='cancel':old['cancel_requested']=True
+        transport[mutation][0].fulfill(json=old)
+        page.wait_for_timeout(50)
+        assert len(held)==2, 'Overlapping mutation acknowledgement must request fresh authoritative readback'
+        latest=retained_snapshot(state='succeeded')
+        if mutation=='cancel':latest['cancel_requested']=True
+        held[1].fulfill(json=latest)
+        page.get_by_text('Runtime status: succeeded',exact=True).wait_for()
+        held[0].fulfill(json=retained_snapshot())
+        page.wait_for_timeout(50)
+        assert page.get_by_text('Runtime status: succeeded',exact=True).is_visible()
+        assert page.locator('#operations-resume').is_hidden()
+        if mutation=='cancel':assert 'Cancellation requested: true' in page.locator('#operations-progress').text_content()
+        evidence(page,'overlapping-ack-'+mutation,external,errors)
+        assert errors==[] and external==[]
+
+
+def test_scope_replacement_clears_old_effect_controls_before_readback(tmp_path,monkeypatch):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        transport=install_retained_transport(page,retained_snapshot())
+        held=[]
+        page.route('**/api/operations/batches/retained-B*',lambda route:held.append(route))
+        page.locator('#operations-reference').fill('retained-B')
+        page.locator('#operations-digest').fill('b'*64)
+        page.locator('#operations-reopen').click()
+        page.get_by_text('Loading durable state for retained-B',exact=False).wait_for()
+        assert page.locator('#operations-progress').text_content()==''
+        assert page.locator('#operations-cancel').is_hidden() and page.locator('#operations-resume').is_hidden()
+        assert page.locator('#operations-results').evaluate('(e)=>e===document.activeElement')
+        page.evaluate("document.querySelector('#operations-cancel').onclick()")
+        assert not transport['cancel']
+        page.wait_for_timeout(50)
+        assert len(held)==1
+        held[0].fulfill(status=503,json={'detail':'batch_state_unavailable'})
+        page.get_by_text('Current readback unavailable;',exact=False).wait_for()
+        assert page.locator('#operations-new').is_visible()
+        assert 'target-A' not in page.locator('#operations-progress').text_content()
+        evidence(page,'scope-replacement-loading',external,errors)
+        assert errors==[] and external==[]
+
+
+def test_a_superseded_read_does_not_block_the_new_reference_observer(tmp_path,monkeypatch):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        install_retained_transport(page,retained_snapshot())
+        old=[]
+        page.route('**/api/operations/batches/retained-A?*',lambda route:old.append(route))
+        page.locator('#operations-inspect').click()
+        page.wait_for_timeout(50)
+        assert len(old)==1
+        state={'snapshot':retained_snapshot()|{'batch_id':'retained-B'}}
+        page.route('**/api/operations/batches/retained-B?*',lambda route:route.fulfill(json=state['snapshot']))
+        page.locator('#operations-reference').fill('retained-B')
+        page.locator('#operations-digest').fill('b'*64)
+        page.locator('#operations-reopen').click()
+        page.get_by_text('Runtime status: pending',exact=True).wait_for()
+        state['snapshot']=retained_snapshot(state='succeeded')|{'batch_id':'retained-B'}
+        page.get_by_text('Runtime status: succeeded',exact=True).wait_for()
+        old[0].fulfill(json=retained_snapshot())
+        page.wait_for_timeout(50)
+        assert page.get_by_text('Runtime status: succeeded',exact=True).is_visible()
+        assert parse_qs(urlparse(page.url).query)['operation_request']==['retained-B']
+        evidence(page,'superseded-read-new-view',external,errors)
+        assert errors==[] and external==[]
