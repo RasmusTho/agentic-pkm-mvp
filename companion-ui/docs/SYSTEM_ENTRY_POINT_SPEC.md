@@ -101,7 +101,7 @@ Within `shell_active`, surface overlays open and close without leaving the state
 
 ```
 shell_active ⇄ rail(open|closed)            (chat rail slot — canvas lane)
-shell_active ⇄ overlay(cmd|vault|memory|peek|posture|map|settings|capture|receipts|tts|help)
+shell_active ⇄ overlay(cmd|vault|memory|peek|posture|map|settings|capture|operations|receipts|tts|help)
 shell_active: suggestion(staged ──▶ applied | discarded)   (body-edit lane)
 shell_active: panel(proposal ──▶ confirming ──▶ executing ──▶ receipt)   (governed)
 shell_active: panel(proposal ──▶ blocked)                  (WriteGuard deny, guard-held)
@@ -189,6 +189,7 @@ Each `data-intent` declares its surface, effect, and whether it routes through t
 | `tts.play` | read-back popover | synthesize + play (`POST /api/companion/tts/synthesize`) | no (read-only; never a mutation endpoint) |
 | `capture.open` | shell (`⌘N`) / entry / map | open Capture modal | no |
 | `capture.save` | Capture | append the capture to the vault inbox | **yes — governed write (§Resolved Q17)** |
+| `operations.open` | shell | inspect and confirm shared-operation scope; observe durable outcomes | runtime only |
 | `receipts.open` | shell / map | open the read-only receipts/history surface | no |
 | `operator.open` | map | open the Operator diagnostics drawer (the operator layer; runtime/diagnostic telemetry lives here, off the front edge — CUIDR-04 #2447) | no (read-only diagnostics; never a mutation endpoint) |
 

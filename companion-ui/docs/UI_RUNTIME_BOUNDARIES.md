@@ -153,6 +153,27 @@ API GETs. The complete delivered asset inventory is Git-tree-bound by its
 `yggdrasil-constrained-reuse.v1` manifest; production deployment and owner acceptance remain
 separate later gates.
 
+## Companion shared operations consumer (#5339)
+
+The shell's Operations workspace uses the public same-origin operations client. Its finite gateway
+additions are `GET /api/operations/capabilities`, `GET /api/operations/receipts/{request_id}`,
+`POST /api/operations`, `POST /api/operations/preconditions`, and the existing finite batch
+preview/inspect/execute/cancel routes. Real client IP, API key and opaque selection carriers retain
+the existing request-local forwarding path on every admitted operation route; no wildcard or
+client-selected runtime origin is introduced.
+
+The runtime capability inventory determines availability. Current qualified update/move/rename
+batches use one server-frozen digest confirmation; preconditions observe native versions and never
+execute or reserve effects. The UI owns selection and display only. It submits no raw policy,
+delegation, store, source path or receipt authority, and never implements a per-item effect loop.
+Source effect, durable receipt, conflict, refusal and derived convergence remain separate server
+fields. Retained batch cancellation preserves completed receipts; verify/resume is available only
+for runtime-declared pending/recoverable state under its original admission and uncancelled scope.
+A lost effect response triggers receipt inspection, never automatic effect retry. URL references
+carry only non-authority request/batch identities and digests so reload rehydrates durable state;
+unavailable readback is explicitly unknown. This consumer is not capability-level GUI/MCP parity
+acceptance; parent #5329 and the owner-doc promotion gate remain open.
+
 ## Control-action register
 
 The UI is a **transport** of human intent. The same intent may arrive on any valid surface — UI,
