@@ -1265,19 +1265,41 @@ def test_same_context_reads_and_reopen_preserve_unsubmitted_argument_drafts(tmp_
 
 
 @pytest.mark.parametrize('kind', ['artifact.update','artifact.move','artifact.rename'])
-def test_failed_capability_read_then_restore_preserves_the_same_context_draft(tmp_path,monkeypatch,kind):
-    host=production_operation_host(tmp_path,monkeypatch)
+@pytest.mark.parametrize('selection_change', ['add','remove','filtered_remove'])
+def test_failed_capability_read_then_restore_preserves_the_same_context_draft(tmp_path,monkeypatch,kind,selection_change):
+    host=production_operation_host(tmp_path,monkeypatch);add_second(host)
     with browser(host) as (page,client,external,errors):
         open_workspace(page);choose(page,kind=kind,text='Draft survives a failed read')
+        checks=page.locator('#operations-resources input[type=checkbox]:enabled')
+        first_id=checks.nth(0).get_attribute('data-resource-id');second_id=checks.nth(1).get_attribute('data-resource-id')
+        def argument(identity):
+            return page.locator('[data-argument][data-resource="'+identity+'"]')
+        retained_id=first_id;expected='Draft survives a failed read'
+        if selection_change!='add':
+            checks.nth(1).check();argument(second_id).fill('Retained second draft during failure')
+            retained_id=second_id;expected='Retained second draft during failure'
+        if selection_change=='filtered_remove':
+            page.locator('#operations-filter').fill('definitely-no-resource-matches');page.locator('#operations-list').click()
+            page.wait_for_function("document.querySelectorAll('#operations-resources input[type=checkbox]').length===0")
         page.route('**/api/operations/capabilities',lambda route:route.fulfill(status=503,json={'detail':'read unavailable'}))
         page.locator('#operations-discover').click()
         page.wait_for_function("document.getElementById('operations-state').textContent.startsWith('Unavailable:')")
-        assert page.locator('[data-argument]').first.input_value()=='Draft survives a failed read'
+        assert argument(retained_id).input_value()==expected
+        if selection_change=='add':
+            checks.nth(1).check()
+        elif selection_change=='remove':
+            checks.nth(0).uncheck()
+        else:
+            page.locator('#operations-resources li').filter(has_text=first_id).get_by_role('button',name='Remove from selection').click()
+        during_failure=argument(retained_id).input_value()
+        assert page.locator('#operations-kind').is_disabled() and page.locator('#operations-preview').is_disabled()
         page.unroute('**/api/operations/capabilities');page.locator('#operations-discover').click()
         page.wait_for_function("document.getElementById('operations-state').textContent.startsWith('Resources: succeeded.')")
         assert page.locator('#operations-kind').input_value()==kind
-        assert page.locator('[data-argument]').first.input_value()=='Draft survives a failed read'
-        evidence(page,'argument-read-restored-'+kind.split('.')[-1],external,errors)
+        mode='argument-read-restored-'+kind.split('.')[-1]+('' if selection_change=='add' else '-'+selection_change)
+        evidence(page,mode,external,errors)
+        assert during_failure==expected
+        assert argument(retained_id).input_value()==expected
         assert not [c for c in client.calls if c[0]=='POST' and c[1]=='/api/operations' and c[2]['operation_id']!='artifact.list']
         assert errors==[] and external==[]
 
@@ -1310,9 +1332,11 @@ def test_explicit_scope_and_real_context_replacement_clear_reused_draft_identiti
 
 
 def test_unavailable_then_restored_operation_keeps_draft_without_enabling_effects(tmp_path,monkeypatch):
-    host=production_operation_host(tmp_path,monkeypatch)
+    host=production_operation_host(tmp_path,monkeypatch);add_second(host)
     with browser(host) as (page,client,external,errors):
         open_workspace(page);choose(page,text='Draft while operation becomes unavailable')
+        checks=page.locator('#operations-resources input[type=checkbox]:enabled')
+        first_id=checks.nth(0).get_attribute('data-resource-id');second_id=checks.nth(1).get_attribute('data-resource-id')
         capabilities=page.evaluate("fetch('/api/operations/capabilities').then(r=>r.json())")
         unavailable=json.loads(json.dumps(capabilities))
         item=next(c for c in unavailable['items'] if c['resource_id']=='artifact.update')
@@ -1324,11 +1348,17 @@ def test_unavailable_then_restored_operation_keeps_draft_without_enabling_effect
         assert page.locator('#operations-kind option:checked').is_disabled()
         assert page.locator('[data-argument]').first.input_value()=='Draft while operation becomes unavailable'
         assert page.locator('#operations-preview').is_disabled()
+        checks.nth(1).check()
+        assert page.locator('[data-resource="'+first_id+'"][data-argument]').input_value()=='Draft while operation becomes unavailable'
+        page.locator('[data-resource="'+second_id+'"][data-argument]').fill('Retained second unavailable draft')
+        checks.nth(0).uncheck()
+        assert page.locator('[data-argument]').first.input_value()=='Retained second unavailable draft'
+        assert page.locator('#operations-preview').is_disabled()
         evidence(page,'argument-unavailable',external,errors)
         page.unroute('**/api/operations/capabilities');page.locator('#operations-discover').click()
         page.wait_for_function("document.getElementById('operations-state').textContent.startsWith('Resources: succeeded.')")
         assert page.locator('#operations-kind').input_value()=='artifact.update'
-        assert page.locator('[data-argument]').first.input_value()=='Draft while operation becomes unavailable'
+        assert page.locator('[data-argument]').first.input_value()=='Retained second unavailable draft'
         assert page.locator('#operations-preview').is_enabled()
         assert not [c for c in client.calls if c[0]=='POST' and c[1]=='/api/operations' and c[2]['operation_id']!='artifact.list']
         assert errors==[] and external==[]
@@ -1349,5 +1379,40 @@ def test_capability_ack_preserves_the_latest_draft_edited_while_read_is_pending(
         assert page.locator('#operations-kind').input_value()=='artifact.move'
         assert page.locator('[data-argument]').first.input_value()=='Notes/latest-draft-during-read.md'
         evidence(page,'argument-pending-read-latest-draft',external,errors)
+        assert not [c for c in client.calls if c[0]=='POST' and c[1]=='/api/operations' and c[2]['operation_id']!='artifact.list']
+        assert errors==[] and external==[]
+
+
+@pytest.mark.parametrize('selection_change', ['none','add','remove','filtered_remove'])
+def test_failed_new_scope_discovery_cannot_restore_discarded_draft_on_retry(tmp_path,monkeypatch,selection_change):
+    host=production_operation_host(tmp_path,monkeypatch);add_second(host)
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page);choose(page,kind='artifact.capture',text='Discarded old scope draft')
+        checks=page.locator('#operations-resources input[type=checkbox]:enabled')
+        first_id=checks.nth(0).get_attribute('data-resource-id')
+        if selection_change=='filtered_remove':
+            page.locator('#operations-filter').fill('definitely-no-resource-matches');page.locator('#operations-list').click()
+            page.wait_for_function("document.querySelectorAll('#operations-resources input[type=checkbox]').length===0")
+        before=page.locator('[data-argument]').first.evaluate('(e)=>[e.id,e.dataset.operation,e.dataset.resource,e.dataset.argument]')
+        transport=install_retained_transport(page,retained_snapshot())
+        page.route('**/api/operations/capabilities',lambda route:route.fulfill(status=503,json={'detail':'reset discovery unavailable'}))
+        page.locator('#operations-new').click()
+        page.wait_for_function("document.getElementById('operations-state').textContent.startsWith('Unavailable:')")
+        immediately_after_failed_reset=page.locator('#operations-arguments input, #operations-arguments textarea').evaluate_all('(es)=>es.map(e=>e.value)')
+        assert page.locator('#operations-intent').evaluate('(e)=>e.disabled')
+        assert page.locator('#operations-kind').is_disabled() and page.locator('#operations-preview').is_disabled()
+        if selection_change=='add':
+            checks.nth(1).check()
+        elif selection_change=='remove':
+            checks.nth(0).uncheck()
+        elif selection_change=='filtered_remove':
+            page.locator('#operations-resources li').filter(has_text=first_id).get_by_role('button',name='Remove from selection').click()
+        page.unroute('**/api/operations/capabilities');page.locator('#operations-discover').click()
+        page.wait_for_function("document.getElementById('operations-state').textContent.startsWith('Resources: succeeded.')")
+        evidence(page,'argument-failed-reset-'+selection_change,external,errors)
+        assert immediately_after_failed_reset==[]
+        assert page.locator('[data-argument]').first.evaluate('(e)=>[e.id,e.dataset.operation,e.dataset.resource,e.dataset.argument]')==before
+        assert page.locator('[data-argument]').first.input_value()==''
+        assert not transport['execute'] and not transport['cancel']
         assert not [c for c in client.calls if c[0]=='POST' and c[1]=='/api/operations' and c[2]['operation_id']!='artifact.list']
         assert errors==[] and external==[]

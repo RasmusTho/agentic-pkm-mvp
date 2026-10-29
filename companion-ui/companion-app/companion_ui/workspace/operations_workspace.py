@@ -186,10 +186,11 @@ def operations_workspace_script() -> str:
   }
   function renderArguments(preserveDrafts) {
     var parent=el('arguments'),kind=el('kind').value,drafts=new Map();
-    var contextKey=context?JSON.stringify([context.active_context_ref,String(context.vault_generation),el('binding').value]):'';
+    var sameScope=parent.dataset.draftScope===String(scopeEpoch);
+    var contextKey=context?JSON.stringify([context.active_context_ref,String(context.vault_generation),el('binding').value]):(sameScope?parent.dataset.draftContext||'':'');
     function draftKey(input) {return JSON.stringify([input.dataset.operation,input.dataset.resource||'',input.dataset.argument||input.id]);}
-    if(preserveDrafts && parent.dataset.draftContext===contextKey)parent.querySelectorAll('input,textarea').forEach(function(input){drafts.set(draftKey(input),input.value);});
-    parent.textContent='';parent.dataset.draftContext=contextKey;el('preview').disabled=!admitted(kind);
+    if(preserveDrafts && sameScope && contextKey && parent.dataset.draftContext===contextKey)parent.querySelectorAll('input,textarea').forEach(function(input){drafts.set(draftKey(input),input.value);});
+    parent.textContent='';parent.dataset.draftContext=contextKey;parent.dataset.draftScope=String(scopeEpoch);el('preview').disabled=!context||!admitted(kind);
     function restoreDraft(input) {
       input.dataset.operation=kind;
       if(drafts.has(draftKey(input)))input.value=drafts.get(draftKey(input));
@@ -227,7 +228,7 @@ def operations_workspace_script() -> str:
       var result=await api.capabilities();
       if(preparation!==owner || scope!==scopeEpoch)return;
       if(result.status!=='succeeded' || !result.context || !Array.isArray(result.items)) throw new Error(json(result));
-      var previousDraftContext=el('arguments').dataset.draftContext,previousKind=el('kind').value;
+      var previousDraftContext=el('arguments').dataset.draftContext,previousDraftScope=el('arguments').dataset.draftScope,previousKind=el('kind').value;
       context=clone(result.context); capabilities=result.items; el('capabilities').textContent='';el('kind').textContent='';
       var previous=el('binding').value;el('binding').textContent='';
       ((context.extensions||{}).vault_binding_ids||[]).forEach(function(binding){var opt=node('option',binding);opt.value=binding;el('binding').append(opt);});
@@ -237,7 +238,7 @@ def operations_workspace_script() -> str:
         var c=support(pair[0]), p=c&&c.payload||{},option=node('option',pair[1]+' · '+(p.support||'unavailable'));
         option.value=pair[0];option.disabled=p.support!=='supported';el('kind').append(option);
       });
-      var sameContext=preserveDrafts!==false && previousDraftContext===JSON.stringify([context.active_context_ref,String(context.vault_generation),el('binding').value]);
+      var sameContext=preserveDrafts!==false && previousDraftScope===String(scopeEpoch) && previousDraftContext===JSON.stringify([context.active_context_ref,String(context.vault_generation),el('binding').value]);
       var first=[...el('kind').options].find(function(o){return !o.disabled;});
       if(preserveDrafts!==false && [...el('kind').options].some(function(o){return o.value===previousKind && (sameContext||!o.disabled);} ))el('kind').value=previousKind;
       else if(first)el('kind').value=first.value;
@@ -423,7 +424,9 @@ def operations_workspace_script() -> str:
   el('new').onclick=safe(function(){
     if(effectPending())return;stopObserving();++scopeEpoch;++generation;++listEpoch;++effectEpoch;++readEpoch;pendingRead=null;preparation=null;
     submitted=false;frozen=null;reference=null;lastResult=null;readbackUnknown=false;freshRequired=false;announcedItems.clear();aggregateAnnouncement='';
+    var draftRoot=el('arguments');draftRoot.textContent='';delete draftRoot.dataset.draftContext;delete draftRoot.dataset.draftScope;
     syncReferenceURL();el('preview-region').hidden=true;el('confirm').disabled=true;el('results').hidden=true;lock(false);reconcileControls();renderResources();
+    el('intent').disabled=true;el('preview').disabled=true;
     if(foreground())el('discover').focus();return discover(false);
   });
   el('reopen').onclick=safe(function(){
