@@ -999,7 +999,7 @@ def test_swedish_alert_untrusted_metadata_is_bounded(tmp_path, monkeypatch, meta
         "required_ok": False, "checks": metadata, "runtime": metadata,
         "detail": "CANARY@everyone /private/secret", "error": "CANARY",
     }, environment="CANARY@everyone")
-    assert subject == "UNKNOWN hälsoproblem - Yggdrasil"
+    assert subject == "Okänd miljö hälsoproblem - Yggdrasil"
     assert "Vi saknar säkra uppgifter om vad som är fel." in body
     assert "CANARY" not in subject + body and "@everyone" not in body
     assert "/private/secret" not in body

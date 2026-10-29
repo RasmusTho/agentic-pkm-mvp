@@ -268,7 +268,7 @@ def _send_down_alert(
     environment: str,
     correlation_id: str,
 ) -> bool:
-    subject = f"{environment.upper() if environment in {'prod', 'test'} else 'UNKNOWN'} hälsoproblem - Yggdrasil"
+    subject = f"{environment.upper() if environment in {'prod', 'test'} else 'Okänd miljö'} hälsoproblem - Yggdrasil"
     body = _alert_body(
         environment=environment,
         severity=_alert_severity(environment),
@@ -297,7 +297,7 @@ def _send_recovery_alert(
     correlation_id = state.get("correlation_id")
     if not isinstance(correlation_id, str) or not correlation_id:
         correlation_id = str(uuid4())
-    subject = f"{environment.upper() if environment in {'prod', 'test'} else 'UNKNOWN'} övervakade kontroller återställda - Yggdrasil"
+    subject = f"{environment.upper() if environment in {'prod', 'test'} else 'Okänd miljö'} övervakade kontroller återställda - Yggdrasil"
     body = _alert_body(
         environment=environment,
         severity="info",
