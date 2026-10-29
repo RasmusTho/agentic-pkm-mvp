@@ -157,12 +157,70 @@ coarse gate remain readable and immutable. A classified refusal still has null o
 new and backup hashes and cannot reach prepare, backup, stop or apply. All original
 guards, their invocation order and retained-runtime cleanup remain binding.
 
-Historical Source20 remains `refused_before_backup / old_kernel_qualification`;
-its actual site, subpredicate and native values remain unknown. New source support
-does not retroactively classify it, permit replay or allocate Source21. The retained
-native effect owner alone owns any separately decided later operation under #6170.
-Source delivery establishes no native readiness, DEV/TEST acceptance, admission or
-host/service/credential authority.
+Root/control refinements use the existing field, with the complete closed spelling
+`old_kernel_<stage>_root_control__<mode>__<side>__<role>__<guard>`. Stage is
+`initial` or `empty_control`. Mode is `captured_empty`, `anchored_discovery`, or
+`unknown` before selection. Side is `old`, `proposed`, or `unknown` when no
+launcher side applies. The OLD and proposed launchers use the **same typed unit
+settings**. `old` names the currently read public launcher, not proof of loaded
+OLD process bytes. Roles and guards below are source symbols, never paths or
+observed values. Unsupported combinations retain the family/coarse fallback.
+
+| Static role | Closed guards | Repair decision or remaining uncertainty |
+| --- | --- | --- |
+| `application`, `control`, `expected_empty` | `mapping_type`, `fields` | Repair the producer's projection shape; no filesystem cause is established. |
+| Same projection roles | `path_type`, `path_absolute`, `path_canonical`, `path_backslash`, `path_nul` | Repair that exact path representation constraint at its producer, without disclosing the path. Canonical excludes empty, dot and parent components. |
+| Same projection roles | `device_type`, `inode_type`, `uid_type`, `gid_type`, `mode_type` | Repair the named field's exact integer representation; booleans are refused. |
+| Same projection roles | `device_range`, `inode_range` | Requalify the invalid nonnegative-device or positive-inode observation respectively; no identity value is exported. |
+| Same projection roles | `uid`, `gid`, `mode` | Requalify the named owner/group/permitted-mode constraint separately. The label does not authorize changing permissions or ownership. |
+| `roots` | `separation`, `fixed_subtree`, `empty_fixed_root` | Resolve application/control aliasing, control outside its fixed subtree, or captured-empty control away from its exact fixed root respectively. |
+| `discovery` | `decode_unknown`, `environment_unknown`, `environment_files_unknown` | Unexpected initial launcher decoding, Environment construction, or EnvironmentFiles-path construction; mode has not been selected. Cause remains UNKNOWN. |
+| `discovery` | `empty_decode_unknown`, `empty_environment_unknown`, `empty_environment_files_unknown`, `candidates_unknown`, `control_parts_unknown` | Unexpected operation at the named fixed construction site after mode selection. Diagnose that site under separate authority; no failed private predicate is guessed. |
+| `hints` | `launcher_hint`, `environment_hint`, `environment_files_hint` | Captured-empty topology requires absence of a control-root reference in that exact source. No new hint format is accepted. |
+| `hints` | `candidate_count` | Bound the anchored-discovery hint population before traversing it. |
+| `fixed_origin`, `fixed_ancestor`, `fixed_root`, `candidate`, `anchor_app`, `anchor_ops`, `reopen_origin`, `reopen_ancestor`, `reopen_root` | `open_unknown`, `fstat_unknown`, `inheritable_unknown` | The no-follow open, descriptor metadata read, or inheritance query failed at this static directory role; exact native cause remains UNKNOWN. Reopen roles occur only in captured-empty mode. |
+| Same directory roles | `directory_type`, `owner_pair`, `directory_mode`, `inheritable` | Requalify that role's directory type, accepted ownership pair, allowed mode, or noninheritable FD respectively. Ancestor/candidate descent permits the existing ancestor mode; fixed roots and loader directories retain their narrower modes. |
+| `anchor_app`, `anchor_ops` | `stat_unknown`, `loader_symlink` | Unknown loader-slot stat, or explicitly rejected loader-directory symlink, for the named public package role. Missing/non-directory slots retain the intentional false return. |
+| `anchor_file` | `stat_unknown`, `file_type`, `uid`, `gid`, `file_mode`, `link_count` | Unknown anchor-file stat or the exact regular-file/owner/group/exact-mode/single-link predicate to requalify. |
+| `candidate_projection`, `fixed_projection`, `reopen_projection` | `fstat_unknown`, `directory_type`, `construction_unknown` | Unknown projection metadata read, non-directory projection, or unexpected projection construction. Fixed/reopen projections apply only to captured-empty mode. |
+| `candidate` | `components_unknown`, `component_count`, `components_canonical`, `stat_unknown`, `symlink` | Unknown component construction, excessive component count, noncanonical component, unknown no-follow traversal stat, or explicit candidate symlink respectively. Missing tails/non-directory breaks remain accepted discovery behaviour. |
+| `anchor_root` | `fstat_unknown`, `directory_mode` | Unknown selected-anchor metadata read or disallowed anchored-root mode, after its loader anchor passed. |
+| `empty_root` | `identity`, `anchored_root_present`, `reopen_identity` | Requalify captured/current fixed-root identity, unexpected anchored topology, or final reopened/current identity respectively. These are different recovery decisions. |
+| `app_slot`, `scripts_slot` | `stat_unknown`, `present` | Unknown no-follow slot stat, or a present slot that violates captured-empty inventory, distinguished by package. |
+| `anchored_roots` | `no_anchor`, `multiple_anchors` | Restore one authenticated anchor, or resolve ambiguous distinct anchored identities. Exactly one remains successful. |
+| `comparison` | `identity` | The discovered projection disagrees with the captured control projection for the named OLD/proposed side. Reconcile that side's topology and captured identity; matching launcher text is insufficient. |
+| `revalidation` | `phase`, `empty_required`, `contract_missing`, `configuration` | Final prebackup revalidation requires qualified phase, captured-empty mode, the saved contract, and equality with the repeated configuration respectively, in that order. |
+| `discovery_close` | `close_unknown` | At least one owned discovery descriptor close was uncertain. This **overrides an earlier guard**; every remaining owned close is still attempted once. It does not identify a filesystem defect or authorize retrying a close. |
+
+Each attempt reports the first failed atom in the original short-circuit order,
+except the existing close-uncertainty dominance. It does not discover later latent
+violations or continue after refusal. Unknown operations name a fixed site only.
+No additional filesystem/transport read, raw error, frame, input, identity, path,
+argv, environment value or numeric owner/mode enters this receipt. The finite
+consumer rejects unknown labels and refinements on non-prebackup statuses;
+legacy absent-field, coarse and family receipts remain valid and immutable.
+
+The public snapshot/manifest pipeline produces exact projection dictionaries and
+canonical paths from authenticated roots and kernel integer metadata. Its earlier
+no-follow root/identity/manifest guards refuse invalid owners, modes and
+changed identities; lifecycle still refuses application/control aliasing. The typed bus and public launcher readers similarly exclude
+malformed input/subclass behaviours before discovery. Final revalidation phase,
+mode and saved-contract preconditions follow from successful qualification;
+captured-empty discovery returns the already compared captured projection. Their
+defensive guards remain present and have direct negative tests; synthetic tests
+do not claim those shapes can arise from validated producers. The assembled
+DEV/TEST source-RPC matrix retains actual snapshot/inventory/manifest, clean Git
+checkout/launcher and finite receipt readers, substituting only external ports.
+
+Historical Source20 retains its coarse unknown classification. Source21's
+`old_kernel_initial_root_control` identifies only that family; its exact inner
+predicate, native values and captured-empty/anchored mode remain UNKNOWN. These
+new bytes cannot retroactively classify either result, replay a consumed attempt,
+allocate Source22, or establish native readiness or DEV/TEST acceptance. The
+canonical request still binds clean caller/Git candidate C to immutable image D
+whose OCI revision is C; changed diagnostic bytes require a newly matched C/D
+before any separately authorized native decision.
+
 
 ### #6300 fixed-selection reconciliation (historical, count-only)
 

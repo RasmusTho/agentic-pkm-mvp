@@ -51,7 +51,14 @@ _OLD_QUALIFICATION_SUBGATES = frozenset({
 
 
 class _OldQualificationRefusal(RuntimeError):
-    def __init__(self, subgate: str | None = None) -> None:
+    def __init__(
+        self, subgate: str | None = None, *,
+        root_control: tuple[str, str, str, str] | None = None,
+    ) -> None:
+        # Receipt consumers separately check the complete closed combination.
+        self.root_control = (root_control if type(root_control) is tuple
+                             and len(root_control) == 4
+                             and all(type(value) is str for value in root_control) else None)
         self.subgate = (subgate if type(subgate) is str
                         and subgate in _OLD_QUALIFICATION_SUBGATES else None)
         super().__init__('bws_lifecycle_unproven')
@@ -129,17 +136,47 @@ def _runtime_version() -> tuple[int, ...]:
         _refuse('retained_runtime')
 
 
-def _application_projection(value: Any) -> dict[str, Any]:
-    if (type(value) is not dict
-            or set(value) != {'path', 'device', 'inode', 'uid', 'gid', 'mode'}
-            or type(value['path']) is not str or not value['path'].startswith('/')
-            or any(part in {'', '.', '..'} for part in value['path'].split('/')[1:])
-            or '\\' in value['path'] or '\0' in value['path']
-            or any(type(value[key]) is not int for key in ('device', 'inode', 'uid', 'gid', 'mode'))
-            or value['device'] < 0 or value['inode'] <= 0
-            or value['uid'] != _CONTROL_OWNER_UID or value['gid'] != _CONTROL_OWNER_GID
-            or value['mode'] not in {0o700, 0o755}):
-        _refuse('root_control')
+def _root_control_refuse(guard: str, *, mode: str = 'unknown',
+                         side: str = 'unknown', role: str) -> NoReturn:
+    raise _OldQualificationRefusal(
+        'root_control', root_control=(mode, side, role, guard),
+    ) from None
+
+
+def _application_projection(value: Any, *, role: str = 'application',
+                            mode: str = 'unknown', side: str = 'unknown') -> dict[str, Any]:
+    # Split the original short circuit in its original order. Never re-read a
+    # predicate to classify it after failure, or include the offending value.
+    def refuse(guard: str) -> NoReturn:
+        _root_control_refuse(guard, mode=mode, side=side, role=role)
+
+    if type(value) is not dict:
+        refuse('mapping_type')
+    if set(value) != {'path', 'device', 'inode', 'uid', 'gid', 'mode'}:
+        refuse('fields')
+    if type(value['path']) is not str:
+        refuse('path_type')
+    if not value['path'].startswith('/'):
+        refuse('path_absolute')
+    if any(part in {'', '.', '..'} for part in value['path'].split('/')[1:]):
+        refuse('path_canonical')
+    if '\\' in value['path']:
+        refuse('path_backslash')
+    if '\0' in value['path']:
+        refuse('path_nul')
+    for key in ('device', 'inode', 'uid', 'gid', 'mode'):
+        if type(value[key]) is not int:
+            refuse(key + '_type')
+    if value['device'] < 0:
+        refuse('device_range')
+    if value['inode'] <= 0:
+        refuse('inode_range')
+    if value['uid'] != _CONTROL_OWNER_UID:
+        refuse('uid')
+    if value['gid'] != _CONTROL_OWNER_GID:
+        refuse('gid')
+    if value['mode'] not in {0o700, 0o755}:
+        refuse('mode')
     return dict(value)
 
 
@@ -241,6 +278,7 @@ def require_no_cleanup_callers(channel: str, *, caller_pid: int | None = None) -
 def _discovered_control_projection(
     launcher: bytes, environment: list[str], environment_files: list[list[Any]], *,
     expected_empty_control_root: dict[str, Any] | None = None,
+    side: str = 'unknown',
 ) -> dict[str, Any]:
     """Verify the fixed control root, using public hints only for anchored roots.
 
@@ -254,132 +292,185 @@ def _discovered_control_projection(
     while its identity is unchanged and both loader packages remain absent.
     """
     descriptors = []
+    mode = 'unknown'
+    site = ('discovery', 'decode_unknown')
+
+    def refuse(guard: str, role: str) -> NoReturn:
+        _root_control_refuse(guard, mode=mode, side=side, role=role)
+
     try:
-        discovery = launcher.decode('utf-8') + '\n' + '\n'.join(environment)
+        decoded = launcher.decode('utf-8')
+        site = ('discovery', 'environment_unknown')
+        discovery = decoded + '\n' + '\n'.join(environment)
+        site = ('discovery', 'environment_files_unknown')
         discovery += '\n' + '\n'.join(row[0] for row in environment_files)
         if expected_empty_control_root is None:
+            mode = 'anchored_discovery'
+            site = ('discovery', 'candidates_unknown')
             candidates = sorted(set(re.findall(
                 re.escape(CONTROL_DIRECTORY) + r'/[A-Za-z0-9._/-]+', discovery,
             )))
         else:
-            # The installed unit and fixed launcher need no control-root path
-            # hint: when the captured source root is empty, authenticate that
-            # fixed root directly. Refuse every hint until a concrete hint
-            # format is part of the supported unit/launcher contract.
-            if (CONTROL_DIRECTORY in launcher.decode('utf-8')
-                    or any(CONTROL_DIRECTORY in value for value in environment)
-                    or any(CONTROL_DIRECTORY in row[0] for row in environment_files)):
-                _refuse('root_control')
+            mode = 'captured_empty'
+            # Keep the second original decode and hint short circuit. No new
+            # reads, accepted hint format, or continuation after a refusal.
+            site = ('discovery', 'empty_decode_unknown')
+            if CONTROL_DIRECTORY in launcher.decode('utf-8'):
+                refuse('launcher_hint', 'hints')
+            site = ('discovery', 'empty_environment_unknown')
+            if any(CONTROL_DIRECTORY in value for value in environment):
+                refuse('environment_hint', 'hints')
+            site = ('discovery', 'empty_environment_files_unknown')
+            if any(CONTROL_DIRECTORY in row[0] for row in environment_files):
+                refuse('environment_files_hint', 'hints')
             candidates = []
         if not candidates:
             candidates = [CONTROL_DIRECTORY + '/app/ops/postgres_deploy_linux.py']
         if len(candidates) > _CONTROL_PROJECTION_MAX_HINTS:
-            _refuse('root_control')
+            refuse('candidate_count', 'hints')
 
         def directory(
             name: str, parent: int | None = None, *, allow_0750_ancestor: bool = False,
+            role: str,
         ) -> int:
+            nonlocal site
+            site = (role, 'open_unknown')
             fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                          **({} if parent is None else {'dir_fd': parent}))
             descriptors.append(fd)
+            site = (role, 'fstat_unknown')
             info = os.fstat(fd)
             allowed_modes = {0o700, 0o750, 0o755} if allow_0750_ancestor else {0o700, 0o755}
-            if (not stat.S_ISDIR(info.st_mode)
-                    or (info.st_uid, info.st_gid) not in {
-                        (0, 0), (_CONTROL_OWNER_UID, _CONTROL_OWNER_GID),
-                    }
-                    or stat.S_IMODE(info.st_mode) not in allowed_modes or os.get_inheritable(fd)):
-                _refuse('root_control')
+            if not stat.S_ISDIR(info.st_mode):
+                refuse('directory_type', role)
+            if (info.st_uid, info.st_gid) not in {
+                (0, 0), (_CONTROL_OWNER_UID, _CONTROL_OWNER_GID),
+            }:
+                refuse('owner_pair', role)
+            if stat.S_IMODE(info.st_mode) not in allowed_modes:
+                refuse('directory_mode', role)
+            site = (role, 'inheritable_unknown')
+            if os.get_inheritable(fd):
+                refuse('inheritable', role)
             return fd
 
         def anchor(parent: int) -> bool:
-            # ENOTDIR also covers a symlink on some hosts: stat first, no-follow,
-            # and reject it explicitly instead of mistaking it for an absent dir.
+            nonlocal site
+            # Missing/non-directory loader slots still mean false, including
+            # FileNotFoundError raised by directory() inside this same try.
             try:
-                for name in ('app', 'ops'):
+                for name, role in (('app', 'anchor_app'), ('ops', 'anchor_ops')):
+                    site = (role, 'stat_unknown')
                     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
                     if stat.S_ISLNK(info.st_mode):
-                        _refuse('root_control')
+                        refuse('loader_symlink', role)
                     if not stat.S_ISDIR(info.st_mode):
                         return False
-                    parent = directory(name, parent)
+                    parent = directory(name, parent, role=role)
+                site = ('anchor_file', 'stat_unknown')
                 info = os.stat('postgres_deploy_linux.py', dir_fd=parent, follow_symlinks=False)
             except FileNotFoundError:
                 return False
-            if (not stat.S_ISREG(info.st_mode)
-                    or info.st_uid != _CONTROL_OWNER_UID or info.st_gid != _CONTROL_OWNER_GID
-                    or stat.S_IMODE(info.st_mode) != 0o644 or info.st_nlink != 1):
-                _refuse('root_control')
+            if not stat.S_ISREG(info.st_mode):
+                refuse('file_type', 'anchor_file')
+            if info.st_uid != _CONTROL_OWNER_UID:
+                refuse('uid', 'anchor_file')
+            if info.st_gid != _CONTROL_OWNER_GID:
+                refuse('gid', 'anchor_file')
+            if stat.S_IMODE(info.st_mode) != 0o644:
+                refuse('file_mode', 'anchor_file')
+            if info.st_nlink != 1:
+                refuse('link_count', 'anchor_file')
             return True
 
-        def projection(fd: int, path: str = CONTROL_DIRECTORY) -> dict[str, Any]:
+        def projection(fd: int, path: str = CONTROL_DIRECTORY, *, role: str) -> dict[str, Any]:
+            nonlocal site
+            site = (role, 'fstat_unknown')
             info = os.fstat(fd)
             if not stat.S_ISDIR(info.st_mode):
-                _refuse('root_control')
+                refuse('directory_type', role)
+            site = (role, 'construction_unknown')
             return dict(path=path, device=info.st_dev, inode=info.st_ino,
                         uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode))
 
-        root = directory('/')
+        root = directory('/', role='fixed_origin')
+        site = ('discovery', 'control_parts_unknown')
         control_parts = Path(CONTROL_DIRECTORY).parts[1:]
         for index, name in enumerate(control_parts):
-            root = directory(name, root, allow_0750_ancestor=index < len(control_parts) - 1)
+            ancestor = index < len(control_parts) - 1
+            root = directory(name, root, allow_0750_ancestor=ancestor,
+                             role='fixed_ancestor' if ancestor else 'fixed_root')
         roots = {}
         for candidate in candidates:
+            site = ('candidate', 'components_unknown')
             parts = candidate[len(CONTROL_DIRECTORY) + 1:].rstrip('/').split('/')
-            if (len(parts) > _CONTROL_PROJECTION_MAX_COMPONENTS
-                    or any(name in {'', '.', '..'} for name in parts)):
-                _refuse('root_control')
+            if len(parts) > _CONTROL_PROJECTION_MAX_COMPONENTS:
+                refuse('component_count', 'candidate')
+            if any(name in {'', '.', '..'} for name in parts):
+                refuse('components_canonical', 'candidate')
             ancestors = [(CONTROL_DIRECTORY, root)]
             for name in parts:
                 path, parent = ancestors[-1]
                 try:
+                    site = ('candidate', 'stat_unknown')
                     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
                     if stat.S_ISLNK(info.st_mode):
-                        _refuse('root_control')
+                        refuse('symlink', 'candidate')
                     if not stat.S_ISDIR(info.st_mode):
                         break
-                    child = directory(name, parent, allow_0750_ancestor=True)
+                    child = directory(name, parent, allow_0750_ancestor=True, role='candidate')
                 except FileNotFoundError:
                     break
                 ancestors.append((path + '/' + name, child))
             for path, fd in reversed(ancestors):
                 if anchor(fd):
+                    site = ('anchor_root', 'fstat_unknown')
                     info = os.fstat(fd)
                     if stat.S_IMODE(info.st_mode) not in {0o700, 0o755}:
-                        _refuse('root_control')
-                    roots[path] = projection(fd, path)
+                        refuse('directory_mode', 'anchor_root')
+                    roots[path] = projection(fd, path, role='candidate_projection')
                     break
         if expected_empty_control_root is not None:
-            expected = _application_projection(expected_empty_control_root)
-            actual = projection(root)
-            if actual != expected or roots:
-                _refuse('root_control')
-            # The exception is only for first install before either public
-            # loader package exists. Any entry in either slot, including a
-            # symlink or a non-directory, is inventory drift.
-            for name in ('app', 'scripts'):
+            expected = _application_projection(
+                expected_empty_control_root, role='expected_empty', mode=mode, side=side,
+            )
+            actual = projection(root, role='fixed_projection')
+            if actual != expected:
+                refuse('identity', 'empty_root')
+            if roots:
+                refuse('anchored_root_present', 'empty_root')
+            # Any slot entry still refuses, with the same per-slot stat calls.
+            for name, role in (('app', 'app_slot'), ('scripts', 'scripts_slot')):
                 try:
+                    site = (role, 'stat_unknown')
                     os.stat(name, dir_fd=root, follow_symlinks=False)
                 except FileNotFoundError:
                     continue
-                _refuse('root_control')
+                refuse('present', role)
 
-            # Reopen the fixed path without following links so the returned
-            # identity still names the directory currently installed there.
-            current_root = directory('/')
+            current_root = directory('/', role='reopen_origin')
             for index, name in enumerate(control_parts):
+                ancestor = index < len(control_parts) - 1
                 current_root = directory(
-                    name, current_root,
-                    allow_0750_ancestor=index < len(control_parts) - 1,
+                    name, current_root, allow_0750_ancestor=ancestor,
+                    role='reopen_ancestor' if ancestor else 'reopen_root',
                 )
-            if projection(current_root) != actual:
-                _refuse('root_control')
+            if projection(current_root, role='reopen_projection') != actual:
+                refuse('reopen_identity', 'empty_root')
             return actual
-        if len(roots) != 1:
-            _refuse('root_control')
+        count = len(roots)
+        if count != 1:
+            refuse('no_anchor' if count == 0 else 'multiple_anchors', 'anchored_roots')
         return next(iter(roots.values()))
-    except Exception:
-        _refuse('root_control')
+    except Exception as failure:
+        if type(failure) is _OldQualificationRefusal:
+            # Preserve only this supported type, not attrs on a foreign error.
+            # The finite consumer validates every tuple again before emission.
+            if failure.subgate == 'root_control' and getattr(failure, 'root_control', None) is not None:
+                raise
+            _refuse('root_control')
+        role, guard = site
+        refuse(guard, role)
     finally:
         unknown = False
         for fd in reversed(descriptors):
@@ -388,7 +479,7 @@ def _discovered_control_projection(
             except OSError:
                 unknown = True
         if unknown:
-            _refuse('root_control')
+            refuse('close_unknown', 'discovery_close')
 
 
 def _pid_token(
@@ -659,12 +750,15 @@ class FixedBwsService:
         expected_empty_control_root = (
             self.control if self.control_inventory_empty else None
         )
-        for raw in (launcher, self.launcher_after):
+        for side, raw in (('old', launcher), ('proposed', self.launcher_after)):
             if _discovered_control_projection(
                 raw, environment, files,
-                expected_empty_control_root=expected_empty_control_root,
+                expected_empty_control_root=expected_empty_control_root, side=side,
             ) != self.control:
-                _refuse('root_control')
+                _root_control_refuse(
+                    'identity', role='comparison', side=side,
+                    mode='captured_empty' if self.control_inventory_empty else 'anchored_discovery',
+                )
         hints = hashlib.sha256(json.dumps([environment, files], separators=(',', ':')).encode()).hexdigest()
         return start[:3], cleanup[:3], hints
 
@@ -703,17 +797,19 @@ class FixedBwsService:
             _refuse('setup')
         self._held_runtime()
         self.phase = 'qualifying'
-        application = _application_projection(application_root)
-        control = _application_projection(control_root)
+        mode = 'captured_empty' if control_inventory_empty else 'anchored_discovery'
+        application = _application_projection(application_root, role='application', mode=mode)
+        control = _application_projection(control_root, role='control', mode=mode)
         self.application = application
         self.control = control
         self.control_inventory_empty = control_inventory_empty
-        if (control['path'] == application['path']
-                or not (control['path'] == CONTROL_DIRECTORY
-                        or control['path'].startswith(CONTROL_DIRECTORY + '/'))):
-            _refuse('root_control')
+        if control['path'] == application['path']:
+            _root_control_refuse('separation', mode=mode, role='roots')
+        if not (control['path'] == CONTROL_DIRECTORY
+                or control['path'].startswith(CONTROL_DIRECTORY + '/')):
+            _root_control_refuse('fixed_subtree', mode=mode, role='roots')
         if control_inventory_empty and control['path'] != CONTROL_DIRECTORY:
-            _refuse('root_control')
+            _root_control_refuse('empty_fixed_root', mode=mode, role='roots')
         try:
             if (type(launcher_content) is not dict or set(launcher_content) != {'sha256', 'base64'}
                     or type(launcher_content['base64']) is not str):
@@ -746,9 +842,14 @@ class FixedBwsService:
 
     def revalidate_empty_control_configuration(self) -> None:
         """Recheck the captured first-install control root at the backup boundary."""
-        if (self.phase != 'qualified' or not self.control_inventory_empty
-                or self.contract is None or self._config() != self.contract):
-            _refuse('root_control')
+        if self.phase != 'qualified':
+            _root_control_refuse('phase', role='revalidation')
+        if not self.control_inventory_empty:
+            _root_control_refuse('empty_required', mode='anchored_discovery', role='revalidation')
+        if self.contract is None:
+            _root_control_refuse('contract_missing', mode='captured_empty', role='revalidation')
+        if self._config() != self.contract:
+            _root_control_refuse('configuration', mode='captured_empty', role='revalidation')
 
     def stop_old(self) -> None:
         if (self.phase != 'qualified' or self.launcher_after is None

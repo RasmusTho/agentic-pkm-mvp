@@ -1298,12 +1298,35 @@ coarse gate remain readable and immutable. A classified refusal still has null o
 new and backup hashes and cannot reach prepare, backup, stop or apply. All original
 guards, their invocation order and retained-runtime cleanup remain binding.
 
-Historical Source20 remains `refused_before_backup / old_kernel_qualification`;
-its actual site, subpredicate and native values remain unknown. New source support
-does not retroactively classify it, permit replay or allocate Source21. The retained
-native effect owner alone owns any separately decided later operation under #6170.
-Source delivery establishes no native readiness, DEV/TEST acceptance, admission or
-host/service/credential authority.
+Root/control now additionally identifies the first failed semantic atom through
+`old_kernel_<stage>_root_control__<mode>__<side>__<role>__<guard>` in the same
+optional field. The complete finite role/guard vocabulary and per-leaf repair or
+UNKNOWN interpretation live in [BWS source-installation refusal diagnostics](../OPERATIONS.md#bws-source-installation-refusal-diagnostics).
+It distinguishes every projection field/representation constraint, fixed root
+relationship, hint source, directory/anchor/traversal operation and security
+predicate, captured-empty identity/loader slot/reopen, zero/multiple anchors,
+OLD/proposed comparison, and final phase/mode/saved/repeated-contract check.
+Mode is `unknown` until selected; side is `unknown` outside a launcher check.
+The two launchers still use the same typed unit settings. No predicate or OS call
+is repeated to classify a failure. Missing/non-directory discovery false returns,
+successful empty/anchored shapes, descriptor ceilings/lifetimes and all guard,
+backup/stop/apply/UNKNOWN/compensation boundaries are unchanged. Discovery-close
+uncertainty remains distinct and overrides an earlier predicate while every
+owned close is attempted once. Unsupported or malformed claims keep the existing
+family/coarse fallback; old absent-field, family and non-prebackup receipts retain
+their compatibility rules. A first failure does not disclose later latent defects
+or grant repair authority.
+
+Historical Source20 remains `refused_before_backup / old_kernel_qualification`.
+Source21 remains `refused_before_backup / old_kernel_initial_root_control`; its
+exact predicate, native values and selected mode remain UNKNOWN. New diagnostics
+do not retroactively classify either result, allocate Source22, replay a consumed
+attempt, or establish native readiness or DEV/TEST acceptance. The retained native
+effect owner alone owns a separately decided later operation under #6170. The
+clean caller checkout, exact Git launcher and candidate C / OCI image D revision
+binding remain mandatory: changed diagnostic bytes need a newly matched C/D,
+not reuse of the historical 9ca8/0bb6 pair. Source delivery grants no host,
+service, credential, observation or installation authority.
 
 Text activation still authenticates existing secrets and the real PostgreSQL
 backend, selected existing root, instance ownership, principal and runtime floors,
