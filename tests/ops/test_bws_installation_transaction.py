@@ -3576,7 +3576,7 @@ def test_root_control_leaf_refusals_preserve_order_effects_and_lifetime(monkeypa
     test_handle_close_uncertainty_stops_exact_generation_without_retry(False)
 
 
-@pytest.mark.parametrize('kind', ['foreign', 'subclass', 'missing', 'bad_tuple', 'bad_atom', 'bad_context', 'legacy'])
+@pytest.mark.parametrize('kind', ['foreign', 'subclass', 'missing', 'bad_tuple', 'bad_atom', 'bad_context', 'missing_subgate', 'legacy'])
 def test_root_control_leaf_unknowns_preserve_legacy_privacy_and_binding(kind):
     request, ports, _admission, service, events, *_ = _transaction_fixture()
     cls = bws_installation_lifecycle._OldQualificationRefusal
@@ -3591,7 +3591,10 @@ def test_root_control_leaf_unknowns_preserve_legacy_privacy_and_binding(kind):
             exc = Foreign('root_control')
         else:
             exc = cls('root_control')
-            if kind == 'missing':
+            if kind == 'missing_subgate':
+                exc.root_control = ('captured_empty', 'old', 'hints', 'launcher_hint')
+                del exc.subgate
+            elif kind == 'missing':
                 del exc.root_control
             elif kind == 'bad_tuple':
                 exc.root_control = ['captured_empty', 'old', 'hints', 'launcher_hint']
@@ -3602,7 +3605,7 @@ def test_root_control_leaf_unknowns_preserve_legacy_privacy_and_binding(kind):
         raise exc
     service.qualify_old = refuse
     result = transaction._execute_source_installation('dev', request, ports)
-    _assert_old_refusal(result, events, 'old_kernel_qualification' if kind in {'foreign', 'subclass'}
+    _assert_old_refusal(result, events, 'old_kernel_qualification' if kind in {'foreign', 'subclass', 'missing_subgate'}
                         else 'old_kernel_initial_root_control')
     assert events.index('runtime_enter') < events.index('runtime_close')
     # Binding itself remains real in the source RPC matrix and existing precise

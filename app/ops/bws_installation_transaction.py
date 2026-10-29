@@ -2525,7 +2525,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                         _OldQualificationRefusal, _OLD_QUALIFICATION_SUBGATES,
                     )
                     if type(failure) is _OldQualificationRefusal:
-                        subgate = failure.subgate
+                        subgate = getattr(failure, "subgate", None)
                         if type(subgate) is str and subgate in _OLD_QUALIFICATION_SUBGATES:
                             classified = f"old_kernel_{old_qualification_stage}_{subgate}"
                             if classified in _PREBACKUP_REFUSAL_GATES:
