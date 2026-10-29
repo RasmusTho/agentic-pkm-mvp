@@ -116,7 +116,31 @@ def operations_workspace_script() -> str:
   }
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
   var context=null, capabilities=[], resources=[], selection=new Map(), frozen=null, reference=null;
-  var cancelBusy=false, busy=false, submitted=false, timer=null, generation=0, lastResult=null, readbackUnknown=false, readEpoch=0, pendingRead=null, effectEpoch=0, announcedItems=new Map(), aggregateAnnouncement='';
+  // HTTP guards end at response settlement; read tokens and scope generations own presentation.
+  var preparation=null, executeRequest=null, cancelRequest=null, submitted=false, timer=null;
+  var generation=0, scopeEpoch=0, listEpoch=0, lastResult=null, readbackUnknown=false, freshRequired=false;
+  var readEpoch=0, pendingRead=null, effectEpoch=0, bootstrapped=false, announcedItems=new Map(), aggregateAnnouncement='';
+  function foreground() {return !root.hidden && overlayHost.topmost()==='operations';}
+  function focusResults() {if(foreground())el('results').focus();}
+  function effectPending() {return !!(executeRequest||cancelRequest);}
+  function sameReference(ref) {return !!reference && reference.id===ref.id && (reference.digest||'')===(ref.digest||'');}
+  function currentScope(scope,ref) {return scope===scopeEpoch && sameReference(ref);}
+  function reconcileControls() {
+    var active=document.activeElement,counts=lastResult&&lastResult.counts||{};
+    var eligible=reference&&reference.digest&&lastResult&&!readbackUnknown&&!freshRequired;
+    el('cancel').hidden=!(eligible && counts.pending>0 && !lastResult.cancel_requested);
+    el('resume').hidden=!(eligible && lastResult.current_admission==='original' && !lastResult.cancel_requested && (counts.pending>0 || counts.recoverable>0));
+    el('resume').disabled=!!(preparation||effectPending());el('cancel').disabled=!!cancelRequest;
+    el('new').disabled=effectPending();el('reopen').disabled=effectPending();
+    if((active===el('cancel')||active===el('resume')) && (active.hidden||active.disabled))focusResults();
+  }
+  function syncReferenceURL() {
+    var url=new URL(window.location.href);
+    if(reference){url.searchParams.set('operation_request',reference.id);if(reference.digest)url.searchParams.set('operation_digest',reference.digest);else url.searchParams.delete('operation_digest');}
+    else {url.searchParams.delete('operation_request');url.searchParams.delete('operation_digest');}
+    // Keep the shared host's current history marker; references never grant authority.
+    window.history.replaceState(window.history.state,'',url);
+  }
   var labels={'artifact.create':'Create','artifact.capture':'Capture','artifact.update':'Edit body',
     'artifact.move':'Move','artifact.rename':'Rename','artifact.classify':'Classify',
     'artifact.tags.add':'Add tags','artifact.tags.remove':'Remove tags','collection.reorder':'Order',
@@ -132,8 +156,8 @@ def operations_workspace_script() -> str:
       target_binding_id:el('binding').value,targets:target?[{artifact_id:target.resource_id}]:[],arguments:args||{}});
   }
   function invalidate() {
-    if (busy || submitted) return;
-    frozen=null; el('preview-region').hidden=true; el('confirm').disabled=true;
+    if (preparation || effectPending() || submitted) return;
+    ++generation;frozen=null; el('preview-region').hidden=true; el('confirm').disabled=true;
   }
   function lock(value) { el('intent').disabled=value; el('selection').disabled=value; el('discover').disabled=value; }
   function renderResources() {
@@ -173,16 +197,23 @@ def operations_workspace_script() -> str:
     if (!entries.length) parent.append(node('p','Select at least one resource.'));
   }
   async function listResources() {
+    if(submitted)return;
     if(!admitted('artifact.list')) throw new Error('artifact.list unavailable');
-    var result=await api.invoke(command('artifact.list',null,{query:el('filter').value,limit:250}));
-    if (!['succeeded','degraded_read'].includes(result.status)) throw new Error(json(result));
-    resources=result.items||[]; renderResources();
-    message('Resources: '+result.status+'. '+(result.warnings||[]).join(' '));
+    var scope=scopeEpoch, query=++listEpoch;
+    try {
+      var result=await api.invoke(command('artifact.list',null,{query:el('filter').value,limit:250}));
+      if(scope!==scopeEpoch || query!==listEpoch || submitted)return;
+      if (!['succeeded','degraded_read'].includes(result.status)) throw new Error(json(result));
+      resources=result.items||[]; renderResources();
+      message('Resources: '+result.status+'. '+(result.warnings||[]).join(' '));
+    } catch(error) {if(scope===scopeEpoch && query===listEpoch && !submitted)throw error;}
   }
   async function discover() {
-    if(busy||submitted)return; busy=true; message('Loading capabilities and resources…');
+    if(preparation||submitted)return;
+    var owner={},scope=scopeEpoch;preparation=owner;message('Loading capabilities and resources…');
     try {
       var result=await api.capabilities();
+      if(preparation!==owner || scope!==scopeEpoch)return;
       if(result.status!=='succeeded' || !result.context || !Array.isArray(result.items)) throw new Error(json(result));
       context=clone(result.context); capabilities=result.items; el('capabilities').textContent='';el('kind').textContent='';
       var previous=el('binding').value;el('binding').textContent='';
@@ -195,28 +226,27 @@ def operations_workspace_script() -> str:
       });
       var first=[...el('kind').options].find(function(o){return !o.disabled;});if(first)el('kind').value=first.value;
       el('intent').disabled=!first || !el('binding').value;
-      invalidate();renderArguments();await listResources();
-    } catch(error) {context=null;el('intent').disabled=true; message('Unavailable: '+error.message);}
-    finally {busy=false;}
+      frozen=null;el('preview-region').hidden=true;el('confirm').disabled=true;renderArguments();await listResources();
+    } catch(error) {if(preparation===owner && scope===scopeEpoch){context=null;el('intent').disabled=true;message('Unavailable: '+error.message);}}
+    finally {if(preparation===owner)preparation=null;}
   }
   function remember(ref) {
-    if(!reference || reference.id!==ref.id || reference.digest!==ref.digest) {
-      ++readEpoch;announcedItems.clear();aggregateAnnouncement='';lastResult=null;readbackUnknown=false;
-      stopObserving();el('progress').textContent='';el('cancel').hidden=true;el('resume').hidden=true;
-      el('results').hidden=false;message('Loading durable state for '+ref.id+'…');
-      if(!root.hidden)el('results').focus();
+    ref={id:ref.id,digest:ref.digest||undefined};
+    if(!sameReference(ref)) {
+      ++scopeEpoch;++generation;++listEpoch;preparation=null;++readEpoch;pendingRead=null;
+      announcedItems.clear();aggregateAnnouncement='';lastResult=null;readbackUnknown=false;freshRequired=true;
+      stopObserving();el('progress').textContent='';el('preview-region').hidden=true;el('confirm').disabled=true;
+      el('results').hidden=false;message('Loading durable state for '+ref.id+'…');focusResults();
     }
     reference=clone(ref);el('reference').value=ref.id;el('digest').value=ref.digest||'';
-    var url=new URL(window.location.href);url.searchParams.set('operation_request',ref.id);
-    if(ref.digest)url.searchParams.set('operation_digest',ref.digest);else url.searchParams.delete('operation_digest');
-    // Only non-authority references. Effect state is always rehydrated from the server.
-    window.history.replaceState(window.history.state,'',url);
+    syncReferenceURL();reconcileControls();
   }
   function scopeLine(label,value) { el('scope').append(node('p',label+': '+value)); }
   async function preview() {
-    if(busy||submitted||!admitted(el('kind').value))return;
-    busy=true;lock(true);message('Loading owner preconditions and frozen scope…');el('confirm').disabled=true;
+    if(preparation||effectPending()||submitted||!admitted(el('kind').value))return;
+    var owner={},scope=scopeEpoch;preparation=owner;lock(true);message('Loading owner preconditions and frozen scope…');el('confirm').disabled=true;
     var epoch=++generation;
+    function current() {return preparation===owner && scope===scopeEpoch && epoch===generation && !submitted;}
     try {
       var kind=el('kind').value,targets=[...selection.values()],commands=[];
       if(['artifact.archive','artifact.restore'].includes(kind))targets=[{resource_id:el('source').value,payload:{artifact_class:'source'}}];
@@ -229,6 +259,7 @@ def operations_workspace_script() -> str:
         if(target && target.payload && target.payload.vault_context && target.payload.vault_context.vault_binding_id!==el('binding').value)throw new Error('Selection spans a different binding; narrow the selection.');
         var intent=command(kind,target,args);if(target&&target.payload&&target.payload.artifact_class==='source')intent.targets[0].artifact_class='source';
         var observed=await api.preconditions(intent);
+        if(!current())return;
         if(observed.status!=='observed')throw new Error(json(observed));
         if(observed.operation_id!==kind || !observed.context || observed.context.active_context_ref!==intent.active_context_ref || String(observed.context.vault_generation)!==String(intent.vault_generation))throw new Error('Preconditions changed context. Refresh explicitly.');
         intent.expected_version=observed.expected_version;intent.arguments=clone(observed.arguments);commands.push(intent);
@@ -241,9 +272,10 @@ def operations_workspace_script() -> str:
           limit:commands.length,partial_success_policy:ce.partial_success_policy,
           items:commands.map(function(c){return {request_id:c.request_id,artifact_id:c.targets[0].artifact_id,expected_version:c.expected_version,arguments:c.arguments};})});
         batch=await api.previewBatch(batchIntent);
+        if(!current())return;
         if(!batch.digest || batch.current_admission!=='original' || batch.operation_id!==kind || batch.cardinality!==commands.length)throw new Error(json(batch));
       }
-      if(epoch!==generation)throw new Error('Selection changed during preview');
+      if(!current())return;
       frozen=clone({commands:commands,batch:batch});el('scope').textContent='';
       scopeLine('Operation / effect',kind);scopeLine('Context',commands[0].active_context_ref+' · generation '+commands[0].vault_generation);
       scopeLine('Vault binding',commands[0].target_binding_id);scopeLine('Cardinality',batch?batch.cardinality:1);
@@ -252,24 +284,30 @@ def operations_workspace_script() -> str:
       detail(el('scope'),'Exact targets, versions and intended changes',commands);
       if(batch){detail(el('scope'),'Runtime policy ceiling, expiry and revocation',batch.policy_ceiling);scopeLine('Confirmation digest',batch.digest);}
       else scopeLine('Policy ceiling','Existing runtime authority only; revalidated at execution. No new delegation is granted.');
-      el('preview-region').hidden=false;el('confirm').disabled=false;el('preview-region').focus();message('Frozen scope ready. Nothing has executed.');
-    } catch(error) {frozen=null;lock(false);message('Preview refused: '+error.message);}
-    finally {busy=false;}
+      el('preview-region').hidden=false;el('confirm').disabled=false;if(foreground())el('preview-region').focus();message('Frozen scope ready. Nothing has executed.');
+    } catch(error) {if(current()){frozen=null;lock(false);message('Preview refused: '+error.message);}}
+    finally {if(preparation===owner)preparation=null;}
   }
   function stopObserving() {clearInterval(timer);timer=null;}
   function observePending() {
-    if(!root.hidden && reference && reference.digest && lastResult && lastResult.counts && lastResult.counts.pending>0) {
+    if(!root.hidden && reference && !readbackUnknown && (executeRequest || (reference.digest && lastResult && lastResult.counts && lastResult.counts.pending>0))) {
       if(timer===null)timer=setInterval(function(){inspect(true);},1000);
     } else stopObserving();
   }
+  function itemFacts(item,outcome) {
+    var c=outcome&&outcome.convergence||{},r=outcome&&outcome.receipt||{},recovery=outcome&&outcome.recovery||{};
+    return {state:item.state||'not declared',outcome:outcome&&outcome.status||'not declared',
+      'source effect':c.source_effect||'not declared',store:c.store||'not declared',index:c.index||'not declared',links:c.link||'not declared',
+      'receipt identity':r.receipt_id||'not declared','receipt status':r.status||'not declared',
+      'recovery action':recovery.action||'not declared','recovery instructions':recovery.instructions||'not declared'};
+  }
   function renderResult(result) {
-    if(lastResult && json(lastResult)===json(result) && !readbackUnknown) {observePending();return;}
-    var restoredRead=readbackUnknown;readbackUnknown=false;
+    var restoredRead=readbackUnknown;readbackUnknown=false;freshRequired=false;
+    if(lastResult && json(lastResult)===json(result) && !restoredRead) {reconcileControls();observePending();return;}
     var parent=el('progress'),active=document.activeElement;
     var focused=parent.contains(active),disclosure=focused && active.closest('details[data-disclosure]');
     var focusedKey=disclosure && disclosure.dataset.disclosure;
     var openKeys=new Set([...parent.querySelectorAll('details[data-disclosure]')].filter(function(d){return d.open;}).map(function(d){return d.dataset.disclosure;}));
-    var focusAction=active===el('cancel') || active===el('resume');
     var changes=[];
     lastResult=clone(result);el('results').hidden=false;parent.textContent='';
     parent.append(node('p','Runtime status: '+(result.status||'unknown')));
@@ -278,18 +316,19 @@ def operations_workspace_script() -> str:
     if(result.cancel_requested!==undefined)parent.append(node('p','Cancellation requested: '+result.cancel_requested+'; completed effects retain their receipts.'));
     var items=reference&&reference.digest?result.items||[]:[{request_id:result.request_id,outcome:result}];
     items.forEach(function(item){
-      var row=node('section'),outcome=item.outcome;
-      var key=item.request_id||item.artifact_id||result.request_id;
+      var row=node('section'),outcome=item.outcome,key=item.request_id||item.artifact_id||result.request_id;
       row.dataset.resultKey=key;
-      var itemState=json([item.state,outcome&&outcome.status,outcome&&outcome.convergence,outcome&&outcome.receipt,outcome&&outcome.recovery]);
-      if(announcedItems.get(key)!==itemState) {
-        changes.push((item.artifact_id||item.request_id||'Operation')+': '+(item.state||'')+' '+(outcome?outcome.status:''));
-        announcedItems.set(key,itemState);
+      var facts=itemFacts(item,outcome),previous=announcedItems.get(key);
+      var deltas=Object.keys(facts).filter(function(name){return !previous || previous[name]!==facts[name];});
+      if(deltas.length) {
+        changes.push((item.artifact_id||item.request_id||'Operation')+': '+(item.state||outcome&&outcome.status||'unknown')+' · '+deltas.map(function(name){return name+' '+(previous?previous[name]+' → ':'')+facts[name];}).join(', '));
+        announcedItems.set(key,facts);
       }
       row.setAttribute('aria-label','Result '+(item.artifact_id||item.request_id));
       row.append(node('h4',(item.artifact_id||item.request_id||'Operation')+' · '+(outcome?outcome.status:item.state||'unknown')));
       if(outcome){
-        var c=outcome.convergence||{};row.append(node('p','Source effect: '+(c.source_effect||'not declared')+' · Receipt: '+(outcome.receipt?outcome.receipt.receipt_id||'recorded':'not declared')));
+        var c=outcome.convergence||{},receipt=outcome.receipt||{};
+        row.append(node('p','Source effect: '+(c.source_effect||'not declared')+' · Receipt: '+(receipt.receipt_id||'not declared')+' · Receipt status: '+(receipt.status||'not declared')));
         row.append(node('p','Convergence: store '+(c.store||'not declared')+' · index '+(c.index||'not declared')+' · links '+(c.link||'not declared')));
         if(outcome.conflict)detail(row,'Conflict evidence',outcome.conflict);
         if(outcome.warnings&&outcome.warnings.length)row.append(node('p','Warnings: '+outcome.warnings.join(' · ')));
@@ -298,54 +337,62 @@ def operations_workspace_script() -> str:
       } else row.append(node('p','No outcome declared yet.'));
       parent.append(row);
     });
-    detail(parent,'Complete runtime response',result);
-    var isBatch=!!(reference&&reference.digest),counts=result.counts||{};
-    el('cancel').hidden=!(isBatch && counts.pending>0 && !result.cancel_requested);
-    el('resume').hidden=!(isBatch && result.current_admission==='original' && !result.cancel_requested && (counts.pending>0 || counts.recoverable>0));
-    el('resume').disabled=busy||cancelBusy;el('cancel').disabled=cancelBusy;
+    detail(parent,'Complete runtime response',result);reconcileControls();
     var disclosures=[...parent.querySelectorAll('details[data-disclosure]')];
     disclosures.forEach(function(d){if(openKeys.has(d.dataset.disclosure))d.open=true;});
-    if(!root.hidden && focused) {
+    if(foreground() && focused) {
       var restored=disclosures.find(function(d){return d.dataset.disclosure===focusedKey;});
-      if(restored)restored.querySelector('summary').focus();else el('results').focus();
-    } else if(!root.hidden && focusAction && active.hidden)el('results').focus();
-    var aggregate='Operation '+(result.status||'unknown')+(result.counts?' · '+Object.entries(result.counts).map(function(p){return p.join(': ');}).join(', '):'');
+      if(restored)restored.querySelector('summary').focus();else focusResults();
+    }
+    var aggregate='Operation '+(result.status||'unknown')+(result.counts?' · '+Object.entries(result.counts).map(function(p){return p.join(': ');}).join(', '):'')+
+      (result.cancel_requested!==undefined?' · cancellation requested: '+result.cancel_requested:'')+(result.current_admission?' · admission: '+result.current_admission:'');
     if(changes.length || aggregate!==aggregateAnnouncement || restoredRead)message(aggregate+(changes.length?' · '+changes.join('; '):'')+(restoredRead?' · Durable readback restored.':''));
     aggregateAnnouncement=aggregate;observePending();
   }
   async function inspect(quiet, force) {
-    if(!reference || (quiet&&!force&&pendingRead===readEpoch))return;
-    var epoch=++readEpoch;pendingRead=epoch;
-    try {var result=reference.digest?await api.inspectBatch(reference.id,reference.digest):await api.receipt(reference.id);if(epoch!==readEpoch)return;renderResult(result);if(!quiet&&!root.hidden)el('results').focus();return result;}
-    catch(error){if(epoch!==readEpoch)return;stopObserving();readbackUnknown=true;el('cancel').hidden=true;el('resume').hidden=true;
-      el('results').hidden=false;
+    if(root.hidden || !reference || (quiet&&!force&&pendingRead===readEpoch))return;
+    var epoch=++readEpoch,scope=scopeEpoch,ref=clone(reference);pendingRead=epoch;
+    function current() {return epoch===readEpoch && currentScope(scope,ref) && !root.hidden;}
+    try {
+      var result=ref.digest?await api.inspectBatch(ref.id,ref.digest):await api.receipt(ref.id);
+      if(!current())return;renderResult(result);if(!quiet)focusResults();return result;
+    } catch(error) {
+      if(!current())return;stopObserving();readbackUnknown=true;freshRequired=true;el('results').hidden=false;reconcileControls();
       if(!lastResult){el('progress').textContent='';el('progress').append(node('p','No durable state was returned by this read. Nothing has been retried.'));}
-      message('Current readback unavailable; latest progress unknown. Retained reference '+reference.id+'. '+error.message);
-      if(!quiet&&!root.hidden)el('results').focus();}
-    finally {if(pendingRead===epoch)pendingRead=null;}
+      message('Current readback unavailable; latest progress unknown. Retained reference '+ref.id+'. '+error.message);
+      if(!quiet)focusResults();
+    } finally {if(pendingRead===epoch)pendingRead=null;}
+  }
+  function settleMutation(scope,ref,effect,observed,result,error,label) {
+    if(!currentScope(scope,ref) || effect!==effectEpoch)return;
+    if(!error && observed===readEpoch && !root.hidden) {++readEpoch;renderResult(result);return;}
+    freshRequired=true;reconcileControls();
+    if(error)message(label+' response unavailable; inspecting durable state. '+error.message);
+    // This read has its own ownership; no settled HTTP guard awaits its transport.
+    if(!root.hidden)inspect(true,true);
   }
   async function execute(resume) {
-    if(busy || cancelBusy || (!resume && (!frozen||submitted)))return;
+    reconcileControls();
+    if(preparation || effectPending() || (!resume && (!frozen||submitted)))return;
     if(resume && (!lastResult || el('resume').hidden))return;
-    var effect=++effectEpoch;++readEpoch;
-    busy=true;submitted=true;lock(true);el('confirm').disabled=true;el('resume').disabled=true;
-    el('preview-region').hidden=true;el('results').hidden=false;el('results').focus();message('Execution requested. Awaiting owner receipt…');
+    submitted=true;lock(true);el('confirm').disabled=true;el('preview-region').hidden=true;el('results').hidden=false;focusResults();
     if(!resume)remember(frozen.batch?{id:frozen.batch.batch_id,digest:frozen.batch.digest}:{id:frozen.commands[0].request_id});
-    message('Execution requested. Awaiting owner receipt…');
-    clearInterval(timer);timer=setInterval(function(){inspect(true);},1000);
-    var observed=readEpoch;
-    try {var result=reference.digest?await api.executeBatch(reference.id,reference.digest):await api.invoke(frozen.commands[0]);
-      if(effect===effectEpoch){if(observed===readEpoch){++readEpoch;renderResult(result);}else await inspect(true,true);}}
-    catch(error){if(effect===effectEpoch){message('Execution response unavailable; inspecting durable state. '+error.message);await inspect(true);}}
-    finally {busy=false;el('resume').disabled=cancelBusy;}
+    var owner={},scope=scopeEpoch,ref=clone(reference),effect=++effectEpoch,observed=++readEpoch,result,error;
+    executeRequest=owner;reconcileControls();message('Execution requested. Awaiting owner receipt…');observePending();
+    try {result=ref.digest?await api.executeBatch(ref.id,ref.digest):await api.invoke(frozen.commands[0]);}
+    catch(failure) {error=failure;}
+    finally {if(executeRequest===owner)executeRequest=null;reconcileControls();}
+    settleMutation(scope,ref,effect,observed,result,error,'Execution');observePending();
   }
   async function cancel() {
-    if(cancelBusy || !reference || !reference.digest || el('cancel').hidden)return;
-    ++effectEpoch;++readEpoch;var observed=readEpoch;cancelBusy=true;el('new').disabled=true;
-    el('cancel').disabled=true;el('results').focus();
-    try {var result=await api.cancelBatch(reference.id,reference.digest);if(observed===readEpoch){++readEpoch;renderResult(result);}else await inspect(true,true);if(!root.hidden)el('results').focus();}
-    catch(error){message('Cancellation outcome unknown. '+error.message);await inspect(true);}
-    finally {cancelBusy=false;el('new').disabled=false;el('cancel').disabled=false;el('resume').disabled=busy;}
+    reconcileControls();
+    if(cancelRequest || !reference || !reference.digest || el('cancel').hidden)return;
+    var owner={},scope=scopeEpoch,ref=clone(reference),effect=++effectEpoch,observed=++readEpoch,result,error;
+    cancelRequest=owner;reconcileControls();focusResults();
+    try {result=await api.cancelBatch(ref.id,ref.digest);}
+    catch(failure) {error=failure;}
+    finally {if(cancelRequest===owner)cancelRequest=null;reconcileControls();}
+    settleMutation(scope,ref,effect,observed,result,error,'Cancellation');observePending();
   }
   function safe(action){return function(){Promise.resolve().then(action).catch(function(error){message(error.message);});};}
   el('discover').onclick=safe(discover);el('list').onclick=safe(listResources);
@@ -353,23 +400,31 @@ def operations_workspace_script() -> str:
   el('arguments').addEventListener('input',invalidate);el('preview').onclick=safe(preview);
   el('confirm').onclick=safe(function(){return execute(false);});el('resume').onclick=safe(function(){return execute(true);});
   el('cancel').onclick=safe(cancel);el('inspect').onclick=safe(function(){return inspect(false);});
-  el('back').onclick=function(){frozen=null;el('preview-region').hidden=true;lock(false);el('preview').focus();};
+  el('back').onclick=function(){if(submitted)return;frozen=null;el('preview-region').hidden=true;lock(false);if(foreground())el('preview').focus();};
   el('new').onclick=safe(function(){
-    if(busy||cancelBusy)return;stopObserving(); ++readEpoch;submitted=false;frozen=null;reference=null;lastResult=null;readbackUnknown=false;
-    var url=new URL(window.location.href);url.searchParams.delete('operation_request');url.searchParams.delete('operation_digest');
-    window.history.replaceState(window.history.state,'',url);el('results').hidden=true;lock(false);renderResources();el('discover').focus();return discover();
+    if(effectPending())return;stopObserving();++scopeEpoch;++generation;++listEpoch;++effectEpoch;++readEpoch;pendingRead=null;preparation=null;
+    submitted=false;frozen=null;reference=null;lastResult=null;readbackUnknown=false;freshRequired=false;announcedItems.clear();aggregateAnnouncement='';
+    syncReferenceURL();el('preview-region').hidden=true;el('confirm').disabled=true;el('results').hidden=true;lock(false);reconcileControls();renderResources();
+    if(foreground())el('discover').focus();return discover();
   });
   el('reopen').onclick=safe(function(){
-    if(busy||cancelBusy)return;submitted=true;frozen=null;lock(true);
-    remember({id:el('reference').value.trim(),digest:el('digest').value.trim()||undefined});return inspect(false);
+    if(effectPending())return;submitted=true;frozen=null;preparation=null;++generation;lock(true);
+    el('preview-region').hidden=true;el('confirm').disabled=true;
+    remember({id:el('reference').value.trim(),digest:el('digest').value.trim()||undefined});focusResults();return inspect(false,true);
   });
   overlayHost.register('operations',{
-    open:function(){root.hidden=false;el('discover').focus();
-      var params=new URL(window.location.href).searchParams;
-      if(!reference&&params.get('operation_request')){submitted=true;lock(true);remember({id:params.get('operation_request'),digest:params.get('operation_digest')||undefined});inspect(false);}
-      else if(reference)inspect(true);else if(frozen)el('preview-region').focus();else discover();
+    open:function(){
+      root.hidden=false;
+      if(!bootstrapped){
+        bootstrapped=true;var params=new URL(window.location.href).searchParams;
+        if(params.get('operation_request')){submitted=true;lock(true);remember({id:params.get('operation_request'),digest:params.get('operation_digest')||undefined});}
+      }
+      syncReferenceURL();
+      if(reference){freshRequired=true;reconcileControls();el('results').hidden=false;focusResults();inspect(true,true);}
+      else if(frozen){if(foreground())el('preview-region').focus();}
+      else {if(foreground())el('discover').focus();discover();}
     },
-    close:function(){root.hidden=true;stopObserving();}
+    close:function(){root.hidden=true;++readEpoch;pendingRead=null;freshRequired=!!reference;stopObserving();}
   });
 })();
 </script>"""
