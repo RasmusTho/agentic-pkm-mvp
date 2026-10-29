@@ -2160,6 +2160,8 @@ BWS_SOURCE_INSTALLATION_SOURCES = frozenset({
 })
 BWS_SOURCE_INSTALLATION_PATHS = BWS_SOURCE_INSTALLATION_SOURCES | frozenset({
     "tests/ops/test_bws_installation_transaction.py",
+    "tests/ops/test_bws_control_installation.py",
+    "tests/ops/fixtures/host_secret_contract_legacy.json",
     "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
 })
 

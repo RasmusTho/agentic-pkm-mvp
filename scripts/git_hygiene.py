@@ -22,7 +22,7 @@ import tempfile
 import time
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Any, TypeGuard
@@ -411,10 +411,17 @@ def _integration_merge_tree(
         ]
 
         def scratch_read(args: list[str], data: bytes | None = None) -> bytes:
-            return subprocess.run(
-                command + args, cwd=temporary, env=env, check=True,
-                input=data, capture_output=True, timeout=GIT_PROBE_TIMEOUT_SECONDS,
-            ).stdout
+            # Git can emit attribute results while consuming a large NUL path
+            # list. A regular input file avoids coupling stdin/stdout pipe flow.
+            with tempfile.TemporaryFile() if data is not None else nullcontext(None) as source:
+                if data is not None:
+                    if source.write(data) != len(data):
+                        raise OSError("incomplete integration probe input")
+                    source.seek(0)
+                return subprocess.run(
+                    command + args, cwd=temporary, env=env, check=True,
+                    stdin=source, capture_output=True, timeout=GIT_PROBE_TIMEOUT_SECONDS,
+                ).stdout
 
         merged = subprocess.run(
             command + ["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", head, target],

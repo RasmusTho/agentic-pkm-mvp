@@ -16,6 +16,12 @@ and active lease conflicts before a local mutation. Dedicated worktrees use
 the remote base as publication authority, so a stale shared local base ref is
 advisory only when the dedicated `HEAD` already contains the remote head.
 
+The disposable integration oracle supplies byte input through a temporary regular
+file, including the complete NUL-separated attribute path set. This avoids pipe
+backpressure while preserving exact input, captured output, bounded Git execution,
+and fail-closed handling of temporary-file failures. Attribute response validation
+and the staging/commit content proof remain unchanged.
+
 Ordinary preflight refuses every pending Git operation, including a merge, and
 requires `HEAD` to contain `origin/main` even when local `main` equals that ref.
 For an authorized additive integration of `main`, the explicit

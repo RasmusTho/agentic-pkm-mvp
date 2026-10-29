@@ -50,12 +50,13 @@ def case(tmp_path):
     paths = {name: base / name for name in ("application", "control", "launcher", "backups")}
     for path in paths.values():
         path.mkdir(mode=0o755)
+    legacy_contract = (Path(__file__).parent / "fixtures" / "host_secret_contract_legacy.json").read_bytes()
     specs = (
         ("launcher", "yggdrasil-bws-deploy", b"#!/fixed/python\nold launcher\n", 0o755, b"#!/fixed/python\nnew launcher\n"),
         ("application", "app/ops/helper.py", b"old source\x00\xff\n", 0o600, b"new source\n"),
         ("application", "app/ops/created.py", None, None, b"new module\n"),
         ("application", "app/ops/matching.py", b"unchanged\n", 0o644, b"unchanged\n"),
-        ("application", "config/secrets/host_secret_contract.json", b'{"old":true}\n', 0o644, b'{"new":true}\n'),
+        ("application", "config/secrets/host_secret_contract.json", legacy_contract, 0o644, b'{"new":true}\n'),
         ("control", "app/ops/helper.py", b"control old\n", 0o644, b"control new\n"),
     )
     changes, payloads = [], {}
@@ -377,7 +378,8 @@ def test_partial_install_compensation_is_exact_and_owned(case, monkeypatch, faul
     def replace_file(src, dst, **kwargs):
         nonlocal calls, foreign_inode
         calls += 1
-        if fault == "rename_then_error" and calls == 2:
+        if fault == "rename_then_error" and calls == 3:
+            assert dst == "host_secret_contract.json"
             original_replace(src, dst, **kwargs)
             raise OSError("rename completed but acknowledgement failed")
         if calls == 3 and fault in {"mid_install", "foreign_same_bytes", "inplace_drift"}:

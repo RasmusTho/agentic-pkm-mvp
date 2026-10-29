@@ -1248,3 +1248,7 @@ is the system's next major frontier, and the sequencing is intentional, not an o
 ## Subscription classification comparison (#3429, 2026-10-28)
 
 The opt-in subscription comparator uses the existing no-tools Codex executor for GPT-5.6 Luna, Terra and Sol. Its Issue receipt owns measured quality and batch timing. It neither provisions an API key nor changes Product defaults; usage and API-dollar costs are unavailable from this adapter.
+
+## Subscription comparator abstention (#6422)
+
+The subscription-only evaluator now offers validated explicit abstention for unresolved intent. The original dataset, scorer and zero-tolerance mutation gate remain unchanged; the follow-up Issue receipt owns the measured rerun. Product classifier and defaults are unaffected.

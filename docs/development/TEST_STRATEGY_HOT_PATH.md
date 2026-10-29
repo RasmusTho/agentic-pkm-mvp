@@ -136,11 +136,17 @@ The runner authenticates expansion of the complete Ops directory before executio
 
 An additional closed source-installation profile permits only
 `app/ops/bws_installation_transaction.py`, `app/ops/postgres_deploy_linux.py`,
-`tests/ops/test_bws_installation_transaction.py`, and
+`tests/ops/test_bws_installation_transaction.py`, `tests/ops/test_bws_control_installation.py`,
+the exact test-data path `tests/ops/fixtures/host_secret_contract_legacy.json`, and
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, with at least one source changed and
 regular nonsymlink inputs. It omits only `test_dormant_ownership_initialization.py`;
 all other Ops modules and seven serial boundaries remain. Unknown cochanges retain broad
 coverage. The pre-existing native deployment-control profile below has precedence.
+
+The control-installation module tests the Source transaction's public-file compensation port
+with temporary files and explicit process/network/Product import guards. Its legacy contract
+fixture is test data shared with the transaction tests; other fixture or configuration paths
+retain normal routing.
 
 Dormant initialization protects Product/Runtime TEST vault and ledger ownership. Its actual
 CLI is `app.instance.runtime`, not the generic application CLI. A conservative static import

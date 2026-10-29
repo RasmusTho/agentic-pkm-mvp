@@ -1110,7 +1110,6 @@ def _source_file_inventory(roots: dict[str, Path]) -> tuple[list[dict[str, objec
 
 def _old_disk_state(config: Any, request: dict[str, str]) -> dict[str, object]:
     """Capture bounded old on-disk state without asserting which bytes it loaded."""
-    from app.ops.host_secret_contract import load_host_secret_contract_bytes
     from app.ops.bws_installation_lifecycle import _public_launcher_bytes
 
     if config.channel not in {"dev", "test"}:
@@ -1121,7 +1120,6 @@ def _old_disk_state(config: Any, request: dict[str, str]) -> dict[str, object]:
     try:
         application_fd = _open_absolute_directory(roots["application"], opened)
         contract, contract_mode = _read_relative(application_fd, _CONTRACT.as_posix())
-        load_host_secret_contract_bytes(contract)
     except Exception:
         _refuse()
     finally:
