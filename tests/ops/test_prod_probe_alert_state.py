@@ -140,7 +140,7 @@ def test_sustained_outage_alerts_once_and_recovers(
 
     assert prod_probe.run_probe(**down_kwargs) is False
     assert channel.send.call_count == 1
-    assert "down" in channel.send.call_args_list[0].args[0].lower()
+    assert "hälsoproblem" in channel.send.call_args_list[0].args[0].lower()
     assert state_file.exists()
     assert json.loads(state_file.read_text())["status"] == "down"
 
@@ -150,7 +150,7 @@ def test_sustained_outage_alerts_once_and_recovers(
 
     assert prod_probe.run_probe(**healthy_kwargs) is True
     assert channel.send.call_count == 2
-    assert "recover" in channel.send.call_args_list[1].args[0].lower()
+    assert "återställda" in channel.send.call_args_list[1].args[0].lower()
     assert not state_file.exists()
 
 
@@ -178,12 +178,12 @@ def test_distinct_outage_realerts_after_recovery(
         **{**common_kwargs, "http_get": _healthy_http_get}
     ) is True
     assert channel.send.call_count == 2
-    assert "recover" in channel.send.call_args_list[1].args[0].lower()
+    assert "återställda" in channel.send.call_args_list[1].args[0].lower()
     assert not state_file.exists()
 
     assert prod_probe.run_probe(**common_kwargs) is False
     assert channel.send.call_count == 3
-    assert "down" in channel.send.call_args_list[2].args[0].lower()
+    assert "hälsoproblem" in channel.send.call_args_list[2].args[0].lower()
     assert state_file.exists()
 
 
@@ -204,7 +204,7 @@ def test_probe_reads_required_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     assert result is False
     channel.send.assert_called_once()
-    assert "required_ok" in channel.send.call_args[0][1].lower()
+    assert "Obligatorisk hälsa: UNKNOWN" in channel.send.call_args[0][1]
 
 
 @pytest.mark.parametrize("heartbeat_payload", [[], None, 1, "heartbeat"])
@@ -230,7 +230,7 @@ def test_non_object_heartbeat_json_still_sends_down_alert(
 
     assert result is False
     channel.send.assert_called_once()
-    assert "worker heartbeat malformed: expected an object" in channel.send.call_args.args[1]
+    assert "Workerns heartbeat-kontroll misslyckades" in channel.send.call_args.args[1]
     assert json.loads(state_file.read_text())["environment"] == "prod"
 
 
@@ -317,7 +317,7 @@ def test_alert_state_from_other_environment_does_not_suppress_down_alert(
     ) is False
 
     channel.send.assert_called_once()
-    assert "PROD down" in channel.send.call_args.args[0]
+    assert "PROD hälsoproblem" in channel.send.call_args.args[0]
 
 
 def test_probe_uses_explicit_environment_and_correlates_recovery(
@@ -337,7 +337,7 @@ def test_probe_uses_explicit_environment_and_correlates_recovery(
 
     assert prod_probe.run_probe(**common, http_get=_down_http_get) is False
     down_subject, down_body = channel.send.call_args.args
-    assert down_subject == "TEST down - Yggdrasil"
+    assert down_subject == "TEST hälsoproblem - Yggdrasil"
     assert "environment: test" in down_body
     assert "severity: warning" in down_body
     assert "transition: down" in down_body
@@ -349,7 +349,7 @@ def test_probe_uses_explicit_environment_and_correlates_recovery(
 
     assert prod_probe.run_probe(**common, http_get=_healthy_http_get) is True
     recovery_subject, recovery_body = channel.send.call_args_list[-1].args
-    assert recovery_subject == "TEST recovered - Yggdrasil"
+    assert recovery_subject == "TEST övervakade kontroller återställda - Yggdrasil"
     assert "transition: recovered" in recovery_body
     assert "severity: info" in recovery_body
     assert correlation_id in recovery_body
@@ -936,10 +936,109 @@ def test_probe_main_qualifies_slow_samples_at_nominal_cadence(asynchronous_healt
         prod_probe.main(["--loop"])
     assert health.iterations == ([0.0] if sample_delay == 25 else [0.0, 60.0])
     assert health.channel.send.call_count == 1
-    assert "recovered" in health.channel.send.call_args.args[0]
+    assert "återställda" in health.channel.send.call_args.args[0]
     assert correlation in health.channel.send.call_args.args[1]
     assert health.samples == [2.0 + sample_delay]
     assert health.snapshots[-1]["checks"]["llm_access"]["capabilities"]["text_generation"]["freshness"] == "fresh"
     assert len([packet for _, packet, _ in packets if packet["url"].endswith("/api/health")]) == len(health.iterations)
     assert all(packet["url"].endswith(("/readyz", "/api/health", "?model_access_sampling=cache")) for _, packet, _ in packets)
     assert any(timeout < 10 for _, _, timeout in packets) if sample_delay != 25 else True
+
+
+def _assembled_alert(tmp_path, monkeypatch, payload, *, environment="prod"):
+    monkeypatch.setattr(prod_probe, "ALERT_STATE_FILE", tmp_path / "swedish.state")
+    channel = _make_spy_channel()
+    heartbeat = _write_fresh_heartbeat(tmp_path)
+
+    def http_get(url, timeout=10):
+        if url.endswith("/readyz"):
+            return 200, {"state": "running"}
+        return 200, payload
+
+    assert prod_probe.run_probe(
+        channel=channel, environment=environment, http_get=http_get,
+        heartbeat_path=str(heartbeat),
+    ) is False
+    return channel.send.call_args.args
+
+
+def test_swedish_health_alert_names_mandatory_failures(tmp_path, monkeypatch):
+    subject, body = _assembled_alert(tmp_path, monkeypatch, {
+        "required_ok": False,
+        "checks": {
+            "embedding_index": {"ok": False, "required": True},
+            "obsidian": {"ok": False, "required": False},
+            "ffmpeg": {"ok": False, "required": False},
+            "llm_access": {"ok": True, "required": True},
+        },
+        "runtime": {
+            "worker": {"ok": False}, "db": {"ok": False},
+            "llm": {"ok": True}, "watcher": {"ok": False},
+        },
+    })
+    assert subject == "PROD hälsoproblem - Yggdrasil"
+    assert "Obligatoriska kontroller rapporterar fel: sökindex, databas, worker" in body
+    assert "Obsidian" not in body and "ffmpeg" not in body and "watcher" not in body
+    assert "Readiness-kontrollen misslyckades" not in body
+    assert "Fullständigt driftstopp är inte fastställt" in body
+    assert "Påverkan utöver dessa observationer: UNKNOWN" in body
+    assert "Nästa steg:" in body and "RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md" in body
+
+
+@pytest.mark.parametrize("metadata", [None, [], "CANARY@everyone", {}, {
+    "CANARY@everyone": {"ok": False, "required": True},
+    "embedding_index": {"ok": "CANARY", "required": True},
+    "obsidian": {"ok": False, "required": "CANARY"},
+}])
+def test_swedish_alert_untrusted_metadata_is_bounded(tmp_path, monkeypatch, metadata):
+    monkeypatch.setattr(prod_probe, "PROBE_REMEDIATION_URL", "CANARY@everyone")
+    subject, body = _assembled_alert(tmp_path, monkeypatch, {
+        "required_ok": False, "checks": metadata, "runtime": metadata,
+        "detail": "CANARY@everyone /private/secret", "error": "CANARY",
+    }, environment="CANARY@everyone")
+    assert subject == "UNKNOWN hälsoproblem - Yggdrasil"
+    assert "UNKNOWN – detaljerad felorsak" in body
+    assert "CANARY" not in subject + body and "@everyone" not in body
+    assert "/private/secret" not in body
+    assert len(f"**{subject}**\n{body}") <= 2000
+    # Maximum finite cause set plus unbounded attacker keys still yields one bounded message.
+    (tmp_path / "swedish.state").unlink()
+    _, body = _assembled_alert(tmp_path, monkeypatch, {
+        "required_ok": False,
+        "checks": {**{k: {"ok": False} for k in prod_probe._REQUIRED_CHECK_LABELS},
+                   **{f"CANARY{i}": {"ok": False} for i in range(500)}},
+        "runtime": {k: {"ok": False} for k in prod_probe._RUNTIME_LABELS},
+    })
+    assert "CANARY" not in body
+    assert len(f"**PROD hälsoproblem - Yggdrasil**\n{body}") <= 2000
+
+
+@pytest.mark.parametrize("utc, local", [
+    ("2026-01-15T12:00:00+00:00", "2026-01-15 kl. 13:00:00 CET (+0100)"),
+    ("2026-07-15T12:00:00+00:00", "2026-07-15 kl. 14:00:00 CEST (+0200)"),
+    ("2026-10-25T00:30:00+00:00", "2026-10-25 kl. 02:30:00 CEST (+0200)"),
+    ("2026-10-25T01:30:00+00:00", "2026-10-25 kl. 02:30:00 CET (+0100)"),
+])
+def test_swedish_alert_time_and_recovery(tmp_path, monkeypatch, utc, local):
+    monkeypatch.setattr(prod_probe, "_alert_timestamp", lambda: utc)
+    _, body = _assembled_alert(tmp_path, monkeypatch, {"required_ok": False})
+    assert local in body and f"timestamp_utc: {utc}" in body
+    state = json.loads((tmp_path / "swedish.state").read_text())
+    channel = _make_spy_channel()
+    assert prod_probe.run_probe(
+        channel=channel, environment="prod", http_get=_healthy_http_get,
+        heartbeat_path=str(_write_fresh_heartbeat(tmp_path)),
+    ) is True
+    subject, recovery = channel.send.call_args.args
+    assert subject == "PROD övervakade kontroller återställda - Yggdrasil"
+    assert "De övervakade kontrollerna är åter gröna" in recovery
+    assert "bekräftar inte att hela systemet" in recovery
+    assert state["correlation_id"] in recovery and local in recovery
+
+    def missing_zone(_name):
+        raise prod_probe.ZoneInfoNotFoundError("synthetic missing zone")
+
+    monkeypatch.setattr(prod_probe, "ZoneInfo", missing_zone)
+    _, fallback = _assembled_alert(tmp_path, monkeypatch, {"required_ok": False})
+    assert "UTC (lokal tidszon saknas)" in fallback
+    assert f"timestamp_utc: {utc}" in fallback
