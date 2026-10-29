@@ -287,6 +287,14 @@ def test_supports_keyboard_focus_labels_and_responsive_layout(tmp_path, monkeypa
         assert page.locator('#operations-preview-region').evaluate('(e)=>e===document.activeElement')
         page.keyboard.press('Tab')
         assert page.locator('#operations-preview-region').evaluate('(e)=>e.contains(document.activeElement)')
+        preflight_count=len([c for c in client.calls if c[1]=='/api/operations/preconditions'])
+        page.keyboard.press('Escape')
+        page.get_by_test_id('operations-workspace').wait_for(state='hidden')
+        opener.focus()
+        page.keyboard.press('Enter')
+        assert page.locator('#operations-preview-region').evaluate('(e)=>e===document.activeElement')
+        assert page.locator('#operations-confirm').is_enabled()
+        assert len([c for c in client.calls if c[1]=='/api/operations/preconditions'])==preflight_count
         page.locator('#operations-back').click()
         assert page.locator('#operations-preview').evaluate('(e)=>e===document.activeElement')
         for width in [1440,720,390,195]:
@@ -374,4 +382,156 @@ def test_empty_discovery_and_javascript_off_are_truthful(tmp_path, monkeypatch):
         assert not [c for c in client.calls if c[1].startswith('/api/operations')]
         destination=os.environ.get('OPERATIONS_EVIDENCE_DIR')
         if destination:page.screenshot(path=str(Path(destination)/'javascript-off.png'))
+        assert errors==[] and external==[]
+
+
+def retained_snapshot(*, state='pending', cancelled=False):
+    """Server-shaped retained batch fixture for transport-ordering UI proofs."""
+    terminal=state=='succeeded'
+    outcome={'request_id':'receipt-A','operation_id':'artifact.update','status':'succeeded',
+             'receipt':{'receipt_id':'native-A'},'convergence':{'source_effect':'committed','store':'converged','index':'converged','link':'converged'}}
+    return {'batch_id':'retained-A','status':'cancelled' if cancelled else 'succeeded' if terminal else 'pending',
+            'current_admission':'original','cancel_requested':cancelled,
+            'counts':{'completed':2 if terminal else 1,'pending':0 if terminal or cancelled else 1,'recoverable':0,'cancelled':1 if cancelled else 0},
+            'items':[{'request_id':'receipt-A','artifact_id':'target-A','state':'terminal','outcome':outcome},
+                     {'request_id':'receipt-B','artifact_id':'target-B','state':'cancelled' if cancelled else 'terminal' if terminal else state,
+                      'outcome':outcome|{'request_id':'receipt-B'} if terminal else None}]}
+
+
+def install_retained_transport(page, initial):
+    state={'snapshot':initial,'reads':0,'execute':[],'cancel':[]}
+    def route_retained(route):
+        request=route.request
+        if request.method=='GET':
+            state['reads']+=1
+            if state.get('unavailable'):
+                route.fulfill(status=503,json={'detail':'operation_readback_unavailable'})
+            else:
+                route.fulfill(json=state['snapshot'])
+        elif request.url.endswith('/execute'):
+            state['execute'].append(route)
+        elif request.url.endswith('/cancel'):
+            state['cancel'].append(route)
+        else:
+            route.abort()
+    page.route('**/api/operations/batches/retained-*',route_retained)
+    page.route('**/api/operations/batches/retained-*/execute',route_retained)
+    page.route('**/api/operations/batches/retained-*/cancel',route_retained)
+    page.get_by_text('Reopen an operation after interruption',exact=True).click()
+    page.locator('#operations-reference').fill('retained-A')
+    page.locator('#operations-digest').fill('a'*64)
+    page.locator('#operations-reopen').click()
+    page.get_by_text('Runtime status: pending',exact=True).wait_for()
+    return state
+
+
+@pytest.mark.parametrize('cancel_first',[True,False])
+def test_late_mutation_response_cannot_regress_cancellation_or_change_reference(tmp_path,monkeypatch,cancel_first):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        pending=retained_snapshot()
+        transport=install_retained_transport(page,pending)
+        with page.expect_request('**/retained-A/execute'):
+            page.locator('#operations-resume').click()
+        page.wait_for_timeout(50)
+        with page.expect_request('**/retained-A/cancel'):
+            page.locator('#operations-cancel').click()
+        page.wait_for_timeout(50)
+        cancelled=retained_snapshot(cancelled=True)
+        if cancel_first:
+            transport['snapshot']=cancelled
+            transport['cancel'][0].fulfill(json=cancelled)
+            page.get_by_text('Runtime status: cancelled',exact=True).wait_for()
+            transport['execute'][0].fulfill(json=pending)
+        else:
+            transport['execute'][0].fulfill(json=pending)
+            page.wait_for_timeout(100)
+            # Cancellation still owns A; changing the reference cannot cross that in-flight boundary.
+            page.locator('#operations-reference').fill('retained-B')
+            page.locator('#operations-digest').fill('b'*64)
+            page.locator('#operations-reopen').click()
+            assert parse_qs(urlparse(page.url).query)['operation_request']==['retained-A']
+            transport['snapshot']=cancelled
+            transport['cancel'][0].fulfill(json=cancelled)
+        page.get_by_text('Runtime status: cancelled',exact=True).wait_for()
+        page.wait_for_timeout(50)
+        assert 'Cancellation requested: true' in page.locator('#operations-progress').text_content()
+        assert page.locator('#operations-resume').is_hidden()
+        assert parse_qs(urlparse(page.url).query)['operation_request']==['retained-A']
+        assert page.locator('#operations-results').evaluate('(e)=>e===document.activeElement')
+        evidence(page,'ordered-cancel-'+str(cancel_first),external,errors)
+        assert host.note.read_text().endswith('Original.\n')
+        assert errors==[] and external==[]
+
+
+@pytest.mark.parametrize('lost_response',[False,True])
+def test_pending_restart_and_lost_response_keep_passive_observation(tmp_path,monkeypatch,lost_response):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        transport=install_retained_transport(page,retained_snapshot())
+        if lost_response:
+            with page.expect_request('**/retained-A/execute'):
+                page.locator('#operations-resume').click()
+            page.wait_for_timeout(50)
+            transport['execute'][0].abort()
+            page.wait_for_function("!document.querySelector('#operations-resume').disabled")
+        initial_reads=transport['reads']
+        transport['snapshot']=retained_snapshot(state='succeeded')
+        page.get_by_text('Runtime status: succeeded',exact=True).wait_for()
+        assert transport['reads']>initial_reads
+        assert len(transport['execute'])==int(lost_response)
+        assert not [c for c in client.calls if c[1].endswith('/execute')]
+        evidence(page,'pending-observed-'+str(lost_response),external,errors)
+        assert errors==[] and external==[]
+
+
+def test_progress_preserves_disclosure_focus_and_deduplicates_item_announcements(tmp_path,monkeypatch):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        transport=install_retained_transport(page,retained_snapshot())
+        assert page.locator('#operations-results').evaluate('(e)=>e===document.activeElement')
+        disclosure=page.locator('section[aria-label="Result target-A"] details').last
+        disclosure.locator('summary').click()
+        assert disclosure.evaluate('(e)=>e.open')
+        transport['snapshot']=retained_snapshot(state='started')
+        page.get_by_text('target-B · started',exact=True).wait_for()
+        assert disclosure.evaluate('(e)=>e.open')
+        assert disclosure.locator('summary').evaluate('(e)=>e===document.activeElement')
+        announcement=page.locator('#operations-state').text_content()
+        assert 'target-B: started' in announcement
+        reads=transport['reads']
+        page.wait_for_timeout(1200)
+        assert transport['reads']>reads
+        assert page.locator('#operations-state').text_content()==announcement
+        assert disclosure.evaluate('(e)=>e.open')
+        assert disclosure.locator('summary').evaluate('(e)=>e===document.activeElement')
+        transport['unavailable']=True
+        page.locator('#operations-inspect').click()
+        page.get_by_text('Current readback unavailable;',exact=False).wait_for()
+        assert page.locator('#operations-resume').is_hidden()
+        assert disclosure.evaluate('(e)=>e.open')
+        transport['unavailable']=False
+        page.locator('#operations-inspect').click()
+        page.get_by_text('Durable readback restored.',exact=False).wait_for()
+        assert page.locator('#operations-resume').is_visible()
+        assert disclosure.evaluate('(e)=>e.open')
+        evidence(page,'focused-disclosure-live-item',external,errors)
+        assert errors==[] and external==[]
+
+
+def test_reopens_a_native_receipt_with_a_colon_identity(tmp_path,monkeypatch):
+    host=production_operation_host(tmp_path,monkeypatch)
+    response=host.client.post('/api/operations',headers=host.headers,
+        json=host.command(request_id='retained:external'))
+    assert response.status_code==200
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        page.get_by_text('Reopen an operation after interruption',exact=True).click()
+        page.locator('#operations-reference').fill('retained:external')
+        page.locator('#operations-reopen').click()
+        page.get_by_text('Source effect: committed',exact=False).wait_for()
+        assert any(c[0]=='GET' and c[1]=='/api/operations/receipts/retained:external' for c in client.calls)
         assert errors==[] and external==[]

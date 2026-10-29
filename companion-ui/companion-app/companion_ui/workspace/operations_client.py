@@ -21,7 +21,8 @@ def operations_client_script() -> str:
     if (typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(value)) {
       throw new Error('Invalid operation reference');
     }
-    return encodeURIComponent(value);
+    // The admitted alphabet is already path-segment safe, including literal colons.
+    return value;
   }
   async function request(path, body) {
     var response = await fetch(path, body === undefined ? {method:'GET', cache:'no-store'} : {

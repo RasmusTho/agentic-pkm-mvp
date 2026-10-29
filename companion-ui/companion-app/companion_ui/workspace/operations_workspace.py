@@ -103,12 +103,16 @@ def operations_workspace_script() -> str:
   function el(id) { return document.getElementById('operations-' + id); }
   function node(tag, text) { var n=document.createElement(tag); n.textContent=text==null?'':String(text); return n; }
   function json(value) { return JSON.stringify(value, null, 2); }
-  function detail(parent, label, value) { var d=node('details'),s=node('summary',label); d.append(s,node('pre',json(value))); parent.append(d); }
+  function detail(parent, label, value) {
+    var d=node('details'),s=node('summary',label);
+    d.dataset.disclosure=(parent.dataset.resultKey||'aggregate')+':'+label;
+    d.append(s,node('pre',json(value))); parent.append(d);
+  }
   function message(value) { if(el('state').textContent!==value) el('state').textContent=value; }
   function id() { return 'companion-' + crypto.randomUUID(); }
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
   var context=null, capabilities=[], resources=[], selection=new Map(), frozen=null, reference=null;
-  var cancelBusy=false, busy=false, submitted=false, timer=null, generation=0, lastResult=null, readEpoch=0;
+  var cancelBusy=false, busy=false, submitted=false, timer=null, generation=0, lastResult=null, readbackUnknown=false, readEpoch=0, effectEpoch=0, announcedItems=new Map(), aggregateAnnouncement='';
   var labels={'artifact.create':'Create','artifact.capture':'Capture','artifact.update':'Edit body',
     'artifact.move':'Move','artifact.rename':'Rename','artifact.classify':'Classify',
     'artifact.tags.add':'Add tags','artifact.tags.remove':'Remove tags','collection.reorder':'Order',
@@ -192,6 +196,9 @@ def operations_workspace_script() -> str:
     finally {busy=false;}
   }
   function remember(ref) {
+    if(!reference || reference.id!==ref.id || reference.digest!==ref.digest) {
+      ++readEpoch;announcedItems.clear();aggregateAnnouncement='';lastResult=null;readbackUnknown=false;
+    }
     reference=clone(ref);el('reference').value=ref.id;el('digest').value=ref.digest||'';
     var url=new URL(window.location.href);url.searchParams.set('operation_request',ref.id);
     if(ref.digest)url.searchParams.set('operation_digest',ref.digest);else url.searchParams.delete('operation_digest');
@@ -242,8 +249,22 @@ def operations_workspace_script() -> str:
     } catch(error) {frozen=null;lock(false);message('Preview refused: '+error.message);}
     finally {busy=false;}
   }
+  function stopObserving() {clearInterval(timer);timer=null;}
+  function observePending() {
+    if(!root.hidden && reference && reference.digest && lastResult && lastResult.counts && lastResult.counts.pending>0) {
+      if(timer===null)timer=setInterval(function(){inspect(true);},1000);
+    } else stopObserving();
+  }
   function renderResult(result) {
-    lastResult=clone(result);el('results').hidden=false;var parent=el('progress');parent.textContent='';
+    if(lastResult && json(lastResult)===json(result) && !readbackUnknown) {observePending();return;}
+    var restoredRead=readbackUnknown;readbackUnknown=false;
+    var parent=el('progress'),active=document.activeElement;
+    var focused=parent.contains(active),disclosure=focused && active.closest('details[data-disclosure]');
+    var focusedKey=disclosure && disclosure.dataset.disclosure;
+    var openKeys=new Set([...parent.querySelectorAll('details[data-disclosure]')].filter(function(d){return d.open;}).map(function(d){return d.dataset.disclosure;}));
+    var focusAction=active===el('cancel') || active===el('resume');
+    var changes=[];
+    lastResult=clone(result);el('results').hidden=false;parent.textContent='';
     parent.append(node('p','Runtime status: '+(result.status||'unknown')));
     if(result.counts)detail(parent,'Runtime counts',result.counts);
     if(result.current_admission)parent.append(node('p','Current admission: '+result.current_admission));
@@ -251,6 +272,13 @@ def operations_workspace_script() -> str:
     var items=reference&&reference.digest?result.items||[]:[{request_id:result.request_id,outcome:result}];
     items.forEach(function(item){
       var row=node('section'),outcome=item.outcome;
+      var key=item.request_id||item.artifact_id||result.request_id;
+      row.dataset.resultKey=key;
+      var itemState=json([item.state,outcome&&outcome.status,outcome&&outcome.convergence,outcome&&outcome.receipt,outcome&&outcome.recovery]);
+      if(announcedItems.get(key)!==itemState) {
+        changes.push((item.artifact_id||item.request_id||'Operation')+': '+(item.state||'')+' '+(outcome?outcome.status:''));
+        announcedItems.set(key,itemState);
+      }
       row.setAttribute('aria-label','Result '+(item.artifact_id||item.request_id));
       row.append(node('h4',(item.artifact_id||item.request_id||'Operation')+' · '+(outcome?outcome.status:item.state||'unknown')));
       if(outcome){
@@ -267,33 +295,42 @@ def operations_workspace_script() -> str:
     var isBatch=!!(reference&&reference.digest),counts=result.counts||{};
     el('cancel').hidden=!(isBatch && counts.pending>0 && !result.cancel_requested);
     el('resume').hidden=!(isBatch && result.current_admission==='original' && !result.cancel_requested && (counts.pending>0 || counts.recoverable>0));
-    el('resume').disabled=busy;el('cancel').disabled=false;
-    message('Operation '+(result.status||'unknown')+(result.counts?' · '+Object.entries(result.counts).map(function(p){return p.join(': ');}).join(', '):''));
+    el('resume').disabled=busy||cancelBusy;el('cancel').disabled=cancelBusy;
+    var disclosures=[...parent.querySelectorAll('details[data-disclosure]')];
+    disclosures.forEach(function(d){if(openKeys.has(d.dataset.disclosure))d.open=true;});
+    if(!root.hidden && focused) {
+      var restored=disclosures.find(function(d){return d.dataset.disclosure===focusedKey;});
+      if(restored)restored.querySelector('summary').focus();else el('results').focus();
+    } else if(!root.hidden && focusAction && active.hidden)el('results').focus();
+    var aggregate='Operation '+(result.status||'unknown')+(result.counts?' · '+Object.entries(result.counts).map(function(p){return p.join(': ');}).join(', '):'');
+    if(changes.length || aggregate!==aggregateAnnouncement || restoredRead)message(aggregate+(changes.length?' · '+changes.join('; '):'')+(restoredRead?' · Durable readback restored.':''));
+    aggregateAnnouncement=aggregate;observePending();
   }
   async function inspect(quiet) {
     if(!reference)return;
     var epoch=++readEpoch;
-    try {var result=reference.digest?await api.inspectBatch(reference.id,reference.digest):await api.receipt(reference.id);if(epoch!==readEpoch)return;renderResult(result);return result;}
-    catch(error){if(epoch!==readEpoch)return;el('cancel').hidden=true;el('resume').hidden=true;message('Readback unavailable; outcome unknown. Retain reference '+reference.id+'. '+error.message);if(!quiet)el('results').focus();}
+    try {var result=reference.digest?await api.inspectBatch(reference.id,reference.digest):await api.receipt(reference.id);if(epoch!==readEpoch)return;renderResult(result);if(!quiet&&!root.hidden)el('results').focus();return result;}
+    catch(error){if(epoch!==readEpoch)return;stopObserving();readbackUnknown=true;el('cancel').hidden=true;el('resume').hidden=true;message('Current readback unavailable; latest progress unknown. Retained reference '+reference.id+'. '+error.message);if(!quiet)el('results').focus();}
   }
   async function execute(resume) {
     if(busy || (!resume && (!frozen||submitted)))return;
     if(resume && (!lastResult || el('resume').hidden))return;
+    var effect=++effectEpoch;++readEpoch;
     busy=true;submitted=true;lock(true);el('confirm').disabled=true;el('resume').disabled=true;
     el('preview-region').hidden=true;el('results').hidden=false;el('results').focus();message('Execution requested. Awaiting owner receipt…');
     if(!resume)remember(frozen.batch?{id:frozen.batch.batch_id,digest:frozen.batch.digest}:{id:frozen.commands[0].request_id});
     clearInterval(timer);timer=setInterval(function(){inspect(true);},1000);
-    try {var result=reference.digest?await api.executeBatch(reference.id,reference.digest):await api.invoke(frozen.commands[0]);++readEpoch;renderResult(result);}
-    catch(error){message('Execution response unavailable; inspecting durable state. '+error.message);await inspect(true);}
-    finally {busy=false;clearInterval(timer);timer=null;el('resume').disabled=false;}
+    try {var result=reference.digest?await api.executeBatch(reference.id,reference.digest):await api.invoke(frozen.commands[0]);if(effect===effectEpoch){++readEpoch;renderResult(result);}}
+    catch(error){if(effect===effectEpoch){message('Execution response unavailable; inspecting durable state. '+error.message);await inspect(true);}}
+    finally {busy=false;el('resume').disabled=cancelBusy;}
   }
   async function cancel() {
     if(cancelBusy || !reference || !reference.digest || el('cancel').hidden)return;
-    cancelBusy=true;el('new').disabled=true;
-    el('cancel').disabled=true;
-    try {var result=await api.cancelBatch(reference.id,reference.digest);++readEpoch;renderResult(result);}
+    ++effectEpoch;++readEpoch;cancelBusy=true;el('new').disabled=true;
+    el('cancel').disabled=true;el('results').focus();
+    try {var result=await api.cancelBatch(reference.id,reference.digest);++readEpoch;renderResult(result);if(!root.hidden)el('results').focus();}
     catch(error){message('Cancellation outcome unknown. '+error.message);await inspect(true);}
-    finally {cancelBusy=false;el('new').disabled=false;}
+    finally {cancelBusy=false;el('new').disabled=false;el('cancel').disabled=false;el('resume').disabled=busy;}
   }
   function safe(action){return function(){Promise.resolve().then(action).catch(function(error){message(error.message);});};}
   el('discover').onclick=safe(discover);el('list').onclick=safe(listResources);
@@ -303,21 +340,21 @@ def operations_workspace_script() -> str:
   el('cancel').onclick=safe(cancel);el('inspect').onclick=safe(function(){return inspect(false);});
   el('back').onclick=function(){frozen=null;el('preview-region').hidden=true;lock(false);el('preview').focus();};
   el('new').onclick=safe(function(){
-    if(busy||cancelBusy)return; ++readEpoch;submitted=false;frozen=null;reference=null;lastResult=null;
+    if(busy||cancelBusy)return;stopObserving(); ++readEpoch;submitted=false;frozen=null;reference=null;lastResult=null;readbackUnknown=false;
     var url=new URL(window.location.href);url.searchParams.delete('operation_request');url.searchParams.delete('operation_digest');
-    window.history.replaceState(window.history.state,'',url);el('results').hidden=true;lock(false);renderResources();return discover();
+    window.history.replaceState(window.history.state,'',url);el('results').hidden=true;lock(false);renderResources();el('discover').focus();return discover();
   });
   el('reopen').onclick=safe(function(){
-    if(busy)return;submitted=true;frozen=null;lock(true);
+    if(busy||cancelBusy)return;submitted=true;frozen=null;lock(true);
     remember({id:el('reference').value.trim(),digest:el('digest').value.trim()||undefined});return inspect(false);
   });
   overlayHost.register('operations',{
     open:function(){root.hidden=false;el('discover').focus();
       var params=new URL(window.location.href).searchParams;
       if(!reference&&params.get('operation_request')){submitted=true;lock(true);remember({id:params.get('operation_request'),digest:params.get('operation_digest')||undefined});inspect(false);}
-      else if(reference)inspect(true);else discover();
+      else if(reference)inspect(true);else if(frozen)el('preview-region').focus();else discover();
     },
-    close:function(){root.hidden=true;}
+    close:function(){root.hidden=true;stopObserving();}
   });
 })();
 </script>"""
