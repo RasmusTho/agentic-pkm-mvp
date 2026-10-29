@@ -1,6 +1,6 @@
 ---
 status: Accepted
-owner: Architecture (Rasmus)
+owner: Architecture / CES
 date: 2026-10-29
 ---
 
