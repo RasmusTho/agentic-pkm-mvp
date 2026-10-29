@@ -177,3 +177,11 @@ vault path or index identity. Unlinked recovery and the final link both revalida
 scope, retained content and request integrity. Reasoning mirrors use the selected vault binding,
 including when the configured scalar vault consumes a compatibility projection. Every proposal,
 receipt and lock destination is checked for resolved containment before the first file effect.
+
+
+Completed replay rechecks the activation posture and retained candidate/receipt integrity, but
+appends no new activation audit receipt. The Episode lock covers that decision, so repeated worker
+delivery converges across object state, the entire vault tree and Create receipts. The shared worker
+idempotency harness exercises this topic through real synthesis and Create with only finite PG read
+ports substituted; the Episode Debrief integration suite also exercises the real migrated PG reader.
+Immutable Heimdal reads remain in the bounded storage adapter, behind the retrieval boundary.

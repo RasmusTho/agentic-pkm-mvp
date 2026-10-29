@@ -814,21 +814,10 @@ def _bound_heimdal_results(refs: list[str], *, scope: str, episode_id: str,
     Heimdal has no vault index bundle. Binding authority is the existing Episode
     ledger, never an invented vault path or payload copy of a vault binding.
     """
-    from app.db.db import conn_rw
+    from app.episode_debrief.store import bound_heimdal_observations
     from app.heimdal.publish import canonical_content_hash
-    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
     from app.episodes.segmenter import _DEFAULT_SCOPE
-    with conn_rw() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT DISTINCT ON (b.artifact_ref) b.artifact_ref, h.payload
-                FROM episode_artifact_binding b JOIN heimdal_observation_log h
-                  ON b.artifact_ref = 'heimdal.observations:' || (h.payload->'payload'->>'observation_id')
-                WHERE b.artifact_ref = ANY(%s) AND b.episode_id=%s AND b.scope=%s
-                  AND b.binding_state='active' AND b.vault_binding_id = ANY(%s)
-                ORDER BY b.artifact_ref, h.sequence DESC
-            """, (refs, episode_id, scope, sorted(binding_ids if binding_ids is not None else {COMPATIBILITY_BINDING_ID})))
-            rows = cur.fetchall()
+    rows = bound_heimdal_observations(refs, scope=scope, episode_id=episode_id, binding_ids=binding_ids)
     results = []
     for row in rows:
         ref, envelope = (row["artifact_ref"], row["payload"]) if isinstance(row, dict) else row

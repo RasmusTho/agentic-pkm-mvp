@@ -254,3 +254,20 @@ def trigger_for_episode(episode_id: str, *, vault_binding_id: str) -> dict[str, 
     if isinstance(value, str):
         value = json.loads(value)
     return dict(value['payload'])
+
+
+def bound_heimdal_observations(refs: list[str], *, scope: str, episode_id: str,
+                               binding_ids: set[str] | None) -> list[Any]:
+    """Read immutable observation envelopes through exact active Episode membership."""
+    with conn_rw() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ON (b.artifact_ref) b.artifact_ref, h.payload
+                FROM episode_artifact_binding b JOIN heimdal_observation_log h
+                  ON b.artifact_ref = 'heimdal.observations:' || (h.payload->'payload'->>'observation_id')
+                WHERE b.artifact_ref = ANY(%s) AND b.episode_id=%s AND b.scope=%s
+                  AND b.binding_state='active' AND b.vault_binding_id = ANY(%s)
+                ORDER BY b.artifact_ref, h.sequence DESC
+            """, (refs, episode_id, scope, sorted(binding_ids if binding_ids is not None else {COMPATIBILITY_BINDING_ID})))
+            rows = cur.fetchall()
+    return rows

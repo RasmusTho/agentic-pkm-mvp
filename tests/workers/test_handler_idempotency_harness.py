@@ -22,15 +22,15 @@ objects/file_state/vector index + vault writes):
   ``purge_vectors``+``upsert`` and a double-insert on redelivery is caught here;
 - **vault writes** — the tmp vault tree (hashed per file).
 
-All three MUST converge for all 9 topics (``durable_state_matches``).
+All three MUST converge for every registered topic (``durable_state_matches``).
 
 The **emitted outbox events** leg is asserted per each topic's declared
 ``_EmissionExpectation`` — never a silent empty-list compare:
 
-- IDEMPOTENT (7 emitting topics: ``ingest.object.created``,
+- IDEMPOTENT (8 emitting topics: ``ingest.object.created``,
   ``ingest.vault.changed``, ``panel.scan.requested``, ``index.embedding.requested``,
   ``promote.intent.created``, ``knowledge_acquisition.stage.completed``,
-  ``knowledge_acquisition.stage.dead_lettered``): emits >0 events on dispatch 1,
+  ``knowledge_acquisition.stage.dead_lettered``, ``debrief.trigger.created``): emits >0 events on dispatch 1,
   deduped on dispatch 2 via a content-derived dedup key (never the envelope's
   random ``event_id`` -- see the #2881 note below, and the KA-07 (#3107) note
   in ``app.workers.outbox_worker._KA_CONSUMER_SIGNAL_DEDUP`` for the two KA
@@ -117,7 +117,7 @@ from app.promotion import consumer as promotion_consumer
 from app.stores import get_vector_index
 from tests.helpers.topic_dispatch import enumerate_topic_comparators
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +518,59 @@ def _setup_ka_stage_dead_lettered(vault_root: Path, monkeypatch: pytest.MonkeyPa
     )
 
 
+def _setup_debrief_trigger_created(vault_root: Path, monkeypatch: pytest.MonkeyPatch) -> _FixtureResult:
+    # Keep the dispatcher, synthesis, retrieval, Create, knowledge seam and
+    # filesystem receipts real. Replace only the PG read adapter with finite
+    # rows; the PG production-reader proof lives in tests/episode_debrief.
+    from uuid import uuid4
+    from app.episode_debrief import store
+    from app.episode_debrief.trigger import debrief_id_for_episode
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+    from app.retrieval import hybrid
+    from app.write_guard import DEFAULT_WRITE_GUARD
+    from scripts.yaml_roundtrip import dump_frontmatter
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    initialize_test_vault(vault_root)
+    monkeypatch.delenv("INSTANCE_VAULT_REGISTRY_PATH", raising=False)
+    monkeypatch.delenv("INSTANCE_OWNERSHIP_ROOT", raising=False)
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state":"healthy"})
+    episode_id = "ep-" + str(uuid4())
+    relative = f"episodes/{episode_id}.md"
+    note = vault_root / relative
+    note.parent.mkdir(parents=True)
+    note.write_text(dump_frontmatter({"episode_id":episode_id,"title":"Harness Episode","scope":"work",
+        "time":{"start":"2026-10-13T08:00:00Z","end":"2026-10-13T10:00:00Z","closed":True},
+        "segmentation":"accepted"}, "Human-owned Episode body."))
+    docs = []
+    members = []
+    for index in range(3):
+        oid = str(uuid4())
+        source_path = f"capture-{index}.md"
+        body = f"Captured source {index}."
+        (vault_root / source_path).write_text(dump_frontmatter({"uuid":oid,"scope":"work"},body))
+        docs.append({"doc_id":oid,"text":body,"payload":{"domain":"work","note_path":source_path,
+            "review_state":"reviewed","evidence_role":"background"}})
+        members.append((oid,"work"))
+    cache = hybrid.MemoryHybridStore()
+    cache.set_documents(docs)
+    monkeypatch.setattr(hybrid, "_STORE", cache)
+    monkeypatch.setattr(hybrid, "_revalidate_cache_generation", lambda:None)
+    monkeypatch.setattr(store, "synthesis_inputs", lambda *_args, **_kwargs:
+        (store.EpisodeRow(episode_id, relative, 3), tuple(members), COMPATIBILITY_BINDING_ID))
+    monkeypatch.setattr(store, "canonical_note_identity", lambda identity, **_kwargs:identity)
+    debrief_id = debrief_id_for_episode(episode_id)
+    receipt_path = vault_root / "_system/episode-debriefs/outbox.jsonl"
+    def emissions() -> int:
+        return len(receipt_path.read_text().splitlines()) if receipt_path.exists() else 0
+    return _FixtureResult({"episode_id":episode_id,"debrief_id":debrief_id,"scope":"work","bound_artifact_count":3}, emission_count=emissions)
+
+
 TOPIC_FIXTURES: dict[str, _TopicFixture] = {
+    "debrief.trigger.created": _TopicFixture(
+        "debrief.trigger.created", _setup_debrief_trigger_created,
+        emission=_EmissionExpectation.IDEMPOTENT,
+    ),
     "ingest.object.created": _TopicFixture(
         "ingest.object.created",
         _setup_ingest_object_created,

@@ -276,10 +276,11 @@ def synthesize_debrief(
             destinations.append(canonical.with_name(f".{canonical.name}.{suffix}.lock"))
         for destination in destinations:
             _assert_selected_vault_owns_path(root, destination.resolve(), "debrief destination")
-        expansion_records.emit_expansion_gate_receipt(decision, receipt_path=activation_path)
         receipt_id = str(uuid5(NAMESPACE_URL, f"episode-debrief:{binding}:{debrief_id}"))
         with create._draft_publication_lock(path):
             raw, version, fields = _read_episode(path, episode_id, scope)
+            if not (draft_path.exists() and debrief_id in fields.get("debrief_ref", [])):
+                expansion_records.emit_expansion_gate_receipt(decision, receipt_path=activation_path)
             source_request = None
             if not draft_path.exists() or debrief_id not in fields.get("debrief_ref", []):
                 sources, sections = _sources(members, scope=scope, root=root,

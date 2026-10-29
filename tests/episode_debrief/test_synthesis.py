@@ -127,9 +127,11 @@ def test_synthesis_idempotent_per_episode(episode, monkeypatch):
     path = db.root / first["draft"]
     original = path.read_bytes()
     episode_bytes = (db.root / "episodes" / f"{ep}.md").read_bytes()
+    activation_bytes = (path.parent / "activation.jsonl").read_bytes()
     monkeypatch.setattr(create, "_run_cognition", lambda *_: pytest.fail("replay must not regenerate"))
     assert run(episode)["status"] == "already_debriefed"
     assert path.read_bytes() == original
+    assert (path.parent / "activation.jsonl").read_bytes() == activation_bytes
     assert (db.root / "episodes" / f"{ep}.md").read_bytes() == episode_bytes
     lines = (path.parent / "outbox.jsonl").read_text().splitlines()
     assert len(lines) == 1
