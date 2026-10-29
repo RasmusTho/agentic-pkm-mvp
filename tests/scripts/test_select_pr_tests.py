@@ -3386,11 +3386,15 @@ def test_bws_source_receipt_cochange_fails_closed(failure, monkeypatch):
     if failure == "no-source":
         changed = changed[1:]
     elif failure in {"unknown-source", "unknown-test", "shared-fixture"}:
-        changed.append({
+        extra = {
             "unknown-source": "app/ops/bws_new_diagnostics.py",
             "unknown-test": "tests/ops/test_bws_new_diagnostics.py",
             "shared-fixture": "tests/conftest.py",
-        }[failure])
+        }[failure]
+        changed.append(extra)
+        # An existing new file must fail the allowset, not merely is_file().
+        original_is_file = Path.is_file
+        monkeypatch.setattr(Path, "is_file", lambda path: str(path) == extra or original_is_file(path))
     else:
         kind, name = failure.split("-", 1)
         method = "is_file" if kind == "missing" else "is_symlink"
