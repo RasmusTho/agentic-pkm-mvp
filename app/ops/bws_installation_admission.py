@@ -62,6 +62,7 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "owner_launcher_profile",
     "backup_roots",
     "source_manifest",
+    "descriptor_capacity",
     "candidate_profile",
     "old_kernel_qualification",
     "qualified_writer_snapshot",

@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-28 (#6384 target-scoped BWS host-admin reads and #5337 dormant batch availability/recovery; repository-only; no live BWS, batch installation or channel verification)
+Last reviewed: 2026-10-29 (#6447 BWS full-source quota and descriptor-headroom cross-reference; repository-only; no live capacity or DEV/TEST verification; prior #6384/#5337 evidence retained)
 Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; this is not a new deployment, release or functional-acceptance receipt.
 Infrastructure reference review: 2026-10-21; other sections retain their individual verification dates.
 Local Colima startup entry reviewed 2026-10-24 against scripts/start_full_system.sh, tests/ops/test_colima_runtime_readiness.py and the isolated/default runtime receipts on Issue #4899; no TARS verification or placement change.
@@ -98,13 +98,21 @@ qualified, the transaction leaves the service stopped and its owner unresolved. 
 replays an earlier operation, retries an unknown outcome, or routes to PROD. This repository support
 does not authorize a live call or prove DEV/TEST acceptance; #3347 remains the owner gate. See the
 [detailed deployment contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery).
+The fixed full-source path also checks combined application/control inventory, prospective additions
+against the existing directory-entry ceiling, and the current process's descriptor headroom for
+retained preparation, apply, authenticated compensation, the complete installed-inventory recheck,
+and the bounded service-configuration control-root projection while the handle remains open before
+service or backup effects; unknown or insufficient capacity refuses. The generic 192-entry limit
+and 190-module provenance limit remain separate. This is repository support, not live host capacity
+or DEV/TEST acceptance evidence; see the detailed contract for the finite source and descriptor
+budgets.
 
 #### BWS source-installation refusal diagnostics
 
 A caught `refused_before_backup` receipt includes the finite `prebackup_gate` diagnostic. Its values
 are `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
 `authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
-`backup_roots`, `source_manifest`, `candidate_profile`, `old_kernel_qualification`,
+`backup_roots`, `source_manifest`, `descriptor_capacity`, `candidate_profile`, `old_kernel_qualification`,
 `qualified_writer_snapshot`, and `generation_qualification`. The diagnostic contains no exception
 text or operation input; it identifies the producer gate for that caught refusal. The
 `authority_cutover` value names a real current-writer predicate after the bound plan is read, but
