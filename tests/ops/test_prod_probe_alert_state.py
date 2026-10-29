@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import io
 import sys
 import time
+from email.message import Message
 from pathlib import Path
 from typing import Any
+import urllib.request
+import urllib.response
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +19,7 @@ PROBE_MODULE_DIR = Path(__file__).parent.parent.parent / "ops" / "host-setup" / 
 sys.path.insert(0, str(PROBE_MODULE_DIR))
 
 import prod_probe  # noqa: E402
+import notification_channels  # noqa: E402
 
 
 def _healthy_http_get(url: str, timeout: int = 10) -> tuple[int, dict[str, Any]]:
@@ -49,6 +54,63 @@ def _write_fresh_heartbeat(tmp_path: Path) -> Path:
     hb_path = tmp_path / "worker_heartbeat.json"
     hb_path.write_text(json.dumps({"ts": time.time()}))
     return hb_path
+
+
+def test_unconfirmed_discord_delivery_does_not_commit_outage_state(
+    tmp_path, monkeypatch
+):
+    """Exercise the probe, real adapter and real opener error policy together."""
+    state_file = tmp_path / "probe.state"
+    monkeypatch.setattr(prod_probe, "ALERT_STATE_FILE", state_file)
+    secret_file = tmp_path / "runtime.env"
+    secret_file.write_text(
+        "DISCORD_WEBHOOK=https://discord.com/api/webhooks/123456789/synthetic-token\n"
+    )
+    secret_file.chmod(0o600)
+    channel = notification_channels.DiscordChannel(secret_file)
+    statuses = iter([204, 200, 204, 200])
+    requests = []
+
+    def https_open(_handler, request):
+        requests.append(request)
+        status = next(statuses)
+        body = json.dumps({
+            "id": "123456790", "channel_id": "123456791", "webhook_id": "123456789"
+        }).encode() if status == 200 else b""
+        response = urllib.response.addinfourl(
+            io.BytesIO(body), Message(), request.full_url, status
+        )
+        response.msg = "synthetic response"
+        return response
+
+    monkeypatch.setattr(urllib.request.HTTPSHandler, "https_open", https_open)
+    monkeypatch.setattr(urllib.request, "_opener", None)
+    arguments = {
+        "channel": channel,
+        "environment": "test",
+        "http_get": _down_http_get,
+        "heartbeat_path": _write_fresh_heartbeat(tmp_path),
+    }
+    assert prod_probe.run_probe(**arguments) is False
+    assert not state_file.exists()
+    assert prod_probe.run_probe(**arguments) is False
+    incident = json.loads(state_file.read_text())
+    assert incident["environment"] == "test"
+    correlation = incident["correlation_id"]
+    assert prod_probe.run_probe(**arguments) is False
+    assert len(requests) == 2
+    assert json.loads(state_file.read_text())["correlation_id"] == correlation
+    arguments["http_get"] = _healthy_http_get
+    assert prod_probe.run_probe(**arguments) is True
+    assert len(requests) == 3
+    assert json.loads(state_file.read_text())["correlation_id"] == correlation
+    assert prod_probe.run_probe(**arguments) is True
+    assert len(requests) == 4
+    assert not state_file.exists()
+    payloads = [json.loads(request.data)["content"] for request in requests]
+    assert correlation in payloads[1]
+    assert correlation in payloads[2]
+    assert correlation in payloads[3]
 
 
 def test_sustained_outage_alerts_once_and_recovers(
