@@ -175,19 +175,27 @@ def operations_workspace_script() -> str:
       row.append(label,node('p','Identity: '+(item.resource_id||'unavailable')));
       detail(row,'Context and provenance',p);
       check.addEventListener('change',function(){
-        invalidate(); if(check.checked) selection.set(item.resource_id,clone(item)); else selection.delete(item.resource_id); renderArguments();
+        invalidate(); if(check.checked) selection.set(item.resource_id,clone(item)); else selection.delete(item.resource_id); renderArguments(true);
       });
       list.append(row);
     });
     // Filtered-out selections are retained and named; a new query cannot silently broaden/narrow scope.
     var hidden=[...selection.values()].filter(function(item){return !resources.some(function(r){return r.resource_id===item.resource_id;});});
     hidden.forEach(function(item){var row=node('li','Selected outside current filter: '+item.resource_id),button=node('button','Remove from selection');
-      button.type='button';button.disabled=submitted;button.addEventListener('click',function(){selection.delete(item.resource_id);invalidate();renderResources();renderArguments();});row.append(button);list.append(row);});
+      button.type='button';button.disabled=submitted;button.addEventListener('click',function(){selection.delete(item.resource_id);invalidate();renderResources();renderArguments(true);});row.append(button);list.append(row);});
   }
-  function renderArguments() {
-    var parent=el('arguments'); parent.textContent=''; var kind=el('kind').value;
+  function renderArguments(preserveDrafts) {
+    var parent=el('arguments'),kind=el('kind').value,drafts=new Map();
+    var contextKey=context?JSON.stringify([context.active_context_ref,String(context.vault_generation),el('binding').value]):'';
+    function draftKey(input) {return JSON.stringify([input.dataset.operation,input.dataset.resource||'',input.dataset.argument||input.id]);}
+    if(preserveDrafts && parent.dataset.draftContext===contextKey)parent.querySelectorAll('input,textarea').forEach(function(input){drafts.set(draftKey(input),input.value);});
+    parent.textContent='';parent.dataset.draftContext=contextKey;el('preview').disabled=!admitted(kind);
+    function restoreDraft(input) {
+      input.dataset.operation=kind;
+      if(drafts.has(draftKey(input)))input.value=drafts.get(draftKey(input));
+    }
     if (['artifact.archive','artifact.restore'].includes(kind)) {
-      var label=node('label','Source identity');label.htmlFor='operations-source';var input=node('input');input.id='operations-source';parent.append(label,input);return;
+      var label=node('label','Source identity');label.htmlFor='operations-source';var input=node('input');input.id='operations-source';restoreDraft(input);parent.append(label,input);return;
     }
     var entries=kind==='artifact.capture'?[null]:[...selection.values()];
     entries.forEach(function(item,index){
@@ -195,6 +203,7 @@ def operations_workspace_script() -> str:
       var key=kind==='artifact.update'?'body':kind==='artifact.capture'?'text':kind==='artifact.move'?'destination':'name';
       input.id='operations-argument-'+index;input.dataset.argument=key;input.dataset.resource=item?item.resource_id:'';
       label.htmlFor=input.id; label.textContent=(item?item.resource_id+' · ':'')+({body:'New body',text:'Capture text',destination:'Destination relative to selected vault',name:'New filename'}[key]);
+      restoreDraft(input);
       parent.append(label,input);
     });
     if (!entries.length) parent.append(node('p','Select at least one resource.'));
@@ -211,13 +220,14 @@ def operations_workspace_script() -> str:
       message('Resources: '+result.status+'. '+(result.warnings||[]).join(' '));
     } catch(error) {if(scope===scopeEpoch && query===listEpoch && !submitted)throw error;}
   }
-  async function discover() {
+  async function discover(preserveDrafts) {
     if(preparation||submitted)return;
     var owner={},scope=scopeEpoch;preparation=owner;message('Loading capabilities and resources…');
     try {
       var result=await api.capabilities();
       if(preparation!==owner || scope!==scopeEpoch)return;
       if(result.status!=='succeeded' || !result.context || !Array.isArray(result.items)) throw new Error(json(result));
+      var previousDraftContext=el('arguments').dataset.draftContext,previousKind=el('kind').value;
       context=clone(result.context); capabilities=result.items; el('capabilities').textContent='';el('kind').textContent='';
       var previous=el('binding').value;el('binding').textContent='';
       ((context.extensions||{}).vault_binding_ids||[]).forEach(function(binding){var opt=node('option',binding);opt.value=binding;el('binding').append(opt);});
@@ -227,9 +237,12 @@ def operations_workspace_script() -> str:
         var c=support(pair[0]), p=c&&c.payload||{},option=node('option',pair[1]+' · '+(p.support||'unavailable'));
         option.value=pair[0];option.disabled=p.support!=='supported';el('kind').append(option);
       });
-      var first=[...el('kind').options].find(function(o){return !o.disabled;});if(first)el('kind').value=first.value;
+      var sameContext=preserveDrafts!==false && previousDraftContext===JSON.stringify([context.active_context_ref,String(context.vault_generation),el('binding').value]);
+      var first=[...el('kind').options].find(function(o){return !o.disabled;});
+      if(preserveDrafts!==false && [...el('kind').options].some(function(o){return o.value===previousKind && (sameContext||!o.disabled);} ))el('kind').value=previousKind;
+      else if(first)el('kind').value=first.value;
       el('intent').disabled=!first || !el('binding').value;
-      frozen=null;el('preview-region').hidden=true;el('confirm').disabled=true;renderArguments();await listResources();
+      frozen=null;el('preview-region').hidden=true;el('confirm').disabled=true;renderArguments(sameContext && el('kind').value===previousKind);await listResources();
     } catch(error) {if(preparation===owner && scope===scopeEpoch){context=null;el('intent').disabled=true;message('Unavailable: '+error.message);}}
     finally {if(preparation===owner)preparation=null;}
   }
@@ -411,7 +424,7 @@ def operations_workspace_script() -> str:
     if(effectPending())return;stopObserving();++scopeEpoch;++generation;++listEpoch;++effectEpoch;++readEpoch;pendingRead=null;preparation=null;
     submitted=false;frozen=null;reference=null;lastResult=null;readbackUnknown=false;freshRequired=false;announcedItems.clear();aggregateAnnouncement='';
     syncReferenceURL();el('preview-region').hidden=true;el('confirm').disabled=true;el('results').hidden=true;lock(false);reconcileControls();renderResources();
-    if(foreground())el('discover').focus();return discover();
+    if(foreground())el('discover').focus();return discover(false);
   });
   el('reopen').onclick=safe(function(){
     if(effectPending())return;submitted=true;frozen=null;preparation=null;++generation;lock(true);
