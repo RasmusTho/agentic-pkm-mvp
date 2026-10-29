@@ -243,3 +243,174 @@ def test_capture_request_id_cannot_rebind_selected_target(tmp_path, monkeypatch)
     from pathlib import Path
     other = Path(host.runtime.registry.load().registrations[bindings[1]].path)
     assert all("one exact selected target" not in note.read_text() for note in other.rglob("*.md"))
+
+
+def test_http_read_version_drives_native_update_and_stale_conflict(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch)
+    read = dict(operation_id="artifact.read", request_id="public-read",
+        active_context_ref=host.selection["context"]["context_id"],
+        vault_generation=str(host.selection["context"]["generation"]),
+        target_binding_id=host.binding_id, targets=[{"artifact_id": host.artifact_id}], arguments={})
+    observed = host.client.post("/api/operations", headers=host.headers, json=read)
+    assert observed.status_code == 200 and observed.json()["status"] == "succeeded"
+    version = observed.json()["items"][0]["resulting_version"]
+    update = {**read, "operation_id": "artifact.update", "request_id": "public-update",
+        "expected_version": version, "arguments": {"body": "Updated using only HTTP.\n"}}
+    result = host.client.post("/api/operations", headers=host.headers, json=update)
+    assert result.status_code == 200 and result.json()["status"] == "convergence_pending"
+    stale = host.client.post("/api/operations", headers=host.headers,
+        json={**update, "request_id": "public-stale-update"})
+    assert stale.status_code == 200 and stale.json()["status"] == "conflicted"
+    after = host.client.post("/api/operations", headers=host.headers,
+        json={**read, "request_id": "public-read-after"})
+    assert after.json()["items"][0]["payload"]["body"].endswith("Updated using only HTTP.\n")
+
+
+@pytest.mark.parametrize(("operation", "arguments", "destination"), [
+    ("artifact.rename", {"name": "renamed.md"}, "Notes/renamed.md"),
+    ("artifact.move", {"destination": "Projects/moved.md"}, "Projects/moved.md"),
+])
+def test_http_placement_preconditions_are_native_and_non_authoritative(
+    tmp_path, monkeypatch, operation, arguments, destination,
+):
+    host = production_operation_host(tmp_path, monkeypatch)
+    (host.root / "Projects").mkdir()
+    command = dict(operation_id=operation, request_id="public-placement",
+        active_context_ref=host.selection["context"]["context_id"],
+        vault_generation=str(host.selection["context"]["generation"]),
+        target_binding_id=host.binding_id, targets=[{"artifact_id": host.artifact_id}],
+        arguments=arguments)
+    preflight = host.client.post("/api/operations/preconditions", headers=host.headers, json=command)
+    assert preflight.status_code == 200, preflight.text
+    snapshot = preflight.json()
+    assert snapshot["status"] == "observed"
+    assert isinstance(snapshot["expected_version"], str) and snapshot["expected_version"]
+    assert snapshot["arguments"]["destination_generation"]
+    assert not {"decision_token", "delegation", "receipt", "policy", "root", "path"}.intersection(snapshot)
+    assert host.note.exists() and not (host.root / destination).exists()
+    assert not (host.root / ".pkm-placement").exists()
+    effect = host.client.post("/api/operations", headers=host.headers,
+        json={**command, "expected_version": snapshot["expected_version"],
+              "arguments": snapshot["arguments"]})
+    assert effect.status_code == 200 and effect.json()["status"] in {"succeeded", "convergence_pending"}
+    assert effect.json()["convergence"]["source_effect"] == "committed"
+    read = host.client.post("/api/operations", headers=host.headers,
+        json={**command, "operation_id": "artifact.read", "request_id": "public-read-placed",
+              "arguments": {}})
+    assert read.status_code == 200 and read.json()["status"] == "succeeded"
+    assert read.json()["items"][0]["payload"]["body"].endswith("Original.\n")
+
+
+@pytest.mark.parametrize("change", ["source", "destination"])
+def test_http_placement_observation_does_not_refresh_execute_versions(tmp_path, monkeypatch, change):
+    host = production_operation_host(tmp_path, monkeypatch)
+    command = dict(operation_id="artifact.rename", request_id="placement-observed",
+        active_context_ref=host.selection["context"]["context_id"],
+        vault_generation=str(host.selection["context"]["generation"]),
+        target_binding_id=host.binding_id, targets=[{"artifact_id": host.artifact_id}],
+        arguments={"name": "occupied.md"})
+    observed = host.client.post("/api/operations/preconditions", headers=host.headers, json=command)
+    assert observed.status_code == 200, observed.text
+    snapshot = observed.json()
+    if change == "source":
+        read = host.client.post("/api/operations", headers=host.headers,
+            json={**command, "operation_id": "artifact.read", "request_id": "before-concurrent-edit", "arguments": {}})
+        changed = host.client.post("/api/operations", headers=host.headers,
+            json={**command, "operation_id": "artifact.update", "request_id": "concurrent-edit",
+                  "arguments": {"body": "Newer source must remain.\n"},
+                  "expected_version": read.json()["items"][0]["resulting_version"]})
+        assert changed.json()["status"] == "convergence_pending"
+    else:
+        (host.root / "Notes/occupied.md").write_text("Independent destination must remain.\n")
+    original = host.note.read_bytes()
+    refused = host.client.post("/api/operations", headers=host.headers,
+        json={**command, "expected_version": snapshot["expected_version"], "arguments": snapshot["arguments"]})
+    assert refused.status_code == 200 and refused.json()["status"] == "conflicted", refused.text
+    assert host.note.read_bytes() == original
+    if change == "destination":
+        assert (host.root / "Notes/occupied.md").read_text() == "Independent destination must remain.\n"
+
+
+@pytest.mark.parametrize("boundary", ["after_factory_clear", "after_factory_replace", "after_native_observation"])
+def test_preconditions_keep_original_selection_guard(tmp_path, monkeypatch, boundary):
+    host = production_operation_host(tmp_path, monkeypatch, extra_roots=("two",))
+    from app.api.routes import operations
+    from app.knowledge.placement import KnowledgePlacementOwner
+    command = dict(operation_id="artifact.rename", request_id="precondition-revoked",
+        active_context_ref=host.selection["context"]["context_id"],
+        vault_generation=str(host.selection["context"]["generation"]),
+        target_binding_id=host.binding_id, targets=[{"artifact_id": host.artifact_id}],
+        arguments={"name": "refused.md"})
+    if boundary.startswith("after_factory"):
+        factory = operations.build_production_operation_runtime
+
+        def changed(*args, **kwargs):
+            runtime = factory(*args, **kwargs)
+            if boundary == "after_factory_clear":
+                host.clear_selection()
+            else:
+                service = runtime.carrier.service
+                service.selection_store.replace_bindings(host.selection["context_selection_id"],
+                    principal=runtime.carrier.derived.principal,
+                    instance_identity=runtime.carrier.derived.instance_identity,
+                    binding_ids=[next(binding for binding in host.runtime.registry.load().registrations
+                                     if binding != host.binding_id)])
+            return runtime
+
+        monkeypatch.setattr(operations, "build_production_operation_runtime", changed)
+    else:
+        native = KnowledgePlacementOwner.destination_generation
+
+        def revoked(owner, destination):
+            generation = native(owner, destination)
+            host.clear_selection()
+            return generation
+
+        monkeypatch.setattr(KnowledgePlacementOwner, "destination_generation", revoked)
+    refused = host.client.post("/api/operations/preconditions", headers=host.headers, json=command)
+    assert refused.status_code == 403, refused.text
+    assert host.note.exists() and not (host.root / "Notes/refused.md").exists()
+    assert not (host.root / ".pkm-placement").exists()
+    assert not (host.runtime.registry.path.parent / "operation-receipts.json").exists()
+
+
+def test_preconditions_reject_client_authority_and_do_not_reserve_receipts(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch)
+    command = dict(operation_id="artifact.update", request_id="observe-only",
+        active_context_ref=host.selection["context"]["context_id"],
+        vault_generation=str(host.selection["context"]["generation"]),
+        target_binding_id=host.binding_id, targets=[{"artifact_id": host.artifact_id}],
+        arguments={"body": "Not an effect.\n"})
+    assert host.client.post("/api/operations/preconditions", json=command).status_code == 401
+    for key in ("delegation", "decision_token", "path", "receipt", "reader", "policy_decision"):
+        assert host.client.post("/api/operations/preconditions", headers=host.headers,
+            json={**command, key: "forged"}).status_code == 422
+    assert host.client.post("/api/operations/preconditions", headers=host.headers,
+        json={**command, "expected_version": "silently-refresh-this"}).status_code == 422
+    observed = host.client.post("/api/operations/preconditions", headers=host.headers, json=command)
+    assert observed.status_code == 200 and observed.json()["status"] == "observed"
+    assert host.note.read_text().endswith("Original.\n")
+    assert not (host.runtime.registry.path.parent / "operation-receipts.json").exists()
+
+
+@pytest.mark.parametrize(("operation", "arguments"), [
+    ("artifact.rename", {"name": "../escape.md"}),
+    ("artifact.rename", {"name": "back\\slash.md"}),
+    ("artifact.move", {"destination": "/tmp/escape.md"}),
+    ("artifact.move", {"destination": "../escape.md"}),
+    ("artifact.move", {"destination": ".system/escape.md"}),
+    ("artifact.move", {"destination": "Notes/human.md"}),
+])
+def test_preconditions_keep_native_destination_boundaries(tmp_path, monkeypatch, operation, arguments):
+    host = production_operation_host(tmp_path, monkeypatch)
+    command = dict(operation_id=operation, request_id="invalid-destination",
+        active_context_ref=host.selection["context"]["context_id"],
+        vault_generation=str(host.selection["context"]["generation"]),
+        target_binding_id=host.binding_id, targets=[{"artifact_id": host.artifact_id}],
+        arguments=arguments)
+    refused = host.client.post("/api/operations/preconditions", headers=host.headers, json=command)
+    assert refused.status_code in {409, 422}, refused.text
+    assert "expected_version" not in refused.json()
+    assert host.note.read_text().endswith("Original.\n")
+    assert not (host.root / ".pkm-placement").exists()
+    assert not (host.runtime.registry.path.parent / "operation-receipts.json").exists()

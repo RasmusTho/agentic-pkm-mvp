@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sys
 from time import time
 from typing import Any, Callable, Mapping
@@ -34,6 +34,7 @@ from app.operations.execution_kernel import JsonReceiptStore, OperationExecution
 from app.operations.archival_operations import ArchivalOperationServerConfig, build_archival_operation_handlers
 from app.operations.placement_operations import PlacementOperationServerConfig, build_placement_operation_handlers
 from app.knowledge.placement import KnowledgePlacementOwner
+from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
 from app.operations.read_operations import READ_OWNERS, RequestContextCarrier
 from app.operations.write_operations import (
     CAPTURE_OPERATION_ID, UPDATE_OPERATION_ID, WriteOperationServerConfig,
@@ -73,6 +74,7 @@ class ProductionOperationRuntime:
     operation_id: str
     selection_record: ContextSelectionRecord
     readback_config: WriteOperationServerConfig | None = None
+    preconditions_reader: Callable[[], Mapping[str, Any]] | None = None
     selection_check: Callable[[], None] | None = None
 
     def discovery(self) -> CapabilityDiscovery:
@@ -151,6 +153,30 @@ class ProductionOperationRuntime:
                 raise HTTPException(404, "operation_receipt_unavailable")
             return stored.outcome
 
+    def preconditions(self, operation: OperationRequest) -> dict[str, Any]:
+        """Observe native versions without executing or reserving an operation."""
+        if (operation.context.active_context_ref, operation.context.vault_generation) != (
+            self.context.active_context_ref, self.context.vault_generation
+        ):
+            raise HTTPException(409, "active_context_generation_stale")
+        if operation.operation_id != self.operation_id:
+            raise HTTPException(403, "operation_binding_mismatch")
+        if self.preconditions_reader is None:
+            return {"status": "unavailable", "operation_id": operation.operation_id,
+                    "reason": self.unavailable.get(operation.operation_id, "operation preconditions unavailable")}
+        selected = self.selection_record
+        with self.carrier.service.selection_store.read_effect_window(
+            self.carrier.override_bearer or self.carrier.session_bearer or "",
+            principal=selected.principal, instance_identity=selected.instance_identity,
+            expected_record=selected,
+        ) as require_current:
+            self.selection_check = require_current
+            try:
+                return {"status": "observed", "operation_id": operation.operation_id,
+                        "context": self.context.to_dict(), **self.preconditions_reader()}
+            finally:
+                self.selection_check = None
+
 
 def build_production_operation_runtime(
     request: Request, *, api_key: str | None, session_bearer: str | None,
@@ -228,6 +254,7 @@ def build_production_operation_runtime(
         unavailable.update({name: "qualified archive volume/retention/fixed reader/key unavailable" for name in ("artifact.archive", "artifact.restore")})
     handlers = {}
     readback_config = None
+    preconditions_reader = None
     valid_token = lambda *_: False
     version_current = lambda _: False
     policy = lambda *_: PolicyDecision.denied("governed-write.v1", "effect owner unavailable")
@@ -341,6 +368,43 @@ def build_production_operation_runtime(
 
         version_current = check_version
         policy = lambda *_: PolicyDecision.allowed("governed-write.v1", grant.decision_token.token_id)
+
+        def observe_preconditions() -> Mapping[str, Any]:
+            from app.heimdal.local_archive import OperationTargetRefused, resolve_operation_restore_target
+
+            try:
+                with context_bound_read_window(context, registry_store=registry):
+                    require_effect()
+                    arguments = dict(operation.arguments)
+                    expected: str | int | None = None
+                    if operation_id == UPDATE_OPERATION_ID:
+                        assert note_path is not None
+                        expected = read_note_text_with_version(note_path)[1]
+                    elif placement_owner is not None:
+                        key = "destination" if operation_id == "artifact.move" else "name"
+                        if set(arguments) != {key} or not isinstance(arguments[key], str):
+                            raise ValueError("one placement destination intent is required")
+                        destination = arguments[key]
+                        if operation_id == "artifact.rename":
+                            destination = str(PurePosixPath(resource).with_name(destination))
+                        expected = placement_owner.source_generation(resource, artifact_id or "")
+                        arguments["destination_generation"] = placement_owner.destination_generation(destination)
+                    elif operation_id in {"artifact.archive", "artifact.restore"}:
+                        if (len(operation.targets) != 1
+                            or operation.targets[0].get("artifact_class") != "source"):
+                            raise ValueError("one source artifact identity is required")
+                        expected = resolve_operation_restore_target(
+                            str(operation.targets[0]["artifact_id"]),
+                            service_reader=archive_configs[target_binding_id].restore_service,
+                        ).generation
+                    require_effect()
+                    return {"expected_version": expected, "arguments": arguments}
+            except (KnowledgeCapabilityError, ValueError) as exc:
+                raise HTTPException(422, "invalid_operation_preconditions") from exc
+            except (KnowledgeWriteConflict, OperationTargetRefused, OSError) as exc:
+                raise HTTPException(409, "operation_preconditions_unavailable") from exc
+
+        preconditions_reader = observe_preconditions
     elif operation is None or operation_id in READ_OWNERS or operation_id == "operation.discovery":
         def scoped_owner(item: OperationRequest) -> OwnerExecutionResult:
             # Lazy request binding is host composition, never a client-selected
@@ -361,5 +425,6 @@ def build_production_operation_runtime(
         version_checker=version_current, token_validator=valid_token,
     )
     runtime = ProductionOperationRuntime(kernel, carrier, operation_context, actor, registry,
-                                        unavailable, operation_id, selection_record, readback_config)
+        unavailable, operation_id, selection_record, readback_config,
+        preconditions_reader=preconditions_reader)
     return runtime

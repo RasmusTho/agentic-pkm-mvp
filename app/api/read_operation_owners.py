@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from app.api.routes.artifacts import _content_hash, _extract_title, _resolve_and_validate
+from app.api.routes.artifacts import _extract_title, _resolve_and_validate
 from app.api.routes.companion import (
     _collect_relation_notes,
     _rank_related_notes,
@@ -20,6 +20,7 @@ from app.api.routes.companion import (
 )
 from app.instance.context_bound_read import ContextBoundReadRoot
 from app.instance.vault_registry import VaultRegistryStore
+from app.knowledge.write_ops import read_note_text_with_version
 from app.operations.contracts import OperationItemOutcome
 from app.operations.read_operations import (
     LIST_OPERATION_ID,
@@ -124,13 +125,12 @@ def _read_owner(request, context, roots, registry_store) -> ReadResult:  # type:
     locator = str(located.note["note_path"])
     try:
         resolved = _resolve_and_validate(locator, root.root)
-        body = resolved.read_text(encoding="utf-8")
+        body, version = read_note_text_with_version(resolved)
     except FileNotFoundError:
         return ReadResult("artifact_not_found")
     except (OSError, UnicodeDecodeError):
         return ReadResult("artifact_inaccessible")
     freshness = source_freshness(context)
-    version = _content_hash(body)
     return ReadResult(
         "succeeded",
         (

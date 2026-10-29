@@ -495,6 +495,16 @@ composition or before invocation even when the replacement selects the same bind
 and namespace reservations remain the last version fences. The host's `operation-receipts.json` reuses `JsonReceiptStore` beside the
 instance registry; clients cannot choose its path, token, policy, service reader or receipt.
 
+`artifact.read` returns the HKA byte version accepted by body-edit CAS, from the same native read
+as its body. `POST /api/operations/preconditions` observes existing owner versions for a bounded
+intent: HKA body version, placement source/destination generations, or raw archive/restore
+generation. Capture append has no version requirement. Placement clients provide only a relative
+destination intent or filename; the selected native owner resolves and validates it. Observations
+hold the original selection and scoped read window, return no token, policy or receipt authority,
+and create no kernel reservation or source effect. Execution separately reauthenticates and uses
+the supplied frozen versions; a changed source or occupied destination conflicts without silently
+refreshing them. An observation is not policy approval or a guarantee that later execution succeeds.
+
 | Family | Production disposition | Canonical owner / remaining prerequisite |
 | --- | --- | --- |
 | List/read/search/related/discovery | Installed | `read_operation_owners` and the delivered read adapter; degraded reads retain typed owner outcomes. |

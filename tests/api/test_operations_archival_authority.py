@@ -74,6 +74,31 @@ def test_qualified_archive_and_restore_use_real_native_receipts(archived_host):
     assert len(raw_read_gate.all_raw_read_receipts()) == 1
 
 
+def test_http_archive_preconditions_observe_native_generation_without_effects(archived_host):
+    host = archived_host
+    journal = host.runtime.registry.path.parent / "operation-receipts.json"
+    for operation in ("artifact.archive", "artifact.restore"):
+        command = dict(operation_id=operation, request_id="http-" + operation,
+            active_context_ref=host.selection["context"]["context_id"],
+            vault_generation=str(host.selection["context"]["generation"]),
+            target_binding_id=host.binding_id,
+            targets=[{"artifact_id": raw_read_gate.raw_ref_for(host.raw_record), "artifact_class": "source"}],
+            arguments={})
+        before = journal.read_bytes() if journal.exists() else None
+        reads = len(raw_read_gate.all_raw_read_receipts())
+        observed = host.client.post("/api/operations/preconditions", headers=host.headers, json=command)
+        assert observed.status_code == 200 and observed.json()["status"] == "observed", observed.text
+        assert type(observed.json()["expected_version"]) is int
+        assert (journal.read_bytes() if journal.exists() else None) == before
+        assert len(raw_read_gate.all_raw_read_receipts()) == reads
+        effect = host.client.post("/api/operations", headers=host.headers,
+            json={**command, "expected_version": observed.json()["expected_version"]})
+        assert effect.status_code == 200 and effect.json()["status"] == "succeeded", effect.text
+        assert effect.json()["receipt"]["extensions"]["archival"]["stage"] == (
+            "retired" if operation == "artifact.archive" else "restored")
+    assert len(raw_read_gate.all_raw_read_receipts()) == 1
+
+
 @pytest.mark.parametrize("stage", ["after_archive_lock", "after_operation_binding",
     "after_reservation", "after_object_write", "after_manifest_write"])
 def test_archive_final_native_guard_refuses_cleared_selection(archived_host, monkeypatch, stage):

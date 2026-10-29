@@ -110,3 +110,23 @@ def receipt(request_id: str, request: Request,
         return runtime.receipt(request_id).to_dict()
     except (ContextSelectionError, ContextBoundReadError, BindingAuthorizationError) as exc:
         raise HTTPException(403, "operation_authority_unavailable") from exc
+
+
+@router.post("/preconditions")
+def preconditions(command: OperationCommand, request: Request,
+    api_key: str | None = Depends(api_key_header),
+    x_active_context_session: str | None = Header(default=None),
+    x_active_context_override: str | None = Header(default=None)) -> dict[str, Any]:
+    if command.expected_version is not None:
+        raise HTTPException(422, "preconditions_do_not_accept_expected_version")
+    operation = OperationRequest(command.operation_id, command.request_id,
+        OperationContext(command.active_context_ref, command.vault_generation),
+        targets=tuple(target.model_dump(exclude_none=True) for target in command.targets),
+        arguments=command.arguments)
+    runtime = _runtime(request, api_key, x_active_context_session, x_active_context_override,
+                       operation=operation, target_binding_id=command.target_binding_id)
+    try:
+        return runtime.preconditions(operation)
+    except (ContextSelectionError, ActiveContextServiceError, ContextBoundReadError,
+            GovernedWriteProtocolError, BindingAuthorizationError, ActiveContextError, WritesBlockedError) as exc:
+        raise HTTPException(403, "operation_authority_unavailable") from exc

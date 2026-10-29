@@ -116,6 +116,11 @@ last parent probes, and raw representation checks follow verification and each a
 wait. Receipt finalization and ownership-proved cleanup preserve earlier source truth rather than
 requesting new forward authority.
 
+HTTP precondition observations reuse the same server-resolved selection and native version
+readers. They issue no effect receipt or kernel reservation and return no DecisionToken or policy
+authority. A later execute request obtains current MVR-05C/GOV admission and compares its supplied
+owner-native versions; observing a newer version never silently changes an admitted intent.
+
 ## Commands
 
 - Evaluate policy.
