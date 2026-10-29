@@ -130,6 +130,39 @@ legacy `descriptor_capacity` gate and Source19's inner predicate remain unclassi
 `refused_before_backup` status and null generation and backup fields retain
 their existing meanings.
 
+OLD-kernel refusals retain the coarse `old_kernel_qualification` fallback. Supported
+new refusals use `old_kernel_initial_<family>` for service setup, retained-runtime
+entry and the first qualification, or `old_kernel_empty_control_<family>` for the
+final empty-control configuration revalidation immediately before prepare/backup.
+The closed families are:
+
+| Family | Public guard meaning | Supported stages |
+| --- | --- | --- |
+| `setup` | Fixed DEV/TEST unit selection or qualification call shape | `initial` |
+| `retained_runtime` | Registered runtime metadata, retained FD or its ownership/close contract | `initial`, `empty_control` |
+| `unit_properties` | Read-only bus transport, typed response shape or required unit/configuration properties | `initial`, `empty_control` |
+| `root_control` | Application/control projection, root identity, loader inventory, control hints or final configuration equality | `initial`, `empty_control` |
+| `launcher` | Public launcher content/identity, proposed launcher payload or start topology | `initial`, `empty_control` |
+| `service_process` | Active/running state, job/control/main PID, unit-process census or root/start/cwd/runtime/argv/main-task identity | `initial` |
+| `cleanup_contract` | Required cleanup command tuple and execution contract | `initial`, `empty_control` |
+
+These are explicit finite allowlisted gate values, not private predicate values.
+Only the lifecycle's supported refusal type and allowlisted family can refine the
+coarse gate at those two transaction sites; unknown, malformed, unsupported or
+foreign exception classifications retain `old_kernel_qualification`. No exception
+text, argv, transport output, path, environment value, PID/start token, root identity
+or credential enters this diagnostic. Existing receipts with no diagnostic or the
+coarse gate remain readable and immutable. A classified refusal still has null old,
+new and backup hashes and cannot reach prepare, backup, stop or apply. All original
+guards, their invocation order and retained-runtime cleanup remain binding.
+
+Historical Source20 remains `refused_before_backup / old_kernel_qualification`;
+its actual site, subpredicate and native values remain unknown. New source support
+does not retroactively classify it, permit replay or allocate Source21. The retained
+native effect owner alone owns any separately decided later operation under #6170.
+Source delivery establishes no native readiness, DEV/TEST acceptance, admission or
+host/service/credential authority.
+
 ### #6300 fixed-selection reconciliation (historical, count-only)
 
 The accepted V7 summary is the fixed selection of 651 items: 12 persisted, 544 missing, 95 invalid,
