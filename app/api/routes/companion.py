@@ -2192,6 +2192,26 @@ class CalibrationRevisitDismissRequest(BaseModel):
     decision_object_id: str | None = None
 
 
+class EpisodeDebriefReviewRequest(BaseModel):
+    """One explicit human disposition; there is no timeout or implicit accept."""
+
+    disposition: Literal["accepted", "dismissed"]
+
+
+class EpisodeDebriefListResponse(BaseModel):
+    fresh: list[dict[str, Any]]
+    read_only: Literal[True] = True
+
+
+class EpisodeDebriefReviewResponse(BaseModel):
+    debrief_id: str
+    episode_id: str
+    review_state: Literal["reviewed", "archived"]
+    authority_state: str
+    receipt: str
+    changed: bool
+
+
 class CalibrationRevisitActionResponse(BaseModel):
     status: Literal["answered", "dismissed"]
     decision_id: str
@@ -5931,6 +5951,67 @@ def post_calibration_revisit_dismiss(
         # an answered calibration rung.
         receipt=None,
     )
+
+
+@router.get(
+    "/episode-debriefs",
+    response_model=EpisodeDebriefListResponse | VaultSelectionRequiredResponse,
+)
+@_scoped_companion_read
+def read_companion_episode_debriefs() -> EpisodeDebriefListResponse | VaultSelectionRequiredResponse:
+    """Read-only projection of fresh debriefs from the durable debrief notes."""
+
+    from app.episode_debrief.review import list_fresh_debriefs
+
+    vault_root = _active_companion_vault_root_or_picker()
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
+    return EpisodeDebriefListResponse(fresh=list_fresh_debriefs(vault_root))
+
+
+@router.post(
+    "/episode-debriefs/{debrief_id}/review",
+    response_model=EpisodeDebriefReviewResponse | VaultSelectionRequiredResponse,
+)
+def post_companion_episode_debrief_review(
+    debrief_id: str,
+    req: EpisodeDebriefReviewRequest,
+) -> EpisodeDebriefReviewResponse | VaultSelectionRequiredResponse:
+    """Flip review_state (accept -> reviewed, dismiss -> archived); never deletes."""
+
+    from app.episode_debrief.review import (
+        WRITE_ACTION as DEBRIEF_REVIEW_WRITE_ACTION,
+        DebriefDispositionConflictError,
+        DebriefNotFoundError,
+        DebriefReviewError,
+        review_debrief,
+    )
+
+    vault_root = _active_companion_vault_root_or_picker(require_initialized=True)
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
+    try:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed(DEBRIEF_REVIEW_WRITE_ACTION)
+        result = review_debrief(debrief_id, req.disposition, vault_root=vault_root)
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "writeguard_blocked", "state": "blocked", "message": str(exc)},
+        ) from exc
+    except DebriefNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail={"error": "episode_debrief_not_found", "message": str(exc)},
+        ) from exc
+    except DebriefDispositionConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "episode_debrief_already_disposed", "message": str(exc)},
+        ) from exc
+    except DebriefReviewError as exc:
+        raise HTTPException(
+            status_code=409, detail={"error": "episode_debrief_unreviewable", "message": str(exc)},
+        ) from exc
+    return EpisodeDebriefReviewResponse(**result)
 
 
 @router.post(
