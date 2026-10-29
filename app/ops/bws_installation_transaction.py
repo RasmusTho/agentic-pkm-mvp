@@ -1350,7 +1350,7 @@ def candidate_manifest(
             or set(profile["source_packages"]) != {"application", "control"}
             or type(profile["roots"]) is not dict
             or set(profile["roots"]) != {"application", "control"}
-            or set(roots) not in ({"application", "control", "launcher"}, {"application", "launcher"})
+            or set(roots) != {"application", "control", "launcher"}
             or type(profile["contract_mode"]) is not int or profile["contract_mode"] != 0o644
             or type(profile["disk_state_sha256"]) is not str
             or re.fullmatch(r"[0-9a-f]{64}", profile["disk_state_sha256"]) is None):
@@ -1433,6 +1433,7 @@ def candidate_manifest(
         for name, root in roots.items():
             opened: list[int] = []
             root_fd = _open_absolute_directory(Path(root.path), opened)
+            root_fds[name] = (root_fd, opened)
             root_info = os.fstat(root_fd)
             if (root_info.st_dev, root_info.st_ino, root_info.st_uid, root_info.st_gid,
                     stat.S_IMODE(root_info.st_mode)) != (
@@ -1445,12 +1446,15 @@ def candidate_manifest(
                                    "mode": stat.S_IMODE(root_info.st_mode)}
                 if expected_identity != actual_identity:
                     _refuse()
-            root_fds[name] = (root_fd, opened)
 
         package_paths = {package: {path for path in candidate_file_data if path.startswith(package + "/")}
                          for package in ("app", "scripts")}
         for root_name, package_list in packages.items():
             old_paths = {path for selected_root, path in old_by_key if selected_root == root_name}
+            if not package_list:
+                if root_name != "control" or old_paths:
+                    _refuse()
+                continue
             candidate_paths = set().union(*(package_paths[package] for package in cast(list[str], package_list)))
             target_paths = candidate_paths if root_name == "application" else old_paths
             if not old_paths <= target_paths or not target_paths:
@@ -1887,7 +1891,7 @@ def _roots(config: Any, profile: dict[str, object]) -> tuple[dict[str, Any], Any
     source_roots = {
         cast(dict[str, object], row)["root"] for row in source_rows if type(row) is dict
     }
-    active_roots = {"application", "launcher"} | source_roots
+    active_roots = {"application", "control", "launcher"} | source_roots
     if not active_roots <= set(roots):
         _refuse()
     roots = {name: root for name, root in roots.items() if name in active_roots}

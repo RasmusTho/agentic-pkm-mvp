@@ -1257,6 +1257,14 @@ API migration/bootstrap, source replay or runtime entry; an environment variable
 alone never asks an older bootstrap to perform a relaxed deployment. Full retains
 the existing `channel:<SHA>` selector.
 
+For a first install where the separate control-source root has neither the `app`
+nor `scripts` package, the captured control inventory may be empty. The installer
+still reopens that root and compares its filesystem identity and complete source
+inventory with the snapshot. It omits control writes only when that captured
+inventory is empty; a changed root or a newly appearing control source refuses.
+The application inventory remains required and non-empty, and this branch does
+not establish DEV or TEST acceptance.
+
 Text activation still authenticates existing secrets and the real PostgreSQL
 backend, selected existing root, instance ownership, principal and runtime floors,
 restart fences, writer exclusion, migration inventory/execution and rollback
