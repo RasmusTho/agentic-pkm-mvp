@@ -47,6 +47,23 @@ paths rendered by `scripts/install_host_probe.py`. The installer prints a plan b
 requires `--apply` from the exact clean `origin/main` checkout before writing a host. A merged code
 change or a plan is not evidence that the service has been installed.
 
+The repository probe qualifies asynchronous health independently of the periodic Companion UI
+producer. Each iteration sends one ordinary background `/api/health` request and, for a cold/stale
+model-capability result, cache-only reads every 0.5 seconds within 45 seconds, capped at 90 cache
+reads. Each request has at most 10 seconds and only the remaining acquisition budget, including
+isolated reader startup, DNS, connection, headers and success/error body. A short-lived serial
+reader uses the same interpreter and trusted installed source, a scrubbed environment and private
+bounded JSON pipes. The parent kills and confirms reaping a timed-out reader within one additional
+second; unconfirmed termination stops the probe before another request. No timer state or
+persistent service is introduced. Cache reads do not schedule samplers or extend 30-second freshness.
+Only final `required_ok=true`, qualified activation, `/readyz` success and a fresh host heartbeat
+permit same-correlation recovery; text-capture remains cache-only and unqualified. The loop targets
+60-second iteration starts by sleeping the remaining interval after work. Source tests cover slow
+25/50/85/100-second synthetic samples and readiness/HTTP delay; slow delivery or scheduling can
+still postpone the nominal cadence, and no arbitrary latency or current-health guarantee is made.
+This source correction does not upgrade the installed package identified below or satisfy #4076's
+controlled TEST receipt.
+
 The production service reads only the declared `heimdal-external-alerts` BWS binding
 `shared/discord.webhook`; its child receives a short-lived mode-0600 runtime file and never inherits
 the BWS token. Probe state and secret-controller state stay on the host. It has no Docker service

@@ -75,6 +75,27 @@ production, so the Compose healthcheck remains a cache producer in every gateway
 Server-rendered entry and operator health reads stay passive and use the cache selector. The
 process-local observer serializes background route refreshes and queues the remaining bounded work,
 leaving a portal slot available for an ordinary Product request.
+The standalone host probe acquires its own observation: each iteration makes one ordinary
+background `/api/health` request. If required health is false and a model capability is cold or
+stale, it qualifies the result using only `model_access_sampling=cache` reads, at 0.5-second
+intervals within a 45-second acquisition deadline and at most 90 cache reads. Each HTTP request
+uses the remaining budget, capped at 10 seconds, across isolated reader startup, DNS, connection,
+headers and both success/error body reads. The same interpreter loads the trusted probe source;
+the URL travels only through a private bounded pipe, with no inherited environment or raw error
+output. Request input is capped at 16 KiB and response body/IPC output at 1 MiB. On timeout, the
+parent kills and confirms reaping the exact child within one additional second; unconfirmed
+termination stops the probe before another request. No timer handler or persistent worker is added.
+A result arriving at or after the acquisition deadline fails closed, and cache reads never enqueue
+another preflight. Final API `required_ok` and the host worker-heartbeat check still govern
+recovery; unavailable, malformed, stale or missing results cannot clear an incident. Text-capture
+remains cache-only and explicitly unqualified.
+The loop preserves nominal 60-second iteration starts by sleeping only the remaining interval.
+This avoids adding a full interval after qualification: a legal sample can complete after the
+first window and still be fresh on the next read. Source regressions cover 25/50/85/100-second
+synthetic samples, a 9-second readiness delay under the 10-second HTTP bound and bounded HTTP latency without another producer.
+The 30-second freshness rule is unchanged; slow HTTP, notification delivery or scheduling can
+postpone the nominal cadence, so these source tests do not guarantee arbitrary latency or live
+health. Installing the updated host probe and proving live recovery remain separate scoped work.
 Changes to the selected route, executor policy, policy-referenced host environment values, or
 referenced authentication files create a new configuration generation.
 The API aggregates raw observations on every request using their completion time and the existing

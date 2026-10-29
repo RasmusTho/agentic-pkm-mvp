@@ -19,6 +19,7 @@ import json
 import logging
 import math
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -224,22 +225,127 @@ def _send_recovery_alert(
 # ---------------------------------------------------------------------------
 # HTTP helpers (injectable for testing)
 # ---------------------------------------------------------------------------
-def _http_get(url: str, timeout: int = 10) -> tuple[int, dict[str, Any]]:
+_HTTP_MAX_BYTES = 1024 * 1024
+_HTTP_MAX_REQUEST_BYTES = 16384
+_HTTP_CHILD_CLEANUP_SECONDS = 1.0
+_HTTP_CHILD_CODE = (
+    "import sys; sys.path.insert(0, sys.argv[1]); "
+    "import prod_probe; prod_probe._http_get_child()"
+)
+
+
+class _HttpChildCleanupFailed(BaseException):
+    """Stop this probe if exact child termination/reaping cannot be confirmed."""
+
+
+def _terminate_http_child(child: subprocess.Popen[bytes]) -> None:
+    try:
+        if child.poll() is None:
+            try:
+                child.kill()
+            except ProcessLookupError:
+                pass
+        child.wait(timeout=_HTTP_CHILD_CLEANUP_SECONDS)
+    except BaseException:
+        raise _HttpChildCleanupFailed("HTTP child termination unconfirmed; stopping probe") from None
+    finally:
+        for pipe in (child.stdin, child.stdout, child.stderr):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass  # Never hide an unconfirmed child-reaping failure.
+
+
+def _http_get(url: str, timeout: float = 10) -> tuple[int, dict[str, Any]]:
+    """One serial, disposable reader; parent bounds even native DNS/header reads."""
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise TimeoutError("probe HTTP deadline exceeded")
+    deadline = time.monotonic() + timeout
+    request = json.dumps({"url": url, "timeout": timeout}).encode()
+    if len(request) > _HTTP_MAX_REQUEST_BYTES:
+        raise ValueError("probe HTTP request too large")
+    child = subprocess.Popen(
+        [sys.executable, "-I", "-c", _HTTP_CHILD_CODE, str(Path(__file__).resolve().parent)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env={},
+    )
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("probe HTTP reader", timeout)
+        output, _ = child.communicate(request, timeout=remaining)
+    except subprocess.TimeoutExpired:
+        _terminate_http_child(child)
+        raise TimeoutError("probe HTTP deadline exceeded") from None
+    except BaseException:
+        _terminate_http_child(child)
+        raise
+    if child.returncode is None:
+        _terminate_http_child(child)
+        raise TimeoutError("probe HTTP child completion unconfirmed")
+    if child.returncode != 0 or time.monotonic() >= deadline or len(output) > _HTTP_MAX_BYTES:
+        raise TimeoutError("probe HTTP response unavailable")
+    try:
+        result = json.loads(output)
+        if (
+            not isinstance(result, dict) or set(result) != {"status", "body"}
+            or type(result["status"]) is not int or not 100 <= result["status"] <= 599
+            or not isinstance(result["body"], dict)
+        ):
+            raise ValueError("invalid response")
+        return result["status"], result["body"]
+    except (ValueError, KeyError, TypeError):
+        raise ValueError("probe HTTP response malformed") from None
+
+
+def _http_get_child() -> None:
+    """Private bounded pipe protocol; no URL, environment or raw error output."""
+    try:
+        raw = sys.stdin.buffer.read(_HTTP_MAX_REQUEST_BYTES + 1)
+        if len(raw) > _HTTP_MAX_REQUEST_BYTES:
+            raise ValueError("request too large")
+        request = json.loads(raw)
+        if (
+            not isinstance(request, dict) or set(request) != {"url", "timeout"}
+            or not isinstance(request["url"], str)
+            or type(request["timeout"]) not in {int, float}
+            or not math.isfinite(request["timeout"]) or request["timeout"] <= 0
+        ):
+            raise ValueError("invalid request")
+        status, body = _read_http_json(request["url"], request["timeout"])
+        output = json.dumps({"status": status, "body": body}, ensure_ascii=False).encode()
+        if len(output) > _HTTP_MAX_BYTES:
+            raise ValueError("response too large")
+    except Exception:
+        output = b'{"error":true}'
+    sys.stdout.buffer.write(output)
+    sys.stdout.buffer.flush()
+
+
+def _read_http_json(url: str, timeout: float) -> tuple[int, dict[str, Any]]:
     """GET url, return (status_code, json_body). Raises on network error."""
     import urllib.request
 
     req = urllib.request.Request(url)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = json.loads(resp.read().decode())
-            return resp.status, body
+            raw = resp.read(_HTTP_MAX_BYTES + 1)
+            if len(raw) > _HTTP_MAX_BYTES:
+                raise ValueError("response too large")
+            return resp.status, json.loads(raw.decode())
     except Exception as exc:
         # urllib raises HTTPError for 4xx/5xx with no body read
         import urllib.error
 
         if isinstance(exc, urllib.error.HTTPError):
             try:
-                body = json.loads(exc.read().decode())
+                raw = exc.read(_HTTP_MAX_BYTES + 1)
+                if len(raw) > _HTTP_MAX_BYTES:
+                    raise ValueError("response too large")
+                body = json.loads(raw.decode())
             except Exception:
                 body = {}
             return exc.code, body
@@ -265,28 +371,71 @@ def _probe_readyz(
         return False, "readyz unreachable"
 
 
+# Qualification reads never enqueue work; these bounds cover one acquisition,
+# including HTTP time. The normal loop still sleeps its configured interval.
+_HEALTH_ACQUISITION_SECONDS = 45.0
+_HEALTH_CACHE_READS = 90
+_HEALTH_CACHE_INTERVAL_SECONDS = 0.5
+
+
+def _health_observation_pending(body: dict[str, Any]) -> bool:
+    """Only cold/stale model snapshots justify waiting for the scheduled sample."""
+    if body.get("full_channel_qualified") is False:
+        return False
+    checks = body.get("checks")
+    if not isinstance(checks, dict):
+        return False
+    llm = checks.get("llm_access")
+    if not isinstance(llm, dict):
+        return False
+    capabilities = llm.get("capabilities")
+    return isinstance(capabilities, dict) and any(
+        isinstance(item, dict)
+        and item.get("status") == "unknown"
+        and isinstance(item.get("reason_code"), str)
+        and item.get("reason_code") in {
+            "readiness_unknown", "missing_observation", "stale_observation"
+        }
+        for item in capabilities.values()
+    )
+
+
 def _probe_health_required_ok(
     base_url: str,
     http_get: Any = None,
 ) -> tuple[bool, str]:
-    """Check /api/health required_ok field (NOT the top-level ok).
+    """Acquire required health with one background request, then passive reads.
 
-    A payload with ok=true but required_ok=false MUST trigger an alert.
+    Trust only the API's final required_ok, never a prior success or top-level ok.
+    A cold/stale model snapshot may finish asynchronously within this finite budget.
     """
     if http_get is None:
         http_get = _http_get
-    try:
-        status, body = http_get(f"{base_url}/api/health")
+    deadline = time.monotonic() + _HEALTH_ACQUISITION_SECONDS
+    url = f"{base_url}/api/health"
+    for attempt in range(_HEALTH_CACHE_READS + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, "health acquisition deadline exceeded"
+        try:
+            status, body = http_get(url, timeout=min(10.0, remaining))
+        except Exception:
+            return False, "/api/health unreachable"
+        if time.monotonic() >= deadline:
+            return False, "health acquisition deadline exceeded"
         if status != 200:
             return False, f"/api/health returned HTTP {status}"
-        # Intentionally ignore the top-level ok; we only gate on required_ok.
-        required_ok = body.get("required_ok")
-        if required_ok is True:
+        if not isinstance(body, dict):
+            return False, "health response malformed"
+        if body.get("full_channel_qualified") is False:
+            return False, "health full channel unqualified"
+        if body.get("required_ok") is True:
             return True, "health required_ok=true"
-
-        return False, f"health required_ok={required_ok!r}"
-    except Exception:
-        return False, "/api/health unreachable"
+        if not _health_observation_pending(body) or attempt == _HEALTH_CACHE_READS:
+            return False, "health required_ok=false"
+        time.sleep(max(0.0, min(_HEALTH_CACHE_INTERVAL_SECONDS, deadline - time.monotonic())))
+        url = f"{base_url}/api/health?model_access_sampling=cache"
+    return False, "health required_ok=false"
 
 
 def _probe_worker_heartbeat(
@@ -464,6 +613,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.loop:
         while True:
+            iteration_started = time.monotonic()
             try:
                 run_probe(
                     environment=environment,
@@ -471,7 +621,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except Exception:
                 log.exception("probe iteration failed: environment=%s", environment)
-            time.sleep(interval)
+            time.sleep(max(0.0, interval - (time.monotonic() - iteration_started)))
 
     try:
         healthy = run_probe(
