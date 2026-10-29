@@ -489,8 +489,10 @@ expected version, and explicit selection preconditions. Existing loopback/proxy/
 and the provisioned principal precede instance reads. WSP resolves every effect with its own GOV
 action/write class and write permission; an MVR-05B read carrier supplies no effect decision.
 Selection, principal, ownership and binding fences plus GOV token/context validation remain held
-through native source and receipt publication. Native CAS and namespace reservations remain the
-last version fences. The host's `operation-receipts.json` reuses `JsonReceiptStore` beside the
+through native source and receipt publication. The factory captures the immutable selection record
+before context resolution; an effect fences that exact record, refusing any replacement during
+composition or before invocation even when the replacement selects the same binding. Native CAS
+and namespace reservations remain the last version fences. The host's `operation-receipts.json` reuses `JsonReceiptStore` beside the
 instance registry; clients cannot choose its path, token, policy, service reader or receipt.
 
 | Family | Production disposition | Canonical owner / remaining prerequisite |

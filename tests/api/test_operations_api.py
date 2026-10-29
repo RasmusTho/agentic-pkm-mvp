@@ -54,6 +54,84 @@ def test_expired_or_replaced_selection_cannot_borrow_old_intent(tmp_path, monkey
     assert host.note.read_text().endswith("Original.\n")
 
 
+@pytest.mark.parametrize("replacement", ["same_binding", "other_binding"])
+def test_factory_selection_replacement_cannot_authorize_old_capture(tmp_path, monkeypatch, replacement):
+    host = production_operation_host(tmp_path, monkeypatch, extra_roots=("two",))
+    from pathlib import Path
+    from app.api.routes import operations
+
+    bindings = host.runtime.registry.load().registrations
+    other_binding = next(binding for binding in bindings if binding != host.binding_id)
+    target = host.binding_id if replacement == "same_binding" else other_binding
+    command = host.command("artifact.capture", request_id="factory-selection-race",
+        targets=[], expected_version=None, arguments={"text": "stale factory must not append"})
+    real_factory = operations.build_production_operation_runtime
+    observed = {}
+
+    def replace_after_factory(*args, **kwargs):
+        runtime = real_factory(*args, **kwargs)
+        service = runtime.carrier.service
+        bearer = host.selection["context_selection_id"]
+        before = service.inspect(bearer, derived=runtime.carrier.derived)
+        after = service.selection_store.replace_bindings(bearer,
+            principal=before.principal, instance_identity=before.instance_identity,
+            binding_ids=[target])
+        observed.update(runtime=runtime, before=before, after=after)
+        return runtime
+
+    monkeypatch.setattr(operations, "build_production_operation_runtime", replace_after_factory)
+    result = host.client.post("/api/operations", headers=host.headers, json=command)
+    assert observed["before"].binding_ids == (host.binding_id,)
+    assert observed["after"].binding_ids == (target,)
+    assert observed["after"].generation == observed["before"].generation + 1
+    assert observed["runtime"].context.active_context_ref == command["active_context_ref"]
+    assert observed["runtime"].context.vault_generation == command["vault_generation"]
+    assert observed["runtime"].context.extensions["target_binding_id"] == host.binding_id
+    assert result.status_code == 403, result.text
+    assert result.json()["detail"] == "operation_authority_unavailable"
+    assert observed["runtime"].kernel.receipt_store.lookup(command["request_id"]) is None
+    for registration in bindings.values():
+        assert all("stale factory must not append" not in note.read_text()
+                   for note in Path(registration.path).rglob("*.md"))
+
+
+def test_replacement_during_factory_resolution_cannot_borrow_new_record(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch, extra_roots=("two",))
+    from pathlib import Path
+    from app.instance.active_context_service import ActiveContextSelectionService
+
+    bindings = host.runtime.registry.load().registrations
+    other_binding = next(binding for binding in bindings if binding != host.binding_id)
+    command = host.command("artifact.capture", request_id="factory-resolution-race",
+        targets=[], expected_version=None, arguments={"text": "unfenced resolved context"},
+        target_binding_id=other_binding,
+        vault_generation=str(host.selection["context"]["generation"] + 1))
+    real_resolve = ActiveContextSelectionService.resolve_request_context
+    observed = {}
+
+    def replace_before_resolve(service, **kwargs):
+        bearer = host.selection["context_selection_id"]
+        before = service.inspect(bearer, derived=kwargs["derived"])
+        after = service.selection_store.replace_bindings(bearer,
+            principal=before.principal, instance_identity=before.instance_identity,
+            binding_ids=[other_binding])
+        resolved = real_resolve(service, **kwargs)
+        observed.update(before=before, after=after, context=resolved.snapshot)
+        return resolved
+
+    monkeypatch.setattr(ActiveContextSelectionService, "resolve_request_context", replace_before_resolve)
+    result = host.client.post("/api/operations", headers=host.headers, json=command)
+    assert observed["before"].binding_ids == (host.binding_id,)
+    assert observed["after"].binding_ids == observed["context"].binding_ids == (other_binding,)
+    assert observed["after"].generation == observed["context"].generation == observed["before"].generation + 1
+    assert str(observed["context"].generation) == command["vault_generation"]
+    assert result.status_code == 403, result.text
+    assert result.json()["detail"] == "operation_authority_unavailable"
+    for registration in bindings.values():
+        assert all("unfenced resolved context" not in note.read_text()
+                   for note in Path(registration.path).rglob("*.md"))
+
+
 def test_current_gov_token_is_required_even_for_valid_selection(tmp_path, monkeypatch):
     host = production_operation_host(tmp_path, monkeypatch)
     from app.governance.governed_write import GovernedWriteAdapter, InvalidDecisionTokenError

@@ -24,7 +24,7 @@ from app.instance.active_context_service import (
 )
 from app.instance.context_bound_read import context_bound_read_window
 from app.instance.context_bound_write import context_bound_write_window
-from app.instance.context_selection import ContextSelectionError
+from app.instance.context_selection import ContextSelectionError, ContextSelectionRecord
 from app.instance.vault_registry import VaultRegistryStore
 from app.operations.contracts import (
     CapabilityAvailability, CapabilityDiscovery, CapabilitySupport, OperationContext,
@@ -71,6 +71,7 @@ class ProductionOperationRuntime:
     registry: VaultRegistryStore
     unavailable: Mapping[str, str]
     operation_id: str
+    selection_record: ContextSelectionRecord
     readback_config: WriteOperationServerConfig | None = None
     selection_check: Callable[[], None] | None = None
 
@@ -102,9 +103,7 @@ class ProductionOperationRuntime:
                                     warnings=(self.unavailable.get(request.operation_id, "operation unavailable"),))
         if request.operation_id != self.operation_id:
             raise HTTPException(403, "operation_binding_mismatch")
-        selected = self.carrier.service.inspect(
-            self.carrier.override_bearer or self.carrier.session_bearer or "", derived=self.carrier.derived
-        )
+        selected = self.selection_record
         delegation = {
             "active_context_ref": self.context.active_context_ref,
             "vault_generation": self.context.vault_generation,
@@ -169,6 +168,11 @@ def build_production_operation_runtime(
     service = build_selection_service(get_selection_store())
     derived = service.derive(subject, presented_credential=api_key)
     carrier = RequestContextCarrier(service, derived, session_bearer, override_bearer)
+    # Capture before resolving: a replacement anywhere during composition or
+    # before invocation must not fence a newer record around the old context.
+    # Inspect releases the store lock before the resolver's existing lock order.
+    selection_record = service.inspect(
+        override_bearer if override_bearer is not None else session_bearer or "", derived=derived)
     operation_id = operation.operation_id if operation else "operation.discovery"
     action, write_class = EFFECTS.get(operation_id, (ACTION_SELECTION_INSPECT, WRITE_CLASS_READ))
     context = service.resolve_request_context(
@@ -357,5 +361,5 @@ def build_production_operation_runtime(
         version_checker=version_current, token_validator=valid_token,
     )
     runtime = ProductionOperationRuntime(kernel, carrier, operation_context, actor, registry,
-                                        unavailable, operation_id, readback_config)
+                                        unavailable, operation_id, selection_record, readback_config)
     return runtime
