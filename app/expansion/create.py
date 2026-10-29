@@ -126,12 +126,13 @@ class OutputKind(str, Enum):
     OVERVIEW = "create.overview"
     ANSWER_NOTE = "create.answer_note"
     DIGEST = "create.digest"
+    EPISODE_DEBRIEF = "create.episode_debrief"
 
 
 # The closed subset `run_create_pass` will build. Anything outside this set
 # fails loud via `InvalidOutputKindError` -- no default kind (spec §2.1).
 SUPPORTED_OUTPUT_KINDS: frozenset[OutputKind] = frozenset(
-    {OutputKind.OVERVIEW, OutputKind.ANSWER_NOTE, OutputKind.DIGEST}
+    {OutputKind.OVERVIEW, OutputKind.ANSWER_NOTE, OutputKind.DIGEST, OutputKind.EPISODE_DEBRIEF}
 )
 
 CREATE_CAPABILITY_ID = "synthesis_note_proposal"
@@ -218,6 +219,7 @@ class SourceInput:
     # ``text``; durability and replay checks use these bytes so newline
     # normalization cannot erase a source mutation.
     raw_bytes: bytes | None = None
+    evidence_role: str | None = None
 
 
 class CreateIdempotencyConflictError(RuntimeError):
@@ -259,6 +261,8 @@ class CreateRequest:
     language_policy: str | None = None  # explicit human choice, else dominant-source
     trace_id: str | None = None
     digest_activity: DigestActivityInput | None = None
+    # Trigger adapter supplies source identities, never unvalidated narrative.
+    debrief_sections: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -413,7 +417,7 @@ def _build_source_refs(sources: Sequence[SourceInput]) -> tuple[SourceRef, ...]:
         SourceRef(
             artifact_id=source.object_id,
             note_path=source.note_path,
-            role="cited",
+            role=source.evidence_role or "cited",
             review_state=source.review_state,
         )
         for source in sources
@@ -442,6 +446,18 @@ def _build_synthesis_body(
         lines.append("")
     if request.kind is OutputKind.DIGEST and request.digest_activity is not None:
         lines.extend(_digest_activity_section(request.digest_activity))
+    if request.kind is OutputKind.EPISODE_DEBRIEF:
+        by_id = {source.object_id: source for source in sources}
+        for name, identities in request.debrief_sections:
+            lines.extend([f"## {name}", ""])
+            for identity in identities:
+                source = by_id[identity]
+                # Every line item has a validated SourceRef and verbatim source span.
+                for span in source.quoted_spans:
+                    lines.append(f"- {span} [source: {identity}]")
+            if not identities:
+                lines.append("- (none)")
+            lines.append("")
     lines.append("## Sources")
     lines.append("")
     for source in sources:
@@ -506,10 +522,15 @@ def _run_cognition(request: CreateRequest) -> dict[str, Any]:
     }
 
 
-def _drafts_dir(vault_root: Path) -> Path:
+def _drafts_dir(vault_root: Path, kind: OutputKind | None = None) -> Path:
     from app.vault.paths import get_vault_system_dir_rel
 
     system_root = Path(get_vault_system_dir_rel(vault_root))
+    if kind is OutputKind.EPISODE_DEBRIEF:
+        target = vault_root / "_system/episode-debriefs"
+        if not target.resolve().is_relative_to(vault_root.resolve()):
+            raise CreateIdempotencyConflictError("debrief staging path escapes the selected vault")
+        return target
     return vault_root / system_root / DRAFTS_SUBDIR
 
 
@@ -539,6 +560,9 @@ def _draft_frontmatter(
         "created": _iso(created_at),
         "expires": _iso(created_at + timedelta(days=staleness_days)),
     }
+    if kind is OutputKind.EPISODE_DEBRIEF:
+        frontmatter.pop("expires")
+        frontmatter["review_state"] = "draft"
     provenance_refs = [
         source.provenance_ref
         for source in sources
@@ -654,7 +678,7 @@ def _existing_expiry_receipt_id(
 
 
 def _request_fingerprint(request: CreateRequest) -> str:
-    material = {
+    material: dict[str, Any] = {
         "kind": request.kind.value,
         "title": request.title,
         "question": request.question,
@@ -677,6 +701,9 @@ def _request_fingerprint(request: CreateRequest) -> str:
             for source in request.sources
         ],
     }
+    if request.kind is OutputKind.EPISODE_DEBRIEF:
+        material["debrief_sections"] = request.debrief_sections
+        material["evidence_roles"] = [source.evidence_role for source in request.sources]
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -857,6 +884,16 @@ def run_create_pass(
             f"{sorted(k.value for k in SUPPORTED_OUTPUT_KINDS)}"
         )
 
+    if request.kind is OutputKind.EPISODE_DEBRIEF:
+        import re
+        names = tuple(name for name, _ in request.debrief_sections)
+        if names != ("decisions", "commitments", "open_loops", "key_captures"):
+            raise InvalidOutputKindError("episode debrief requires its four source-bound sections")
+        if not draft_id or not re.fullmatch(r"debrief-[0-9a-f]{64}", draft_id):
+            raise InvalidOutputKindError("episode debrief requires its deterministic trigger identity")
+        source_ids = {source.object_id for source in request.sources}
+        if any(identity not in source_ids for _, ids in request.debrief_sections for identity in ids):
+            raise UnresolvableCitationError("debrief section references an unadmitted source")
     now = now or _now()
     decision = evaluate_create_activation(request.kind, request.sources, now=now)
     if not decision.activatable:
@@ -876,7 +913,7 @@ def run_create_pass(
     request_fingerprint = _request_fingerprint(request) if draft_id is not None else None
     resolved_vault_root = Path(vault_root).expanduser().resolve()
     replay_draft_path = (
-        _drafts_dir(resolved_vault_root) / f"{draft_id}.md" if draft_id is not None else None
+        _drafts_dir(resolved_vault_root, request.kind) / f"{draft_id}.md" if draft_id is not None else None
     )
     if replay_draft_path is not None:
         # Replay inspection and the expiry sweep share this lock.  Otherwise a
@@ -985,7 +1022,7 @@ def run_create_pass(
     write_guard.assert_writes_allowed(CREATE_STAGING_WRITE_ACTION)
 
     vault_root = resolved_vault_root
-    drafts_dir = _drafts_dir(vault_root)
+    drafts_dir = _drafts_dir(vault_root, request.kind)
     drafts_dir.mkdir(parents=True, exist_ok=True)
 
     frontmatter = _draft_frontmatter(
@@ -1038,7 +1075,14 @@ def run_create_pass(
                 request_fingerprint=request_fingerprint,
                 draft_sha256=draft_sha256,
             )
-            _atomic_write_bytes(draft_path, note_text.encode("utf-8"))
+            if request.kind is OutputKind.EPISODE_DEBRIEF:
+                from app.knowledge.write_ops import create_candidate_note_once
+                create_candidate_note_once(
+                    draft_path.relative_to(vault_root).as_posix(), note_text,
+                    vault_root=vault_root, action=CREATE_STAGING_WRITE_ACTION, write_guard=write_guard,
+                )
+            else:
+                _atomic_write_bytes(draft_path, note_text.encode("utf-8"))
 
         receipt_id = _emit_receipt(
             CREATE_PROPOSED_EVENT,

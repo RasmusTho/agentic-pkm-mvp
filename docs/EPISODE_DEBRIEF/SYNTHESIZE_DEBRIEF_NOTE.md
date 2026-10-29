@@ -11,6 +11,19 @@ can_parallelize_with: []
 
 # Synthesize Debrief Note
 
+Repository implementation: `app/episode_debrief/synthesis.py` adapts the durable trigger through
+`app/workers/outbox_worker.py::_dispatch_topic` to `app/expansion/create.py`. The CLI
+`episode-debrief synthesize --episode <id>` replays existing durable trigger intent; it cannot
+invent an explicit-ask debrief. Bound membership is resolved through the retrieval capability
+without a similarity cutoff, retaining its scope prefilter and evidence-role clamp. Decisions
+are cited from the canonical readable receipt log within the Episode bounds. Commitment
+posture uses its dedicated `commitment_kind` and `commitment_state` fields.
+
+A draft/receipt committed before a failed Episode CAS is recovered on replay without
+regeneration. Missing or corrupt citations, scope changes, concurrent human edits and
+activation regression fail closed. The Episode update patches only the raw `debrief_ref`
+YAML value through the versioned knowledge seam, preserving unrelated formatting and bytes.
+
 ## Purpose
 
 This is the capability's actual value delivery — the retro the owner never has time to run. Rather than
@@ -145,4 +158,4 @@ the next DEBRIEF-01 reconciliation tick re-attempts cleanly since idempotency ke
 ## Related GitHub Issues
 
 One issue: `[Episode Debrief] synthesize-debrief-note: Create-engine debrief synthesis linked from the
-Episode note`. Blocked until DEBRIEF-01 merges (and transitively ERE-02/04/06).
+Episode note`. DEBRIEF-01 is delivered in #6362; DEBRIEF-03 remains separate.

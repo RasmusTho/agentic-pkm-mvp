@@ -211,6 +211,9 @@ def write_episode_note(
     preserved_body: str | None = None
     if existing_text is not None:
         existing_fields, existing_body = parse_episode_note_document(existing_text)
+        # DEBRIEF-02 is an additive link, not part of a machine segmentation rewrite.
+        if "debrief_ref" in existing_fields:
+            fields["debrief_ref"] = list(existing_fields["debrief_ref"])
         _, canonical_body = parse_episode_note_document(render_episode_note(existing_fields))
         should_preserve_body = (
             existing_body != canonical_body

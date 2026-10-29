@@ -61,6 +61,12 @@
       "enum": ["proposed", "accepted", "re-cut"],
       "description": "Segmentation lifecycle state. proposed = opt-out capture proposal (no authority); accepted = standing reached by silent acceptance; re-cut = human-corrected boundary (ERE-07)."
     },
+    "debrief_ref": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^debrief-[0-9a-f]{64}$"},
+      "uniqueItems": true,
+      "description": "Additive DEBRIEF-02 candidate references; human fields remain unchanged."
+    },
     "derived_from": {
       "$ref": "_defs.schema.json#/$defs/id_list",
       "description": "Source ids this episode was fused/derived from -- Heimdal per-session episode_ids and/or other stream boundary hints. Never a fused ep-<uuid> equal to this note's own episode_id."

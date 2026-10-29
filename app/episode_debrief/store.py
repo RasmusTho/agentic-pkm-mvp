@@ -96,7 +96,7 @@ def read_closures(
     ]
 
 
-def closed_episodes(*, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> list[EpisodeRow]:
+def closed_episodes(*, vault_binding_id: str = COMPATIBILITY_BINDING_ID, episode_id: str | None = None) -> list[EpisodeRow]:
     """Re-derive eligibility from the projection and its current active bindings."""
     with conn_rw() as conn:
         assert_replay_projection_schema(conn, "episodes")
@@ -108,10 +108,10 @@ def closed_episodes(*, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> list
                 FROM episodes e LEFT JOIN {BINDING_TABLE} b
                   ON b.vault_binding_id = e.vault_binding_id AND b.episode_id = e.episode_id
                  AND b.binding_state = %s
-                WHERE e.vault_binding_id = %s AND e.closed = true
+                WHERE e.vault_binding_id = %s AND e.closed = true AND (%s::text IS NULL OR e.episode_id = %s)
                 GROUP BY e.episode_id, e.note_path ORDER BY e.episode_id
                 """,
-                (BINDING_STATE_ACTIVE, vault_binding_id),
+                (BINDING_STATE_ACTIVE, vault_binding_id, episode_id, episode_id),
             )
             rows = cur.fetchall()
     return [
@@ -149,3 +149,73 @@ def advance_cursor(
                 """,
                 (vault_binding_id, CURSOR_KEY, json.dumps(value)),
             )
+
+
+def synthesis_inputs(
+    episode_id: str, *, projection_binding_ids: tuple[str, ...],
+) -> tuple[EpisodeRow, tuple[tuple[str, str], ...]]:
+    """Resolve the same winning projection as DEBRIEF-01 plus its active members."""
+    candidates = [
+        (row, binding)
+        for binding in projection_binding_ids
+        for row in closed_episodes(vault_binding_id=binding, episode_id=episode_id)
+        if row.episode_id == episode_id
+    ]
+    if not candidates:
+        raise ValueError("debrief episode is missing or not closed")
+    row, binding = max(candidates, key=lambda item: item[0].bound_artifact_count)
+    with conn_rw() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT artifact_ref, scope FROM {BINDING_TABLE} "
+                "WHERE vault_binding_id = %s AND episode_id = %s AND binding_state = 'active' "
+                "ORDER BY artifact_ref", (binding, episode_id),
+            )
+            rows = cur.fetchall()
+    return row, tuple(
+        (item['artifact_ref'], item['scope']) if isinstance(item, dict) else (item[0], item[1])
+        for item in rows
+    )
+
+
+def resolve_synthesis_artifact(ref: str, *, projection_binding_ids: tuple[str, ...]) -> str:
+    """Resolve vault activity provenance only inside its admitted producer bindings."""
+    if not ref.startswith("vault.activity:"):
+        return ref
+    row_id = str(UUID(ref.removeprefix("vault.activity:")))
+    with conn_rw() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT payload FROM outbox WHERE id = %s::uuid AND vault_binding_id = ANY(%s)",
+                (row_id, list(projection_binding_ids)),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise ValueError("bound activity provenance cannot be resolved")
+    value = row['payload'] if isinstance(row, dict) else row[0]
+    if isinstance(value, str):
+        value = json.loads(value)
+    payload = value.get('payload', value)
+    identity = payload.get('uuid') or payload.get('object_id')
+    if not isinstance(identity, str) or not identity:
+        raise ValueError("bound activity has no resolvable object identity")
+    return identity
+
+
+
+def trigger_for_episode(episode_id: str, *, vault_binding_id: str) -> dict[str, Any]:
+    """CLI replay consumes existing durable intent, never invents a human-triggered draft."""
+    with conn_rw() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT payload FROM outbox WHERE topic='debrief.trigger.created' "
+                "AND vault_binding_id=%s AND payload->'payload'->>'episode_id'=%s "
+                "ORDER BY created_at, id LIMIT 1", (vault_binding_id, episode_id),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise ValueError("no durable debrief trigger exists for this Episode")
+    value = row['payload'] if isinstance(row, dict) else row[0]
+    if isinstance(value, str):
+        value = json.loads(value)
+    return dict(value['payload'])

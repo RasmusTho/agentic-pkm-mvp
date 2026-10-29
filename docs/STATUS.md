@@ -97,6 +97,10 @@ and `tests/episode_debrief/test_trigger.py` production-path PostgreSQL fixtures.
 support. DEBRIEF-02 synthesis, DEBRIEF-03 review and parent #3331's composed/test-channel acceptance
 remain separate work; no deployed runtime or operator qualification is claimed.
 
+DEBRIEF-02 (#3333) adds trigger-driven Create synthesis and an additive guarded Episode
+reference. Candidates retain source refs and scope, are not indexed, and do not expire.
+DEBRIEF-03 review/disposition and parent #3331 composed acceptance remain separate.
+
 ### TypeSafe System One repository support (2026-10-06)
 
 PR #5803 merged repository support for typed Jev judgments in the Product canvas and Builder CKM,

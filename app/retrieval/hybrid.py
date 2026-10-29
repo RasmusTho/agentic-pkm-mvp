@@ -807,6 +807,40 @@ def _contain_rerank(
     return reranked
 
 
+def scoped_artifact_lookup(
+    artifact_ids: tuple[str, ...], *, scope: str | None,
+    allowed_binding_ids: set[str] | None = None,
+) -> ScopedRetrieval:
+    """Resolve explicit membership through the same scope/evidence prefilter.
+
+    No embedding, rank cutoff or reranker may substitute an unbound item. Missing
+    members remain absent for the consumer's fail-loud citation validation.
+    """
+    if not isinstance(scope, str) or not scope:
+        raise ValueError("bound artifact retrieval requires an explicit scope")
+    _revalidate_cache_generation()
+    docs = _STORE.all()
+    eligible, excluded = _partition_by_scope(docs, scope, allowed_binding_ids)
+    wanted = set(artifact_ids)
+    results = []
+    for index in eligible:
+        doc = docs[index]
+        payload = dict(doc.payload or {})
+        identities = {value for value in (doc.doc_id, doc.source_ref, payload.get("provenance_ref")) if isinstance(value, str)}
+        if not wanted.intersection(identities):
+            continue
+        results.append({
+            "id": doc.doc_id, "doc_id": doc.doc_id, "text": doc.text,
+            "score": 1.0, "snippet": None, "source_ref": doc.source_ref,
+            "payload": payload,
+            "evidence_role_in_context": _clamp_in_context(_intrinsic_evidence_role(payload)),
+        })
+    return ScopedRetrieval(
+        results=results, denials=_denials_for_excluded(excluded, scope, set()),
+        scope_policy_prefiltered=True, active_scope=scope,
+    )
+
+
 def scoped_hybrid_search(
     query: str,
     *,

@@ -123,6 +123,7 @@ outputs until the human decides"* — that sentence is this capability's contrac
 | `create.overview` | a synthesis/overview note over a topic, cluster, or note-set (the hub a `connect.cluster_emergence` finding proposes) | explicit human ask, or accepted cluster finding |
 | `create.answer_note` | an ASK answer worth keeping, filed as a note with its sources (the "answer becomes knowledge" path — extends the #2026 ASK synthesis proof from ephemeral answer to durable proposal) | explicit human ask only ("save this as a note") |
 | `create.digest` | a bounded period digest (what moved, what opened, what went quiet) | explicit ask now; later optionally *offered* via a G4 moment — offered, never auto-run |
+| `create.episode_debrief` | persistent four-section Episode retrospective, source-bound and citation-validated | durable `debrief.trigger.created` only (DEBRIEF-02); `_system/episode-debriefs/`, no expiry; additive `debrief_ref` only |
 
 Anything else is invalid — the engine fails loud; no default kind.
 
