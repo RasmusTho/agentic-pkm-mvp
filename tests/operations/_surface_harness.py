@@ -5,6 +5,7 @@ import asyncio
 from concurrent.futures import Future
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 from pathlib import Path
 from queue import Queue
@@ -37,13 +38,20 @@ def direct(host, command):
     runtime = build_production_operation_runtime(request, api_key=None,
         session_bearer=host.headers.get("X-Active-Context-Session"), override_bearer=None,
         operation=operation, target_binding_id=command.get("target_binding_id"))
-    return runtime.invoke(operation).to_dict()
+    # Compare the complete native JSON value across transport surfaces, not
+    # Python-only tuple/list representation in opaque dataclass receipts.
+    return json.loads(json.dumps(runtime.invoke(operation).to_dict(), allow_nan=False))
 
 
 @contextmanager
 def runtime_http(host):
     """Only the socket transport is bridged; all request owners remain real."""
-    calls = []
+    class RecordedCalls(list):
+        def __init__(self):
+            super().__init__()
+            self.header_names = []
+
+    calls = RecordedCalls()
     disconnect = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -54,6 +62,9 @@ def runtime_http(host):
             body = self.rfile.read(int(self.headers.get("content-length", "0"))) if method == "POST" else None
             headers = {key: value for key, value in self.headers.items() if key.lower() in {
                 "content-type", "x-active-context-session", "x-active-context-override", "x-trace-id"}}
+            # Observe the actual socket boundary before the test bridge's
+            # native-header allowlist, retaining names only, never bearers.
+            calls.header_names.append(frozenset(key.lower() for key in self.headers.keys()))
             calls.append((method, self.path))
             response = host.client.request(method, self.path, content=body, headers=headers)
             if disconnect and self.path == disconnect[0]:

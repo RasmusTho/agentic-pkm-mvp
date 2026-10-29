@@ -110,6 +110,10 @@ def test_v2_request_metadata_never_supplies_host_authority(tmp_path, monkeypatch
         assert host.note.read_bytes() == original
         if case != 'injection':
             assert not any(method == 'POST' for method, _ in calls)
+        if case in {'override', 'empty-override'}:
+            assert calls.header_names
+            assert all({'x-active-context-session', 'x-active-context-override'} <= names
+                       for names in calls.header_names)
 
 
 def test_v2_incomplete_native_schema_is_a_typed_refusal_before_dispatch(tmp_path, monkeypatch):
@@ -140,9 +144,16 @@ def test_v2_carriers_are_request_scoped_and_forged_headers_never_reach_native_id
         first = client.payload('mimer.v2.operation.discovery')
         assert first['status'] == 'succeeded'
         assert host.headers['X-Active-Context-Session'] not in str(first)
+        assert 'x-active-context-session' in calls.header_names[0]
+        assert all(not {'x-api-key', 'x-forwarded-for', 'principal', 'mimer/identity'}.intersection(names)
+                   for names in calls.header_names)
+        completed = len(calls)
         client.meta = {}
         second = client.call('mimer.v2.operation.discovery')
         assert second.isError and '401' in second.content[0].text
+        assert calls.header_names[completed:]
+        assert all('x-active-context-session' not in names and 'x-active-context-override' not in names
+                   for names in calls.header_names[completed:])
         assert not any(method == 'POST' for method, _ in calls)
 
 
