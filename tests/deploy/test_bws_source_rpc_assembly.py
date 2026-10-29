@@ -21,7 +21,11 @@ import pytest
 from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
 
-def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path) -> None:
+_ROOT_RPC_BATCHES = {'empty': 5, 'anchored': 4, 'alias': 1, 'proposed': 1, 'uncertain': 1}
+
+
+def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path,
+              batch: int | None = None) -> None:
     """Run in a disposable interpreter; no native configuration is consulted."""
     # Keep actual Git commands/bytes/readers on macOS, using a regular stdin
     # file for the external batch transport after observing blocked pipe writes.
@@ -318,6 +322,21 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                           expected_gate='old_kernel_initial_retained_runtime')]
         if fault.endswith('alias'):
             cases = [dict(expected=('anchored_discovery', 'unknown', 'roots', 'separation'), stage='initial')]
+        total_cases = len(cases)
+        mode = fault.removeprefix('root-matrix-')
+        batch_count = _ROOT_RPC_BATCHES[mode]
+        # Disjoint strides partition the unchanged semantic case list exactly.
+        # Bound each actual subprocess group under CI's unchanged 120s timer;
+        # the existing child timeout remains 600s as its cleanup backstop.
+        case_indices = list(range(total_cases))
+        if batch is not None:
+            assert 0 <= batch < batch_count
+            groups = [set(range(i, total_cases, batch_count)) for i in range(batch_count)]
+            assert set.union(*groups) == set(range(total_cases))
+            assert sum(map(len, groups)) == total_cases
+            case_indices = list(range(batch, total_cases, batch_count))
+            cases = [cases[i] for i in case_indices]
+            assert 1 <= len(cases) <= 15
         proved = set()
         for index, case in enumerate(cases):
             request['operation_id'] = str(uuid.uuid4())
@@ -371,7 +390,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             assert {p.name: p.read_bytes() for p in state['receipts'].iterdir()} == terminal_files
             setattr(sys, namespace['_VERIFIED_CANDIDATE_ENTRYPOINT'], marker)
         sys.stdout = sys.__stdout__
-        print(json.dumps(dict(status='matrix', cases=len(cases), guards=len(proved), restored=True,
+        print(json.dumps(dict(status='matrix', cases=len(cases), total_cases=total_cases, case_indices=case_indices,
+                              guards=len(proved), restored=True,
                               source_only=sys.pycache_prefix == '/dev/null')))
         return
     status = namespace["run"]()
@@ -416,13 +436,14 @@ def test_assembled_source_rpc_uses_real_descriptor_envelope(secure_tmp_path, cha
 
 
 @pytest.mark.parametrize("channel", ["dev", "test"])
-@pytest.mark.parametrize("mode", ["empty", "anchored", "alias", "proposed", "uncertain"])
-def test_root_control_leaf_diagnostics_cross_verified_source_rpc(secure_tmp_path, channel, mode):
+@pytest.mark.parametrize("mode,batch", [(mode, batch) for mode, count in _ROOT_RPC_BATCHES.items()
+                                        for batch in range(count)])
+def test_root_control_leaf_diagnostics_cross_verified_source_rpc(secure_tmp_path, channel, mode, batch):
     with tempfile.TemporaryDirectory(prefix="pkm-source-journal-") as directory:
         completed = subprocess.run(
             [sys.executable, "-m", "tests.deploy.test_bws_source_rpc_assembly", str(secure_tmp_path),
              str(Path(__file__).resolve().parents[2]), channel, 'root-matrix-' + mode,
-             str(Path(directory).resolve())],
+             str(Path(directory).resolve()), str(batch)],
             cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=600,
         )
     if mode == 'uncertain':
@@ -433,8 +454,11 @@ def test_root_control_leaf_diagnostics_cross_verified_source_rpc(secure_tmp_path
     assert completed.returncode == 0, completed.stderr
     result = json.loads(completed.stdout)
     assert result['restored'] and result['source_only']
-    assert result['cases'] >= (40 if mode in {'empty', 'anchored'} else 1)
+    assert result['total_cases'] >= (40 if mode in {'empty', 'anchored'} else 1)
+    assert 1 <= result['cases'] <= 15
+    assert result['case_indices'] == list(range(batch, result['total_cases'], _ROOT_RPC_BATCHES[mode]))
 
 
 if __name__ == "__main__":
-    _exercise(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4], Path(sys.argv[5]))
+    _exercise(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4], Path(sys.argv[5]),
+              int(sys.argv[6]) if len(sys.argv) > 6 else None)

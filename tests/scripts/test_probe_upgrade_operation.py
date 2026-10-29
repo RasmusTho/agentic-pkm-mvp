@@ -52,6 +52,7 @@ class OfflineHost:
         self.proc, self.cgroup = root / "proc", root / "cgroup"
         self.operation_root = root / "operations"
         self.events, self.phases, self.sleeps = [], [], []
+        self.clock = SimpleNamespace(monotonic=time.monotonic, sleep=self.sleeps.append)
         self.on_phase = self.after_start = None
         self.journal_rows = None
         self.starts, self.reuse_invocation = 0, False
@@ -88,9 +89,12 @@ class OfflineHost:
         )
         monkeypatch.setattr(operation.pwd, "getpwall", lambda: [account])
         monkeypatch.setattr(operation.os, "listxattr", lambda _: [], raising=False)
-        monkeypatch.setattr(operation.time, "sleep", self.sleeps.append)
+        monkeypatch.setattr(carrier, "time", self.clock)
 
     def bind(self, module):
+        # Include assembled remote modules while leaving subprocess.wait's
+        # shared stdlib polling clock real and outside the observation recorder.
+        self.monkeypatch.setattr(module, "time", self.clock)
         for name, value in {
             "PACKAGE": self.package,
             "SCRIPT": self.script,
@@ -404,6 +408,7 @@ def host(tmp_path, monkeypatch):
 
 
 def test_real_operation_keeps_incident_source_closure_and_new_incarnation(host):
+    assert operation.time is carrier.time and operation.time is not time
     incident = host.incident.read_bytes()
     result = host.run()
     assert result["status"] == "committed", result
