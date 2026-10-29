@@ -118,6 +118,27 @@ notification through Discord after resolving its declared BWS binding, then clea
 after the first healthy run so a later distinct outage can alert again. Each alert identifies the
 source system, environment, severity, transition, UTC timestamp, correlation ID, and remediation
 URL. A sustained outage and its recovery share the same correlation ID.
+The source template leads with `PROD hälsoproblem` (or `TEST hälsoproblem`), not a
+claim of total outage. It names failed required checks from the finite health-producer mapping
+and mandatory runtime database, worker and model components. Optional failures are excluded;
+watcher requirement is producer-local and is not inferred from a failed watcher observation.
+Unknown or malformed cause metadata yields plain Swedish uncertainty in the human text;
+`UNKNOWN` is reserved for technical metadata. Raw health details,
+errors, paths and arbitrary keys never become notification text. Templates are deterministic;
+there is no language-model call or inferred cause, impact or repair claim. Broader impact remains
+unknown in plain Swedish (`impact: UNKNOWN` in the footer); recovery says only that the monitored readiness, required health and heartbeat checks
+are green, using the same incident correlation.
+
+Messages include Swedish local date/time in `Europe/Stockholm` (with DST and numeric offset),
+fall back to UTC when zone data is unavailable, and retain UTC, transition, severity, source and
+correlation metadata below the human text. The finite template fits Discord's 2,000-character
+content limit including its bold subject wrapper; the sender itself does not truncate. The next
+step points to the fixed incident runbook URL rather than echoing runtime URL configuration.
+Use the raw health surface separately for investigation; the alert does not reproduce diagnostics.
+This source change does not upgrade an already installed probe. The #4076 owner retains deployed
+upgrade and controlled TEST acceptance; the dated installation receipts below remain historical
+facts for their exact source versions.
+
 Relabel the existing Makefile targets
 `verify-prod-channel` (line 210) and `verify-test-channel` (line 204) so their
 names reflect what they actually do — run pytest channel-isolation suites — and

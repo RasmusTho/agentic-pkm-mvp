@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from notification_channels import (
     NotificationChannel,
@@ -146,6 +147,77 @@ def _alert_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+# Only producer-owned identifiers become human text. Diagnostic values never do.
+_REQUIRED_CHECK_LABELS = {
+    "index_outbox": "indexets utkorg",
+    "obsidian": "Obsidian-beroenden",
+    "llm_access": "modellåtkomst",
+    "llm_task_routes": "modellrutter",
+    "embedding_index": "sökindex",
+}
+_RUNTIME_LABELS = {"db": "databasen", "worker": "bakgrundsarbetaren", "llm": "modellkörning"}
+_UNKNOWN_CAUSE = "Hälsokontrollen kunde inte bekräftas. Vi saknar säkra uppgifter om vad som är fel."
+_RUNBOOK_URL = (
+    "https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/"
+    "docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md"
+)
+
+
+def _health_failure_reason(body: dict[str, Any]) -> str:
+    """Project the producer's required conjunction into finite internal tokens.
+
+    db/worker/llm are mandatory in _runtime_ok. Watcher is conditional on a
+    producer-local setting absent from this payload, so do not infer its role.
+    """
+    if body.get("required_ok") is not False:
+        return "health required_ok=false"
+    tokens = []
+    checks = body.get("checks")
+    runtime = body.get("runtime")
+    if isinstance(checks, dict):
+        for key in _REQUIRED_CHECK_LABELS:
+            item = checks.get(key)
+            if (isinstance(item, dict) and item.get("ok") is False
+                    and item.get("required", True) is True):
+                tokens.append("check." + key)
+    if isinstance(runtime, dict):
+        for key in _RUNTIME_LABELS:
+            item = runtime.get(key)
+            if isinstance(item, dict) and item.get("ok") is False:
+                tokens.append("runtime." + key)
+    # Unknown components and malformed metadata are deliberately not interpolated.
+    return "health required_ok=false" + (":" + ",".join(tokens) if tokens else "")
+
+
+def _human_observations(details: list[str]) -> list[str]:
+    observations = []
+    labels = {"check." + k: v for k, v in _REQUIRED_CHECK_LABELS.items()}
+    labels.update({"runtime." + k: v for k, v in _RUNTIME_LABELS.items()})
+    for detail in details[:3]:  # readyz, health, host heartbeat only
+        if detail.startswith("health required_ok=false"):
+            tokens = detail.partition(":")[2].split(",")
+            names = [label for key, label in labels.items() if key in tokens]
+            observations.append("Obligatoriska kontroller rapporterar fel: " + ", ".join(names)
+                                if names else _UNKNOWN_CAUSE)
+        elif detail == "/api/health unreachable":
+            observations.append("Hälsokontrollen kunde inte nå API:t; vi vet ännu inte varför.")
+        elif detail.startswith("/api/health returned HTTP "):
+            observations.append("Hälsokontrollen fick ett HTTP-felsvar; vi vet ännu inte varför.")
+        elif detail == "health acquisition deadline exceeded":
+            observations.append("Hälsokontrollen hann inte slutföras inom tidsgränsen; vi vet ännu inte varför.")
+        elif detail == "health response malformed":
+            observations.append("Hälsosvaret kunde inte tolkas; vi vet ännu inte varför.")
+        elif detail == "health full channel unqualified":
+            observations.append("Hälsokontrollen kunde inte bekräfta den valda miljöns beredskap.")
+        elif detail == "readyz unreachable" or detail.startswith("readyz returned HTTP "):
+            observations.append("Kontrollen av tjänstens beredskap misslyckades.")
+        elif detail.startswith("worker heartbeat"):
+            observations.append("Bakgrundsarbetarens livssignal kunde inte bekräftas.")
+        else:
+            observations.append(_UNKNOWN_CAUSE)
+    return list(dict.fromkeys(observations)) or [_UNKNOWN_CAUSE]
+
+
 def _alert_body(
     *,
     environment: str,
@@ -154,17 +226,38 @@ def _alert_body(
     correlation_id: str,
     details: list[str],
 ) -> str:
-    lines = [
+    timestamp = _alert_timestamp()
+    instant = datetime.fromisoformat(timestamp)
+    try:
+        local = instant.astimezone(ZoneInfo("Europe/Stockholm"))
+        local_time = local.strftime("%Y-%m-%d kl. %H:%M:%S %Z (%z)")
+    except (ZoneInfoNotFoundError, OSError, ValueError):
+        local_time = instant.strftime("%Y-%m-%d kl. %H:%M:%S UTC (lokal tidszon saknas)")
+    environment = environment if environment in {"test", "prod"} else "unknown"
+    try:
+        correlation_id = str(UUID(correlation_id))
+    except (ValueError, TypeError, AttributeError):
+        correlation_id = "UNKNOWN"
+    lines = [f"Tid: {local_time}"]
+    if transition == "recovered":
+        lines.append("De övervakade kontrollerna fungerar igen: tjänstens beredskap, obligatoriska hälsokontroller och bakgrundsarbetarens livssignal.")
+        lines.append("Detta bekräftar inte att hela tjänsten eller alla funktioner är felfria.")
+    else:
+        lines.extend(_human_observations(details))
+        lines.append("Vi vet ännu inte om eller hur detta påverkar användningen. Larmet betyder inte att hela tjänsten ligger nere.")
+    lines.extend([
+        "Nästa steg: öppna felsökningsguiden nedan och kontrollera de delar som anges ovan.",
+        "Teknisk metadata:",
+        "impact: UNKNOWN" if transition != "recovered" else "scope: monitored_checks_only",
         f"source_system: {PROBE_SOURCE_SYSTEM}",
         f"environment: {environment}",
         f"severity: {severity}",
         f"transition: {transition}",
-        f"timestamp_utc: {_alert_timestamp()}",
+        f"timestamp_utc: {timestamp}",
         f"correlation_id: {correlation_id}",
-    ]
-    if details:
-        lines.extend(["failures:", *[f"  - {detail}" for detail in details]])
-    lines.append(f"remediation: {PROBE_REMEDIATION_URL}")
+        # Fixed owner URL: runtime configuration is not trusted notification text.
+        f"remediation: {_RUNBOOK_URL}",
+    ])
     return "\n".join(lines)
 
 
@@ -175,7 +268,7 @@ def _send_down_alert(
     environment: str,
     correlation_id: str,
 ) -> bool:
-    subject = f"{environment.upper()} down - Yggdrasil"
+    subject = f"{environment.upper() if environment in {'prod', 'test'} else 'Okänd miljö'} hälsoproblem - Yggdrasil"
     body = _alert_body(
         environment=environment,
         severity=_alert_severity(environment),
@@ -204,7 +297,7 @@ def _send_recovery_alert(
     correlation_id = state.get("correlation_id")
     if not isinstance(correlation_id, str) or not correlation_id:
         correlation_id = str(uuid4())
-    subject = f"{environment.upper()} recovered - Yggdrasil"
+    subject = f"{environment.upper() if environment in {'prod', 'test'} else 'Okänd miljö'} övervakade kontroller återställda - Yggdrasil"
     body = _alert_body(
         environment=environment,
         severity="info",
@@ -432,7 +525,7 @@ def _probe_health_required_ok(
         if body.get("required_ok") is True:
             return True, "health required_ok=true"
         if not _health_observation_pending(body) or attempt == _HEALTH_CACHE_READS:
-            return False, "health required_ok=false"
+            return False, _health_failure_reason(body)
         time.sleep(max(0.0, min(_HEALTH_CACHE_INTERVAL_SECONDS, deadline - time.monotonic())))
         url = f"{base_url}/api/health?model_access_sampling=cache"
     return False, "health required_ok=false"

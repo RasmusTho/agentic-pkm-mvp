@@ -1082,6 +1082,27 @@ down alert on the first outage transition and one recovery signal on the first h
 messages carry the same correlation ID. Alerts include source system, environment, severity, UTC
 timestamp, and remediation URL.
 
+The source template leads with `PROD hälsoproblem` (or `TEST hälsoproblem`), not a
+claim of total outage. It names failed required checks from the finite health-producer mapping
+and mandatory runtime database, worker and model components. Optional failures are excluded;
+watcher requirement is producer-local and is not inferred from a failed watcher observation.
+Unknown or malformed cause metadata yields plain Swedish uncertainty in the human text;
+`UNKNOWN` is reserved for technical metadata. Raw health details,
+errors, paths and arbitrary keys never become notification text. Templates are deterministic;
+there is no language-model call or inferred cause, impact or repair claim. Broader impact remains
+unknown in plain Swedish (`impact: UNKNOWN` in the footer); recovery says only that the monitored readiness, required health and heartbeat checks
+are green, using the same incident correlation.
+
+Messages include Swedish local date/time in `Europe/Stockholm` (with DST and numeric offset),
+fall back to UTC when zone data is unavailable, and retain UTC, transition, severity, source and
+correlation metadata below the human text. The finite template fits Discord's 2,000-character
+content limit including its bold subject wrapper; the sender itself does not truncate. The next
+step points to the fixed incident runbook URL rather than echoing runtime URL configuration.
+Use the raw health surface separately for investigation; the alert does not reproduce diagnostics.
+This source change does not upgrade an already installed probe. The #4076 owner retains deployed
+upgrade and controlled TEST acceptance; the dated installation receipts below remain historical
+facts for their exact source versions.
+
 The Linux service uses the `heimdal-external-alerts` BWS consumer and the `discord.webhook`
 binding. The BWS token is read through systemd credentials and is removed from the probe child's
 environment; only a short-lived mode-0600 runtime file carries the declared webhook binding.
