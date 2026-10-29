@@ -131,7 +131,11 @@ and its consumer/refusal regressions cover this exact boundary.
 
 Ops-only selections use the existing bounded process runner with complete whole-module
 selected inventories. Their eight host-sensitive modules still start only after all parallel
-processes exit. Shared configuration and mixed subsystem routing retain their existing paths.
+processes exit successfully, including collected-node verification. A failed parallel pytest,
+timeout or invalid node result keeps the verdict red after every parallel child is reaped;
+its logs and evidence remain in the aggregate, and the serial log explicitly lists its targets
+as `NOT RUN`. Green parallel runs retain the complete selected serial coverage. This also applies
+to the legacy serial-last route. Shared configuration and mixed subsystem routing retain their existing paths.
 The runner authenticates expansion of the complete Ops directory before execution.
 
 When explicitly selected, only `tests/ops/test_native_source_diagnostic_admission.py` may refine
@@ -152,9 +156,10 @@ or a ten-minute completion bound.
 
 An additional closed source-installation profile permits only
 `app/ops/bws_installation_transaction.py`, `app/ops/postgres_deploy_linux.py`,
+`app/ops/bws_installation_lifecycle.py`, `tests/ops/test_bws_installation_lifecycle.py`,
 `tests/ops/test_bws_installation_transaction.py`, `tests/ops/test_bws_control_installation.py`,
 the exact test-data path `tests/ops/fixtures/host_secret_contract_legacy.json`, and
-`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, with at least one source changed and
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, with at least one transaction or Linux-deploy source changed and
 regular nonsymlink inputs. It omits only `test_dormant_ownership_initialization.py`;
 all other Ops modules and seven serial boundaries remain. Unknown cochanges retain broad
 coverage. The pre-existing native deployment-control profile below has precedence.
@@ -163,6 +168,9 @@ The control-installation module tests the Source transaction's public-file compe
 with temporary files and explicit process/network/Product import guards. Its legacy contract
 fixture is test data shared with the transaction tests; other fixture or configuration paths
 retain normal routing.
+The lifecycle pair covers the Source transaction's empty-control revalidation before backup.
+It is an allowed cochange, not another qualifying source: lifecycle-only changes retain broad
+coverage. These profile and red-run changes do not establish a ten-minute CI bound.
 
 Dormant initialization protects Product/Runtime TEST vault and ledger ownership. Its actual
 CLI is `app.instance.runtime`, not the generic application CLI. A conservative static import
@@ -433,7 +441,9 @@ effort improved before adopting further changes.
   fail that partition. A single-worker invocation retains file execution.
   Each completed failed partition emits its diagnostic log immediately, before waiting for other
   workers or the serial boundary. The final aggregate retains every partition's log, and remaining
-  selected coverage still runs; prompt diagnostics do not turn partial execution into success.
+  parallel coverage still runs. After every parallel child exits, any failed pytest, timeout or
+  invalid node result skips the serial phase with explicit `NOT RUN` targets in its retained log;
+  green parallel runs retain the full selected serial phase. Partial execution remains red.
   [PR #6373 job 121343690509](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/40251333352/job/121343690509)
   supplied the motivating measurement: the atomic deployment file took 2324.55 seconds and the
   serial boundary took 892.48 seconds. An earlier partition finished red at 00:57:33 UTC, while its

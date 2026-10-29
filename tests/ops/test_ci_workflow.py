@@ -749,6 +749,9 @@ if "--collect-only" in sys.argv:
     raise SystemExit(0)
 target_text = " ".join(sys.argv[1:])
 print(target_text, flush=True)
+if serial_marker := os.environ.get("FAKE_SERIAL_MARKER"):
+    if "tests/ops/test_instance_state_writer_inventory.py" in sys.argv[1:]:
+        Path(serial_marker).touch()
 if active_dir_value := os.environ.get("FAKE_ACTIVE_DIR"):
     active_dir = Path(active_dir_value)
     active_dir.mkdir(exist_ok=True)
@@ -833,16 +836,35 @@ if (fail_target := os.environ.get("FAKE_FAIL_TARGET")) and fail_target in target
         check=False,
     )
     assert exact_boundary.returncode == 0, exact_boundary.stdout + exact_boundary.stderr
-    failure = run(env={"FAKE_FAIL_TARGET": "tests/ops"})
+    serial_marker = tmp_path / "serial-invoked"
+    failure = run(env={"FAKE_FAIL_TARGET": "tests/ops", "FAKE_SERIAL_MARKER": str(serial_marker)})
     assert failure.returncode == 1
     assert "PARTITION FAILED (7)" in failure.stderr
     assert "synthetic scoped failure" in failure.stderr
+    assert "SERIAL BOUNDARY NOT RUN:" in failure.stdout
+    assert "SERIAL BOUNDARY FINISHED" not in failure.stdout
+    assert not serial_marker.exists()
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    serial_log = aggregate.split("===== scoped serial boundary =====\n")[1]
+    assert serial_log.endswith("NOT RUN: tests/ops/test_instance_state_writer_inventory.py\n")
+    assert "SERIAL BOUNDARY NOT RUN: index=4 " in serial_log
+    assert len(serial_log.splitlines()) == 2
+    assert (tmp_path / "logs/partition-4.log").read_text() == serial_log
+    assert "synthetic scoped failure" in aggregate
+    assert aggregate.count("===== scoped partition ") == 4
     absent = run(expected_targets=[*expected, "tests/missing"])
     assert absent.returncode != 0
     assert "does not match expected targets exactly once" in absent.stderr
-    timed_out = run(env={"FAKE_TIMEOUT_TARGET": "tests/deploy"}, timeout=1)
+    timed_out = run(env={"FAKE_TIMEOUT_TARGET": "tests/deploy",
+        "FAKE_SERIAL_MARKER": str(serial_marker)}, timeout=1)
     assert timed_out.returncode == 1
     assert "PARTITION TIMED OUT after 1s" in timed_out.stderr
+    assert "SERIAL BOUNDARY NOT RUN:" in timed_out.stdout
+    assert "SERIAL BOUNDARY FINISHED" not in timed_out.stdout
+    assert not serial_marker.exists()
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert "PARTITION TIMED OUT after 1s" in aggregate
+    assert "NOT RUN: tests/ops/test_instance_state_writer_inventory.py\n" in aggregate
     child_pid_path = tmp_path / "child.pid"
     child_cleanup = run(env={"FAKE_CHILD_PID_PATH": str(child_pid_path)})
     assert child_cleanup.returncode == 0, child_cleanup.stdout + child_cleanup.stderr
@@ -1313,11 +1335,14 @@ with state_path.open("a+") as handle:
     handle.truncate()
     json.dump(state, handle)
 time.sleep(0.05)
+failed = mode == "pytest-failure" and (
+    nodes[-1] in (nodes if os.environ["FAKE_MODULE"] in args else args)
+)
 for node in (nodes if os.environ["FAKE_MODULE"] in args else args):
     if node in nodes:
         if mode == "missing" and node == nodes[-1]:
             continue
-        print(node + " PASSED", flush=True)
+        print(node + (" FAILED" if failed and node == nodes[-1] else " PASSED"), flush=True)
         if mode == "duplicate" and node == nodes[-1]:
             print(node + " PASSED", flush=True)
         if mode == "unexpected" and node == nodes[-1]:
@@ -1329,6 +1354,7 @@ with state_path.open("r+") as handle:
     handle.seek(0)
     handle.truncate()
     json.dump(state, handle)
+raise SystemExit(1 if failed else 0)
 ''', encoding="utf-8")
     fake_pytest.chmod(0o755)
     expected = ([module, "tests/scripts", "tests/ci", *serial_targets] if native
@@ -1461,10 +1487,15 @@ def test_scoped_runner_splits_measured_module_with_exact_coverage(tmp_path: Path
 
 @pytest.mark.parametrize("mode", ["missing", "duplicate", "unexpected"])
 def test_scoped_runner_rejects_incomplete_measured_node_evidence(tmp_path: Path, mode: str) -> None:
-    result, _state, _nodes = _run_scoped_measured_fixture(tmp_path, mode)
+    result, state, _nodes = _run_scoped_measured_fixture(tmp_path, mode)
     assert result.returncode == 1
     assert "Collected-node verification failed:" in result.stderr
     assert "Collected-node verification failed:" in (tmp_path / "aggregate.log").read_text()
+    assert state["active"] == 0
+    assert "serial_active" not in state
+    assert "SERIAL BOUNDARY NOT RUN:" in result.stdout
+    assert "NOT RUN: tests/ops/test_native_journaling_acceptance.py\n" in (
+        tmp_path / "aggregate.log").read_text()
 
 
 @pytest.mark.parametrize("workers", [2, 3, 4])
@@ -1541,14 +1572,28 @@ def test_native_admission_receipt_rejects_extra_units(tmp_path):
         verify_executed_nodes(coverage_path, logs_dir)
 
 
-@pytest.mark.parametrize("mode", ["missing", "duplicate", "unexpected"])
+@pytest.mark.parametrize("mode", ["pytest-failure", "missing", "duplicate", "unexpected"])
 def test_scoped_native_admission_requires_complete_node_results(tmp_path, mode):
+    from scripts.select_pr_tests import SCOPED_DEPLOY_SERIAL_BOUNDARY
+
     result, state, _nodes = _run_scoped_measured_fixture(tmp_path, mode, native=True)
     assert result.returncode == 1
-    assert "Collected-node verification failed:" in result.stderr
-    assert "Collected-node verification failed:" in (tmp_path / "aggregate.log").read_text()
-    assert state["active"] == 0 and state["serial_active"] == 1
-    assert state["serial_invocation_count"] == len(state["invocations"])
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    if mode == "pytest-failure":
+        assert "PARTITION FAILED (1)" in result.stderr
+        assert " FAILED" in aggregate
+        assert "Collected-node verification failed:" not in aggregate
+    else:
+        assert "Collected-node verification failed:" in result.stderr
+        assert "Collected-node verification failed:" in aggregate
+    assert state["active"] == 0 and state["peak"] <= 4
+    assert "serial_active" not in state and "serial_invocation_count" not in state
+    assert len(state["invocations"]) == 4
+    assert "SERIAL BOUNDARY NOT RUN:" in result.stdout
+    assert "SERIAL BOUNDARY FINISHED" not in result.stdout
+    for target in SCOPED_DEPLOY_SERIAL_BOUNDARY[1:]:
+        assert all(target not in args for args in state["invocations"])
+        assert aggregate.count(f"NOT RUN: {target}\n") == 1
 
 
 @pytest.mark.parametrize("mode", ["collect-failure", "collect-duplicate"])
@@ -1580,11 +1625,11 @@ print("slow-released-after-diagnostic", flush=True)
     release = tmp_path / "release"
     process = subprocess.Popen(
         [sys.executable, str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
-         "--partitions-json", json.dumps([["tests/fast"], ["tests/slow"]]),
-         "--expected-targets-json", json.dumps(["tests/fast", "tests/slow"]),
+         "--partitions-json", json.dumps([["tests/fast"], ["tests/slow"], ["tests/serial"]]),
+         "--expected-targets-json", json.dumps(["tests/fast", "tests/slow", "tests/serial"]),
          "--log-dir", str(tmp_path / "logs"),
          "--aggregate-log", str(tmp_path / "aggregate.log"),
-         "--jobs", "2", "--shard-timeout-seconds", "5"],
+         "--jobs", "2", "--shard-timeout-seconds", "5", "--serial-last"],
         cwd=REPO_ROOT,
         env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_RELEASE": str(release)},
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -1601,18 +1646,24 @@ print("slow-released-after-diagnostic", flush=True)
     assert "early-diagnostic" in aggregate
     assert "slow-released-after-diagnostic" in aggregate
     assert "PARTITION TIMED OUT" not in aggregate
+    assert "SERIAL PARTITION NOT RUN:" in aggregate
+    assert aggregate.count("slow-released-after-diagnostic") == 1
 
-def test_scoped_runner_serial_last_failure_is_aggregated(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fail_target", ["tests/ops", "tests/scripts"])
+def test_scoped_runner_serial_last_failure_is_aggregated(tmp_path: Path, fail_target: str) -> None:
     """The legacy serial-last path must remain fail-loud and observable."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake_pytest = bin_dir / "pytest"
     fake_pytest.write_text(
         f"#!{sys.executable}\n" + r'''
+import os
 import sys
 
 args = sys.argv[1:]
 if "tests/ops" in args:
+    print("serial invoked", flush=True)
+if os.environ["FAKE_FAIL_TARGET"] in args:
     print("synthetic serial failure", flush=True)
     raise SystemExit(7)
 ''',
@@ -1633,16 +1684,25 @@ if "tests/ops" in args:
             "--shard-timeout-seconds", "10",
         ],
         cwd=REPO_ROOT,
-        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_FAIL_TARGET": fail_target},
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 1
-    assert "SERIAL PARTITION FAILED (7): 1" in result.stderr
     aggregate = (tmp_path / "aggregate.log").read_text()
     assert "===== scoped serial partition =====" in aggregate
     assert "synthetic serial failure" in aggregate
+    if fail_target == "tests/ops":
+        assert "SERIAL PARTITION FAILED (7): 1" in result.stderr
+        assert "serial invoked" in aggregate
+        assert "NOT RUN" not in aggregate
+    else:
+        assert "PARTITION FAILED (7): 0" in result.stderr
+        assert "SERIAL PARTITION NOT RUN:" in aggregate
+        assert "NOT RUN: tests/ops\n" in aggregate
+        assert "serial invoked" not in aggregate
+        assert "SERIAL PARTITION FINISHED" not in result.stdout
 
 
 @pytest.mark.parametrize(
