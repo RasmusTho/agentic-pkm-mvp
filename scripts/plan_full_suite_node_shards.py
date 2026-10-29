@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan bounded process work units for the measured long full-suite module."""
+"""Plan bounded process work units for two exact measured test modules."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from typing import Sequence
 
 MAX_WORKERS = 4
 TARGET_MODULE = "tests/deploy/test_deploy_channel_script.py"
+NATIVE_ADMISSION_MODULE = "tests/ops/test_native_source_diagnostic_admission.py"
+MEASURED_NODE_MODULES = (TARGET_MODULE, NATIVE_ADMISSION_MODULE)
 SHARED_CHECKOUT_NODES = (
     f"{TARGET_MODULE}::test_rollback_dry_run_without_sha_parses_flag_and_skips_writes",
     f"{TARGET_MODULE}::test_rollback_with_explicit_sha_still_allows_flags",
@@ -20,8 +22,8 @@ SHARED_CHECKOUT_NODES = (
 def parse_collected_nodes(output: str, target: str) -> tuple[str, ...]:
     """Extract the exact collected node IDs for one requested test module."""
 
-    if target != TARGET_MODULE:
-        raise ValueError(f"node planner only accepts the measured module: {TARGET_MODULE}")
+    if target not in MEASURED_NODE_MODULES:
+        raise ValueError(f"node planner only accepts measured modules: {MEASURED_NODE_MODULES}")
     prefix = f"{target}::"
     node_lines = tuple(
         line.strip()
@@ -45,8 +47,12 @@ def plan_node_units(
 
     if not 2 <= max_workers <= MAX_WORKERS:
         raise ValueError(f"worker cap must be between 2 and {MAX_WORKERS}")
-    if target != TARGET_MODULE:
-        raise ValueError(f"node planner only accepts the measured module: {TARGET_MODULE}")
+    if target not in MEASURED_NODE_MODULES:
+        raise ValueError(f"node planner only accepts measured modules: {MEASURED_NODE_MODULES}")
+    # This module's function-scoped temporary roots and effect ports permit
+    # two independent processes; keep its first measured split bounded to two.
+    if target == NATIVE_ADMISSION_MODULE:
+        max_workers = min(max_workers, 2)
     if not nodes:
         return ()
     if len(set(nodes)) != len(nodes):
@@ -167,10 +173,12 @@ def verify_executed_nodes(coverage_path: Path, logs_dir: Path) -> tuple[str, ...
     target = coverage.get("target")
     work_items = coverage.get("work_items")
     max_workers = coverage.get("max_workers")
-    if target != TARGET_MODULE or not isinstance(work_items, list):
+    if target not in MEASURED_NODE_MODULES or not isinstance(work_items, list):
         raise ValueError("collected-node coverage receipt is malformed")
     if not isinstance(max_workers, int) or not 2 <= max_workers <= MAX_WORKERS:
         raise ValueError("collected-node coverage receipt exceeds the worker cap")
+    if target == NATIVE_ADMISSION_MODULE:
+        max_workers = min(max_workers, 2)
 
     expected_by_unit: dict[str, tuple[str, ...]] = {}
     for item in work_items:

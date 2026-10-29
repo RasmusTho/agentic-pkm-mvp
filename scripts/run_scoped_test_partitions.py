@@ -20,7 +20,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.select_pr_tests import PR_MARKER_EXPRESSION
-from scripts.plan_full_suite_node_shards import TARGET_MODULE, plan_node_units, verify_node_results
+from scripts.plan_full_suite_node_shards import (
+    MEASURED_NODE_MODULES, NATIVE_ADMISSION_MODULE, TARGET_MODULE, plan_node_units, verify_node_results,
+)
 
 MAX_PARTITIONS = 4
 MAX_SHARD_TIMEOUT_SECONDS = 3300
@@ -352,7 +354,13 @@ def _expand_and_balance_parallel(
         if len(positional) != 1:
             raise ValueError("each execution candidate must contain one positional target")
         target = positional[0]
-        if _is_deploy_target(target):
+        if target == NATIVE_ADMISSION_MODULE and jobs > 1 and nodes_for_target(target):
+            if options:
+                raise ValueError("native admission node candidates must not contain pytest options")
+            refined = plan_node_units(nodes_for_target(target), target, max_workers=2)
+            for unit in refined:
+                node_weight[unit[0]] = len(unit)
+        elif _is_deploy_target(target):
             if options:
                 raise ValueError("deploy execution candidates must not contain pytest options")
             nodes = nodes_for_target(target)
@@ -416,10 +424,12 @@ def _report_partition_result(
     """Validate collected-node evidence and surface a completed failure now."""
 
     index, returncode, log_path, timed_out = result
-    nodes = tuple(target for target in targets if target.startswith(f"{TARGET_MODULE}::"))
-    if nodes:
+    for module in MEASURED_NODE_MODULES:
+        nodes = tuple(target for target in targets if target.startswith(f"{module}::"))
+        if not nodes:
+            continue
         try:
-            verify_node_results(nodes, TARGET_MODULE, log_path.read_text(encoding="utf-8").splitlines())
+            verify_node_results(nodes, module, log_path.read_text(encoding="utf-8").splitlines())
         except (OSError, ValueError) as exc:
             with log_path.open("a", encoding="utf-8") as log:
                 log.write(f"\nCollected-node verification failed: {exc}\n")

@@ -130,9 +130,25 @@ and its consumer/refusal regressions cover this exact boundary.
 ### Native deployment-control serial coverage
 
 Ops-only selections use the existing bounded process runner with complete whole-module
-execution units. Their eight host-sensitive modules still start only after all parallel
+selected inventories. Their eight host-sensitive modules still start only after all parallel
 processes exit. Shared configuration and mixed subsystem routing retain their existing paths.
 The runner authenticates expansion of the complete Ops directory before execution.
+
+When explicitly selected, only `tests/ops/test_native_source_diagnostic_admission.py` may refine
+into two disjoint collected-node units through the existing finite planner. Its 394 current cases
+split into 197 plus 197; the complete collected inventory and one result per node remain required,
+without a permanent case count. Other Ops modules stay atomic and jobs=1 retains the whole file.
+The `composed` fixture is function scoped: authority, vault, journals and witness files use each
+case's temporary roots; external process/filesystem ports and shared environment/cache substitutes
+are process local. The intentional runtime-UID proof subprocess reads fixture state with bytecode
+writes disabled. Four-worker concurrency and serial-after-parallel ordering remain unchanged.
+
+[Source PR #6428 Unit](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/40788213835/job/123166626373)
+took 745 seconds: 89 seconds before scoped pytest, a 483.41-second critical parallel unit, and
+156.42 seconds of trailing serial pytest. Its other parallel units took 47.99, 51.62 and 159.28
+seconds. The byte-identical diagnostic-admission module alone spanned at least 454.329 seconds
+in PR #6411. These observations motivate the finite split; they do not establish a new speedup
+or a ten-minute completion bound.
 
 An additional closed source-installation profile permits only
 `app/ops/bws_installation_transaction.py`, `app/ops/postgres_deploy_linux.py`,
