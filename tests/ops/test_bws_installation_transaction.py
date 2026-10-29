@@ -1744,7 +1744,7 @@ def test_empty_control_root_qualifies_through_lifecycle_gate(tmp_path, monkeypat
         "root_search_path_trailing_slash", "unsupported_child_path_suffix",
         "unsupported_child_path_plus", "unsupported_child_path_semicolon",
         "unsupported_child_path_comma", "unsupported_child_path_space",
-        "unsupported_child_path_bracket",
+        "unsupported_child_path_bracket", "unsupported_ld_audit_literal_space",
         "before_backup_loader_package", "before_backup_root_identity",
         "before_backup_foreign_hint", "before_backup_root_search_path",
         "before_backup_root_search_path_trailing_slash",
@@ -1789,6 +1789,11 @@ def test_empty_control_root_refuses_identity_or_inventory_drift_before_backup(
             }[kind]
             hint = f"{control_root}/app{suffix}"
             properties[("Service", "Environment")].append(f"PYTHONPATH={hint}")
+            return
+        elif kind == "unsupported_ld_audit_literal_space":
+            properties[("Service", "Environment")].append(
+                f"LD_AUDIT={control_root}/app legacy"
+            )
             return
         else:
             hint = (

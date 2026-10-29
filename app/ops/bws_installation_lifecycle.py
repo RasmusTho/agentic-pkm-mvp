@@ -272,7 +272,7 @@ def _discovered_control_projection(
                 'PYTHONHOME': {':'},
                 'LD_LIBRARY_PATH': {':', ';'},
                 'LD_PRELOAD': {':', ' '},
-                'LD_AUDIT': {':', ' '},
+                'LD_AUDIT': {':'},
             }
             for entry in environment:
                 key = entry.partition('=')[0]
