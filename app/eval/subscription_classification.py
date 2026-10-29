@@ -20,7 +20,7 @@ from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 
 MODELS = ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
 EFFORT = "low"
-DECISION_PROTOCOL = "subscription_intent_decision.v6"
+DECISION_PROTOCOL = "subscription_intent_decision.v7"
 DECISIONS: dict[str, tuple[str, str | None] | None] = {
     "abstain": None,
     "co_authoring": ("co_authoring", None),
@@ -47,6 +47,11 @@ DECISION_INSTRUCTIONS = (
     "lookup or a choice of implementation do not erase a recognizable operation. "
     "Indirect requests, hedges, suggestions, desired-state statements and rhetorical "
     "questions can ask for a change without imperative wording or permission to execute. "
+    "A concrete proposal for what should change establishes a change request even when "
+    "tentative, conditional, phrased as a question or deferred in time. Route that proposal "
+    "by its operation; do not demote it because commitment or scheduling is uncertain. "
+    "An observation describes the existing state; a proposal points toward a desired "
+    "change. A question about consequences alone does not propose an actual change. "
     "Uncertainty about whether a meaningful statement requests action is different from "
     "unresolved meaning: a coherent observation without an established change request "
     "is exploratory, not abstain. Historical, hypothetical and conceptual questions are "
