@@ -18,6 +18,55 @@ def sidecar_source_path(monkeypatch):
     monkeypatch.syspath_prepend(str(SIDECAR))
 
 
+def test_real_sdk_absence_fails_original_client_startup_and_terminates(tmp_path):
+    import site
+    import subprocess
+    import sys
+    from pathlib import Path
+    from textwrap import dedent
+
+    # Preserve the actual core dependencies, without installing or mocking an SDK.
+    views = []
+    for index, directory in enumerate(dict.fromkeys(site.getsitepackages())):
+        view = tmp_path / f"site-{index}"
+        view.mkdir()
+        for entry in Path(directory).iterdir():
+            if entry.name == "mcp" or entry.name.startswith(("mcp-", "mcp.")):
+                continue
+            (view / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
+        views.append(str(view))
+    repo = SIDECAR.parent
+    script = dedent("""
+        import importlib.util
+        import json
+        from pathlib import Path
+        import sys
+
+        repo = Path(sys.argv[1])
+        sys.path.extend([str(repo), str(repo / "companion-ui" / "companion-app"), *json.loads(sys.argv[2])])
+        assert importlib.util.find_spec("mcp") is None
+        import tests.operations._surface_harness as harness
+        assert Path(harness.__file__).resolve() == repo / "tests" / "operations" / "_surface_harness.py"
+        assert importlib.util.find_spec("mcp") is None and "mcp" not in sys.modules
+        client = harness.ExternalMcpClient("http://127.0.0.1:1", {})
+        try:
+            client.__enter__()
+        except ModuleNotFoundError as exc:
+            assert exc.name == "mcp"
+        else:
+            client.__exit__()
+            raise AssertionError("Missing SDK unexpectedly allowed client startup")
+        client.thread.join(5)
+        assert not client.thread.is_alive()
+        assert client.ready.done() and client.queue.empty()
+        print("original-sdk-absence-refusal-and-thread-termination")
+    """)
+    result = subprocess.run([sys.executable, "-I", "-S", "-B", "-c", script, str(repo), json.dumps(views)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == "original-sdk-absence-refusal-and-thread-termination"
+
+
 def test_v2_tools_are_capability_derived_and_exclude_raw_filesystem_write(tmp_path, monkeypatch):
     host = production_operation_host(tmp_path, monkeypatch)
     observed = host.client.get('/api/operations/capabilities', headers=host.headers)
