@@ -541,7 +541,8 @@ def test_real_assignment_stamping_and_multiple_observations_preserve_state_proof
     assert run(episode)['status'] == 'created'
 
 
-def test_real_vault_sync_created_commitment_and_watcher_coexist(episode):
+@pytest.mark.parametrize('review_state', ['reviewed', 'evergreen', 'promoted'])
+def test_real_vault_sync_created_commitment_and_watcher_coexist(episode, review_state):
     from app.services.vault_sync import upsert_object_from_note
     from app.episodes.assignment import AssignmentDecision, commit_assignment_diff
     from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
@@ -549,8 +550,10 @@ def test_real_vault_sync_created_commitment_and_watcher_coexist(episode):
     db, ep, _, docs = episode
     path = db.root / docs[1]['payload']['note_path']
     stamp = datetime(2026,10,13,9,1,tzinfo=timezone.utc).timestamp()
-    os.utime(path, (stamp,stamp))
     fields, body = load_frontmatter(path.read_text())
+    fields['review_state'] = review_state
+    path.write_text(dump_frontmatter(fields, body))
+    os.utime(path, (stamp,stamp))
     upsert_object_from_note(str(path), fields, body, True, True, vault_root=db.root)
     event = db.execute("SELECT id,payload FROM outbox WHERE topic='ingest.object.created' AND vault_binding_id=%s",(COMPATIBILITY_BINDING_ID,))[0]
     assert event[1].get('payload',event[1]).get('extensions',{}).get('observed_at')

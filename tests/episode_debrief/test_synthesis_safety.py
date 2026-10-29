@@ -62,3 +62,15 @@ def test_alias_cannot_redirect_debrief_ref_patch_into_human_goal():
     raw = f"---\nepisode_id: {ep}\nscope: work\ntitle: Human\ntime: {{start: '2026-10-13T08:00:00Z', closed: true}}\ngoal: &items []\ndebrief_ref: *items\nsegmentation: accepted\n---\nHuman body.\n"
     with pytest.raises((DebriefSynthesisError, ValueError)):
         append_debrief_ref_text(raw, episode_id=ep, scope='work', debrief_id=debrief_id_for_episode(ep))
+
+
+@pytest.mark.parametrize('state', ['evergreen', 'promoted', 'processed', 'inbox', 'logged'])
+def test_content_fingerprint_preserves_legacy_state_equivalence(state):
+    from app.episode_debrief.evidence import commitment_content_fingerprint
+    from app.domain.state_axes import normalize_artifact_state_axes
+    fields = {'review_state':state, 'summary':'Send report', 'target_ref':'report-A',
+              'commitment_id':'c-1', 'commitment_state':'next'}
+    emitted = normalize_artifact_state_axes(fields, default_review_state='provisional')
+    assert commitment_content_fingerprint(fields, 'Send report') == commitment_content_fingerprint(emitted, 'Send report')
+    emitted['target_ref'] = 'contract-B'
+    assert commitment_content_fingerprint(fields, 'Send report') != commitment_content_fingerprint(emitted, 'Send report')
