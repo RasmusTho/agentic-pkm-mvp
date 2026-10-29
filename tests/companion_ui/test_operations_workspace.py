@@ -698,3 +698,20 @@ def test_a_superseded_read_does_not_block_the_new_reference_observer(tmp_path,mo
         assert parse_qs(urlparse(page.url).query)['operation_request']==['retained-B']
         evidence(page,'superseded-read-new-view',external,errors)
         assert errors==[] and external==[]
+
+
+def test_operations_work_without_secure_context_random_uuid(tmp_path,monkeypatch):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        page.evaluate("Object.defineProperty(window.crypto,'randomUUID',{value:undefined,configurable:true})")
+        open_workspace(page)
+        choose(page)
+        page.locator('#operations-preview').click()
+        page.locator('#operations-confirm:enabled').wait_for()
+        page.locator('#operations-confirm').click()
+        page.get_by_text('Source effect: committed',exact=False).wait_for()
+        assert host.note.read_text().endswith('Updated in Companion.\n')
+        effects=[c for c in client.calls if c[0]=='POST' and c[1]=='/api/operations' and c[2]['operation_id']=='artifact.update']
+        assert len(effects)==1
+        assert effects[0][2]['request_id'].startswith('companion-')
+        assert errors==[] and external==[]

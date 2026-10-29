@@ -109,7 +109,11 @@ def operations_workspace_script() -> str:
     d.append(s,node('pre',json(value))); parent.append(d);
   }
   function message(value) { if(el('state').textContent!==value) el('state').textContent=value; }
-  function id() { return 'companion-' + crypto.randomUUID(); }
+  function id() {
+    // Same nonauthority identity fallback as the shipped shell's idempotencyKey.
+    if(window.crypto && window.crypto.randomUUID)return 'companion-'+window.crypto.randomUUID();
+    return 'companion-'+Date.now()+'-'+Math.random().toString(16).slice(2);
+  }
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
   var context=null, capabilities=[], resources=[], selection=new Map(), frozen=null, reference=null;
   var cancelBusy=false, busy=false, submitted=false, timer=null, generation=0, lastResult=null, readbackUnknown=false, readEpoch=0, pendingRead=null, effectEpoch=0, announcedItems=new Map(), aggregateAnnouncement='';
