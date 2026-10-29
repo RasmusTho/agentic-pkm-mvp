@@ -102,7 +102,12 @@ The fixed full-source path also checks combined application/control inventory, p
 against the existing directory-entry ceiling, and the current process's descriptor headroom for
 retained preparation, apply, authenticated compensation, the complete installed-inventory recheck,
 and the bounded service-configuration control-root projection while the handle remains open before
-service or backup effects; unknown or insufficient capacity refuses. The generic 192-entry limit
+service or backup effects. Only the verified one-shot source CLI may temporarily raise its own soft
+limit to the finite derived minimum within its unchanged existing hard cap. Unknown/inadequate hard
+capacity, an ineligible/shared process or failed resource admission refuses. Original limits are
+restored after owned descriptor cleanup; uncertain cleanup/restoration terminates the dedicated CLI
+before unrelated work. No unit, hard, parent/other-process or persistent resource setting changes.
+The generic 192-entry limit
 and 190-module provenance limit remain separate. This is repository support, not live host capacity
 or DEV/TEST acceptance evidence; see the detailed contract for the finite source and descriptor
 budgets.
@@ -112,12 +117,17 @@ budgets.
 A caught `refused_before_backup` receipt includes the finite `prebackup_gate` diagnostic. Its values
 are `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
 `authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
-`backup_roots`, `source_manifest`, `descriptor_capacity`, `candidate_profile`, `old_kernel_qualification`,
+`backup_roots`, `source_manifest`, `descriptor_capacity`, `descriptor_capacity_unknown`,
+`descriptor_capacity_insufficient`, `descriptor_capacity_ineligible`,
+`descriptor_capacity_admission_refused`, `candidate_profile`, `old_kernel_qualification`,
 `qualified_writer_snapshot`, and `generation_qualification`. The diagnostic contains no exception
 text or operation input; it identifies the producer gate for that caught refusal. The
 `authority_cutover` value names a real current-writer predicate after the bound plan is read, but
 does not establish that it caused any previously observed refusal. Legacy receipts without this
-field remain valid. The `refused_before_backup` status and null generation and backup fields retain
+field remain valid. Descriptor-specific gates separate unknown metadata, qualified inadequate
+capacity, ineligible process context and failed resource admission without numeric values; the
+legacy `descriptor_capacity` gate and Source19's inner predicate remain unclassified. The
+`refused_before_backup` status and null generation and backup fields retain
 their existing meanings.
 
 ### #6300 fixed-selection reconciliation (historical, count-only)

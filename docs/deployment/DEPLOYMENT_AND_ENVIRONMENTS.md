@@ -1371,8 +1371,8 @@ provenance retains its independent 190-module limit. These budgets do not change
 ownership, root identity, hash, mode, writer, caller, generation, admission, or compensation guards.
 
 Before constructing the service lifecycle or allocating a backup, the fixed source path reads the
-current process's open-descriptor count and soft `RLIMIT_NOFILE`. Missing, unreadable, or insufficient
-headroom refuses before effects. Required peak headroom is derived from the actual changed roots,
+current process's open-descriptor count and finite soft and hard `RLIMIT_NOFILE`. Unknown,
+unreadable, invalid, or inadequate hard capacity refuses before effects. Required peak headroom is derived from the actual changed roots,
 target parent paths, and prior-file count: retained roots/ancestors and target parents, prior and
 backup files, bundle and manifest, one applied inode descriptor per change, and up to two additional
 descriptors for each restored prior target. It adds nine bounded transient descriptors: one held
@@ -1390,8 +1390,29 @@ anchor probes at each possible ancestor (`4 + 16 * (32 + 2 * 33) = 1572` descrip
 configuration checks are serial and close each projection's descriptors before the next call. The
 descriptor census conservatively counts one extra
 descriptor for its own enumeration. The validator repeats this check immediately before opening
-roots or allocating the bundle. The 8194-entry manifest ceiling does not promise capacity under
-arbitrary process limits, and no process/system limit is raised.
+roots or allocating the bundle, using the same inventory peak and accounting for the already held
+runtime descriptor. The 8194-entry manifest ceiling does not promise capacity under arbitrary
+process limits.
+
+Only the exact verified launcher's one-shot `__main__` DEV/TEST source RPC can establish a
+temporary soft descriptor envelope. The current kernel task census and Python thread identity must
+prove that this is the sole thread in that same process. Adequate soft capacity is a no-op. Otherwise,
+the source process raises only its own soft limit to the finite minimum of its trusted current count
+plus the unchanged required peak, within its unchanged existing hard cap; a fresh ordinary guard
+must then pass. Caller arguments, environment and RPC input cannot supply a budget or opt in.
+Imported/reusable RPC calls, the shared `serve` supervisor and other actions are ineligible. No hard,
+parent/other-process, unit, systemwide or persistent resource setting is changed. Related synchronous
+Git/service command children terminate inside this invocation; the independently managed unit does
+not inherit the source RPC's soft limit.
+
+The source caller retains its original limits and strong references to its file handle and runtime
+lifecycle until cleanup. After success, refusal or exception, it restores and reads back the original
+limits only after those owned descriptors are proved closed. If closure, the unchanged hard cap or
+restoration cannot be proved after a limit-change attempt, the dedicated CLI terminates with status
+78 before returning or running unrelated Python/exit hooks. Process death closes remaining owned
+descriptors; it does not authorize adopting an unfinished operation. No shared or later work can
+inherit a changed envelope. This enabling support neither identifies Source19's unknown inner
+predicate nor establishes native capacity, installation or parent acceptance.
 
 The fixed DEV/TEST caller in `app.ops.bws_installation_transaction` composes those file mechanics
 with the existing BWS operation reservation, current writer/caller census, authenticated public
@@ -1481,9 +1502,14 @@ observer or a permission to operate a native host.
 New caught `refused_before_backup` receipts carry a value-free `prebackup_gate` from this finite
 set: `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
 `authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
-`backup_roots`, `source_manifest`, `descriptor_capacity`, `candidate_profile`, `old_kernel_qualification`,
+`backup_roots`, `source_manifest`, `descriptor_capacity`, `descriptor_capacity_unknown`,
+`descriptor_capacity_insufficient`, `descriptor_capacity_ineligible`,
+`descriptor_capacity_admission_refused`, `candidate_profile`, `old_kernel_qualification`,
 `qualified_writer_snapshot`, or `generation_qualification`. The field classifies the producer gate
-that refused without storing exception text or request values. `authority_cutover` classifies
+that refused without storing exception text or request values. The descriptor-specific gates
+distinguish unknown accounting/peak metadata, qualified inadequate capacity, an ineligible process,
+and failed resource admission. The earlier `descriptor_capacity` label remains valid and does not
+identify an inner predicate. No numeric descriptor or limit values enter the receipt. `authority_cutover` classifies
 validation of a present cutover selection after `bound_plan`; ordinary-terminal owner/context
 refusals remain `current_writer_snapshot` (or the qualified recheck gate). Its presence does not
 establish the cause of the earlier observed refusal. The canonical validator continues accepting legacy refusal receipts

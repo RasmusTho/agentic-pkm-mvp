@@ -438,6 +438,36 @@ def test_source_installation_reexecs_exact_candidate_launcher_before_import(tmp_
     assert executed == [(binding, b'exact C1 source', raw, ['rpc', 'dev'])]
 
 
+@pytest.mark.parametrize("main_entry,fail", [(True, False), (True, True), (False, False)])
+def test_source_process_marker_is_scoped_to_verified_one_shot(tmp_path, monkeypatch, main_entry, fail):
+    root = tmp_path / "candidate"
+    root.mkdir()
+    request = {"action": "source-installation", "operation_id": "019ff695-00a6-7072-a082-57cbf2b3ee22",
+               "candidate_sha": "a" * 40, "image_digest": "sha256:" + "b" * 64,
+               "bundle_name": "source-process"}
+    binding = {"candidate_sha": request["candidate_sha"], "checkout": str(root), "script_sha256": "c" * 64}
+    monkeypatch.setattr(service, "__name__", "__main__" if main_entry else "scripts.postgres_deploy_service")
+    monkeypatch.setattr(sys, service._VERIFIED_CANDIDATE_ENTRYPOINT, binding, raising=False)
+    monkeypatch.setattr(service, "_preimport_reservation", lambda *_args: service._PreimportReservation(None))
+    monkeypatch.setattr(service, "_candidate_checkout_root", lambda _sha: root)
+    monkeypatch.setattr(service, "_candidate_launcher_binding", lambda *_args: (binding, b"source"))
+    monkeypatch.setattr(service, "_install_source_loader", lambda _root: None)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(request)))
+    def main(arguments):
+        assert arguments == ["rpc", "dev"]
+        assert getattr(sys, "_yggdrasil_bws_source_rpc_process", None) == (os.getpid() if main_entry else None)
+        if fail:
+            raise RuntimeError("synthetic source invocation failure")
+        return 0
+    monkeypatch.setattr(linux, "main", main)
+    if fail:
+        with pytest.raises(RuntimeError):
+            service._dispatch(root, "dev", ["rpc", "dev"], caller_checkout=root)
+    else:
+        assert service._dispatch(root, "dev", ["rpc", "dev"], caller_checkout=root) == 0
+    assert not hasattr(sys, "_yggdrasil_bws_source_rpc_process")
+
+
 def test_source_installation_recovery_reexecs_exact_candidate_before_import(tmp_path, monkeypatch):
     old_root = tmp_path / "old-generation"
     candidate_root = tmp_path / "candidate"

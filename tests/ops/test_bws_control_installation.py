@@ -9,6 +9,7 @@ import importlib
 import json
 import os
 from pathlib import Path
+import resource
 import shutil
 import socket
 import stat
@@ -26,9 +27,10 @@ def denied_external_ports(monkeypatch):
 
     for name in ("Popen", "run", "call", "check_call", "check_output"):
         monkeypatch.setattr(subprocess, name, denied)
-    for name in ("system", "popen", "posix_spawn", "posix_spawnp", "fork", "forkpty", "execve"):
+    for name in ("system", "popen", "posix_spawn", "posix_spawnp", "fork", "forkpty", "execve", "_exit"):
         if hasattr(os, name):
             monkeypatch.setattr(os, name, denied)
+    monkeypatch.setattr(resource, "setrlimit", denied)
     monkeypatch.setattr(socket, "socket", denied)
     monkeypatch.setattr(socket, "create_connection", denied)
     original_import = builtins.__import__
@@ -117,9 +119,31 @@ def _root(module, path):
                        stat.S_IMODE(info.st_mode))
 
 
+@pytest.mark.parametrize("limits", [
+    (64, -1), (64, None), (True, 8192), (0, 8192), (8192, 64), (64, False),
+])
+def test_source_descriptor_snapshot_rejects_unknown_or_invalid_hard_metadata(monkeypatch, limits):
+    import resource
+    module = importlib.import_module("app.ops.bws_control_installation")
+    monkeypatch.setattr(resource, "getrlimit", lambda _which: limits)
+    monkeypatch.setattr(os, "listdir", lambda _path: ["0", "1", "2"])
+    assert module._source_descriptor_capacity_snapshot() is None
+    with pytest.raises(module.InstallationRefused, match="descriptor_capacity_unknown"):
+        module._source_descriptor_accounting()
+
+
+@pytest.mark.parametrize("snapshot", [None, (0, 64), (True, 64, 8192), (-1, 64, 8192),
+                                      (0, 64, None), (0, 128, 64)])
+def test_source_descriptor_accounting_rejects_malformed_snapshot(monkeypatch, snapshot):
+    module = importlib.import_module("app.ops.bws_control_installation")
+    monkeypatch.setattr(module, "_source_descriptor_capacity_snapshot", lambda: snapshot)
+    with pytest.raises(module.InstallationRefused, match="descriptor_capacity_unknown"):
+        module._source_descriptor_accounting()
+
+
 def test_source_manifest_budget_accepts_large_bounded_delta(secure_tmp_path, monkeypatch):
     module = importlib.import_module("app.ops.bws_control_installation")
-    monkeypatch.setattr(module, "_source_descriptor_capacity_snapshot", lambda: (0, 1_000_000))
+    monkeypatch.setattr(module, "_source_descriptor_capacity_snapshot", lambda: (0, 1_000_000, 1_000_000))
     application = secure_tmp_path / "application"
     backups = secure_tmp_path / "backups"
     application.mkdir(mode=0o755)
@@ -253,7 +277,7 @@ def test_source_descriptor_budget_covers_apply_and_compensation(secure_tmp_path,
     assert sum(len(payload) for payload in payloads.values()) == 8_102_989
 
     required = module._source_descriptor_peak(roots, changes, backup_root)
-    monkeypatch.setattr(module, "_source_descriptor_capacity_snapshot", lambda: (0, required))
+    monkeypatch.setattr(module, "_source_descriptor_capacity_snapshot", lambda: (0, required, required))
 
     original_open, original_close = os.open, os.close
     open_descriptors = set()
@@ -747,7 +771,7 @@ def test_component_has_no_native_execution_entrypoint(case):
     imports |= {name.name for node in ast.walk(tree) if isinstance(node, ast.Import) for name in node.names}
     assert imports <= {
         "__future__", "fcntl", "hashlib", "json", "os", "pathlib", "re", "resource",
-        "stat", "dataclasses", "typing", "uuid", "weakref",
+        "stat", "dataclasses", "typing", "uuid", "weakref", "sys", "threading",
         "app.ops.bws_installation_lifecycle",
     }
     with module.install_public_files(**args) as handle:
