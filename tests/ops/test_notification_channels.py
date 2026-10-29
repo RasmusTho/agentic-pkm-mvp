@@ -254,8 +254,11 @@ def test_discord_refuses_redirect_through_actual_opener(tmp_path, monkeypatch, s
         (200, _confirmation_bytes(id="")),
         (200, _confirmation_bytes(channel_id="not-a-channel")),
         (200, b"x" * (64 * 1024 + 1)),
+        (200, _confirmation_bytes(flags=float("nan"))),
+        (200, _confirmation_bytes(flags=float("inf"))),
+        (200, _confirmation_bytes(flags=float("-inf"))),
     ],
-    ids=["unconfirmed204", "empty", "malformed", "array", "missing-fields", "wrong-webhook", "invalid-message", "invalid-channel", "oversized"],
+    ids=["unconfirmed204", "empty", "malformed", "array", "missing-fields", "wrong-webhook", "invalid-message", "invalid-channel", "oversized", "nan", "infinity", "negative-infinity"],
 )
 def test_discord_rejects_unconfirmed_response_without_secret_disclosure(
     tmp_path, monkeypatch, status, body

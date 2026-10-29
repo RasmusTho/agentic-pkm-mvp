@@ -223,6 +223,10 @@ class _NoDiscordRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _reject_json_constant(_value: str) -> None:
+    raise ValueError("invalid webhook confirmation")
+
+
 class DiscordChannel:
     """One-way Discord webhook push using a host-secret runtime binding."""
 
@@ -262,7 +266,9 @@ class DiscordChannel:
                 body_bytes = response.read(64 * 1024 + 1)
                 if len(body_bytes) > 64 * 1024:
                     raise ValueError("invalid webhook confirmation")
-                confirmation = json.loads(body_bytes.decode("utf-8"))
+                confirmation = json.loads(
+                    body_bytes.decode("utf-8"), parse_constant=_reject_json_constant
+                )
                 if (
                     not isinstance(confirmation, dict)
                     or confirmation.get("webhook_id") != self._webhook_id
