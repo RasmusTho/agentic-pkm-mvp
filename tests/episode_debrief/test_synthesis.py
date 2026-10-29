@@ -33,14 +33,17 @@ def episode(debrief_db, monkeypatch):
     monkeypatch.setattr(hybrid, "_STORE", hybrid.MemoryHybridStore())
     monkeypatch.setattr(hybrid, "_revalidate_cache_generation", lambda: None)
     ep = db.episode(count=0, extra_fields={"time": {"start": "2026-10-13T08:00:00Z", "end": "2026-10-13T10:00:00Z", "closed": True}, "space": ["office"], "goal": ["human goal"], "protagonists": ["human"], "causation": ["human cause"]})
+    from app.ingest.vault_alpha import resolve_ingest_config
+    folder = (resolve_ingest_config(db.root).include_folders or ["."])[0]
     docs = []
     for kind, extra in (("decision", {}), ("commitment", {"commitment_id": "c-1", "commitment_kind": "next_action", "commitment_state": "next"}), ("capture", {})):
         oid = str(uuid4())
-        relative = f"{kind}.md"
+        relative = (Path(folder) / f"{kind}.md").as_posix()
         body = f"Retained {kind} text with a citation."
         fields = {"uuid": oid, "kind": kind, "scope": "work", **extra}
+        (db.root / relative).parent.mkdir(parents=True, exist_ok=True)
         (db.root / relative).write_text(dump_frontmatter(fields, body), encoding="utf-8")
-        db.bind(ep, count=1, prefix=oid)
+        _install_watcher_binding(db, ep, {"payload": {"note_path": relative}})
         docs.append({"doc_id": oid, "text": body, "source_ref": oid + "-0", "payload": {"domain": "work", "note_path": relative, "review_state": "reviewed", "evidence_role": "background"}})
         if kind == "decision":
             append_decision_receipt(object_id=oid, key="review", value={"allow": True, "reason": "retained judgment"}, trace_id="fixture", created_at=datetime(2026, 10, 13, 9, tzinfo=timezone.utc), vault_root=db.root, vault_uuid=None)
@@ -261,8 +264,9 @@ def test_native_binding_isolation_uses_real_registry_and_effect_window(episode, 
     ep = db.episode(count=0, binding=first.vault_binding_id)
     for doc in docs:
         relative = doc['payload']['note_path']
+        (db.root / relative).parent.mkdir(parents=True, exist_ok=True)
         (db.root / relative).write_bytes((old_root / relative).read_bytes())
-        db.bind(ep, count=1, prefix=doc['doc_id'], binding=first.vault_binding_id)
+        _install_watcher_binding(db, ep, doc, binding=first.vault_binding_id)
         doc['payload']['vault_binding_id'] = first.vault_binding_id
     directory = decisions_receipts_dir(db.root)
     directory.mkdir(parents=True, exist_ok=True)
@@ -272,13 +276,21 @@ def test_native_binding_isolation_uses_real_registry_and_effect_window(episode, 
     report = synthesis.synthesize_debrief(payload, vault_root=db.root, vault_binding_id=first.vault_binding_id, write_guard=ALLOW)
     assert report['status'] == 'created'
     assert (db.root / report['draft']).exists()
+    fm, _ = load_frontmatter((db.root / report['draft']).read_text())
+    from app.stores import get_object_store, resolve_object_store_port
+    from uuid import UUID
+    native_store = resolve_object_store_port(vault_binding_id=first.vault_binding_id).store
+    for ref in fm['debrief_source_refs']:
+        assert native_store.get(UUID(ref['artifact_id'])) is not None
+        assert get_object_store().get(UUID(ref['artifact_id'])) is None
+    assert fm['proposed_by']['cognition']['outcome'] != 'missing_input'
     # The same identities cannot borrow another binding's index provenance.
     for doc in docs:
         doc['payload']['vault_binding_id'] = 'foreign-binding'
     hybrid._STORE.set_documents(docs)
     ep2 = db.episode(count=0, binding=first.vault_binding_id)
     for doc in docs:
-        db.bind(ep2, count=1, prefix=doc['doc_id'], binding=first.vault_binding_id)
+        _install_watcher_binding(db, ep2, doc, binding=first.vault_binding_id)
     with pytest.raises(create.UnresolvableCitationError):
         synthesis.synthesize_debrief({**payload, 'episode_id': ep2, 'debrief_id': debrief_id_for_episode(ep2)}, vault_root=db.root, vault_binding_id=first.vault_binding_id, write_guard=ALLOW)
 
@@ -314,3 +326,155 @@ def test_episode_machine_writer_preserves_additive_debrief_ref(episode):
                        space=fields.get('space'), goal=fields.get('goal'), protagonists=fields.get('protagonists'),
                        causation=fields.get('causation'), write_guard=ALLOW)
     assert parse_episode_note_document(path.read_text())[0]['debrief_ref'] == [debrief_id_for_episode(ep)]
+
+
+def _install_watcher_binding(db, ep, doc, *, binding=None):
+    import hashlib
+    from psycopg.types.json import Jsonb
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+    from app.watcher.registry import ingest_vault_changed_payload
+    binding = binding or COMPATIBILITY_BINDING_ID
+    relative = doc['payload']['note_path']
+    path = db.root / relative
+    event = str(uuid4())
+    payload = ingest_vault_changed_payload(vault_root=db.root, relative_path=Path(relative),
+        mtime=datetime(2026, 10, 13, 9, tzinfo=timezone.utc).timestamp(),
+        content_hash=hashlib.sha256(path.read_bytes()).hexdigest(), watcher='fixture')
+    db.execute("INSERT INTO outbox(id,topic,payload,vault_binding_id) VALUES(%s,'ingest.vault.changed',%s,%s)", (event, Jsonb(payload), binding))
+    db.execute("INSERT INTO episode_artifact_binding(vault_binding_id,artifact_ref,episode_id,scope,basis,confidence,binding_state,rule) VALUES(%s,%s,%s,'work','time_overlap',1,'active','fixture')", (binding,'vault.activity:'+event,ep))
+    return event
+
+
+def test_real_watcher_path_only_binding_resolves(episode):
+    db, ep, _, docs = episode
+    doc = docs[-1]
+    db.execute("DELETE FROM episode_artifact_binding WHERE episode_id=%s AND artifact_ref IN (SELECT 'vault.activity:' || id::text FROM outbox WHERE topic='ingest.vault.changed' AND payload->>'relative_path'=%s)", (ep,doc['payload']['note_path']))
+    _install_watcher_binding(db, ep, doc)
+    assert run(episode)['status'] == 'created'
+
+
+def test_retained_uuid_maps_to_canonical_source_identity(episode):
+    db, _, _, docs = episode
+    oid = docs[-1]['doc_id']
+    retained = str(uuid4())
+    path = db.root / docs[-1]['payload']['note_path']
+    fields, body = load_frontmatter(path.read_text())
+    fields['uuid'] = retained
+    path.write_text(dump_frontmatter(fields, body))
+    db.execute("INSERT INTO objects(id,uuid,kind,source_ref,payload) VALUES(%s,%s,'note','fixture','{}'::jsonb)", (oid,retained))
+    assert run(episode)['status'] == 'created'
+
+
+def test_source_uses_production_ingest_panel_normalization(episode, monkeypatch):
+    from app.ingest import vault_alpha
+    db, _, _, docs = episode
+    path = db.root / docs[-1]['payload']['note_path']
+    fields, body = load_frontmatter(path.read_text())
+    fields.update(domain='work', review_state='reviewed')
+    path.write_text(dump_frontmatter(fields, body + '\n%% AI:Start %%\nAI status text\n%% AI:End %%\n'))
+    monkeypatch.setattr(vault_alpha, 'classify_run', lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(vault_alpha, 'index_ingest_object', lambda **_kwargs: None)
+    monkeypatch.setattr(vault_alpha, 'append_jsonl', lambda *_args, **_kwargs: None)
+    result = vault_alpha.run_vault_alpha_ingest_paths(db.root, [path], force=True)
+    assert result.ingested == 1
+    from app.stores import get_object_store
+    from uuid import UUID
+    projection = get_object_store().get(UUID(docs[-1]['doc_id']))
+    docs[-1]['text'] = projection['payload']['text']
+    hybrid._STORE.set_documents(docs)
+    report = run(episode)
+    assert 'AI status text' not in (db.root / report['draft']).read_text()
+
+
+def test_unlinked_replay_rechecks_source_scope(episode, monkeypatch):
+    db, _, _, docs = episode
+    real = synthesis.write_note_from_absolute
+    monkeypatch.setattr(synthesis, 'write_note_from_absolute', lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('crash')))
+    with pytest.raises(OSError):
+        run(episode)
+    monkeypatch.setattr(synthesis, 'write_note_from_absolute', real)
+    path = db.root / docs[-1]['payload']['note_path']
+    fields, body = load_frontmatter(path.read_text())
+    fields['scope'] = 'private'
+    path.write_text(dump_frontmatter(fields, body))
+    with pytest.raises((synthesis.DebriefSynthesisError, create.UnresolvableCitationError)):
+        run(episode)
+
+
+def test_completed_commitment_is_not_an_open_loop(episode):
+    db, _, _, docs = episode
+    path = db.root / docs[1]['payload']['note_path']
+    fields, body = load_frontmatter(path.read_text())
+    fields['commitment_state'] = 'done'
+    path.write_text(dump_frontmatter(fields, body))
+    _refresh_observation(db, path)
+    report = run(episode)
+    _, body = load_frontmatter((db.root / report['draft']).read_text())
+    section = body.split('## open_loops\n',1)[1].split('\n## ',1)[0]
+    assert '(none)' in section
+
+
+def test_native_worker_consumes_compatibility_projection_trigger(episode, monkeypatch):
+    from tests.episode_debrief.test_trigger import _active_native_runtime
+    from app.workers.outbox_worker import _dispatch_topic
+    from app.receipts.decision_receipt_log import decisions_receipts_dir
+    import shutil
+    db, ep, _, docs = episode
+    old_root = db.root
+    first, _ = _active_native_runtime(db, monkeypatch)
+    db.root = Path(first.path)
+    initialize_test_vault(db.root)
+    shutil.copytree(old_root / 'episodes', db.root / 'episodes', dirs_exist_ok=True)
+    for doc in docs:
+        relative = doc['payload']['note_path']
+        (db.root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (db.root / relative).write_bytes((old_root / relative).read_bytes())
+    shutil.copytree(decisions_receipts_dir(old_root), decisions_receipts_dir(db.root), dirs_exist_ok=True)
+    db.tick()
+    payload = db.execute("SELECT payload->'payload' FROM outbox WHERE topic='debrief.trigger.created' AND vault_binding_id=%s", (first.vault_binding_id,))[0][0]
+    _dispatch_topic('debrief.trigger.created', payload, trace_id='native', message={'vault_binding_id':first.vault_binding_id,'payload_schema':'debrief.trigger.created.v1'}, vault_root=db.root)
+    assert (db.root / '_system/episode-debriefs' / f'{debrief_id_for_episode(ep)}.md').exists()
+
+
+def _refresh_observation(db, path):
+    import hashlib
+    from psycopg.types.json import Jsonb
+    db.execute("UPDATE outbox SET payload=jsonb_set(payload,'{hash}',%s::jsonb) WHERE topic='ingest.vault.changed' AND payload->>'relative_path'=%s", (Jsonb(hashlib.sha256(path.read_bytes()).hexdigest()), str(path.relative_to(db.root))))
+
+
+@pytest.mark.parametrize('change', ['scope', 'membership'])
+def test_source_changes_during_cognition_cannot_be_linked(episode, monkeypatch, change):
+    db, ep, _, docs = episode
+    original = create.run_create_pass
+    def changed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if change == 'scope':
+            path = db.root / docs[-1]['payload']['note_path']
+            fields, body = load_frontmatter(path.read_text())
+            fields['scope'] = 'private'
+            path.write_text(dump_frontmatter(fields, body))
+        else:
+            db.execute("DELETE FROM episode_artifact_binding WHERE episode_id=%s", (ep,))
+        return result
+    monkeypatch.setattr(create, 'run_create_pass', changed)
+    with pytest.raises((synthesis.DebriefSynthesisError, create.UnresolvableCitationError)):
+        run(episode)
+    fields, _ = load_frontmatter((db.root / 'episodes' / f'{ep}.md').read_text())
+    assert not fields.get('debrief_ref')
+
+
+@pytest.mark.parametrize('change', ['missing_hash', 'late', 'changed'])
+def test_closure_state_requires_matching_observation(episode, change):
+    from psycopg.types.json import Jsonb
+    db, _, _, docs = episode
+    relative = docs[1]['payload']['note_path']
+    if change == 'changed':
+        path = db.root / relative
+        fields, body = load_frontmatter(path.read_text())
+        fields['commitment_state'] = 'done'
+        path.write_text(dump_frontmatter(fields, body))
+    else:
+        key, value = ('hash', None) if change == 'missing_hash' else ('mtime', datetime(2026,10,14,tzinfo=timezone.utc).timestamp())
+        db.execute("UPDATE outbox SET payload=jsonb_set(payload,ARRAY[%s],%s::jsonb) WHERE topic='ingest.vault.changed' AND payload->>'relative_path'=%s", (key, Jsonb(value), relative))
+    with pytest.raises(create.UnresolvableCitationError):
+        run(episode)

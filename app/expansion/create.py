@@ -9,9 +9,10 @@ machinery, activated through the Expansion Activation Gate
 (``app.activation.gate``) rather than rebuilt -- the second passage through
 that gate the ASK synthesis proof (#2022/#2026) already validated once.
 
-This module implements all three output kinds (closed enum, no default):
+This module implements four output kinds (closed enum, no default):
 ``create.overview`` (a synthesis/overview over a topic/cluster/note-set),
 ``create.answer_note`` (an ASK answer filed as a durable note with sources),
+``create.episode_debrief`` (an Episode-bound proposal under ``_system/episode-debriefs/``),
 and ``create.digest`` (a bounded-period digest -- EXP-5, #2998; explicit-ask
 only through :func:`run_create_pass` in this slice). A moment may only ever
 materialize a digest *offer* checkbox, never a draft directly from tick
@@ -23,7 +24,8 @@ ADR, mirroring ``app.expansion.connect``'s and
 ``app.knowledge_compilation.proposal_builders``'s posture):
 
 - **This slice produces DRAFTS ONLY.** The only write this module ever
-  performs is a staging-area note under ``_system/drafts/`` (spec §2.3, owner
+  performs is a proposal note under ``_system/drafts/`` or, for Episode debriefs,
+  ``_system/episode-debriefs/`` (spec §2.3, owner
   decision E1's recommended default -- no owner ruling has superseded it, so
   this module uses it as documented). There is no code path here, and no
   configuration flag, that writes a canonical vault location --
@@ -263,6 +265,7 @@ class CreateRequest:
     digest_activity: DigestActivityInput | None = None
     # Trigger adapter supplies source identities, never unvalidated narrative.
     debrief_sections: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    reasoning_binding_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -504,7 +507,8 @@ def _run_cognition(request: CreateRequest) -> dict[str, Any]:
 
     object_ids = [source.object_id for source in request.sources]
     try:
-        output = run_multi_note_reasoning(object_ids, trace_id=request.trace_id)
+        output = (run_multi_note_reasoning(object_ids, trace_id=request.trace_id, vault_binding_id=request.reasoning_binding_id)
+                  if request.reasoning_binding_id is not None else run_multi_note_reasoning(object_ids, trace_id=request.trace_id))
     except Exception:
         return {
             "claims": 0,

@@ -56,6 +56,8 @@ def append_debrief_ref_text(raw: str, *, episode_id: str, scope: str, debrief_id
     match = re.match(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|$)", raw, re.S)
     if match is None:
         raise DebriefSynthesisError("Episode frontmatter cannot be patched")
+    if any(isinstance(token, yaml.tokens.AliasToken) for token in yaml.scan(match.group(1))):
+        raise DebriefSynthesisError("aliased Episode fields cannot be patched safely")
     document = yaml.compose(match.group(1))
     if not isinstance(document, yaml.MappingNode):
         raise DebriefSynthesisError("Episode frontmatter must be a mapping")
@@ -67,6 +69,13 @@ def append_debrief_ref_text(raw: str, *, episode_id: str, scope: str, debrief_id
         raise DebriefSynthesisError("debrief_ref must be an identity list")
     if debrief_id in refs:
         return raw
+    def checked(result: str) -> str:
+        after, after_body = parse_episode_note_document(result)
+        before_without_ref = {key: value for key, value in fields.items() if key != "debrief_ref"}
+        after_without_ref = {key: value for key, value in after.items() if key != "debrief_ref"}
+        if before_without_ref != after_without_ref or parse_episode_note_document(raw)[1] != after_body:
+            raise DebriefSynthesisError("debrief patch attempted to change protected Episode content")
+        return result
     value = json.dumps([*refs, debrief_id], ensure_ascii=False)
     for key, node in document.value:
         if key.value == "debrief_ref":
@@ -76,10 +85,10 @@ def append_debrief_ref_text(raw: str, *, episode_id: str, scope: str, debrief_id
             suffix = raw[end:]
             if raw[start:end].endswith(("\n", "\r")):
                 value += "\r\n" if "\r\n" in raw[start:end] else "\n"
-            return raw[:start] + value + suffix
+            return checked(raw[:start] + value + suffix)
     newline = "\r\n" if raw.startswith("---\r\n") else "\n"
     offset = match.end(1)
-    return raw[:offset] + newline + "debrief_ref: " + value + raw[offset:]
+    return checked(raw[:offset] + newline + "debrief_ref: " + value + raw[offset:])
 
 
 def _read_episode(path: Path, episode_id: str, scope: str) -> tuple[str, str, dict[str, Any]]:
@@ -93,14 +102,15 @@ def _read_episode(path: Path, episode_id: str, scope: str) -> tuple[str, str, di
 
 def _sources(
     members: tuple[tuple[str, str], ...], *, scope: str, root: Path,
-    binding_ids: tuple[str, ...], episode_id: str, episode_fields: Mapping[str, Any],
+    source_binding_id: str, effect_binding_id: str, episode_id: str, episode_fields: Mapping[str, Any],
 ) -> tuple[tuple[create.SourceInput, ...], tuple[tuple[str, tuple[str, ...]], ...]]:
     if not members or any(member_scope != scope for _, member_scope in members):
         raise DebriefSynthesisError("cross_scope_no_flow: active binding scope differs from trigger")
-    identities = tuple(store.resolve_synthesis_artifact(ref, projection_binding_ids=binding_ids) for ref, _ in members)
+    artifacts = tuple(store.resolve_synthesis_artifact(ref, vault_binding_id=source_binding_id, vault_root=root) for ref, _ in members)
+    identities = tuple(item.identity for item in artifacts)
     response = retrieve(RetrievalRequest(
         query=episode_id, scope=scope, domain=scope, k=len(identities),
-        artifact_ids=identities, artifact_binding_ids=binding_ids if binding_ids != (COMPATIBILITY_BINDING_ID,) else None,
+        artifact_ids=identities, artifact_binding_ids=(source_binding_id,) if source_binding_id != COMPATIBILITY_BINDING_ID else None,
     ))
     by_identity: dict[str, RetrievalHit] = {}
     for hit in response.hits:
@@ -143,14 +153,17 @@ def _sources(
         _assert_selected_vault_owns_path(root, path.resolve(), "debrief source")
         raw, _ = read_note_text_with_version(path)
         fields, body = load_frontmatter(raw)
-        if fields.get("uuid") is not None and fields["uuid"] != hit.object_id:
-            raise create.UnresolvableCitationError("retained source identity differs from the index")
+        if fields.get("uuid") is not None and store.canonical_note_identity(str(fields["uuid"]), vault_binding_id=source_binding_id) != hit.object_id:
+            raise create.UnresolvableCitationError("retained source identity differs from the scoped canonical identity")
         source_scope = fields.get("scope") or fields.get("domain")
         if source_scope is not None and source_scope != scope:
             raise DebriefSynthesisError("cross_scope_no_flow: retained note differs from trigger")
-        if not body.strip() or body.strip() not in hit.text:
-            raise create.UnresolvableCitationError("retained citation differs from indexed source")
-        selected.append((hit, raw, body.strip(), note_path, identity))
+        from app.agents.panel.filters import strip_ai_panels
+        from app.agents.panel.writeback import strip_ai_status_block
+        source_text = strip_ai_status_block(strip_ai_panels(body)).strip()
+        if not source_text or source_text != hit.text.strip():
+            raise create.UnresolvableCitationError("retained citation differs from canonical ingest source text")
+        selected.append((hit, raw, source_text, note_path, artifacts[index].provenance_ref))
         commitment = fields.get("commitment")
         commitment = commitment if isinstance(commitment, dict) else {}
         kind = fields.get("kind")
@@ -162,8 +175,19 @@ def _sources(
         if is_commitment:
             sections["commitments"].append(index)
         state = commitment.get("state") or fields.get("commitment_state") or fields.get("state") or fields.get("status")
-        commitment_kind = commitment.get("kind") or fields.get("commitment_kind")
-        if state in {"next", "next_action", "waiting", "in-progress", "in_progress"} or commitment_kind in {"next_action", "waiting"}:
+        if is_commitment or state in {"in-progress", "in_progress"}:
+            # Commitment kind persists across completion: it cannot override state.
+            # A closure-time state claim requires the immutable watcher observation
+            # admitted by the Episode binding, not today's mutable note alone.
+            artifact = artifacts[index]
+            digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            if not artifact.content_hash or artifact.content_hash != digest or artifact.observed_at is None:
+                raise create.UnresolvableCitationError("closure-time commitment state has no matching bound observation")
+            from datetime import timezone
+            observed = datetime.fromtimestamp(artifact.observed_at, timezone.utc)
+            if observed < start or (end is not None and observed > end):
+                raise create.UnresolvableCitationError("commitment observation is outside Episode bounds")
+        if state in {"next", "next_action", "waiting", "in-progress", "in_progress"}:
             sections["open_loops"].append(index)
         if not is_decision and not is_commitment and index not in sections["open_loops"]:
             sections["key_captures"].append(index)
@@ -178,7 +202,7 @@ def _sources(
     inputs = materialize_reasoning_inputs([
         ReasoningSourceInput(source_id=f"{identity}:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}", text=body)
         for _, raw, body, _, identity in selected
-    ], namespace_key=f"episode-debrief:{root}:{episode_id}")
+    ], namespace_key=f"episode-debrief:{effect_binding_id}:{episode_id}", vault_binding_id=effect_binding_id)
     sources = tuple(create.SourceInput(
         object_id=item.object_id, note_path=note_path, text=body, quoted_spans=(body,),
         review_state=hit.payload.get("review_state"), provenance_ref=identity, raw_bytes=raw.encode("utf-8"),
@@ -204,11 +228,11 @@ def synthesize_debrief(
     runtime = resolve_scalar_binding_runtime(requested_binding_id=vault_binding_id, vault_root=root)
     binding = runtime.vault_binding_id if runtime is not None else vault_binding_id
     projection_ids: tuple[str, ...] = (binding,)
-    if binding != COMPATIBILITY_BINDING_ID and vault_binding_id == COMPATIBILITY_BINDING_ID and _is_configured_scalar_root(root):
+    if binding != COMPATIBILITY_BINDING_ID and _is_configured_scalar_root(root):
         projection_ids = (binding, COMPATIBILITY_BINDING_ID)
     write_guard.assert_writes_allowed(WRITE_ACTION)
     with current_binding_effect_window(runtime) if runtime is not None else nullcontext():
-        row, members = store.synthesis_inputs(episode_id, projection_binding_ids=projection_ids)
+        row, members, source_binding = store.synthesis_inputs(episode_id, projection_binding_ids=projection_ids)
         path = root / row.note_path
         _assert_selected_vault_owns_path(root, path.resolve(), "Episode note")
         decision = expansion_records.evaluate_synthesis_note_proposal_activation(
@@ -223,9 +247,16 @@ def synthesize_debrief(
         receipt_id = str(uuid5(NAMESPACE_URL, f"episode-debrief:{binding}:{debrief_id}"))
         with create._draft_publication_lock(path):
             raw, version, fields = _read_episode(path, episode_id, scope)
+            source_request = None
+            if not draft_path.exists() or debrief_id not in fields.get("debrief_ref", []):
+                sources, sections = _sources(members, scope=scope, root=root,
+                    source_binding_id=source_binding, effect_binding_id=binding, episode_id=episode_id, episode_fields=fields)
+                source_request = create.CreateRequest(kind=create.OutputKind.EPISODE_DEBRIEF,
+                    title=f"Episode debrief: {fields['title']}", sources=sources, debrief_sections=sections, reasoning_binding_id=binding)
             if draft_path.exists():
                 metadata, _ = load_frontmatter(draft_path.read_text(encoding="utf-8"))
-                retained = create._replay_draft_metadata(draft_path, request_fingerprint=metadata.get("request_fingerprint", ""), draft_id=debrief_id)
+                expected_fingerprint = create._request_fingerprint(source_request) if source_request is not None else metadata.get("request_fingerprint", "")
+                retained = create._replay_draft_metadata(draft_path, request_fingerprint=expected_fingerprint, draft_id=debrief_id)
                 assert retained is not None
                 if metadata.get("episode_id") != episode_id or metadata.get("scope") != scope:
                     raise DebriefSynthesisError("existing draft belongs to another Episode or scope")
@@ -248,17 +279,27 @@ def synthesize_debrief(
             else:
                 report = None
             if report is None:
-                sources, sections = _sources(members, scope=scope, root=root, binding_ids=projection_ids, episode_id=episode_id, episode_fields=fields)
-                created = create.run_create_pass(create.CreateRequest(
-                    kind=create.OutputKind.EPISODE_DEBRIEF, title=f"Episode debrief: {fields['title']}",
-                    sources=sources, debrief_sections=sections,
-                ), vault_root=root, outbox_path=outbox_path, write_guard=write_guard,
+                assert source_request is not None
+                created = create.run_create_pass(source_request,
+                    vault_root=root, outbox_path=outbox_path, write_guard=write_guard,
                     draft_id=debrief_id, receipt_id=receipt_id,
                     draft_frontmatter_enricher=lambda draft: {"episode_id": episode_id, "scope": scope,
                         "debrief_source_refs": [ref.model_dump(exclude_none=True) for ref in draft.source_refs]},
                 )
                 if not created.activatable:
                     return {"status": "blocked", "reasons": list(created.blocked_reasons)}
+            if debrief_id not in fields.get("debrief_ref", []):
+                _, current_members, current_binding = store.synthesis_inputs(episode_id, projection_binding_ids=projection_ids)
+                if (current_members, current_binding) != (members, source_binding):
+                    raise DebriefSynthesisError("Episode membership changed before linking")
+                current_sources, current_sections = _sources(current_members, scope=scope, root=root,
+                    source_binding_id=current_binding, effect_binding_id=binding, episode_id=episode_id, episode_fields=fields)
+                current_request = create.CreateRequest(kind=create.OutputKind.EPISODE_DEBRIEF,
+                    title=f"Episode debrief: {fields['title']}", sources=current_sources,
+                    debrief_sections=current_sections, reasoning_binding_id=binding)
+                assert source_request is not None
+                if create._request_fingerprint(current_request) != create._request_fingerprint(source_request):
+                    raise create.UnresolvableCitationError("Episode evidence changed before linking")
             patched = append_debrief_ref_text(raw, episode_id=episode_id, scope=scope, debrief_id=debrief_id)
             changed = patched != raw
             if changed:

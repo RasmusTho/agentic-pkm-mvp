@@ -6,7 +6,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.reasoning.provider import run_reasoning_claims_for_object
 from app.reasoning.schema import Claim, Evidence, Inference, ReasoningOutcome, ReasoningOutput
-from app.stores import get_object_store
+from app.stores import get_object_store, resolve_object_store_port
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ class MaterializedReasoningInput:
 
 
 def materialize_reasoning_inputs(
-    sources: Sequence[ReasoningSourceInput], *, namespace_key: str
+    sources: Sequence[ReasoningSourceInput], *, namespace_key: str, vault_binding_id: str | None = None
 ) -> tuple[MaterializedReasoningInput, ...]:
     """Persist rebuildable, non-knowledge inputs for ``run_multi_note_reasoning``.
 
@@ -35,7 +35,7 @@ def materialize_reasoning_inputs(
     is an unbound machine mirror, never canonical knowledge or retrieval rank.
     """
 
-    store = get_object_store()
+    store = resolve_object_store_port(vault_binding_id=vault_binding_id).store if vault_binding_id is not None else get_object_store()
     materialized: list[MaterializedReasoningInput] = []
     for source in sources:
         text = source.text.strip()
@@ -72,8 +72,8 @@ def materialize_reasoning_inputs(
     return tuple(materialized)
 
 
-def _load_texts(object_ids: Iterable[str]) -> List[tuple[str, str]]:
-    store = get_object_store()
+def _load_texts(object_ids: Iterable[str], *, vault_binding_id: str | None = None) -> List[tuple[str, str]]:
+    store = resolve_object_store_port(vault_binding_id=vault_binding_id).store if vault_binding_id is not None else get_object_store()
     texts: List[tuple[str, str]] = []
     for raw_id in object_ids:
         try:
@@ -105,7 +105,7 @@ def _build_synthesis_inference(claims: Sequence[Claim], object_ids: Sequence[str
     )
 
 
-def run_multi_note_reasoning(object_ids: Sequence[str], *, trace_id: str | None = None) -> ReasoningOutput:
+def run_multi_note_reasoning(object_ids: Sequence[str], *, trace_id: str | None = None, vault_binding_id: str | None = None) -> ReasoningOutput:
     """
     Run reasoning across multiple notes and merge the results.
     Falls back gracefully if any note is missing.
@@ -115,7 +115,7 @@ def run_multi_note_reasoning(object_ids: Sequence[str], *, trace_id: str | None 
             outcome="missing_input", degraded_reason="missing_input"
         )
 
-    texts = _load_texts(object_ids)
+    texts = _load_texts(object_ids, vault_binding_id=vault_binding_id) if vault_binding_id is not None else _load_texts(object_ids)
     all_claims: List[Claim] = []
     all_evidence: List[Evidence] = []
     all_inferences: List[Inference] = []
@@ -124,7 +124,8 @@ def run_multi_note_reasoning(object_ids: Sequence[str], *, trace_id: str | None 
         outcomes.append("missing_input")
     for object_id, text in texts:
         try:
-            result = run_reasoning_claims_for_object(object_id, trace_id=trace_id)
+            result = (run_reasoning_claims_for_object(object_id, trace_id=trace_id, vault_binding_id=vault_binding_id)
+                      if vault_binding_id is not None else run_reasoning_claims_for_object(object_id, trace_id=trace_id))
         except Exception:
             result = ReasoningOutput(
                 outcome="provider_failure", degraded_reason="provider_failure"

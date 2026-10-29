@@ -159,3 +159,11 @@ the next DEBRIEF-01 reconciliation tick re-attempts cleanly since idempotency ke
 
 One issue: `[Episode Debrief] synthesize-debrief-note: Create-engine debrief synthesis linked from the
 Episode note`. DEBRIEF-01 is delivered in #6362; DEBRIEF-03 remains separate.
+
+
+Closure-state evidence: a commitment/open-loop state is admitted only when a bound watcher
+observation lies within the Episode interval and its immutable content hash matches the retained
+note. Missing or stale historical state fails loudly instead of presenting current state as
+closure-time truth. Unlinked recovery revalidates membership, scope, retained content and request
+integrity; linking also rechecks admission after cognition. Reasoning mirrors use the selected
+vault binding, including when the configured scalar vault consumes a compatibility projection.

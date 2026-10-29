@@ -55,3 +55,10 @@ def test_duplicate_yaml_fields_are_refused():
     raw = f"---\nepisode_id: {ep}\nscope: work\nscope: work\ntitle: Human\ntime: {{start: '2026-10-13T08:00:00Z', closed: true}}\nsegmentation: accepted\n---\nHuman body.\n"
     with pytest.raises((DebriefSynthesisError, ValueError)):
         append_debrief_ref_text(raw, episode_id=ep, scope="work", debrief_id=debrief_id_for_episode(ep))
+
+
+def test_alias_cannot_redirect_debrief_ref_patch_into_human_goal():
+    ep = 'ep-' + str(uuid4())
+    raw = f"---\nepisode_id: {ep}\nscope: work\ntitle: Human\ntime: {{start: '2026-10-13T08:00:00Z', closed: true}}\ngoal: &items []\ndebrief_ref: *items\nsegmentation: accepted\n---\nHuman body.\n"
+    with pytest.raises((DebriefSynthesisError, ValueError)):
+        append_debrief_ref_text(raw, episode_id=ep, scope='work', debrief_id=debrief_id_for_episode(ep))

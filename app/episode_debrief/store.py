@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from pathlib import Path
 from uuid import UUID
 
 from app.db.db import conn_rw
@@ -153,7 +154,7 @@ def advance_cursor(
 
 def synthesis_inputs(
     episode_id: str, *, projection_binding_ids: tuple[str, ...],
-) -> tuple[EpisodeRow, tuple[tuple[str, str], ...]]:
+) -> tuple[EpisodeRow, tuple[tuple[str, str], ...], str]:
     """Resolve the same winning projection as DEBRIEF-01 plus its active members."""
     candidates = [
         (row, binding)
@@ -175,20 +176,39 @@ def synthesis_inputs(
     return row, tuple(
         (item['artifact_ref'], item['scope']) if isinstance(item, dict) else (item[0], item[1])
         for item in rows
-    )
+    ), binding
 
 
-def resolve_synthesis_artifact(ref: str, *, projection_binding_ids: tuple[str, ...]) -> str:
-    """Resolve vault activity provenance only inside its admitted producer bindings."""
+@dataclass(frozen=True)
+class SynthesisArtifact:
+    identity: str
+    provenance_ref: str
+    content_hash: str | None = None
+    observed_at: float | None = None
+
+
+def canonical_note_identity(vault_uuid: str, *, vault_binding_id: str) -> str:
+    from app.objects.identity import resolve_vault_uuid_with_connection
+    with conn_rw() as conn:
+        return resolve_vault_uuid_with_connection(conn, vault_uuid, vault_binding_id=vault_binding_id)
+
+
+def resolve_synthesis_artifact(
+    ref: str, *, vault_binding_id: str, vault_root: "Path",
+) -> SynthesisArtifact:
+    """Resolve ordinary watcher events using the canonical contained-note identity seam."""
+    from pathlib import Path
+    from app.episodes.vault_activity_stream import _resolve_note_path
+    from app.episode_debrief.trigger import _assert_selected_vault_owns_path
+    from app.ingest.vault_alpha import resolve_vault_note_identity
+    from app.knowledge.write_ops import read_note_text_with_version
+    from scripts.yaml_roundtrip import load_frontmatter
     if not ref.startswith("vault.activity:"):
-        return ref
+        return SynthesisArtifact(ref, ref)
     row_id = str(UUID(ref.removeprefix("vault.activity:")))
     with conn_rw() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT payload FROM outbox WHERE id = %s::uuid AND vault_binding_id = ANY(%s)",
-                (row_id, list(projection_binding_ids)),
-            )
+            cur.execute("SELECT payload FROM outbox WHERE id=%s::uuid AND vault_binding_id=%s", (row_id, vault_binding_id))
             row = cur.fetchone()
     if row is None:
         raise ValueError("bound activity provenance cannot be resolved")
@@ -196,11 +216,17 @@ def resolve_synthesis_artifact(ref: str, *, projection_binding_ids: tuple[str, .
     if isinstance(value, str):
         value = json.loads(value)
     payload = value.get('payload', value)
-    identity = payload.get('uuid') or payload.get('object_id')
+    identity = payload.get('object_id') or payload.get('uuid')
     if not isinstance(identity, str) or not identity:
-        raise ValueError("bound activity has no resolvable object identity")
-    return identity
-
+        path = _resolve_note_path(payload, vault_root=Path(vault_root))
+        if path is None:
+            raise ValueError("bound activity has no contained retained note")
+        _assert_selected_vault_owns_path(vault_root, path, "bound activity note")
+        raw, _ = read_note_text_with_version(path)
+        fields, body = load_frontmatter(raw)
+        note_identity = resolve_vault_note_identity(path, vault_root=vault_root, frontmatter=fields, body=body)
+        identity = canonical_note_identity(note_identity.note_uuid, vault_binding_id=vault_binding_id)
+    return SynthesisArtifact(identity, ref, payload.get('hash'), payload.get('mtime'))
 
 
 def trigger_for_episode(episode_id: str, *, vault_binding_id: str) -> dict[str, Any]:
