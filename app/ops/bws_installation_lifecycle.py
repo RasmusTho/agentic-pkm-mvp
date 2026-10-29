@@ -211,7 +211,7 @@ def _discovered_control_projection(
     launcher: bytes, environment: list[str], environment_files: list[list[Any]], *,
     expected_empty_control_root: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Verify the fixed control root, using a public hint when one is present.
+    """Verify the fixed control root, using public hints only for anchored roots.
 
     The configured control root is already fixed by this owner contract. A hint
     may select a deeper path under it; without one, verify the fixed root's
@@ -226,60 +226,20 @@ def _discovered_control_projection(
     try:
         discovery = launcher.decode('utf-8') + '\n' + '\n'.join(environment)
         discovery += '\n' + '\n'.join(row[0] for row in environment_files)
-        direct_control_root_reference = False
-        hinted_paths: set[str] = set()
-        safe_suffix_characters = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-')
-
-        def collect_control_hints(value: str, separators: set[str]) -> None:
-            nonlocal direct_control_root_reference
-            for reference in re.finditer(re.escape(CONTROL_DIRECTORY), value):
-                suffix_start = reference.end()
-                if suffix_start == len(value):
-                    direct_control_root_reference = True
-                    continue
-                first = value[suffix_start]
-                if first == '/':
-                    path_end = suffix_start
-                    while path_end < len(value) and value[path_end] not in separators:
-                        path_end += 1
-                    raw_path = value[suffix_start:path_end]
-                    if re.fullmatch(r'/[A-Za-z0-9._/-]*', raw_path) is None:
-                        _refuse()
-                    if raw_path.strip('/'):
-                        hinted_paths.add(CONTROL_DIRECTORY + raw_path)
-                    else:
-                        direct_control_root_reference = True
-                elif first in separators or first not in safe_suffix_characters:
-                    direct_control_root_reference = True
-
         if expected_empty_control_root is None:
             candidates = sorted(set(re.findall(
                 re.escape(CONTROL_DIRECTORY) + r'/[A-Za-z0-9._/-]+', discovery,
             )))
         else:
-            # The fixed launcher is Python source, not an environment/path-list
-            # value. Refuse a hard-coded control-root reference rather than
-            # truncating its source token at a quote or punctuation character.
-            if CONTROL_DIRECTORY in launcher.decode('utf-8'):
+            # The installed unit and fixed launcher need no control-root path
+            # hint: when the captured source root is empty, authenticate that
+            # fixed root directly. Refuse every hint until a concrete hint
+            # format is part of the supported unit/launcher contract.
+            if (CONTROL_DIRECTORY in launcher.decode('utf-8')
+                    or any(CONTROL_DIRECTORY in value for value in environment)
+                    or any(CONTROL_DIRECTORY in row[0] for row in environment_files)):
                 _refuse()
-            # Preserve typed environment and EnvironmentFiles values while
-            # classifying complete path tokens. Only actual list separators
-            # end a token; punctuation and whitespace stay in the path and fail
-            # closed if unsupported.
-            path_list_separators = {
-                'PATH': {':'},
-                'PYTHONPATH': {':'},
-                'PYTHONHOME': {':'},
-                'LD_LIBRARY_PATH': {':', ';'},
-                'LD_PRELOAD': {':', ' '},
-                'LD_AUDIT': {':'},
-            }
-            for entry in environment:
-                key = entry.partition('=')[0]
-                collect_control_hints(entry, path_list_separators.get(key, set()))
-            for row in environment_files:
-                collect_control_hints(row[0], set())
-            candidates = sorted(hinted_paths)
+            candidates = []
         if not candidates:
             candidates = [CONTROL_DIRECTORY + '/app/ops/postgres_deploy_linux.py']
         if len(candidates) > 16:
@@ -360,10 +320,7 @@ def _discovered_control_projection(
         if expected_empty_control_root is not None:
             expected = _application_projection(expected_empty_control_root)
             actual = projection(root)
-            if (actual != expected or roots or direct_control_root_reference or any(
-                candidate[len(CONTROL_DIRECTORY) + 1:].rstrip('/').split('/')[0]
-                not in {'app', 'scripts'} for candidate in candidates
-            )):
+            if actual != expected or roots:
                 _refuse()
             # The exception is only for first install before either public
             # loader package exists. Any entry in either slot, including a

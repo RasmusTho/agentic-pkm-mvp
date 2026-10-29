@@ -145,6 +145,27 @@ def test_unit_selection_is_fixed_to_dev_or_test():
         lifecycle.FixedBwsService(unit="unrelated.service", channel="dev")
 
 
+@pytest.mark.parametrize("hint_source", ["launcher", "environment", "environment_file"])
+def test_empty_control_projection_refuses_control_root_hints(hint_source):
+    launcher = b"fixed launcher"
+    environment = []
+    environment_files = []
+    if hint_source == "launcher":
+        launcher += lifecycle.CONTROL_DIRECTORY.encode()
+    elif hint_source == "environment":
+        environment.append(f"PYTHONPATH={lifecycle.CONTROL_DIRECTORY}/app")
+    else:
+        environment_files.append([f"{lifecycle.CONTROL_DIRECTORY}/app.env", False])
+
+    with pytest.raises(RuntimeError, match="bws_lifecycle_unproven"):
+        lifecycle._discovered_control_projection(
+            launcher,
+            environment,
+            environment_files,
+            expected_empty_control_root=_root(lifecycle.CONTROL_DIRECTORY, 1),
+        )
+
+
 def test_inflight_exec_stop_post_caller_refuses_before_transaction_mutation(monkeypatch, tmp_path):
     proc_root = tmp_path / "proc"
     process = proc_root / "321"

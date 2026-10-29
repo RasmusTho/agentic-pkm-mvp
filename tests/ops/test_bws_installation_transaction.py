@@ -1741,14 +1741,10 @@ def test_empty_control_root_qualifies_through_lifecycle_gate(tmp_path, monkeypat
 @pytest.mark.parametrize(
     "drift", [
         "loader_package", "root_identity", "foreign_hint", "root_search_path",
-        "root_search_path_trailing_slash", "unsupported_child_path_suffix",
-        "unsupported_child_path_plus", "unsupported_child_path_semicolon",
-        "unsupported_child_path_comma", "unsupported_child_path_space",
-        "unsupported_child_path_bracket", "unsupported_ld_audit_literal_space",
+        "root_search_path_trailing_slash", "environment_file_hint",
         "before_backup_loader_package", "before_backup_root_identity",
         "before_backup_foreign_hint", "before_backup_root_search_path",
         "before_backup_root_search_path_trailing_slash",
-        "before_backup_unsupported_child_path_semicolon",
     ],
 )
 def test_empty_control_root_refuses_identity_or_inventory_drift_before_backup(
@@ -1778,21 +1774,15 @@ def test_empty_control_root_refuses_identity_or_inventory_drift_before_backup(
             moved = control_root.with_name("moved-control-root")
             control_root.rename(moved)
             control_root.mkdir(mode=0o755)
-        elif kind.startswith("unsupported_child_path_"):
-            suffix = {
-                "unsupported_child_path_suffix": "@legacy",
-                "unsupported_child_path_plus": "+legacy",
-                "unsupported_child_path_semicolon": ";legacy",
-                "unsupported_child_path_comma": ",legacy",
-                "unsupported_child_path_space": " legacy",
-                "unsupported_child_path_bracket": "]legacy",
-            }[kind]
-            hint = f"{control_root}/app{suffix}"
-            properties[("Service", "Environment")].append(f"PYTHONPATH={hint}")
-            return
-        elif kind == "unsupported_ld_audit_literal_space":
+        elif kind == "foreign_hint":
+            # A literal suffix used to be truncated as a path separator.
             properties[("Service", "Environment")].append(
-                f"LD_AUDIT={control_root}/app legacy"
+                f"PYTHONPATH={control_root}/app;legacy"
+            )
+            return
+        elif kind == "environment_file_hint":
+            properties[("Service", "EnvironmentFiles")].append(
+                [f"{control_root}/app.env", False]
             )
             return
         else:

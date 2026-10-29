@@ -1265,8 +1265,10 @@ inventory is empty; a changed root or a newly appearing control source refuses.
 After caller-source validation and immediately before backup, old-kernel lifecycle
 qualification also accepts this shape only when the fixed control-root identity
 still matches and both loader packages remain absent at every repeated configuration
-check, with no direct-root or unclassified control search hint. Existing anchored
-roots keep their strict anchor checks. This support-topology proof does not establish
+check, and the fixed launcher, unit environment, and EnvironmentFiles paths contain
+no control-root reference. This matches the installed unit/launcher topology; any
+hint is refused until its format is explicitly supported. Existing anchored roots keep
+their strict anchor checks. This support-topology proof does not establish
 loaded-code provenance or operation ownership, and the application inventory remains
 required and non-empty. It does not establish DEV or TEST acceptance.
 
