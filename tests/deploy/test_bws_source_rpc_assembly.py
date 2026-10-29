@@ -21,8 +21,25 @@ import pytest
 from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
 
-def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path) -> None:
+_ROOT_RPC_BATCHES = {'empty': 5, 'anchored': 4, 'alias': 1, 'proposed': 1, 'uncertain': 1}
+
+
+def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path,
+              batch: int | None = None) -> None:
     """Run in a disposable interpreter; no native configuration is consulted."""
+    # Keep actual Git commands/bytes/readers on macOS, using a regular stdin
+    # file for the external batch transport after observing blocked pipe writes.
+    if sys.platform == 'darwin':
+        native_run = subprocess.run
+        def git_transport(argv, **kwargs):
+            if argv[-2:] == ['cat-file', '--batch'] and 'input' in kwargs:
+                raw = kwargs.pop('input')
+                with tempfile.TemporaryFile() as incoming:
+                    incoming.write(raw)
+                    incoming.seek(0)
+                    return native_run(argv, stdin=incoming, **kwargs)
+            return native_run(argv, **kwargs)
+        subprocess.run = git_transport
     # Secure public-source fixtures can live inside the checkout on CI. Model
     # that ancestry on every platform; private durable journals must stay outside.
     (base / ".git").mkdir(mode=0o700)
@@ -39,6 +56,12 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     contract = checkout / "config/secrets/host_secret_contract.json"
     contract.parent.mkdir(mode=0o755, parents=True)
     shutil.copyfile(repository / "config/secrets/host_secret_contract.json", contract)
+    if fault == 'root-matrix-proposed':
+        # A genuine exact Git launcher whose supported code is unchanged but
+        # whose bytes carry a forbidden empty-topology hint. No payload shim.
+        candidate_launcher = checkout / 'scripts/postgres_deploy_service.py'
+        candidate_launcher.write_bytes(candidate_launcher.read_bytes()
+                                       + b'\n# synthetic support hint: ' + str(base / 'control').encode() + b'\n')
     git_env = {**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.invalid",
                "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid"}
     for args in (("init", "-q"), ("add", "app", "scripts", "config"),
@@ -52,13 +75,16 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     namespace.update(__name__="__main__", _OWNER_UID=os.geteuid(), _OWNER_GID=os.getegid())
     binding, _source = namespace["_candidate_launcher_binding"](checkout, revision)
     setattr(sys, namespace["_VERIFIED_CANDIDATE_ENTRYPOINT"], binding)
-    namespace["_candidate_checkout_root"] = lambda _sha: checkout
+    if not fault.startswith('root-'):
+        namespace["_candidate_checkout_root"] = lambda _sha: checkout
     namespace["_preimport_reservation"] = lambda *_args: namespace["_PreimportReservation"](None)
     real_loader = namespace["_install_source_loader"]
     state: dict[str, object] = {"events": []}
 
     def bind_effects(root):
         finder = real_loader(root)
+        if state.get('bound'):
+            return finder
         from app.ops import bws_control_installation as control
         from app.ops import bws_installation_admission as admission
         from app.ops import bws_installation_lifecycle as lifecycle
@@ -184,7 +210,20 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 self.phase = "new_stopped_checked"
             def stop_failed_start_if_exact(self):
                 self.phase = "new_stopped_checked"
-        lifecycle.FixedBwsService = Service
+        if fault.startswith('root-matrix'):
+            from tests.ops.test_bws_installation_lifecycle import configure_root_control_rpc
+            anchored = fault.endswith('anchored')
+            if fault.endswith('alias'):
+                control_root = installed
+                transaction._CONTROL_DIRECTORY = installed
+            if anchored:
+                shutil.copytree(checkout / 'app', control_root / 'app')
+            state['root_fixture'] = configure_root_control_rpc(
+                lifecycle, transaction, state, control_root, installed, runtime, public_launcher,
+                channel, anchored=anchored,
+            )
+        else:
+            lifecycle.FixedBwsService = Service
 
         # The remote service profile is an external observation. Its actual disk
         # inventory, source-only loader, current contract parser and final reader
@@ -214,7 +253,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             def interrupt_backup(*_args):
                 raise KeyboardInterrupt()
             control._backup = interrupt_backup
-        state.update(backups=backups, receipts=receipts)
+        state.update(backups=backups, receipts=receipts, bound=True, control_root=control_root)
         return finder
 
     def guarded_bind_effects(root):
@@ -262,6 +301,99 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     sys.argv = [str(script), "rpc", channel]
     sys.stdin, output = io.StringIO(json.dumps(request)), io.StringIO()
     sys.stdout = output
+    if fault.startswith('root-matrix'):
+        import uuid
+        # Bootstrap binds ports once, retaining every original source reader.
+        # A real loader is still installed at each subsequent verified run.
+        sys.path.insert(0, str(checkout))
+        sys.dont_write_bytecode = True
+        sys.pycache_prefix = '/dev/null'
+        bootstrap_finder = guarded_bind_effects(checkout)
+        sys.meta_path.remove(bootstrap_finder)
+        from tests.ops.test_bws_installation_lifecycle import root_control_rpc_cases
+        from app.ops import bws_installation_admission as admission
+        cases = root_control_rpc_cases(state['control_root'], anchored=fault.endswith('anchored'))
+        if fault.endswith('proposed'):
+            cases = [dict(expected=('captured_empty', 'proposed', 'hints', 'launcher_hint'), stage='initial')]
+        if fault.endswith('uncertain'):
+            cases = [dict(runtime_close_failure=True,
+                          os_fault=dict(operation='fstat', path=str(state['control_root']), occurrence=0,
+                                        change={'st_mode': 0o100644}),
+                          expected_gate='old_kernel_initial_retained_runtime')]
+        if fault.endswith('alias'):
+            cases = [dict(expected=('anchored_discovery', 'unknown', 'roots', 'separation'), stage='initial')]
+        total_cases = len(cases)
+        mode = fault.removeprefix('root-matrix-')
+        batch_count = _ROOT_RPC_BATCHES[mode]
+        # Disjoint strides partition the unchanged semantic case list exactly.
+        # Bound each actual subprocess group under CI's unchanged 120s timer;
+        # the existing child timeout remains 600s as its cleanup backstop.
+        case_indices = list(range(total_cases))
+        if batch is not None:
+            assert 0 <= batch < batch_count
+            groups = [set(range(i, total_cases, batch_count)) for i in range(batch_count)]
+            assert set.union(*groups) == set(range(total_cases))
+            assert sum(map(len, groups)) == total_cases
+            case_indices = list(range(batch, total_cases, batch_count))
+            cases = [cases[i] for i in case_indices]
+            assert 1 <= len(cases) <= 15
+        proved = set()
+        for index, case in enumerate(cases):
+            request['operation_id'] = str(uuid.uuid4())
+            state['root_fixture']['prepare'](case)
+            sys.stdin, output = io.StringIO(json.dumps(request)), io.StringIO()
+            sys.stdout = output
+            status = namespace['run']()
+            assert status == 0, (index, case.get('expected'), status, output.getvalue())
+            result = json.loads(output.getvalue())['source_installation']
+            expected = case.get('expected_gate') or (
+                'old_kernel_' + case['stage'] + '_root_control__' + '__'.join(case['expected'])
+            )
+            assert result['status'] == 'refused_before_backup', (index, result)
+            assert result['prebackup_gate'] == expected, (index, case.get('expected'), result)
+            assert all(result[key] is None for key in (
+                'old_generation_sha256', 'new_generation_sha256', 'backup_manifest_sha256',
+            ))
+            kernel = state['root_fixture']['kernel']
+            assert not kernel.fds and not kernel.runtime_fds
+            if case.get('os_fault'):
+                assert kernel.fired, (index, case)
+            if case.get('positive') or case.get('stage') == 'empty_control':
+                assert state['root_fixture']['after_qualification']
+            assert not list(state['backups'].iterdir())
+            owner = admission._owner_record((state['receipts'] / (channel + '.source-installation.lock')).read_bytes(), channel)
+            assert owner['operation_id'] == request['operation_id']
+            assert admission._terminal_receipt(owner) == result
+            receipt_name = 'bws-source-installation-' + request['operation_id'] + '.receipt.json'
+            receipt = json.loads((state['receipts'] / receipt_name).read_text())
+            assert receipt == result
+            assert admission._receipt_generations(result['status'], None, None, None,
+                                                  prebackup_gate_present=True, prebackup_gate=expected)
+            assert 'PRIVATE_CANARY' not in output.getvalue()
+            assert resource.getrlimit(resource.RLIMIT_NOFILE) == state['original_limits']
+            proved.add(expected)
+        terminal_files = {p.name: p.read_bytes() for p in state['receipts'].iterdir()}
+        original_request = dict(request)
+        marker = getattr(sys, namespace['_VERIFIED_CANDIDATE_ENTRYPOINT'])
+        for binding_fault in ('replay', 'candidate', 'marker', 'dirty'):
+            request = dict(original_request)
+            if binding_fault == 'candidate':
+                request['candidate_sha'] = 'f' * 40
+            elif binding_fault == 'marker':
+                setattr(sys, namespace['_VERIFIED_CANDIDATE_ENTRYPOINT'], {**marker, 'script_sha256': 'f' * 64})
+            elif binding_fault == 'dirty':
+                script.write_bytes(script.read_bytes() + b'\n# PRIVATE_CANARY uncommitted\n')
+            sys.stdin, output = io.StringIO(json.dumps(request)), io.StringIO()
+            sys.stdout = output
+            assert namespace['run']() != 0
+            assert 'PRIVATE_CANARY' not in output.getvalue()
+            assert {p.name: p.read_bytes() for p in state['receipts'].iterdir()} == terminal_files
+            setattr(sys, namespace['_VERIFIED_CANDIDATE_ENTRYPOINT'], marker)
+        sys.stdout = sys.__stdout__
+        print(json.dumps(dict(status='matrix', cases=len(cases), total_cases=total_cases, case_indices=case_indices,
+                              guards=len(proved), restored=True,
+                              source_only=sys.pycache_prefix == '/dev/null')))
+        return
     status = namespace["run"]()
     assert status == 0, (status, output.getvalue(), state.get("bootstrap_failure"))
     result = json.loads(output.getvalue())["source_installation"]
@@ -303,5 +435,30 @@ def test_assembled_source_rpc_uses_real_descriptor_envelope(secure_tmp_path, cha
     assert result["restored"] is True and result["source_only"] is True
 
 
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("mode,batch", [(mode, batch) for mode, count in _ROOT_RPC_BATCHES.items()
+                                        for batch in range(count)])
+def test_root_control_leaf_diagnostics_cross_verified_source_rpc(secure_tmp_path, channel, mode, batch):
+    with tempfile.TemporaryDirectory(prefix="pkm-source-journal-") as directory:
+        completed = subprocess.run(
+            [sys.executable, "-m", "tests.deploy.test_bws_source_rpc_assembly", str(secure_tmp_path),
+             str(Path(__file__).resolve().parents[2]), channel, 'root-matrix-' + mode,
+             str(Path(directory).resolve()), str(batch)],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=600,
+        )
+    if mode == 'uncertain':
+        assert completed.returncode == 78 and completed.stdout == '', completed.stderr
+        owner = json.loads((secure_tmp_path / 'receipts' / (channel + '.source-installation.lock')).read_text())
+        assert owner['operation_id']
+        return
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result['restored'] and result['source_only']
+    assert result['total_cases'] >= (40 if mode in {'empty', 'anchored'} else 1)
+    assert 1 <= result['cases'] <= 15
+    assert result['case_indices'] == list(range(batch, result['total_cases'], _ROOT_RPC_BATCHES[mode]))
+
+
 if __name__ == "__main__":
-    _exercise(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4], Path(sys.argv[5]))
+    _exercise(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4], Path(sys.argv[5]),
+              int(sys.argv[6]) if len(sys.argv) > 6 else None)

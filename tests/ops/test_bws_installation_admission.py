@@ -449,3 +449,28 @@ def test_fixed_caller_identity_rejects_other_launcher_actions(monkeypatch):
 
     with pytest.raises(admission.InstallationAdmissionRefused):
         admission._fixed_caller_identity("dev")
+
+
+def test_root_control_leaf_receipts_preserve_closed_allowlist_parity(monkeypatch, tmp_path):
+    _patch_directories(monkeypatch, tmp_path)
+    assert admission._ROOT_CONTROL_REFINEMENTS == transaction._ROOT_CONTROL_REFINEMENTS
+    assert admission._PREBACKUP_REFUSAL_GATES == transaction._PREBACKUP_REFUSAL_GATES
+    request = _request()
+    legacy = _receipt(request, status='refused_before_backup')
+    with admission.installation_admission(**request) as lease:
+        for gate in sorted(admission._ROOT_CONTROL_REFINEMENT_GATES):
+            receipt = {**legacy, 'prebackup_gate': gate}
+            assert lease._validate_receipt(receipt) == receipt
+        for gate in ('old_kernel_qualification', 'old_kernel_initial_root_control', None):
+            receipt = legacy if gate is None else {**legacy, 'prebackup_gate': gate}
+            assert lease._validate_receipt(receipt) == receipt
+        valid = next(iter(admission._ROOT_CONTROL_REFINEMENT_GATES))
+        for bad in (valid + 'PRIVATE_CANARY', valid.replace('__old__', '__foreign__'), [], {}, 7):
+            if bad == valid:
+                continue
+            with pytest.raises(admission.InstallationAdmissionRefused):
+                lease._validate_receipt({**legacy, 'prebackup_gate': bad})
+        for status in ('installed', 'compensated_restored', 'compensated_stopped', 'unknown', 'refused_before_stop'):
+            with pytest.raises(admission.InstallationAdmissionRefused):
+                lease._validate_receipt({**_receipt(request, status=status), 'prebackup_gate': valid})
+        lease.complete(legacy)

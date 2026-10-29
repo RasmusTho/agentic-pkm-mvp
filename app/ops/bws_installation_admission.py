@@ -51,6 +51,78 @@ _RECEIPT_STATUSES = frozenset({
     "refused_before_stop",
     "unknown",
 })
+# Closed static contexts; no native values participate in these combinations.
+# Kept local at both existing receipt boundaries to preserve source-loader import
+# order. The parity test binds both copies to the real producer guard matrix.
+_ROOT_CONTROL_PROJECTION_GUARDS = (
+    "mapping_type", "fields", "path_type", "path_absolute", "path_canonical",
+    "path_backslash", "path_nul", "device_type", "inode_type", "uid_type",
+    "gid_type", "mode_type", "device_range", "inode_range", "uid", "gid", "mode",
+)
+_ROOT_CONTROL_DIRECTORY_GUARDS = (
+    "open_unknown", "fstat_unknown", "directory_type", "owner_pair",
+    "directory_mode", "inheritable_unknown", "inheritable",
+)
+_ROOT_CONTROL_CONTEXTS = (
+    (("unknown", "captured_empty", "anchored_discovery"), ("unknown",),
+     ("application", "control"), _ROOT_CONTROL_PROJECTION_GUARDS),
+    (("captured_empty",), ("unknown", "old", "proposed"),
+     ("expected_empty",), _ROOT_CONTROL_PROJECTION_GUARDS),
+    (("captured_empty", "anchored_discovery"), ("unknown",),
+     ("roots",), ("separation", "fixed_subtree")),
+    (("captured_empty",), ("unknown",), ("roots",), ("empty_fixed_root",)),
+    (("unknown",), ("unknown", "old", "proposed"), ("discovery",),
+     ("decode_unknown", "environment_unknown", "environment_files_unknown")),
+    (("captured_empty",), ("unknown", "old", "proposed"), ("discovery",),
+     ("empty_decode_unknown", "empty_environment_unknown", "empty_environment_files_unknown")),
+    (("anchored_discovery",), ("unknown", "old", "proposed"),
+     ("discovery",), ("candidates_unknown",)),
+    (("captured_empty", "anchored_discovery"), ("unknown", "old", "proposed"),
+     ("discovery",), ("control_parts_unknown",)),
+    (("captured_empty",), ("unknown", "old", "proposed"),
+     ("hints",), ("launcher_hint", "environment_hint", "environment_files_hint")),
+    (("anchored_discovery",), ("unknown", "old", "proposed"),
+     ("hints",), ("candidate_count",)),
+    (("captured_empty", "anchored_discovery"), ("unknown", "old", "proposed"),
+     ("fixed_origin", "fixed_ancestor", "fixed_root", "candidate", "anchor_app", "anchor_ops"),
+     _ROOT_CONTROL_DIRECTORY_GUARDS),
+    (("captured_empty",), ("unknown", "old", "proposed"),
+     ("reopen_origin", "reopen_ancestor", "reopen_root"), _ROOT_CONTROL_DIRECTORY_GUARDS),
+    (("captured_empty", "anchored_discovery"), ("unknown", "old", "proposed"),
+     ("anchor_app", "anchor_ops"), ("stat_unknown", "loader_symlink")),
+    (("captured_empty", "anchored_discovery"), ("unknown", "old", "proposed"),
+     ("anchor_file",), ("stat_unknown", "file_type", "uid", "gid", "file_mode", "link_count")),
+    (("captured_empty", "anchored_discovery"), ("unknown", "old", "proposed"),
+     ("candidate_projection",), ("fstat_unknown", "directory_type", "construction_unknown")),
+    (("captured_empty",), ("unknown", "old", "proposed"),
+     ("fixed_projection", "reopen_projection"), ("fstat_unknown", "directory_type", "construction_unknown")),
+    (("captured_empty", "anchored_discovery"), ("unknown", "old", "proposed"),
+     ("candidate",), ("components_unknown", "component_count", "components_canonical", "stat_unknown", "symlink")),
+    (("captured_empty", "anchored_discovery"), ("unknown", "old", "proposed"),
+     ("anchor_root",), ("fstat_unknown", "directory_mode")),
+    (("captured_empty",), ("unknown", "old", "proposed"),
+     ("empty_root",), ("identity", "anchored_root_present", "reopen_identity")),
+    (("captured_empty",), ("unknown", "old", "proposed"),
+     ("app_slot", "scripts_slot"), ("stat_unknown", "present")),
+    (("anchored_discovery",), ("unknown", "old", "proposed"),
+     ("anchored_roots",), ("no_anchor", "multiple_anchors")),
+    (("captured_empty", "anchored_discovery"), ("old", "proposed"),
+     ("comparison",), ("identity",)),
+    (("unknown",), ("unknown",), ("revalidation",), ("phase",)),
+    (("anchored_discovery",), ("unknown",), ("revalidation",), ("empty_required",)),
+    (("captured_empty",), ("unknown",), ("revalidation",), ("contract_missing", "configuration")),
+    (("captured_empty", "anchored_discovery"), ("unknown", "old", "proposed"),
+     ("discovery_close",), ("close_unknown",)),
+)
+_ROOT_CONTROL_REFINEMENTS = frozenset(
+    (mode, side, role, guard)
+    for modes, sides, roles, guards in _ROOT_CONTROL_CONTEXTS
+    for mode in modes for side in sides for role in roles for guard in guards
+)
+_ROOT_CONTROL_REFINEMENT_GATES = frozenset(
+    "old_kernel_" + stage + "_root_control__" + "__".join(context)
+    for stage in ("initial", "empty_control") for context in _ROOT_CONTROL_REFINEMENTS
+)
 _PREBACKUP_REFUSAL_GATES = frozenset({
     "channel_lock_entry",
     "channel_owner_check",
@@ -83,7 +155,7 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "old_kernel_empty_control_cleanup_contract",
     "qualified_writer_snapshot",
     "generation_qualification",
-})
+}) | _ROOT_CONTROL_REFINEMENT_GATES
 _ADMISSION_TERMINAL_STATUSES = frozenset({
     "installed", "compensated_restored", "refused_before_backup", "refused_before_stop",
 })

@@ -2349,9 +2349,17 @@ def test_empty_control_root_refuses_identity_or_inventory_drift_before_backup(
     result = transaction._execute_source_installation(channel, request, ports)
 
     assert result["source_installation"]["status"] == "refused_before_backup"
-    assert result["source_installation"]["prebackup_gate"] == (
-        "old_kernel_empty_control_root_control" if drift.startswith("before_backup_")
-        else "old_kernel_initial_root_control"
+    final = drift.startswith('before_backup_')
+    kind = drift.removeprefix('before_backup_')
+    role, guard = (
+        ('app_slot', 'present') if kind == 'loader_package' else
+        ('empty_root', 'identity') if kind == 'root_identity' else
+        ('hints', 'environment_files_hint') if kind == 'environment_file_hint' else
+        ('hints', 'environment_hint')
+    )
+    assert result['source_installation']['prebackup_gate'] == (
+        'old_kernel_' + ('empty_control' if final else 'initial') + '_root_control__'
+        + '__'.join(('captured_empty', 'old' if final else 'proposed', role, guard))
     )
     if drift.startswith("before_backup_"):
         assert prebackup_revalidation_calls == 1
@@ -3342,7 +3350,11 @@ def _old_qualification_case(monkeypatch, secure_tmp_path, channel="dev"):
 def _assert_old_refusal(result, events, expected):
     receipt = result["source_installation"]
     assert receipt["status"] == "refused_before_backup"
-    assert receipt["prebackup_gate"] == expected
+    if expected.endswith('_root_control'):
+        assert (receipt['prebackup_gate'] == expected
+                or receipt['prebackup_gate'].startswith(expected + '__'))
+    else:
+        assert receipt["prebackup_gate"] == expected
     assert all(receipt[key] is None for key in (
         "old_generation_sha256", "new_generation_sha256", "backup_manifest_sha256",
     ))
@@ -3488,3 +3500,176 @@ def test_old_kernel_classification_keeps_prebackup_effect_order_and_protected_gu
         assert events.index("_held_runtime") < events.index("_config")
     if fault == "process":
         assert events.index("_config") < events.index("_state") < events.index("_single_process")
+
+
+def test_root_control_leaf_matrix_reaches_canonical_receipt(monkeypatch, secure_tmp_path):
+    from tests.ops.test_bws_installation_lifecycle import RootControlOS
+    # The end-to-end Source RPC matrix is the producer proof. These cheap
+    # transaction cases isolate side comparison and final configuration order.
+    for channel in ('dev', 'test'):
+        for side, discovery in (('old', 1), ('proposed', 2)):
+            case_root = secure_tmp_path / (channel + side)
+            case_root.mkdir(mode=0o750)
+            request, ports, admission, service, events, control, _properties, _ = _old_qualification_case(
+                monkeypatch, case_root, channel,
+            )
+            old = ports.old_state(None, None)
+            old['source_packages']['control'] = ['app']
+            kernel = RootControlOS(control, anchored=True)
+            kernel.arm(dict(operation='fstat', path=str(control), occurrence=2,
+                            change={'st_ino': 987654321}), discovery=discovery)
+            monkeypatch.setattr(bws_installation_lifecycle, 'os', kernel.port())
+            result = transaction._execute_source_installation(channel, request, ports)
+            _assert_old_refusal(result, events, 'old_kernel_initial_root_control__' + '__'.join((
+                'anchored_discovery', side, 'comparison', 'identity',
+            )))
+            assert admission.receipt == result['source_installation']
+            assert kernel.fired and not kernel.fds
+
+    # Captured-empty discovery itself guarantees equality with its captured
+    # dictionary. No supported writer mutates that dictionary while _config
+    # runs. Exercise the remaining defensive comparison by corrupting only
+    # in-process test state after the real discovery returns its validated
+    # projection and before its caller compares it; never fake a producer.
+    case_root = secure_tmp_path / 'defensive-empty-comparison'
+    case_root.mkdir(mode=0o750)
+    request, ports, _admission, service, events, control, _properties, _ = _old_qualification_case(
+        monkeypatch, case_root,
+    )
+    kernel = RootControlOS(control)
+    original_close = kernel.close
+    def corrupt_after_discovery(fd):
+        original_close(fd)
+        if not kernel.fds and kernel.discovery == 1:
+            service.control = {**service.control, 'inode': 987654321}
+    kernel.close = corrupt_after_discovery
+    monkeypatch.setattr(bws_installation_lifecycle, 'os', kernel.port())
+    result = transaction._execute_source_installation('dev', request, ports)
+    _assert_old_refusal(result, events,
+                        'old_kernel_initial_root_control__captured_empty__old__comparison__identity')
+
+
+def test_root_control_leaf_refusals_preserve_order_effects_and_lifetime(monkeypatch, secure_tmp_path):
+    from tests.ops.test_bws_installation_lifecycle import RootControlOS
+    for close_failures in (0, 3):
+        case_root = secure_tmp_path / str(close_failures)
+        case_root.mkdir(mode=0o750)
+        request, ports, admission, _service, events, control, _properties, _ = _old_qualification_case(
+            monkeypatch, case_root,
+        )
+        kernel = RootControlOS(control)
+        kernel.arm(dict(operation='fstat', path=str(control), occurrence=0,
+                        change={'st_mode': 0o100644}))
+        kernel.close_failures = close_failures
+        monkeypatch.setattr(bws_installation_lifecycle, 'os', kernel.port())
+        result = transaction._execute_source_installation('dev', request, ports)
+        expected = ('discovery_close', 'close_unknown') if close_failures else ('fixed_root', 'directory_type')
+        _assert_old_refusal(result, events, 'old_kernel_initial_root_control__' + '__'.join((
+            'captured_empty', 'old', *expected,
+        )))
+        assert kernel.closed == list(reversed(kernel.opened)) and not kernel.fds
+        assert admission.receipt == result['source_installation']
+        assert events.index('source_manifest') < events.index('descriptor_capacity')
+    # The unchanged uncertain-handle and retained-runtime protocols remain
+    # acceptance evidence, rather than forcing a finite diagnostic on them.
+    test_failed_stop_and_handle_close_refusal_retain_owner_without_receipt()
+    test_handle_close_uncertainty_stops_exact_generation_without_retry(False)
+
+
+@pytest.mark.parametrize('kind', ['foreign', 'subclass', 'missing', 'bad_tuple', 'bad_atom', 'bad_context', 'missing_subgate', 'legacy'])
+def test_root_control_leaf_unknowns_preserve_legacy_privacy_and_binding(kind):
+    request, ports, _admission, service, events, *_ = _transaction_fixture()
+    cls = bws_installation_lifecycle._OldQualificationRefusal
+    def refuse(**_kwargs):
+        if kind == 'foreign':
+            exc = RuntimeError('PRIVATE_CANARY')
+            exc.subgate = 'root_control'
+            exc.root_control = ('captured_empty', 'old', 'hints', 'launcher_hint')
+        elif kind == 'subclass':
+            class Foreign(cls):
+                pass
+            exc = Foreign('root_control')
+        else:
+            exc = cls('root_control')
+            if kind == 'missing_subgate':
+                exc.root_control = ('captured_empty', 'old', 'hints', 'launcher_hint')
+                del exc.subgate
+            elif kind == 'missing':
+                del exc.root_control
+            elif kind == 'bad_tuple':
+                exc.root_control = ['captured_empty', 'old', 'hints', 'launcher_hint']
+            elif kind == 'bad_atom':
+                exc.root_control = ('captured_empty', 'old', 'hints', 'PRIVATE_CANARY')
+            elif kind == 'bad_context':
+                exc.root_control = ('unknown', 'old', 'hints', 'launcher_hint')
+        raise exc
+    service.qualify_old = refuse
+    result = transaction._execute_source_installation('dev', request, ports)
+    _assert_old_refusal(result, events, 'old_kernel_qualification' if kind in {'foreign', 'subclass', 'missing_subgate'}
+                        else 'old_kernel_initial_root_control')
+    assert events.index('runtime_enter') < events.index('runtime_close')
+    # Binding itself remains real in the source RPC matrix and existing precise
+    # checkout/Git-launcher/OCI/full-profile negatives; no new request field exists.
+    assert set(request) == {'action', 'operation_id', 'candidate_sha', 'image_digest', 'bundle_name'}
+
+
+def test_root_control_defensive_projection_rows_have_real_producer_invariants(monkeypatch, secure_tmp_path):
+    import copy
+    monkeypatch.setattr(bws_installation_lifecycle, '_CONTROL_OWNER_UID', os.geteuid())
+    monkeypatch.setattr(bws_installation_lifecycle, '_CONTROL_OWNER_GID', os.getegid())
+    # Actual no-follow root producer, not a hand-authored profile as sole proof.
+    paths = {name: secure_tmp_path / name for name in ('application', 'control', 'backup', 'launcher')}
+    for path in paths.values():
+        path.mkdir(mode=0o755)
+        path.chmod(0o755)
+    monkeypatch.setattr(transaction, '_OWNER_UID', os.geteuid())
+    monkeypatch.setattr(transaction, '_OWNER_GID', os.getegid())
+    monkeypatch.setattr(transaction, '_CONTROL_DIRECTORY', paths['control'])
+    monkeypatch.setattr(transaction, '_BACKUP_DIRECTORY', paths['backup'])
+    monkeypatch.setattr(transaction, '_LAUNCHER', paths['launcher'] / 'yggdrasil-bws-deploy')
+    identities = {name: transaction._root_identity(paths[name]) for name in ('application', 'control')}
+    for identity in identities.values():
+        assert set(identity) == {'device', 'inode', 'uid', 'gid', 'mode'}
+        assert all(type(v) is int for v in identity.values())
+        assert identity['device'] >= 0 and identity['inode'] > 0
+        assert identity['uid'] == os.geteuid() and identity['gid'] == os.getegid()
+        assert identity['mode'] == 0o755
+    config = SimpleNamespace(root=paths['application'])
+    profile = dict(roots=identities, source_files=[])
+    roots, _backup = transaction._roots(config, profile)
+    for name in ('application', 'control'):
+        value = transaction._root_projection(roots[name])
+        assert bws_installation_lifecycle._application_projection(value) == value
+        assert type(value) is dict and type(value['path']) is str
+        assert value['path'] == str(paths[name].resolve())
+    # The actual roots boundary rejects malformed/foreign projection records
+    # before lifecycle, and preserves the independently produced healthy root.
+    for invalid in (None, {}, {**identities['application'], 'private': 'PRIVATE_CANARY'}, *[
+        {**identities['application'], key: True} for key in ('device', 'inode', 'uid', 'gid', 'mode')
+    ]):
+        malformed = copy.deepcopy(profile)
+        malformed['roots']['application'] = invalid
+        with pytest.raises(RuntimeError, match='bws_installation_transaction_refused'):
+            transaction._roots(config, malformed)
+        assert transaction._root_identity(paths['control']) == identities['control']
+    for mode in (0o750, 0o777):
+        paths['application'].chmod(mode)
+        with pytest.raises(RuntimeError, match='bws_installation_transaction_refused'):
+            transaction._root_identity(paths['application'])
+    paths['application'].chmod(0o755)
+    for path in (Path('relative'), paths['application'] / '..', Path('/PRIVATE_CANARY\\bad'),
+                 Path('/PRIVATE_CANARY\0bad')):
+        with pytest.raises(RuntimeError, match='bws_installation_transaction_refused'):
+            transaction._root_identity(path)
+    for field in ('_OWNER_UID', '_OWNER_GID'):
+        with monkeypatch.context() as patch:
+            patch.setattr(transaction, field, 999999)
+            with pytest.raises(RuntimeError, match='bws_installation_transaction_refused'):
+                transaction._root_identity(paths['application'])
+    assert transaction._CONTROL_DIRECTORY == paths['control']
+    # The typed caller constructs control.path from the fixed source constant;
+    # outside-subtree and empty-deeper-path defensive states have no input flag.
+    assert set(transaction._validate_request('dev', {
+        'action': 'source-installation', 'operation_id': str(uuid.uuid4()),
+        'candidate_sha': 'a' * 40, 'image_digest': 'sha256:' + 'b' * 64, 'bundle_name': 'fixed',
+    })) == {'operation_id', 'candidate_sha', 'image_digest', 'bundle_name'}
