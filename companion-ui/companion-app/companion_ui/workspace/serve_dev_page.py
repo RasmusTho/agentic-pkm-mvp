@@ -129,6 +129,10 @@ from companion_ui.workspace.episode_debrief_review import (
 from companion_ui.workspace.standing_question_review import (
     standing_question_review_script,
 )
+from companion_ui.workspace.operations_client import operations_client_script, operations_route_allowed
+from companion_ui.workspace.operations_workspace import (
+    operations_launcher_markup, operations_workspace_markup, operations_workspace_script,
+)
 from companion_ui.workspace.overlay_host import (
     DEFAULT_POSTURE_EMPHASIS,
     coarse_vault_posture,
@@ -3797,6 +3801,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         </div>
         {breadcrumb_html}
         {identity_caution_html}
+        {operations_launcher_markup()}
       </header>
       {voice_push_to_talk_html}
       {hidden_frontmatter_html}
@@ -9573,7 +9578,10 @@ def _render_orientation_index_html(
         # workspace shell (#1785) ships the modal for shell_active, and the
         # orienting/no_vault states carry no capture affordance.
         + (capture_modal_markup() if is_cold else "")
+        + operations_workspace_markup()
         + overlay_host_script()
+        + operations_client_script()
+        + operations_workspace_script()
         + memory_drawer_script_html
         + system_map_overlay_script()
         + (capture_modal_script() if is_cold else "")
@@ -11807,6 +11815,7 @@ def render_index_html(
             "memory",
             "capture",
             "receipts",
+            "operations",
             "settings",
             # CUIDR-04 (#2447): the operator layer is reached from the System
             # Map now that the floating operator pill is gone from the edge.
@@ -15809,6 +15818,7 @@ def render_index_html(
   {panel_palette_markup(fields)}
   {memory_review_drawer_markup()}
   {receipts_history_modal_markup()}
+  {operations_workspace_markup()}
   {settings_drawer_markup(fields)}
   {vault_settings_panel_html}
   {system_map_overlay_markup(
@@ -15981,6 +15991,8 @@ def render_index_html(
   {calibration_revisit_script_html}
   {episode_debrief_review_script_html}
   {receipts_history_script()}
+  {operations_client_script()}
+  {operations_workspace_script()}
   {system_map_overlay_script()}
   {guidance_layer_script()}
 
@@ -17062,6 +17074,15 @@ def make_handler(
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if operations_route_allowed(parsed.path) and self._get_path_allowed(parsed.path):
+                try:
+                    data = self._client.get(parsed.path,
+                        params={key: values[-1] for key, values in parse_qs(parsed.query).items()})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             if parsed.path in {"/api/companion/vault/notes/scoped", "/api/companion/active-context/selection"}:
                 try:
                     data = self._client.get(parsed.path, params={})
@@ -17466,6 +17487,7 @@ def make_handler(
         # GET paths the page server proxies through to the runtime API.
         _GET_PROXY_PATHS = frozenset(
             {
+                "/api/operations/capabilities",
                 "/api/standing-questions",
                 "/api/companion/orientation",
                 "/api/companion/briefing/today",
@@ -17485,6 +17507,8 @@ def make_handler(
             }
         )
         _GET_PROXY_PATTERNS = (
+            re.compile(r"^/api/operations/receipts/[A-Za-z0-9_.:-]{1,256}$"),
+            re.compile(r"^/api/operations/batches/[A-Za-z0-9_.:-]{1,200}$"),
             re.compile(r"^/api/standing-questions/sq-[0-9a-f-]+$"),
             re.compile(r"^/api/companion/tts/audio/[a-f0-9]{64}\.wav$"),
         )
@@ -17499,6 +17523,9 @@ def make_handler(
         # (same-origin model; the browser never talks to the runtime directly).
         _POST_PROXY_PATHS = frozenset(
             {
+                "/api/operations",
+                "/api/operations/preconditions",
+                "/api/operations/batches/preview",
                 "/api/companion/workspace/body",
                 "/api/companion/workspace/update",
                 "/api/companion/journaling/reflection/start",
@@ -17560,6 +17587,7 @@ def make_handler(
         # the served page can render the view-in-Panel handoff (intent_id) and
         # the provider-unavailable notice — server declares, UI renders.
         _POST_PROXY_PATTERNS = (
+            re.compile(r"^/api/operations/batches/[A-Za-z0-9_.:-]{1,200}/(?:execute|cancel)$"),
             re.compile(r"^/api/standing-questions/sq-[0-9a-f-]+/(?:dismiss|close|reopen)$"),
             re.compile(r"^/api/canvas/sessions/[^/]+/coauthor$"),
             re.compile(r"^/api/canvas/sessions/[^/]+/edits$"),
@@ -17643,7 +17671,7 @@ def make_handler(
             has_session = session_from_cookie(self.headers.get("Cookie", "")) is not None or any(
                 self.headers.get(name) is not None for name in _ACTIVE_CONTEXT_HEADERS[:2]
             )
-            if client_host and (path in self._FORWARDED_CLIENT_AUTH_PATHS or has_session):
+            if client_host and (path in self._FORWARDED_CLIENT_AUTH_PATHS or operations_route_allowed(path) or has_session):
                 headers["X-Forwarded-For"] = client_host
             api_key = self.headers.get("X-API-Key")
             if api_key:

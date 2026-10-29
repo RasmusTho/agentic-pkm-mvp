@@ -126,3 +126,14 @@ that a prototype, live UI audit, or runtime acceptance has occurred.
 - Runtime boundary: No runtime delivery is claimed. Implementation remains
   downstream in the bounded operations-workspace issue and owner-native
   operation contracts.
+
+## Consuming implementation validation (#5339)
+
+The Companion consumer binds this accepted flow to the shared overlay frame, existing receipt/list/
+form patterns and local-system token normalization through the constrained-reuse route. The exact
+source hashes, admitted transformations, state/accessibility matrices, no-egress observations and
+independent review are retained in the #5339 delivery evidence; no live design-system selection,
+MCP design identity, project creation or live parity is claimed. Behavioral verification lives in
+`tests/companion_ui/test_operations_workspace.py`; the public client/gateway boundary is checked by
+`tests/architecture/test_autonomous_operations_boundaries.py`. These receipts verify this bounded
+consumer only. Broader GUI/MCP parity and capability-level owner-doc promotion remain with #5329.

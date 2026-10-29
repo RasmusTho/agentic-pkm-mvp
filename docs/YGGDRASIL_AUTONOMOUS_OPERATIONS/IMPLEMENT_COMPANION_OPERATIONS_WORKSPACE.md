@@ -36,19 +36,19 @@ The product is not functionally complete if only agents can reach the broader op
 ## Acceptance Criteria
 
 - [ ] The accepted human flow exposes all supported operation families through capability-driven controls.
-  Verify: `companion-ui/companion-app/src/features/operations/__tests__/operations-workspace.test.tsx::renders_capability_driven_operation_actions`
+  Verify: `tests/companion_ui/test_operations_workspace.py::test_renders_capability_driven_operation_actions`
 - [ ] Delegation preview states exact targets, policy ceiling, cardinality, and effect before one confirmation.
-  Verify: `companion-ui/companion-app/src/features/operations/__tests__/delegation-flow.test.tsx::confirms_bounded_scope_once_before_execution`
+  Verify: `tests/companion_ui/test_operations_workspace.py::test_confirms_bounded_scope_once_before_execution`
 - [ ] Progress and result views preserve per-item receipts, conflicts, refusal, lag, cancellation, and recovery.
-  Verify: `companion-ui/companion-app/src/features/operations/__tests__/operation-results.test.tsx::renders_truthful_progress_receipts_and_recovery`
+  Verify: `tests/companion_ui/test_operations_workspace.py::test_renders_truthful_progress_receipts_and_recovery`
 - [ ] Focus, keyboard, screen-reader, and responsive behavior matches the accepted handoff.
-  Verify: `companion-ui/companion-app/src/features/operations/__tests__/operations-accessibility.test.tsx::supports_keyboard_focus_labels_and_responsive_layout`
+  Verify: `tests/companion_ui/test_operations_workspace.py::test_supports_keyboard_focus_labels_and_responsive_layout`
 - [ ] UI code cannot import domain stores or bypass the operations client boundary.
   Verify: `tests/architecture/test_autonomous_operations_boundaries.py::test_companion_operations_use_only_public_operations_client`
 
 ## How to Verify (Pre-Merge)
 
-- Run the focused Companion test files named above through the repository's package-manager command.
+- `COMPANION_UI_BROWSER_TESTS=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_operations_workspace.py`
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/architecture/test_autonomous_operations_boundaries.py`
 - `ruff check app tests companion-ui/companion-app`
 - Run the visual/responsive validation required by the accepted design handoff.

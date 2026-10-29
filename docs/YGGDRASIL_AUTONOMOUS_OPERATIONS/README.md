@@ -38,8 +38,13 @@ creation/proposal, broader batch families and complete cross-surface parity rema
 separately gated. The [batch owner specification](DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md#dormant-implementation-and-supported-boundary)
 records exact inputs, original-authority fences and retained recovery limits.
 
-This source installation does not establish deployment or parent capability acceptance. #5339 owns
-the Companion consumer; #5340 owns MCP v2 and terminal conformance under accepted ADR-0069. The
+The #5339 Companion consumer presents runtime-discovered availability, native version preflight,
+one frozen batch confirmation, per-item receipt/convergence/conflict inspection and retained
+cancellation/recovery through that shared HTTP boundary. Its UI owns no effects or durable outcome
+truth. Unqualified operation families retain their typed unavailable state.
+
+This source installation does not establish deployment or parent capability acceptance. #5340
+owns MCP v2 and terminal conformance under accepted ADR-0069. The
 unchanged MCP v1 five-operation profile retains its own contract.
 
 ## Execution Order

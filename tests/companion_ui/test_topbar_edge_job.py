@@ -518,7 +518,7 @@ def test_shell_topbar_has_no_recovery_telemetry() -> None:
         "the posture pill must not render on the shell topbar"
     )
 
-    front_text = _visible_text(shell_front)
+    front_text = _visible_text(shell_front, exclude_hidden=True)
     for token in ("recovery", "online"):
         assert token not in front_text, (
             f"operator/posture telemetry {token!r} must not be visible on the "
@@ -528,7 +528,7 @@ def test_shell_topbar_has_no_recovery_telemetry() -> None:
 
     # Same guarantee across every entry-state orientation render.
     for state, raw in _ENTRY_RENDERS.items():
-        front = _visible_text(_strip_operator_layer(raw))
+        front = _visible_text(_strip_operator_layer(raw), exclude_hidden=True)
         assert "recovery" not in front, (
             f"recovery telemetry leaked into visible text on entry state {state}"
         )
@@ -562,3 +562,10 @@ def test_settings_launcher_absent_on_entry_pages() -> None:
             "(no settings drawer occupant registered there)"
         )
         assert 'data-testid="workspace-surface-icon-map"' in raw, state
+
+
+def test_frontedge_scan_excludes_hidden_overlays_but_keeps_visible_telemetry() -> None:
+    hidden = '<header>Note</header><div hidden><p>Recovery</p><input><div>Online</div></div><p>Visible</p>'
+    assert _visible_text(hidden, exclude_hidden=True) == 'notevisible'
+    assert 'recovery' in _visible_text('<header>Recovery</header><div hidden>Details</div>', exclude_hidden=True)
+    assert 'online' in _visible_text('<div hidden="false">Recovery</div><p>Online</p>', exclude_hidden=True)
