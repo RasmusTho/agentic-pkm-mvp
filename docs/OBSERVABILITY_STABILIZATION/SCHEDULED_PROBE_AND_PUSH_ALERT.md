@@ -62,10 +62,13 @@ unhealthy signal and does not claim a controlled outage or repair of its cause.
 
 The existing shared webhook import is committed under #6347, catalog standing is owner-accepted
 under #5506, and the declared consuming-host BWS launch succeeded. No credential was created or
-rotated. The legacy Mac job remains loaded in the observed local user domain with last exit 1;
-its program provenance and exact retirement remain separate work. Issue #4076 remains open for
-that retirement after verified Linux activation and the qualified isolated TEST outage/recovery
-drill. This production installation is not the TEST acceptance receipt.
+rotated. After fresh verified Linux activity, the exact legacy `com.yggdrasil.prod-probe` job was
+[disabled and unloaded on 2026-10-29](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6449#issuecomment-6491766335)
+in the qualified current user's GUI domain. The disabled override, absent loaded job and preserved
+original plist metadata/selected identity were verified; no legacy arguments were executed.
+This retires only the named local consumer and does not assert physical-asset or program-source
+equivalence. Issue #4076 remains open for the qualified isolated TEST outage/recovery drill;
+production installation and local retirement are not the TEST acceptance receipt.
 
 ## Purpose
 

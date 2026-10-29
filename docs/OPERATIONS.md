@@ -1065,11 +1065,15 @@ intentionally re-arming notifications; the installed Linux state path is under
 `--apply` writes the host from the exact merged `origin/main` checkout. Production installation
 uses `--channel prod`. The installer is deliberately separate from the TEST outage/recovery drill;
 the parent Issue #4076 owns both live host operations and disabling the legacy Mac LaunchAgent after
-the Linux production service is active. Linux activation is now verified by the receipt above;
-the legacy Mac job is still loaded in the observed local user domain with last exit 1, and its
-program provenance and exact retirement remain unresolved. The separately qualified isolated TEST
-down/repeat/recovery/restoration drill and Mac retirement remain open under #4076. Existing
-catalog acceptance and the #6347 shared webhook import must not be requested or repeated again.
+the Linux production service is active. Linux activation is verified by the receipt above.
+After a fresh check of the same active Linux invocation, the exact legacy
+`com.yggdrasil.prod-probe` job was
+[disabled and unloaded on 2026-10-29](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6449#issuecomment-6491766335)
+in the qualified current user's GUI domain. Readback confirmed the disabled override, absent job
+and preserved original plist metadata/selected identity. No legacy program was invoked and no
+physical-asset identity is claimed. The separately qualified isolated TEST
+down/repeat/recovery/restoration drill remains open under #4076. Existing catalog acceptance and
+the #6347 shared webhook import must not be requested or repeated again.
 
 ## Prod backup watcher (stale or failed nightly dump)
 
