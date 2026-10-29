@@ -61,8 +61,7 @@ permit same-correlation recovery; text-capture remains cache-only and unqualifie
 60-second iteration starts by sleeping the remaining interval after work. Source tests cover slow
 25/50/85/100-second synthetic samples and readiness/HTTP delay; slow delivery or scheduling can
 still postpone the nominal cadence, and no arbitrary latency or current-health guarantee is made.
-This source correction does not upgrade the installed package identified below or satisfy #4076's
-controlled TEST receipt.
+The bounded production upgrade is recorded below; #4076's controlled TEST receipt remains open.
 
 The production service reads only the declared `heimdal-external-alerts` BWS binding
 `shared/discord.webhook`; its child receives a short-lived mode-0600 runtime file and never inherits
@@ -76,6 +75,21 @@ The same active/enabled invocation remained stable across two normal 60-second i
 zero restarts, one confirmed down alert and two duplicate suppressions. Production already had
 `/readyz` HTTP 200 and `required_ok=false` before installation; that alert reports the existing
 unhealthy signal and does not claim a controlled outage or repair of its cause.
+
+The [2026-10-29 upgrade receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6457#issuecomment-6502803665)
+verifies the subsequent one-file update to source `0d064c012296589e92987c1f374fa18b05104f7b`:
+`prod_probe.py` SHA-256 `0172b37565a067c26acd37afed8d650be7a56117ad1962860446fd18353058ac`,
+with the other 59 source files retained from `777726d3139fc82cd69097dcd3bccc4d1c6c167a`.
+The mixed 60-file manifest is `3ae600b78abefb751ef8fd73e7639b75a41b09f30d44fd4d06b1bb77101ae861`;
+it does not represent the whole new main tree. Configuration, effective unit, interpreter and private
+child binding matched. The same active/enabled normal invocation completed 43 qualified cycles with
+zero restarts, suppressing the existing incident while retaining its current acknowledgment.
+Normal caches were qualified without forced deletion or restoration.
+The original executor remains `UNKNOWN` at `start_intent/main_process_boundary`; its finite helper
+and cgroup are reaped. A separately reviewed read-only verification qualified the actual installed
+and running postconditions without adopting lifecycle ownership or rewriting that result. Original
+request/program/result/handle bytes and pinned follow tooling remain preserved; the original resource
+guard still fences later #6457 apply requests. No guard clearance or further compensation was needed.
 
 The existing shared webhook import is committed under #6347, catalog standing is owner-accepted
 under #5506, and the declared consuming-host BWS launch succeeded. No credential was created or
