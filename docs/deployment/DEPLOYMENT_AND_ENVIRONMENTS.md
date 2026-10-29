@@ -1532,13 +1532,14 @@ finite unresolved result and retains every hold. The request never starts, retri
 adopts or releases an installation based on a different owner marker, and it is not a generic
 observer or a permission to operate a native host.
 
-New caught `refused_before_backup` receipts carry a value-free `prebackup_gate` from this finite
+New caught `refused_before_backup` receipts carry a value-free `prebackup_gate` from this finite base
 set: `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
 `authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
 `backup_roots`, `source_manifest`, `descriptor_capacity`, `descriptor_capacity_unknown`,
 `descriptor_capacity_insufficient`, `descriptor_capacity_ineligible`,
 `descriptor_capacity_admission_refused`, `candidate_profile`, `old_kernel_qualification`,
-`qualified_writer_snapshot`, or `generation_qualification`. The field classifies the producer gate
+`qualified_writer_snapshot`, or `generation_qualification`, plus the explicit OLD-kernel stage/family
+combinations defined in Native source preflight and recovery above. The field classifies the producer gate
 that refused without storing exception text or request values. The descriptor-specific gates
 distinguish unknown accounting/peak metadata, qualified inadequate capacity, an ineligible process,
 and failed resource admission. The earlier `descriptor_capacity` label remains valid and does not

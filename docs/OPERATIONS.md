@@ -114,13 +114,14 @@ budgets.
 
 #### BWS source-installation refusal diagnostics
 
-A caught `refused_before_backup` receipt includes the finite `prebackup_gate` diagnostic. Its values
-are `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
+A caught `refused_before_backup` receipt includes the finite `prebackup_gate` diagnostic. Its base
+values are `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
 `authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
 `backup_roots`, `source_manifest`, `descriptor_capacity`, `descriptor_capacity_unknown`,
 `descriptor_capacity_insufficient`, `descriptor_capacity_ineligible`,
 `descriptor_capacity_admission_refused`, `candidate_profile`, `old_kernel_qualification`,
-`qualified_writer_snapshot`, and `generation_qualification`. The diagnostic contains no exception
+`qualified_writer_snapshot`, and `generation_qualification`, plus the explicit OLD-kernel stage/family
+combinations in the table below. The diagnostic contains no exception
 text or operation input; it identifies the producer gate for that caught refusal. The
 `authority_cutover` value names a real current-writer predicate after the bound plan is read, but
 does not establish that it caused any previously observed refusal. Legacy receipts without this
