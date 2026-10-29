@@ -1264,12 +1264,17 @@ if "TIMEOUT_SCOPED" in __import__("os").environ:
     assert "incomplete" in incomplete.stderr
 
 
-def _run_scoped_measured_fixture(tmp_path: Path, mode: str = "complete"):
+def _run_scoped_measured_fixture(tmp_path: Path, mode: str = "complete", *, native=False, jobs=4):
     from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+    from scripts.select_pr_tests import SCOPED_DEPLOY_SERIAL_BOUNDARY
 
-    nodes = [*SHARED_CHECKOUT_NODES, *(
-        f"{TARGET_MODULE}::test_regular_{index}[value with space]" for index in range(9)
-    )]
+    module = "tests/ops/test_native_source_diagnostic_admission.py" if native else TARGET_MODULE
+    nodes = ([f"{module}::test_regular_{index:03}[value with space]" for index in range(394)]
+        if native else [*SHARED_CHECKOUT_NODES, *(
+            f"{module}::test_regular_{index}[value with space]" for index in range(9)
+        )])
+    serial_targets = (list(SCOPED_DEPLOY_SERIAL_BOUNDARY[1:]) if native
+        else ["tests/ops/test_native_journaling_acceptance.py"])
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake_pytest = bin_dir / "pytest"
@@ -1284,10 +1289,15 @@ args = sys.argv[1:]
 nodes = json.loads(os.environ["FAKE_NODES"])
 mode = os.environ["FAKE_MODE"]
 if "--collect-only" in args:
+    if mode == "collect-failure":
+        print("synthetic native collection failure")
+        raise SystemExit(2)
+    if mode == "collect-duplicate":
+        nodes.append(nodes[-1])
     print("\n".join(nodes))
     raise SystemExit(0)
 state_path = Path(os.environ["FAKE_STATE"])
-serial = "tests/ops/test_native_journaling_acceptance.py" in args
+serial = all(target in args for target in json.loads(os.environ["FAKE_SERIAL_TARGETS"]))
 with state_path.open("a+") as handle:
     fcntl.flock(handle, fcntl.LOCK_EX)
     handle.seek(0)
@@ -1303,7 +1313,7 @@ with state_path.open("a+") as handle:
     handle.truncate()
     json.dump(state, handle)
 time.sleep(0.05)
-for node in args:
+for node in (nodes if os.environ["FAKE_MODULE"] in args else args):
     if node in nodes:
         if mode == "missing" and node == nodes[-1]:
             continue
@@ -1321,23 +1331,26 @@ with state_path.open("r+") as handle:
     json.dump(state, handle)
 ''', encoding="utf-8")
     fake_pytest.chmod(0o755)
-    expected = [TARGET_MODULE, "tests/scripts", "tests/ops"]
+    expected = ([module, "tests/scripts", "tests/ci", *serial_targets] if native
+        else [module, "tests/scripts", "tests/ops"])
+    partitions = [expected] if native else [[target] for target in expected]
     state_path = tmp_path / "state.json"
     result = subprocess.run(
         [sys.executable, str(REPO_ROOT / "scripts/run_scoped_test_partitions.py"),
-         "--partitions-json", json.dumps([[target] for target in expected]),
+         "--partitions-json", json.dumps(partitions),
          "--expected-targets-json", json.dumps(expected),
-         "--execution-units-json", json.dumps([[target] for target in expected]),
+         "--execution-units-json", json.dumps(partitions),
          "--log-dir", str(tmp_path / "logs"),
          "--aggregate-log", str(tmp_path / "aggregate.log"),
-         "--jobs", "4", "--shard-timeout-seconds", "10",
-         "--serial-boundary-json", json.dumps(["tests/ops/test_native_journaling_acceptance.py"])],
+         "--jobs", str(jobs), "--shard-timeout-seconds", "10",
+         "--serial-boundary-json", json.dumps(serial_targets)],
         cwd=REPO_ROOT,
         env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
-             "FAKE_NODES": json.dumps(nodes), "FAKE_MODE": mode, "FAKE_STATE": str(state_path)},
+             "FAKE_NODES": json.dumps(nodes), "FAKE_MODE": mode, "FAKE_STATE": str(state_path),
+             "FAKE_SERIAL_TARGETS": json.dumps(serial_targets), "FAKE_MODULE": module},
         capture_output=True, text=True, timeout=30, check=False,
     )
-    return result, json.loads(state_path.read_text()), nodes
+    return result, json.loads(state_path.read_text()) if state_path.exists() else {}, nodes
 
 
 def _weighted_root_fixture(tmp_path, monkeypatch, *, collection_code=0):
@@ -1452,6 +1465,98 @@ def test_scoped_runner_rejects_incomplete_measured_node_evidence(tmp_path: Path,
     assert result.returncode == 1
     assert "Collected-node verification failed:" in result.stderr
     assert "Collected-node verification failed:" in (tmp_path / "aggregate.log").read_text()
+
+
+@pytest.mark.parametrize("workers", [2, 3, 4])
+def test_native_admission_node_plan_is_closed_and_complete(workers, tmp_path):
+    from scripts.plan_full_suite_node_shards import (
+        parse_collected_nodes, plan_node_units, verify_executed_nodes, write_plan,
+    )
+
+    module = "tests/ops/test_native_source_diagnostic_admission.py"
+    nodes = tuple(f"{module}::test_case[{index:03}]" for index in range(394))
+    assert parse_collected_nodes("\n".join(nodes), module) == nodes
+    units = plan_node_units(nodes, module, max_workers=workers)
+    assert [len(unit) for unit in units] == [197, 197]
+    assert tuple(node for unit in units for node in unit) == nodes
+    assert plan_node_units(nodes[:3], module, max_workers=workers) == (nodes[:1], nodes[1:3])
+    plan_dir, logs_dir = tmp_path / "plan", tmp_path / "logs"
+    items = write_plan(nodes, module, plan_dir, max_workers=workers)
+    logs_dir.mkdir()
+    for item, unit in zip(items, units, strict=True):
+        (logs_dir / f"{item}.log").write_text("".join(f"{node} PASSED\n" for node in unit))
+    assert verify_executed_nodes(plan_dir / "coverage.json", logs_dir) == nodes
+    with pytest.raises(ValueError, match="duplicates"):
+        plan_node_units((*nodes, nodes[-1]), module)
+    with pytest.raises(ValueError, match="escaped"):
+        plan_node_units((*nodes, "tests/ops/test_other.py::test_case"), module)
+    with pytest.raises(ValueError, match="only accepts"):
+        plan_node_units(("tests/ops/test_other.py::test_case",), "tests/ops/test_other.py")
+
+
+@pytest.mark.parametrize("jobs", [1, 4])
+def test_scoped_runner_splits_native_admission_without_overlapping_serial_boundary(tmp_path, jobs):
+    from scripts.select_pr_tests import SCOPED_DEPLOY_SERIAL_BOUNDARY
+
+    result, state, nodes = _run_scoped_measured_fixture(tmp_path, native=True, jobs=jobs)
+    assert result.returncode == 0, result.stdout + result.stderr
+    invocations = state["invocations"]
+    module = "tests/ops/test_native_source_diagnostic_admission.py"
+    node_units = [tuple(arg for arg in args if arg in nodes) for args in invocations]
+    node_units = [unit for unit in node_units if unit]
+    if jobs == 1:
+        assert node_units == []
+        assert sum(module in args for args in invocations) == 1
+    else:
+        assert [len(unit) for unit in node_units] == [197, 197]
+        assert sorted(node for unit in node_units for node in unit) == sorted(nodes)
+        assert not any(module in args for args in invocations)
+    assert state["peak"] <= jobs
+    assert state["serial_active"] == 1
+    assert state["serial_invocation_count"] == len(invocations)
+    assert [arg for arg in invocations[-1] if arg in SCOPED_DEPLOY_SERIAL_BOUNDARY] == list(
+        SCOPED_DEPLOY_SERIAL_BOUNDARY[1:])
+    aggregate = (tmp_path / "aggregate.log").read_text()
+    assert all(aggregate.count(node + " PASSED") == 1 for node in nodes)
+
+
+def test_native_admission_receipt_rejects_extra_units(tmp_path):
+    from scripts.plan_full_suite_node_shards import verify_executed_nodes, write_plan
+
+    module = "tests/ops/test_native_source_diagnostic_admission.py"
+    nodes = tuple(f"{module}::test_case[{index}]" for index in range(4))
+    plan_dir, logs_dir = tmp_path / "plan", tmp_path / "logs"
+    write_plan(nodes, module, plan_dir, max_workers=4)
+    coverage_path = plan_dir / "coverage.json"
+    coverage = json.loads(coverage_path.read_text())
+    moved = coverage["work_items"][0]["nodes"].pop()
+    coverage["work_items"].append({"id": "deploy-node-unit-2", "nodes": [moved]})
+    coverage_path.write_text(json.dumps(coverage))
+    logs_dir.mkdir()
+    for item in coverage["work_items"]:
+        (logs_dir / f"{item['id']}.log").write_text("".join(f"{node} PASSED\n" for node in item["nodes"]))
+    # The same four nodes appear once with a receipt-declared cap of four,
+    # but this exact module is admitted to only two work units.
+    with pytest.raises(ValueError, match="worker cap"):
+        verify_executed_nodes(coverage_path, logs_dir)
+
+
+@pytest.mark.parametrize("mode", ["missing", "duplicate", "unexpected"])
+def test_scoped_native_admission_requires_complete_node_results(tmp_path, mode):
+    result, state, _nodes = _run_scoped_measured_fixture(tmp_path, mode, native=True)
+    assert result.returncode == 1
+    assert "Collected-node verification failed:" in result.stderr
+    assert "Collected-node verification failed:" in (tmp_path / "aggregate.log").read_text()
+    assert state["active"] == 0 and state["serial_active"] == 1
+    assert state["serial_invocation_count"] == len(state["invocations"])
+
+
+@pytest.mark.parametrize("mode", ["collect-failure", "collect-duplicate"])
+def test_scoped_native_admission_collection_failure_stops_execution(tmp_path, mode):
+    result, state, _nodes = _run_scoped_measured_fixture(tmp_path, mode, native=True)
+    assert result.returncode != 0
+    assert "collection failed" in result.stderr or "inventory contains duplicates" in result.stderr
+    assert state == {}
 
 
 def test_scoped_runner_reports_failure_before_other_partitions_finish(tmp_path: Path) -> None:
