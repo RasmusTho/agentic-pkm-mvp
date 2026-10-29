@@ -61,3 +61,28 @@ def test_batch_effect_surfaces_use_shared_runtime_and_existing_coordinator():
         for path in root.rglob("*.py"):
             source = path.read_text()
             assert not any(name in source for name in ("BatchOperationCoordinator(", "ProductionBatchRuntime("))
+
+
+def test_companion_operations_use_only_public_operations_client():
+    root = Path("companion-ui/companion-app/companion_ui/workspace")
+    for name in ("operations_workspace.py", "operations_client.py"):
+        source = (root / name).read_text()
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                assert not (node.module or "").startswith("app")
+            if isinstance(node, ast.Import):
+                assert not any(alias.name.startswith("app") for alias in node.names)
+        assert not any(token in source for token in ("write_note", "StorePort", "BatchOperationCoordinator(", "OperationExecutionKernel("))
+    workspace = (root / "operations_workspace.py").read_text()
+    assert "fetch(" not in workspace
+    assert "window.operationsClient" in workspace
+    client = (root / "operations_client.py").read_text()
+    assert "'/api/operations'" in client
+    assert "executeBatch" in client and "expected_digest:digest" in client
+    assert "localStorage" not in workspace and "sessionStorage" not in workspace
+    from companion_ui.workspace.serve_dev_page import make_handler
+    handler = make_handler(client=object(), api_base_url="http://127.0.0.1:18001")
+    for path in ("/api/operations/batches/x/unknown", "/api/operations/receipts/x/extra", "/api/operations/effects"):
+        assert not handler.route_allowed("GET", path)
+        assert not handler.route_allowed("POST", path)

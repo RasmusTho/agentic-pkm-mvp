@@ -273,7 +273,7 @@ def test_overlay_frame_component_is_sole_frame_source() -> None:
     )
     # One header per shell overlay (capture also ships on the shell).
     assert sorted(headers) == sorted(
-        ["cmd", "capture", "receipts", "settings", "memory", "map"]
+        ["cmd", "capture", "receipts", "settings", "memory", "map", "operations"]
     ), f"each overlay renders exactly one frame header, got {sorted(headers)}"
 
     # No overlay root emits a duplicate scrim element (the single scrim is in

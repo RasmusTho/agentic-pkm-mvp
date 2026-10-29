@@ -448,6 +448,7 @@ _OCCUPANT_MARKERS: dict[str, str] = {
     "capture": 'data-testid="capture-modal"',
     "memory": 'data-region="memory-review-drawer"',
     "receipts": 'data-testid="receipts-history-modal"',
+    "operations": 'data-testid="operations-workspace"',
     "settings": 'data-region="settings-drawer"',
     "map": 'data-region="system-map-overlay"',
 }
@@ -463,6 +464,7 @@ _OCCUPANT_OPEN_INTENTS: dict[str, str] = {
     "capture": "capture.open",
     "memory": "memory.open",
     "receipts": "receipts.open",
+    "operations": "operations.open",
     "settings": "settings.open",
     "map": "map.open",
 }
