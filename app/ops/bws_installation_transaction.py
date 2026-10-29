@@ -66,6 +66,10 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "backup_roots",
     "source_manifest",
     "descriptor_capacity",
+    "descriptor_capacity_unknown",
+    "descriptor_capacity_insufficient",
+    "descriptor_capacity_ineligible",
+    "descriptor_capacity_admission_refused",
     "candidate_profile",
     "old_kernel_qualification",
     "qualified_writer_snapshot",
@@ -2143,7 +2147,12 @@ class _NativePorts:
     """Fixed production bindings for this one DEV/TEST source-installation path."""
 
     def __init__(self) -> None:
+        from app.ops.bws_control_installation import _SourceDescriptorEnvelope
         self._config: Any = None
+        self._descriptor_envelope = _SourceDescriptorEnvelope()
+        self._descriptor_service: Any = None
+        self._descriptor_handle: Any = None
+        self._descriptor_prepare_uncertain = False
         self._caller_profile_sent = False
         self._caller_source_modules: list[dict[str, object]] | None = None
         caller_root = getattr(sys, "_yggdrasil_bws_candidate_checkout", None)
@@ -2226,28 +2235,52 @@ class _NativePorts:
         self, roots: dict[str, Any], changes: tuple[Any, ...], backup_root: Any,
         source_inventory_fd_peak: int = 0,
     ) -> None:
-        """Refuse unknown or insufficient FD headroom before service or backup effects."""
-        from app.ops.bws_control_installation import _require_source_descriptor_capacity
-        _require_source_descriptor_capacity(
-            roots, changes, backup_root, source_inventory_fd_peak,
-        )
+        """Admit only this dedicated invocation, then retain the ordinary FD guard."""
+        self._descriptor_envelope.admit(roots, changes, backup_root, source_inventory_fd_peak)
 
     def roots(self, config: Any, profile: dict[str, object]) -> tuple[dict[str, Any], Any]:
         return _roots(config, profile)
 
     def service(self, channel: str) -> Any:
         from app.ops.bws_installation_lifecycle import FixedBwsService
-        return FixedBwsService(unit=f"yggdrasil-bws-deploy@{channel}.service", channel=channel)
+        self._descriptor_service = FixedBwsService(
+            unit=f"yggdrasil-bws-deploy@{channel}.service", channel=channel,
+        )
+        return self._descriptor_service
 
     def prepare(self, roots: dict[str, Any], changes: tuple[Any, ...],
                 payloads: dict[tuple[str, str], bytes], backup_root: Any, bundle_name: str, *,
                 source_inventory_fd_peak: int = 0,
                 runtime_fd_already_open: bool = False) -> Any:
-        from app.ops.bws_control_installation import _prepare_full_source_files
-        return _prepare_full_source_files(roots=roots, changes=changes, payloads=payloads,
-                                          backup_root=backup_root, bundle_name=bundle_name,
-                                          source_inventory_fd_peak=source_inventory_fd_peak,
-                                          runtime_fd_already_open=runtime_fd_already_open)
+        from app.ops.bws_control_installation import InstallationRefused, _prepare_full_source_files
+        self._descriptor_prepare_uncertain = True
+        try:
+            self._descriptor_handle = _prepare_full_source_files(
+                roots=roots, changes=changes, payloads=payloads,
+                backup_root=backup_root, bundle_name=bundle_name,
+                source_inventory_fd_peak=source_inventory_fd_peak,
+                runtime_fd_already_open=runtime_fd_already_open,
+            )
+            self._descriptor_prepare_uncertain = False
+            return self._descriptor_handle
+        except BaseException as exc:
+            self._descriptor_handle = getattr(exc, "installation", None)
+            # The lower mechanic attaches its handle to every typed refusal
+            # after allocation. An interruption/untyped exception may conceal
+            # owned FDs, so only process termination can close that uncertainty.
+            if isinstance(exc, InstallationRefused):
+                self._descriptor_prepare_uncertain = False
+            raise
+
+    def source_resources_closed(self) -> bool:
+        handle, service = self._descriptor_handle, self._descriptor_service
+        try:
+            return (not self._descriptor_prepare_uncertain
+                    and (handle is None or (handle.state == "closed" and not handle._fds))
+                    and (service is None or not service.runtime_context_started
+                         or service.runtime_close_completed is True))
+        except Exception:
+            return False
 
     def apply(self, handle: Any) -> Any:
         from app.ops.bws_control_installation import apply_public_files
@@ -2474,8 +2507,16 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                     if (not callable(descriptor_preflight)
                             or type(source_inventory_fd_peak) is not int
                             or source_inventory_fd_peak < 0):
-                        _refuse()
-                    descriptor_preflight(roots, changes, backup_root, source_inventory_fd_peak)
+                        _refuse_prebackup_gate("descriptor_capacity_unknown")
+                    try:
+                        descriptor_preflight(roots, changes, backup_root, source_inventory_fd_peak)
+                    except Exception as exc:
+                        from app.ops.bws_control_installation import InstallationRefused
+                        if (isinstance(exc, InstallationRefused) and exc.reason in {
+                                "descriptor_capacity_unknown", "descriptor_capacity_insufficient",
+                                "descriptor_capacity_ineligible", "descriptor_capacity_admission_refused"}):
+                            _refuse_prebackup_gate(exc.reason)
+                        raise
                     prebackup_gate = "candidate_profile"
                     candidate_profile = _candidate_profile(old_state, payloads, manifest_proof)
                     prebackup_gate = "old_kernel_qualification"
@@ -2700,7 +2741,11 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
 
 def run_source_installation(channel: str, request: object) -> dict[str, object]:
     """Execute one fixed DEV/TEST source install through existing BWS ownership."""
-    return _execute_source_installation(channel, request, _NativePorts())
+    ports = _NativePorts()
+    try:
+        return _execute_source_installation(channel, request, ports)
+    finally:
+        ports._descriptor_envelope.close(owned_resources_closed=ports.source_resources_closed())
 
 
 def reconcile_source_installation(channel: str, request: object) -> dict[str, object]:

@@ -623,7 +623,7 @@ def _full_source_manifest_case(
     """Build a shallow-checkout-safe Git candidate with real guarded core sources."""
     control_module = importlib.import_module("app.ops.bws_control_installation")
     monkeypatch.setattr(control_module, "_source_descriptor_capacity_snapshot",
-                        lambda: (0, 1_000_000))
+                        lambda: (0, 1_000_000, 1_000_000))
     monkeypatch.setattr(transaction, "_OWNER_UID", os.geteuid())
     monkeypatch.setattr(transaction, "_OWNER_GID", os.getegid())
     target = _owned_dir(secure_tmp_path / f"target-{channel}")
@@ -1157,7 +1157,10 @@ def test_full_source_large_delta_reaches_prepare(monkeypatch, secure_tmp_path, c
 
     changed_roots = {change.root for change in changes}
     prepare_roots = {name: root for name, root in case.roots.items() if name in changed_roots}
-    handle = case.ports.prepare(prepare_roots, changes, payloads, case.backup, "large-source-delta")
+    handle = case.ports.prepare(
+        prepare_roots, changes, payloads, case.backup, "large-source-delta",
+        source_inventory_fd_peak=proof["source_inventory_fd_peak"], runtime_fd_already_open=True,
+    )
     try:
         assert handle.state == "prepared"
         assert len(handle._targets) == len(changes)
@@ -1281,7 +1284,7 @@ def test_source_descriptor_capacity_refuses_before_backup(
             prepare_roots, changes, case.backup,
         )
         assert required > required_without_inventory
-        snapshot = lambda: (128, 128 + required_without_inventory)
+        snapshot = lambda: (128, 128 + required_without_inventory, 128 + required_without_inventory)
         reason = "descriptor_capacity_insufficient"
     elif capacity == "control-projection-insufficient":
         lifecycle_module = importlib.import_module("app.ops.bws_installation_lifecycle")
@@ -1293,12 +1296,13 @@ def test_source_descriptor_capacity_refuses_before_backup(
                 prepare_roots, changes, case.backup, inventory_fd_peak,
             )
         assert required > required_without_projection
-        snapshot = lambda: (128, 128 + required_without_projection)
+        snapshot = lambda: (128, 128 + required_without_projection, 128 + required_without_projection)
         reason = "descriptor_capacity_insufficient"
     else:
-        snapshot = lambda: (128, 128 + required - 1)
+        snapshot = lambda: (128, 128 + required - 1, 128 + required - 1)
         reason = "descriptor_capacity_insufficient"
     monkeypatch.setattr(control_module, "_source_descriptor_capacity_snapshot", snapshot)
+    monkeypatch.setattr(control_module, "_source_descriptor_process_eligible", lambda: True)
 
     with pytest.raises(control_module.InstallationRefused, match=reason):
         case.ports.preflight_source_descriptor_capacity(
@@ -1418,7 +1422,7 @@ def test_created_deep_source_preflights_held_profile_rescan_capacity(
         prepare_roots, changes, case.backup, proof["source_inventory_fd_peak"],
     )
     monkeypatch.setattr(control_module, "_source_descriptor_capacity_snapshot",
-                        lambda: (0, required))
+                        lambda: (0, required, required))
     assert not list(case.backup_root.iterdir())
     before_state = {}
     for change in changes:
@@ -1450,6 +1454,7 @@ def test_created_deep_source_preflights_held_profile_rescan_capacity(
     with monkeypatch.context() as descriptor_ports:
         descriptor_ports.setattr(os, "open", tracked_open)
         descriptor_ports.setattr(os, "close", tracked_close)
+        descriptor_ports.setattr(control_module, "_source_descriptor_process_eligible", lambda: True)
         case.ports.preflight_source_descriptor_capacity(
             prepare_roots, changes, case.backup, proof["source_inventory_fd_peak"],
         )
@@ -2666,6 +2671,44 @@ def test_prebackup_refusal_receipt_reports_finite_gate(options, expected_gate):
         assert events.index("source_manifest") < events.index("descriptor_capacity")
         assert "qualified_old" not in events
     assert admission.receipt == receipt
+
+
+@pytest.mark.parametrize("fault", ["missing-port", "missing-peak", "bool-peak", "negative-peak"])
+def test_invalid_descriptor_port_or_peak_refuses_before_service(fault):
+    request, ports, admission, _service, events, _old, _candidate = _transaction_fixture()
+    if fault == "missing-port":
+        ports.preflight_source_descriptor_capacity = None
+    else:
+        manifest = ports.source_manifest
+        def invalid_manifest(*args):
+            changes, payloads, proof = manifest(*args)
+            proof = dict(proof)
+            if fault == "missing-peak":
+                proof.pop("source_inventory_fd_peak")
+            else:
+                proof["source_inventory_fd_peak"] = True if fault == "bool-peak" else -1
+            return changes, payloads, proof
+        ports.source_manifest = invalid_manifest
+    result = transaction._execute_source_installation("dev", request, ports)["source_installation"]
+    assert result["status"] == "refused_before_backup"
+    assert result["prebackup_gate"] == "descriptor_capacity_unknown"
+    assert result == admission.receipt
+    assert not {"prepare", "qualified_old", "stop_old", "apply_source"} & set(events)
+
+
+@pytest.mark.parametrize("reason", ["descriptor_capacity_unknown", "descriptor_capacity_insufficient",
+                                    "descriptor_capacity_ineligible", "descriptor_capacity_admission_refused"])
+def test_descriptor_refusal_receipt_keeps_only_finite_reason(reason):
+    from app.ops.bws_control_installation import InstallationRefused
+    request, ports, admission, _service, events, _old, _candidate = _transaction_fixture()
+    def refuse(*_args):
+        raise InstallationRefused(reason)
+    ports.preflight_source_descriptor_capacity = refuse
+    result = transaction._execute_source_installation("dev", request, ports)["source_installation"]
+    assert result["status"] == "refused_before_backup"
+    assert result["prebackup_gate"] == reason
+    assert result == admission.receipt
+    assert not {"prepare", "qualified_old", "stop_old", "apply_source"} & set(events)
 
 
 def test_second_native_writer_snapshot_error_reports_qualified_gate(monkeypatch):

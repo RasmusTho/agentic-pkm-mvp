@@ -742,6 +742,7 @@ def _dispatch(root: Path, channel: str, arguments: list[str], *, caller_checkout
         raise
     source_finder = None
     source_installation = False
+    source_process_owned = False
     source_root = root
     try:
         if reservation.skip_cleanup:
@@ -792,6 +793,13 @@ def _dispatch(root: Path, channel: str, arguments: list[str], *, caller_checkout
             reservation.release()
         if action == "serve":
             setattr(sys, _STARTUP_RELEASE_ATTRIBUTE, reservation.release)
+        if source_installation and __name__ == "__main__":
+            if hasattr(sys, "_yggdrasil_bws_source_rpc_process"):
+                raise RuntimeError("bws_source_process_refused")
+            # This exact verified launcher ends with SystemExit(run()). Imported
+            # dispatch/main/rpc calls and the shared serve branch cannot opt in.
+            sys._yggdrasil_bws_source_rpc_process = os.getpid()
+            source_process_owned = True
         return main(arguments)
     finally:
         reservation.release()
@@ -801,6 +809,8 @@ def _dispatch(root: Path, channel: str, arguments: list[str], *, caller_checkout
             delattr(sys, _STARTUP_RELEASE_ATTRIBUTE)
         if source_installation and hasattr(sys, "_yggdrasil_bws_candidate_checkout"):
             delattr(sys, "_yggdrasil_bws_candidate_checkout")
+        if source_process_owned and hasattr(sys, "_yggdrasil_bws_source_rpc_process"):
+            delattr(sys, "_yggdrasil_bws_source_rpc_process")
         sys.stdin = previous_stdin
 
 

@@ -15,6 +15,8 @@ import os
 from pathlib import PurePosixPath
 import re
 import stat
+import sys
+import threading
 from dataclasses import dataclass, field
 from typing import Mapping, NoReturn
 from uuid import uuid4
@@ -243,22 +245,109 @@ def _source_manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
                        total_payload_limit=_MAX_TOTAL_SOURCE_BYTES)
 
 
-def _source_descriptor_capacity_snapshot() -> tuple[int, int] | None:
-    """Return current FD count and soft RLIMIT_NOFILE, failing closed if unknown."""
+def _source_descriptor_capacity_snapshot() -> tuple[int, int, int] | None:
+    """Return this process's FD count and finite soft/hard NOFILE limits."""
     try:
         import resource
 
-        soft_limit, _hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
-        if type(soft_limit) is not int or soft_limit <= 0:
+        soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if (type(soft_limit) is not int or type(hard_limit) is not int
+                or not 0 < soft_limit <= hard_limit
+                or soft_limit == resource.RLIM_INFINITY or hard_limit == resource.RLIM_INFINITY):
             return None
         entries = os.listdir("/dev/fd")
         if any(not entry.isdecimal() for entry in entries):
             return None
         # The directory enumeration may or may not expose its own FD on the
         # current platform, so count one extra descriptor conservatively.
-        return len(entries) + 1, soft_limit
+        return len(entries) + 1, soft_limit, hard_limit
     except (ImportError, OSError, AttributeError, ValueError):
         return None
+
+
+def _source_descriptor_accounting() -> tuple[int, int, int]:
+    snapshot = _source_descriptor_capacity_snapshot()
+    if (not isinstance(snapshot, tuple) or len(snapshot) != 3
+            or type(snapshot[0]) is not int or snapshot[0] < 0
+            or type(snapshot[1]) is not int or type(snapshot[2]) is not int
+            or not 0 < snapshot[1] <= snapshot[2]):
+        _refuse("descriptor_capacity_unknown")
+    return snapshot
+
+
+def _source_descriptor_process_eligible() -> bool:
+    """Only the exact, single-threaded launcher CLI may change its own soft cap.
+
+    The launcher establishes this marker only in its verified __main__ source-RPC
+    branch. Neither imported RPC callers, the shared server, nor request/env data
+    can opt in. The kernel task census also rejects non-Python native threads.
+    """
+    pid = os.getpid()
+    try:
+        return (
+            getattr(sys, "_yggdrasil_bws_source_rpc_process", None) == pid
+            and threading.current_thread() is threading.main_thread()
+            and threading.active_count() == 1
+            and os.listdir("/proc/self/task") == [str(pid)]
+        )
+    except OSError:
+        return False
+
+
+class _SourceDescriptorEnvelope:
+    """One same-process admission; the caller closes owned resources before restore."""
+
+    def __init__(self) -> None:
+        self._pid = os.getpid()
+        self._original: tuple[int, int] | None = None
+        self._admitted = False
+
+    def admit(self, roots: Mapping[str, Root], changes: tuple[Change, ...], backup_root: Root,
+              source_inventory_fd_peak: int) -> None:
+        if self._pid != os.getpid() or self._admitted or not _source_descriptor_process_eligible():
+            _refuse("descriptor_capacity_ineligible")
+        open_descriptors, soft_limit, hard_limit = _source_descriptor_accounting()
+        required = open_descriptors + _source_descriptor_peak(
+            roots, changes, backup_root, source_inventory_fd_peak,
+        )
+        if required > hard_limit:
+            _refuse("descriptor_capacity_insufficient")
+        if required > soft_limit:
+            import resource
+
+            # Preserve before attempting the syscall: failure/readback ambiguity
+            # still requires restoration or termination of this dedicated CLI.
+            self._original = (soft_limit, hard_limit)
+            try:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (required, hard_limit))
+                if resource.getrlimit(resource.RLIMIT_NOFILE) != (required, hard_limit):
+                    _refuse("descriptor_capacity_admission_refused")
+            except (OSError, ValueError):
+                _refuse("descriptor_capacity_admission_refused")
+        # Repeat the ordinary real guard after admission; no guessed budget or
+        # setter success replaces same-process accounting.
+        _require_source_descriptor_capacity(roots, changes, backup_root, source_inventory_fd_peak)
+        self._admitted = True
+
+    def close(self, *, owned_resources_closed: bool) -> None:
+        if self._original is None:
+            return
+        # This is only reachable inside the one-shot __main__ RPC. If closure or
+        # restoration cannot be proved, terminate before returning to any caller
+        # or running unrelated Python/atexit work with the changed envelope.
+        if self._pid != os.getpid() or owned_resources_closed is not True:
+            os._exit(78)
+        try:
+            import resource
+
+            if resource.getrlimit(resource.RLIMIT_NOFILE)[1] != self._original[1]:
+                os._exit(78)
+            resource.setrlimit(resource.RLIMIT_NOFILE, self._original)
+            if resource.getrlimit(resource.RLIMIT_NOFILE) != self._original:
+                os._exit(78)
+        except BaseException:
+            os._exit(78)
+        self._original = None
 
 
 def _source_descriptor_peak(roots: Mapping[str, Root], changes: tuple[Change, ...],
@@ -304,12 +393,7 @@ def _source_descriptor_peak(roots: Mapping[str, Root], changes: tuple[Change, ..
 def _require_source_descriptor_capacity(roots: Mapping[str, Root], changes: tuple[Change, ...],
                                         backup_root: Root, source_inventory_fd_peak: int = 0, *,
                                         runtime_fd_already_open: bool = False) -> None:
-    snapshot = _source_descriptor_capacity_snapshot()
-    if (not isinstance(snapshot, tuple) or len(snapshot) != 2
-            or type(snapshot[0]) is not int or snapshot[0] < 0
-            or type(snapshot[1]) is not int or snapshot[1] <= 0):
-        _refuse("descriptor_capacity_unknown")
-    open_descriptors, soft_limit = snapshot
+    open_descriptors, soft_limit, _hard_limit = _source_descriptor_accounting()
     required_peak = _source_descriptor_peak(
         roots, changes, backup_root, source_inventory_fd_peak,
         runtime_fd_already_open=runtime_fd_already_open,
