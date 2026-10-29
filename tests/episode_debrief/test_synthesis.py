@@ -580,3 +580,22 @@ def test_mixed_episode_reads_actual_heimdal_publish_and_binding(episode, foreign
         assert 'Captured speech from the live observation log.' in body
         assert signal.provenance_ref in fm['provenance_refs']
         assert any(ref.get('note_path') is None for ref in fm['debrief_source_refs'])
+
+
+
+def test_same_vault_receipt_alias_checks_canonical_lock_destination(episode, tmp_path_factory):
+    db, _, _, _ = episode
+    outside = tmp_path_factory.mktemp('foreign-lock')
+    victim = outside / 'keep'
+    victim.write_text('untouched')
+    directory = db.root / '_system/episode-debriefs'
+    directory.mkdir(parents=True)
+    target = directory / 'receipts.jsonl'
+    target.touch()
+    (directory / 'outbox.jsonl').symlink_to(target)
+    (directory / '.receipts.jsonl.append.lock').symlink_to(victim)
+    with pytest.raises(RuntimeError, match='outside'):
+        run(episode)
+    assert victim.read_text() == 'untouched'
+    assert not target.read_bytes()
+    assert not (directory / 'activation.jsonl').exists()

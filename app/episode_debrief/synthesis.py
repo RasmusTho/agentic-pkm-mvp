@@ -269,6 +269,11 @@ def synthesize_debrief(
             draft_path.with_name(f".{draft_path.name}.publication.lock"),
             path.with_name(f".{path.name}.publication.lock"),
             outbox_path.with_name(f".{outbox_path.name}.append.lock")]
+        # Reused append/publication helpers derive locks after resolving aliases.
+        # A same-vault leaf alias can therefore select a different lock filename.
+        for target, suffix in ((draft_path, "publication"), (path, "publication"), (outbox_path, "append")):
+            canonical = target.resolve()
+            destinations.append(canonical.with_name(f".{canonical.name}.{suffix}.lock"))
         for destination in destinations:
             _assert_selected_vault_owns_path(root, destination.resolve(), "debrief destination")
         expansion_records.emit_expansion_gate_receipt(decision, receipt_path=activation_path)
