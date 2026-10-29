@@ -1703,10 +1703,10 @@ def _install_synthetic_real_lifecycle_service(monkeypatch, ports, old_state, tmp
 
 
 @pytest.mark.parametrize("channel", ["dev", "test"])
-def test_empty_control_root_qualifies_through_lifecycle_gate(tmp_path, monkeypatch, channel):
+def test_empty_control_root_qualifies_through_lifecycle_gate(secure_tmp_path, monkeypatch, channel):
     request, ports, _admission, _service, events, old_state, _candidate = _transaction_fixture(channel=channel)
     service, _control_root, _properties = _install_synthetic_real_lifecycle_service(
-        monkeypatch, ports, old_state, tmp_path, channel=channel,
+        monkeypatch, ports, old_state, secure_tmp_path, channel=channel,
     )
     revalidation_calls = 0
     original_revalidation = service.revalidate_empty_control_configuration
@@ -1748,11 +1748,11 @@ def test_empty_control_root_qualifies_through_lifecycle_gate(tmp_path, monkeypat
     ],
 )
 def test_empty_control_root_refuses_identity_or_inventory_drift_before_backup(
-    tmp_path, monkeypatch, channel, drift,
+    secure_tmp_path, monkeypatch, channel, drift,
 ):
     request, ports, _admission, _service, events, old_state, _candidate = _transaction_fixture(channel=channel)
     service, control_root, properties = _install_synthetic_real_lifecycle_service(
-        monkeypatch, ports, old_state, tmp_path, channel=channel,
+        monkeypatch, ports, old_state, secure_tmp_path, channel=channel,
     )
     original = bws_installation_lifecycle._discovered_control_projection
     prebackup_revalidation_calls = 0
