@@ -133,6 +133,13 @@ _MAX_SOURCE_FILES = 4096
 _MAX_SOURCE_FILE_BYTES = 8 * 1024 * 1024
 _MAX_TOTAL_SOURCE_BYTES = 64 * 1024 * 1024
 _MAX_SOURCE_MANIFEST_CHANGES = 2 * _MAX_SOURCE_FILES + 2
+# Reserve a conservative sum of transient descriptors in the fixed source
+# lifecycle: one retained runtime FD, all seven parent-side descriptors that
+# subprocess.Popen may hold while starting a DEV/TEST service command with
+# DEVNULL stdin and captured stdout/stderr, and one backup-directory listing.
+# The listing and subprocess do not overlap in the current serial lifecycle;
+# summing them avoids depending on that sequencing for the admission bound.
+_SOURCE_DESCRIPTOR_TRANSIENT_RESERVE = 9
 
 
 def _refuse(reason: str) -> NoReturn:
@@ -234,6 +241,81 @@ def _source_manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
     _validate_manifest(roots, changes, payloads, backup,
                        change_limit=_MAX_SOURCE_MANIFEST_CHANGES,
                        total_payload_limit=_MAX_TOTAL_SOURCE_BYTES)
+
+
+def _source_descriptor_capacity_snapshot() -> tuple[int, int] | None:
+    """Return current FD count and soft RLIMIT_NOFILE, failing closed if unknown."""
+    try:
+        import resource
+
+        soft_limit, _hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if type(soft_limit) is not int or soft_limit <= 0:
+            return None
+        entries = os.listdir("/dev/fd")
+        if any(not entry.isdecimal() for entry in entries):
+            return None
+        # The directory enumeration may or may not expose its own FD on the
+        # current platform, so count one extra descriptor conservatively.
+        return len(entries) + 1, soft_limit
+    except (ImportError, OSError, AttributeError, ValueError):
+        return None
+
+
+def _source_descriptor_peak(roots: Mapping[str, Root], changes: tuple[Change, ...],
+                            backup_root: Root, source_inventory_fd_peak: int = 0, *,
+                            runtime_fd_already_open: bool = False) -> int:
+    """Bound handles, lifecycle transients, and held-handle readers."""
+    root_descriptors = sum(
+        1 + len(_path(root.path, absolute=True)) for root in (*roots.values(), backup_root)
+    )
+    target_parent_descriptors = sum(len(_path(change.path)) - 1 for change in changes)
+    existing_targets = sum(change.before_sha256 is not None for change in changes)
+
+    # Preparation retains roots/ancestors, every target parent and prior file,
+    # one backup file for each existing target, plus the bundle directory and
+    # manifest. Apply retains one staged inode FD per change. Compensation can
+    # add a restore inode FD and a reopened restored-target FD per prior file.
+    prepared = root_descriptors + target_parent_descriptors + 2 * existing_targets + 2
+    applied = prepared + len(changes)
+    compensated = applied + 2 * existing_targets
+    if type(source_inventory_fd_peak) is not int or source_inventory_fd_peak < 0:
+        _refuse("descriptor_capacity_unknown")
+    if type(runtime_fd_already_open) is not bool:
+        _refuse("descriptor_capacity_unknown")
+    try:
+        from app.ops.bws_installation_lifecycle import _control_projection_descriptor_bound
+        control_projection_fd_peak = _control_projection_descriptor_bound()
+    except Exception:
+        _refuse("descriptor_capacity_unknown")
+    if type(control_projection_fd_peak) is not int or control_projection_fd_peak < 0:
+        _refuse("descriptor_capacity_unknown")
+    runtime_fd = 0 if runtime_fd_already_open else 1
+    lifecycle_transients = _SOURCE_DESCRIPTOR_TRANSIENT_RESERVE - runtime_fd
+    handle_peak = max(prepared, applied, compensated)
+    return max(
+        handle_peak + lifecycle_transients,
+        handle_peak + runtime_fd + source_inventory_fd_peak,
+        # FixedBwsService._config retains this bounded source-only projection
+        # while the prepared handle and runtime reader remain held.
+        handle_peak + runtime_fd + control_projection_fd_peak,
+    )
+
+
+def _require_source_descriptor_capacity(roots: Mapping[str, Root], changes: tuple[Change, ...],
+                                        backup_root: Root, source_inventory_fd_peak: int = 0, *,
+                                        runtime_fd_already_open: bool = False) -> None:
+    snapshot = _source_descriptor_capacity_snapshot()
+    if (not isinstance(snapshot, tuple) or len(snapshot) != 2
+            or type(snapshot[0]) is not int or snapshot[0] < 0
+            or type(snapshot[1]) is not int or snapshot[1] <= 0):
+        _refuse("descriptor_capacity_unknown")
+    open_descriptors, soft_limit = snapshot
+    required_peak = _source_descriptor_peak(
+        roots, changes, backup_root, source_inventory_fd_peak,
+        runtime_fd_already_open=runtime_fd_already_open,
+    )
+    if open_descriptors + required_peak > soft_limit:
+        _refuse("descriptor_capacity_insufficient")
 
 
 def _directory(handle: Installation, name: str, parent: int | None,
@@ -418,7 +500,8 @@ def _compensate(handle: Installation) -> bool:
         handle.compensation.extend((t.change.path, "refused") for t in handle._targets if t.written is not None)
         return False
     complete = True
-    for target in reversed(handle._targets):
+    for index in range(len(handle._targets) - 1, -1, -1):
+        target = handle._targets[index]
         outcome = "refused"
         try:
             _backup_valid(handle)
@@ -437,9 +520,7 @@ def _compensate(handle: Installation) -> bool:
                     _same(target.parent, name, None)
                     outcome = "removed"
                 else:
-                    index = handle._targets.index(target)
                     saved = handle._backup_files[f"{index:04d}.before"]
-                    _same(handle._bundle, f"{index:04d}.before", saved)  # type: ignore[arg-type]
                     _replace(handle, target, saved.data,
                              stat.S_IMODE(target.before.info.st_mode), target.written)
                     restored = _file(handle, target.parent, name, target.uid, target.gid,
@@ -472,7 +553,9 @@ def install_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ..
 
 def _prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ...],
                           payloads: Mapping[tuple[str, str], bytes], backup_root: Root,
-                          bundle_name: str, full_source_manifest: bool) -> Installation:
+                          bundle_name: str, full_source_manifest: bool,
+                          source_inventory_fd_peak: int = 0,
+                          runtime_fd_already_open: bool = False) -> Installation:
     """Validate and durably back up a finite manifest without replacing targets.
 
     The returned handle retains the exact root, target, backup and flock identities
@@ -485,6 +568,11 @@ def _prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, .
     validate(roots, changes, payloads, backup_root)
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", bundle_name) is None:
         _refuse("bundle_name_refused")
+    if full_source_manifest:
+        _require_source_descriptor_capacity(
+            roots, changes, backup_root, source_inventory_fd_peak,
+            runtime_fd_already_open=runtime_fd_already_open,
+        )
     handle = Installation(backup_root.path + "/" + bundle_name)
     try:
         opened = {name: _root(handle, root) for name, root in roots.items()}
@@ -537,11 +625,14 @@ def prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ..
 
 def _prepare_full_source_files(*, roots: Mapping[str, Root], changes: tuple[Change, ...],
                                payloads: Mapping[tuple[str, str], bytes], backup_root: Root,
-                               bundle_name: str) -> Installation:
+                               bundle_name: str, source_inventory_fd_peak: int = 0,
+                               runtime_fd_already_open: bool = False) -> Installation:
     """Prepare the internal full-source path with its derived source manifest budget."""
     return _prepare_public_files(roots=roots, changes=changes, payloads=payloads,
                                   backup_root=backup_root, bundle_name=bundle_name,
-                                  full_source_manifest=True)
+                                  full_source_manifest=True,
+                                  source_inventory_fd_peak=source_inventory_fd_peak,
+                                  runtime_fd_already_open=runtime_fd_already_open)
 
 
 def apply_public_files(
@@ -570,7 +661,6 @@ def apply_public_files(
             if (not target_keys or len(selected_keys) != len(target_keys)
                     or not selected_keys <= all_keys):
                 _refuse("target_selection_refused")
-        _tree(handle)
         _backup_valid(handle)
         for target in handle._targets:
             expected = target.written if target.applied and target.written is not None else target.before

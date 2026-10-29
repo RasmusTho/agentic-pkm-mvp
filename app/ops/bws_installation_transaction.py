@@ -65,6 +65,7 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "owner_launcher_profile",
     "backup_roots",
     "source_manifest",
+    "descriptor_capacity",
     "candidate_profile",
     "old_kernel_qualification",
     "qualified_writer_snapshot",
@@ -996,6 +997,18 @@ def _source_path_is_supported(relative: str) -> bool:
             and all(re.fullmatch(r"[A-Za-z0-9_]+", part) is not None for part in parts[:-1]))
 
 
+def _source_inventory_file_fd_peak(root_descriptor_count: int, relative: str, depth: int) -> int:
+    """Bound an inventory file read while its recursive directory stack is held."""
+    parts = PurePosixPath(relative).parts
+    if (type(root_descriptor_count) is not int or root_descriptor_count < 1
+            or type(depth) is not int or depth < 0 or len(parts) < 2
+            or depth != len(parts) - 2):
+        _refuse()
+    # The inventory retains the package FD and recursive directory stack,
+    # then _read_relative opens a second root-relative chain including the file.
+    return root_descriptor_count + 1 + depth + len(parts)
+
+
 def _external_source_path_is_supported(relative: str) -> bool:
     parts = PurePosixPath(relative).parts
     return (len(parts) >= 2 and parts[0] in _EXTERNAL_SOURCE_ROOTS
@@ -1003,18 +1016,26 @@ def _external_source_path_is_supported(relative: str) -> bool:
             and all(re.fullmatch(r"[A-Za-z0-9_-]+", part) is not None for part in parts[:-1]))
 
 
-def _source_file_inventory(roots: dict[str, Path]) -> tuple[list[dict[str, object]], dict[str, list[str]]]:
-    """Hash every Python source file reachable through the fixed app/scripts loader roots."""
+def _source_file_inventory(
+    roots: dict[str, Path],
+) -> tuple[list[dict[str, object]], dict[str, list[str]], int, int]:
+    """Hash source inventory and bound this walk's FD and directory-entry demand."""
     rows: list[dict[str, object]] = []
     packages: dict[str, list[str]] = {}
     total_bytes = 0
     total_entries = 0
+    peak_descriptors = 0
 
-    def inspect_package(root_fd: int, root_name: str, package: str, package_fd: int) -> None:
-        nonlocal total_bytes, total_entries
+    def inspect_package(
+        root_fd: int, root_name: str, package: str, package_fd: int, root_descriptor_count: int,
+    ) -> None:
+        nonlocal total_bytes, total_entries, peak_descriptors
 
-        def walk(directory_fd: int, prefix: str) -> None:
-            nonlocal total_bytes, total_entries
+        def walk(directory_fd: int, prefix: str, depth: int) -> None:
+            nonlocal total_bytes, total_entries, peak_descriptors
+            # Keep one extra for scandir's directory stream; fd-based scandir
+            # may duplicate its input descriptor depending on the platform.
+            peak_descriptors = max(peak_descriptors, root_descriptor_count + 1 + depth + 1)
             try:
                 names = []
                 with os.scandir(directory_fd) as entries:
@@ -1043,13 +1064,22 @@ def _source_file_inventory(roots: dict[str, Path]) -> tuple[list[dict[str, objec
                             if ((opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
                                     or not stat.S_ISDIR(opened.st_mode)):
                                 _refuse()
-                            walk(child, prefix + name + "/")
+                            walk(child, prefix + name + "/", depth + 1)
                         finally:
                             os.close(child)
                     elif stat.S_ISREG(info.st_mode) and name.endswith(".py"):
                         relative = prefix + name
                         if not _source_path_is_supported(relative):
                             _refuse()
+                        # _read_relative opens each directory component and the
+                        # file from root_fd while the recursive directory stack
+                        # remains held. Count that second path chain as well.
+                        peak_descriptors = max(
+                            peak_descriptors,
+                            _source_inventory_file_fd_peak(
+                                root_descriptor_count, relative, depth,
+                            ),
+                        )
                         raw, mode = _read_relative(root_fd, relative)
                         if not _supported_source_mode(relative, mode):
                             _refuse()
@@ -1069,7 +1099,7 @@ def _source_file_inventory(roots: dict[str, Path]) -> tuple[list[dict[str, objec
             except Exception:
                 _refuse()
 
-        walk(package_fd, package + "/")
+        walk(package_fd, package + "/", 0)
 
     for root_name, root in sorted(roots.items()):
         opened: list[int] = []
@@ -1095,7 +1125,7 @@ def _source_file_inventory(roots: dict[str, Path]) -> tuple[list[dict[str, objec
                             or not stat.S_ISDIR(opened_info.st_mode)):
                         _refuse()
                     selected_packages.append(package)
-                    inspect_package(root_fd, root_name, package, package_fd)
+                    inspect_package(root_fd, root_name, package, package_fd, len(opened))
                 finally:
                     os.close(package_fd)
             packages[root_name] = selected_packages
@@ -1108,7 +1138,7 @@ def _source_file_inventory(roots: dict[str, Path]) -> tuple[list[dict[str, objec
     rows.sort(key=lambda row: (str(row["root"]), str(row["path"])))
     if not rows:
         _refuse()
-    return rows, packages
+    return rows, packages, peak_descriptors, total_entries
 
 
 def _old_disk_state(config: Any, request: dict[str, str]) -> dict[str, object]:
@@ -1118,7 +1148,7 @@ def _old_disk_state(config: Any, request: dict[str, str]) -> dict[str, object]:
     if config.channel not in {"dev", "test"}:
         _refuse()
     roots = {"application": Path(config.root), "control": _CONTROL_DIRECTORY}
-    source_files, source_packages = _source_file_inventory(roots)
+    source_files, source_packages, _scan_fd_peak, _scan_entry_count = _source_file_inventory(roots)
     opened: list[int] = []
     try:
         application_fd = _open_absolute_directory(roots["application"], opened)
@@ -1287,7 +1317,7 @@ def loaded_source_profile(
 
     roots = {"application": config.root, "control": _CONTROL_DIRECTORY}
     modules = _source_modules(config, roots, caller_source_modules=caller_source_modules)
-    source_files, source_packages = _source_file_inventory(roots)
+    source_files, source_packages, _scan_fd_peak, _scan_entry_count = _source_file_inventory(roots)
     files_by_key = {(row["root"], row["path"]): row for row in source_files}
     for module in modules:
         file_row = files_by_key.get((module["root"], module["path"]))
@@ -1404,7 +1434,8 @@ def candidate_manifest(
         _refuse()
 
     current_roots = {name: Path(roots[name].path) for name in ("application", "control") if name in roots}
-    current_files, current_packages = _source_file_inventory(current_roots)
+    (current_files, current_packages, source_inventory_fd_peak,
+     source_inventory_entry_count) = _source_file_inventory(current_roots)
     if current_files != profile["source_files"] or current_packages != profile["source_packages"]:
         _refuse()
 
@@ -1487,6 +1518,26 @@ def candidate_manifest(
                     changes.append(Change(root_name, relative, before_sha256, old_mode,
                                           _sha(candidate_raw), candidate_mode))
                     total_delta_bytes += len(candidate_raw)
+                    if before_sha256 is None:
+                        root_descriptor_count = len(current_roots[root_name].parts)
+                        depth = len(PurePosixPath(relative).parts) - 2
+                        source_inventory_fd_peak = max(
+                            source_inventory_fd_peak,
+                            _source_inventory_file_fd_peak(
+                                root_descriptor_count, relative, depth,
+                            ),
+                        )
+
+        # The transaction only writes files into already-existing parents.
+        # Each newly admitted source path therefore adds exactly one directory
+        # entry to the post-install scan; updates add none and directory
+        # creation remains impossible in the lower file mechanic.
+        prospective_source_entries = source_inventory_entry_count + sum(
+            change.root in {"application", "control"} and change.before_sha256 is None
+            for change in changes
+        )
+        if prospective_source_entries > _MAX_SOURCE_ENTRIES:
+            _refuse()
 
         app_fd = root_fds["application"][0]
         old_contract, old_contract_mode = _read_relative(app_fd, _CONTRACT.as_posix())
@@ -1550,6 +1601,7 @@ def candidate_manifest(
             "candidate_modules": [],
             "contract_mode": contract_mode,
             "launcher_key": launcher_key,
+            "source_inventory_fd_peak": source_inventory_fd_peak,
             "new_generation_sha256": _sha(json.dumps(
                 [[change.root, change.path, change.after_sha256, change.mode] for change in changes],
                 separators=(",", ":"),
@@ -1655,7 +1707,9 @@ def _verify_candidate_checkout(root: Path, revision: str) -> None:
                 or results[1].stdout.rstrip(b"\n").decode("ascii") != revision
                 or results[2].stdout):
             _refuse()
-        disk_files, disk_packages = _source_file_inventory({"application": root})
+        disk_files, disk_packages, _scan_fd_peak, _scan_entry_count = _source_file_inventory(
+            {"application": root},
+        )
         git_files = _git_source_files(root, revision)
         expected = [{"root": "application", "path": path, "sha256": _sha(raw),
                      "mode": mode, "size": len(raw)} for path, (raw, mode) in sorted(git_files.items())]
@@ -1842,7 +1896,7 @@ def _bind_source_inventory(profile: dict[str, object], config: Any) -> dict[str,
     for root_name, root_path in roots.items():
         if identities.get(root_name) != _root_identity(root_path):
             _refuse()
-    source_files, source_packages = _source_file_inventory(roots)
+    source_files, source_packages, _scan_fd_peak, _scan_entry_count = _source_file_inventory(roots)
     if value["schema"] == _PROFILE_SCHEMA:
         if value["source_files"] != source_files or value["source_packages"] != source_packages:
             _refuse()
@@ -2168,6 +2222,16 @@ class _NativePorts:
             git_file_mode=lambda revision, path: _git_mode(self.caller_root, revision, path),
         )
 
+    def preflight_source_descriptor_capacity(
+        self, roots: dict[str, Any], changes: tuple[Any, ...], backup_root: Any,
+        source_inventory_fd_peak: int = 0,
+    ) -> None:
+        """Refuse unknown or insufficient FD headroom before service or backup effects."""
+        from app.ops.bws_control_installation import _require_source_descriptor_capacity
+        _require_source_descriptor_capacity(
+            roots, changes, backup_root, source_inventory_fd_peak,
+        )
+
     def roots(self, config: Any, profile: dict[str, object]) -> tuple[dict[str, Any], Any]:
         return _roots(config, profile)
 
@@ -2176,10 +2240,14 @@ class _NativePorts:
         return FixedBwsService(unit=f"yggdrasil-bws-deploy@{channel}.service", channel=channel)
 
     def prepare(self, roots: dict[str, Any], changes: tuple[Any, ...],
-                payloads: dict[tuple[str, str], bytes], backup_root: Any, bundle_name: str) -> Any:
+                payloads: dict[tuple[str, str], bytes], backup_root: Any, bundle_name: str, *,
+                source_inventory_fd_peak: int = 0,
+                runtime_fd_already_open: bool = False) -> Any:
         from app.ops.bws_control_installation import _prepare_full_source_files
         return _prepare_full_source_files(roots=roots, changes=changes, payloads=payloads,
-                                          backup_root=backup_root, bundle_name=bundle_name)
+                                          backup_root=backup_root, bundle_name=bundle_name,
+                                          source_inventory_fd_peak=source_inventory_fd_peak,
+                                          runtime_fd_already_open=runtime_fd_already_open)
 
     def apply(self, handle: Any) -> Any:
         from app.ops.bws_control_installation import apply_public_files
@@ -2398,10 +2466,18 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                     changes, payloads, manifest_proof = ports.source_manifest(
                         old_state, config, request, roots, backup_root,
                     )
-                    prebackup_gate = "candidate_profile"
-                    candidate_profile = _candidate_profile(old_state, payloads, manifest_proof)
                     roots = {name: root for name, root in roots.items()
                              if name in manifest_proof["changed_roots"]}
+                    prebackup_gate = "descriptor_capacity"
+                    descriptor_preflight = getattr(ports, "preflight_source_descriptor_capacity", None)
+                    source_inventory_fd_peak = manifest_proof.get("source_inventory_fd_peak")
+                    if (not callable(descriptor_preflight)
+                            or type(source_inventory_fd_peak) is not int
+                            or source_inventory_fd_peak < 0):
+                        _refuse()
+                    descriptor_preflight(roots, changes, backup_root, source_inventory_fd_peak)
+                    prebackup_gate = "candidate_profile"
+                    candidate_profile = _candidate_profile(old_state, payloads, manifest_proof)
                     prebackup_gate = "old_kernel_qualification"
                     service = ports.service(channel)
                     launcher = payloads[("launcher", "yggdrasil-bws-deploy")]
@@ -2435,6 +2511,8 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                             phase = "qualified"
                             handle = ports.prepare(
                                 roots, changes, payloads, backup_root, request["bundle_name"],
+                                source_inventory_fd_peak=source_inventory_fd_peak,
+                                runtime_fd_already_open=True,
                             )
                         except Exception as exc:
                             handle = getattr(exc, "installation", None)

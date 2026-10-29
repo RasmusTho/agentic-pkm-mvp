@@ -36,12 +36,29 @@ PROC = Path('/proc')
 BUS = 'org.freedesktop.systemd1'
 MANAGER = '/org/freedesktop/systemd1'
 EXEC_TYPE = 'a(sasbttttuii)'
+_CONTROL_PROJECTION_MAX_HINTS = 16
+_CONTROL_PROJECTION_MAX_COMPONENTS = 32
+_CONTROL_PROJECTION_ANCHOR_COMPONENTS = 2
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
        'SYSTEMD_COLORS': '0', 'SYSTEMD_PAGER': ''}
 
 
 def _refuse() -> NoReturn:
     raise RuntimeError('bws_lifecycle_unproven') from None
+
+
+def _control_projection_descriptor_bound() -> int:
+    """Bound all descriptors retained by one control projection call.
+
+    Each accepted hint can retain its complete 32-component descent and the
+    two-directory anchor probes at each of the 33 possible ancestors until the
+    call returns. The fixed root walk is retained once per call.
+    """
+    fixed_root_descriptors = len(Path(CONTROL_DIRECTORY).parts)
+    ancestors_per_hint = _CONTROL_PROJECTION_MAX_COMPONENTS + 1
+    per_hint = (_CONTROL_PROJECTION_MAX_COMPONENTS
+                + _CONTROL_PROJECTION_ANCHOR_COMPONENTS * ancestors_per_hint)
+    return fixed_root_descriptors + _CONTROL_PROJECTION_MAX_HINTS * per_hint
 
 
 def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -242,7 +259,7 @@ def _discovered_control_projection(
             candidates = []
         if not candidates:
             candidates = [CONTROL_DIRECTORY + '/app/ops/postgres_deploy_linux.py']
-        if len(candidates) > 16:
+        if len(candidates) > _CONTROL_PROJECTION_MAX_HINTS:
             _refuse()
 
         def directory(
@@ -295,7 +312,8 @@ def _discovered_control_projection(
         roots = {}
         for candidate in candidates:
             parts = candidate[len(CONTROL_DIRECTORY) + 1:].rstrip('/').split('/')
-            if len(parts) > 32 or any(name in {'', '.', '..'} for name in parts):
+            if (len(parts) > _CONTROL_PROJECTION_MAX_COMPONENTS
+                    or any(name in {'', '.', '..'} for name in parts)):
                 _refuse()
             ancestors = [(CONTROL_DIRECTORY, root)]
             for name in parts:

@@ -34,7 +34,10 @@ def denied_external_ports(monkeypatch):
     original_import = builtins.__import__
 
     def isolated_import(name, *args, **kwargs):
-        if name.startswith("app.") and name not in {"app.ops", "app.ops.bws_control_installation"}:
+        if name.startswith("app.") and name not in {
+            "app.ops", "app.ops.bws_control_installation",
+            "app.ops.bws_installation_lifecycle",
+        }:
             return denied()
         return original_import(name, *args, **kwargs)
 
@@ -114,8 +117,9 @@ def _root(module, path):
                        stat.S_IMODE(info.st_mode))
 
 
-def test_source_manifest_budget_accepts_large_bounded_delta(secure_tmp_path):
+def test_source_manifest_budget_accepts_large_bounded_delta(secure_tmp_path, monkeypatch):
     module = importlib.import_module("app.ops.bws_control_installation")
+    monkeypatch.setattr(module, "_source_descriptor_capacity_snapshot", lambda: (0, 1_000_000))
     application = secure_tmp_path / "application"
     backups = secure_tmp_path / "backups"
     application.mkdir(mode=0o755)
@@ -182,6 +186,156 @@ def test_source_manifest_budget_is_finite_and_bounds_payload_bytes(monkeypatch):
     over_limit, over_limit_payloads = _manifest_changes(module, 3, b"12345678")
     with pytest.raises(module.InstallationRefused, match="manifest_refused"):
         module._source_manifest(roots, over_limit, over_limit_payloads, backup)
+
+
+def test_source_descriptor_budget_covers_apply_and_compensation(secure_tmp_path, monkeypatch):
+    module = importlib.import_module("app.ops.bws_control_installation")
+    application = secure_tmp_path / "application"
+    launcher = secure_tmp_path / "launcher"
+    backups = secure_tmp_path / "backups"
+    for directory in (application, launcher, backups):
+        directory.mkdir(mode=0o755)
+    app_ops = application / "app/ops"
+    contract_directory = application / "config/secrets"
+    app_ops.mkdir(mode=0o755, parents=True)
+    contract_directory.mkdir(mode=0o755, parents=True)
+    app_root = _root(module, application)
+    launcher_root = _root(module, launcher)
+    backup_root = _root(module, backups)
+    roots = {"application": app_root, "launcher": launcher_root}
+
+    changes, payloads, before_state = [], {}, {}
+
+    def add(root_name, path, before, after, mode):
+        target_root = roots[root_name]
+        target = Path(target_root.path) / path
+        target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        if before is not None:
+            target.write_bytes(before)
+            target.chmod(mode)
+        key = (root_name, path)
+        changes.append(module.Change(
+            root_name, path, None if before is None else digest(before),
+            None if before is None else mode, digest(after), mode,
+        ))
+        payloads[key] = after
+        before_state[key] = (before, mode if before is not None else None)
+
+    fixed_after_bytes = sum(len(raw) for raw in (
+        b"NEW_DEPLOYMENT = True\n", b"NEW_ADMISSION = True\n",
+        b'{"schema": 2}\n', b"#!/bin/sh\nNEW=1\n",
+    ))
+    generated_total_bytes = 8_102_989 - fixed_after_bytes
+    base_size, extra_bytes = divmod(generated_total_bytes, 225)
+    for index in range(225):
+        variant = index % 8
+        target_size = base_size + (index < extra_bytes)
+        after_prefix = f"NEW_SOURCE = {variant}\n".encode()
+        after = after_prefix + b"#" * (target_size - len(after_prefix))
+        if index < 165:
+            before_prefix = f"OLD_SOURCE = {variant}\n".encode()
+            before = before_prefix + b"!" * (target_size - len(before_prefix))
+        else:
+            before = None
+        add("application", f"app/ops/generated_budget_{index:04d}.py",
+            before, after, 0o644)
+    add("application", "app/ops/postgres_deploy_linux.py",
+        b"OLD_DEPLOYMENT = True\n", b"NEW_DEPLOYMENT = True\n", 0o644)
+    add("application", "app/ops/bws_installation_admission.py",
+        b"OLD_ADMISSION = True\n", b"NEW_ADMISSION = True\n", 0o644)
+    add("application", "config/secrets/host_secret_contract.json",
+        b'{"schema": 1}\n', b'{"schema": 2}\n', 0o644)
+    add("launcher", "yggdrasil-bws-deploy",
+        b"#!/bin/sh\nOLD=1\n", b"#!/bin/sh\nNEW=1\n", 0o755)
+    changes = tuple(changes)
+    assert len(changes) == 229
+    assert sum(change.before_sha256 is not None for change in changes) == 169
+    assert sum(len(payload) for payload in payloads.values()) == 8_102_989
+
+    required = module._source_descriptor_peak(roots, changes, backup_root)
+    monkeypatch.setattr(module, "_source_descriptor_capacity_snapshot", lambda: (0, required))
+
+    original_open, original_close = os.open, os.close
+    open_descriptors = set()
+    peak_open_descriptors = 0
+
+    def tracked_open(*args, **kwargs):
+        nonlocal peak_open_descriptors
+        descriptor = original_open(*args, **kwargs)
+        open_descriptors.add(descriptor)
+        peak_open_descriptors = max(peak_open_descriptors, len(open_descriptors))
+        if len(open_descriptors) > required:
+            open_descriptors.remove(descriptor)
+            original_close(descriptor)
+            raise OSError("synthetic descriptor capacity exceeded")
+        return descriptor
+
+    def tracked_close(descriptor):
+        open_descriptors.discard(descriptor)
+        return original_close(descriptor)
+
+    with monkeypatch.context() as descriptor_ports:
+        descriptor_ports.setattr(os, "open", tracked_open)
+        descriptor_ports.setattr(os, "close", tracked_close)
+        handle = module._prepare_full_source_files(
+            roots=roots, changes=changes, payloads=payloads, backup_root=backup_root,
+            bundle_name="source-descriptor-budget",
+        )
+        try:
+            assert handle.state == "prepared"
+            assert len(handle._targets) == 229
+            backup_sizes = {saved.fd: len(saved.data) for saved in handle._backup_files.values()}
+            backup_descriptors = set(backup_sizes)
+            backup_read_count = 0
+            backup_read_bytes = 0
+            original_read = module._read
+
+            def counted_read(descriptor):
+                nonlocal backup_read_count, backup_read_bytes
+                data = original_read(descriptor)
+                if descriptor in backup_descriptors:
+                    backup_read_count += 1
+                    backup_read_bytes += len(data)
+                return data
+
+            descriptor_ports.setattr(module, "_read", counted_read)
+            assert module.apply_public_files(handle) is handle
+            assert handle.state == "installed"
+            for change in changes:
+                path = Path(roots[change.root].path) / change.path
+                assert path.read_bytes() == payloads[(change.root, change.path)]
+                assert stat.S_IMODE(path.stat().st_mode) == change.mode
+
+            outcomes = module.compensate_public_files(handle)
+            assert len(outcomes) == 229
+            assert handle.compensation_complete is True
+            assert all(outcome != "refused" for _path, outcome in outcomes)
+            for change in changes:
+                path = Path(roots[change.root].path) / change.path
+                before, before_mode = before_state[(change.root, change.path)]
+                if before is None:
+                    assert not path.exists()
+                else:
+                    assert path.read_bytes() == before
+                    assert stat.S_IMODE(path.stat().st_mode) == before_mode
+            # From instrumented apply entry through compensation, whole-bundle
+            # checks run at apply entry/each target/apply exit and compensation
+            # entry/each target. The prepare-time check predates instrumentation.
+            complete_bundle_checks = 3 + 2 * len(changes)
+            expected_reads = complete_bundle_checks * len(backup_descriptors)
+            expected_read_bytes = complete_bundle_checks * sum(
+                backup_sizes.values()
+            )
+            assert backup_read_count == expected_reads
+            assert backup_read_bytes == expected_read_bytes
+            assert backup_read_count == 78_370
+            assert backup_read_bytes == 2_765_700_811
+        finally:
+            handle.close()
+    assert peak_open_descriptors <= required
+    assert not open_descriptors
+    assert handle.state == "closed"
+    assert (backups / "source-descriptor-budget" / "manifest.json").is_file()
 
 
 @pytest.mark.parametrize("fault", [
@@ -591,7 +745,11 @@ def test_component_has_no_native_execution_entrypoint(case):
     tree = ast.parse(Path(module.__file__).read_text())
     imports = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
     imports |= {name.name for node in ast.walk(tree) if isinstance(node, ast.Import) for name in node.names}
-    assert imports <= {"__future__", "fcntl", "hashlib", "json", "os", "pathlib", "re", "stat", "dataclasses", "typing", "uuid", "weakref"}
+    assert imports <= {
+        "__future__", "fcntl", "hashlib", "json", "os", "pathlib", "re", "resource",
+        "stat", "dataclasses", "typing", "uuid", "weakref",
+        "app.ops.bws_installation_lifecycle",
+    }
     with module.install_public_files(**args) as handle:
         assert handle.state == "installed"
         assert all(outcome != "refused" for _, outcome in module.compensate_public_files(handle))
@@ -632,6 +790,37 @@ def test_install_refuses_same_byte_target_replacement_after_backup(case, monkeyp
     assert error.installation.compensation == []
     assert launcher.stat().st_ino == foreign_inode
     assert launcher.read_bytes() == b"#!/fixed/python\nold launcher\n"
+
+
+@pytest.mark.parametrize("backup_name", ["0000.before", "0001.before", "manifest.json"])
+def test_mid_phase_backup_corruption_stops_before_the_next_target_effect(case, monkeypatch, backup_name):
+    module, paths, args = case
+    handle = module.prepare_public_files(**args)
+    launcher = paths["launcher"] / "yggdrasil-bws-deploy"
+    next_target = paths["application"] / "app/ops/helper.py"
+    corrupted_backup = Path(handle.bundle_path) / backup_name
+    original_replace = module._replace
+    corrupted = False
+
+    def replace_then_corrupt(handle_arg, target, data, mode, expected):
+        nonlocal corrupted
+        result = original_replace(handle_arg, target, data, mode, expected)
+        if target.change.path == "yggdrasil-bws-deploy" and not corrupted:
+            corrupted_backup.write_bytes(b"tampered backup bytes\n")
+            corrupted = True
+        return result
+
+    monkeypatch.setattr(module, "_replace", replace_then_corrupt)
+    with pytest.raises(module.InstallationRefused, match="file_drift") as raised:
+        module.apply_public_files(handle)
+
+    assert corrupted is True
+    assert launcher.read_bytes() == args["payloads"][("launcher", "yggdrasil-bws-deploy")]
+    assert next_target.read_bytes() == b"old source\x00\xff\n"
+    assert raised.value.installation is handle
+    assert handle.compensation_complete is False
+    assert corrupted_backup.read_bytes() == b"tampered backup bytes\n"
+    handle.close()
 
 
 def test_compensation_never_removes_foreign_same_byte_new_target(case):
