@@ -1,0 +1,100 @@
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.app import app
+from tests._production_operation_harness import production_operation_host
+
+
+def test_effect_route_requires_mvr05c_and_rejects_client_authority(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch)
+    original = host.note.read_bytes()
+    command = host.command()
+    assert host.client.post("/api/operations", json=command).status_code == 401
+    assert host.client.post("/api/operations", headers={"X-Active-Context-Session": "unknown"}, json=command).status_code == 401
+    remote = TestClient(app, client=("203.0.113.9", 5000))
+    assert remote.post("/api/operations", headers=host.headers, json=command).status_code == 401
+    for field in ("path", "key", "reader", "policy_decision", "decision_token", "receipt", "delegation"):
+        forged = {**command, field: {"allowed": True}}
+        assert host.client.post("/api/operations", headers=host.headers, json=forged).status_code == 422
+        forged = {**command, "arguments": {**command["arguments"], field: "forged"}}
+        assert host.client.post("/api/operations", headers=host.headers, json=forged).status_code == 422
+    readonly = {**command, "delegation": {"authority_class": "read_only"}}
+    assert host.client.post("/api/operations", headers=host.headers, json=readonly).status_code == 422
+    stale = {**command, "vault_generation": "0"}
+    result = host.client.post("/api/operations", headers=host.headers, json=stale)
+    assert result.status_code == 200 and result.json()["status"] == "conflicted"
+    assert host.note.read_bytes() == original
+    host.client.delete("/api/companion/active-context/selection", headers=host.headers)
+    assert host.client.post("/api/operations", headers=host.headers, json=command).status_code == 401
+    assert host.note.read_bytes() == original
+
+
+@pytest.mark.parametrize("kind", ["path", "unknown"])
+def test_target_identity_cannot_be_a_client_locator(tmp_path, monkeypatch, kind):
+    host = production_operation_host(tmp_path, monkeypatch)
+    identity = "Notes/human.md" if kind == "path" else "unknown"
+    result = host.client.post("/api/operations", headers=host.headers,
+        json=host.command(targets=[{"artifact_id": identity}]))
+    assert result.status_code in {409, 422}
+    assert host.note.read_text().endswith("Original.\n")
+
+
+def test_expired_or_replaced_selection_cannot_borrow_old_intent(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch)
+    command = host.command()
+    replacement = host.client.put("/api/companion/active-context/selection",
+        headers=host.headers, json={"vault_binding_ids": [host.binding_id]})
+    assert replacement.status_code == 200
+    refused = host.client.post("/api/operations", headers=host.headers, json=command)
+    assert refused.status_code == 200 and refused.json()["status"] == "conflicted"
+    from app.api.routes.active_context_selection import get_selection_store
+    store = get_selection_store()
+    monkeypatch.setattr(store, "_clock", lambda: 4102444800)
+    assert host.client.post("/api/operations", headers=host.headers, json=command).status_code == 401
+    assert host.note.read_text().endswith("Original.\n")
+
+
+def test_current_gov_token_is_required_even_for_valid_selection(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch)
+    from app.governance.governed_write import GovernedWriteAdapter, InvalidDecisionTokenError
+
+    def invalid(self, **kwargs):
+        raise InvalidDecisionTokenError("revoked at current GOV boundary")
+
+    monkeypatch.setattr(GovernedWriteAdapter, "validate_decision_token", invalid)
+    result = host.client.post("/api/operations", headers=host.headers, json=host.command())
+    assert result.status_code == 200 and result.json()["status"] == "rejected", result.text
+    assert host.note.read_text().endswith("Original.\n")
+
+
+def test_reentrant_selection_change_at_source_seam_refuses_effect(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch)
+    import app.knowledge.write_ops as writes
+    from app.api.routes.active_context_selection import build_selection_service, get_selection_store
+    real_write = writes.write_note_from_absolute
+    service = build_selection_service(get_selection_store())
+    derived = service.derive("trusted_loopback")
+
+    def changed(*args, **kwargs):
+        service.selection_store.clear(host.selection["context_selection_id"],
+            principal=derived.principal, instance_identity=derived.instance_identity)
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr("app.operations.write_operations.write_note_from_absolute", changed)
+    result = host.client.post("/api/operations", headers=host.headers, json=host.command())
+    assert result.status_code in {200, 403}
+    if result.status_code == 200:
+        assert result.json()["status"] != "succeeded"
+    assert host.note.read_text().endswith("Original.\n")
+
+
+def test_capture_reuses_real_scoped_owner_and_preserves_v1(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch)
+    command = host.command("artifact.capture", targets=[], expected_version=None,
+                           arguments={"text": "Remember the approved outcome"})
+    result = host.client.post("/api/operations", headers=host.headers, json=command)
+    assert result.status_code == 200, result.text
+    assert result.json()["status"] == "convergence_pending", result.text
+    assert "Remember the approved outcome" in "".join(
+        note.read_text() for note in host.root.rglob("*.md"))
+    assert result.json()["receipt"]["extensions"]["write"]["authority_receipt"]["target_binding_id"] == host.binding_id

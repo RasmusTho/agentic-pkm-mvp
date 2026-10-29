@@ -481,6 +481,39 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - Optimistic write guard and `DEFAULT_WRITE_GUARD` combined with the per-note opt-out (`ai_panel_auto_run: never` / `ai_panel.auto_run: never`) keep note updates deterministic and fail safe on version mismatches.
 - See `docs/CONCURRENCY.md`, `docs/EVENTS.md`, and `app/promotion/consumer.py` for the enacted guardrails and testing strategy.
 
+## Autonomous operation HTTP composition
+
+`app.api.operation_runtime.build_production_operation_runtime` is the named production composition
+for the operation kernel. `POST /api/operations` carries bounded intent, stable target identity,
+expected version, and explicit selection preconditions. Existing loopback/proxy/API-key admission
+and the provisioned principal precede instance reads. WSP resolves every effect with its own GOV
+action/write class and write permission; an MVR-05B read carrier supplies no effect decision.
+Selection, principal, ownership and binding fences plus GOV token/context validation remain held
+through native source and receipt publication. Native CAS and namespace reservations remain the
+last version fences. The host's `operation-receipts.json` reuses `JsonReceiptStore` beside the
+instance registry; clients cannot choose its path, token, policy, service reader or receipt.
+
+| Family | Production disposition | Canonical owner / remaining prerequisite |
+| --- | --- | --- |
+| List/read/search/related/discovery | Installed | `read_operation_owners` and the delivered read adapter; degraded reads retain typed owner outcomes. |
+| Capture/body edit | Installed for initialized selected bindings | `write_operations` over scoped capture and native HKA CAS; body-edit AuthorityReceipts carry the full selected context. |
+| Move/rename | Installed on Linux/macOS | `placement_operations` and `KnowledgePlacementOwner`; the owner qualifies the actual local POSIX filesystem and refuses unsupported namespace semantics before source effects. |
+| Archive/restore | Installed only with qualified host dependencies | `archival_operations`; existing channel archive metadata, verified volume and selected-vault retention must resolve. Human-knowledge archival remains refused by the owner. |
+| Create/proposal apply | Typed unavailable | The delivered EXE creation and Panel producers lack a context-bound scoped production input; their scalar compatibility path cannot borrow the operation token. |
+| Classification/tags/order | Typed unavailable | `KnowledgeSemanticOwner` requires an exact human approval owner and its held `semantic_authority_window`; no production approval producer is installed. HTTP intent cannot manufacture it. |
+| Batch supervision | Typed unavailable | The finite delivered batch coordinator remains direct composition; supervision is outside #5352. |
+
+Capability discovery uses the same finite installed maps and reports unmet dependencies explicitly.
+Kernel uncertainty never clears a reservation or invokes the original effect again. Body edits
+may add read-only native receipt evidence while retaining `recovery_required`. After a process
+restart the old selection is refused; a newly authenticated selection of the same bindings can
+read the historical durable outcome through `GET /api/operations/receipts/{request_id}`.
+
+The Companion workspace and broader external MCP v2 consumer are subsequent slices. They must
+consume this shared boundary. No MCP v2 tool is installed here; its accepted-ADR/owner-contract
+gate remains binding. The five ADR-0061 MCP v1 operations remain unchanged. This source wiring
+does not establish deployment, live acceptance, or full cross-surface parity.
+
 ## Boundary Enforcement
 - Explicit DEV/TEST `text-capture` activation binds the native request to a finite
   API method/path perimeter before route dependencies and handlers. It retains
