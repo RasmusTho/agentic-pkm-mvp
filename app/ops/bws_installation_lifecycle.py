@@ -226,10 +226,38 @@ def _discovered_control_projection(
     try:
         discovery = launcher.decode('utf-8') + '\n' + '\n'.join(environment)
         discovery += '\n' + '\n'.join(row[0] for row in environment_files)
-        direct_control_root_reference = re.search(
-            re.escape(CONTROL_DIRECTORY) + r"/*(?![A-Za-z0-9._/-])", discovery,
-        ) is not None
-        candidates = sorted(set(re.findall(re.escape(CONTROL_DIRECTORY) + r'/[A-Za-z0-9._/-]+', discovery)))
+        direct_control_root_reference = False
+        if expected_empty_control_root is None:
+            candidates = sorted(set(re.findall(
+                re.escape(CONTROL_DIRECTORY) + r'/[A-Za-z0-9._/-]+', discovery,
+            )))
+        else:
+            # Do not accept a supported prefix that was truncated from an
+            # unclassified path (for example, app@legacy). Parse each complete
+            # token under the fixed root and refuse characters outside the
+            # existing path grammar before applying the app/scripts allowlist.
+            delimiters = set(' \t\n\r\v\f:;,\"\'()]}\x00')
+            hinted_paths = set()
+            for reference in re.finditer(re.escape(CONTROL_DIRECTORY), discovery):
+                suffix_start = reference.end()
+                if suffix_start == len(discovery):
+                    direct_control_root_reference = True
+                    continue
+                first = discovery[suffix_start]
+                if first == '/':
+                    path_end = suffix_start
+                    while path_end < len(discovery) and discovery[path_end] not in delimiters:
+                        path_end += 1
+                    raw_path = discovery[suffix_start:path_end]
+                    if re.fullmatch(r'/[A-Za-z0-9._/-]*', raw_path) is None:
+                        _refuse()
+                    if raw_path.strip('/'):
+                        hinted_paths.add(CONTROL_DIRECTORY + raw_path)
+                    else:
+                        direct_control_root_reference = True
+                elif first not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-':
+                    direct_control_root_reference = True
+            candidates = sorted(hinted_paths)
         if not candidates:
             candidates = [CONTROL_DIRECTORY + '/app/ops/postgres_deploy_linux.py']
         if len(candidates) > 16:
