@@ -1256,3 +1256,7 @@ The opt-in subscription comparator uses the existing no-tools Codex executor for
 ## Subscription comparator abstention (#6422)
 
 The subscription-only evaluator now offers validated explicit abstention for unresolved intent. The original dataset, scorer and zero-tolerance mutation gate remain unchanged; the follow-up Issue receipt owns the measured rerun. Product classifier and defaults are unaffected.
+
+## Subscription route recognition (#6437)
+
+The subscription-only comparison now includes the golden cases' declared surface/note context and distinguishes recognizing indirect intent from having enough details to execute it. Genuine missing antecedents and contradictions still require abstention. The unchanged full-set rerun and any residuals are recorded on #6437; no Product routing or default changes.
