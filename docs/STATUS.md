@@ -101,6 +101,12 @@ DEBRIEF-02 (#3333) adds trigger-driven Create synthesis and an additive guarded 
 reference. Candidates retain source refs and scope, are not indexed, and do not expire.
 DEBRIEF-03 review/disposition and parent #3331 composed acceptance remain separate.
 
+DEBRIEF-03 (#3332) adds the companion review surface: `GET /api/companion/episode-debriefs` lists
+fully published `review_state: draft` debriefs, and accept/dismiss flips only `review_state` to
+`reviewed`/`archived` with an idempotent `episode_debrief.reviewed`/`.dismissed` receipt. Nothing is
+deleted and `authority_state` stays `proposal`. The composed fixture loop is covered; parent #3331's
+authorized test-channel receipt remains outstanding.
+
 ### TypeSafe System One repository support (2026-10-06)
 
 PR #5803 merged repository support for typed Jev judgments in the Product canvas and Builder CKM,

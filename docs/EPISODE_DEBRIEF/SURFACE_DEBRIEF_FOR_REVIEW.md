@@ -112,6 +112,28 @@ A lost receipt (at-least-once outbox) does not lose the disposition itself — t
 commit point, mirroring the Decision Receipt Log's receipt-before-ack posture applied to review state
 instead of a governance verdict.
 
+## Delivered Implementation (#3332)
+
+- `app/episode_debrief/review.py` owns the projection and the disposition. Only a fully published
+  debrief is listed or reviewable: Create's integrity record must match the as-published bytes and a
+  `expansion.create.proposed` receipt must exist. Unpublished, tampered or aliased drafts are refused.
+- `GET /api/companion/episode-debriefs` (scoped companion read) returns `{"fresh": [...],
+  "read_only": true}`; `POST /api/companion/episode-debriefs/{debrief_id}/review` with
+  `{"disposition": "accepted" | "dismissed"}` returns `review_state`, `authority_state` and the receipt
+  reference. Not found is 404; a different prior disposition is 409 `episode_debrief_already_disposed`
+  (dispositions never overwrite); WriteGuard denial is 409 before any effect.
+- The flip replaces only the `review_state` scalar bytes through the guarded note-write seam with an
+  expected-version check, under the debrief's publication lock. The receipt (`episode_debrief.reviewed`
+  / `episode_debrief.dismissed`, payload `debrief_id`, `episode_id`, `prior_review_state`,
+  `review_state`) goes to `_system/episode-debriefs/outbox.jsonl` with a deterministic event id, so a
+  re-click or an interrupted first click converges to exactly one receipt.
+- DEBRIEF-02 replay verifies a reviewed debrief against its as-published bytes (`review_state:
+  draft`), so trigger redelivery after review stays an idempotent `already_debriefed` no-op.
+- The companion workspace rail renders a client-loaded review card
+  (`companion_ui/workspace/episode_debrief_review.py`); a failed read is shown as unavailable, never as
+  an empty list. The page proxy admits only the projection GET and the review POST.
+- The Daily Briefing seam is the receipt pair above; no consumer is built.
+
 ## Related Docs
 
 - `docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` §2.4/§7 (E4 — conservative

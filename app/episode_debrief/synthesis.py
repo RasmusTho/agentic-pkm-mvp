@@ -19,7 +19,7 @@ import yaml
 
 from app.activation import expansion_records
 from app.activation.gate import ActivationPosture
-from app.episode_debrief import store
+from app.episode_debrief import review, store
 from app.episode_debrief.trigger import (
     _assert_selected_vault_owns_path, _is_configured_scalar_root,
     debrief_id_for_episode,
@@ -290,8 +290,8 @@ def synthesize_debrief(
             if draft_path.exists():
                 metadata, _ = load_frontmatter(draft_path.read_text(encoding="utf-8"))
                 expected_fingerprint = create._request_fingerprint(source_request) if source_request is not None else metadata.get("request_fingerprint", "")
-                retained = create._replay_draft_metadata(draft_path, request_fingerprint=expected_fingerprint, draft_id=debrief_id)
-                assert retained is not None
+                # A reviewed debrief differs from its publication only in review_state.
+                retained = review.replay_published_metadata(draft_path, request_fingerprint=expected_fingerprint, draft_id=debrief_id)
                 if metadata.get("episode_id") != episode_id or metadata.get("scope") != scope:
                     raise DebriefSynthesisError("existing draft belongs to another Episode or scope")
                 receipt = create._existing_receipt(outbox_path, create.CREATE_PROPOSED_EVENT, receipt_id)
