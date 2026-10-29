@@ -2349,7 +2349,10 @@ def test_empty_control_root_refuses_identity_or_inventory_drift_before_backup(
     result = transaction._execute_source_installation(channel, request, ports)
 
     assert result["source_installation"]["status"] == "refused_before_backup"
-    assert result["source_installation"]["prebackup_gate"] == "old_kernel_qualification"
+    assert result["source_installation"]["prebackup_gate"] == (
+        "old_kernel_empty_control_root_control" if drift.startswith("before_backup_")
+        else "old_kernel_initial_root_control"
+    )
     if drift.startswith("before_backup_"):
         assert prebackup_revalidation_calls == 1
         assert service.phase == "qualified"
@@ -3287,3 +3290,201 @@ def test_channel_lock_acquisition_refusal_is_no_effect_and_has_no_channel_owner_
     assert events.index("channel_lock_refused") < events.index("admission_complete")
     assert events.index("admission_complete") < events.index("admission_exit")
     assert admission.receipt == receipt
+
+
+# Real lifecycle and typed bus decoding; only filesystem/transport ports are synthetic.
+def _old_qualification_case(monkeypatch, secure_tmp_path, channel="dev"):
+    request, ports, admission, _service, events, old_state, _candidate = _transaction_fixture(channel=channel)
+    service, control, properties = _install_synthetic_real_lifecycle_service(
+        monkeypatch, ports, old_state, secure_tmp_path, channel=channel,
+    )
+    cls = bws_installation_lifecycle.FixedBwsService
+    for name in ("_call", "_get", "_exec", "_state", "_single_process"):
+        monkeypatch.setattr(service, name, getattr(cls, name).__get__(service))
+    for name in ("ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload"):
+        properties[("Service", name)] = []
+    for name, action in (("ExecStart", "serve"), ("ExecStopPost", "cleanup")):
+        properties[("Service", name)] = [[
+            bws_installation_lifecycle.LAUNCHER,
+            [bws_installation_lifecycle.LAUNCHER, action, channel], False,
+            1, 2, 3, 4, 5, 1, 0,
+        ]]
+    properties.update({
+        ("Unit", "ActiveState"): "active", ("Unit", "SubState"): "running",
+        ("Unit", "Job"): [0, "/"], ("Service", "ControlPID"): 0,
+        ("Service", "MainPID"): 123,
+    })
+    faults = {"transport": False, "processes": [["private-cgroup", 123, "private-command"]]}
+
+    def run(argv):
+        if faults["transport"]:
+            # The real _typed decoder must reject this value without echoing it.
+            return json.dumps({"type": "PRIVATE_CANARY", "data": "PRIVATE_CANARY"}).encode()
+        if argv[7] == "call":
+            method = argv[11]
+            signature = "o" if method == "GetUnit" else "a(sus)"
+            data = ["/org/freedesktop/systemd1/unit/synthetic"] if method == "GetUnit" else [faults["processes"]]
+        else:
+            interface, name = argv[-2].rsplit(".", 1)[-1], argv[-1]
+            value = properties[(interface, name)]
+            signature = (bws_installation_lifecycle.EXEC_TYPE if name.startswith("Exec") else
+                         "a(sb)" if name == "EnvironmentFiles" else
+                         "as" if name in {"OnFailure", "OnSuccess", "TriggeredBy", "Environment"} else
+                         "(uo)" if name == "Job" else
+                         "u" if name in {"ControlPID", "MainPID"} else "s")
+            data = value
+        return json.dumps({"type": signature, "data": data}).encode()
+
+    monkeypatch.setattr(bws_installation_lifecycle, "_run", run)
+    return request, ports, admission, service, events, control, properties, faults
+
+
+def _assert_old_refusal(result, events, expected):
+    receipt = result["source_installation"]
+    assert receipt["status"] == "refused_before_backup"
+    assert receipt["prebackup_gate"] == expected
+    assert all(receipt[key] is None for key in (
+        "old_generation_sha256", "new_generation_sha256", "backup_manifest_sha256",
+    ))
+    assert not {"prepare", "apply_launcher", "stop_old", "apply_source", "start_new"} & set(events)
+    assert "PRIVATE_CANARY" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("fault,subgate", [
+    ("setup", "setup"), ("runtime", "retained_runtime"),
+    ("transport", "unit_properties"), ("typed_value", "unit_properties"),
+    ("root", "root_control"), ("launcher", "launcher"),
+    ("state", "service_process"), ("processes", "service_process"),
+    ("cleanup", "cleanup_contract"),
+])
+def test_source_old_kernel_refusals_preserve_finite_stage_classification(
+    monkeypatch, secure_tmp_path, channel, fault, subgate, capsys,
+):
+    request, ports, admission, service, events, control, properties, faults = _old_qualification_case(
+        monkeypatch, secure_tmp_path, channel,
+    )
+    if fault == "setup":
+        # The actual native service factory reaches the strict constructor guard.
+        ports.service = lambda _channel: transaction._NativePorts.service(ports, "PRIVATE_CANARY")
+    elif fault == "runtime":
+        # Real retained_runtime entry, before qualify_old, with a failed runtime stat.
+        monkeypatch.setattr(service, "retained_runtime", type(service).retained_runtime.__get__(service))
+        monkeypatch.setattr(bws_installation_lifecycle, "RUNTIME", str(control / "PRIVATE_CANARY"))
+    elif fault == "transport":
+        faults["transport"] = True
+    elif fault == "typed_value":
+        properties[("Service", "User")] = "PRIVATE_CANARY"
+    elif fault == "root":
+        (control / "app").mkdir()
+    elif fault == "launcher":
+        launcher_reads = iter((b"old launcher", b"PRIVATE_CANARY"))
+        monkeypatch.setattr(bws_installation_lifecycle, "_public_launcher_bytes", lambda: next(launcher_reads))
+    elif fault == "state":
+        properties[("Service", "ControlPID")] = "PRIVATE_CANARY"
+    elif fault == "processes":
+        faults["processes"] = [["PRIVATE_CANARY", "PRIVATE_CANARY", "PRIVATE_CANARY"]]
+    elif fault == "cleanup":
+        properties[("Service", "ExecStopPost")][0][1] = ["PRIVATE_CANARY"]
+    result = transaction._execute_source_installation(channel, request, ports)
+    _assert_old_refusal(result, events, f"old_kernel_initial_{subgate}")
+    assert admission.receipt == result["source_installation"]
+    assert "PRIVATE_CANARY" not in repr(capsys.readouterr())
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("drift", [
+    "inventory", "identity", "configuration", "runtime", "unit", "launcher", "cleanup",
+])
+def test_empty_control_revalidation_reports_finite_old_kernel_refusal(
+    monkeypatch, secure_tmp_path, channel, drift,
+):
+    request, ports, _admission, service, events, control, properties, _faults = _old_qualification_case(
+        monkeypatch, secure_tmp_path, channel,
+    )
+
+    def drift_after_qualification(_request):
+        assert service.phase == "qualified"
+        events.append("verify_caller_sources")
+        if drift == "inventory":
+            (control / "scripts").mkdir()
+        elif drift == "identity":
+            control.rename(control.with_name("old-root"))
+            control.mkdir(mode=0o755)
+        elif drift == "configuration":
+            properties[("Service", "Environment")] = ["PRIVATE_CANARY=value"]
+        elif drift == "runtime":
+            monkeypatch.setattr(service, "_held_runtime", type(service)._held_runtime.__get__(service))
+        elif drift == "unit":
+            properties[("Service", "Type")] = "PRIVATE_CANARY"
+        elif drift == "launcher":
+            monkeypatch.setattr(bws_installation_lifecycle, "_public_launcher_bytes", lambda: b"PRIVATE_CANARY")
+        else:
+            properties[("Service", "ExecStopPost")][0][1] = ["PRIVATE_CANARY"]
+
+    ports.verify_caller_sources = drift_after_qualification
+    result = transaction._execute_source_installation(channel, request, ports)
+    subgate = {"runtime": "retained_runtime", "unit": "unit_properties",
+               "launcher": "launcher", "cleanup": "cleanup_contract"}.get(drift, "root_control")
+    _assert_old_refusal(result, events, f"old_kernel_empty_control_{subgate}")
+    assert "verify_caller_sources" in events
+    assert service.phase == "qualified"
+
+
+@pytest.mark.parametrize("bad", [None, "PRIVATE_CANARY", [], {}, 7])
+@pytest.mark.parametrize("exception_kind", ["typed", "ordinary", "foreign"])
+def test_old_kernel_unclassified_failures_preserve_legacy_refusal(bad, exception_kind):
+    request, ports, _admission, service, events, *_ = _transaction_fixture()
+
+    def refuse(**_kwargs):
+        if exception_kind == "typed":
+            raise bws_installation_lifecycle._OldQualificationRefusal(bad)
+        if exception_kind == "foreign":
+            exc = RuntimeError("PRIVATE_CANARY")
+            exc.subgate = "root_control"
+            raise exc
+        raise RuntimeError("PRIVATE_CANARY")
+
+    service.qualify_old = refuse
+    result = transaction._execute_source_installation("dev", request, ports)
+    _assert_old_refusal(result, events, "old_kernel_qualification")
+    assert events.index("runtime_enter") < events.index("runtime_close")
+
+
+@pytest.mark.parametrize("fault", ["runtime", "unit", "root", "cleanup", "process"])
+def test_old_kernel_classification_keeps_prebackup_effect_order_and_protected_guards(
+    monkeypatch, secure_tmp_path, fault,
+):
+    request, ports, _admission, service, events, control, properties, faults = _old_qualification_case(
+        monkeypatch, secure_tmp_path,
+    )
+    # Track the actual ordered guard calls, without replacing their predicates.
+    for name in ("_held_runtime", "_config", "_state", "_single_process", "_exec"):
+        original = getattr(service, name)
+
+        def tracked(*args, _name=name, _original=original, **kwargs):
+            events.append(_name)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(service, name, tracked)
+    expected = {
+        "runtime": "retained_runtime", "unit": "unit_properties", "root": "root_control",
+        "cleanup": "cleanup_contract", "process": "service_process",
+    }[fault]
+    if fault == "runtime":
+        monkeypatch.setattr(service, "_held_runtime", type(service)._held_runtime.__get__(service))
+    elif fault == "unit":
+        properties[("Service", "Type")] = "PRIVATE_CANARY"
+    elif fault == "root":
+        (control / "scripts").mkdir()
+    elif fault == "cleanup":
+        properties[("Service", "ExecStopPost")][0][2] = True
+    else:
+        faults["processes"] = []
+    result = transaction._execute_source_installation("dev", request, ports)
+    _assert_old_refusal(result, events, f"old_kernel_initial_{expected}")
+    assert events.index("source_manifest") < events.index("descriptor_capacity")
+    if fault != "runtime":
+        assert events.index("_held_runtime") < events.index("_config")
+    if fault == "process":
+        assert events.index("_config") < events.index("_state") < events.index("_single_process")

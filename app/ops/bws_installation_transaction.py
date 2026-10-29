@@ -72,6 +72,18 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "descriptor_capacity_admission_refused",
     "candidate_profile",
     "old_kernel_qualification",
+    "old_kernel_initial_setup",
+    "old_kernel_initial_retained_runtime",
+    "old_kernel_initial_unit_properties",
+    "old_kernel_initial_root_control",
+    "old_kernel_initial_launcher",
+    "old_kernel_initial_service_process",
+    "old_kernel_initial_cleanup_contract",
+    "old_kernel_empty_control_retained_runtime",
+    "old_kernel_empty_control_unit_properties",
+    "old_kernel_empty_control_root_control",
+    "old_kernel_empty_control_launcher",
+    "old_kernel_empty_control_cleanup_contract",
     "qualified_writer_snapshot",
     "generation_qualification",
 })
@@ -2346,6 +2358,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
     proposed_generation: str | None = None
     final_generation: str | None = None
     backup_manifest: str | None = None
+    old_qualification_stage = "initial"
     prebackup_gate = "channel_lock_entry"
 
     with ports.admission(channel, request) as admission:
@@ -2435,6 +2448,16 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
             if phase == "before_backup" and receipt is None:
                 refusal_gate = (failure.gate if isinstance(failure, _PrebackupGateRefusal)
                                 else prebackup_gate)
+                if refusal_gate == "old_kernel_qualification":
+                    from app.ops.bws_installation_lifecycle import (
+                        _OldQualificationRefusal, _OLD_QUALIFICATION_SUBGATES,
+                    )
+                    if type(failure) is _OldQualificationRefusal:
+                        subgate = failure.subgate
+                        if type(subgate) is str and subgate in _OLD_QUALIFICATION_SUBGATES:
+                            classified = f"old_kernel_{old_qualification_stage}_{subgate}"
+                            if classified in _PREBACKUP_REFUSAL_GATES:
+                                refusal_gate = classified
                 receipt = _receipt(request, status="refused_before_backup", old_generation=None,
                                    new_generation=None, backup_manifest=None,
                                    prebackup_gate=refusal_gate)
@@ -2548,6 +2571,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                                 verify_caller_sources(request)
                             if getattr(service, "control_inventory_empty", False):
                                 prebackup_gate = "old_kernel_qualification"
+                                old_qualification_stage = "empty_control"
                                 service.revalidate_empty_control_configuration()
                             phase = "qualified"
                             handle = ports.prepare(

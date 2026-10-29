@@ -11,6 +11,9 @@ import pytest
 from app.ops import bws_installation_lifecycle as lifecycle
 from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
+_REAL_LIFECYCLE_RUN = lifecycle._run
+_REAL_LIFECYCLE_PID_TOKEN = lifecycle._pid_token
+
 
 def _root(path: str, inode: int) -> dict[str, int | str]:
     return {
@@ -501,3 +504,67 @@ def test_final_restored_old_mismatch_can_stop_only_that_restored_process(monkeyp
          "--job-mode=ignore-dependencies", "stop", "yggdrasil-bws-deploy@dev.service"),
     ]
     assert service.phase == "restored_stopped_checked"
+
+
+@pytest.mark.parametrize("fault,expected", [
+    ("setup", "setup"), ("runtime", "retained_runtime"),
+    ("transport", "unit_properties"), ("property", "unit_properties"),
+    ("root", "root_control"), ("launcher", "launcher"),
+    ("state", "service_process"), ("pid_token", "service_process"),
+    ("cleanup", "cleanup_contract"),
+])
+def test_old_qualification_refusals_are_finite_and_value_free(
+    monkeypatch, secure_tmp_path, capsys, fault, expected,
+):
+    # Share only synthetic input/transport assembly; qualification stays real.
+    from tests.ops.test_bws_installation_transaction import _old_qualification_case
+
+    _request, ports, _admission, service, _events, control, properties, faults = _old_qualification_case(
+        monkeypatch, secure_tmp_path,
+    )
+    old = ports.old_state(None, None)
+    arguments = dict(
+        application_root={"path": "/srv/app", **old["roots"]["application"]},
+        control_root={"path": str(control), **old["roots"]["control"]},
+        launcher_content={"sha256": hashlib.sha256(b"new launcher").hexdigest(),
+                          "base64": base64.b64encode(b"new launcher").decode()},
+        control_inventory_empty=True,
+    )
+    if fault == "transport":
+        # Real _run normalizes private stderr and a nonzero transport exit.
+        monkeypatch.setattr(lifecycle, "_run", _REAL_LIFECYCLE_RUN)
+        monkeypatch.setattr(lifecycle.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(lifecycle.sys, "platform", "linux")
+        from types import SimpleNamespace
+        monkeypatch.setattr(lifecycle.subprocess, "run", lambda *_a, **_k: SimpleNamespace(
+            returncode=1, stdout=b"PRIVATE_CANARY", stderr=b"PRIVATE_CANARY",
+        ))
+    elif fault == "property":
+        properties[("Service", "EnvironmentFiles")] = [["PRIVATE_CANARY", "PRIVATE_CANARY"]]
+    elif fault == "root":
+        properties[("Service", "Environment")] = [f"PRIVATE_CANARY={control}/app"]
+    elif fault == "launcher":
+        arguments["launcher_content"] = {"base64": "PRIVATE_CANARY", "sha256": "PRIVATE_CANARY"}
+    elif fault == "state":
+        properties[("Unit", "Job")] = ["PRIVATE_CANARY", "PRIVATE_CANARY"]
+    elif fault == "pid_token":
+        monkeypatch.setattr(lifecycle, "_pid_token", _REAL_LIFECYCLE_PID_TOKEN)
+        monkeypatch.setattr(service, "_state", lambda _active: 0)
+    elif fault == "cleanup":
+        properties[("Service", "ExecStopPost")][0][0] = "PRIVATE_CANARY"
+
+    with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+        if fault == "setup":
+            lifecycle.FixedBwsService(unit="PRIVATE_CANARY", channel="dev")
+        elif fault == "runtime":
+            monkeypatch.setattr(lifecycle, "RUNTIME", str(control / "PRIVATE_CANARY"))
+            with type(service).retained_runtime(service):
+                pytest.fail("runtime refusal must precede yield")
+        else:
+            service.qualify_old(**arguments)
+    assert type(caught.value) is lifecycle._OldQualificationRefusal
+    assert caught.value.subgate == expected
+    assert str(caught.value) == "bws_lifecycle_unproven"
+    assert "PRIVATE_CANARY" not in repr(caught.value)
+    assert "PRIVATE_CANARY" not in repr(capsys.readouterr())
+    assert service.phase != "qualified"
