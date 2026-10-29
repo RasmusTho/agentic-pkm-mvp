@@ -65,3 +65,4 @@
 - [ADR-0066: Shared model-access facade with separate policy authorities and governed catalog discovery (Accepted 2026-09-22)](./ADR-0066-shared-model-access-router-and-catalogs.md)
 - [ADR-0067: Mac mini is the Product model-access portal (Accepted target state, owner-directed 2026-10-07)](./ADR-0067-mac-mini-product-model-access-portal.md)
 - [ADR-0068: Continuous dev delivery — merge on risk, then dev → test → prod (Accepted target state, owner-directed 2026-10-18)](./ADR-0068-continuous-dev-delivery-flow.md)
+- [ADR-0069: Admit the bounded MCP v2 operation profile (Accepted, owner-directed 2026-10-29; partially supersedes ADR-0061 for the v2 operation boundary only)](./ADR-0069-mcp-v2-authority-profile.md)

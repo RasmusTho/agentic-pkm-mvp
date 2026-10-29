@@ -35,7 +35,9 @@ A client under this contract operates in two modes simultaneously:
 - **API-mediated caller** — governed writes and retrieval through the HTTP surface (§4). Mediated-write semantics apply (AGENT-FLOWS §4).
 - **Mode (c) direct filesystem agent** — direct reads and writes of vault Markdown under the human's delegation (§5). Observed-write semantics apply: Mimer observes, classifies, and indexes the result; a direct write is not APPLY, produces no Mimer receipt of its own, and confers no authority.
 
-ADR-0061 additionally admits an **MCP protocol adapter** under this same contract. Its standalone
+### MCP v1 compatibility profile (ADR-0061)
+
+ADR-0061 admits the **MCP v1 compatibility profile** under this same contract. Its standalone
 sidecar packaging and fixed v1 posture are:
 
 - **A2 topology:** a constituent-owned sidecar process with a tested boundary to the governed HTTP
@@ -48,22 +50,45 @@ sidecar packaging and fixed v1 posture are:
 - **Exactly five operations:** ask, governed capture, retrieve/search, note-read, and health; the
   implementation must reject every other route.
   Generic vault writes, separate receipt read-back, internal `vault_tools` reuse, hidden authority,
-  and direct-filesystem fallback are excluded.
+  and direct-filesystem fallback are excluded from v1.
 
-MCP is a third client protocol adapter, **not a third durable mutation path**: governed capture
-still terminates at the HTTP API, returns that API's PolicyDecision, DecisionToken, and
-AuthorityReceipt unchanged, and follows §6 W5 after an ambiguous response. The
-`mcp.vault.append_note` descriptor remains internal orchestrator plumbing, not an external endpoint.
-The MCP SDK and executable are shipped only in the separate `mimer-mcp-sidecar` distribution, not
-in `app/` or its runtime dependency surface. Streamable HTTP over tailnet/LAN plus per-device
-authentication are deferred, separately gated follow-ons and must not be enabled implicitly.
+MCP v1 is a client protocol adapter, **not a third durable mutation path**: governed capture still
+terminates at the HTTP API, returns that API's PolicyDecision, DecisionToken, and AuthorityReceipt
+unchanged, and follows §6 W5 after an ambiguous response. The `mcp.vault.append_note` descriptor
+remains internal orchestrator plumbing, not an external endpoint. The MCP SDK and executable are
+shipped only in the separate `mimer-mcp-sidecar` distribution, not in `app/` or its runtime
+dependency surface. Streamable HTTP over tailnet/LAN plus per-device authentication are deferred,
+separately gated follow-ons and must not be enabled implicitly.
+
+### Accepted MCP v2 authority profile
+
+[ADR-0069](../adr/ADR-0069-mcp-v2-authority-profile.md) records the owner-approved v2 design and
+partially supersedes ADR-0061 only for the explicitly versioned v2 operation boundary. The accepted
+decision does not establish runtime support, conformance, external-client readiness, or deployment.
+MCP v2 delegates only to the shared authenticated production operations HTTP boundary. Its
+versioned tools and resources derive schemas and availability from that runtime and may map only
+qualified, supported owner-native discovery, creation/editing, placement, semantic metadata/order,
+lifecycle, bounded-batch, and observation/recovery operations. Uninstalled, unsupported, and
+dependency-blocked operations remain typed-unavailable; listing them grants no execution authority.
+
+Every effect retains current MVR-05C delegation/DecisionToken checks, bounded scope and
+cardinality, policy ceilings, expected versions, and original native/GOV receipt truth. V2 receipt
+readback is allowed only through the shared operations API; v1's receipt-readback exclusion remains
+unchanged. Preserve typed refused, conflicted, unknown, pending, and partial outcomes and
+independent projection lag. A lost reply or restart requires durable API readback and reconciliation
+before retry; the client cannot turn ambiguity into success or blindly repeat an effect. Cancellation
+cannot erase completed effects or receipts. Client-supplied paths, readers, keys, policy decisions,
+receipts, or raw delegation are not authority. Context/runtime controls and specialized Canvas,
+Panel, memory, briefing, TTS, and Ask capabilities keep their separately declared grants. Stdio,
+constituent-owned sidecar packaging, inherited authentication, no network listener, and the ban on
+filesystem fallback remain binding.
 
 ## 3. Authority envelope — the three hard invariants
 
 Every client, both families, every admitted adapter and mutation path:
 
 1. **Never semantic authority.** The client never decides what a vault note means, never owns a Core-6 field, and never treats its own output as human-canonical. Client output enters at the zone posture of where it lands (AGENT-FLOWS §7); promotion to human-canonical knowledge is a human act through the trust path (`docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`).
-2. **Every durable mutation stays inside a named path.** There are exactly two: the governed API path (§4) and the direct-filesystem path (§5). The accepted MCP adapter delegates capture to the governed API and adds no third write path. No bespoke side channels, no client-invented write mechanisms, no local write queue that replays into the vault without the human.
+2. **Every durable mutation stays inside a named path.** There are exactly two: the governed API path (§4) and the direct-filesystem path (§5). MCP v1 delegates capture to the governed API; MCP v2 delegates only the admitted operations to that same governed API. Neither protocol profile adds a third write path. No bespoke side channels, no client-invented write mechanisms, no local write queue that replays into the vault without the human.
 3. **Never a hidden source of truth.** No client-local store may hold meaning that the vault + companion set cannot rebuild (`docs/INTEGRATION_FABRIC_CONTRACT.md` authority rule). Client caches are opaque external durability: rebuildable, never written back as authority.
 
 How each transport stays inside the envelope:

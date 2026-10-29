@@ -361,14 +361,38 @@ direct-filesystem fallback, hidden queue, network listener, or internal ToolProv
 
 ### MCP v2 parity profile
 
-MCP v2 remains target-state only. Any broader external MCP operation set requires a superseding
-accepted ADR and a matching owner-contract update before the broader external MCP operation set may
-be treated as authorized or executable.
+The bounded MCP v2 design profile is accepted by
+[ADR-0069](../adr/ADR-0069-mcp-v2-authority-profile.md), with the matching update in the
+[Mimer Client Contract](MIMER_CLIENT_CONTRACT.md#accepted-mcp-v2-authority-profile). This partially
+supersedes ADR-0061 only for the explicitly versioned v2 operation boundary; ADR-0061's exact five
+v1 operations, A2 constituent-owned sidecar, B1 stdio-only/no-listener transport, and C1 inherited
+authentication remain unchanged.
 
-Only contract-ready operations may be mapped. MCP discovery exposes operation version, schemas,
-authority/side-effect class, preview support, and maturity. Tool/resource implementations delegate
-to the same operation seam as GUI/API and add no policy, filesystem, retry, receipt, identity, or
-recovery behavior of their own.
+The accepted profile admits only capability-derived, versioned tools and resources for qualified
+owner-native discovery/read/search, capture and typed creation, editing, identity-preserving
+placement, semantic metadata/order, lifecycle, finite batches, and operation status/receipt/
+convergence/recovery. Discovery exposes operation version, schemas, authority/side-effect class,
+preview support, and maturity. Only contract-ready operations may be mapped, and each concrete
+operation must be supported by a qualified production runtime. Uninstalled, dependency-blocked, and
+unsupported operations remain typed-unavailable; listing an operation does not make it executable.
+Every effect uses the shared authenticated production
+operations API with current host-resolved context and principal, MVR-05C effect-capable
+delegation/DecisionToken authorization, bounded targets/cardinality, policy ceilings, expected
+versions, and owner-native semantics. V2 receipt readback is available only through that API; v1's
+receipt-readback exclusion remains unchanged. The adapter adds no policy, filesystem access, retry,
+identity, receipt, or recovery behavior of its own. Preserve the native typed refused, conflicted,
+unknown, pending, and partial outcomes, original source/GOV receipts, and independent projection lag.
+A lost reply or restart requires durable readback and reconciliation before retry; the adapter cannot
+convert ambiguity into success, blindly repeat an effect, or cancel away completed effects and
+receipts.
+
+The accepted ADR and matching owner contracts satisfy the design prerequisite for this bounded
+profile and future implementation; they do not establish installed runtime capability, conformance,
+external-client acceptance, or deployment. The #5354 fence remains: any broader external MCP
+operation set beyond this profile requires a superseding accepted ADR and matching owner-contract
+update to merge before that broader set may be treated as authorized or executable. Shipped
+capability or parent-closure claims still require the current-SHA conformance, negative-authority,
+failure/restart, real-client, Companion UAT, and owner-document evidence below.
 
 ## Conformance and acceptance
 
