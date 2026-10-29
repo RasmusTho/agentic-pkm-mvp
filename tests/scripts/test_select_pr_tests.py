@@ -3183,7 +3183,7 @@ def test_ops_only_execution_preserves_complete_coverage(changed, tmp_path):
 @pytest.mark.parametrize("extra", [None, "app/instance/runtime.py", "app/instance/legacy_owner_recovery.py",
     "scripts/instance_state_writer_inventory.py", "tests/conftest.py", "tests/ops/conftest.py",
     "tests/helpers/runtime_start_harness.py", "docs/ENVIRONMENTS.md", "app/ops/host_secret_controller.py",
-    "app/ops/bws_control_installation.py", "tests/ops/test_bws_installation_lifecycle.py",
+    "app/ops/bws_control_installation.py",
     "tests/ops/test_dormant_ownership_initialization.py"])
 def test_bws_source_profile_omits_only_dormant(extra, monkeypatch):
     changed = sorted(selector.BWS_SOURCE_INSTALLATION_PATHS - {
@@ -3206,15 +3206,25 @@ def test_bws_source_profile_omits_only_dormant(extra, monkeypatch):
 
 
 @pytest.mark.parametrize("with_legacy_fixture", [False, True])
-def test_bws_source_control_test_cochange_preserves_complete_coverage(with_legacy_fixture, tmp_path, monkeypatch):
+@pytest.mark.parametrize("cochange", ["control", "lifecycle", "control-and-lifecycle"])
+def test_bws_source_control_test_cochange_preserves_complete_coverage(with_legacy_fixture, cochange, tmp_path, monkeypatch):
     from scripts.run_scoped_test_partitions import validate_execution_units
 
     changed = [
         "app/ops/bws_installation_transaction.py",
         "tests/ops/test_bws_installation_transaction.py",
-        "tests/ops/test_bws_control_installation.py",
         "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
     ]
+    if "control" in cochange:
+        changed.append("tests/ops/test_bws_control_installation.py")
+    if "lifecycle" in cochange:
+        changed.extend([
+            "app/ops/bws_installation_lifecycle.py",
+            "tests/ops/test_bws_installation_lifecycle.py",
+        ])
+    assert selector.BWS_SOURCE_INSTALLATION_SOURCES == {
+        "app/ops/bws_installation_transaction.py", "app/ops/postgres_deploy_linux.py",
+    }
     if with_legacy_fixture:
         fixture_path = "tests/ops/fixtures/host_secret_contract_legacy.json"
         fixture = tmp_path / "legacy.json"
@@ -3242,19 +3252,29 @@ def test_bws_source_control_test_cochange_preserves_complete_coverage(with_legac
 
 
 @pytest.mark.parametrize("failure", ["no-source", "missing-test", "symlinked-test",
-    "missing-fixture", "symlinked-fixture", "unrelated-fixture"])
+    "missing-fixture", "symlinked-fixture", "unrelated-fixture", "lifecycle-only",
+    "missing-lifecycle-source", "symlinked-lifecycle-source",
+    "missing-lifecycle-test", "symlinked-lifecycle-test"])
 def test_bws_source_control_test_cochange_fails_closed(failure, monkeypatch):
     control_test = "tests/ops/test_bws_control_installation.py"
+    lifecycle_paths = [
+        "app/ops/bws_installation_lifecycle.py", "tests/ops/test_bws_installation_lifecycle.py",
+    ]
     changed = [
         "app/ops/bws_installation_transaction.py",
         "tests/ops/test_bws_installation_transaction.py",
         control_test,
         "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+        *lifecycle_paths,
     ]
     if failure == "no-source":
         changed = changed[1:]
+    elif failure == "lifecycle-only":
+        changed = lifecycle_paths
     else:
         guarded_path = control_test
+        if "lifecycle" in failure:
+            guarded_path = lifecycle_paths[0 if failure.endswith("source") else 1]
         if failure.endswith("fixture"):
             guarded_path = ("tests/ops/fixtures/unrelated.json" if failure == "unrelated-fixture"
                 else "tests/ops/fixtures/host_secret_contract_legacy.json")

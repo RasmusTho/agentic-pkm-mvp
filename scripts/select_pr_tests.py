@@ -2161,6 +2161,8 @@ BWS_SOURCE_INSTALLATION_SOURCES = frozenset({
     "app/ops/bws_installation_transaction.py", "app/ops/postgres_deploy_linux.py",
 })
 BWS_SOURCE_INSTALLATION_PATHS = BWS_SOURCE_INSTALLATION_SOURCES | frozenset({
+    "app/ops/bws_installation_lifecycle.py",
+    "tests/ops/test_bws_installation_lifecycle.py",
     "tests/ops/test_bws_installation_transaction.py",
     "tests/ops/test_bws_control_installation.py",
     "tests/ops/fixtures/host_secret_contract_legacy.json",

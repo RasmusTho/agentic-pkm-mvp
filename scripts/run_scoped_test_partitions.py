@@ -522,9 +522,25 @@ def run_partitions(
                     f"targets={len(parallel_partitions[index])}",
                     flush=True,
                 )
-    serial_last_index: int | None = None
-    if serial_last:
-        serial_last_index = len(parallel_partitions)
+    parallel_failed = any(
+        returncode != 0 or timed_out for returncode, _, timed_out in results.values()
+    )
+    serial_last_index = len(parallel_partitions) if serial_last else None
+    boundary_index = len(parallel_partitions) if boundary_targets else None
+    serial_not_run_log: Path | None = None
+    if parallel_failed and (serial_last or boundary_targets):
+        serial_targets = source_partitions[-1] if serial_last else boundary_targets
+        label = "SERIAL PARTITION" if serial_last else "SERIAL BOUNDARY"
+        serial_not_run_log = log_dir / f"partition-{len(parallel_partitions)}.log"
+        message = (
+            f"{label} NOT RUN: index={len(parallel_partitions)} "
+            "parallel pytest, timeout or collected-node verification failed.\n"
+            + "".join(f"NOT RUN: {target}\n" for target in serial_targets)
+        )
+        serial_not_run_log.write_text(message, encoding="utf-8")
+        print(message, end="", flush=True)
+    if serial_last and not parallel_failed:
+        assert serial_last_index is not None
         result_index, returncode, log_path, timed_out = _run_partition(
             serial_last_index,
             source_partitions[-1],
@@ -541,9 +557,8 @@ def run_partitions(
             f"targets={len(source_partitions[-1])}",
             flush=True,
         )
-    boundary_index: int | None = None
-    if boundary_targets:
-        boundary_index = len(parallel_partitions)
+    if boundary_targets and not parallel_failed:
+        assert boundary_index is not None
         result_index, returncode, log_path, timed_out = _run_partition(
             boundary_index,
             boundary_targets,
@@ -563,9 +578,10 @@ def run_partitions(
     expected_results = len(parallel_partitions) + int(serial_last) + int(
         boundary_index is not None
     )
-    if len(results) != expected_results:
+    accounted_results = len(results) + int(serial_not_run_log is not None)
+    if accounted_results != expected_results:
         print(
-            f"Partition runner incomplete: expected={expected_results} actual={len(results)}",
+            f"Partition runner incomplete: expected={expected_results} actual={accounted_results}",
             file=sys.stderr,
         )
         return 1
@@ -579,22 +595,22 @@ def run_partitions(
                 aggregate.write("\n")
             if returncode != 0 or timed_out:
                 failed = True
-        if serial_last_index is not None:
-            returncode, log_path, timed_out = results[serial_last_index]
+        for index, label in (
+            (serial_last_index, "partition"), (boundary_index, "boundary"),
+        ):
+            if index is None:
+                continue
+            if serial_not_run_log is not None:
+                log_path = serial_not_run_log
+                failed = True
+            else:
+                returncode, log_path, timed_out = results[index]
+                if returncode != 0 or timed_out:
+                    failed = True
             log = log_path.read_text(encoding="utf-8")
-            aggregate.write(f"===== scoped serial partition =====\n{log}")
+            aggregate.write(f"===== scoped serial {label} =====\n{log}")
             if log and not log.endswith("\n"):
                 aggregate.write("\n")
-            if returncode != 0 or timed_out:
-                failed = True
-        if boundary_index is not None:
-            returncode, log_path, timed_out = results[boundary_index]
-            log = log_path.read_text(encoding="utf-8")
-            aggregate.write(f"===== scoped serial boundary =====\n{log}")
-            if log and not log.endswith("\n"):
-                aggregate.write("\n")
-            if returncode != 0 or timed_out:
-                failed = True
     return 1 if failed else 0
 
 
