@@ -16,6 +16,8 @@ import subprocess
 
 import pytest
 
+from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
+
 
 @pytest.fixture(autouse=True)
 def denied_external_ports(monkeypatch):
@@ -93,6 +95,93 @@ def refused(module, args):
         assert raised.value.installation.state == "refused"
         raised.value.installation.close()
     return raised.value
+
+
+def _manifest_changes(module, count, payload=b"source\n"):
+    changes, payloads = [], {}
+    for index in range(count):
+        path = f"app/ops/source_{index:04d}.py"
+        key = ("application", path)
+        changes.append(module.Change("application", path, None, None,
+                                     digest(payload), 0o644))
+        payloads[key] = payload
+    return tuple(changes), payloads
+
+
+def _root(module, path):
+    info = path.stat()
+    return module.Root(str(path), info.st_dev, info.st_ino, info.st_uid, info.st_gid,
+                       stat.S_IMODE(info.st_mode))
+
+
+def test_source_manifest_budget_accepts_large_bounded_delta(secure_tmp_path):
+    module = importlib.import_module("app.ops.bws_control_installation")
+    application = secure_tmp_path / "application"
+    backups = secure_tmp_path / "backups"
+    application.mkdir(mode=0o755)
+    backups.mkdir(mode=0o755)
+    (application / "app/ops").mkdir(mode=0o755, parents=True)
+    (application / "app").chmod(0o755)
+    (application / "app/ops").chmod(0o755)
+    roots = {"application": _root(module, application)}
+    backup_root = _root(module, backups)
+    changes, payloads = _manifest_changes(module, 193)
+
+    handle = module._prepare_full_source_files(
+        roots=roots, changes=changes, payloads=payloads, backup_root=backup_root,
+        bundle_name="large-source-delta",
+    )
+    try:
+        assert handle.state == "prepared"
+        assert len(handle._targets) == 193
+        assert (backups / "large-source-delta" / "manifest.json").is_file()
+    finally:
+        handle.close()
+
+
+def test_legacy_manifest_budget_cannot_opt_into_source_limit(secure_tmp_path):
+    module = importlib.import_module("app.ops.bws_control_installation")
+    application = secure_tmp_path / "application"
+    backups = secure_tmp_path / "backups"
+    application.mkdir(mode=0o755)
+    backups.mkdir(mode=0o755)
+    roots = {"application": _root(module, application)}
+    backup_root = _root(module, backups)
+    changes, payloads = _manifest_changes(module, 193)
+
+    with pytest.raises(module.InstallationRefused, match="manifest_refused"):
+        module.prepare_public_files(
+            roots=roots, changes=changes, payloads=payloads, backup_root=backup_root,
+            bundle_name="legacy-over-budget",
+        )
+
+    assert not list(backups.iterdir())
+
+
+def test_source_manifest_budget_is_finite_and_bounds_payload_bytes(monkeypatch):
+    module = importlib.import_module("app.ops.bws_control_installation")
+    assert module._MAX_SOURCE_MANIFEST_CHANGES == 2 * module._MAX_SOURCE_FILES + 2
+
+    roots = {"application": module.Root("/tmp/bws-source-app", 1, 2,
+                                         os.geteuid(), os.getegid(), 0o755)}
+    backup = module.Root("/tmp/bws-source-backup", 1, 3,
+                         os.geteuid(), os.getegid(), 0o755)
+    at_limit, at_limit_payloads = _manifest_changes(
+        module, module._MAX_SOURCE_MANIFEST_CHANGES, b"x",
+    )
+    module._source_manifest(roots, at_limit, at_limit_payloads, backup)
+    too_many, payloads = _manifest_changes(
+        module, module._MAX_SOURCE_MANIFEST_CHANGES + 1, b"x",
+    )
+    with pytest.raises(module.InstallationRefused, match="manifest_refused"):
+        module._source_manifest(roots, too_many, payloads, backup)
+
+    monkeypatch.setattr(module, "_MAX_TOTAL_SOURCE_BYTES", 16)
+    at_byte_limit, at_byte_limit_payloads = _manifest_changes(module, 2, b"12345678")
+    module._source_manifest(roots, at_byte_limit, at_byte_limit_payloads, backup)
+    over_limit, over_limit_payloads = _manifest_changes(module, 3, b"12345678")
+    with pytest.raises(module.InstallationRefused, match="manifest_refused"):
+        module._source_manifest(roots, over_limit, over_limit_payloads, backup)
 
 
 @pytest.mark.parametrize("fault", [

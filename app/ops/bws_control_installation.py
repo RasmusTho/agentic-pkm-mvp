@@ -124,6 +124,16 @@ class Installation:
 
 _LIVE_INSTALLATIONS: weakref.WeakValueDictionary[int, Installation] = weakref.WeakValueDictionary()
 
+# The generic public-file mechanic keeps its historic module-call ceiling. The
+# trusted full-source path has a separate bound derived from two independently
+# bounded source inventories (old and candidate), plus its fixed contract and
+# launcher entries.
+_MAX_LEGACY_MANIFEST_CHANGES = 192
+_MAX_SOURCE_FILES = 4096
+_MAX_SOURCE_FILE_BYTES = 8 * 1024 * 1024
+_MAX_TOTAL_SOURCE_BYTES = 64 * 1024 * 1024
+_MAX_SOURCE_MANIFEST_CHANGES = 2 * _MAX_SOURCE_FILES + 2
+
 
 def _refuse(reason: str) -> NoReturn:
     raise InstallationRefused(reason)
@@ -151,12 +161,13 @@ def _path(value: str, *, absolute: bool = False) -> tuple[str, ...]:
     return tuple(parts)
 
 
-def _manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
-              payloads: Mapping[tuple[str, str], bytes], backup: Root) -> None:
+def _validate_manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
+                       payloads: Mapping[tuple[str, str], bytes], backup: Root, *,
+                       change_limit: int, total_payload_limit: int | None = None) -> None:
     if any(not isinstance(c, Change) or not isinstance(c.root, str)
            or not isinstance(c.path, str) for c in changes):
         _refuse("manifest_refused")
-    if not changes or len(changes) > 192 or set(roots) != {c.root for c in changes}:
+    if not changes or len(changes) > change_limit or set(roots) != {c.root for c in changes}:
         _refuse("manifest_refused")
     if not set(roots) <= {"application", "control", "launcher"}:
         _refuse("manifest_refused")
@@ -175,6 +186,7 @@ def _manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
     if any(a == b or a in b.parents or b in a.parents
            for i, a in enumerate(paths) for b in paths[i + 1:]):
         _refuse("root_alias_refused")
+    total_payload_bytes = 0
     for change in changes:
         parts = _path(change.path)
         source_path = (len(parts) >= 2 and re.fullmatch(r"[A-Za-z0-9_]+\.py", parts[-1])
@@ -201,9 +213,27 @@ def _manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
         if (not allowed or type(change.mode) is not int or not mode_ok or not before_ok
                 or not isinstance(change.after_sha256, str)
                 or re.fullmatch(r"[0-9a-f]{64}", change.after_sha256) is None
-                or not isinstance(data, bytes) or len(data) > 8 * 1024 * 1024
+                or not isinstance(data, bytes) or len(data) > _MAX_SOURCE_FILE_BYTES
                 or _hash(data) != change.after_sha256):
             _refuse("manifest_refused")
+        total_payload_bytes += len(data)
+        if total_payload_limit is not None and total_payload_bytes > total_payload_limit:
+            _refuse("manifest_refused")
+
+
+def _manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
+              payloads: Mapping[tuple[str, str], bytes], backup: Root) -> None:
+    """Validate the unchanged generic/legacy manifest contract."""
+    _validate_manifest(roots, changes, payloads, backup,
+                       change_limit=_MAX_LEGACY_MANIFEST_CHANGES)
+
+
+def _source_manifest(roots: Mapping[str, Root], changes: tuple[Change, ...],
+                     payloads: Mapping[tuple[str, str], bytes], backup: Root) -> None:
+    """Validate a full-source manifest selected only by its production caller."""
+    _validate_manifest(roots, changes, payloads, backup,
+                       change_limit=_MAX_SOURCE_MANIFEST_CHANGES,
+                       total_payload_limit=_MAX_TOTAL_SOURCE_BYTES)
 
 
 def _directory(handle: Installation, name: str, parent: int | None,
@@ -440,9 +470,9 @@ def install_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ..
     ))
 
 
-def prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ...],
-                         payloads: Mapping[tuple[str, str], bytes], backup_root: Root,
-                         bundle_name: str) -> Installation:
+def _prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ...],
+                          payloads: Mapping[tuple[str, str], bytes], backup_root: Root,
+                          bundle_name: str, full_source_manifest: bool) -> Installation:
     """Validate and durably back up a finite manifest without replacing targets.
 
     The returned handle retains the exact root, target, backup and flock identities
@@ -451,7 +481,8 @@ def prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ..
     preparation preserves any allocated backup bundle and never authorizes replay.
     """
     roots, changes, payloads = dict(roots), tuple(changes), dict(payloads)
-    _manifest(roots, changes, payloads, backup_root)
+    validate = _source_manifest if full_source_manifest else _manifest
+    validate(roots, changes, payloads, backup_root)
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", bundle_name) is None:
         _refuse("bundle_name_refused")
     handle = Installation(backup_root.path + "/" + bundle_name)
@@ -493,6 +524,24 @@ def prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ..
         handle.state = "refused"
         reason = exc.reason if isinstance(exc, InstallationRefused) else "filesystem_refused"
         raise InstallationRefused(reason, handle) from None
+
+
+def prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ...],
+                         payloads: Mapping[tuple[str, str], bytes], backup_root: Root,
+                         bundle_name: str) -> Installation:
+    """Prepare the existing bounded generic/legacy public-file contract."""
+    return _prepare_public_files(roots=roots, changes=changes, payloads=payloads,
+                                  backup_root=backup_root, bundle_name=bundle_name,
+                                  full_source_manifest=False)
+
+
+def _prepare_full_source_files(*, roots: Mapping[str, Root], changes: tuple[Change, ...],
+                               payloads: Mapping[tuple[str, str], bytes], backup_root: Root,
+                               bundle_name: str) -> Installation:
+    """Prepare the internal full-source path with its derived source manifest budget."""
+    return _prepare_public_files(roots=roots, changes=changes, payloads=payloads,
+                                  backup_root=backup_root, bundle_name=bundle_name,
+                                  full_source_manifest=True)
 
 
 def apply_public_files(

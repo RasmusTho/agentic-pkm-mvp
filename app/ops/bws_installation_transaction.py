@@ -34,11 +34,14 @@ _SOURCE_PYCACHE_PREFIX = "/dev/null"
 _SOURCE_PROVENANCE_POLICY = "bws-source-bytes-v2"
 _SOURCE_HASH_ATTRIBUTE = "__yggdrasil_source_sha256__"
 _MAX_MODULES = 190
-_MAX_MANIFEST_CHANGES = _MAX_MODULES + 2
+# Keep these local so loading the transaction for its source loader does not
+# eagerly import the installed application package. The lower file mechanism
+# carries the same limits; tests assert the two enforcement sites stay aligned.
 _MAX_SOURCE_FILES = 4096
-_MAX_SOURCE_ENTRIES = 32768
 _MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _MAX_TOTAL_SOURCE_BYTES = 64 * 1024 * 1024
+_MAX_SOURCE_MANIFEST_CHANGES = 2 * _MAX_SOURCE_FILES + 2
+_MAX_SOURCE_ENTRIES = 32768
 _MAX_PROFILE_BYTES = 900_000
 _EXTERNAL_SOURCE_ROOTS = ("llm_contract", "mimer_runtime", "companion_ui", "ops")
 _PROFILE_READINESS_TIMEOUT_SECONDS = 30.0
@@ -1427,6 +1430,7 @@ def candidate_manifest(
     payloads: dict[tuple[str, str], bytes] = {}
     candidate_source_by_key: dict[tuple[str, str], bytes] = {}
     candidate_files: list[dict[str, object]] = []
+    candidate_inventory_bytes = 0
     total_delta_bytes = 0
     root_fds: dict[str, tuple[int, list[int]]] = {}
     try:
@@ -1474,6 +1478,10 @@ def candidate_manifest(
                 candidate_source_by_key[key] = candidate_raw
                 candidate_files.append({"root": root_name, "path": relative, "sha256": _sha(candidate_raw),
                                         "mode": candidate_mode, "size": len(candidate_raw)})
+                candidate_inventory_bytes += len(candidate_raw)
+                if (len(candidate_files) > _MAX_SOURCE_FILES
+                        or candidate_inventory_bytes > _MAX_TOTAL_SOURCE_BYTES):
+                    _refuse()
                 if old_raw != candidate_raw or old_mode != candidate_mode:
                     payloads[key] = candidate_raw
                     changes.append(Change(root_name, relative, before_sha256, old_mode,
@@ -1528,7 +1536,8 @@ def candidate_manifest(
         changes.append(Change("launcher", launcher_key[1], _sha(old_launcher), 0o755,
                               _sha(launcher), 0o755))
         total_delta_bytes += len(candidate_contract) + len(launcher)
-        if total_delta_bytes > _MAX_TOTAL_SOURCE_BYTES or len(changes) > _MAX_MANIFEST_CHANGES:
+        if (total_delta_bytes > _MAX_TOTAL_SOURCE_BYTES
+                or len(changes) > _MAX_SOURCE_MANIFEST_CHANGES):
             _refuse()
         changed_roots = {change.root for change in changes}
         if not changed_roots <= set(roots):
@@ -2168,9 +2177,9 @@ class _NativePorts:
 
     def prepare(self, roots: dict[str, Any], changes: tuple[Any, ...],
                 payloads: dict[tuple[str, str], bytes], backup_root: Any, bundle_name: str) -> Any:
-        from app.ops.bws_control_installation import prepare_public_files
-        return prepare_public_files(roots=roots, changes=changes, payloads=payloads,
-                                    backup_root=backup_root, bundle_name=bundle_name)
+        from app.ops.bws_control_installation import _prepare_full_source_files
+        return _prepare_full_source_files(roots=roots, changes=changes, payloads=payloads,
+                                          backup_root=backup_root, bundle_name=bundle_name)
 
     def apply(self, handle: Any) -> Any:
         from app.ops.bws_control_installation import apply_public_files

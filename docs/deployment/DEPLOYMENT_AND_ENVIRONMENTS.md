@@ -1344,6 +1344,19 @@ These are **file mechanics only**, proved with temporary-filesystem tests. The c
 already hold authenticated exclusion of other writers for the complete handle lifetime;
 component directory flocks serialize cooperating component calls only, not native admission.
 
+The fixed full-source caller uses a finite source-manifest budget separate from the generic
+public-file and loaded-module limits. The old disk inventory and candidate Git tree each retain the
+4096-file and 64 MiB source bounds, with the existing 8 MiB per-file bound. Before backup, the
+transaction also checks the prospective combined application/control Python inventory against the
+same 4096-file and 64 MiB limits. Its maximum manifest size is derived from the two bounded source
+inventories plus the fixed contract and launcher entries: `2 * 4096 + 2 = 8194`. This counts at
+most one entry per old or candidate source path, covering create/update/delete accounting, plus the
+contract and launcher entries. Candidate verification still refuses deleted sources under its
+existing contract. The lower full-source validator repeats the entry and 64 MiB aggregate-payload
+checks before backup; the generic public-file path retains its 192-entry limit, and loaded-module
+provenance retains its independent 190-module limit. These budgets do not change file/path,
+ownership, root identity, hash, mode, writer, caller, generation, admission, or compensation guards.
+
 The fixed DEV/TEST caller in `app.ops.bws_installation_transaction` composes those file mechanics
 with the existing BWS operation reservation, current writer/caller census, authenticated public
 roots, and fixed unit lifecycle. Its first-call route is a direct `rpc dev|test` invocation from a

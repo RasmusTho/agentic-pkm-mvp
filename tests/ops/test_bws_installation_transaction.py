@@ -611,6 +611,113 @@ def _empty_control_manifest_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     )
 
 
+def _full_source_manifest_case(
+    monkeypatch: pytest.MonkeyPatch, secure_tmp_path: Path, *, channel: str,
+    generated_count: int = 205, generated_update_count: int = 0,
+    control_source: bytes | None = None,
+    unchanged_core: tuple[str, ...] = (),
+) -> SimpleNamespace:
+    """Build a shallow-checkout-safe Git candidate with real guarded core sources."""
+    monkeypatch.setattr(transaction, "_OWNER_UID", os.geteuid())
+    monkeypatch.setattr(transaction, "_OWNER_GID", os.getegid())
+    target = _owned_dir(secure_tmp_path / f"target-{channel}")
+    app_root = _owned_dir(target / "application")
+    control_root = _owned_dir(target / "control")
+    launcher_root = _owned_dir(target / "launcher")
+    backup_root = _owned_dir(target / "backup")
+    monkeypatch.setattr(transaction, "_CONTROL_DIRECTORY", control_root)
+    monkeypatch.setattr(transaction, "_BACKUP_DIRECTORY", backup_root)
+    launcher_path = launcher_root / "yggdrasil-bws-deploy"
+    monkeypatch.setattr(transaction, "_LAUNCHER", launcher_path)
+
+    repository = Path(__file__).resolve().parents[2]
+    core_paths = (
+        "app/__init__.py",
+        "app/ops/__init__.py",
+        "app/ops/postgres_deploy_linux.py",
+        "app/ops/bws_installation_admission.py",
+        "scripts/__init__.py",
+        "scripts/postgres_deploy_service.py",
+    )
+    candidate_sources = {relative: (repository / relative).read_bytes() for relative in core_paths}
+    for index in range(generated_count):
+        variant = index % 8
+        candidate_sources[f"app/ops/generated_budget_{index:04d}.py"] = (
+            f"GENERATED_SOURCE = {variant}\n".encode() + b"#" * (variant * 7)
+        )
+    candidate_contract = (repository / "config/secrets/host_secret_contract.json").read_bytes()
+
+    checkout = _owned_dir(secure_tmp_path / f"candidate-{channel}")
+    git_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@example.invalid",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@example.invalid",
+    }
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True, env=git_env)
+    for relative, raw in candidate_sources.items():
+        path = checkout / relative
+        _owned_dir(path.parent)
+        path.write_bytes(raw)
+        path.chmod(0o755 if relative == "scripts/postgres_deploy_service.py" else 0o644)
+    contract_path = checkout / "config/secrets/host_secret_contract.json"
+    _owned_dir(contract_path.parent)
+    contract_path.write_bytes(candidate_contract)
+    contract_path.chmod(0o644)
+    subprocess.run(["git", "-C", str(checkout), "add", "app", "scripts", "config"],
+                   check=True, env=git_env)
+    subprocess.run(["git", "-C", str(checkout), "commit", "-q", "-m", "generated source candidate"],
+                   check=True, env=git_env)
+    revision = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"], check=True,
+                              capture_output=True, text=True, env=git_env).stdout.strip()
+
+    old_sources = {relative: raw for relative, raw in candidate_sources.items()
+                   if not relative.startswith("app/ops/generated_budget_")}
+    for index in range(generated_update_count):
+        variant = index % 8
+        old_sources[f"app/ops/generated_budget_{index:04d}.py"] = (
+            f"PREVIOUS_SOURCE = {variant}\n".encode() + b"!" * (variant * 7)
+        )
+    for relative in ("app/ops/postgres_deploy_linux.py", "app/ops/bws_installation_admission.py"):
+        if relative not in unchanged_core:
+            old_sources[relative] = b"# previous installed source\n" + old_sources[relative]
+    for relative, raw in old_sources.items():
+        path = app_root / relative
+        _owned_dir(path.parent)
+        path.write_bytes(raw)
+        path.chmod(0o755 if relative == "scripts/postgres_deploy_service.py" else 0o644)
+
+    old_contract = (Path(__file__).parent / "fixtures" / "host_secret_contract_legacy.json").read_bytes()
+    installed_contract = app_root / "config/secrets/host_secret_contract.json"
+    _owned_dir(installed_contract.parent)
+    installed_contract.write_bytes(old_contract)
+    installed_contract.chmod(0o644)
+    old_launcher = b"old launcher bytes\n"
+    launcher_path.write_bytes(old_launcher)
+    launcher_path.chmod(0o755)
+    monkeypatch.setattr(bws_installation_lifecycle, "_public_launcher_bytes", lambda: old_launcher)
+
+    if control_source is not None:
+        control_file = control_root / "app/ops/postgres_deploy_linux.py"
+        _owned_dir(control_file.parent)
+        control_file.write_bytes(control_source)
+        control_file.chmod(0o644)
+
+    config = SimpleNamespace(channel=channel, root=app_root)
+    request = {"operation_id": str(uuid.uuid4()), "channel": channel, "candidate_sha": revision,
+               "image_digest": "sha256:" + "b" * 64, "bundle_name": f"source-budget-{channel}"}
+    profile = transaction._old_disk_state(config, request)
+    roots, backup = transaction._roots(config, profile)
+    monkeypatch.setattr(sys, "_yggdrasil_bws_candidate_checkout", str(checkout), raising=False)
+    ports = transaction._NativePorts()
+    return SimpleNamespace(
+        app_root=app_root, backup_root=backup_root, checkout=checkout, config=config,
+        request=request, profile=profile, roots=roots, backup=backup, ports=ports,
+        candidate_sources=candidate_sources,
+    )
+
+
 def _loaded_module(path: Path) -> SimpleNamespace:
     filename = str(path)
     source = path.read_bytes() if path.exists() else b""
@@ -986,6 +1093,137 @@ def test_first_install_manifest_refuses_control_source_drift(monkeypatch, tmp_pa
 
     with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
         case.invoke()
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_full_source_large_delta_reaches_prepare(monkeypatch, secure_tmp_path, channel):
+    # Mirror the public 229-change transition with 165 existing-source updates,
+    # 60 creates, two guarded core updates, contract and launcher. The real
+    # lower prepare retains the resulting target, before-file and backup handles.
+    case = _full_source_manifest_case(
+        monkeypatch, secure_tmp_path, channel=channel, generated_count=225,
+        generated_update_count=165,
+    )
+
+    changes, payloads, proof = case.ports.source_manifest(
+        case.profile, case.config, case.request, case.roots, case.backup,
+    )
+
+    assert len(changes) == 229
+    assert any(change.before_sha256 is None for change in changes)
+    assert any(change.root == "application"
+               and change.path == "config/secrets/host_secret_contract.json" for change in changes)
+    assert any(change.root == "launcher" and change.path == "yggdrasil-bws-deploy"
+               for change in changes)
+    assert case.profile["source_packages"]["control"] == []
+    assert all(change.root != "control" for change in changes)
+    assert len(proof["candidate_files"]) <= transaction._MAX_SOURCE_FILES
+    assert sum(row["size"] for row in proof["candidate_files"]) <= transaction._MAX_TOTAL_SOURCE_BYTES
+    generated_rows = [row for row in proof["candidate_files"]
+                      if str(row["path"]).startswith("app/ops/generated_budget_")]
+    assert len({row["sha256"] for row in generated_rows}) == 8
+    assert len({row["size"] for row in generated_rows}) == 8
+
+    changed_roots = {change.root for change in changes}
+    prepare_roots = {name: root for name, root in case.roots.items() if name in changed_roots}
+    handle = case.ports.prepare(prepare_roots, changes, payloads, case.backup, "large-source-delta")
+    try:
+        assert handle.state == "prepared"
+        assert len(handle._targets) == len(changes)
+        assert (case.backup_root / "large-source-delta" / "manifest.json").is_file()
+    finally:
+        handle.close()
+
+    assert not any(f"app.ops.generated_budget_{index:04d}" in sys.modules
+                   for index in range(225))
+
+
+@pytest.mark.parametrize("budget", ["count", "bytes", "manifest"])
+def test_source_manifest_combined_inventory_budget_refuses_before_backup(
+    monkeypatch, secure_tmp_path, budget,
+):
+    control_source = b"CONTROL_OLD = True\n"
+    if budget == "count":
+        # The old and Git inventories are each seven files; the prospective
+        # application plus retained control copies need an eighth combined slot.
+        monkeypatch.setattr(transaction, "_MAX_SOURCE_FILES", 8)
+    case = _full_source_manifest_case(
+        monkeypatch, secure_tmp_path, channel="dev", generated_count=1,
+        control_source=control_source,
+        unchanged_core=("app/ops/bws_installation_admission.py",) if budget == "bytes" else (),
+    )
+    if budget == "manifest":
+        control_module = importlib.import_module("app.ops.bws_control_installation")
+        payload = b"bounded source\n"
+        digest = hashlib.sha256(payload).hexdigest()
+        changes = tuple(
+            control_module.Change("application", f"app/ops/generated_limit_{index:04d}.py",
+                                  None, None, digest, 0o644)
+            for index in range(transaction._MAX_SOURCE_MANIFEST_CHANGES + 1)
+        )
+        payloads = {(change.root, change.path): payload for change in changes}
+        with pytest.raises(control_module.InstallationRefused, match="manifest_refused"):
+            case.ports.prepare(
+                {"application": case.roots["application"]}, changes, payloads,
+                case.backup, "over-source-manifest",
+            )
+        assert not list(case.backup_root.iterdir())
+        return
+    if budget == "count":
+        _changes, _payloads, proof = case.ports.source_manifest(
+            case.profile, case.config, case.request, case.roots, case.backup,
+        )
+        assert len(case.profile["source_files"]) == 7
+        assert len(case.candidate_sources) == 7
+        assert len(proof["candidate_files"]) == 8
+        assert not list(case.backup_root.iterdir())
+        monkeypatch.setattr(transaction, "_MAX_SOURCE_FILES", 7)
+    if budget == "bytes":
+        candidate_inventory_bytes = (
+            sum(len(raw) for raw in case.candidate_sources.values())
+            + len(case.candidate_sources["app/ops/postgres_deploy_linux.py"])
+        )
+        old_inventory_bytes = sum(row["size"] for row in case.profile["source_files"])
+        candidate_tree_bytes = sum(len(raw) for raw in case.candidate_sources.values())
+        assert old_inventory_bytes < candidate_inventory_bytes - 1
+        assert candidate_tree_bytes < candidate_inventory_bytes - 1
+        monkeypatch.setattr(transaction, "_MAX_TOTAL_SOURCE_BYTES", candidate_inventory_bytes)
+        _changes, _payloads, proof = case.ports.source_manifest(
+            case.profile, case.config, case.request, case.roots, case.backup,
+        )
+        assert sum(row["size"] for row in proof["candidate_files"]) == candidate_inventory_bytes
+        assert not list(case.backup_root.iterdir())
+        monkeypatch.setattr(transaction, "_MAX_TOTAL_SOURCE_BYTES", candidate_inventory_bytes - 1)
+
+    with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+        case.ports.source_manifest(case.profile, case.config, case.request, case.roots, case.backup)
+
+    assert not list(case.backup_root.iterdir())
+
+
+def test_source_manifest_budget_preserves_provenance_and_file_guards(
+    monkeypatch, secure_tmp_path,
+):
+    control_module = importlib.import_module("app.ops.bws_control_installation")
+    assert transaction._MAX_MODULES == 190
+    assert transaction._MAX_SOURCE_MANIFEST_CHANGES == 2 * transaction._MAX_SOURCE_FILES + 2
+    assert transaction._MAX_SOURCE_FILES == control_module._MAX_SOURCE_FILES
+    assert transaction._MAX_SOURCE_BYTES == control_module._MAX_SOURCE_FILE_BYTES
+    assert transaction._MAX_TOTAL_SOURCE_BYTES == control_module._MAX_TOTAL_SOURCE_BYTES
+    assert transaction._MAX_SOURCE_MANIFEST_CHANGES == control_module._MAX_SOURCE_MANIFEST_CHANGES
+    case = _full_source_manifest_case(monkeypatch, secure_tmp_path, channel="test")
+    changes, payloads, _proof = case.ports.source_manifest(
+        case.profile, case.config, case.request, case.roots, case.backup,
+    )
+    assert len(changes) > 192
+
+    old_source = case.app_root / "app/ops/postgres_deploy_linux.py"
+    old_source.write_bytes(old_source.read_bytes() + b"# post-snapshot drift\n")
+    with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+        case.ports.source_manifest(case.profile, case.config, case.request, case.roots, case.backup)
+
+    assert payloads
+    assert not list(case.backup_root.iterdir())
 
 
 def test_source_payload_inventory_is_exact_and_independent_json(monkeypatch, tmp_path):
