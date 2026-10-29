@@ -9,7 +9,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 import pytest
 
@@ -1644,6 +1644,185 @@ def _transaction_fixture(
     config = config_override or SimpleNamespace(channel=channel, root=Path("/srv/app"), journal=object())
     ports = Ports()
     return request, ports, admission, service, events, old_state, candidate
+
+
+def _install_synthetic_real_lifecycle_service(monkeypatch, ports, old_state, tmp_path, *, channel="dev"):
+    control_root = (tmp_path.resolve() / "empty-control-root").resolve()
+    control_root.mkdir(mode=0o755)
+    root_info = control_root.stat()
+    owner_uid, owner_gid = os.getuid(), os.getgid()
+    monkeypatch.setattr(transaction, "_CONTROL_DIRECTORY", control_root)
+    monkeypatch.setattr(bws_installation_lifecycle, "CONTROL_DIRECTORY", str(control_root))
+    monkeypatch.setattr(bws_installation_lifecycle, "_CONTROL_OWNER_UID", owner_uid)
+    monkeypatch.setattr(bws_installation_lifecycle, "_CONTROL_OWNER_GID", owner_gid)
+    old_state["roots"]["application"].update(uid=owner_uid, gid=owner_gid)
+    old_state["roots"]["control"] = {
+        "device": root_info.st_dev, "inode": root_info.st_ino,
+        "uid": root_info.st_uid, "gid": root_info.st_gid, "mode": root_info.st_mode & 0o777,
+    }
+
+    service = bws_installation_lifecycle.FixedBwsService(
+        unit=f"yggdrasil-bws-deploy@{channel}.service", channel=channel,
+    )
+    service.runtime_version = (1, 2, 3, 4, 5, 6, 7, 8)
+    service.retained_runtime = lambda: nullcontext()
+    monkeypatch.setattr(service, "_held_runtime", lambda: None)
+    monkeypatch.setattr(service, "_call", lambda method, _signature: (
+        f"/org/freedesktop/systemd1/unit/yggdrasil_2dbws_2ddeploy_40{channel}_2eservice"
+        if method == "GetUnit" else pytest.fail("unexpected systemd method")
+    ))
+    monkeypatch.setattr(service, "_state", lambda active: 123 if active else 0)
+    monkeypatch.setattr(service, "_single_process", lambda _pid: None)
+    monkeypatch.setattr(bws_installation_lifecycle, "_public_launcher_bytes", lambda: b"old launcher")
+    monkeypatch.setattr(bws_installation_lifecycle, "_pid_token", lambda *_args: "5" * 64)
+
+    start = [bws_installation_lifecycle.LAUNCHER,
+             [bws_installation_lifecycle.LAUNCHER, "serve", channel], False, 1, 2, 3, 4, 5, 1, 0]
+    cleanup = [bws_installation_lifecycle.LAUNCHER,
+               [bws_installation_lifecycle.LAUNCHER, "cleanup", channel], False, 1, 2, 3, 4, 5, 1, 0]
+    properties = {
+        ("Unit", "Id"): service.unit,
+        ("Unit", "LoadState"): "loaded",
+        ("Service", "Type"): "simple",
+        ("Service", "User"): "root",
+        ("Service", "Group"): "root",
+        ("Service", "KillMode"): "control-group",
+        ("Service", "Restart"): "on-failure",
+        ("Unit", "OnFailure"): [],
+        ("Unit", "OnSuccess"): [],
+        ("Unit", "TriggeredBy"): [],
+        ("Service", "Environment"): [],
+        ("Service", "EnvironmentFiles"): [],
+    }
+    monkeypatch.setattr(service, "_get", lambda interface, name, _signature: properties[(interface, name)])
+    monkeypatch.setattr(service, "_exec", lambda name, _action=None: (
+        start if name == "ExecStart" else cleanup if name == "ExecStopPost" else []
+    ))
+    ports.service = lambda _channel: service
+    return service, control_root, properties
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_empty_control_root_qualifies_through_lifecycle_gate(secure_tmp_path, monkeypatch, channel):
+    request, ports, _admission, _service, events, old_state, _candidate = _transaction_fixture(channel=channel)
+    service, _control_root, _properties = _install_synthetic_real_lifecycle_service(
+        monkeypatch, ports, old_state, secure_tmp_path, channel=channel,
+    )
+    revalidation_calls = 0
+    original_revalidation = service.revalidate_empty_control_configuration
+
+    def track_revalidation():
+        nonlocal revalidation_calls
+        revalidation_calls += 1
+        original_revalidation()
+
+    service.revalidate_empty_control_configuration = track_revalidation
+
+    def stop_before_synthetic_backup(*_args):
+        events.append("synthetic_stop_before_backup")
+        raise RuntimeError("synthetic stop after empty-root revalidation")
+
+    ports.prepare = stop_before_synthetic_backup
+
+    result = transaction._execute_source_installation(channel, request, ports)
+
+    assert result["source_installation"]["status"] == "refused_before_stop"
+    assert result["source_installation"].get("prebackup_gate") is None
+    assert service.control_inventory_empty is True
+    assert service.phase == "qualified"
+    assert service.contract is not None
+    assert revalidation_calls == 1
+    assert "synthetic_stop_before_backup" in events
+    assert result["source_installation"]["backup_manifest_sha256"] is None
+    assert not {"prepare", "apply_launcher", "stop_old", "apply_source"} & set(events)
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize(
+    "drift", [
+        "loader_package", "root_identity", "foreign_hint", "root_search_path",
+        "root_search_path_trailing_slash", "environment_file_hint",
+        "before_backup_loader_package", "before_backup_root_identity",
+        "before_backup_foreign_hint", "before_backup_root_search_path",
+        "before_backup_root_search_path_trailing_slash",
+    ],
+)
+def test_empty_control_root_refuses_identity_or_inventory_drift_before_backup(
+    secure_tmp_path, monkeypatch, channel, drift,
+):
+    request, ports, _admission, _service, events, old_state, _candidate = _transaction_fixture(channel=channel)
+    service, control_root, properties = _install_synthetic_real_lifecycle_service(
+        monkeypatch, ports, old_state, secure_tmp_path, channel=channel,
+    )
+    original = bws_installation_lifecycle._discovered_control_projection
+    prebackup_revalidation_calls = 0
+    original_revalidation = service.revalidate_empty_control_configuration
+
+    def track_revalidation():
+        nonlocal prebackup_revalidation_calls
+        prebackup_revalidation_calls += 1
+        original_revalidation()
+
+    service.revalidate_empty_control_configuration = track_revalidation
+    calls = 0
+
+    def add_drift():
+        kind = drift.removeprefix("before_backup_")
+        if kind == "loader_package":
+            (control_root / "app").mkdir(mode=0o755)
+        elif kind == "root_identity":
+            moved = control_root.with_name("moved-control-root")
+            control_root.rename(moved)
+            control_root.mkdir(mode=0o755)
+        elif kind == "foreign_hint":
+            # A literal suffix used to be truncated as a path separator.
+            properties[("Service", "Environment")].append(
+                f"PYTHONPATH={control_root}/app;legacy"
+            )
+            return
+        elif kind == "environment_file_hint":
+            properties[("Service", "EnvironmentFiles")].append(
+                [f"{control_root}/app.env", False]
+            )
+            return
+        else:
+            hint = (
+                str(control_root) + ("/" if kind == "root_search_path_trailing_slash" else "")
+                if kind in {"root_search_path", "root_search_path_trailing_slash"}
+                else f"{control_root}/unclassified-loader"
+            )
+            properties[("Service", "Environment")].append(f"PYTHONPATH={hint}")
+
+    if drift.startswith("before_backup_"):
+        original_verify_sources = ports.verify_caller_sources
+
+        def verify_sources_then_drift(selected_request):
+            original_verify_sources(selected_request)
+            add_drift()
+
+        ports.verify_caller_sources = verify_sources_then_drift
+    else:
+        def introduce_drift(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                add_drift()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(bws_installation_lifecycle, "_discovered_control_projection", introduce_drift)
+
+    result = transaction._execute_source_installation(channel, request, ports)
+
+    assert result["source_installation"]["status"] == "refused_before_backup"
+    assert result["source_installation"]["prebackup_gate"] == "old_kernel_qualification"
+    if drift.startswith("before_backup_"):
+        assert prebackup_revalidation_calls == 1
+        assert service.phase == "qualified"
+    else:
+        assert calls == 2
+        assert prebackup_revalidation_calls == 0
+        assert service.phase == "qualifying"
+    assert not {"prepare", "apply_launcher", "stop_old", "apply_source"} & set(events)
 
 
 def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, terminal=True, legacy=False):

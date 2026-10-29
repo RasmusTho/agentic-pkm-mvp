@@ -2188,6 +2188,23 @@ class _NativePorts:
         _retire_channel_owner(effects, owner)
 
 
+def _captured_control_inventory_is_empty(old_state: dict[str, object]) -> bool:
+    """Recognize only the exact first-install shape verified by the manifest."""
+    packages = old_state.get("source_packages")
+    files = old_state.get("source_files")
+    if (type(packages) is not dict
+            or packages != {"application": ["app", "scripts"], "control": []}
+            or type(files) is not list):
+        return False
+    for row in files:
+        if (type(row) is not dict or type(row.get("root")) is not str
+                or row["root"] not in {"application", "control"}):
+            return False
+        if row["root"] == "control":
+            return False
+    return True
+
+
 def _execute_source_installation(channel: str, raw_request: object, ports: Any) -> dict[str, object]:
     request = _validate_request(channel, raw_request)
     request["channel"] = channel
@@ -2388,6 +2405,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                             application_root={"path": str(config.root), **app_identity},
                             control_root={"path": str(_CONTROL_DIRECTORY), **control_identity},
                             launcher_content=launcher_content,
+                            control_inventory_empty=_captured_control_inventory_is_empty(old_state),
                         )
                         prebackup_gate = "qualified_writer_snapshot"
                         current = _require_writer_snapshot(ports.preflight(effects, request), request)
@@ -2398,11 +2416,14 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                         proposed_generation = _generation_sha(
                             candidate_profile, manifest_proof["new_generation_sha256"], service.contract,
                         )
-                        phase = "qualified"
                         try:
                             verify_caller_sources = getattr(ports, "verify_caller_sources", None)
                             if callable(verify_caller_sources):
                                 verify_caller_sources(request)
+                            if getattr(service, "control_inventory_empty", False):
+                                prebackup_gate = "old_kernel_qualification"
+                                service.revalidate_empty_control_configuration()
+                            phase = "qualified"
                             handle = ports.prepare(
                                 roots, changes, payloads, backup_root, request["bundle_name"],
                             )

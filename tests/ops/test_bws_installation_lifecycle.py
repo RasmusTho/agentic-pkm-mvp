@@ -145,6 +145,46 @@ def test_unit_selection_is_fixed_to_dev_or_test():
         lifecycle.FixedBwsService(unit="unrelated.service", channel="dev")
 
 
+@pytest.mark.parametrize("hint_source", ["launcher", "environment", "environment_file"])
+def test_empty_control_projection_refuses_control_root_hints(
+    hint_source, monkeypatch, secure_tmp_path,
+):
+    secure_tmp_path.chmod(0o750)
+    control_root = (secure_tmp_path.resolve() / "bws-control").resolve()
+    control_root.mkdir(mode=0o755)
+    control_root.chmod(0o755)
+    monkeypatch.setattr(lifecycle, "CONTROL_DIRECTORY", str(control_root))
+    monkeypatch.setattr(lifecycle, "_CONTROL_OWNER_UID", os.getuid())
+    monkeypatch.setattr(lifecycle, "_CONTROL_OWNER_GID", os.getgid())
+    info = control_root.stat()
+    expected_root = {
+        "path": str(control_root), "device": info.st_dev, "inode": info.st_ino,
+        "uid": info.st_uid, "gid": info.st_gid, "mode": info.st_mode & 0o777,
+    }
+    # Prove this synthetic root qualifies without hints before exercising the guard.
+    assert lifecycle._discovered_control_projection(
+        b"fixed launcher", [], [], expected_empty_control_root=expected_root,
+    ) == expected_root
+
+    launcher = b"fixed launcher"
+    environment = []
+    environment_files = []
+    if hint_source == "launcher":
+        launcher += str(control_root).encode()
+    elif hint_source == "environment":
+        environment.append(f"PYTHONPATH={control_root}/app")
+    else:
+        environment_files.append([f"{control_root}/app.env", False])
+
+    with pytest.raises(RuntimeError, match="bws_lifecycle_unproven"):
+        lifecycle._discovered_control_projection(
+            launcher,
+            environment,
+            environment_files,
+            expected_empty_control_root=expected_root,
+        )
+
+
 def test_inflight_exec_stop_post_caller_refuses_before_transaction_mutation(monkeypatch, tmp_path):
     proc_root = tmp_path / "proc"
     process = proc_root / "321"
