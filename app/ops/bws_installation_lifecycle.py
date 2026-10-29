@@ -227,36 +227,58 @@ def _discovered_control_projection(
         discovery = launcher.decode('utf-8') + '\n' + '\n'.join(environment)
         discovery += '\n' + '\n'.join(row[0] for row in environment_files)
         direct_control_root_reference = False
-        if expected_empty_control_root is None:
-            candidates = sorted(set(re.findall(
-                re.escape(CONTROL_DIRECTORY) + r'/[A-Za-z0-9._/-]+', discovery,
-            )))
-        else:
-            # Do not accept a supported prefix that was truncated from an
-            # unclassified path (for example, app@legacy). Parse each complete
-            # token under the fixed root and refuse characters outside the
-            # existing path grammar before applying the app/scripts allowlist.
-            delimiters = set(' \t\n\r\v\f:;,\"\'()]}\x00')
-            hinted_paths = set()
-            for reference in re.finditer(re.escape(CONTROL_DIRECTORY), discovery):
+        hinted_paths: set[str] = set()
+        safe_suffix_characters = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-')
+
+        def collect_control_hints(value: str, separators: set[str]) -> None:
+            nonlocal direct_control_root_reference
+            for reference in re.finditer(re.escape(CONTROL_DIRECTORY), value):
                 suffix_start = reference.end()
-                if suffix_start == len(discovery):
+                if suffix_start == len(value):
                     direct_control_root_reference = True
                     continue
-                first = discovery[suffix_start]
+                first = value[suffix_start]
                 if first == '/':
                     path_end = suffix_start
-                    while path_end < len(discovery) and discovery[path_end] not in delimiters:
+                    while path_end < len(value) and value[path_end] not in separators:
                         path_end += 1
-                    raw_path = discovery[suffix_start:path_end]
+                    raw_path = value[suffix_start:path_end]
                     if re.fullmatch(r'/[A-Za-z0-9._/-]*', raw_path) is None:
                         _refuse()
                     if raw_path.strip('/'):
                         hinted_paths.add(CONTROL_DIRECTORY + raw_path)
                     else:
                         direct_control_root_reference = True
-                elif first not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-':
+                elif first in separators or first not in safe_suffix_characters:
                     direct_control_root_reference = True
+
+        if expected_empty_control_root is None:
+            candidates = sorted(set(re.findall(
+                re.escape(CONTROL_DIRECTORY) + r'/[A-Za-z0-9._/-]+', discovery,
+            )))
+        else:
+            # The fixed launcher is Python source, not an environment/path-list
+            # value. Refuse a hard-coded control-root reference rather than
+            # truncating its source token at a quote or punctuation character.
+            if CONTROL_DIRECTORY in launcher.decode('utf-8'):
+                _refuse()
+            # Preserve typed environment and EnvironmentFiles values while
+            # classifying complete path tokens. Only actual list separators
+            # end a token; punctuation and whitespace stay in the path and fail
+            # closed if unsupported.
+            path_list_separators = {
+                'PATH': {':'},
+                'PYTHONPATH': {':'},
+                'PYTHONHOME': {':'},
+                'LD_LIBRARY_PATH': {':', ';'},
+                'LD_PRELOAD': {':', ' '},
+                'LD_AUDIT': {':', ' '},
+            }
+            for entry in environment:
+                key = entry.partition('=')[0]
+                collect_control_hints(entry, path_list_separators.get(key, set()))
+            for row in environment_files:
+                collect_control_hints(row[0], set())
             candidates = sorted(hinted_paths)
         if not candidates:
             candidates = [CONTROL_DIRECTORY + '/app/ops/postgres_deploy_linux.py']
