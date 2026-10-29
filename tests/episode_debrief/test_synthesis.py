@@ -599,3 +599,40 @@ def test_same_vault_receipt_alias_checks_canonical_lock_destination(episode, tmp
     assert victim.read_text() == 'untouched'
     assert not target.read_bytes()
     assert not (directory / 'activation.jsonl').exists()
+
+
+
+@pytest.mark.parametrize('change', ['body', 'summary', 'target_ref', 'source_goal', 'waiting_on'])
+def test_post_closure_commitment_content_cannot_borrow_old_provenance(episode, change):
+    db, ep, _, docs = episode
+    path = db.root / docs[1]['payload']['note_path']
+    fields, body = load_frontmatter(path.read_text())
+    fields.update(summary='Send the draft report', target_ref='report-A', source_goal='original-goal')
+    body = 'Send the draft report'
+    path.write_text(dump_frontmatter(fields, body))
+    _refresh_observation(db, path)
+    # ERE stamping remains admissible, but semantic content changes after
+    # closure must not be cited under the earlier immutable observation.
+    from app.episodes.assignment import _stamp_note_frontmatter_episode_ref_insert
+    _stamp_note_frontmatter_episode_ref_insert(path, [ep], vault_root=db.root, write_guard=ALLOW)
+    fields, body = load_frontmatter(path.read_text())
+    if change == 'body':
+        body = 'Cancel the supplier contract'
+    else:
+        fields[change] = 'different post-closure obligation'
+    path.write_text(dump_frontmatter(fields, body))
+    docs[1]['text'] = body
+    hybrid._STORE.set_documents(docs)
+    with pytest.raises(create.UnresolvableCitationError, match='closure-time'):
+        run(episode)
+
+
+
+def test_conflicting_retained_scope_carriers_cannot_use_stale_index_scope(episode):
+    db, _, _, docs = episode
+    path = db.root / docs[-1]['payload']['note_path']
+    fields, body = load_frontmatter(path.read_text())
+    fields.update(scope='work', domain='private')
+    path.write_text(dump_frontmatter(fields, body))
+    with pytest.raises(synthesis.DebriefSynthesisError, match='cross_scope_no_flow'):
+        run(episode)

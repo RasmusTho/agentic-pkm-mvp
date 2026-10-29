@@ -159,10 +159,10 @@ def ingest_vault_changed_payload(
     try:
         data = (vault_root / relative_path).read_bytes()
         if content_hash and hashlib.sha256(data).hexdigest() == content_hash:
-            from app.episode_debrief.evidence import commitment_state_fingerprint
+            from app.episode_debrief.evidence import commitment_content_fingerprint
             from scripts.yaml_roundtrip import load_frontmatter
-            fields, _ = load_frontmatter(data.decode("utf-8"))
-            payload["extensions"] = {"episode_debrief_state_fingerprint": commitment_state_fingerprint(fields)}
+            fields, body = load_frontmatter(data.decode("utf-8"))
+            payload["extensions"] = {"episode_debrief_content_fingerprint": commitment_content_fingerprint(fields, body)}
     except (OSError, UnicodeError, ValueError):
         pass
     return payload

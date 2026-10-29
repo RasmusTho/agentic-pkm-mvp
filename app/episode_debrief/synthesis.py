@@ -173,8 +173,8 @@ def _sources(
         fields, body = load_frontmatter(raw)
         if fields.get("uuid") is not None and store.canonical_note_identity(str(fields["uuid"]), vault_binding_id=source_binding_id) != hit.object_id:
             raise create.UnresolvableCitationError("retained source identity differs from the scoped canonical identity")
-        source_scope = fields.get("scope") or fields.get("domain")
-        if source_scope is not None and source_scope != scope:
+        source_scopes = [fields[key] for key in ("scope", "domain") if fields.get(key) is not None]
+        if any(source_scope != scope for source_scope in source_scopes):
             raise DebriefSynthesisError("cross_scope_no_flow: retained note differs from trigger")
         from app.agents.panel.filters import strip_ai_panels
         from app.agents.panel.writeback import strip_ai_status_block
@@ -199,8 +199,8 @@ def _sources(
             # admitted by the Episode binding, not today's mutable note alone.
             artifact = artifacts[index]
             digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-            from app.episode_debrief.evidence import commitment_state_fingerprint
-            state_matches = (artifact.state_fingerprint == commitment_state_fingerprint(fields)) if artifact.state_fingerprint else (artifact.content_hash == digest)
+            from app.episode_debrief.evidence import commitment_content_fingerprint
+            state_matches = (artifact.content_fingerprint == commitment_content_fingerprint(fields, body)) if artifact.content_fingerprint else (artifact.content_hash == digest)
             if not state_matches or artifact.observed_at is None:
                 raise create.UnresolvableCitationError("closure-time commitment state has no matching bound observation")
             from datetime import timezone

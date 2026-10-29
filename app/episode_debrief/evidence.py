@@ -1,14 +1,20 @@
-"""Immutable commitment-state evidence shared by activity producers and debrief admission."""
+"""Immutable commitment-content evidence shared by activity producers and debrief admission."""
 from __future__ import annotations
 
 import hashlib
 import json
 from typing import Any, Mapping
 
+from app.agents.panel.filters import strip_ai_panels
+from app.agents.panel.writeback import strip_ai_status_block
+from app.domain.state_axes import normalize_artifact_state_axes
 
-def commitment_state_fingerprint(fields: Mapping[str, Any]) -> str:
-    # ERE's mechanical episode_ref stamp and YAML formatting are not state changes.
-    state = {key: fields.get(key) for key in (
-        "kind", "commitment", "commitment_id", "commitment_kind", "commitment_state", "state", "status",
-    )}
-    return hashlib.sha256(json.dumps(state, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+
+def commitment_content_fingerprint(fields: Mapping[str, Any], body: str) -> str:
+    # Preserve every semantic field (including summary/target/source_goal and
+    # future fields). Only ERE's mechanical episode_ref stamp is excluded.
+    # Match the existing ingest normalization, not YAML serialization/formatting.
+    normalized = normalize_artifact_state_axes(dict(fields), default_review_state="provisional")
+    normalized.pop("episode_ref", None)
+    content = {"frontmatter": normalized, "body": strip_ai_status_block(strip_ai_panels(body)).strip()}
+    return hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()

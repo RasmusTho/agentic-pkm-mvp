@@ -162,9 +162,10 @@ Episode note`. DEBRIEF-01 is delivered in #6362; DEBRIEF-03 remains separate.
 
 
 Closure-state evidence uses the latest bound observation within the Episode interval for each
-logical source. Registry watcher events carry an optional semantic commitment-state fingerprint
+logical source. Registry watcher events carry an optional semantic commitment-content fingerprint
 under the existing `extensions` object, derived only when their raw content hash matches the
-observed bytes. This survives ERE's mechanical `episode_ref` stamp. Vault-sync created events
+observed bytes. It covers normalized body and all frontmatter except the mechanical `episode_ref`,
+including summary, target, source goal and future commitment fields. This survives ERE's mechanical `episode_ref` stamp. Vault-sync created events
 carry their observed file time under `extensions.observed_at`; their immutable frontmatter provides
 state evidence. Legacy watcher events can prove state only while their full-file hash still matches.
 Missing or stale historical proof fails loudly instead of presenting today's state as closure truth.
