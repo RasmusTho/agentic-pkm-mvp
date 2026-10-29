@@ -380,7 +380,7 @@ def test_refused_before_backup_receipt_is_backward_compatible_and_validates_gate
     assert admission._PREBACKUP_REFUSAL_GATES == transaction._PREBACKUP_REFUSAL_GATES
     request = _request()
     legacy = _receipt(request, status="refused_before_backup")
-    diagnostic = {**legacy, "prebackup_gate": "current_writer_snapshot"}
+    diagnostic = {**legacy, "prebackup_gate": "descriptor_capacity"}
 
     with admission.installation_admission(**request) as lease:
         assert lease._validate_receipt(legacy) == legacy
@@ -390,7 +390,7 @@ def test_refused_before_backup_receipt_is_backward_compatible_and_validates_gate
         with pytest.raises(admission.InstallationAdmissionRefused):
             lease._validate_receipt(unknown_gate)
 
-        incompatible_status = {**_receipt(request), "prebackup_gate": "current_writer_snapshot"}
+        incompatible_status = {**_receipt(request), "prebackup_gate": "descriptor_capacity"}
         with pytest.raises(admission.InstallationAdmissionRefused):
             lease._validate_receipt(incompatible_status)
 
