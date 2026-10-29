@@ -385,8 +385,7 @@ def test_refused_before_backup_receipt_is_backward_compatible_and_validates_gate
     with admission.installation_admission(**request) as lease:
         assert lease._validate_receipt(legacy) == legacy
         assert lease._validate_receipt(diagnostic) == diagnostic
-        for gate in ("descriptor_capacity_unknown", "descriptor_capacity_insufficient",
-                     "descriptor_capacity_ineligible", "descriptor_capacity_admission_refused"):
+        for gate in sorted(admission._PREBACKUP_REFUSAL_GATES):
             specific = {**legacy, "prebackup_gate": gate}
             assert lease._validate_receipt(specific) == specific
             invalid_status = {**_receipt(request), "prebackup_gate": gate}

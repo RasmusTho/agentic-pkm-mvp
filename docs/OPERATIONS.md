@@ -114,13 +114,14 @@ budgets.
 
 #### BWS source-installation refusal diagnostics
 
-A caught `refused_before_backup` receipt includes the finite `prebackup_gate` diagnostic. Its values
-are `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
+A caught `refused_before_backup` receipt includes the finite `prebackup_gate` diagnostic. Its base
+values are `channel_lock_entry`, `channel_owner_check`, `caller_census`, `current_writer_snapshot`,
 `authority_cutover`, `candidate_verification`, `old_disk_state`, `owner_launcher_profile`,
 `backup_roots`, `source_manifest`, `descriptor_capacity`, `descriptor_capacity_unknown`,
 `descriptor_capacity_insufficient`, `descriptor_capacity_ineligible`,
 `descriptor_capacity_admission_refused`, `candidate_profile`, `old_kernel_qualification`,
-`qualified_writer_snapshot`, and `generation_qualification`. The diagnostic contains no exception
+`qualified_writer_snapshot`, and `generation_qualification`, plus the explicit OLD-kernel stage/family
+combinations in the table below. The diagnostic contains no exception
 text or operation input; it identifies the producer gate for that caught refusal. The
 `authority_cutover` value names a real current-writer predicate after the bound plan is read, but
 does not establish that it caused any previously observed refusal. Legacy receipts without this
@@ -129,6 +130,39 @@ capacity, ineligible process context and failed resource admission without numer
 legacy `descriptor_capacity` gate and Source19's inner predicate remain unclassified. The
 `refused_before_backup` status and null generation and backup fields retain
 their existing meanings.
+
+OLD-kernel refusals retain the coarse `old_kernel_qualification` fallback. Supported
+new refusals use `old_kernel_initial_<family>` for service setup, retained-runtime
+entry and the first qualification, or `old_kernel_empty_control_<family>` for the
+final empty-control configuration revalidation immediately before prepare/backup.
+The closed families are:
+
+| Family | Public guard meaning | Supported stages |
+| --- | --- | --- |
+| `setup` | Fixed DEV/TEST unit selection or qualification call shape | `initial` |
+| `retained_runtime` | Registered runtime metadata, retained FD or its ownership/close contract | `initial`, `empty_control` |
+| `unit_properties` | Read-only bus transport, typed response shape or required unit/configuration properties | `initial`, `empty_control` |
+| `root_control` | Application/control projection, root identity, loader inventory, control hints or final configuration equality | `initial`, `empty_control` |
+| `launcher` | Public launcher content/identity, proposed launcher payload or start topology | `initial`, `empty_control` |
+| `service_process` | Active/running state, job/control/main PID, unit-process census or root/start/cwd/runtime/argv/main-task identity | `initial` |
+| `cleanup_contract` | Required cleanup command tuple and execution contract | `initial`, `empty_control` |
+
+These are explicit finite allowlisted gate values, not private predicate values.
+Only the lifecycle's supported refusal type and allowlisted family can refine the
+coarse gate at those two transaction sites; unknown, malformed, unsupported or
+foreign exception classifications retain `old_kernel_qualification`. No exception
+text, argv, transport output, path, environment value, PID/start token, root identity
+or credential enters this diagnostic. Existing receipts with no diagnostic or the
+coarse gate remain readable and immutable. A classified refusal still has null old,
+new and backup hashes and cannot reach prepare, backup, stop or apply. All original
+guards, their invocation order and retained-runtime cleanup remain binding.
+
+Historical Source20 remains `refused_before_backup / old_kernel_qualification`;
+its actual site, subpredicate and native values remain unknown. New source support
+does not retroactively classify it, permit replay or allocate Source21. The retained
+native effect owner alone owns any separately decided later operation under #6170.
+Source delivery establishes no native readiness, DEV/TEST acceptance, admission or
+host/service/credential authority.
 
 ### #6300 fixed-selection reconciliation (historical, count-only)
 
@@ -1063,6 +1097,20 @@ and private runtime binding metadata were verified without exposing credentials.
 The pre-existing `/readyz` HTTP 200 and `/api/health.required_ok=false` signal produced one confirmed
 down alert followed by two duplicate suppressions, with no observed delivery or iteration errors.
 This is normal production monitoring, not a controlled outage, source-health repair or TEST proof.
+
+The [subsequent production upgrade](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6457#issuecomment-6502803665)
+changed only `prod_probe.py` to SHA-256
+`0172b37565a067c26acd37afed8d650be7a56117ad1962860446fd18353058ac` from source
+`0d064c012296589e92987c1f374fa18b05104f7b`, retaining the other 59 files from the initial source above.
+Its mixed 60-file manifest is `3ae600b78abefb751ef8fd73e7639b75a41b09f30d44fd4d06b1bb77101ae861`,
+with unchanged configuration/unit and a qualified interpreter/private normal-child binding.
+Read-only verification observed the same active/enabled invocation over 43 completed suppression
+cycles, zero restarts and the unchanged existing incident. The original executor remains `UNKNOWN`
+at `start_intent/main_process_boundary`, with its helper/cgroup reaped and immutable original
+request/program/result/handle still followable through preserved pinned tooling. The linked actual
+postcondition receipt does not adopt lifecycle ownership or relabel the executor. Its original
+resource guard remains intact and fences later #6457 apply requests; no guard clearance or further
+host compensation was performed. The separate #4076 controlled TEST acceptance remains open.
 
 **Two distinct Makefile targets — do not confuse them:**
 

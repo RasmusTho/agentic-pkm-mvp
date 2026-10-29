@@ -43,8 +43,22 @@ ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
        'SYSTEMD_COLORS': '0', 'SYSTEMD_PAGER': ''}
 
 
-def _refuse() -> NoReturn:
-    raise RuntimeError('bws_lifecycle_unproven') from None
+# Values describe public guard families, never native values or exception text.
+_OLD_QUALIFICATION_SUBGATES = frozenset({
+    'setup', 'retained_runtime', 'unit_properties', 'root_control',
+    'launcher', 'service_process', 'cleanup_contract',
+})
+
+
+class _OldQualificationRefusal(RuntimeError):
+    def __init__(self, subgate: str | None = None) -> None:
+        self.subgate = (subgate if type(subgate) is str
+                        and subgate in _OLD_QUALIFICATION_SUBGATES else None)
+        super().__init__('bws_lifecycle_unproven')
+
+
+def _refuse(subgate: str | None = None) -> NoReturn:
+    raise _OldQualificationRefusal(subgate) from None
 
 
 def _control_projection_descriptor_bound() -> int:
@@ -73,34 +87,34 @@ def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def _run(argv: list[str]) -> bytes:
     # No caller environment, credential, shell, stdin, pager or remote bus.
     if os.geteuid() != 0 or sys.platform != 'linux':
-        _refuse()
+        _refuse('unit_properties')
     try:
         completed = subprocess.run(argv, stdin=subprocess.DEVNULL, env=ENV,
             capture_output=True, check=False, timeout=60)
         if (completed.returncode != 0 or completed.stderr
                 or type(completed.stdout) is not bytes or len(completed.stdout) > 131072):
-            _refuse()
+            _refuse('unit_properties')
         return completed.stdout
     except Exception:
         # No exception's argv/stdout/stderr/private value becomes a diagnostic.
         # A timeout or unknown action return is never translated into stopped.
-        _refuse()
+        _refuse('unit_properties')
 
 
 def _typed(argv: list[str], signature: str) -> Any:
     try:
         value = json.loads(_run(argv), object_pairs_hook=_unique)
         if type(value) is not dict or set(value) != {'type', 'data'} or value['type'] != signature:
-            _refuse()
+            _refuse('unit_properties')
         return value['data']
     except Exception:
-        _refuse()
+        _refuse('unit_properties')
 
 
 def _runtime_identity(value: os.stat_result) -> tuple[int, ...]:
     if (not stat.S_ISREG(value.st_mode) or value.st_uid != 0 or value.st_gid != 0
             or value.st_mode & 0o022 or not value.st_mode & 0o111):
-        _refuse()
+        _refuse('retained_runtime')
     return (value.st_dev, value.st_ino, value.st_uid, value.st_gid,
             value.st_mode, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
@@ -112,7 +126,7 @@ def _runtime_version() -> tuple[int, ...]:
     try:
         return _runtime_identity(os.stat(RUNTIME))
     except Exception:
-        _refuse()
+        _refuse('retained_runtime')
 
 
 def _application_projection(value: Any) -> dict[str, Any]:
@@ -125,7 +139,7 @@ def _application_projection(value: Any) -> dict[str, Any]:
             or value['device'] < 0 or value['inode'] <= 0
             or value['uid'] != _CONTROL_OWNER_UID or value['gid'] != _CONTROL_OWNER_GID
             or value['mode'] not in {0o700, 0o755}):
-        _refuse()
+        _refuse('root_control')
     return dict(value)
 
 
@@ -138,17 +152,17 @@ def _public_launcher_bytes() -> bytes:
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or before.st_gid != 0
                 or stat.S_IMODE(before.st_mode) != 0o755 or before.st_nlink != 1
                 or not 0 < before.st_size <= 65536 or os.get_inheritable(fd)):
-            _refuse()
+            _refuse('launcher')
         raw = os.pread(fd, before.st_size + 1, 0)
         def version(value: os.stat_result) -> tuple[int, ...]:
             return (value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode,
                     value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
         if (len(raw) != before.st_size or version(os.fstat(fd)) != version(before)
                 or version(os.stat(LAUNCHER, follow_symlinks=False)) != version(before)):
-            _refuse()
+            _refuse('launcher')
         return raw
     except Exception:
-        _refuse()
+        _refuse('launcher')
     finally:
         if fd is not None:
             os.close(fd)
@@ -255,12 +269,12 @@ def _discovered_control_projection(
             if (CONTROL_DIRECTORY in launcher.decode('utf-8')
                     or any(CONTROL_DIRECTORY in value for value in environment)
                     or any(CONTROL_DIRECTORY in row[0] for row in environment_files)):
-                _refuse()
+                _refuse('root_control')
             candidates = []
         if not candidates:
             candidates = [CONTROL_DIRECTORY + '/app/ops/postgres_deploy_linux.py']
         if len(candidates) > _CONTROL_PROJECTION_MAX_HINTS:
-            _refuse()
+            _refuse('root_control')
 
         def directory(
             name: str, parent: int | None = None, *, allow_0750_ancestor: bool = False,
@@ -275,7 +289,7 @@ def _discovered_control_projection(
                         (0, 0), (_CONTROL_OWNER_UID, _CONTROL_OWNER_GID),
                     }
                     or stat.S_IMODE(info.st_mode) not in allowed_modes or os.get_inheritable(fd)):
-                _refuse()
+                _refuse('root_control')
             return fd
 
         def anchor(parent: int) -> bool:
@@ -285,7 +299,7 @@ def _discovered_control_projection(
                 for name in ('app', 'ops'):
                     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
                     if stat.S_ISLNK(info.st_mode):
-                        _refuse()
+                        _refuse('root_control')
                     if not stat.S_ISDIR(info.st_mode):
                         return False
                     parent = directory(name, parent)
@@ -295,13 +309,13 @@ def _discovered_control_projection(
             if (not stat.S_ISREG(info.st_mode)
                     or info.st_uid != _CONTROL_OWNER_UID or info.st_gid != _CONTROL_OWNER_GID
                     or stat.S_IMODE(info.st_mode) != 0o644 or info.st_nlink != 1):
-                _refuse()
+                _refuse('root_control')
             return True
 
         def projection(fd: int, path: str = CONTROL_DIRECTORY) -> dict[str, Any]:
             info = os.fstat(fd)
             if not stat.S_ISDIR(info.st_mode):
-                _refuse()
+                _refuse('root_control')
             return dict(path=path, device=info.st_dev, inode=info.st_ino,
                         uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode))
 
@@ -314,14 +328,14 @@ def _discovered_control_projection(
             parts = candidate[len(CONTROL_DIRECTORY) + 1:].rstrip('/').split('/')
             if (len(parts) > _CONTROL_PROJECTION_MAX_COMPONENTS
                     or any(name in {'', '.', '..'} for name in parts)):
-                _refuse()
+                _refuse('root_control')
             ancestors = [(CONTROL_DIRECTORY, root)]
             for name in parts:
                 path, parent = ancestors[-1]
                 try:
                     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
                     if stat.S_ISLNK(info.st_mode):
-                        _refuse()
+                        _refuse('root_control')
                     if not stat.S_ISDIR(info.st_mode):
                         break
                     child = directory(name, parent, allow_0750_ancestor=True)
@@ -332,14 +346,14 @@ def _discovered_control_projection(
                 if anchor(fd):
                     info = os.fstat(fd)
                     if stat.S_IMODE(info.st_mode) not in {0o700, 0o755}:
-                        _refuse()
+                        _refuse('root_control')
                     roots[path] = projection(fd, path)
                     break
         if expected_empty_control_root is not None:
             expected = _application_projection(expected_empty_control_root)
             actual = projection(root)
             if actual != expected or roots:
-                _refuse()
+                _refuse('root_control')
             # The exception is only for first install before either public
             # loader package exists. Any entry in either slot, including a
             # symlink or a non-directory, is inventory drift.
@@ -348,7 +362,7 @@ def _discovered_control_projection(
                     os.stat(name, dir_fd=root, follow_symlinks=False)
                 except FileNotFoundError:
                     continue
-                _refuse()
+                _refuse('root_control')
 
             # Reopen the fixed path without following links so the returned
             # identity still names the directory currently installed there.
@@ -359,13 +373,13 @@ def _discovered_control_projection(
                     allow_0750_ancestor=index < len(control_parts) - 1,
                 )
             if projection(current_root) != actual:
-                _refuse()
+                _refuse('root_control')
             return actual
         if len(roots) != 1:
-            _refuse()
+            _refuse('root_control')
         return next(iter(roots.values()))
     except Exception:
-        _refuse()
+        _refuse('root_control')
     finally:
         unknown = False
         for fd in reversed(descriptors):
@@ -374,7 +388,7 @@ def _discovered_control_projection(
             except OSError:
                 unknown = True
         if unknown:
-            _refuse()
+            _refuse('root_control')
 
 
 def _pid_token(
@@ -390,22 +404,22 @@ def _pid_token(
     registered runtime alias, whose target/version must remain unchanged.
     """
     if type(pid) is not int or not 0 < pid < 2**31:
-        _refuse()
+        _refuse('service_process')
     descriptor = os.open(PROC / str(pid), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         initial = os.fstat(descriptor)
         if initial.st_uid != 0 or not stat.S_ISDIR(initial.st_mode):
-            _refuse()
+            _refuse('service_process')
 
         def read(name: str, limit: int) -> bytes:
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
             try:
                 info = os.fstat(fd)
                 if info.st_uid != 0 or not stat.S_ISREG(info.st_mode):
-                    _refuse()
+                    _refuse('service_process')
                 data = os.read(fd, limit + 1)
                 if not 0 < len(data) <= limit:
-                    _refuse()
+                    _refuse('service_process')
                 return data
             finally:
                 os.close(fd)
@@ -414,17 +428,17 @@ def _pid_token(
             raw = read('stat', 16384)
             match = re.fullmatch(rb'([1-9][0-9]*) \((.*)\) ([^\n]+)\n?', raw)
             if match is None or int(match[1]) != pid:
-                _refuse()
+                _refuse('service_process')
             fields = match[3].split()
             if (len(fields) < 20 or fields[0] not in {b'R', b'S', b'D', b'I'}
                     or not fields[19].isdigit()):
-                _refuse()
+                _refuse('service_process')
             uid = [line.split()[1:] for line in read('status', 65536).splitlines() if line.startswith(b'Uid:')]
             if uid != [[b'0', b'0', b'0', b'0']]:
-                _refuse()
+                _refuse('service_process')
             if read('cmdline', 16384) != b'\0'.join(
                     part.encode() for part in (RUNTIME, LAUNCHER, 'serve', channel)) + b'\0':
-                _refuse()
+                _refuse('service_process')
             try:
                 cwd = os.stat('cwd', dir_fd=descriptor)
                 exe = os.stat('exe', dir_fd=descriptor)
@@ -434,15 +448,15 @@ def _pid_token(
                         or os.readlink('cwd', dir_fd=descriptor) != application['path']
                         or (exe.st_dev, exe.st_ino) != runtime_version[:2]
                         or _runtime_version() != runtime_version):
-                    _refuse()
+                    _refuse('service_process')
             except Exception:
                 # Never include a proc target, runtime path or caller value in
                 # the emitted error. Missing/changed links are unknown, not idle.
-                _refuse()
+                _refuse('service_process')
             tasks = os.open('task', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
             try:
                 if os.listdir(tasks) != [str(pid)]:
-                    _refuse()
+                    _refuse('service_process')
             finally:
                 os.close(tasks)
             return fields[19].decode('ascii')
@@ -450,7 +464,7 @@ def _pid_token(
         start = identity()
         named = os.stat(PROC / str(pid), follow_symlinks=False)
         if (named.st_dev, named.st_ino) != (initial.st_dev, initial.st_ino) or identity() != start:
-            _refuse()
+            _refuse('service_process')
         return hashlib.sha256(f'{unit}:{pid}:{start}'.encode()).hexdigest()
     finally:
         os.close(descriptor)
@@ -460,7 +474,7 @@ class FixedBwsService:
     def __init__(self, *, unit: str, channel: str) -> None:
         if (channel not in {'dev', 'test'} or type(unit) is not str
                 or unit != f'yggdrasil-bws-deploy@{channel}.service'):
-            _refuse()
+            _refuse('setup')
         self.unit, self.channel = unit, channel
         self.object: str | None = None
         self.phase = 'unqualified'
@@ -483,22 +497,22 @@ class FixedBwsService:
     def _held_runtime(self) -> None:
         try:
             if self.runtime_version is None:
-                _refuse()
+                _refuse('retained_runtime')
             if self.runtime_fd is None:
                 if self.runtime_close_completed and _runtime_version() == self.runtime_version:
                     return
-                _refuse()
+                _refuse('retained_runtime')
             if (os.get_inheritable(self.runtime_fd)
                     or fcntl.fcntl(self.runtime_fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY
                     or _runtime_identity(os.fstat(self.runtime_fd)) != self.runtime_version
                     or _runtime_version() != self.runtime_version):
-                _refuse()
+                _refuse('retained_runtime')
         except Exception:
-            _refuse()
+            _refuse('retained_runtime')
 
     def _runtime_contract(self) -> tuple[dict[str, Any], tuple[int, ...]]:
         if self.application is None or self.runtime_version is None:
-            _refuse()
+            _refuse('retained_runtime')
         return self.application, self.runtime_version
 
     @contextmanager
@@ -511,7 +525,7 @@ class FixedBwsService:
         rechecks metadata; it is NOT exclusion of independent runtime writers.
         """
         if self.phase != 'unqualified' or self.runtime_context_started:
-            _refuse()
+            _refuse('retained_runtime')
         self.runtime_context_started = True
         fd: int | None = None
         version: tuple[int, ...] | None = None
@@ -526,7 +540,7 @@ class FixedBwsService:
                 self.runtime_fd, self.runtime_version = fd, version
                 self._held_runtime()
             except Exception:
-                _refuse()
+                _refuse('retained_runtime')
             body_entered = True
             yield
         finally:
@@ -561,23 +575,23 @@ class FixedBwsService:
                 self.runtime_fd = None
             if unknown:
                 # Never retry close: the FD may already have been released.
-                _refuse()
+                _refuse('retained_runtime')
             self.runtime_close_completed = fd is not None
 
     def _call(self, method: str, signature: str) -> Any:
         # Only these two read-only Manager methods are constructed here.
         if method not in {'GetUnit', 'GetUnitProcesses'}:
-            _refuse()
+            _refuse('unit_properties')
         value = _typed(['busctl', '--system', '--no-pager', '--json=short',
             '--auto-start=no', '--allow-interactive-authorization=no', '--timeout=30s',
             'call', BUS, MANAGER, BUS + '.Manager', method, 's', self.unit], signature)
         if type(value) is not list or len(value) != 1:
-            _refuse()
+            _refuse('unit_properties')
         return value[0]
 
     def _get(self, interface: str, name: str, signature: str) -> Any:
         if self.object is None:
-            _refuse()
+            _refuse('unit_properties')
         return _typed(['busctl', '--system', '--no-pager', '--json=short',
             '--auto-start=no', '--allow-interactive-authorization=no', '--timeout=30s',
             'get-property', BUS, self.object, BUS + '.' + interface, name], signature)
@@ -586,16 +600,16 @@ class FixedBwsService:
         rows = self._get('Service', name, EXEC_TYPE)
         if action is None:
             if rows != []:
-                _refuse()
+                _refuse('launcher')
             return []
         if type(rows) is not list or len(rows) != 1:
-            _refuse()
+            _refuse('cleanup_contract' if action == 'cleanup' else 'launcher')
         row = rows[0]
         if (type(row) is not list or len(row) != 10
                 or row[:3] != [LAUNCHER, [LAUNCHER, action, self.channel], False]
                 or type(row[2]) is not bool
                 or any(type(value) is not int or value < 0 for value in row[3:])):
-            _refuse()
+            _refuse('cleanup_contract' if action == 'cleanup' else 'launcher')
         return row
 
     def _config(self) -> tuple[Any, ...]:
@@ -607,10 +621,10 @@ class FixedBwsService:
         ):
             for key, expected in values.items():
                 if self._get(interface, key, 's') != expected:
-                    _refuse()
+                    _refuse('unit_properties')
         for name in ('OnFailure', 'OnSuccess', 'TriggeredBy'):
             if self._get('Unit', name, 'as') != []:
-                _refuse()
+                _refuse('unit_properties')
         for name in ('ExecCondition', 'ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecReload'):
             self._exec(name)
         start = self._exec('ExecStart', 'serve')
@@ -622,7 +636,7 @@ class FixedBwsService:
                 or type(files) is not list or len(files) > 32
                 or any(type(row) is not list or len(row) != 2 or type(row[0]) is not str
                        or '\0' in row[0] or len(row[0]) > 4096 or type(row[1]) is not bool for row in files)):
-            _refuse()
+            _refuse('unit_properties')
         launcher = _public_launcher_bytes()
         allowed = (
             (self.launcher_before,) if self.phase in {
@@ -636,12 +650,12 @@ class FixedBwsService:
             (self.launcher_before, self.launcher_after)
         )
         if launcher not in allowed:
-            _refuse()
+            _refuse('launcher')
         # Qualify the proposed public launcher against the SAME current typed
         # unit configuration before backup/stop. Old-only hints must not allow
         # an installation whose final root-first launcher loses this topology.
         if self.launcher_after is None or self.control is None:
-            _refuse()
+            _refuse('launcher')
         expected_empty_control_root = (
             self.control if self.control_inventory_empty else None
         )
@@ -650,31 +664,31 @@ class FixedBwsService:
                 raw, environment, files,
                 expected_empty_control_root=expected_empty_control_root,
             ) != self.control:
-                _refuse()
+                _refuse('root_control')
         hints = hashlib.sha256(json.dumps([environment, files], separators=(',', ':')).encode()).hexdigest()
         return start[:3], cleanup[:3], hints
 
     def _state(self, active: bool) -> int:
         expected = ('active', 'running') if active else ('inactive', 'dead')
         if (self._get('Unit', 'ActiveState', 's'), self._get('Unit', 'SubState', 's')) != expected:
-            _refuse()
+            _refuse('service_process')
         job = self._get('Unit', 'Job', '(uo)')
         if (type(job) is not list or len(job) != 2 or type(job[0]) is not int
                 or job[0] != 0 or job[1] != '/'):
-            _refuse()
+            _refuse('service_process')
         control = self._get('Service', 'ControlPID', 'u')
         pid = self._get('Service', 'MainPID', 'u')
         if type(control) is not int or control != 0 or type(pid) is not int:
-            _refuse()
+            _refuse('service_process')
         if (active and not 0 < pid < 2**31) or (not active and pid != 0):
-            _refuse()
+            _refuse('service_process')
         return pid
 
     def _single_process(self, pid: int) -> None:
         rows = self._call('GetUnitProcesses', 'a(sus)')
         if (type(rows) is not list or len(rows) != 1 or type(rows[0]) is not list
                 or len(rows[0]) != 3 or type(rows[0][1]) is not int or rows[0][1] != pid):
-            _refuse()
+            _refuse('service_process')
         # Raw cgroup/name data are neither returned nor printed.
 
     def qualify_old(
@@ -686,7 +700,7 @@ class FixedBwsService:
                 and (type(expected_service_identity) is not str
                      or re.fullmatch('[0-9a-f]{64}', expected_service_identity) is None))
                 or type(control_inventory_empty) is not bool):
-            _refuse()
+            _refuse('setup')
         self._held_runtime()
         self.phase = 'qualifying'
         application = _application_projection(application_root)
@@ -697,36 +711,36 @@ class FixedBwsService:
         if (control['path'] == application['path']
                 or not (control['path'] == CONTROL_DIRECTORY
                         or control['path'].startswith(CONTROL_DIRECTORY + '/'))):
-            _refuse()
+            _refuse('root_control')
         if control_inventory_empty and control['path'] != CONTROL_DIRECTORY:
-            _refuse()
+            _refuse('root_control')
         try:
             if (type(launcher_content) is not dict or set(launcher_content) != {'sha256', 'base64'}
                     or type(launcher_content['base64']) is not str):
-                _refuse()
+                _refuse('launcher')
             proposed_launcher = base64.b64decode(launcher_content['base64'], validate=True)
             if (not 0 < len(proposed_launcher) <= 65536
                     or hashlib.sha256(proposed_launcher).hexdigest() != launcher_content['sha256']):
-                _refuse()
+                _refuse('launcher')
             self.launcher_after = proposed_launcher
         except Exception:
-            _refuse()
+            _refuse('launcher')
         self.launcher_before = _public_launcher_bytes()
         self.object = self._call('GetUnit', 'o')
         if (type(self.object) is not str
                 or re.fullmatch(r'/org/freedesktop/systemd1/unit/[A-Za-z0-9_]+', self.object) is None):
-            _refuse()
+            _refuse('unit_properties')
         self.contract = self._config()
         old_pid = self._state(True)
         runtime_version = self.runtime_version
         if runtime_version is None:
-            _refuse()
+            _refuse('retained_runtime')
         self.old_pid = old_pid
         self._single_process(old_pid)
         old_token = _pid_token(self.unit, self.channel, old_pid, application, runtime_version)
         self.old_token = old_token
         if expected_service_identity is not None and old_token != expected_service_identity:
-            _refuse()
+            _refuse('service_process')
         self.cleanup = self._exec('ExecStopPost', 'cleanup')
         self.phase = 'qualified'
 
@@ -734,7 +748,7 @@ class FixedBwsService:
         """Recheck the captured first-install control root at the backup boundary."""
         if (self.phase != 'qualified' or not self.control_inventory_empty
                 or self.contract is None or self._config() != self.contract):
-            _refuse()
+            _refuse('root_control')
 
     def stop_old(self) -> None:
         if (self.phase != 'qualified' or self.launcher_after is None
