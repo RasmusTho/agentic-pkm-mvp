@@ -24,13 +24,16 @@ class McpToolDefinition:
     name: str
     description: str
     input_schema: dict[str, Any]
+    output_schema: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "description": self.description,
-            "inputSchema": self.input_schema,
-        }
+        result = {"name": self.name, "description": self.description, "inputSchema": self.input_schema}
+        if self.output_schema is not None:
+            result["outputSchema"] = self.output_schema
+        if self.metadata is not None:
+            result["_meta"] = self.metadata
+        return result
 
 
 @dataclass(frozen=True)

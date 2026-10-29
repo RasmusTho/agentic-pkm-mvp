@@ -47,8 +47,11 @@ class MimerMcpTransportConfig:
     tls_key: str | None = None
     auth_token: str | None = None
     runtime_read_deadline_seconds: float = DEFAULT_RUNTIME_READ_DEADLINE_SECONDS
+    profile: str = "v1"
 
     def validate(self) -> None:
+        if self.profile not in {"v1", "v2"}:
+            raise ValueError("Mimer MCP profile must be v1 or v2")
         if self.transport != _ALLOWED_TRANSPORT:
             raise ValueError("Mimer MCP v1 supports only the stdio transport")
         if any(value is not None for value in (self.bind, self.port, self.tls_cert, self.tls_key, self.auth_token)):
@@ -59,17 +62,12 @@ class MimerMcpTransportConfig:
             raise ValueError("Mimer MCP v1 requires a loopback HTTP API endpoint")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("Mimer MCP loopback endpoint must not carry credentials or URL options")
+        if self.profile == "v2" and parsed.path not in {"", "/"}:
+            raise ValueError("Mimer MCP v2 requires a loopback HTTP origin")
 
 
-def _tool_definitions(semantic: MimerMcpServer) -> list[types.Tool]:
-    return [
-        types.Tool(
-            name=tool.name,
-            description=tool.description,
-            inputSchema=tool.input_schema,
-        )
-        for tool in semantic.list_tools()
-    ]
+def _tool_definitions(definitions) -> list[types.Tool]:
+    return [types.Tool(**tool.as_dict()) for tool in definitions]
 
 
 def _result_content(result: McpToolResult) -> list[types.TextContent]:
@@ -83,47 +81,94 @@ def _result_content(result: McpToolResult) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=json.dumps(payload, separators=(",", ":"), default=str))]
 
 
-def create_stdio_server(semantic: MimerMcpServer) -> Server:
-    """Create the SDK server with only the delivered five semantic tools."""
+def create_stdio_server(semantic) -> Server:
+    """Keep v1 fixed; explicitly selected v2 obtains request-local discovery."""
+    v2 = getattr(semantic, "profile", None) == "v2"
+    server = Server("mimer-mcp", version="2" if v2 else "1")
 
-    server = Server("mimer-mcp", version="1")
+    def metadata():
+        meta = server.request_context.meta
+        return meta.model_dump() if meta is not None else {}
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
-        return _tool_definitions(semantic)
+        definitions = (await asyncio.to_thread(semantic.list_tools, metadata())) if v2 else semantic.list_tools()
+        return _tool_definitions(definitions)
 
     @server.call_tool(validate_input=True)
     async def call_tool(name: str, arguments: Mapping[str, Any]) -> types.CallToolResult:
-        result = semantic.call_tool(name, arguments)
+        result = (await asyncio.to_thread(semantic.call_tool, name, arguments, meta=metadata())) if v2 else semantic.call_tool(name, arguments)
         if name == "mimer.health":
-            _LOG.info(
-                "mimer_mcp_health transport=stdio readiness=%s dependency=%s",
-                "degraded" if result.is_error else "ready",
-                "loopback_http",
-            )
-        return types.CallToolResult(content=_result_content(result), isError=result.is_error)
+            _LOG.info("mimer_mcp_health transport=stdio readiness=%s dependency=%s",
+                "degraded" if result.is_error else "ready", "loopback_http")
+        return types.CallToolResult(content=_result_content(result), isError=result.is_error,
+            **({"structuredContent": result.content} if v2 and not result.is_error and isinstance(result.content, dict) else {}))
+
+    if v2:
+        @server.list_resources()
+        async def list_resources() -> list[types.Resource]:
+            return [types.Resource(uri="mimer://v2/capabilities", name="Native operation capabilities",
+                mimeType="application/json")]
+
+        @server.read_resource()
+        async def read_resource(uri):
+            from mcp.server.lowlevel.helper_types import ReadResourceContents
+            if str(uri) != "mimer://v2/capabilities":
+                raise ValueError("unknown resource")
+            result = await asyncio.to_thread(semantic.discover, metadata())
+            if result.is_error:
+                raise ValueError("native operation discovery unavailable")
+            return [ReadResourceContents(json.dumps(result.content), mime_type="application/json")]
 
     return server
 
 
+class _V2PayloadLogFilter(logging.Filter):
+    """SDK request/validation logs may contain raw request metadata.
+
+    Suppress those payload-bearing dependency records, including SDK calls to
+    the root logger, without storing carrier values or altering API results.
+    """
+    def filter(self, record):
+        return not (record.name.startswith(("mcp.", "httpx", "httpcore"))
+                    or "/mcp/" in record.pathname.replace("\\", "/"))
+
+
+def _protect_v2_diagnostics():
+    guard = _V2PayloadLogFilter()
+    loggers = [logging.getLogger(), *(logger for logger in logging.Logger.manager.loggerDict.values()
+                                     if isinstance(logger, logging.Logger))]
+    for logger in loggers:
+        for handler in logger.handlers:
+            handler.addFilter(guard)
+
+
 async def serve_stdio(
     config: MimerMcpTransportConfig,
-    semantic_factory: Callable[..., MimerMcpServer] = MimerMcpServer.for_loopback,
+    semantic_factory: Callable[..., Any] | None = None,
 ) -> None:
     """Run one client-spawned stdio server until the client closes its streams."""
 
     config.validate()
+    if config.profile == "v2":
+        _protect_v2_diagnostics()
+    if semantic_factory is None:
+        if config.profile == "v2":
+            from .v2 import MimerMcpV2Server
+            semantic_factory = MimerMcpV2Server.for_loopback
+        else:
+            semantic_factory = MimerMcpServer.for_loopback
     semantic = semantic_factory(
         config.base_url,
         runtime_read_deadline_seconds=config.runtime_read_deadline_seconds,
     )
     server = create_stdio_server(semantic)
-    dependency = semantic.call_tool("mimer.health", {})
-    readiness = "degraded" if dependency.is_error else "ready"
-    if dependency.is_error:
-        _LOG.warning(
-            "mimer_mcp_starting transport=stdio readiness=degraded dependency=loopback_http"
-        )
+    readiness = "awaiting_request_context"
+    if config.profile == "v1":
+        dependency = semantic.call_tool("mimer.health", {})
+        readiness = "degraded" if dependency.is_error else "ready"
+        if dependency.is_error:
+            _LOG.warning("mimer_mcp_starting transport=stdio readiness=degraded dependency=loopback_http")
     try:
         async with stdio_server() as (read_stream, write_stream):
             _LOG.info("mimer_mcp_started transport=stdio readiness=%s dependency=loopback_http", readiness)
@@ -132,7 +177,7 @@ async def serve_stdio(
                 write_stream,
                 InitializationOptions(
                     server_name="mimer-mcp",
-                    server_version="1",
+                    server_version="2" if config.profile == "v2" else "1",
                     capabilities=server.get_capabilities(
                         notification_options=NotificationOptions(),
                         experimental_capabilities={},
@@ -150,6 +195,7 @@ def parse_config(argv: Sequence[str] | None = None) -> MimerMcpTransportConfig:
 
     parser = argparse.ArgumentParser(prog="mimer-mcp")
     parser.add_argument("--transport", default=_ALLOWED_TRANSPORT)
+    parser.add_argument("--profile", choices=("v1", "v2"), default="v1")
     parser.add_argument("--base-url", default=_DEFAULT_BASE_URL)
     parser.add_argument("--bind")
     parser.add_argument("--port", type=int)

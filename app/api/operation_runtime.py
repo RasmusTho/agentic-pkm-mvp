@@ -17,6 +17,7 @@ from typing import Any, Callable, Iterator, Mapping
 from fastapi import HTTPException, Request
 
 from app.api.read_operation_owners import _locate_identity, build_read_operation_adapter
+from app.api.operation_schemas import operation_transport_schemas
 from app.api.routes import capture
 from app.api.routes.active_context_selection import build_selection_service, get_selection_store
 from app.auth import resolve_auth_subject
@@ -113,11 +114,20 @@ class ProductionOperationRuntime:
             installed.add("operation.batch")
         else:
             unavailable["operation.batch"] = "qualified finite batch owner unavailable"
+        schemas = operation_transport_schemas()
         return CapabilityDiscovery(tuple(
             CapabilityAvailability(
                 name, CapabilitySupport.SUPPORTED if name in installed else CapabilitySupport.UNAVAILABLE,
                 reason=None if name in installed else unavailable[name],
                 extensions={"authority_class": "governed_effect" if name in EFFECTS or name in unavailable or name == "operation.batch" else "read_only",
+                            "side_effect_class": "source_write" if name in EFFECTS or name in unavailable or name == "operation.batch" else "none",
+                            "preview_support": name in installed and (name in EFFECTS or name == "operation.batch"),
+                            "maturity": "active" if name in installed else "planned",
+                            "output_schema": schemas["outcome"] if name != "operation.batch" else {"type": "object"},
+                            "input_schema": (schemas["discovery"] if name == "operation.discovery" else
+                                schemas["batch_preview"] if name == "operation.batch" else
+                                {**schemas["command"], "properties": {**schemas["command"]["properties"],
+                                    "operation_id": {"type": "string", "const": name}}}),
                             **({"supported_kinds": batch_kinds, "max_targets": 100,
                                 "partial_success_policy": "independent"} if name == "operation.batch" else {})},
             ) for name in sorted(installed | set(unavailable))
@@ -134,7 +144,11 @@ class ProductionOperationRuntime:
                           provenance=OperationProvenance(self.actor, "http", "shared_http"))
         if request.operation_id in READ_OWNERS or request.operation_id == "operation.discovery":
             adapter = build_read_operation_adapter(self.registry)
-            return replace(adapter, discovery=self.discovery()).invoke(request, self.carrier)
+            outcome = replace(adapter, discovery=self.discovery()).invoke(request, self.carrier)
+            if request.operation_id == "operation.discovery":
+                return replace(outcome, extensions={**outcome.extensions,
+                    "transport_schemas": operation_transport_schemas()})
+            return outcome
         if request.operation_id not in self.kernel.handlers:
             return OperationOutcome(request.request_id, OperationStatus.NOT_SUPPORTED,
                                     request.operation_id, self.context,

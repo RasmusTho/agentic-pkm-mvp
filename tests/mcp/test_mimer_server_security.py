@@ -65,8 +65,9 @@ def _request(process: subprocess.Popen[str], payload: dict[str, object]) -> dict
     return response
 
 
+@pytest.mark.parametrize("profile", ["v1", "v2"])
 def test_stdio_production_entrypoint_opens_no_network_listener(
-    tmp_path: Path, installed_entrypoint: Path
+    tmp_path: Path, installed_entrypoint: Path, profile: str
 ) -> None:
     entrypoint = installed_entrypoint
     probe = tmp_path / "probe"
@@ -81,7 +82,7 @@ def test_stdio_production_entrypoint_opens_no_network_listener(
         encoding="utf-8",
     )
     process = subprocess.Popen(
-        [str(entrypoint), "--transport", "stdio"],
+        [str(entrypoint), "--transport", "stdio", "--profile", profile],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         env={**os.environ, "PYTHONPATH": str(probe)},
     )

@@ -48,9 +48,12 @@ def test_sidecar_dependency_import_filesystem_credential_and_route_boundaries() 
     assert 'mimer-mcp = "mimer_mcp_sidecar.transport:main"' in manifest
     assert "mcp>=1.29,<2" in manifest and "httpx>=0.27,<1" in manifest
     assert "app" not in manifest and "app" not in lock
+    # V1 retains the exact five-route fence; opt-in v2 has its separate finite
+    # shared-operation boundary, without changing dependency/credential isolation.
+    v1_tree = ast.parse((sidecar / "mimer_mcp_sidecar/semantic.py").read_text())
     routes = {
         node.value
-        for node in ast.walk(tree)
+        for node in ast.walk(v1_tree)
         if isinstance(node, ast.Constant)
         and isinstance(node.value, str)
         and node.value.startswith("/")
@@ -83,3 +86,16 @@ def test_core_only_wheel_imports_mimer_mcp_compatibility_without_sidecar(tmp_pat
         text=True,
     )
     assert result.stdout.strip() == "ok"
+
+
+def test_v2_profile_uses_only_fixed_shared_operations_http_routes():
+    source = Path("mimer-mcp-sidecar/mimer_mcp_sidecar/v2.py").read_text()
+    tree = ast.parse(source)
+    routes = {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
+              and isinstance(node.value, str) and node.value.startswith("/")}
+    assert routes == {"/", "/api/operations", "/api/operations/capabilities",
+        "/api/operations/preconditions", "/api/operations/receipts/",
+        "/api/operations/batches/preview", "/api/operations/batches/"}
+    assert "follow_redirects=False" in source and "trust_env=False" in source
+    assert not any(term in source for term in ("OperationExecutionKernel", "ProductionOperationRuntime",
+        "receipt_store", "build_write_operation_handlers", "X-API-Key", "X-Forwarded-For"))

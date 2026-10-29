@@ -83,6 +83,32 @@ Panel, memory, briefing, TTS, and Ask capabilities keep their separately declare
 constituent-owned sidecar packaging, inherited authentication, no network listener, and the ban on
 filesystem fallback remain binding.
 
+### V2 request carrier mapping
+
+The explicitly selected `mimer-mcp --profile v2` sidecar relays only these existing WSP carriers
+from each MCP request's `_meta` to the fixed loopback shared operations API:
+
+| MCP request metadata key | Existing HTTP carrier header |
+| --- | --- |
+| `mimer/active-context-session` | `X-Active-Context-Session` |
+| `mimer/active-context-override` | `X-Active-Context-Override` |
+
+This is a v2 carrier mapping within ADR-0069's inherited authentication posture. WSP remains the
+sole selection issuer and owns TTL, clearing and restart invalidation. The API derives the current
+host subject, principal and instance, validates the live selection and GOV/MVR-05C effect authority,
+and preserves override precedence. A present empty, malformed or stale override is never dropped
+in favor of a valid session or default. An MVR-05B read snapshot is not an effect grant.
+
+The authorized client runtime may retain its issued selection under that WSP lifecycle and present
+it on individual requests. The sidecar keeps neither raw carrier value across requests nor carrier
+default headers. It does not accept API keys, principal/identity or forwarding headers from MCP,
+look up credentials, create a selection, add a listener, or widen the API origin or admitted scope.
+Raw carriers travel only in request memory and the two HTTP headers; they do not belong in tool
+arguments, resources, schema examples, results, errors, diagnostics, receipts, environment variables,
+CLI arguments, configuration or caches. V2 suppresses payload-bearing SDK/HTTP dependency logs,
+including SDK validation diagnostics, without redacting legitimate native PolicyDecision,
+DecisionToken or AuthorityReceipt payloads. V1's tools, carriers and behavior remain unchanged.
+
 ## 3. Authority envelope — the three hard invariants
 
 Every client, both families, every admitted adapter and mutation path:
