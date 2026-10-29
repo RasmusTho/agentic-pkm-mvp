@@ -7,6 +7,7 @@ import shlex
 import shutil
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -3610,6 +3611,68 @@ def test_integration_accepts_clean_pending_merge(pending_integration_repo):
     assert not _integration_git(state["worktree"], "ls-files", "--unmerged").stdout
     assert _integration_report(state)["ok"] is True
     assert _integration_report(state, step="commit")["ok"] is True
+
+
+def test_integration_scratch_reader_preserves_large_nul_and_binary_input(
+    pending_integration_repo, monkeypatch,
+):
+    state = pending_integration_repo
+    original = subprocess.run
+    supplied = []
+
+    def file_backed(command, *args, **kwargs):
+        if "check-attr" in command or "hash-object" in command:
+            source = kwargs.get("stdin")
+            assert source is not None and stat.S_ISREG(os.fstat(source.fileno()).st_mode)
+            assert "input" not in kwargs
+            supplied.append(source.read())
+            source.seek(0)
+        return original(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", file_backed)
+    # Larger than pipe capacity, with delimiters and bytes that must not pass
+    # through text decoding or shell/path quoting.
+    paths = [f"nested/path-{i:05d}-".encode() + b"x" * 64 + b"\t\n\xff" for i in range(5686)]
+    path_input = b"".join(path + b"\0" for path in paths)
+    binary = b"\0\xff\r\n" * 32768
+    with git_hygiene._integration_merge_tree(state["worktree"], state["head"], state["target"]) as (
+        _, _, scratch_read, object_format, _,
+    ):
+        response = scratch_read(["check-attr", "-z", "conflict-marker-size", "--stdin"], path_input)
+        assert response == b"".join(path + b"\0conflict-marker-size\0unspecified\0" for path in paths)
+        for payload in (binary, b""):
+            oid = scratch_read(["hash-object", "--no-filters", "-w", "--stdin"], payload).strip()
+            expected = hashlib.new(object_format, b"blob " + str(len(payload)).encode() + b"\0" + payload)
+            assert oid == expected.hexdigest().encode()
+            assert scratch_read(["cat-file", "blob", oid.decode()]) == payload
+    assert supplied == [path_input, binary, b""]
+
+
+@pytest.mark.parametrize("failure", ["create", "write", "short-write", "seek"])
+def test_integration_scratch_input_io_failure_is_redacted(pending_integration_repo, monkeypatch, failure):
+    original = tempfile.TemporaryFile
+
+    @contextmanager
+    def unavailable(*args, **kwargs):
+        if failure == "create":
+            raise OSError("secret")
+        with original(*args, **kwargs) as source:
+            class BrokenInput:
+                def write(self, data):
+                    if failure == "write":
+                        raise OSError("secret")
+                    return len(data) - 1 if failure == "short-write" else source.write(data)
+
+                def seek(self, position):
+                    raise OSError("secret")
+
+            yield BrokenInput()
+
+    monkeypatch.setattr(tempfile, "TemporaryFile", unavailable)
+    report = _integration_report(pending_integration_repo)
+    assert report["ok"] is False
+    assert report["checks"]["integration_merge"]["reason"] == "integration_probe_or_content_failed"
+    assert "secret" not in json.dumps(report)
 
 
 @pytest.mark.parametrize("method", ["ours", "index-reset"])
