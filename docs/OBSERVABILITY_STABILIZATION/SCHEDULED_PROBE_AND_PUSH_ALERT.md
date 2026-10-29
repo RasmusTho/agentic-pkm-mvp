@@ -51,11 +51,21 @@ The production service reads only the declared `heimdal-external-alerts` BWS bin
 `shared/discord.webhook`; its child receives a short-lived mode-0600 runtime file and never inherits
 the BWS token. Probe state and secret-controller state stay on the host. It has no Docker service
 dependency: it reads the worker heartbeat from the host volume and probes the local API endpoint.
-As checked on 2026-10-12, no Linux host-probe unit is installed on `ygg-prod`; the legacy Mac
-LaunchAgent is loaded but its last observed exit status is 1. Issue #4076 owns live activation,
-disabling the Mac job after Linux prod is active, and the TEST drill. The current BWS webhook
-binding is absent, so enabling the Linux unit before restoring that existing binding would leave
-the probe unable to start.
+The Linux production probe was installed on `ygg-prod` on 2026-10-29 from source
+`777726d3139fc82cd69097dcd3bccc4d1c6c167a`, including the confirmed-delivery repair merged in
+PR #6430. The [installation receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6444#issuecomment-6490667131)
+verifies all 60 package files, configuration, effective unit and private runtime binding metadata.
+The same active/enabled invocation remained stable across two normal 60-second intervals with
+zero restarts, one confirmed down alert and two duplicate suppressions. Production already had
+`/readyz` HTTP 200 and `required_ok=false` before installation; that alert reports the existing
+unhealthy signal and does not claim a controlled outage or repair of its cause.
+
+The existing shared webhook import is committed under #6347, catalog standing is owner-accepted
+under #5506, and the declared consuming-host BWS launch succeeded. No credential was created or
+rotated. The legacy Mac job remains loaded in the observed local user domain with last exit 1;
+its program provenance and exact retirement remain separate work. Issue #4076 remains open for
+that retirement after verified Linux activation and the qualified isolated TEST outage/recovery
+drill. This production installation is not the TEST acceptance receipt.
 
 ## Purpose
 
