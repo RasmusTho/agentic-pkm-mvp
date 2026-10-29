@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 import sys
+from time import time
 from typing import Any, Callable, Mapping
 
 from fastapi import HTTPException, Request
@@ -17,12 +18,13 @@ from app.api.read_operation_owners import _locate_identity, build_read_operation
 from app.api.routes import capture
 from app.api.routes.active_context_selection import build_selection_service, get_selection_store
 from app.auth import resolve_auth_subject
-from app.governance.governed_write import GovernedWriteAdapter
+from app.governance.governed_write import GovernedWriteAdapter, InvalidDecisionTokenError
 from app.instance.active_context_service import (
     ACTION_SELECTION_INSPECT, PERMISSION_SELECTION_READ, WRITE_CLASS_READ,
 )
 from app.instance.context_bound_read import context_bound_read_window
 from app.instance.context_bound_write import context_bound_write_window
+from app.instance.context_selection import ContextSelectionError
 from app.instance.vault_registry import VaultRegistryStore
 from app.operations.contracts import (
     CapabilityAvailability, CapabilityDiscovery, CapabilitySupport, OperationContext,
@@ -175,8 +177,10 @@ def build_production_operation_runtime(
         required_permission="write" if operation_id in EFFECTS else PERMISSION_SELECTION_READ,
     ).snapshot
     context.require_effect_capable()
-    operation_context = OperationContext(context.context_id, str(context.generation),
-                                         {"vault_binding_ids": list(context.binding_ids)})
+    operation_context = OperationContext(context.context_id, str(context.generation), {
+        "vault_binding_ids": list(context.binding_ids),
+        "target_binding_id": target_binding_id,
+    })
     registry = VaultRegistryStore(Path(os.environ["INSTANCE_VAULT_REGISTRY_PATH"]))
     journal = JsonReceiptStore(registry.path.parent / "operation-receipts.json")
     actor = context.principal_context.principal_id
@@ -188,22 +192,36 @@ def build_production_operation_runtime(
         unavailable.update({name: "initialized selected target unavailable" for name in EFFECTS})
     if not (sys.platform == "darwin" or sys.platform.startswith("linux")):
         unavailable.update({name: "local POSIX placement unavailable" for name in ("artifact.move", "artifact.rename")})
-    archive_config = None
+    archive_configs: dict[str, ArchivalOperationServerConfig] = {}
     try:
         from app.config.environment import active_environment
         from app.ops.heimdal_cold_volume import load_channel_archive_metadata, require_archive_volume_ready
         from app.heimdal.local_archive import resolve_retention_window_days
+        from app.heimdal import raw_read_gate, raw_store
+        from app.heimdal.local_archive import OPERATION_RESTORE_SERVICE
         config_root = Path(os.environ["PKM_CONFIG_ROOT"])
-        if not config_root.is_absolute() or len(context.binding_ids) != 1:
+        if not config_root.is_absolute():
             raise ValueError("explicit archive host configuration required")
+        if OPERATION_RESTORE_SERVICE not in raw_read_gate.resolve_read_allowlist():
+            raise ValueError("fixed operation reader unavailable")
+        raw_store.resolve_raw_store_key()
+        channel = active_environment()
+        require_archive_volume_ready(load_channel_archive_metadata(config_root=config_root, channel=channel), expected_channel=channel)
         with context_bound_read_window(context, registry_store=registry) as roots:
-            archive_root = roots[0].root
-            channel = active_environment()
-            require_archive_volume_ready(load_channel_archive_metadata(config_root=config_root, channel=channel), expected_channel=channel)
-            resolve_retention_window_days(archive_root)
-        archive_config = ArchivalOperationServerConfig(config_root, channel, archive_root)
+            for selected_root in roots:
+                if registry.load().registrations[selected_root.vault_binding_id].extensions.get("status") != "initialized":
+                    continue
+                try:
+                    resolve_retention_window_days(selected_root.root)
+                except Exception:
+                    continue
+                archive_configs[selected_root.vault_binding_id] = ArchivalOperationServerConfig(
+                    config_root, channel, selected_root.root)
     except Exception:
-        unavailable.update({name: "qualified channel archive volume/retention unavailable" for name in ("artifact.archive", "artifact.restore")})
+        archive_configs.clear()
+    if not archive_configs or (operation_id in {"artifact.archive", "artifact.restore"}
+                               and target_binding_id not in archive_configs):
+        unavailable.update({name: "qualified archive volume/retention/fixed reader/key unavailable" for name in ("artifact.archive", "artifact.restore")})
     handlers = {}
     readback_config = None
     valid_token = lambda *_: False
@@ -243,15 +261,30 @@ def build_production_operation_runtime(
             if runtime.selection_check is None:
                 return False
             runtime.selection_check()
+            if context.expires_at is None or context.expires_at <= time():
+                raise InvalidDecisionTokenError("operation authority expired at native effect")
             gov.validate_decision_token(decision_token=grant.decision_token, **binding)
             gov.validate_context(grant.decision_token, context=context, target_binding_id=target_binding_id)
             DEFAULT_WRITE_GUARD.assert_writes_allowed(action)
+            if operation_id in {"artifact.archive", "artifact.restore"}:
+                from app.heimdal.raw_read_gate import resolve_read_allowlist
+                from app.heimdal.local_archive import OPERATION_RESTORE_SERVICE
+                if OPERATION_RESTORE_SERVICE not in resolve_read_allowlist():
+                    raise InvalidDecisionTokenError("fixed archive reader no longer admitted")
             return True
+
+        def require_effect() -> None:
+            try:
+                valid = validate_token()
+            except ContextSelectionError as exc:
+                raise InvalidDecisionTokenError("operation selection changed at native effect") from exc
+            if not valid:
+                raise InvalidDecisionTokenError("operation native effect authority unavailable")
 
         def capture_owner(arguments: Mapping[str, Any], incoming: Request) -> Any:
             return capture._capture_to_inbox(
                 capture.CaptureRequest.model_validate({**arguments, "target_binding_id": target_binding_id}),
-                incoming, context,
+                incoming, context, effect_check=require_effect,
             )
 
         request.state.compatibility_write_root = root
@@ -275,8 +308,9 @@ def build_production_operation_runtime(
             canonical = build_placement_operation_handlers(PlacementOperationServerConfig(
                 placement_owner, operation_context, artifact_id or "", resource,
             ))
-        elif operation_id in {"artifact.archive", "artifact.restore"} and archive_config is not None:
-            canonical = build_archival_operation_handlers(archive_config)
+        elif operation_id in {"artifact.archive", "artifact.restore"}:
+            canonical = build_archival_operation_handlers(replace(
+                archive_configs[target_binding_id], effect_check=require_effect))
 
         def invoke_owner(item: OperationRequest) -> Any:
             # Revalidate after kernel/process-lock waits and hold the complete

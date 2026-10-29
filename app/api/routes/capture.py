@@ -49,7 +49,7 @@ from contextlib import nullcontext
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -303,6 +303,7 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
 
 def _capture_to_inbox(
     req: CaptureRequest, request: Request, context: ActiveContextSetV1 | None = None,
+    *, effect_check: Callable[[], None] | None = None,
 ) -> CaptureResponse | JSONResponse:
     """Append a capture to the vault inbox note through the governed pipeline."""
     trace_id = getattr(request.state, "trace_id", None) or new_trace_id()
@@ -446,7 +447,7 @@ def _capture_to_inbox(
         context_bound_write_window(
             context, target_binding_id=req.target_binding_id or "", token=grant.decision_token,
             registry_store=registry, action=_WRITE_GUARD_ACTION, write_class=_WRITE_CLASS,
-            actor=_EVENT_SOURCE, resource=note_rel,
+            actor=_EVENT_SOURCE, resource=note_rel, effect_check=effect_check,
         ) if context is not None and registry is not None else nullcontext(vault_root)
     )
     try:
@@ -500,11 +501,18 @@ def _capture_to_inbox(
             # secondary same-note writes still hold this exact effect window.
             # Legacy direct producer calls have no ASGI app and retain full behavior.
             text_scope = getattr(getattr(request.scope.get('app'), 'state', None), 'activation_scope', 'full') == 'text-capture'
-            registration = None if text_scope else _offer_question_registration_proposal(
-                vault_root=vault_root, note_rel=note_rel, trace_id=trace_id
-            )
+            secondary_refused = False
+            try:
+                registration = None if text_scope else _offer_question_registration_proposal(
+                    vault_root=vault_root, note_rel=note_rel, trace_id=trace_id
+                )
+            except InvalidDecisionTokenError:
+                # The main capture and its accountability are already durable.
+                # A refused optional secondary effect cannot erase that truth.
+                registration = None
+                secondary_refused = True
             registration_state: Literal["proposal_pending", "not_qualified", "degraded", "unavailable"]
-            if text_scope:
+            if text_scope or secondary_refused:
                 registration_state = 'unavailable'
             elif registration is None or not registration.classification.classified:
                 registration_state = "degraded"

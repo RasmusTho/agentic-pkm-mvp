@@ -35,14 +35,15 @@ class OperationHost:
         return data
 
 
-def production_operation_host(tmp_path, monkeypatch):
-    runtime, registration, _, principal = provisioned_instance(tmp_path)
+def production_operation_host(tmp_path, monkeypatch, *, extra_roots=()):
+    runtime, registration, extra, principal = provisioned_instance(tmp_path, extra_roots=extra_roots)
     root = Path(registration.path)
-    bind_initialized_vault(monkeypatch, root, store_dir=tmp_path,
-                           channel=runtime.layout.channel_id)
-    runtime.complete_initialization(registration.vault_binding_id,
-        vault_id="vault-" + registration.vault_binding_id,
-        local_instance_id=registration.local_instance_id)
+    for selected in (registration, *extra):
+        bind_initialized_vault(monkeypatch, Path(selected.path), store_dir=tmp_path,
+                               channel=runtime.layout.channel_id)
+        runtime.complete_initialization(selected.vault_binding_id,
+            vault_id="vault-" + selected.vault_binding_id,
+            local_instance_id=selected.local_instance_id)
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
     monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))

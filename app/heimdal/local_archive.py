@@ -204,14 +204,18 @@ def eligible_raw_records(
     ]
 
 
-def _ensure_archive_dirs(archive_root: Path) -> tuple[Path, Path]:
+def _ensure_archive_dirs(archive_root: Path, *, effect_check: Callable[[], None] | None = None) -> tuple[Path, Path]:
     if not archive_root.is_absolute() or not archive_root.is_dir():
         raise ArchiveDegradedError("archive_mount_unavailable")
     objects = archive_root / "representations"
     manifests = archive_root / "manifests"
     mount_error = False
     try:
+        if effect_check is not None:
+            effect_check()
         objects.mkdir(exist_ok=True)
+        if effect_check is not None:
+            effect_check()
         manifests.mkdir(exist_ok=True)
     except OSError:
         mount_error = True
@@ -236,13 +240,17 @@ def _discard_uncommitted_manifest(manifest_path: Path) -> None:
         return
 
 
-def _durable_write(path: Path, payload: bytes) -> None:
+def _durable_write(path: Path, payload: bytes, *, effect_check: Callable[[], None] | None = None) -> None:
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
+        if effect_check is not None:
+            effect_check()
         with temporary.open("xb") as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
+        if effect_check is not None:
+            effect_check()
         os.replace(temporary, path)
         directory_fd = os.open(path.parent, os.O_RDONLY)
         try:
@@ -440,6 +448,7 @@ def _bind_terminal_legacy_manifest(
     operation_binding: Mapping[str, object],
     raw_generation: int,
     key: bytes | None,
+    effect_check: Callable[[], None] | None = None,
 ) -> ArchiveResult:
     """Add only the GAF tuple to a fully verified terminal pre-GAF receipt."""
 
@@ -514,7 +523,7 @@ def _bind_terminal_legacy_manifest(
             operation_binding,
         )
         if "gaf_operation" not in current:
-            _durable_write(manifest_path, bound_payload)
+            _durable_write(manifest_path, bound_payload, effect_check=effect_check)
             _relocation_stage_hook("after_operation_binding")
         return ArchiveResult(receipt, ArchiveHealth(True, "ok"), target)
 
@@ -533,6 +542,7 @@ def _relocate_raw_record_owner_native(
     requested_receipt_id: str | None = None,
     operation_binding: Mapping[str, object] | None = None,
     existing_manifest: Mapping[str, object] | None = None,
+    effect_check: Callable[[], None] | None = None,
 ) -> ArchiveResult:
     """Copy, verify, receipt, then activate cold; fail closed on every error."""
     volume_proof = _require_verified_archive_volume(
@@ -541,10 +551,11 @@ def _relocate_raw_record_owner_native(
         volume_ready=volume_ready,
     )
 
-    objects, manifests = _ensure_archive_dirs(archive_root)
+    objects, manifests = _ensure_archive_dirs(archive_root, effect_check=effect_check)
     with raw_liveness.raw_relocation_fence(
         record_id=record.id,
         content_identity=record.content_identity,
+        effect_check=effect_check,
     ) as mutation_authority:
         current_representations = raw_store.all_raw_representations(record.id)
         active_representations = [item for item in current_representations if item.active]
@@ -589,6 +600,7 @@ def _relocate_raw_record_owner_native(
                 operation_binding=operation_binding,
                 raw_generation=mutation_authority.generation,
                 key=key,
+                effect_check=effect_check,
             )
         reference = now or datetime.now(timezone.utc)
         if retention_window_days is None:
@@ -697,8 +709,11 @@ def _relocate_raw_record_owner_native(
                         ),
                         operation_binding,
                     ),
+                    effect_check=effect_check,
                 )
                 _relocation_stage_hook("after_operation_binding")
+                if effect_check is not None:
+                    effect_check()
                 raw_store.register_cold_location(
                     location_ref,
                     object_path,
@@ -730,7 +745,7 @@ def _relocate_raw_record_owner_native(
                         existing_manifest is None
                         or existing_manifest.get("ownership_state") != "verified"
                     ):
-                        _durable_write(object_path, ciphertext)
+                        _durable_write(object_path, ciphertext, effect_check=effect_check)
                     _relocation_stage_hook("after_object_write")
                     copied = object_path.read_bytes()
                     if (
@@ -751,6 +766,7 @@ def _relocate_raw_record_owner_native(
                             _manifest_payload(receipt),
                             operation_binding,
                         ),
+                        effect_check=effect_check,
                     )
                     _relocation_stage_hook("after_manifest_write")
                     activation_started = True
@@ -802,6 +818,7 @@ def relocate_raw_record(
     volume_ready: Callable[[], ArchiveVolumeReady],
     operation_idempotency_key: str | None = None,
     transition_result_sink: Callable[[object], None] | None = None,
+    effect_check: Callable[[], None] | None = None,
 ) -> ArchiveResult:
     """Run HAR-04's owner-native atomic relocation through the public GAF kernel."""
 
@@ -899,6 +916,7 @@ def relocate_raw_record(
             requested_receipt_id=receipt_id,
             operation_binding=operation_binding,
             existing_manifest=existing_manifest,
+            effect_check=effect_check,
         )
 
     adapter = HeimdalRawMediaAdapter(
@@ -967,6 +985,7 @@ def run_single_record_archive_operation(
     channel: str,
     vault_root: Path,
     request_id: str,
+    effect_check: Callable[[], None] | None = None,
 ) -> HeimdalOperationResult:
     """Owner-held single-record archive operation for dormant operation adapters."""
     with raw_store.archive_relocation_lease():
@@ -991,6 +1010,7 @@ def run_single_record_archive_operation(
             volume_ready=lambda: require_archive_volume_ready(metadata, expected_channel=channel),
             operation_idempotency_key=request_id,
             transition_result_sink=transition.append,
+            effect_check=effect_check,
         )
     if len(transition) != 1:
         raise ArchiveDegradedError("archive_transition_readback_unavailable")
@@ -1002,6 +1022,7 @@ def run_single_record_restore_operation(
     *,
     service_reader: str = OPERATION_RESTORE_SERVICE,
     request_id: str,
+    effect_check: Callable[[], None] | None = None,
 ) -> HeimdalOperationResult:
     """Run the sanctioned owner restore once under the fixed service identity."""
     if service_reader != OPERATION_RESTORE_SERVICE:
@@ -1019,6 +1040,7 @@ def run_single_record_restore_operation(
             transition_result_sink=transition.append,
             expected_raw_generation=proof.generation,
             expected_representation_id=proof.representation_id,
+            effect_check=effect_check,
         )
     except raw_read_gate.RawReadRefusedError as exc:
         raise OperationTargetRefused("operation_target_changed") from exc
@@ -1067,6 +1089,7 @@ def run_restore_drill(
     transition_result_sink: Callable[[object], None] | None = None,
     expected_raw_generation: int | None = None,
     expected_representation_id: str | None = None,
+    effect_check: Callable[[], None] | None = None,
 ) -> RestoreDrillReceipt:
     """Restore one archived identity through the production gated read path.
 
@@ -1125,6 +1148,7 @@ def run_restore_drill(
         read_key=key,
         restore_operation_id=operation_id,
         restore_representation_id=expected_representation_id or active[0].id,
+        effect_check=effect_check,
     )
     authority = AccessAuthority(
         OwnerAuthority.CLASS_ADAPTER,

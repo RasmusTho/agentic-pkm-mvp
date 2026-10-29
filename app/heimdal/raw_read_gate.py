@@ -53,6 +53,8 @@ publish stages; cryptographic erasure (v2).
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import json
 import os
 import threading
@@ -212,8 +214,10 @@ class _MemoryReceiptStore:
         self._lock = threading.Lock()
         self._rows: List[RawReadReceipt] = []
 
-    def append(self, receipt: RawReadReceipt) -> RawReadReceipt:
+    def append(self, receipt: RawReadReceipt, *, effect_check: Callable[[], None] | None = None) -> RawReadReceipt:
         with self._lock:
+            if effect_check is not None:
+                effect_check()
             row = RawReadReceipt(
                 id=receipt.id,
                 raw_ref=receipt.raw_ref,
@@ -366,29 +370,34 @@ class _PgReceiptStore:
         finally:
             conn.close()
 
-    def append(self, receipt: RawReadReceipt) -> RawReadReceipt:
+    def append(self, receipt: RawReadReceipt, *, effect_check: Callable[[], None] | None = None) -> RawReadReceipt:
         conn = _pg_connect()
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
-            cur.execute(
-                f"""
-                INSERT INTO {_TABLE} (id, raw_ref, content_identity, reader, purpose, payload)
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb)
-                RETURNING {_SELECT_COLUMNS}
-                """,
-                (
-                    receipt.id,
-                    receipt.raw_ref,
-                    receipt.content_identity,
-                    receipt.reader,
-                    receipt.purpose,
-                    json.dumps(receipt.payload),
-                ),
-            )
-            row = cur.fetchone()
-            assert row is not None, "INSERT ... RETURNING produced no row"
-            return _row_from_db(row)
+            with conn.transaction() if effect_check is not None else nullcontext():
+                if effect_check is not None:
+                    effect_check()
+                cur.execute(
+                    f"""
+                    INSERT INTO {_TABLE} (id, raw_ref, content_identity, reader, purpose, payload)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                    RETURNING {_SELECT_COLUMNS}
+                    """,
+                    (
+                        receipt.id,
+                        receipt.raw_ref,
+                        receipt.content_identity,
+                        receipt.reader,
+                        receipt.purpose,
+                        json.dumps(receipt.payload),
+                    ),
+                )
+                row = cur.fetchone()
+                assert row is not None, "INSERT ... RETURNING produced no row"
+                if effect_check is not None:
+                    effect_check()
+                return _row_from_db(row)
         finally:
             conn.close()
 
@@ -423,6 +432,7 @@ def read_raw_record(
     payload: Optional[Dict[str, Any]] = None,
     expected_representation_id: Optional[str] = None,
     expected_raw_generation: Optional[int] = None,
+    effect_check: Callable[[], None] | None = None,
 ) -> GatedRawRead:
     """The one sanctioned raw->plaintext read call (HEIM-5).
 
@@ -513,6 +523,8 @@ def read_raw_record(
                     "No receipt written and no plaintext returned."
                 )
             _raw_read_stage_hook("after_active_representation_resolution")
+            if effect_check is not None:
+                effect_check()
             try:
                 plaintext = raw_store.decrypt_and_verify_raw_bytes(
                     record.content_identity,
@@ -539,7 +551,7 @@ def read_raw_record(
                 payload=receipt_payload,
                 sequence=-1,
             )
-            persisted_receipt = receipt_backend.append(receipt)
+            persisted_receipt = receipt_backend.append(receipt, effect_check=effect_check) if effect_check is not None else receipt_backend.append(receipt)
 
             return GatedRawRead(
                 plaintext=plaintext,

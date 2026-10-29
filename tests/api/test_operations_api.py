@@ -98,3 +98,70 @@ def test_capture_reuses_real_scoped_owner_and_preserves_v1(tmp_path, monkeypatch
     assert "Remember the approved outcome" in "".join(
         note.read_text() for note in host.root.rglob("*.md"))
     assert result.json()["receipt"]["extensions"]["write"]["authority_receipt"]["target_binding_id"] == host.binding_id
+
+
+def test_capture_keeps_selection_guard_at_native_append(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch)
+    from app.api.routes import capture
+    from app.api.routes.active_context_selection import build_selection_service, get_selection_store
+    service = build_selection_service(get_selection_store())
+    derived = service.derive("trusted_loopback")
+    append = capture.append_note_relative
+
+    def clear_then_append(*args, **kwargs):
+        service.selection_store.clear(host.selection["context_selection_id"],
+            principal=derived.principal, instance_identity=derived.instance_identity)
+        return append(*args, **kwargs)
+
+    monkeypatch.setattr(capture, "append_note_relative", clear_then_append)
+    result = host.client.post("/api/operations", headers=host.headers,
+        json=host.command("artifact.capture", targets=[], expected_version=None,
+                          arguments={"text": "must not cross cleared selection"}))
+    assert result.status_code == 200, result.text
+    assert result.json()["status"] == "rejected", result.text
+    assert all("must not cross cleared selection" not in note.read_text()
+               for note in host.root.rglob("*.md"))
+
+
+def test_capture_secondary_refusal_preserves_committed_main_receipt(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch)
+    from app.api.routes import capture
+    from app.api.routes.active_context_selection import build_selection_service, get_selection_store
+    from app.instance.context_bound_write import require_effect_locator
+    service = build_selection_service(get_selection_store())
+    derived = service.derive("trusted_loopback")
+
+    def secondary(**kwargs):
+        service.selection_store.clear(host.selection["context_selection_id"],
+            principal=derived.principal, instance_identity=derived.instance_identity)
+        require_effect_locator(kwargs["vault_root"], kwargs["note_rel"])
+        pytest.fail("secondary effect must not run")
+
+    monkeypatch.setattr(capture, "_offer_question_registration_proposal", secondary)
+    result = host.client.post("/api/operations", headers=host.headers,
+        json=host.command("artifact.capture", targets=[], expected_version=None,
+                          arguments={"text": "main source remains acknowledged"}))
+    assert result.status_code == 200, result.text
+    assert result.json()["status"] == "convergence_pending", result.text
+    assert result.json()["convergence"]["source_effect"] == "committed"
+    assert result.json()["receipt"]["extensions"]["write"]["authority_receipt"]["receipt_id"]
+
+
+def test_capture_request_id_cannot_rebind_selected_target(tmp_path, monkeypatch):
+    host = production_operation_host(tmp_path, monkeypatch, extra_roots=("two",))
+    bindings = list(host.runtime.registry.load().registrations)
+    assert len(bindings) == 2
+    selection = host.client.put("/api/companion/active-context/selection", headers=host.headers,
+                                json={"vault_binding_ids": bindings})
+    assert selection.status_code == 200
+    host.selection["context"] = selection.json()["context"]
+    command = host.command("artifact.capture", targets=[], expected_version=None,
+        arguments={"text": "one exact selected target"}, target_binding_id=bindings[0])
+    first = host.client.post("/api/operations", headers=host.headers, json=command)
+    assert first.status_code == 200 and first.json()["status"] == "convergence_pending", first.text
+    second = host.client.post("/api/operations", headers=host.headers,
+        json={**command, "target_binding_id": bindings[1]})
+    assert second.status_code == 200 and second.json()["status"] == "conflicted", second.text
+    from pathlib import Path
+    other = Path(host.runtime.registry.load().registrations[bindings[1]].path)
+    assert all("one exact selected target" not in note.read_text() for note in other.rglob("*.md"))

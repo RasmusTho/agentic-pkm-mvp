@@ -102,6 +102,15 @@ copy can retain previously observed native/GOV evidence across a weaker kernel r
 authorizing another effect or acknowledging success. A shared original-request execution window
 covers initial and recovery invocations; current admission follows that wait.
 
+The production autonomous-operation composition also freezes the chosen selected binding into
+its kernel intent. Its current-selection/GOV/expiry guard is explicitly carried through native
+capture's inner write window, raw archive publication and generation-authority checkpoints, and
+restore's gated plaintext/receipt producers. An outer request check does not replace those final
+state-owner checks after waits. These optional native ports narrow the existing admitted window;
+they never mint delegation, key/reader authority or a replacement receipt. Existing non-operation
+producers keep their native authority paths. A refused optional capture effect preserves the
+already-durable main capture and its AuthorityReceipt.
+
 ## Commands
 
 - Evaluate policy.
