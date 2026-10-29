@@ -4,18 +4,19 @@ Reuse: shared overlay frame, receipts modal geometry and disclosures, standing
 question review list/actions, and the shell's labelled native form controls.
 No application/domain imports, durable effect state or per-item effect loop.
 """
+from companion_ui.workspace.guidance_layer import guidance_callout_markup
 from companion_ui.workspace.overlay_frame import overlay_frame_header, overlay_frame_root_attrs
 
 
 def operations_launcher_markup() -> str:
-    return """<button type="button" class="btn btn--secondary" data-testid="operations-open"
+    return """<button type="button" class="btn btn--secondary" data-testid="operations-open" data-intent="operations.open" aria-haspopup="dialog"
       onclick="overlayHost.mount('operations')">Operations</button>
       <noscript><p>Operations requires JavaScript. No operation has been submitted.</p></noscript>"""
 
 
 def operations_workspace_markup() -> str:
     frame = overlay_frame_root_attrs(overlay_id="operations", position="center")
-    header = overlay_frame_header(overlay_id="operations", title="Operations")
+    header = overlay_frame_header(overlay_id="operations", title="Operations", guidance_surface="operations")
     return """
 <style>
 /* Receipts modal frame + standing-question review content; single ordered column. */
@@ -52,7 +53,7 @@ def operations_workspace_markup() -> str:
 </style>
 <div class="operations-modal" id="operations-workspace" data-testid="operations-workspace"
   role="dialog" aria-modal="true" aria-label="Operations" hidden __FRAME__>
-  <div class="operations-panel">__HEADER__
+  <div class="operations-panel">__HEADER____GUIDANCE__
     <div class="operations-body">
       <noscript><p>Operations requires JavaScript. No operation has been submitted.</p></noscript>
       <p class="operations-state" id="operations-state" role="status" aria-live="polite" aria-atomic="true">Open to discover available operations.</p>
@@ -90,7 +91,7 @@ def operations_workspace_markup() -> str:
       </details>
     </div>
   </div>
-</div>""".replace("__FRAME__", frame).replace("__HEADER__", header)
+</div>""".replace("__FRAME__", frame).replace("__HEADER__", header).replace("__GUIDANCE__", guidance_callout_markup("operations"))
 
 
 def operations_workspace_script() -> str:
@@ -417,7 +418,7 @@ def operations_workspace_script() -> str:
     el('preview-region').hidden=true;el('confirm').disabled=true;
     remember({id:el('reference').value.trim(),digest:el('digest').value.trim()||undefined});focusResults();return inspect(false,true);
   });
-  overlayHost.register('operations',{
+  window.overlayHost.register('operations',{
     open:function(){
       root.hidden=false;
       if(!bootstrapped){

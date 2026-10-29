@@ -47,15 +47,17 @@ class _VisibleTextExtractor(HTMLParser):
     whitespace-padded or upper-case close tags (``</script >``, ``<SCRIPT>``)
     cannot leak inert markup into the scanned copy."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, exclude_hidden: bool = False) -> None:
         super().__init__(convert_charrefs=True)
+        self._exclude_hidden = exclude_hidden
         self._skip_depth = 0
         self._chunks: list[str] = []
 
-    def handle_starttag(self, tag: str, attrs: object) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in _VISIBLE_VOID_TAGS:
             return
-        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS:
+        hidden = self._exclude_hidden and any(name == "hidden" for name, _ in attrs)
+        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS or hidden:
             self._skip_depth += 1
 
     def handle_endtag(self, tag: str) -> None:
@@ -69,11 +71,13 @@ class _VisibleTextExtractor(HTMLParser):
             self._chunks.append(data)
 
 
-def visible_text(html: str) -> str:
+def visible_text(html: str, *, exclude_hidden: bool = False) -> str:
     """Rendered human-visible text: tags removed and ``script``/``style``/
     ``head``/``template`` bodies dropped. Whitespace-collapsed and lower-cased
-    for substring scans (see module docstring for the casing rationale)."""
-    extractor = _VisibleTextExtractor()
+    for substring scans (see module docstring for the casing rationale).
+    ``exclude_hidden`` also skips HTML-hidden subtrees for actual front-edge scans;
+    it does not attempt to evaluate stylesheets or change legacy source-text callers."""
+    extractor = _VisibleTextExtractor(exclude_hidden=exclude_hidden)
     extractor.feed(html)
     extractor.close()
     return " ".join("".join(extractor._chunks).split()).lower()

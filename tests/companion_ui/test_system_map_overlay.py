@@ -272,6 +272,7 @@ def test_map_renders_composition_table_nodes() -> None:
         "tts",
         "capture",
         "receipts",
+        "operations",
         "governance",
         "resurface_rail",
         "guidance",
@@ -288,7 +289,7 @@ def test_map_renders_composition_table_nodes() -> None:
     by_id = {node.surface_id: node for node in MAP_SURFACES}
     for shipped in ("orientation", "anchor", "vault", "panel", "palette",
                     "suggestions", "memory", "peek", "tts", "capture",
-                    "receipts", "settings", "map", "guidance", "resurface_rail"):
+                    "receipts", "operations", "settings", "map", "guidance", "resurface_rail"):
         assert by_id[shipped].status == "shipped", shipped
     for partial in ("chat_rail",):
         assert by_id[partial].status == "partial", partial
@@ -401,7 +402,7 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
     # nodes emit are existing declared intents — the map invents none.
     assert set(routable_surface_ids()) == {
         "anchor", "vault", "panel", "palette", "memory", "capture", "receipts",
-        "governance", "settings",
+        "operations", "governance", "settings",
         # CUIDR-04 (#2447): the operator layer routes from the map via the
         # operator drawer (operator.open).
         "operator",
@@ -418,6 +419,7 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
         "memory": "memory.open",
         "capture": "capture.open",
         "receipts": "receipts.open",
+        "operations": "operations.open",
         "governance": "receipts.open",
         "settings": "settings.open",
         "operator": "operator.open",

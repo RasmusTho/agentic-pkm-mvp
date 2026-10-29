@@ -135,6 +135,15 @@ GUIDANCE_CALLOUTS: dict[str, dict[str, str]] = {
         ),
         "help_anchor": "signals",
     },
+    "operations": {
+        "title": "Operations",
+        "body": (
+            "Select resources, inspect the exact scope, and confirm once. "
+            "Outcomes and receipts stay inspectable; interruption never "
+            "automatically replays a change. Close to return to your note."
+        ),
+        "help_anchor": "boundaries",
+    },
     "settings": {
         "title": "Settings",
         "body": (
@@ -170,6 +179,7 @@ GUIDANCE_TOGGLE_SURFACES: tuple[str, ...] = (
     "receipts",
     "settings",
     "map",
+    "operations",
 )
 
 

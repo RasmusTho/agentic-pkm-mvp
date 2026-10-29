@@ -155,7 +155,7 @@ separate later gates.
 
 ## Companion shared operations consumer (#5339)
 
-The shell's Operations workspace uses the public same-origin operations client. Its finite gateway
+The shell's Operations workspace uses the public same-origin operations client. Its action belongs to the active note header and the System Map index; the shared header guidance remains UI-local. Entry surfaces leave it closed, and the observer runs only while the human has opened the Operations view. Closing the view stops observation without cancelling native work. Its finite gateway
 additions are `GET /api/operations/capabilities`, `GET /api/operations/receipts/{request_id}`,
 `POST /api/operations`, `POST /api/operations/preconditions`, and the existing finite batch
 preview/inspect/execute/cancel routes. Real client IP, API key and opaque selection carriers retain

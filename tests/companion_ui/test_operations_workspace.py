@@ -46,10 +46,10 @@ class RuntimeClient:
 
 
 @contextmanager
-def gateway(host):
+def gateway(host, *, orientation=None):
     client = RuntimeClient(host)
     fields = companion_workspace_fields(body='Original.') | {'artifact_id': host.artifact_id}
-    html = render_index_html(api_base_url='http://127.0.0.1:18001', fields=fields).encode()
+    html = render_index_html(api_base_url='http://127.0.0.1:18001', **({'orientation':orientation} if orientation is not None else {'fields':fields})).encode()
     handler = make_handler(client=client, api_base_url='http://127.0.0.1:18001', production_profile=True)
 
     class Handler(handler):
@@ -74,11 +74,11 @@ def gateway(host):
 
 
 @contextmanager
-def browser(host, *, viewport=None, javascript_enabled=True):
+def browser(host, *, viewport=None, javascript_enabled=True, orientation=None):
     if os.environ.get('COMPANION_UI_BROWSER_TESTS') != '1':
         pytest.skip('Set COMPANION_UI_BROWSER_TESTS=1 for real Chromium interaction proof')
     from playwright.sync_api import sync_playwright
-    with gateway(host) as (url, client), sync_playwright() as pw:
+    with gateway(host, orientation=orientation) as (url, client), sync_playwright() as pw:
         engine = pw.chromium.launch()
         context = engine.new_context(viewport=viewport or {'width': 1440, 'height': 1000}, java_script_enabled=javascript_enabled)
         context.add_cookies([{'name': 'companion_context_session', 'value': host.selection['context_selection_id'],
@@ -96,15 +96,16 @@ def browser(host, *, viewport=None, javascript_enabled=True):
             engine.close()
 
 
-def evidence(page, name, external, errors):
+def evidence(page, name, external, errors, *, surface="operations"):
     destination = os.environ.get('OPERATIONS_EVIDENCE_DIR')
     if not destination:
         return
     folder=Path(destination)
     folder.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(folder/(name+'.png')))
+    target=page.locator('body') if surface=='page' else page.get_by_role('dialog',name='Operations',exact=True)
     (folder/(name+'.json')).write_text(json.dumps({'external_requests':external,'page_errors':errors,
-        'viewport':page.viewport_size,'aria':page.get_by_role('dialog',name='Operations',exact=True).aria_snapshot()},indent=2))
+        'viewport':page.viewport_size,'aria_scope':surface,'aria':target.aria_snapshot()},indent=2))
 
 
 def open_workspace(page):
@@ -1146,4 +1147,51 @@ def test_successful_resume_with_unchanged_nonpending_result_settles_live_status_
         page.locator('#operations-new').click()
         page.locator('#operations-resources input[type=checkbox]:enabled').first.wait_for()
         assert 'operation_request' not in parse_qs(urlparse(page.url).query)
+        assert errors==[] and external==[]
+
+
+@pytest.mark.parametrize('entry_mode',['note','orientation'])
+def test_closed_operations_has_no_network_or_effect_loop_on_entry_surfaces(tmp_path,monkeypatch,entry_mode):
+    from tests.companion_ui.test_orientation_ambient_refresh import _orientation_payload
+    host=production_operation_host(tmp_path,monkeypatch)
+    orientation=_orientation_payload() if entry_mode=='orientation' else None
+    with browser(host,orientation=orientation) as (page,client,external,errors):
+        assert page.get_by_test_id('operations-workspace').is_hidden()
+        page.wait_for_timeout(1500)
+        assert not [c for c in client.calls if c[1].startswith('/api/operations')]
+        assert 'recovery' not in page.locator('body').inner_text().lower()
+        if entry_mode=='orientation':
+            assert page.get_by_test_id('operations-open').count()==0
+            page.get_by_test_id('orientation-system-map').click() if page.get_by_test_id('orientation-system-map').count() else page.locator('[data-intent="map.open"]').first.click()
+            assert page.locator('[data-surface-id="operations"]').get_attribute('data-routable')=='false'
+        else:
+            assert page.get_by_test_id('operations-open').evaluate("(e)=>!!e.closest('[data-testid=workspace-note-header]')")
+        evidence(page,'closed-entry-'+entry_mode,external,errors,surface='page')
+        assert errors==[] and external==[]
+
+
+def test_map_guidance_and_close_reopen_observe_only_open_operations(tmp_path,monkeypatch):
+    host=production_operation_host(tmp_path,monkeypatch)
+    with browser(host) as (page,client,external,errors):
+        page.get_by_test_id('workspace-surface-icon-map').click()
+        page.locator('[data-surface-id="operations"][data-routable="true"]').click()
+        page.locator('#operations-resources input[type=checkbox]:enabled').first.wait_for()
+        assert page.get_by_test_id('system-map-overlay').is_hidden()
+        page.get_by_test_id('guidance-toggle-operations').click()
+        assert page.get_by_test_id('guidance-callout-operations').is_visible()
+        transport=install_retained_transport(page,retained_snapshot())
+        reads=transport['reads'];page.wait_for_timeout(1200)
+        assert transport['reads']>reads
+        for _ in range(2):
+            page.keyboard.press('Escape');page.get_by_test_id('operations-workspace').wait_for(state='hidden')
+            page.wait_for_timeout(60);closed_reads=transport['reads'];page.wait_for_timeout(1300)
+            assert transport['reads']==closed_reads
+            page.get_by_test_id('operations-open').click()
+            page.get_by_text('Runtime status: pending',exact=True).wait_for()
+            assert page.locator('#operations-results').evaluate('(e)=>e===document.activeElement')
+            page.wait_for_timeout(1100)
+            assert transport['reads']>closed_reads
+        assert not transport['execute'] and not transport['cancel']
+        assert not [c for c in client.calls if c[0]=='POST' and c[1]=='/api/operations' and c[2]['operation_id']!='artifact.list']
+        evidence(page,'map-guidance-foreground-observer',external,errors)
         assert errors==[] and external==[]

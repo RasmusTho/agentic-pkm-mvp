@@ -3792,6 +3792,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         </div>
         {breadcrumb_html}
         {identity_caution_html}
+        {operations_launcher_markup()}
       </header>
       {voice_push_to_talk_html}
       {hidden_frontmatter_html}
@@ -10383,7 +10384,6 @@ def _render_orientation_index_html(
            data-trace-id above) for the operator layer. Presentation only — no
            classification moves client-side. -->
     </header>
-    {operations_launcher_markup()}
     {"" if is_cold else refresh_html}
     {degraded_html}
     {reentry_overlay_html}
@@ -11803,6 +11803,7 @@ def render_index_html(
             "memory",
             "capture",
             "receipts",
+            "operations",
             "settings",
             # CUIDR-04 (#2447): the operator layer is reached from the System
             # Map now that the floating operator pill is gone from the edge.
@@ -15770,7 +15771,6 @@ def render_index_html(
       </form>
     </div>
   </details>
-  {operations_launcher_markup() if fields is not None else ""}
   {content_section}
   {residual_ambient_html}
 
