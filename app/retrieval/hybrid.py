@@ -807,6 +807,78 @@ def _contain_rerank(
     return reranked
 
 
+def _bound_heimdal_results(refs: list[str], *, scope: str, episode_id: str,
+                           binding_ids: set[str] | None) -> list[dict[str, Any]]:
+    """Read immutable log evidence only through the Episode's exact active binding.
+
+    Heimdal has no vault index bundle. Binding authority is the existing Episode
+    ledger, never an invented vault path or payload copy of a vault binding.
+    """
+    from app.episode_debrief.store import bound_heimdal_observations
+    from app.heimdal.publish import canonical_content_hash
+    from app.episodes.segmenter import _DEFAULT_SCOPE
+    rows = bound_heimdal_observations(refs, scope=scope, episode_id=episode_id, binding_ids=binding_ids)
+    results = []
+    for row in rows:
+        ref, envelope = (row["artifact_ref"], row["payload"]) if isinstance(row, dict) else row
+        payload = envelope["payload"]
+        text = payload.get("content")
+        scope_hint = payload.get("scope_hint")
+        source_scope = scope_hint.strip() if isinstance(scope_hint, str) and scope_hint.strip() else _DEFAULT_SCOPE
+        if source_scope != scope or not isinstance(text, str) or not text.strip():
+            raise ValueError("Heimdal source has no admitted in-scope content")
+        if payload.get("provenance", {}).get("content_hash") != canonical_content_hash(text):
+            raise ValueError("Heimdal source content hash cannot be resolved")
+        results.append({"id": ref, "doc_id": ref, "source_ref": ref, "text": text,
+            "score": 1.0, "snippet": None, "payload": {"domain": scope,
+                "provenance_ref": ref, "heimdal_observation": payload},
+            "evidence_role_in_context": "background"})
+    return results
+
+
+def scoped_artifact_lookup(
+    artifact_ids: tuple[str, ...], *, scope: str | None,
+    allowed_binding_ids: set[str] | None = None,
+    episode_id: str | None = None,
+) -> ScopedRetrieval:
+    """Resolve explicit membership through the same scope/evidence prefilter.
+
+    No embedding, rank cutoff or reranker may substitute an unbound item. Missing
+    members remain absent for the consumer's fail-loud citation validation.
+    """
+    if not isinstance(scope, str) or not scope:
+        raise ValueError("bound artifact retrieval requires an explicit scope")
+    if not _REBUILT_FROM_DURABLE_INDEX and not _STORE.all():
+        rebuild_from_durable_index()
+    _revalidate_cache_generation()
+    docs = _STORE.all()
+    eligible, excluded = _partition_by_scope(docs, scope, allowed_binding_ids)
+    wanted = set(artifact_ids)
+    results = []
+    for index in eligible:
+        doc = docs[index]
+        payload = dict(doc.payload or {})
+        identities = {value for value in (doc.doc_id, doc.source_ref, payload.get("provenance_ref")) if isinstance(value, str)}
+        if not wanted.intersection(identities):
+            continue
+        results.append({
+            "id": doc.doc_id, "doc_id": doc.doc_id, "text": doc.text,
+            "score": 1.0, "snippet": None, "source_ref": doc.source_ref,
+            "payload": payload,
+            "evidence_role_in_context": _clamp_in_context(_intrinsic_evidence_role(payload)),
+        })
+    heimdal_refs = [identity for identity in artifact_ids if identity.startswith("heimdal.observations:")]
+    if heimdal_refs:
+        if not episode_id:
+            raise ValueError("Heimdal retrieval requires exact Episode membership")
+        results.extend(_bound_heimdal_results(heimdal_refs, scope=scope,
+            episode_id=episode_id, binding_ids=allowed_binding_ids))
+    return ScopedRetrieval(
+        results=results, denials=_denials_for_excluded(excluded, scope, set()),
+        scope_policy_prefiltered=True, active_scope=scope,
+    )
+
+
 def scoped_hybrid_search(
     query: str,
     *,

@@ -753,3 +753,9 @@ that existed at each merge. Git history alone also cannot establish historical f
 CI duration or runner cost, review effort, or escaped-defect frequency. Those measurements require
 separately attributable CI and delivery evidence and must remain `not observable` when that evidence
 is unavailable rather than being inferred from this replay.
+
+
+The Episode Debrief CLI (`app/cli/episode_debrief.py`) belongs to the existing `episodes`
+selector owner alongside its runtime package. CLI changes retain Episodes, Episode Debrief and
+invariant targets; unknown sibling CLI modules still fail closed as unowned. The covering check is
+`tests/scripts/test_select_pr_tests.py::test_episode_debrief_cli_selects_existing_episodes_coverage`.

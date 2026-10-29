@@ -11,6 +11,19 @@ can_parallelize_with: []
 
 # Synthesize Debrief Note
 
+Repository implementation: `app/episode_debrief/synthesis.py` adapts the durable trigger through
+`app/workers/outbox_worker.py::_dispatch_topic` to `app/expansion/create.py`. The CLI
+`episode-debrief synthesize --episode <id>` replays existing durable trigger intent; it cannot
+invent an explicit-ask debrief. Bound membership is resolved through the retrieval capability
+without a similarity cutoff, retaining its scope prefilter and evidence-role clamp. Decisions
+are cited from the canonical readable receipt log within the Episode bounds. Commitment
+posture uses its dedicated `commitment_kind` and `commitment_state` fields.
+
+A draft/receipt committed before a failed Episode CAS is recovered on replay without
+regeneration. Missing or corrupt citations, scope changes, concurrent human edits and
+activation regression fail closed. The Episode update patches only the raw `debrief_ref`
+YAML value through the versioned knowledge seam, preserving unrelated formatting and bytes.
+
 ## Purpose
 
 This is the capability's actual value delivery — the retro the owner never has time to run. Rather than
@@ -145,4 +158,30 @@ the next DEBRIEF-01 reconciliation tick re-attempts cleanly since idempotency ke
 ## Related GitHub Issues
 
 One issue: `[Episode Debrief] synthesize-debrief-note: Create-engine debrief synthesis linked from the
-Episode note`. Blocked until DEBRIEF-01 merges (and transitively ERE-02/04/06).
+Episode note`. DEBRIEF-01 is delivered in #6362; DEBRIEF-03 remains separate.
+
+
+Closure-state evidence uses the latest bound observation within the Episode interval for each
+logical source. Registry watcher events carry an optional semantic commitment-content fingerprint
+under the existing `extensions` object, derived only when their raw content hash matches the
+observed bytes. It covers normalized body and all frontmatter except the mechanical `episode_ref`,
+including summary, target, source goal and future commitment fields. This survives ERE's mechanical `episode_ref` stamp. Vault-sync created events
+carry their observed file time under `extensions.observed_at`; their immutable frontmatter provides
+state evidence. Legacy watcher events can prove state only while their full-file hash still matches.
+Missing or stale historical proof fails loudly instead of presenting today's state as closure truth.
+
+Worker and CLI membership lookup initializes the durable retrieval cache when cold. Heimdal
+observations resolve from the append-only log through exact active Episode membership and scope,
+with canonical content-hash validation and background evidence role; they acquire no invented
+vault path or index identity. Unlinked recovery and the final link both revalidate membership,
+scope, retained content and request integrity. Reasoning mirrors use the selected vault binding,
+including when the configured scalar vault consumes a compatibility projection. Every proposal,
+receipt and lock destination is checked for resolved containment before the first file effect.
+
+
+Completed replay rechecks the activation posture and retained candidate/receipt integrity, but
+appends no new activation audit receipt. The Episode lock covers that decision, so repeated worker
+delivery converges across object state, the entire vault tree and Create receipts. The shared worker
+idempotency harness exercises this topic through real synthesis and Create with only finite PG read
+ports substituted; the Episode Debrief integration suite also exercises the real migrated PG reader.
+Immutable Heimdal reads remain in the bounded storage adapter, behind the retrieval boundary.

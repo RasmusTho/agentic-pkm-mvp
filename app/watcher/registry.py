@@ -147,13 +147,25 @@ def ingest_vault_changed_payload(
     content_hash: str | None, watcher: str,
 ) -> dict[str, object]:
     """Build the canonical registry watcher payload without emitting it."""
-    return {
+    payload: dict[str, object] = {
         "vault_path": str(vault_root / relative_path),
         "relative_path": str(relative_path),
         "mtime": mtime,
         "hash": content_hash,
         "watcher": watcher,
     }
+    # Bind the semantic state to the exact observed bytes. A concurrent edit
+    # leaves legacy hash evidence only; it must never stamp another version's state.
+    try:
+        data = (vault_root / relative_path).read_bytes()
+        if content_hash and hashlib.sha256(data).hexdigest() == content_hash:
+            from app.episode_debrief.evidence import commitment_content_fingerprint
+            from scripts.yaml_roundtrip import load_frontmatter
+            fields, body = load_frontmatter(data.decode("utf-8"))
+            payload["extensions"] = {"episode_debrief_content_fingerprint": commitment_content_fingerprint(fields, body)}
+    except (OSError, UnicodeError, ValueError):
+        pass
+    return payload
 
 
 def _matches_scope(rel_path: Path, scope_glob: str) -> bool:

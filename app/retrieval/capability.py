@@ -9,6 +9,7 @@ from app.retrieval.hybrid import (
     _intrinsic_evidence_role,
     get_store,
     scoped_hybrid_search,
+    scoped_artifact_lookup,
 )
 from app.retrieval.context_cache import runtime_context_cache_identity
 from app.vault.active_context_v1 import ActiveContextSetV1
@@ -70,6 +71,10 @@ class RetrievalRequest:
     #: Effective per-binding settings provenance for scoped retrieval.
     settings_bundle_digest: str | None = None
     retrieval_tuning: RetrievalTuning | None = None
+    # Explicit membership retrieval: no ranking may replace a bound source.
+    artifact_ids: tuple[str, ...] | None = None
+    artifact_binding_ids: tuple[str, ...] | None = None
+    artifact_episode_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -229,22 +234,29 @@ def _apply_closure_decay(hits: list["RetrievalHit"]) -> list["RetrievalHit"]:
 
 
 def retrieve(request: RetrievalRequest) -> RetrievalResponse:
-    scoped = scoped_hybrid_search(
-        request.query,
-        k=request.k,
-        language=request.language,
-        query_vector=request.query_vector,
-        # #2921: `request.scope` used to be diagnostic-only. It is now the load-bearing
-        # per-request active-scope binding, so the prefilter partitions in production instead of
-        # waiting on an ambient `ASK_DOMAIN_SCOPE` that no production code ever set.
-        scope=request.scope,
-        allowed_binding_ids=(
-            set(request.active_context.binding_ids)
-            if request.active_context is not None
-            else None
-        ),
-        tuning=request.retrieval_tuning,
-    )
+    if request.artifact_ids is not None:
+        scoped = scoped_artifact_lookup(
+            request.artifact_ids, scope=request.scope,
+            allowed_binding_ids=set(request.artifact_binding_ids) if request.artifact_binding_ids is not None else None,
+            episode_id=request.artifact_episode_id,
+        )
+    else:
+        scoped = scoped_hybrid_search(
+            request.query,
+            k=request.k,
+            language=request.language,
+            query_vector=request.query_vector,
+            # #2921: `request.scope` used to be diagnostic-only. It is now the load-bearing
+            # per-request active-scope binding, so the prefilter partitions in production instead of
+            # waiting on an ambient `ASK_DOMAIN_SCOPE` that no production code ever set.
+            scope=request.scope,
+            allowed_binding_ids=(
+                set(request.active_context.binding_ids)
+                if request.active_context is not None
+                else None
+            ),
+            tuning=request.retrieval_tuning,
+        )
     raw_hits = scoped.results
     diagnostics: dict[str, Any] = {
         "query": request.query,

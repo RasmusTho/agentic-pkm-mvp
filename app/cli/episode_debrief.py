@@ -32,3 +32,21 @@ def tick(vault_root: Path | None, as_json: bool) -> None:
         click.echo(json.dumps(summary))
     else:
         click.echo(f"episode-debrief tick: triggered={len(summary['triggered'])} pending={len(summary['pending_debrief'])}")
+
+
+@episode_debrief_group.command(name="synthesize", help="Replay the durable trigger for one Episode.")
+@click.option("--episode", required=True)
+@click.option("--vault-root", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None)
+@click.option("--json", "as_json", is_flag=True, default=False)
+def synthesize(episode: str, vault_root: Path | None, as_json: bool) -> None:
+    from app.episode_debrief.synthesis import synthesize_episode
+    try:
+        carrier = resolve_cli_vault_context(vault_root, env_policy="channel")
+        if carrier.root is None:
+            raise click.ClickException("no vault is selected")
+        report = synthesize_episode(episode, vault_root=carrier.root)
+    except (CliVaultContextError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(report) if as_json else f"episode-debrief synthesize: {report['status']}")
+    if report["status"] == "blocked":
+        raise click.ClickException("debrief activation blocked: " + ", ".join(report["reasons"]))

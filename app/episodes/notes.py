@@ -33,6 +33,7 @@ _FRONTMATTER_FIELDS = (
     "parent_episode",
     "segmentation",
     "derived_from",
+    "debrief_ref",
 )
 
 

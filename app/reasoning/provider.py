@@ -19,7 +19,7 @@ from app.llm.trace import log_llm_call
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
 from app.reasoning.models import ReasoningMode, ReasoningRun
-from app.stores import get_object_store
+from app.stores import get_object_store, resolve_object_store_port
 
 _FIXTURE_PATH = Path("data") / "golden" / "reasoning_samples.jsonl"
 
@@ -203,8 +203,8 @@ def get_reasoner() -> BaseDeliberationAgent:
     return get_deliberation_agent()
 
 
-def _load_object_text(object_id: str) -> Tuple[str, dict]:
-    store = get_object_store()
+def _load_object_text(object_id: str, *, vault_binding_id: str | None = None) -> Tuple[str, dict]:
+    store = resolve_object_store_port(vault_binding_id=vault_binding_id).store if vault_binding_id is not None else get_object_store()
     try:
         obj = store.get(UUID(str(object_id)))
     except Exception:
@@ -253,6 +253,7 @@ def run_reasoning(
     agent: str | None = None,
     kind: str | None = None,
     llm_routing: LLMRoutingSettings | None = None,
+    vault_binding_id: str | None = None,
 ) -> ReasoningRun:
     agent_name = agent or "reasoning"
     kind_name = kind or f"reasoning.{mode.value}"
@@ -272,7 +273,7 @@ def run_reasoning(
                 result=output.model_dump(),
             )
         object_id = object_ids[0]
-        text, metadata = _load_object_text(object_id)
+        text, metadata = _load_object_text(object_id, vault_binding_id=vault_binding_id) if vault_binding_id is not None else _load_object_text(object_id)
         if not text:
             output = ReasoningOutput(
                 outcome="missing_input", degraded_reason="missing_input"
@@ -345,7 +346,7 @@ def run_reasoning(
         if not object_ids:
             return ReasoningRun(mode=mode, trace_id=trace_id, object_uuids=[], status="failed", error="no object ids provided")
         object_id = object_ids[0]
-        text, _ = _load_object_text(object_id)
+        text, _ = _load_object_text(object_id, vault_binding_id=vault_binding_id) if vault_binding_id is not None else _load_object_text(object_id)
         if not text:
             return ReasoningRun(
                 mode=mode,
@@ -397,7 +398,7 @@ def run_reasoning(
     if mode == ReasoningMode.RANKING:
         texts: List[Tuple[str, str]] = []
         for oid in object_ids:
-            text, _ = _load_object_text(oid)
+            text, _ = _load_object_text(oid, vault_binding_id=vault_binding_id) if vault_binding_id is not None else _load_object_text(oid)
             if text:
                 texts.append((oid, text))
         if not texts:
@@ -474,7 +475,7 @@ def run_reasoning(
             )
         context_lines: List[str] = []
         for oid in object_ids:
-            text, _ = _load_object_text(oid)
+            text, _ = _load_object_text(oid, vault_binding_id=vault_binding_id) if vault_binding_id is not None else _load_object_text(oid)
             if text:
                 context_lines.append(f"- {oid}: {_simple_preview(text, 180)}")
         backend = _reasoning_backend()
@@ -622,8 +623,9 @@ def run_reasoning(
     )
 
 
-def run_reasoning_claims_for_object(object_id: str, trace_id: str | None = None) -> ReasoningOutput:
-    run = run_reasoning(ReasoningMode.CLAIMS, [object_id], trace_id=trace_id)
+def run_reasoning_claims_for_object(object_id: str, trace_id: str | None = None, *, vault_binding_id: str | None = None) -> ReasoningOutput:
+    run = (run_reasoning(ReasoningMode.CLAIMS, [object_id], trace_id=trace_id, vault_binding_id=vault_binding_id)
+           if vault_binding_id is not None else run_reasoning(ReasoningMode.CLAIMS, [object_id], trace_id=trace_id))
     if isinstance(run.result, dict):
         try:
             return ReasoningOutput.model_validate(run.result)
