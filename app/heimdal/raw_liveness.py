@@ -249,6 +249,7 @@ class RawMutationAuthority:
     owner_thread_id: int
     _issuer: object
     _cursor: Any | None
+    _effect_check: Callable[[], None] | None
 
     def __init__(
         self,
@@ -259,6 +260,7 @@ class RawMutationAuthority:
         generation: int,
         backend: Literal["memory", "pg"],
         cursor: Any | None = None,
+        effect_check: Callable[[], None] | None = None,
     ) -> None:
         if _issuer is not _MUTATION_AUTHORITY_ISSUER:
             raise RawLivenessUnavailableError("raw mutation authority cannot be forged")
@@ -269,6 +271,7 @@ class RawMutationAuthority:
         object.__setattr__(self, "owner_thread_id", threading.get_ident())
         object.__setattr__(self, "_issuer", _issuer)
         object.__setattr__(self, "_cursor", cursor)
+        object.__setattr__(self, "_effect_check", effect_check)
 
 
 @dataclass(frozen=True)
@@ -1512,6 +1515,8 @@ def require_raw_mutation_authority(
         raise RawLivenessUnavailableError(
             "raw mutation authority is stale or bound to a different generation"
         )
+    if authority._effect_check is not None:
+        authority._effect_check()
     return authority
 
 
@@ -1587,7 +1592,8 @@ def content_identity_for_raw_record(record_id: str) -> str:
 
 @contextmanager
 def raw_relocation_fence(
-    *, record_id: str, content_identity: str
+    *, record_id: str, content_identity: str,
+    effect_check: Callable[[], None] | None = None,
 ) -> Iterator[RawMutationAuthority]:
     """Fence one relocation against retention for its exact live generation.
 
@@ -1609,6 +1615,7 @@ def raw_relocation_fence(
                 content_identity=content_identity,
                 generation=generation.generation,
                 backend="memory",
+                effect_check=effect_check,
             )
             _activate_mutation_authority(authority)
             try:
@@ -1637,12 +1644,15 @@ def raw_relocation_fence(
             generation=generation.generation,
             backend="pg",
             cursor=cur,
+            effect_check=effect_check,
         )
         _activate_mutation_authority(authority)
         try:
             yield authority
         finally:
             _deactivate_mutation_authority(authority)
+        if effect_check is not None:
+            effect_check()
         conn.commit()
         cur.execute(
             "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",

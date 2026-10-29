@@ -1432,9 +1432,14 @@ class FsVaultAdapter:
         )
 
     def append_note(self, locator: NoteLocator, content: str) -> WriteReceipt:
+        from app.instance.context_bound_write import require_effect_locator
+
         target = self._absolute_path(locator)
+        require_effect_locator(self.vault_root, locator.path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        require_effect_locator(self.vault_root, locator.path)
         with target.open("a", encoding="utf-8") as handle:
+            require_effect_locator(self.vault_root, locator.path)
             handle.write(content)
         return WriteReceipt(
             operation="append_note",

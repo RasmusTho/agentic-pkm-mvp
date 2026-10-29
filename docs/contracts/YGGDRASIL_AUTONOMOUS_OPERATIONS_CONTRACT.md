@@ -40,8 +40,11 @@ capability parity. Broader autonomous operations are a versioned v2 expansion an
 widen the v1 tool set or its authority.
 
 Current runtime capabilities remain whatever their owner documents and production tests establish.
-This contract does not claim a shared operations runtime, external MCP server, generic lifecycle
-operations, safe batch execution, or the GUI additions below are shipped.
+The bounded shared HTTP/runtime composition is implemented by #5352; its exact installed and
+dependency-blocked families are recorded in
+[`ARCHITECTURE.md :: Autonomous operation HTTP composition`](../ARCHITECTURE.md#autonomous-operation-http-composition).
+This is source-level implementation, not deployment, GUI acceptance, external MCP v2 acceptance,
+generic lifecycle support, or safe batch supervision. Those remain separately gated below.
 
 ## Capability boundary
 
@@ -334,6 +337,21 @@ chooses an identity/path, upgrades trust, or reports success merely because an e
 The browser transports human intent. The server resolves identity, authority, validation, policy,
 execution, and typed outcomes. A GUI route may compose presentation state, but domain mutation and
 its preflight MUST call the owning operation. The GUI never re-derives authority from a response.
+
+`POST /api/operations`, `POST /api/operations/preconditions`,
+`GET /api/operations/capabilities`, and the authenticated receipt readback
+share `app.api.operation_runtime.build_production_operation_runtime`. Request context IDs,
+generations and binding IDs are preconditions/selectors, never authority. The host derives the
+principal and MVR-05C write context, validates GOV tokens, and retains native version and effect
+fences. Raw delegation, policy, keys, readers, receipts, and source paths are not operation inputs.
+The kernel journal lives beside the instance registry; ambiguous source effects are inspected
+through durable native receipts or remain recovery-required, without retrying the initial effect.
+Artifact reads return the owning HKA byte version used by body-edit CAS. The preconditions route
+observes existing native versions for the bounded intent, including placement source/destination
+and raw archive/restore generations, without executing or reserving an operation. These observations
+carry no effect authority: execute reauthenticates, revalidates GOV/context/binding and compares the
+client's frozen owner-native versions. It never refreshes them automatically. Destination input is
+intent validated by the selected placement owner, never a client-selected source or authority root.
 
 ### MCP v1 compatibility profile
 

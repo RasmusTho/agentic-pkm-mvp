@@ -37,6 +37,7 @@ class ArchivalOperationServerConfig:
     channel: str
     vault_root: Path
     restore_service: str = OPERATION_RESTORE_SERVICE
+    effect_check: Callable[[], None] | None = None
 
 
 def build_archival_operation_handlers(
@@ -67,9 +68,9 @@ def _execute(request: OperationRequest, config: ArchivalOperationServerConfig) -
         return OwnerExecutionResult(OperationStatus.CONFLICTED, warnings=("expected generation is stale",))
     try:
         if request.operation_id == ARCHIVE_OPERATION_ID:
-            result = run_single_record_archive_operation(proof, config_root=config.config_root, channel=config.channel, vault_root=config.vault_root, request_id=request.request_id)
+            result = run_single_record_archive_operation(proof, config_root=config.config_root, channel=config.channel, vault_root=config.vault_root, request_id=request.request_id, effect_check=config.effect_check)
         else:
-            result = run_single_record_restore_operation(proof, service_reader=config.restore_service, request_id=request.request_id)
+            result = run_single_record_restore_operation(proof, service_reader=config.restore_service, request_id=request.request_id, effect_check=config.effect_check)
     except OperationTargetRefused as exc:
         return OwnerExecutionResult(OperationStatus.REJECTED, warnings=(str(exc),))
     except ArchiveDegradedError as exc:
