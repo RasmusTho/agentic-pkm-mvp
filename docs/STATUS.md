@@ -1260,3 +1260,7 @@ The subscription-only evaluator now offers validated explicit abstention for unr
 ## Subscription route recognition (#6437)
 
 The subscription-only comparison now includes the golden cases' declared surface/note context and distinguishes recognizing indirect intent from having enough details to execute it. Genuine missing antecedents and contradictions still require abstention. The unchanged full-set rerun and any residuals are recorded on #6437; no Product routing or default changes.
+
+## Independent classification validation (#6439)
+
+The opt-in subscription evaluation now supports a separate blind-authored 64-case corpus and a fixed five-repeat study of both corpora. The governing Issue owns the measured verdict and any remaining limitations; a single perfect result on the original 68 cases is not generalization or stability proof. Product routing and defaults remain unchanged.
