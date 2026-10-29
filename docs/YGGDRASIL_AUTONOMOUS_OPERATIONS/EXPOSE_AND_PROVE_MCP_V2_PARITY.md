@@ -24,9 +24,21 @@ MCP v1 behavior, and run integrated human/agent parity and recovery acceptance.
 
 ## Governance gate
 
-This task remains target-state only. Any broader external MCP operation set requires a superseding
-accepted ADR and a matching owner-contract update before the broader external MCP operation set may
-be treated as authorized or executable. ADR-0061's exact five-operation v1 profile remains unchanged.
+The owner-approved bounded v2 design is recorded in
+[ADR-0069](../adr/ADR-0069-mcp-v2-authority-profile.md), with matching updates to the
+[Mimer Client Contract](../contracts/MIMER_CLIENT_CONTRACT.md#accepted-mcp-v2-authority-profile)
+and [Autonomous Operations Contract](../contracts/YGGDRASIL_AUTONOMOUS_OPERATIONS_CONTRACT.md#mcp-v2-parity-profile).
+The design prerequisite is satisfied when that ADR and both matching owner-contract revisions
+merge together. It partially supersedes ADR-0061 only for the versioned v2 operation boundary;
+ADR-0061's exact five-operation v1 profile, A2 sidecar topology, B1 stdio-only transport, and C1
+inherited authentication remain unchanged.
+
+This acceptance does not establish installed runtime support, conformance, external-client
+readiness, or deployment. MCP v2 remains ineligible to claim shipped capability until the current
+SHA direct/HTTP/Companion/MCP conformance, negative-authority and failure/restart proof, isolated
+real-client journey, Companion UAT, and owner-document promotion gates below pass. Any broader
+external MCP operation set beyond this profile requires a superseding accepted ADR and matching
+owner-contract update to merge before it may be treated as authorized or executable.
 
 ## Concretely
 

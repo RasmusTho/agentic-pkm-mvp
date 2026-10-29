@@ -34,6 +34,7 @@ def test_mcp_v2_requires_superseding_adr_before_surface_expansion() -> None:
         assert "superseding accepted ADR" in normalized
         assert "matching owner-contract update" in normalized
         assert "broader external MCP operation set" in normalized
+        assert "ADR-0069" in normalized
 
     v1_profile = _section(
         contract,
@@ -41,6 +42,8 @@ def test_mcp_v2_requires_superseding_adr_before_surface_expansion() -> None:
         "### MCP v2 parity profile",
     )
     assert "exact boundary" in v1_profile
+    for invariant in ("A2", "B1", "C1"):
+        assert invariant in v2_profile
     normalized_contract = re.sub(r"\s+", " ", contract).casefold()
     for operation in ("ask", "capture", "retrieve", "read note", "health"):
         assert operation in normalized_contract
