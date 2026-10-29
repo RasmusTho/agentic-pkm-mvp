@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+import re
+import pytest
 
-from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
+from companion_ui.workspace.serve_dev_page import handle_get, render_index_html, _orientation_ambient_refresh_script
+from companion_ui.workspace.operations_workspace import operations_workspace_script
 
 
 class _OrientationClient:
@@ -184,7 +187,6 @@ def test_ambient_refresh_renders_no_notification_ui() -> None:
         "Notification",
         "EventSource",
         "WebSocket",
-        "setInterval",
         "data-testid=\"orientation-notification\"",
         "data-testid=\"orientation-badge\"",
         "data-testid=\"orientation-modal\"",
@@ -193,6 +195,12 @@ def test_ambient_refresh_renders_no_notification_ui() -> None:
     ]
     for token in forbidden:
         assert token not in html
+    operations = operations_workspace_script()
+    assert html.count(operations) == 1
+    # The admitted foreground Operations observer has its own closed/open/reopen
+    # browser proof. No other shell module may introduce a repeating timer.
+    assert "setInterval" not in html.replace(operations, "")
+    _assert_ambient_read_only(_orientation_ambient_refresh_script())
 
 
 def test_ambient_refresh_has_no_write_or_action_execution_path() -> None:
@@ -202,13 +210,9 @@ def test_ambient_refresh_has_no_write_or_action_execution_path() -> None:
         ambient_refresh_enabled=True,
     )
 
-    assert "method: 'POST'" not in html
-    assert 'data-api-method="POST"' not in html
-    assert "/api/panel/confirm" not in html
-    assert "/api/companion/workspace/body" not in html
-    assert "resurface.dismiss" not in html
-    assert "resurface.snooze" not in html
-    assert "resurface.pin" not in html
+    ambient = _orientation_ambient_refresh_script()
+    assert html.count(ambient) == 1
+    _assert_ambient_read_only(ambient)
 
 
 def test_orientation_vault_entry_includes_browser_control_handlers() -> None:
@@ -245,3 +249,17 @@ def test_orientation_vault_entry_includes_browser_control_handlers() -> None:
     # filter-toggle control handler remains in the orientation vault entry.
     assert "vaultBrowserToggleSelection" not in html
     assert "method: 'POST'" not in html
+
+
+def _assert_ambient_read_only(script: str) -> None:
+    assert re.search(r"method\s*:\s*['\"](?:POST|PUT|PATCH|DELETE)['\"]", script, re.I) is None
+    for token in ('setInterval', 'Notification', 'EventSource', 'WebSocket', '/api/operations',
+                  '/api/panel/confirm', '/api/companion/workspace/body', 'executeBatch(',
+                  'resurface.dismiss', 'resurface.snooze', 'resurface.pin'):
+        assert token not in script
+
+
+@pytest.mark.parametrize('injection', ['setInterval(poll,1000)', "fetch('/x',{method:'POST'})", 'api.executeBatch(id,digest)'])
+def test_ambient_guard_rejects_background_timer_or_effect_path(injection: str) -> None:
+    with pytest.raises(AssertionError):
+        _assert_ambient_read_only(_orientation_ambient_refresh_script()+injection)

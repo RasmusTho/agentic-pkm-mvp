@@ -545,6 +545,7 @@ def test_keyboard_map_routes_declared_intents() -> None:
         "capture.open": "capture",
         "map.open": "map",
         "memory.open": "memory",
+        "operations.open": "operations",
         "receipts.open": "receipts",
         "settings.open": "settings",
         "vault.open": "vault",
@@ -671,7 +672,7 @@ def test_undeclared_overlays_rejected() -> None:
     # The declared registry is exactly the spec's overlay set.
     assert DECLARED_OVERLAYS == (
         "cmd", "vault", "memory", "peek", "posture", "map",
-        "settings", "capture", "receipts", "tts", "help",
+        "settings", "capture", "operations", "receipts", "tts", "help",
     )
 
     for bogus in ("task-popup", "", "notifications", "VAULT"):

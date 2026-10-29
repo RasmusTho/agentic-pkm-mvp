@@ -76,6 +76,7 @@ ROUTE_INTENTS: dict[str, str] = {
     "memory": "memory.open",
     "capture": "capture.open",
     "receipts": "receipts.open",
+    "operations": "operations.open",
     "governance": "receipts.open",
     "settings": "settings.open",
     # Operator/diagnostics layer (#2447, CUIDR-04): the operator drawer is no
@@ -94,6 +95,7 @@ _ROUTABLE_SURFACE_IDS: tuple[str, ...] = (
     "memory",
     "capture",
     "receipts",
+    "operations",
     "governance",
     "settings",
     "operator",
@@ -300,6 +302,16 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         returns="closes back to your note",
         status="shipped",
         status_note="Ready — a history of what the companion has done",
+        routable=True,
+    ),
+    MapNode(
+        surface_id="operations",
+        name="Operations",
+        modes=("act",),
+        reached="your note's Operations action or this map",
+        returns="closes back to your note",
+        status="shipped",
+        status_note="Browse available actions, inspect scope, and review outcomes",
         routable=True,
     ),
     MapNode(
@@ -764,6 +776,7 @@ def system_map_overlay_script() -> str:
         if (id === 'memory') { window.overlayHost.replace('memory'); return; }
         if (id === 'capture') { window.overlayHost.replace('capture'); return; }
         if (id === 'receipts') { window.overlayHost.replace('receipts'); return; }
+        if (id === 'operations') { window.overlayHost.replace('operations'); return; }
         if (id === 'governance') { window.overlayHost.replace('receipts'); return; }
         if (id === 'settings') { window.overlayHost.replace('settings'); return; }
         // Operator layer (#2447): the operator drawer is the home for the
