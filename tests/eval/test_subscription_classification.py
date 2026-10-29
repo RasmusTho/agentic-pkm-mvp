@@ -8,7 +8,8 @@ from app.eval.subscription_classification import MODELS, preflight_targets, run_
 
 
 class FakeExecutor:
-    def __init__(self, *, missing=None, invalid=None):
+    def __init__(self, *, missing=None, invalid=None, cases=None):
+        self.cases = cases
         self.missing = missing
         self.invalid = invalid
         self.calls = []
@@ -22,7 +23,7 @@ class FakeExecutor:
         from app.model_access.codex_cli import _bounded_schema_snapshot
         _bounded_schema_snapshot(kwargs["output_schema_ref"], kwargs["output_schema"], max_bytes=100000)
         self.calls.append(kwargs)
-        cases_by_text = {c.utterance: c for c in load_classification_cases()}
+        cases_by_text = {c.utterance: c for c in (self.cases or load_classification_cases())}
         answers = [{"case_id": item["case_id"],
                     "decision": ("abstain" if cases_by_text[item["intent"]].expected_intent == "unknown"
                                  else cases_by_text[item["intent"]].expected_action_type
@@ -181,3 +182,39 @@ def test_route_recognition_uses_context_without_execution_authority():
     assert "indirect" in DECISION_INSTRUCTIONS.lower()
     assert "does not authorize" in DECISION_INSTRUCTIONS
     assert "meaningful statement" in DECISION_INSTRUCTIONS
+
+
+def test_holdout_selection_and_seed_preserve_scoring_and_privacy(tmp_path):
+    from app.eval.classification import evaluate_classification
+    from app.eval.subscription_classification import HOLDOUT_PATH
+
+    cases = load_classification_cases(HOLDOUT_PATH)
+    executor = FakeExecutor(cases=cases)
+    a = run_comparison(executor, cases_path=HOLDOUT_PATH, shuffle_seed=101)
+    b = run_comparison(executor, cases_path=HOLDOUT_PATH, shuffle_seed=202)
+    assert a["input_sha256"] != b["input_sha256"]
+    assert a["instruction_sha256"] == b["instruction_sha256"]
+    assert a["schema_sha256"] == b["schema_sha256"]
+    for receipt in (a, b):
+        assert receipt["dataset"]["path"] == str(HOLDOUT_PATH)
+        assert receipt["dataset"]["cases"] == 64
+        for run in receipt["runs"]:
+            expected = evaluate_classification(cases, run["case_outcomes"])
+            assert all(run["metrics"][k] == v for k, v in expected.items())
+            assert expected["pass_rate"] == 1.0
+    by_text = {c.utterance: c for c in cases}
+    for call in executor.calls:
+        for item in json.loads(call["user_prompt"]):
+            assert set(item) == {"case_id", "intent", "context"}
+            assert item["case_id"] not in {c.id for c in cases}
+            c = by_text[item["intent"]]
+            assert item["context"] == {"surface": c.surface, "note_state": c.note_state}
+        assert "expected_intent" not in call["user_prompt"]
+        assert "expected_action_type" not in call["user_prompt"]
+        assert "author_notes" not in call["user_prompt"]
+    refused = FakeExecutor()
+    for path, seed in ((tmp_path / "private.yaml", 101), (HOLDOUT_PATH, True),
+                       (HOLDOUT_PATH, -1), (HOLDOUT_PATH, 2**32)):
+        with pytest.raises(ValueError):
+            run_comparison(refused, cases_path=path, shuffle_seed=seed)
+    assert refused.calls == []

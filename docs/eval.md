@@ -340,6 +340,42 @@ complete run can fail the mutation-side gate; report that measured failure and r
 Exit codes are 0 for complete coverage with the hard gate passing, 1 for incomplete coverage or
 quality-gate failure, and 2 for preflight/setup failure. Prompts and raw answers are not in receipts.
 
+### Independent repeated subscription validation (#6439)
+
+`python -m app.eval.subscription_validation --run --output-directory /new/evidence/directory`
+uses the same host-owned safe profile and subscription as the comparison above. It freezes the
+v7 instruction/schema, exact model targets, low effort, original scorer and thresholds. A separate
+64-case synthetic holdout (`docs/eval/classification_holdout.yaml`) was authored in a fresh context
+without the original utterances, tuned instructions or measured outputs, then independently reviewed
+and duplicate-screened before any live inference. It has 16 cases per class, 8 per class/language,
+and no acceptable alternatives. It is not human-validated or a representative population sample.
+The holdout's `frozen_protocol` records the fixed study; changed prompts or scoring require a new
+study rather than silently reinterpreting these results.
+
+The predeclared plan runs both corpora five times at seeds 101, 202, 303, 404 and 505, reversing
+corpus order on alternating repeats: 30 fresh CLI invocations, 1,980 class observations.
+Each call has fresh conversation state and a permuted opaque-ID batch; expected labels, source IDs,
+label rationales and acceptable alternatives stay local. Repeated observations of the same input
+are correlated; neither the count nor a good result proves absence of overfitting or safety on
+unseen inputs. The study reports exact primary labels separately from existing acceptable labels,
+per-trial failures, minimum metrics, language slices and case-level instability.
+
+Only the two checked-in synthetic corpora are selectable (`--dataset golden|holdout` and
+`--shuffle-seed` on the single-comparison command). Arbitrary files/vault content are refused.
+All original numeric floors and zero mutation-side confusion must pass in **every** model/corpus/
+repeat before `pre_registered_gate_passed` is true; pooled scores never hide a bad repeat.
+`perfect_repeatability` additionally requires stable, correct classes across repeats. It is a
+separate claim from passing the quality floors. Known quality failures remain in the planned
+study; an incomplete transport/protocol outcome stops further inference without retry/fallback.
+
+The output directory must not exist. Each content-free trial is saved before the next call, with
+`validation.json` containing all trials and the `subscription-classification-validation.v1` summary.
+CLI exit 0 means the predeclared gate passed, 1 is a measured negative/incomplete result, and 2 is a
+setup/evidence failure. No raw prompts/answers, credentials, provider error text, Product qualification
+or default change are emitted or implied. Frozen hashes/acceptance precede results in the governing
+Issue receipt; its final receipt owns the measured positive, negative or incomplete finding. The
+study does not tune instructions or labels after observing outcomes.
+
 ### Thresholds and the regression gate
 
 Thresholds live in `config/eval_thresholds.yaml` (schema
