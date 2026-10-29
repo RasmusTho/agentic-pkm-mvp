@@ -97,6 +97,16 @@ The shared webhook adapter identifies its client with Discord's documented `Disc
 User-Agent format and the public repository URL/version. Discord may reject the default Python
 User-Agent with Cloudflare error 1010; this header carries no credential or provider authority.
 
+The adapter requests `wait=true` so Discord confirms message creation rather than using the
+[unconfirmed default](https://docs.discord.com/developers/resources/webhook#execute-webhook).
+It uses verified TLS, ignores ambient proxy settings, refuses redirects, and accepts only HTTP 200
+with a bounded valid Message confirmation identifying the configured webhook and message/channel
+IDs. Missing, malformed, oversized or mismatched confirmation is a redacted delivery failure;
+the source probe retains its existing incident/retry state. Response bodies and credential URLs
+are never logged. This transport confirmation grants no workflow authority and does not imply
+exactly-once delivery across uncertain network outcomes. Source delivery does not update an
+installed host package or replace the separate catalog-acceptance and live TEST drill gates.
+
 The channel, webhook, provider account, and host-native credential reference are not shipped by
 this document. They require the bounded delivery work tracked by the observability Issues and a
 redacted live drill receipt.
