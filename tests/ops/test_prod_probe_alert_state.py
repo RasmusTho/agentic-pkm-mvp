@@ -1062,3 +1062,27 @@ def test_swedish_alert_malformed_aggregate_has_unknown_cause(tmp_path, monkeypat
     })
     assert "Vi saknar säkra uppgifter om vad som är fel." in body
     assert "sökindex" not in body
+
+
+@pytest.mark.parametrize("ready_status", [503, None])
+def test_swedish_alert_names_readiness_only_failure(tmp_path, monkeypatch, ready_status):
+    monkeypatch.setattr(prod_probe, "ALERT_STATE_FILE", tmp_path / "ready.state")
+    channel = _make_spy_channel()
+    heartbeat = _write_fresh_heartbeat(tmp_path)
+
+    def http_get(url, timeout=10):
+        if url.endswith("/readyz"):
+            if ready_status is None:
+                raise ConnectionError("CANARY@everyone")
+            return ready_status, {"detail": "CANARY@everyone"}
+        return 200, {"required_ok": True}
+
+    assert prod_probe.run_probe(
+        channel=channel, environment="test", http_get=http_get,
+        heartbeat_path=str(heartbeat),
+    ) is False
+    subject, body = channel.send.call_args.args
+    assert subject == "TEST hälsoproblem - Yggdrasil"
+    assert "Kontrollen av tjänstens beredskap misslyckades." in body
+    assert "Vi saknar säkra uppgifter om vad som är fel." not in body
+    assert "CANARY" not in body

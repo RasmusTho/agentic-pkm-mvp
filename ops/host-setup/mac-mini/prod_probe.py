@@ -209,7 +209,7 @@ def _human_observations(details: list[str]) -> list[str]:
             observations.append("Hälsosvaret kunde inte tolkas; vi vet ännu inte varför.")
         elif detail == "health full channel unqualified":
             observations.append("Hälsokontrollen kunde inte bekräfta den valda miljöns beredskap.")
-        elif detail.startswith("/readyz"):
+        elif detail == "readyz unreachable" or detail.startswith("readyz returned HTTP "):
             observations.append("Kontrollen av tjänstens beredskap misslyckades.")
         elif detail.startswith("worker heartbeat"):
             observations.append("Bakgrundsarbetarens livssignal kunde inte bekräftas.")
