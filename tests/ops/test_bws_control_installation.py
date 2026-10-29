@@ -9,6 +9,7 @@ import importlib
 import json
 import os
 from pathlib import Path
+import resource
 import shutil
 import socket
 import stat
@@ -26,9 +27,10 @@ def denied_external_ports(monkeypatch):
 
     for name in ("Popen", "run", "call", "check_call", "check_output"):
         monkeypatch.setattr(subprocess, name, denied)
-    for name in ("system", "popen", "posix_spawn", "posix_spawnp", "fork", "forkpty", "execve"):
+    for name in ("system", "popen", "posix_spawn", "posix_spawnp", "fork", "forkpty", "execve", "_exit"):
         if hasattr(os, name):
             monkeypatch.setattr(os, name, denied)
+    monkeypatch.setattr(resource, "setrlimit", denied)
     monkeypatch.setattr(socket, "socket", denied)
     monkeypatch.setattr(socket, "create_connection", denied)
     original_import = builtins.__import__
@@ -769,7 +771,7 @@ def test_component_has_no_native_execution_entrypoint(case):
     imports |= {name.name for node in ast.walk(tree) if isinstance(node, ast.Import) for name in node.names}
     assert imports <= {
         "__future__", "fcntl", "hashlib", "json", "os", "pathlib", "re", "resource",
-        "stat", "dataclasses", "typing", "uuid", "weakref",
+        "stat", "dataclasses", "typing", "uuid", "weakref", "sys", "threading",
         "app.ops.bws_installation_lifecycle",
     }
     with module.install_public_files(**args) as handle:
