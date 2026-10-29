@@ -1191,6 +1191,39 @@ postcondition receipt does not adopt lifecycle ownership or relabel the executor
 resource guard remains intact and fences later #6457 apply requests; no guard clearance or further
 host compensation was performed. The separate #4076 controlled TEST acceptance remains open.
 
+The fixed successor protocol delivered under
+[#6475](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6475) supports only that installed
+`0172…` script plus retained59 to rendering source `7436ca29b863fca98faeb8e729d00e9832a71c22`,
+script SHA-256 `17c2dced67a7830e453f4bf5d18e1e330086dab186501b80b259f569936c8e90` (28,710 bytes).
+Its after-manifest is `317f99b147d23dcf20c3e59be2d542cd9f3f74aeca98d519ba2393a9eab3a635`.
+Source support does not change the installed mapping or the 43-cycle historical proof above;
+actual installation is the separate scope of
+[#6476](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6476). The existing Mac job remains retired.
+
+The carrier's `--rendering-successor` path is fixed to #6476 and contract-body SHA-256
+`7ef11ac405db559eec87c507c11eab13bf794a8421d6cd13e0aec98bcaa8ae1c`. Before a later operation,
+its normal Issue claim must be open/in-progress with the exact unexpired dispatcher lease.
+The actual holder, branch and worktree must agree with that claim and its sole active registry
+record; owner identity comes from `CODEX_THREAD_ID`, not an inherited session label. The clean
+checkout's current committed carrier/core/helper bytes and head are bound into the frozen request.
+Names, a new operation ID, source CI, a historical receipt or the closed #6475 lease supply none of
+this authority. The later owner must retain the reviewed source/program binding and original
+new-operation handle for follow/reconciliation.
+
+Inside the existing physical resource lock, admission pins original5b47's request/programs,
+authorization, phase, handle and honest UNKNOWN result, rejects any original continuation, and
+freshly proves its helper and cgroup reaped. It then qualifies the complete current60 package,
+configuration/effective unit, interpreter/launcher/private child, normal invocation, other consumers
+and latest incident. A fixed `rendering-successor.json` selector retains the original `active.json`
+bytes; both paths acquire the same `resource.lock`, whose inode and request/admission binding are
+rechecked before stop, replacement, start and compensation. The original pinned follow remains
+read-only and usable. Unqualified or partial evidence, foreign ownership and concurrent writers
+refuse admission. A lost response follows the same successor handle; unresolved start ownership
+stays UNKNOWN. Existing finite helper limits, descriptor custody and code-only compensation apply,
+retaining current incident acknowledgments, correlation/history and qualified caches.
+The later actual receipt must verify installation and completed normal cycles before these docs
+claim a new deployed version. This source prerequisite does not gate #4076's accepted TEST lane.
+
 **Two distinct Makefile targets — do not confuse them:**
 
 | Target | What it does |

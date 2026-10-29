@@ -39,6 +39,29 @@ UNIT_SHA256 = "c9aa169c8cec7f5e85bcea94115236fc2d2e159060b39f4da085ff318b325332"
 ENGINE_SHA256 = "b697f62f732a1c2ad27b7da3df386ecb8935f19964b0f3b0107dfb3b087f97e6"
 MANIFEST_SHA256 = "3ae600b78abefb751ef8fd73e7639b75a41b09f30d44fd4d06b1bb77101ae861"
 
+# A second, fixed transition. These bindings do not grant installation authority.
+RENDERING_SOURCE_MERGE = "7436ca29b863fca98faeb8e729d00e9832a71c22"
+RENDERING_SCRIPT_SHA256 = "17c2dced67a7830e453f4bf5d18e1e330086dab186501b80b259f569936c8e90"
+RENDERING_MANIFEST_SHA256 = "317f99b147d23dcf20c3e59be2d542cd9f3f74aeca98d519ba2393a9eab3a635"
+RENDERING_SOURCE_ISSUE = 6475
+RENDERING_SOURCE_BODY_SHA256 = "aa7d08590ecf9da897575e3e77a6d6be34c4020bd12a223a4ef8619749f8954c"
+RENDERING_INSTALLATION_ISSUE = 6476
+RENDERING_INSTALLATION_BODY_SHA256 = (
+    "7ef11ac405db559eec87c507c11eab13bf794a8421d6cd13e0aec98bcaa8ae1c"
+)
+ORIGINAL_OPERATION = "5b47bef8b0a64b12a2ffd7109d2b6209"
+ORIGINAL_REQUEST_SHA256 = "762b7c69e6059b5c1caba0145be0d0ede0b357e09776261720be56d9b5c2cfa5"
+ORIGINAL_FILE_SHA256 = {
+    "request.json": ORIGINAL_REQUEST_SHA256,
+    "handle.json": "c4070ed1c9fe21b811aeeb82a84e0823f8f7591310a5f24ec041ef3bb5457642",
+    "phase.json": "979394c5c039928dc4d7b100c135a7f9ddababe7f634f90b9754dcdf64c48c3d",
+    "result.json": "98f01e864c4671decd0a7c0ae0624b39cfb333d378b60fe626d9b01a78d9e6de",
+    "go.json": "4efbe2de4f14250e3c151b8f62e8a93417d350e90fabdaddd74fbf4fcfc3de3d",
+    "probe_script_swap_core.py": "47127117c9f3ba8fa2f7def8ecc026e3f91d2e1fdf05d47b6d7a12f443b8e7a3",
+    "probe_upgrade_operation.py": "425fa0291e0162fee9b6cc11d407e0e0851267ec87d2df155d0f4a1de6ec7bac",
+    "worker.py": "fe1217e7a5f5874aa3256876016d80d6b5353314b110cb1b3b7fe690d3367c3e",
+}
+
 PACKAGE = Path("/opt/yggdrasil/host-probe")
 SCRIPT = PACKAGE / "ops/host-setup/mac-mini/prod_probe.py"
 CONFIG = Path("/etc/yggdrasil/host-probe/prod.env")
@@ -292,16 +315,29 @@ def _safe_command(
 
 def _parse_packet(packet: dict[str, Any]) -> dict[str, Any]:
     expected = {"issue", "parent_issue", "source_merge", "claim_holder", "lease_id", "operation"}
-    if not isinstance(packet, dict) or set(packet) != expected:
+    if not isinstance(packet, dict):
         raise OperationFailure("packet_shape")
-    if packet["issue"] != ISSUE or packet["parent_issue"] != PARENT_ISSUE:
-        raise OperationFailure("issue_binding")
-    if packet["source_merge"] != SOURCE_MERGE or not re.fullmatch(
-        r"[0-9a-f]{40}", packet["source_merge"]
-    ):
-        raise OperationFailure("source_binding")
-    if packet["claim_holder"] != "codex-4076-upgrade-6457-sol":
-        raise OperationFailure("claim_binding")
+    rendering = "installation_authority" in packet
+    if rendering:
+        expected.add("installation_authority")
+    if set(packet) != expected:
+        raise OperationFailure("packet_shape")
+    if rendering:
+        authority = _rendering_authority(packet["installation_authority"])
+        if (
+            packet["issue"] != authority["issue"]
+            or packet["parent_issue"] != PARENT_ISSUE
+            or packet["source_merge"] != RENDERING_SOURCE_MERGE
+            or packet["claim_holder"] != authority["holder"]
+        ):
+            raise OperationFailure("successor_packet_authority_binding")
+    else:
+        if packet["issue"] != ISSUE or packet["parent_issue"] != PARENT_ISSUE:
+            raise OperationFailure("issue_binding")
+        if packet["source_merge"] != SOURCE_MERGE:
+            raise OperationFailure("source_binding")
+        if packet["claim_holder"] != "codex-4076-upgrade-6457-sol":
+            raise OperationFailure("claim_binding")
     if not isinstance(packet["lease_id"], str) or not re.fullmatch(
         r"lease-[0-9a-f]+", packet["lease_id"]
     ):
@@ -311,6 +347,56 @@ def _parse_packet(packet: dict[str, Any]) -> dict[str, Any]:
     ):
         raise OperationFailure("operation_binding")
     return packet
+
+
+def _rendering_authority(value: Any) -> dict[str, Any]:
+    """Bind a later explicit installation contract, never the source-only Issue.
+
+    The carrier must freshly authenticate these fields against the normal
+    Issue claim, dispatcher lease and sole worktree before sending any effect.
+    No host, path, command, service or source selection is accepted here.
+    """
+    if not isinstance(value, dict) or set(value) != {
+        "issue",
+        "body_sha256",
+        "holder",
+        "session",
+        "branch",
+        "scope",
+        "worktree",
+        "source_head",
+        "registration_generation",
+    }:
+        raise OperationFailure("successor_installation_authority_shape")
+    if (
+        type(value["issue"]) is not int
+        or RENDERING_INSTALLATION_ISSUE <= 0
+        or value["issue"] != RENDERING_INSTALLATION_ISSUE
+        or not isinstance(value["body_sha256"], str)
+        or value["body_sha256"] != RENDERING_INSTALLATION_BODY_SHA256
+        or not isinstance(value["holder"], str)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{1,127}", value["holder"])
+        or not isinstance(value["session"], str)
+        or not re.fullmatch(r"[0-9a-f-]{36}", value["session"])
+        or not isinstance(value["branch"], str)
+        or not re.fullmatch(r"codex/[A-Za-z0-9_-]+", value["branch"])
+        or not isinstance(value["worktree"], str)
+        or not Path(value["worktree"]).is_absolute()
+        or ".." in Path(value["worktree"]).parts
+        or not isinstance(value["source_head"], str)
+        or not re.fullmatch(r"[0-9a-f]{40}", value["source_head"])
+        or not isinstance(value["registration_generation"], str)
+        or not re.fullmatch(r"[0-9a-f]{32}", value["registration_generation"])
+        or value["scope"] != "install-0172-to-17c2-on-ygg-prod-under-4076"
+    ):
+        raise OperationFailure("successor_installation_authority_binding")
+    return value
+
+
+def _script_binding(packet: dict[str, Any]) -> tuple[str, str, str]:
+    if "installation_authority" in packet:
+        return NEW_SCRIPT_SHA256, RENDERING_SCRIPT_SHA256, RENDERING_MANIFEST_SHA256
+    return OLD_SCRIPT_SHA256, NEW_SCRIPT_SHA256, MANIFEST_SHA256
 
 
 def _validate_manifest(manifest: dict[str, dict[str, Any]]) -> None:
@@ -1113,7 +1199,10 @@ def _stop_owned(
     context: dict[str, Any],
     *,
     recovery: bool = False,
+    resource_guard: Callable[[], None] | None = None,
 ) -> int:
+    if resource_guard:
+        resource_guard()
     _guard_source(manifest)
     _additional_consumers(identity["cgroup"])
     _same_active(identity)
@@ -1126,6 +1215,8 @@ def _stop_owned(
         stop_intent_usec=intent,
     )
     # Revalidate after the durable write, immediately before the effect.
+    if resource_guard:
+        resource_guard()
     _same_active(identity)
     _safe_command(["/usr/bin/systemctl", "stop", UNIT], timeout=35.0, effect=True)
     _stopped_identity(identity, intent)
@@ -1141,7 +1232,10 @@ def _start_owned(
     context: dict[str, Any],
     *,
     recovery: bool = False,
+    resource_guard: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
+    if resource_guard:
+        resource_guard()
     _guard_source(manifest)
     _stopped_identity(prior, stop_usec)
     if _incident_snapshot() != incident:
@@ -1154,6 +1248,8 @@ def _start_owned(
     _journal_update(
         journal, context, "recovery_start_intent" if recovery else "start_intent", **{key: intent}
     )
+    if resource_guard:
+        resource_guard()
     _guard_source(manifest)
     if _incident_snapshot() != incident:
         raise OperationFailure("incident_changed_before_start")
@@ -1189,40 +1285,46 @@ def _recover(
     old_bytes: bytes,
     journal: Callable[[dict[str, Any]], None],
     operation_hex: str,
+    rendering: bool = False,
+    resource_guard: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Reconcile the original phase, then compensate code and the owned unit once."""
+    old_sha = NEW_SCRIPT_SHA256 if rendering else OLD_SCRIPT_SHA256
+    new_sha = RENDERING_SCRIPT_SHA256 if rendering else NEW_SCRIPT_SHA256
+    if resource_guard:
+        resource_guard()
     prior = context.get("old_identity")
     if not prior or "stop_intent_usec" not in context:
         return {"status": "refused", "probe_effect": False}
     fields = _settle_job()
     _fixed_files()
     current_sha = hashlib.sha256(_read_bounded(SCRIPT, 262_144, mode=0o664)).hexdigest()
-    if current_sha not in {OLD_SCRIPT_SHA256, NEW_SCRIPT_SHA256}:
+    if current_sha not in {old_sha, new_sha}:
         raise OperationFailure("foreign_source_during_recovery", unknown=True)
-    manifest = before_manifest if current_sha == OLD_SCRIPT_SHA256 else after_manifest
+    manifest = before_manifest if current_sha == old_sha else after_manifest
     _guard_source(manifest)
     if fields.get("ActiveState") == "active":
         actual = _active_identity(fields)
         expected = context.get("restored_identity") or context.get("new_identity")
-        if (
-            current_sha == NEW_SCRIPT_SHA256 and "start_intent_usec" in context and expected is None
-        ) or (
-            current_sha == OLD_SCRIPT_SHA256
+        if (current_sha == new_sha and "start_intent_usec" in context and expected is None) or (
+            current_sha == old_sha
             and "recovery_start_intent_usec" in context
             and context.get("restored_identity") is None
         ):
             raise OperationFailure("original_start_ownership_unproven", unknown=True)
-        if current_sha == OLD_SCRIPT_SHA256 and _identity_key(actual) == _identity_key(prior):
+        if current_sha == old_sha and _identity_key(actual) == _identity_key(prior):
             return {"status": "refused", "code_changed": False, "original_service_active": True}
         if expected is None or _identity_key(actual) != _identity_key(expected):
             raise OperationFailure("foreign_active_incarnation_during_recovery", unknown=True)
-        if current_sha == OLD_SCRIPT_SHA256 and context.get("restored_identity"):
+        if current_sha == old_sha and context.get("restored_identity"):
             return {
                 "status": "rolled_back",
                 "code_only": True,
                 "restored_invocation_sha256": _identity_digest(actual),
             }
-        stop_usec = _stop_owned(actual, manifest, journal, context, recovery=True)
+        stop_usec = _stop_owned(
+            actual, manifest, journal, context, recovery=True, resource_guard=resource_guard
+        )
         prior = actual
     else:
         prior = context.get("stopping_identity", prior)
@@ -1239,11 +1341,13 @@ def _recover(
         recovery_stopped_identity=prior,
         recovery_stop_usec=stop_usec,
     )
-    if current_sha == NEW_SCRIPT_SHA256:
+    if current_sha == new_sha:
         parent = _open_directory(SCRIPT.parent)
         try:
 
             def still_owned() -> None:
+                if resource_guard:
+                    resource_guard()
                 _stopped_identity(prior, stop_usec)
                 _guard_source(after_manifest)
                 if _incident_snapshot() != incident:
@@ -1252,9 +1356,9 @@ def _recover(
             _journal_update(journal, context, "rollback_replace_intent")
             swap_script(
                 parent,
-                NEW_SCRIPT_SHA256,
+                new_sha,
                 old_bytes,
-                OLD_SCRIPT_SHA256,
+                old_sha,
                 operation_hex,
                 still_owned,
                 expected_uid=EXPECTED_UID,
@@ -1266,14 +1370,23 @@ def _recover(
     if _incident_snapshot() != incident:
         raise OperationFailure("latest_incident_not_preserved")
     restored = _start_owned(
-        prior, stop_usec, before_manifest, incident, journal, context, recovery=True
+        prior,
+        stop_usec,
+        before_manifest,
+        incident,
+        journal,
+        context,
+        recovery=True,
+        resource_guard=resource_guard,
     )
     _same_active(restored)
     _guard_source(before_manifest)
+    if resource_guard:
+        resource_guard()
     return {
         "status": "rolled_back",
         "code_only": True,
-        "restored_old_sha256": OLD_SCRIPT_SHA256,
+        "restored_old_sha256": old_sha,
         "restored_invocation_sha256": _identity_digest(restored),
         "latest_quiescent_incident_preserved": incident["sha256"],
         "cache_restored_or_deleted": False,
@@ -1288,17 +1401,24 @@ def run(
     old_bytes: bytes,
     new_bytes: bytes,
     journal: Callable[[dict[str, Any]], None] | None = None,
+    resource_guard: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     packet = _parse_packet(packet)
+    rendering = "installation_authority" in packet
+    old_sha, new_sha, manifest_sha = _script_binding(packet)
+    if rendering and resource_guard is None:
+        raise OperationFailure("successor_owned_resource_guard_required")
     if (
-        hashlib.sha256(old_bytes).hexdigest() != OLD_SCRIPT_SHA256
-        or hashlib.sha256(new_bytes).hexdigest() != NEW_SCRIPT_SHA256
+        hashlib.sha256(old_bytes).hexdigest() != old_sha
+        or hashlib.sha256(new_bytes).hexdigest() != new_sha
     ):
         raise OperationFailure("script_binding")
     _validate_manifest(before_manifest)
     _validate_manifest(after_manifest)
-    if _manifest_digest(after_manifest) != MANIFEST_SHA256:
+    if _manifest_digest(after_manifest) != manifest_sha:
         raise OperationFailure("manifest_binding")
+    if rendering and _manifest_digest(before_manifest) != MANIFEST_SHA256:
+        raise OperationFailure("successor_before_manifest_binding")
     if set(before_manifest) != set(after_manifest) or any(
         before_manifest[p] != after_manifest[p] for p in before_manifest if p != SCRIPT_REL
     ):
@@ -1306,17 +1426,19 @@ def run(
     report: dict[str, Any] = {
         "schema": "probe_installation.v1",
         "armed": True,
-        "issue": ISSUE,
+        "issue": packet["issue"],
         "parent_issue": PARENT_ISSUE,
-        "source_merge": SOURCE_MERGE,
+        "source_merge": packet["source_merge"],
         "operation": packet["operation"],
         "claim_holder": packet["claim_holder"],
         "lease_id": packet["lease_id"],
-        "contract_body_sha256": BODY_SHA256,
+        "contract_body_sha256": packet["installation_authority"]["body_sha256"]
+        if rendering
+        else BODY_SHA256,
         "unit": UNIT,
         "script": SCRIPT_REL,
-        "old_script_sha256": OLD_SCRIPT_SHA256,
-        "new_script_sha256": NEW_SCRIPT_SHA256,
+        "old_script_sha256": old_sha,
+        "new_script_sha256": new_sha,
         "source_manifest_files": len(after_manifest),
         "source_manifest": [{"path": p, **v} for p, v in after_manifest.items()],
         "source_manifest_sha256": _manifest_digest(after_manifest),
@@ -1327,6 +1449,8 @@ def run(
     context: dict[str, Any] = {"operation": packet["operation"], "phase": "entry"}
     parent = None
     try:
+        if resource_guard:
+            resource_guard()
         _target_and_consumers()
         _guard_source(before_manifest)
         old = _active_identity(_unit_fields())
@@ -1346,13 +1470,17 @@ def run(
         if journal is None:
             raise OperationFailure("owned_operation_journal_required")
         _journal_update(journal, context, "qualified", old_identity=old)
-        stopped_at = _stop_owned(old, before_manifest, journal, context)
+        stopped_at = _stop_owned(
+            old, before_manifest, journal, context, resource_guard=resource_guard
+        )
         incident = _incident_snapshot()
         _journal_update(journal, context, "quiescent", quiescent_incident=incident)
         report["quiescent_incident"] = incident
         parent = _open_directory(SCRIPT.parent)
 
         def before_replace() -> None:
+            if resource_guard:
+                resource_guard()
             _stopped_identity(old, stopped_at)
             _guard_source(before_manifest)
             fresh = _open_directory(SCRIPT.parent)
@@ -1368,9 +1496,9 @@ def run(
         _journal_update(journal, context, "replace_intent")
         report["swap"] = swap_script(
             parent,
-            OLD_SCRIPT_SHA256,
+            old_sha,
             new_bytes,
-            NEW_SCRIPT_SHA256,
+            new_sha,
             packet["operation"],
             before_replace,
             expected_uid=EXPECTED_UID,
@@ -1381,7 +1509,15 @@ def run(
             raise OperationFailure("incident_changed_across_cutover")
         report["incident_preserved_across_code"] = True
         _journal_update(journal, context, "replaced")
-        new = _start_owned(old, stopped_at, after_manifest, incident, journal, context)
+        new = _start_owned(
+            old,
+            stopped_at,
+            after_manifest,
+            incident,
+            journal,
+            context,
+            resource_guard=resource_guard,
+        )
         if new["invocation"] == old["invocation"]:
             raise OperationFailure("old_invocation_reused")
         report["new_invocation_sha256"] = _identity_digest(new)
@@ -1392,6 +1528,8 @@ def run(
         report["cache_after"] = _cache_inventory(after_manifest)
         report["effective_unit_after"] = _unit_projection(_unit_fields())
         report["actual_launcher_consumer_child_interpreter_qualified"] = True
+        if resource_guard:
+            resource_guard()
         report["status"] = "committed"
         _journal_update(journal, context, "committed")
         return report
@@ -1411,6 +1549,8 @@ def run(
                     old_bytes=old_bytes,
                     journal=journal,
                     operation_hex=packet["operation"],
+                    rendering=rendering,
+                    resource_guard=resource_guard,
                 )
                 report["status"] = report["recovery"]["status"]
             except (OperationFailure, SwapFailure, OSError) as recovery:
@@ -1558,6 +1698,141 @@ def _resource_lock(*, blocking: bool = False) -> int:
     return descriptor
 
 
+def _original_successor_precondition() -> dict[str, Any]:
+    """Read the exact legacy evidence; historical acceptance is never a grant.
+
+    Call with the existing resource.lock held. The legacy active selector and
+    operation directory remain immutable, including their honest UNKNOWN result.
+    """
+    active = _read_bounded(OPERATION_ROOT / "active.json", mode=0o600)
+    if active != _json_bytes(
+        {"operation": ORIGINAL_OPERATION, "request_sha256": ORIGINAL_REQUEST_SHA256}
+    ):
+        raise OperationFailure("successor_original_fence_unqualified", unknown=True)
+    root = OPERATION_ROOT / ORIGINAL_OPERATION
+    _owned_directory(root)
+    if any(
+        path.name == "reconcile.json" or path.name.startswith("reconcile-")
+        for path in root.iterdir()
+    ):
+        raise OperationFailure("successor_original_continuation_present", unknown=True)
+    for name, expected in ORIGINAL_FILE_SHA256.items():
+        if hashlib.sha256(_read_bounded(root / name, mode=0o600)).hexdigest() != expected:
+            raise OperationFailure("successor_original_evidence_changed", unknown=True)
+    original = _status(ORIGINAL_OPERATION, ORIGINAL_REQUEST_SHA256)
+    if not (
+        original.get("status") == "unknown"
+        and original.get("phase") == "start_intent"
+        and original.get("failure") == "main_process_boundary"
+        and original.get("supervisor", {}).get("reaped") is True
+        and original.get("supervisor", {}).get("cgroup_empty") is True
+        and original.get("supervisor", {}).get("reconciliation") is False
+    ):
+        raise OperationFailure("successor_original_not_quiescent_unknown", unknown=True)
+    return {"operation": ORIGINAL_OPERATION, "request_sha256": ORIGINAL_REQUEST_SHA256}
+
+
+def _rendering_current_state(before_manifest: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Fresh observation for the new operation; it does not adopt the old start."""
+    original = _original_successor_precondition()
+    if _manifest_digest(before_manifest) != MANIFEST_SHA256:
+        raise OperationFailure("successor_before_manifest_binding")
+    _target_and_consumers()
+    _guard_source(before_manifest)
+    identity = _active_identity(_unit_fields())
+    _additional_consumers(identity["cgroup"])
+    return {
+        "predecessor": original,
+        "identity": identity,
+        "incident": _incident_snapshot(),
+        "before_manifest_sha256": MANIFEST_SHA256,
+        "after_manifest_sha256": RENDERING_MANIFEST_SHA256,
+        "configuration_sha256": CONFIG_SHA256,
+        "unit_sha256": UNIT_SHA256,
+    }
+
+
+def _same_resource_lock(descriptor: int) -> None:
+    parent = _open_directory(OPERATION_ROOT)
+    try:
+        named = os.stat("resource.lock", dir_fd=parent, follow_symlinks=False)
+        held = os.fstat(descriptor)
+        if _signature(named) != _signature(held) or held.st_nlink != 1:
+            raise OperationFailure("successor_shared_lock_changed", unknown=True)
+    finally:
+        os.close(parent)
+
+
+def _selector(request: dict[str, Any]) -> Path:
+    # The old selector is never overwritten by the successor. Both protocols
+    # still acquire the same physical resource.lock, including old pinned code.
+    return OPERATION_ROOT / (
+        "rendering-successor.json"
+        if "installation_authority" in request["packet"]
+        else "active.json"
+    )
+
+
+def _selection(request: dict[str, Any], request_sha: str) -> dict[str, Any]:
+    selected = {"operation": request["packet"]["operation"], "request_sha256": request_sha}
+    if "installation_authority" in request["packet"]:
+        root = OPERATION_ROOT / selected["operation"]
+        admission = _metadata_read(root / "admission.json")
+        if (
+            set(admission) != {"request_sha256", "resource", "current_state"}
+            or admission["request_sha256"] != request_sha
+            or not isinstance(admission["resource"], dict)
+            or set(admission["resource"]) != {"device", "inode"}
+            or any(type(item) is not int or item <= 0 for item in admission["resource"].values())
+            or not isinstance(admission["current_state"], dict)
+            or set(admission["current_state"])
+            != {
+                "predecessor",
+                "identity",
+                "incident",
+                "before_manifest_sha256",
+                "after_manifest_sha256",
+                "configuration_sha256",
+                "unit_sha256",
+            }
+            or admission["current_state"]["predecessor"]
+            != {
+                "operation": ORIGINAL_OPERATION,
+                "request_sha256": ORIGINAL_REQUEST_SHA256,
+            }
+            or admission["current_state"]["before_manifest_sha256"] != MANIFEST_SHA256
+            or admission["current_state"]["after_manifest_sha256"] != RENDERING_MANIFEST_SHA256
+            or admission["current_state"]["configuration_sha256"] != CONFIG_SHA256
+            or admission["current_state"]["unit_sha256"] != UNIT_SHA256
+            or not isinstance(admission["current_state"]["identity"], dict)
+            or not isinstance(admission["current_state"]["incident"], dict)
+        ):
+            raise OperationFailure("successor_admission_shape", unknown=True)
+        selected["admission_sha256"] = hashlib.sha256(_json_bytes(admission)).hexdigest()
+    return selected
+
+
+def _rendering_resource_guard(request: dict[str, Any], request_sha: str, lock: int) -> None:
+    _same_resource_lock(lock)
+    _original_successor_precondition()
+    if _json_bytes(_metadata_read(_selector(request))) != _json_bytes(
+        _selection(request, request_sha)
+    ):
+        raise OperationFailure("successor_resource_ownership", unknown=True)
+    admission = _metadata_read(OPERATION_ROOT / request["packet"]["operation"] / "admission.json")
+    held = os.fstat(lock)
+    if admission["resource"] != {"device": held.st_dev, "inode": held.st_ino}:
+        raise OperationFailure("successor_shared_lock_changed", unknown=True)
+
+
+def _rendering_entry_guard(request: dict[str, Any], request_sha: str, lock: int) -> None:
+    _rendering_resource_guard(request, request_sha, lock)
+    admission = _metadata_read(OPERATION_ROOT / request["packet"]["operation"] / "admission.json")
+    current = _rendering_current_state(request["before_manifest"])
+    if _identity_key(current["identity"]) != _identity_key(admission["current_state"]["identity"]):
+        raise OperationFailure("successor_normal_invocation_changed", unknown=True)
+
+
 def _operation_name(operation: str) -> str:
     if not isinstance(operation, str) or not re.fullmatch(r"[0-9a-f]{32}", operation):
         raise OperationFailure("operation_handle_shape")
@@ -1600,7 +1875,9 @@ def _request_parts(request: dict[str, Any]) -> tuple[dict[str, Any], bytes, byte
             raise ValueError("naive expiry")
     except (ValueError, TypeError, AttributeError):
         raise OperationFailure("operation_claim_expiry") from None
-    if request["contract_body_sha256"] != BODY_SHA256 or set(request["program_sha256"]) != {
+    rendering = "installation_authority" in packet
+    body_sha = packet["installation_authority"]["body_sha256"] if rendering else BODY_SHA256
+    if request["contract_body_sha256"] != body_sha or set(request["program_sha256"]) != {
         "probe_script_swap_core.py",
         "probe_upgrade_operation.py",
         "worker.py",
@@ -1611,11 +1888,17 @@ def _request_parts(request: dict[str, Any]) -> tuple[dict[str, Any], bytes, byte
         new = base64.b64decode(request["new_base64"], validate=True)
     except (ValueError, TypeError):
         raise OperationFailure("operation_source_encoding") from None
-    if (
-        hashlib.sha256(old).hexdigest() != OLD_SCRIPT_SHA256
-        or hashlib.sha256(new).hexdigest() != NEW_SCRIPT_SHA256
-    ):
+    old_sha, new_sha, manifest_sha = _script_binding(packet)
+    if hashlib.sha256(old).hexdigest() != old_sha or hashlib.sha256(new).hexdigest() != new_sha:
         raise OperationFailure("operation_source_binding")
+    if rendering:
+        _validate_manifest(request["before_manifest"])
+        _validate_manifest(request["after_manifest"])
+        if (
+            _manifest_digest(request["before_manifest"]) != MANIFEST_SHA256
+            or _manifest_digest(request["after_manifest"]) != manifest_sha
+        ):
+            raise OperationFailure("successor_request_manifest_binding")
     return packet, old, new
 
 
@@ -1914,6 +2197,7 @@ def remote_entry(
 ) -> dict[str, Any]:
     packet, _, _ = _request_parts(request)
     operation = packet["operation"]
+    rendering = "installation_authority" in packet
     request_sha = hashlib.sha256(_json_bytes(request)).hexdigest()
     root = OPERATION_ROOT / operation
     if (
@@ -1932,15 +2216,46 @@ def remote_entry(
         request["lease_expires_at"].replace("Z", "+00:00")
     ) <= datetime.now(timezone.utc):
         raise OperationFailure("operation_claim_expired")
-    _owned_directory(OPERATION_ROOT, create=action == "prepare")
+    _owned_directory(OPERATION_ROOT, create=action == "prepare" and not rendering)
     lock = _resource_lock()
     try:
         if action == "prepare":
+            selector = _selector(request)
             try:
-                active = _metadata_read(OPERATION_ROOT / "active.json")
+                active = _metadata_read(selector)
             except FileNotFoundError:
                 active = None
-            if active and active != {"operation": operation, "request_sha256": request_sha}:
+            if rendering and root.exists():
+                return _status(operation, request_sha)  # Follow the frozen request; never replay.
+            expected = {"operation": operation, "request_sha256": request_sha}
+            if rendering and active:
+                if (
+                    set(active) != {"operation", "request_sha256", "admission_sha256"}
+                    or not isinstance(active.get("operation"), str)
+                    or not re.fullmatch(r"[0-9a-f]{32}", active["operation"])
+                    or any(
+                        not isinstance(active[key], str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", active[key])
+                        for key in ("request_sha256", "admission_sha256")
+                    )
+                ):
+                    raise OperationFailure("successor_previous_selection_unqualified", unknown=True)
+                previous_request = _metadata_read(
+                    OPERATION_ROOT / active["operation"] / "request.json"
+                )
+                previous_packet, _, _ = _request_parts(previous_request)
+                if "installation_authority" not in previous_packet or _json_bytes(
+                    active
+                ) != _json_bytes(_selection(previous_request, active["request_sha256"])):
+                    raise OperationFailure("successor_previous_selection_unqualified", unknown=True)
+            same_request = active == expected
+            if rendering:
+                same_request = (
+                    active is not None
+                    and active.get("operation") == operation
+                    and active.get("request_sha256") == request_sha
+                )
+            if active and not same_request:
                 previous = _status(active["operation"], active["request_sha256"])
                 if previous["status"] not in {"refused", "rolled_back"} or not previous.get(
                     "supervisor", {}
@@ -1949,7 +2264,17 @@ def remote_entry(
                         "original_operation_unresolved_or_committed", unknown=True
                     )
             if root.exists():
-                return _status(operation, request_sha)  # No replay, even after a lost response.
+                return _status(operation, request_sha)
+            admission = None
+            if rendering:
+                _same_resource_lock(lock)
+                current = _rendering_current_state(request["before_manifest"])
+                held = os.fstat(lock)
+                admission = {
+                    "request_sha256": request_sha,
+                    "resource": {"device": held.st_dev, "inode": held.st_ino},
+                    "current_state": current,
+                }
             if programs is None or set(programs) != set(request["program_sha256"]):
                 raise OperationFailure("operation_program_set")
             for name, data in programs.items():
@@ -1972,9 +2297,11 @@ def remote_entry(
                 finally:
                     os.close(descriptor)
             _program_files(request, root)
+            if admission is not None:
+                _metadata_write(root / "admission.json", admission, exclusive=True)
             _metadata_write(
-                OPERATION_ROOT / "active.json",
-                {"operation": operation, "request_sha256": request_sha},
+                selector,
+                _selection(request, request_sha),
                 exclusive=active is None,
             )
             _metadata_write(
@@ -1993,8 +2320,8 @@ def remote_entry(
                 "handle": handle,
             }
         _owned_directory(root)
-        active = _metadata_read(OPERATION_ROOT / "active.json")
-        if active != {"operation": operation, "request_sha256": request_sha}:
+        active = _metadata_read(_selector(request))
+        if _json_bytes(active) != _json_bytes(_selection(request, request_sha)):
             raise OperationFailure("original_resource_handle_mismatch", unknown=True)
         status = _status(operation, request_sha)
         if expected_handle != status["handle"]:
@@ -2002,6 +2329,8 @@ def remote_entry(
         if action == "authorize":
             if status["status"] in {"committed", "rolled_back", "refused", "unknown"}:
                 return status
+            if rendering:
+                _rendering_entry_guard(request, request_sha, lock)
             fields = _supervisor_fields(operation)
             if _supervisor_handle(operation, request_sha, fields) != expected_handle:
                 raise OperationFailure("authorization_incarnation_changed", unknown=True)
@@ -2018,6 +2347,8 @@ def remote_entry(
             return status
         if not status.get("supervisor", {}).get("reaped"):
             return status
+        if rendering:
+            _rendering_resource_guard(request, request_sha, lock)
         permission = _reconciliation(root, expected_handle, request_sha)
         context = _latest_context(root, permission)
         fields = _unit_fields()
@@ -2092,6 +2423,7 @@ def worker_main(operation: str) -> int:
     _owned_directory(root)
     request = _metadata_read(root / "request.json")
     packet, old_bytes, new_bytes = _request_parts(request)
+    rendering = "installation_authority" in packet
     request_sha = hashlib.sha256(_json_bytes(request)).hexdigest()
     if packet["operation"] != operation:
         raise OperationFailure("worker_operation_binding")
@@ -2160,11 +2492,13 @@ def worker_main(operation: str) -> int:
             raise OperationFailure("worker_claim_expired")
     lock = _resource_lock(blocking=True)
     try:
-        if _metadata_read(OPERATION_ROOT / "active.json") != {
-            "operation": operation,
-            "request_sha256": request_sha,
-        }:
+        if _json_bytes(_metadata_read(_selector(request))) != _json_bytes(
+            _selection(request, request_sha)
+        ):
             raise OperationFailure("worker_resource_ownership")
+
+        def resource_guard() -> None:
+            _rendering_resource_guard(request, request_sha, lock)
 
         def journal(value: dict[str, Any]) -> None:
             _metadata_write(phase_file, value)
@@ -2175,6 +2509,8 @@ def worker_main(operation: str) -> int:
         signal.signal(signal.SIGALRM, deadline_signal)
         signal.alarm(90 if recovery else 300)
         try:
+            if rendering and not recovery:
+                _rendering_entry_guard(request, request_sha, lock)
             if recovery:
                 result = _recover(
                     context,
@@ -2183,6 +2519,8 @@ def worker_main(operation: str) -> int:
                     old_bytes=old_bytes,
                     journal=journal,
                     operation_hex=operation,
+                    rendering=rendering,
+                    resource_guard=resource_guard if rendering else None,
                 )
                 result.update(
                     schema="probe_installation.v1", operation=operation, test_acceptance=False
@@ -2195,6 +2533,7 @@ def worker_main(operation: str) -> int:
                     old_bytes=old_bytes,
                     new_bytes=new_bytes,
                     journal=journal,
+                    resource_guard=resource_guard if rendering else None,
                 )
         except BaseException as error:
             result = {
@@ -2209,6 +2548,17 @@ def worker_main(operation: str) -> int:
         finally:
             signal.alarm(0)
         result.update(request_sha256=request_sha, worker_invocation=handle["invocation"])
+        if rendering:
+            result["successor"] = {
+                "source_issue": RENDERING_SOURCE_ISSUE,
+                "source_contract_body_sha256": RENDERING_SOURCE_BODY_SHA256,
+                "installation_authority": packet["installation_authority"],
+                "program_sha256": request["program_sha256"],
+                "admission_sha256": _selection(request, request_sha)["admission_sha256"],
+                "original_operation": ORIGINAL_OPERATION,
+                "original_request_sha256": ORIGINAL_REQUEST_SHA256,
+                "original_status_required": "unknown",
+            }
         _metadata_write(result_file, result, exclusive=True)
         return 0
     finally:
