@@ -418,6 +418,9 @@ def test_create_once_stays_behind_knowledge_service_boundary() -> None:
     # compares as a sorted list to stay deterministic across hosts (#4609,
     # mirroring the tests/properties create-once census).
     assert sorted(call_sites) == [
+        # Episode Debrief (#3333): immutable proposal creation through the
+        # guarded create-once knowledge seam; no new filesystem write port.
+        ("app/expansion/create.py", "run_create_pass"),
         # Meeting finalization (CDLM-08, #4388): create-once Sources-zone
         # artifacts written atomically through the same O_EXCL primitive,
         # WriteGuard-gated with its own action string.
