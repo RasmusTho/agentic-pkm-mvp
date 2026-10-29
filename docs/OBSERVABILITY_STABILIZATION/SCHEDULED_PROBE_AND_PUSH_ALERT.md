@@ -122,10 +122,11 @@ The source template leads with `PROD hälsoproblem` (or `TEST hälsoproblem`), n
 claim of total outage. It names failed required checks from the finite health-producer mapping
 and mandatory runtime database, worker and model components. Optional failures are excluded;
 watcher requirement is producer-local and is not inferred from a failed watcher observation.
-Unknown or malformed cause metadata yields an explicit `UNKNOWN` fallback. Raw health details,
+Unknown or malformed cause metadata yields plain Swedish uncertainty in the human text;
+`UNKNOWN` is reserved for technical metadata. Raw health details,
 errors, paths and arbitrary keys never become notification text. Templates are deterministic;
 there is no language-model call or inferred cause, impact or repair claim. Broader impact remains
-`UNKNOWN`; recovery says only that the monitored readiness, required health and heartbeat checks
+unknown in plain Swedish (`impact: UNKNOWN` in the footer); recovery says only that the monitored readiness, required health and heartbeat checks
 are green, using the same incident correlation.
 
 Messages include Swedish local date/time in `Europe/Stockholm` (with DST and numeric offset),

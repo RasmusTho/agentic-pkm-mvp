@@ -155,8 +155,8 @@ _REQUIRED_CHECK_LABELS = {
     "llm_task_routes": "modellrutter",
     "embedding_index": "sökindex",
 }
-_RUNTIME_LABELS = {"db": "databas", "worker": "worker", "llm": "modellkörning"}
-_UNKNOWN_CAUSE = "UNKNOWN – detaljerad felorsak saknas eller kan inte tolkas säkert"
+_RUNTIME_LABELS = {"db": "databasen", "worker": "bakgrundsarbetaren", "llm": "modellkörning"}
+_UNKNOWN_CAUSE = "Hälsokontrollen kunde inte bekräftas. Vi saknar säkra uppgifter om vad som är fel."
 _RUNBOOK_URL = (
     "https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/"
     "docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md"
@@ -198,21 +198,21 @@ def _human_observations(details: list[str]) -> list[str]:
             tokens = detail.partition(":")[2].split(",")
             names = [label for key, label in labels.items() if key in tokens]
             observations.append("Obligatoriska kontroller rapporterar fel: " + ", ".join(names)
-                                if names else "Obligatorisk hälsa: " + _UNKNOWN_CAUSE)
+                                if names else _UNKNOWN_CAUSE)
         elif detail == "/api/health unreachable":
-            observations.append("Hälsokontrollen kunde inte nå API:t; orsaken är UNKNOWN.")
+            observations.append("Hälsokontrollen kunde inte nå API:t; vi vet ännu inte varför.")
         elif detail.startswith("/api/health returned HTTP "):
-            observations.append("Hälsokontrollen fick ett HTTP-felsvar; orsaken är UNKNOWN.")
+            observations.append("Hälsokontrollen fick ett HTTP-felsvar; vi vet ännu inte varför.")
         elif detail == "health acquisition deadline exceeded":
-            observations.append("Hälsokontrollen hann inte slutföras inom tidsgränsen; orsaken är UNKNOWN.")
+            observations.append("Hälsokontrollen hann inte slutföras inom tidsgränsen; vi vet ännu inte varför.")
         elif detail == "health response malformed":
-            observations.append("Hälsosvaret kunde inte tolkas; orsaken är UNKNOWN.")
+            observations.append("Hälsosvaret kunde inte tolkas; vi vet ännu inte varför.")
         elif detail == "health full channel unqualified":
-            observations.append("Hälsosvaret bekräftar inte att hela kanalen är kvalificerad.")
+            observations.append("Hälsokontrollen kunde inte bekräfta den valda miljöns beredskap.")
         elif detail.startswith("/readyz"):
-            observations.append("Readiness-kontrollen misslyckades; API-beredskap är inte bekräftad.")
+            observations.append("Kontrollen av tjänstens beredskap misslyckades.")
         elif detail.startswith("worker heartbeat"):
-            observations.append("Workerns heartbeat-kontroll misslyckades; aktuell livssignal är inte bekräftad.")
+            observations.append("Bakgrundsarbetarens livssignal kunde inte bekräftas.")
         else:
             observations.append(_UNKNOWN_CAUSE)
     return list(dict.fromkeys(observations)) or [_UNKNOWN_CAUSE]
@@ -240,14 +240,15 @@ def _alert_body(
         correlation_id = "UNKNOWN"
     lines = [f"Tid: {local_time}"]
     if transition == "recovered":
-        lines.append("De övervakade kontrollerna är åter gröna: readiness, obligatorisk hälsa och worker-heartbeat.")
-        lines.append("Detta bekräftar inte att hela systemet eller alla funktioner är felfria.")
+        lines.append("De övervakade kontrollerna fungerar igen: tjänstens beredskap, obligatoriska hälsokontroller och bakgrundsarbetarens livssignal.")
+        lines.append("Detta bekräftar inte att hela tjänsten eller alla funktioner är felfria.")
     else:
         lines.extend(_human_observations(details))
-        lines.append("Påverkan utöver dessa observationer: UNKNOWN. Fullständigt driftstopp är inte fastställt.")
+        lines.append("Vi vet ännu inte om eller hur detta påverkar användningen. Larmet betyder inte att hela tjänsten ligger nere.")
     lines.extend([
-        "Nästa steg: kontrollera aktuell hälsa och följ incidentrunbooken nedan.",
+        "Nästa steg: öppna felsökningsguiden nedan och kontrollera de delar som anges ovan.",
         "Teknisk metadata:",
+        "impact: UNKNOWN" if transition != "recovered" else "scope: monitored_checks_only",
         f"source_system: {PROBE_SOURCE_SYSTEM}",
         f"environment: {environment}",
         f"severity: {severity}",

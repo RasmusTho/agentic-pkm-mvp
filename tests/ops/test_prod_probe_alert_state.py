@@ -204,7 +204,7 @@ def test_probe_reads_required_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     assert result is False
     channel.send.assert_called_once()
-    assert "Obligatorisk hälsa: UNKNOWN" in channel.send.call_args[0][1]
+    assert "Vi saknar säkra uppgifter om vad som är fel." in channel.send.call_args[0][1]
 
 
 @pytest.mark.parametrize("heartbeat_payload", [[], None, 1, "heartbeat"])
@@ -230,7 +230,7 @@ def test_non_object_heartbeat_json_still_sends_down_alert(
 
     assert result is False
     channel.send.assert_called_once()
-    assert "Workerns heartbeat-kontroll misslyckades" in channel.send.call_args.args[1]
+    assert "Bakgrundsarbetarens livssignal kunde inte bekräftas" in channel.send.call_args.args[1]
     assert json.loads(state_file.read_text())["environment"] == "prod"
 
 
@@ -977,12 +977,15 @@ def test_swedish_health_alert_names_mandatory_failures(tmp_path, monkeypatch):
         },
     })
     assert subject == "PROD hälsoproblem - Yggdrasil"
-    assert "Obligatoriska kontroller rapporterar fel: sökindex, databas, worker" in body
+    assert "Obligatoriska kontroller rapporterar fel: sökindex, databasen, bakgrundsarbetaren" in body
     assert "Obsidian" not in body and "ffmpeg" not in body and "watcher" not in body
-    assert "Readiness-kontrollen misslyckades" not in body
-    assert "Fullständigt driftstopp är inte fastställt" in body
-    assert "Påverkan utöver dessa observationer: UNKNOWN" in body
-    assert "Nästa steg:" in body and "RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md" in body
+    assert "Kontrollen av tjänstens beredskap misslyckades" not in body
+    assert "Larmet betyder inte att hela tjänsten ligger nere." in body
+    assert "Vi vet ännu inte om eller hur detta påverkar användningen." in body
+    assert "Nästa steg: öppna felsökningsguiden nedan och kontrollera de delar som anges ovan." in body
+    assert "RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md" in body
+    lead = body.split("Teknisk metadata:")[0]
+    assert "UNKNOWN" not in lead and "worker" not in lead and "incidentrunbook" not in lead
 
 
 @pytest.mark.parametrize("metadata", [None, [], "CANARY@everyone", {}, {
@@ -997,7 +1000,7 @@ def test_swedish_alert_untrusted_metadata_is_bounded(tmp_path, monkeypatch, meta
         "detail": "CANARY@everyone /private/secret", "error": "CANARY",
     }, environment="CANARY@everyone")
     assert subject == "UNKNOWN hälsoproblem - Yggdrasil"
-    assert "UNKNOWN – detaljerad felorsak" in body
+    assert "Vi saknar säkra uppgifter om vad som är fel." in body
     assert "CANARY" not in subject + body and "@everyone" not in body
     assert "/private/secret" not in body
     assert len(f"**{subject}**\n{body}") <= 2000
@@ -1031,8 +1034,8 @@ def test_swedish_alert_time_and_recovery(tmp_path, monkeypatch, utc, local):
     ) is True
     subject, recovery = channel.send.call_args.args
     assert subject == "PROD övervakade kontroller återställda - Yggdrasil"
-    assert "De övervakade kontrollerna är åter gröna" in recovery
-    assert "bekräftar inte att hela systemet" in recovery
+    assert "De övervakade kontrollerna fungerar igen" in recovery
+    assert "bekräftar inte att hela tjänsten" in recovery
     assert state["correlation_id"] in recovery and local in recovery
 
     def missing_zone(_name):
@@ -1051,11 +1054,11 @@ def test_swedish_alert_malformed_aggregate_has_unknown_cause(tmp_path, monkeypat
         "checks": {"embedding_index": {"ok": False, "required": True}},
         "runtime": {"db": {"ok": False}},
     })
-    assert "Obligatorisk hälsa: UNKNOWN" in body
+    assert "Vi saknar säkra uppgifter om vad som är fel." in body
     assert "sökindex" not in body and "databas" not in body
     (tmp_path / "swedish.state").unlink()
     _, body = _assembled_alert(tmp_path, monkeypatch, {
         "checks": {"embedding_index": {"ok": False, "required": True}},
     })
-    assert "Obligatorisk hälsa: UNKNOWN" in body
+    assert "Vi saknar säkra uppgifter om vad som är fel." in body
     assert "sökindex" not in body
