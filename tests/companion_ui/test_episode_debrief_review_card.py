@@ -22,6 +22,10 @@ def test_workspace_rail_renders_client_loaded_debrief_review_card() -> None:
     assert "method: 'DELETE'" not in html.split("episode-debrief-review-controller")[1].split("</script>")[0]
     # A failed read is surfaced as unavailable, not rendered as an empty list.
     assert "Debriefs unavailable" in html
+    # Loaded only when opened: a plain page load issues no runtime request.
+    controller = html.split("episode-debrief-review-controller")[1].split("</script>")[0]
+    assert "root.addEventListener('toggle'" in controller
+    assert not controller.rstrip().rstrip("})();").rstrip().endswith("load();")
 
 
 def test_page_proxy_admits_only_the_debrief_projection_and_review_route() -> None:

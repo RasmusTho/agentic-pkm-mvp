@@ -3,6 +3,8 @@
 The runtime owns the read-only projection and the disposition route. This
 module renders API text with textContent and posts only the two declared
 dispositions; a failed read is shown as unavailable, never as an empty list.
+The projection loads when the owner opens the card, so a plain page load makes
+no runtime request.
 Dismiss archives the debrief; nothing here can delete it.
 """
 
@@ -13,21 +15,21 @@ EPISODE_DEBRIEFS_ENDPOINT = "/api/companion/episode-debriefs"
 
 def episode_debrief_review_markup() -> str:
     return f"""
-        <section class="debrief-review-card" data-testid="episode-debrief-review"
-          data-endpoint="{EPISODE_DEBRIEFS_ENDPOINT}" aria-labelledby="episode-debrief-review-heading">
-          <h3 id="episode-debrief-review-heading" class="debrief-review-eyebrow">Episode debriefs</h3>
+        <details class="debrief-review-card" data-testid="episode-debrief-review"
+          data-endpoint="{EPISODE_DEBRIEFS_ENDPOINT}">
+          <summary id="episode-debrief-review-heading" class="debrief-review-eyebrow">Episode debriefs to review</summary>
           <p class="debrief-review-state" data-testid="episode-debrief-review-state" aria-live="polite"></p>
           <div class="debrief-review-list" data-testid="episode-debrief-review-list">
             <p class="debrief-review-loading">Loading debriefs…</p>
           </div>
-        </section>"""
+        </details>"""
 
 
 def episode_debrief_review_style() -> str:
     return """
     /* ---- DEBRIEF-03 episode debrief review card ---- */
     .debrief-review-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; }
-    .debrief-review-eyebrow { color: var(--fg-2); font-size: var(--text-xs); margin: 0 0 8px; }
+    .debrief-review-eyebrow { color: var(--fg-2); cursor: pointer; font-size: var(--text-xs); }
     .debrief-review-item { border-top: 1px solid var(--border); padding: 10px 0; }
     .debrief-review-item h4 { color: var(--fg-1); font-size: var(--text-md); margin: 0 0 6px; }
     .debrief-review-body { color: var(--fg-1); font-size: var(--text-sm); max-height: 14em; overflow: auto; white-space: pre-wrap; }
@@ -112,6 +114,6 @@ def episode_debrief_review_script() -> str:
       }}).then(function(result) {{ setState('Debrief ' + result.review_state + '.'); return load(); }})
         .catch(function(error) {{ setState(error.message, 'danger'); return load(); }});
     }});
-    load();
+    root.addEventListener('toggle', function() {{ if (root.open) {{ load(); }} }});
   }})();
   </script>"""
