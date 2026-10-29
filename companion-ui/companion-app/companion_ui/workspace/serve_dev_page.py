@@ -120,6 +120,12 @@ from companion_ui.workspace.memory_review_drawer import (
     memory_review_queue_fragment,
     memory_review_unavailable_fragment,
 )
+from companion_ui.workspace.episode_debrief_review import (
+    EPISODE_DEBRIEFS_ENDPOINT,
+    episode_debrief_review_markup,
+    episode_debrief_review_script,
+    episode_debrief_review_style,
+)
 from companion_ui.workspace.standing_question_review import (
     standing_question_review_script,
 )
@@ -3557,6 +3563,8 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         if "calibration_revisit" in fields
         else ""
     )
+    # DEBRIEF-03: client-loaded from the runtime projection; never SSR-invented.
+    episode_debrief_review_html = episode_debrief_review_markup()
     act_mode_html = _render_act_mode(
         proposals=fields.get("panel_proposals") or [],
         response=fields.get("panel_last_response") or {},
@@ -3755,6 +3763,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         {day_start_card_html}
         {reflection_offer_html}
         {calibration_revisit_html}
+        {episode_debrief_review_html}
         {canvas_lane_html}
         {active_note_body_update_html}
         {suggestion_flow_html}
@@ -11683,6 +11692,9 @@ def render_index_html(
         if fields is not None and "calibration_revisit" in fields
         else ""
     )
+    episode_debrief_review_script_html = (
+        episode_debrief_review_script() if fields is not None else ""
+    )
     # CUIDR-04 (#2447): the relocated runtime/diagnostic telemetry block lives
     # inside the operator drawer (the operator layer). _render_note_section
     # builds it where its derived inputs are in scope and hands it back so the
@@ -13896,6 +13908,7 @@ def render_index_html(
     .rail-state-value, .rail-state-count {{
       color: var(--fg-2);
     }}
+{episode_debrief_review_style()}
     /* ---- CAL-03 decision calibration revisit card ---- */
     .calibration-revisit-card {{
       display: flex;
@@ -15976,6 +15989,7 @@ def render_index_html(
   {memory_review_drawer_script()}
   {standing_question_review_script()}
   {calibration_revisit_script_html}
+  {episode_debrief_review_script_html}
   {receipts_history_script()}
   {operations_client_script()}
   {operations_workspace_script()}
@@ -17477,6 +17491,7 @@ def make_handler(
                 "/api/standing-questions",
                 "/api/companion/orientation",
                 "/api/companion/briefing/today",
+                EPISODE_DEBRIEFS_ENDPOINT,
                 "/api/companion/workspace",
                 "/api/companion/vault/notes",
                 "/api/companion/vault/notes/scoped",
@@ -17585,6 +17600,8 @@ def make_handler(
             # route distinction explicit so the UI cannot turn a dismissal
             # into an outcome receipt (or vice versa).
             re.compile(r"^/api/companion/calibration/revisits/[^/]+/(?:decision|dismiss)$"),
+            # DEBRIEF-03 accept/dismiss disposition (dismiss archives, never deletes).
+            re.compile(r"^/api/companion/episode-debriefs/debrief-[0-9a-f]{64}/review$"),
         )
 
         def _post_path_allowed(self, path: str) -> bool:
