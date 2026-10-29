@@ -3303,6 +3303,112 @@ def test_bws_source_profile_requires_complete_regular_source_inputs(failure, mon
     assert "BWS source installation scope" not in select_tests(paths).reason
 
 
+@pytest.mark.parametrize("qualifying_source", sorted(selector.BWS_SOURCE_INSTALLATION_SOURCES))
+@pytest.mark.parametrize("cochange", ["admission", "rpc", "docs", "all"])
+def test_bws_source_receipt_cochange_preserves_scoped_execution(qualifying_source, cochange, monkeypatch):
+    from scripts.run_scoped_test_partitions import _serial_safe_candidates, validate_execution_units, validate_inventory
+
+    changed = [
+        qualifying_source,
+        "app/ops/bws_installation_lifecycle.py",
+        "tests/ops/test_bws_installation_lifecycle.py",
+        "tests/ops/test_bws_installation_transaction.py",
+        "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+    ]
+    additions = {
+        "admission": ["app/ops/bws_installation_admission.py", "tests/ops/test_bws_installation_admission.py"],
+        "rpc": ["tests/deploy/test_bws_source_rpc_assembly.py"],
+        "docs": ["docs/OPERATIONS.md"],
+    }
+    changed.extend(path for name, paths in additions.items() if cochange in {name, "all"} for path in paths)
+    with monkeypatch.context() as context:
+        context.setattr(selector, "_bws_source_installation_selection", lambda selection, paths: selection)
+        baseline = select_tests(changed)
+    actual = select_tests(changed)
+    dormant = "tests/ops/test_dormant_ownership_initialization.py"
+    expected = tuple(dict.fromkeys(
+        item for target in baseline.targets
+        for item in (selector._ops_test_files() if target == "tests/ops" else (target,))
+        if item != dormant
+    ))
+    assert actual.targets == expected
+    assert actual.subsystems == baseline.subsystems
+    assert actual.deferred_targets == baseline.deferred_targets
+    assert {path for path in changed if path.startswith("tests/")} <= set(actual.targets)
+    assert selector.BWS_SOURCE_INSTALLATION_SOURCES == {
+        "app/ops/bws_installation_transaction.py", "app/ops/postgres_deploy_linux.py",
+    }
+    assert selector.requires_runtime_checks(changed)
+    partitions = selector.scoped_deploy_partitions(actual)
+    units = selector.scoped_deploy_execution_units(actual)
+    assert partitions and units
+    assert validate_inventory([list(part) for part in partitions], list(actual.targets)) == partitions
+    assert validate_execution_units([list(unit) for unit in units], list(actual.targets)) == units
+    assert len(units) <= selector.SCOPED_EXECUTION_MAX_WORK_UNITS == 4
+    serial = tuple(path for path in selector.SCOPED_DEPLOY_SERIAL_BOUNDARY if path != dormant)
+    if "tests/deploy" not in actual.targets:
+        assert units[-1] == serial
+    candidates, boundary = _serial_safe_candidates(tuple(target for unit in units for target in unit), serial)
+    assert boundary == serial
+    assert not set(serial).intersection(target for candidate in candidates for target in candidate)
+    with pytest.raises(ValueError, match="serial boundary is not fully covered"):
+        _serial_safe_candidates(tuple(target for unit in units for target in unit if target != serial[0]), serial)
+    if cochange in {"rpc", "all"}:
+        from dataclasses import replace
+
+        rpc = additions["rpc"][0]
+        assert (rpc,) in candidates
+        assert rpc not in serial
+        assert actual.subsystems == ("ops", "ops_deploy")
+        if qualifying_source == "app/ops/bws_installation_transaction.py":
+            assert "tests/deploy" in actual.deferred_targets
+            for reason in (baseline.reason, actual.reason + " unrelated"):
+                unqualified = replace(actual, reason=reason)
+                assert selector.scoped_deploy_partitions(unqualified) == ()
+                assert selector.scoped_deploy_execution_units(unqualified) == ()
+        else:
+            assert "tests/deploy" in actual.targets
+
+
+@pytest.mark.parametrize("failure", [
+    "no-source", "unknown-source", "unknown-test", "shared-fixture",
+    "missing-admission", "symlink-admission", "missing-test", "symlink-test",
+    "missing-rpc", "symlink-rpc", "missing-doc", "symlink-doc",
+])
+def test_bws_source_receipt_cochange_fails_closed(failure, monkeypatch):
+    guarded = {
+        "admission": "app/ops/bws_installation_admission.py",
+        "test": "tests/ops/test_bws_installation_admission.py",
+        "rpc": "tests/deploy/test_bws_source_rpc_assembly.py",
+        "doc": "docs/OPERATIONS.md",
+    }
+    changed = ["app/ops/bws_installation_transaction.py", *guarded.values()]
+    if failure == "no-source":
+        changed = changed[1:]
+    elif failure in {"unknown-source", "unknown-test", "shared-fixture"}:
+        extra = {
+            "unknown-source": "app/ops/bws_new_diagnostics.py",
+            "unknown-test": "tests/ops/test_bws_new_diagnostics.py",
+            "shared-fixture": "tests/conftest.py",
+        }[failure]
+        changed.append(extra)
+        # An existing new file must fail the allowset, not merely is_file().
+        original_is_file = Path.is_file
+        monkeypatch.setattr(Path, "is_file", lambda path: str(path) == extra or original_is_file(path))
+    else:
+        kind, name = failure.split("-", 1)
+        method = "is_file" if kind == "missing" else "is_symlink"
+        original = getattr(Path, method)
+        monkeypatch.setattr(Path, method,
+            lambda path: kind != "missing" if str(path) == guarded[name] else original(path))
+    with monkeypatch.context() as context:
+        context.setattr(selector, "_bws_source_installation_selection", lambda selection, paths: selection)
+        baseline = select_tests(changed)
+    assert select_tests(changed) == baseline
+    assert selector.scoped_deploy_partitions(baseline) == ()
+    assert selector.scoped_deploy_execution_units(baseline) == ()
+
+
 def test_ops_only_shared_configuration_keeps_broad_execution():
     selection = select_tests(["app/ops/bws_installation_transaction.py", "pyproject.toml"])
     assert selection.full_suite

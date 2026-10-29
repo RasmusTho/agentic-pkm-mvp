@@ -1915,12 +1915,18 @@ def _defer_heavy(selection: Selection, paths: tuple[str, ...]) -> Selection:
     )
 
 
+def _uses_ops_execution_profile(selection: Selection) -> bool:
+    # The suffix is emitted only after the closed BWS source/path/input guards.
+    # Its changed RPC test adds ops_deploy ownership while tests/deploy is deferred.
+    return selection.subsystems == ("ops",) or selection.reason.endswith("; BWS source installation scope")
+
+
 def scoped_deploy_partitions(selection: Selection) -> tuple[tuple[str, ...], ...]:
     """Partition source-triggered deploy coverage without changing its targets."""
     if selection.full_suite:
         return ()
     if "tests/deploy" not in selection.targets:
-        return (selection.targets,) if selection.subsystems == ("ops",) and _ops_test_files() else ()
+        return (selection.targets,) if _uses_ops_execution_profile(selection) and _ops_test_files() else ()
     buckets: list[list[str]] = [[] for _ in SCOPED_DEPLOY_PARALLEL_ROOTS]
     remainder: list[str] = []
     serial: list[str] = []
@@ -2023,7 +2029,7 @@ def scoped_deploy_execution_units(selection: Selection) -> tuple[tuple[str, ...]
     if not partitions:
         return ()
 
-    if "tests/deploy" not in selection.targets and selection.subsystems == ("ops",):
+    if "tests/deploy" not in selection.targets and _uses_ops_execution_profile(selection):
         files = _ops_test_files()
         expanded = _dedupe([
             item for target in selection.targets
@@ -2161,11 +2167,15 @@ BWS_SOURCE_INSTALLATION_SOURCES = frozenset({
     "app/ops/bws_installation_transaction.py", "app/ops/postgres_deploy_linux.py",
 })
 BWS_SOURCE_INSTALLATION_PATHS = BWS_SOURCE_INSTALLATION_SOURCES | frozenset({
+    "app/ops/bws_installation_admission.py",
     "app/ops/bws_installation_lifecycle.py",
+    "tests/ops/test_bws_installation_admission.py",
     "tests/ops/test_bws_installation_lifecycle.py",
     "tests/ops/test_bws_installation_transaction.py",
     "tests/ops/test_bws_control_installation.py",
     "tests/ops/fixtures/host_secret_contract_legacy.json",
+    "tests/deploy/test_bws_source_rpc_assembly.py",
+    "docs/OPERATIONS.md",
     "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
 })
 
