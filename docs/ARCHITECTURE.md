@@ -513,7 +513,7 @@ refreshing them. An observation is not policy approval or a guarantee that later
 | Archive/restore | Installed only with qualified host dependencies | `archival_operations`; existing channel archive metadata, verified volume, fixed reader allowlist, key and the explicit selected member's retention must resolve. Human-knowledge archival remains refused by the owner. |
 | Create/proposal apply | Typed unavailable | The delivered EXE creation and Panel producers lack a context-bound scoped production input; their scalar compatibility path cannot borrow the operation token. |
 | Classification/tags/order | Typed unavailable | `KnowledgeSemanticOwner` requires an exact human approval owner and its held `semantic_authority_window`; no production approval producer is installed. HTTP intent cannot manufacture it. |
-| Batch supervision | Typed unavailable | The finite delivered batch coordinator remains direct composition; supervision is outside #5352. |
+| Finite batch lifecycle | Installed for qualified body edit and local POSIX move/rename | #6456 composes the delivered `BatchOperationCoordinator` through the shared production runtime and existing journal; unavailable semantic/lifecycle families remain excluded. No supervisor is installed. |
 
 Capability discovery uses the same finite installed maps and reports unmet dependencies explicitly.
 Kernel uncertainty never clears a reservation or invokes the original effect again. Body edits
@@ -525,6 +525,17 @@ current-selection guard inside its own window and preserves a committed main rec
 effect is refused. Native archive publication/raw-generation authority and restore's gated
 plaintext/receipt producers carry the same optional final authority callback through their own
 waits. Existing independent native producers retain their authority paths and optional-null callback.
+
+`app.api.batch_operation_runtime.build_production_batch_runtime` composes finite authenticated
+HTTP preview, inspection, execution/recovery and cancellation over those same canonical owners and
+journal. It freezes 1..100 original versioned targets of one qualified kind/context/vault, original
+host selection/token bindings, policy ceiling and unchanged deadline in the coordinator's existing
+snapshot. Per-item native windows recheck current GOV/selection after waits; the existing run,
+snapshot and original-request fences preserve cancellation and concurrent-consumer truth.
+A rebuilt runtime can reconcile original native evidence while the original selection is current.
+After full WSP reset, properly scoped new read admission can inspect/cancel retained work and read
+body receipts, but cannot refresh authority or restart old effects. The exact endpoint contract is
+in the [batch owner specification](YGGDRASIL_AUTONOMOUS_OPERATIONS/DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md#dormant-implementation-and-supported-boundary).
 
 The Companion workspace and broader external MCP v2 consumer are subsequent slices. They must
 consume this shared boundary. No MCP v2 tool is installed here; its accepted-ADR/owner-contract

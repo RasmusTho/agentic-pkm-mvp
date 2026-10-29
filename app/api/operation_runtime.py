@@ -5,12 +5,14 @@ An adapter's existence is not activation of its missing producer dependencies.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, replace
+import json
 import os
 from pathlib import Path, PurePosixPath
 import sys
 from time import time
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from fastapi import HTTPException, Request
 
@@ -18,7 +20,7 @@ from app.api.read_operation_owners import _locate_identity, build_read_operation
 from app.api.routes import capture
 from app.api.routes.active_context_selection import build_selection_service, get_selection_store
 from app.auth import resolve_auth_subject
-from app.governance.governed_write import GovernedWriteAdapter, InvalidDecisionTokenError
+from app.governance.governed_write import DecisionToken, GovernedWriteAdapter, InvalidDecisionTokenError
 from app.instance.active_context_service import (
     ACTION_SELECTION_INSPECT, PERMISSION_SELECTION_READ, WRITE_CLASS_READ,
 )
@@ -30,9 +32,12 @@ from app.operations.contracts import (
     CapabilityAvailability, CapabilityDiscovery, CapabilitySupport, OperationContext,
     OperationOutcome, OperationProvenance, OperationRequest, OperationStatus,
 )
-from app.operations.execution_kernel import JsonReceiptStore, OperationExecutionKernel, PolicyDecision, OwnerExecutionResult
+from app.operations.execution_kernel import JsonReceiptStore, OperationExecutionKernel, PolicyDecision, OwnerExecutionResult, OwnerHandler
 from app.operations.archival_operations import ArchivalOperationServerConfig, build_archival_operation_handlers
-from app.operations.placement_operations import PlacementOperationServerConfig, build_placement_operation_handlers
+from app.operations.placement_operations import (
+    PlacementOperationServerConfig, build_placement_operation_handlers, reconcile_placement_operation,
+)
+from app.operations.batch_operations import SUPPORTED_BATCH_OPERATIONS
 from app.knowledge.placement import KnowledgePlacementOwner
 from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
 from app.operations.read_operations import READ_OWNERS, RequestContextCarrier
@@ -42,6 +47,7 @@ from app.operations.write_operations import (
 )
 from app.knowledge.write_ops import read_note_text_with_version
 from app.vault.paths import get_vault_capture_note_rel
+from app.vault.active_context_v1 import ActiveContextSetV1
 from app.write_guard import DEFAULT_WRITE_GUARD
 
 EFFECTS = {
@@ -59,8 +65,12 @@ UNAVAILABLE = {
     "artifact.tags.add": "semantic approval owner unavailable",
     "artifact.tags.remove": "semantic approval owner unavailable",
     "collection.reorder": "semantic approval owner unavailable",
-    "operation.batch": "batch supervision unavailable",
 }
+
+
+def _plain(value: Any) -> Any:
+    """Detach journal-safe host data; no bearer is present in these records."""
+    return json.loads(json.dumps(value, sort_keys=True, allow_nan=False))
 
 
 @dataclass
@@ -76,15 +86,41 @@ class ProductionOperationRuntime:
     readback_config: WriteOperationServerConfig | None = None
     preconditions_reader: Callable[[], Mapping[str, Any]] | None = None
     selection_check: Callable[[], None] | None = None
+    host_admission: Mapping[str, Any] | None = None
+    reconcile_owner: OwnerHandler | None = None
+    active_context: ActiveContextSetV1 | None = None
+
+    @contextmanager
+    def selection_window(self) -> Iterator[Callable[[], None]]:
+        selected = self.selection_record
+        with self.carrier.service.selection_store.read_effect_window(
+            self.carrier.override_bearer or self.carrier.session_bearer or "",
+            principal=selected.principal, instance_identity=selected.instance_identity,
+            expected_record=selected,
+        ) as require_current:
+            self.selection_check = require_current
+            try:
+                require_current()
+                yield require_current
+            finally:
+                self.selection_check = None
 
     def discovery(self) -> CapabilityDiscovery:
         installed = {*self.kernel.handlers, *READ_OWNERS, "operation.discovery"}
+        batch_kinds = sorted(SUPPORTED_BATCH_OPERATIONS.intersection(self.kernel.handlers))
+        unavailable = dict(self.unavailable)
+        if batch_kinds:
+            installed.add("operation.batch")
+        else:
+            unavailable["operation.batch"] = "qualified finite batch owner unavailable"
         return CapabilityDiscovery(tuple(
             CapabilityAvailability(
                 name, CapabilitySupport.SUPPORTED if name in installed else CapabilitySupport.UNAVAILABLE,
-                reason=None if name in installed else self.unavailable[name],
-                extensions={"authority_class": "governed_effect" if name in EFFECTS or name in self.unavailable else "read_only"},
-            ) for name in sorted(installed | set(self.unavailable))
+                reason=None if name in installed else unavailable[name],
+                extensions={"authority_class": "governed_effect" if name in EFFECTS or name in unavailable or name == "operation.batch" else "read_only",
+                            **({"supported_kinds": batch_kinds, "max_targets": 100,
+                                "partial_success_policy": "independent"} if name == "operation.batch" else {})},
+            ) for name in sorted(installed | set(unavailable))
         ))
 
     def invoke(self, operation: OperationRequest) -> OperationOutcome:
@@ -182,6 +218,7 @@ def build_production_operation_runtime(
     request: Request, *, api_key: str | None, session_bearer: str | None,
     override_bearer: str | None, operation: OperationRequest | None = None,
     target_binding_id: str | None = None,
+    original_admission: Mapping[str, Any] | None = None,
 ) -> ProductionOperationRuntime:
     """Resolve authenticated selection, owners, GOV and the existing durable journal.
 
@@ -255,6 +292,8 @@ def build_production_operation_runtime(
     handlers = {}
     readback_config = None
     preconditions_reader = None
+    host_admission = None
+    reconcile_owner = None
     valid_token = lambda *_: False
     version_current = lambda _: False
     policy = lambda *_: PolicyDecision.denied("governed-write.v1", "effect owner unavailable")
@@ -272,21 +311,52 @@ def build_production_operation_runtime(
                 if len(operation.targets) != 1:
                     raise HTTPException(422, "one_artifact_identity_required")
                 artifact_id = str(operation.targets[0]["artifact_id"])
-                located = _locate_identity(artifact_id, roots)
-                if isinstance(located, str):
-                    raise HTTPException(409, located)
-                if located.root.vault_binding_id != target_binding_id:
-                    raise HTTPException(403, "target_binding_mismatch")
-                note_path = located.root.root / str(located.note["note_path"])
-                resource = note_path.relative_to(root).as_posix()
+                if original_admission is None:
+                    located = _locate_identity(artifact_id, roots)
+                    if isinstance(located, str):
+                        raise HTTPException(409, located)
+                    if located.root.vault_binding_id != target_binding_id:
+                        raise HTTPException(403, "target_binding_mismatch")
+                    note_path = located.root.root / str(located.note["note_path"])
+                    resource = note_path.relative_to(root).as_posix()
+                else:
+                    # Only the host-journaled original locator may reconstruct
+                    # an owner for recovery after a move. Never locate the new
+                    # path and silently rebind the old intent/token.
+                    resource = str(original_admission["resource"])
+                    relative = PurePosixPath(resource)
+                    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+                        raise HTTPException(409, "batch_admission_unavailable")
+                    note_path = root / resource
             elif operation_id == CAPTURE_OPERATION_ID:
                 resource = get_vault_capture_note_rel(root)
             else:
                 resource = ".system/operations/archive"
         gov = GovernedWriteAdapter()
         binding = dict(action=action, write_class=write_class, actor=actor, resource=resource)
-        grant = gov.bind_context(gov.issue_decision_token(write_guard=DEFAULT_WRITE_GUARD, **binding),
-                                 context=context, target_binding_id=target_binding_id)
+        admitted_intent = replace(operation, context=operation_context,
+            provenance=OperationProvenance(actor, "http", "shared_http"))
+        if original_admission is None:
+            grant = gov.bind_context(gov.issue_decision_token(write_guard=DEFAULT_WRITE_GUARD, **binding),
+                                     context=context, target_binding_id=target_binding_id)
+            token = grant.decision_token
+        else:
+            if (operation_id not in {UPDATE_OPERATION_ID, "artifact.move", "artifact.rename"}
+                or original_admission.get("context") != _plain(asdict(context))
+                or original_admission.get("selection") != _plain(asdict(selection_record))
+                or original_admission.get("intent") != _plain(admitted_intent.to_dict())
+                or original_admission.get("target_binding_id") != target_binding_id):
+                raise HTTPException(403, "original_batch_admission_required")
+            # Restore exact original identity from the existing host-owned
+            # journal. This does not call GOV's issuer or extend authority.
+            token = DecisionToken(**dict(original_admission["token"]), active_context=context)
+            gov.validate_decision_token(decision_token=token, **binding)
+            gov.validate_context(token, context=context, target_binding_id=target_binding_id)
+        if operation_id in {UPDATE_OPERATION_ID, "artifact.move", "artifact.rename"}:
+            host_admission = {"context": _plain(asdict(context)),
+                "selection": _plain(asdict(selection_record)), "resource": resource,
+                "intent": _plain(admitted_intent.to_dict()), "target_binding_id": target_binding_id,
+                "token": _plain({key: value for key, value in asdict(token).items() if key != "active_context"})}
 
         def validate_token(*_: Any) -> bool:
             # Policy/health ports can wait or reenter. End with only the
@@ -300,8 +370,8 @@ def build_production_operation_runtime(
             if runtime.selection_check is None:
                 return False
             runtime.selection_check()
-            gov.validate_decision_token(decision_token=grant.decision_token, **binding)
-            gov.validate_context(grant.decision_token, context=context, target_binding_id=target_binding_id)
+            gov.validate_decision_token(decision_token=token, **binding)
+            gov.validate_context(token, context=context, target_binding_id=target_binding_id)
             if context.expires_at is None or context.expires_at <= time():
                 raise InvalidDecisionTokenError("operation authority expired at native effect")
             return True
@@ -331,6 +401,10 @@ def build_production_operation_runtime(
         if operation_id == UPDATE_OPERATION_ID:
             readback_config = config
         placement_owner = None
+        native_reconciler: OwnerHandler | None = (
+            (lambda item: reconcile_write_operation(item, config))
+            if operation_id == UPDATE_OPERATION_ID else None
+        )
         if operation_id in {"artifact.move", "artifact.rename"}:
             placement_owner = KnowledgePlacementOwner(
                 vault_root=root, context_ref=context.context_id, vault_generation=str(context.generation),
@@ -338,9 +412,11 @@ def build_production_operation_runtime(
                 registry_store=registry, context_is_current=lambda: validate_token(),
                 authority_is_current=lambda _: validate_token(), filesystem="local-posix-v1",
             )
-            canonical = build_placement_operation_handlers(PlacementOperationServerConfig(
+            placement_config = PlacementOperationServerConfig(
                 placement_owner, operation_context, artifact_id or "", resource,
-            ))
+            )
+            canonical = build_placement_operation_handlers(placement_config)
+            native_reconciler = lambda item: reconcile_placement_operation(item, placement_config)
         elif operation_id in {"artifact.archive", "artifact.restore"}:
             canonical = build_archival_operation_handlers(replace(
                 archive_configs[target_binding_id], effect_check=require_effect))
@@ -349,10 +425,18 @@ def build_production_operation_runtime(
             # Revalidate after kernel/process-lock waits and hold the complete
             # MVR-05C window through native source and authority receipts.
             with context_bound_write_window(context, target_binding_id=target_binding_id,
-                token=grant.decision_token, registry_store=registry,
+                token=token, registry_store=registry,
                 effect_check=require_effect, **binding):
                 return canonical[operation_id](item)
 
+        if native_reconciler is not None:
+            def invoke_reconciliation(item: OperationRequest) -> OwnerExecutionResult:
+                with context_bound_write_window(context, target_binding_id=target_binding_id,
+                    token=token, registry_store=registry,
+                    effect_check=require_effect, **binding):
+                    assert native_reconciler is not None
+                    return native_reconciler(item)
+            reconcile_owner = invoke_reconciliation
         handlers = {name: invoke_owner for name in EFFECTS if name not in unavailable}
         valid_token = validate_token
         def check_version(item: OperationRequest) -> bool:
@@ -367,7 +451,7 @@ def build_production_operation_runtime(
             return note_path is not None and read_note_text_with_version(note_path)[1] == item.expected_version
 
         version_current = check_version
-        policy = lambda *_: PolicyDecision.allowed("governed-write.v1", grant.decision_token.token_id)
+        policy = lambda *_: PolicyDecision.allowed("governed-write.v1", token.token_id)
 
         def observe_preconditions() -> Mapping[str, Any]:
             from app.heimdal.local_archive import OperationTargetRefused, resolve_operation_restore_target
@@ -426,5 +510,6 @@ def build_production_operation_runtime(
     )
     runtime = ProductionOperationRuntime(kernel, carrier, operation_context, actor, registry,
         unavailable, operation_id, selection_record, readback_config,
-        preconditions_reader=preconditions_reader)
+        preconditions_reader=preconditions_reader, host_admission=host_admission,
+        reconcile_owner=reconcile_owner, active_context=context)
     return runtime

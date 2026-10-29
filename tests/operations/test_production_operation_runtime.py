@@ -41,7 +41,7 @@ def test_discovery_matches_installed_runtime_handlers(tmp_path, monkeypatch):
     supported_effects = {entry.operation_id for entry in capabilities.capabilities
         if entry.support is CapabilitySupport.SUPPORTED
         and entry.extensions["authority_class"] == "governed_effect"}
-    assert supported_effects == set(runtime.kernel.handlers)
+    assert supported_effects == set(runtime.kernel.handlers) | {"operation.batch"}
     for operation in ("artifact.archive", "artifact.restore", "artifact.classify",
                       "artifact.tags.add", "collection.reorder", "artifact.create", "proposal.apply"):
         entry = capabilities.for_operation(operation)

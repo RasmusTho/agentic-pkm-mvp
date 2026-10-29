@@ -32,3 +32,32 @@ def test_effect_surfaces_share_production_operation_runtime() -> None:
     assert not any("mcp/v2" in getattr(route, "path", "") for route in app.routes)
     v1 = Path("app/mcp").exists()
     assert v1
+
+
+
+def test_batch_effect_surfaces_use_shared_runtime_and_existing_coordinator():
+    from app.api.app import app
+    from app.api.routes import operations
+    expected = {
+        ("/api/operations/batches/preview", "POST"): operations.batch_preview,
+        ("/api/operations/batches/{batch_id}", "GET"): operations.batch_inspect,
+        ("/api/operations/batches/{batch_id}/execute", "POST"): operations.batch_execute,
+        ("/api/operations/batches/{batch_id}/cancel", "POST"): operations.batch_cancel,
+    }
+    for (path, method), endpoint in expected.items():
+        routes = [route for route in app.routes if getattr(route, "path", None) == path
+                  and method in getattr(route, "methods", ())]
+        assert len(routes) == 1 and routes[0].endpoint is endpoint
+    route_source = Path("app/api/routes/operations.py").read_text()
+    assert "build_production_batch_runtime" in route_source
+    assert not any(name in route_source for name in ("BatchOperationCoordinator(", "OperationExecutionKernel(",
+        "write_note_from_absolute", "KnowledgePlacementOwner(", "JsonReceiptStore("))
+    composition = ast.parse(Path("app/api/batch_operation_runtime.py").read_text())
+    imports = {node.module for node in ast.walk(composition) if isinstance(node, ast.ImportFrom)}
+    assert "app.operations.batch_operations" in imports and "app.api.operation_runtime" in imports
+    assert not any(module and module.startswith(("app.mcp", "companion")) for module in imports)
+    # Transport adapters cannot construct a second coordinator/native owner.
+    for root in (Path("app/mcp"), Path("companion-ui/companion-app")):
+        for path in root.rglob("*.py"):
+            source = path.read_text()
+            assert not any(name in source for name in ("BatchOperationCoordinator(", "ProductionBatchRuntime("))

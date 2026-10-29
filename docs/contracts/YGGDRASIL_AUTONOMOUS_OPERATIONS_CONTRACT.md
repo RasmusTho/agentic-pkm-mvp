@@ -43,8 +43,10 @@ Current runtime capabilities remain whatever their owner documents and productio
 The bounded shared HTTP/runtime composition is implemented by #5352; its exact installed and
 dependency-blocked families are recorded in
 [`ARCHITECTURE.md :: Autonomous operation HTTP composition`](../ARCHITECTURE.md#autonomous-operation-http-composition).
-This is source-level implementation, not deployment, GUI acceptance, external MCP v2 acceptance,
-generic lifecycle support, or safe batch supervision. Those remain separately gated below.
+#6456 adds the finite authenticated batch lifecycle over the existing coordinator/journal for the
+actually qualified body-edit and move/rename kinds. This is source-level implementation; deployment,
+GUI acceptance, external MCP v2 acceptance, generic lifecycle support and complete capability
+acceptance remain separately gated below.
 
 ## Capability boundary
 
@@ -284,13 +286,17 @@ The system never calls a partially applied batch wholly successful. Restart resu
 from durable per-item state. A GUI can request one confirmation for the frozen batch; an agent cannot
 add targets after confirmation without a new delegation or human gate.
 
-The dormant AUTOOPS-08 direct composition implements independent per-item execution over the
-finite versioned write/placement/semantic kinds documented in
+The AUTOOPS-08 coordinator implements independent per-item execution over the finite versioned
+write/placement/semantic kinds documented in
 [`DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md`](../YGGDRASIL_AUTONOMOUS_OPERATIONS/DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md#dormant-implementation-and-supported-boundary).
-Its existing kernel journal carries frozen intent/progress and cancellation, while native owner
-receipts and GOV AuthorityReceipts remain separate source/accountability evidence. Restart uses
-the original operation identities and owner recovery seams. This enabling seam does not install
-runtime exposure, extend authority lifetimes, or establish cross-surface capability acceptance.
+Its #6456 shared HTTP installation intersects that finite set with actually qualified runtime
+handlers: body edit and local POSIX move/rename. The existing kernel journal carries frozen
+intent/progress, original host admission and cancellation, while native owner receipts and GOV
+AuthorityReceipts remain separate source/accountability evidence. Runtime restart uses original
+operation identities, token/decision bindings, locators, deadline and owner recovery seams. A new
+WSP selection permits properly scoped retained read/cancel, never new effect authority over an old
+batch. The installation does not extend authority lifetimes or establish cross-surface capability
+acceptance.
 
 ## Source, Store, index, and link convergence
 
@@ -352,6 +358,14 @@ and raw archive/restore generations, without executing or reserving an operation
 carry no effect authority: execute reauthenticates, revalidates GOV/context/binding and compares the
 client's frozen owner-native versions. It never refreshes them automatically. Destination input is
 intent validated by the selected placement owner, never a client-selected source or authority root.
+
+The authenticated `/api/operations/batches` preview/inspect/execute/cancel lifecycle composes the
+same qualified production owners through `build_production_batch_runtime` and the delivered
+`BatchOperationCoordinator`. Its exact inputs and retained-recovery behavior are owned by
+[the finite batch boundary](../YGGDRASIL_AUTONOMOUS_OPERATIONS/DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md#dormant-implementation-and-supported-boundary).
+Adapters submit only original versioned intent or its confirmation digest; they never implement a
+per-item execution loop or supply raw host authority. Current effect refusal remains separate
+from historical committed/unknown source and receipt truth.
 
 ### MCP v1 compatibility profile
 

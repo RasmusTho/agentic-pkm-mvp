@@ -1,4 +1,4 @@
-State: Filed target-state capability specification. Parent #5329 is the blocked validation hub; child Issues #5330-#5340 own delivery. No runtime support is claimed by this directory.
+State: Capability specification with qualified shared HTTP installation recorded below. Parent #5329 remains the validation hub; complete GUI/MCP v2 parity and capability acceptance remain gated.
 
 # Yggdrasil Autonomous Operations
 
@@ -23,10 +23,24 @@ indexing, links, and multi-vault context remain authoritative in their existing 
 5. [Deliver Identity-Preserving Move and Rename](DELIVER_IDENTITY_PRESERVING_MOVE_AND_RENAME.md) — #5334
 6. [Deliver Classification, Tagging, and Ordering](DELIVER_CLASSIFICATION_TAGGING_AND_ORDERING.md) — #5335
 7. [Compose Archive and Restore Operations](COMPOSE_ARCHIVE_AND_RESTORE_OPERATIONS.md) — #5336
-8. [Deliver Safe Batch Execution and Recovery](DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md) — #5337
+8. [Deliver Safe Batch Execution and Recovery](DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md) — #5337 direct coordinator; #6456 qualified HTTP installation over #5352
 9. [Design the Human Operations Flow](DESIGN_HUMAN_OPERATIONS_FLOW.md) — #5338 (`agent:ready` at filing)
 10. [Implement the Companion Operations Workspace](IMPLEMENT_COMPANION_OPERATIONS_WORKSPACE.md) — #5339
 11. [Expose and Prove MCP v2 Parity](EXPOSE_AND_PROVE_MCP_V2_PARITY.md) — #5340
+
+## Qualified Production Installation
+
+#5352 installs the shared authenticated single-operation runtime, native preconditions and receipts.
+#6456 installs the delivered finite batch coordinator's HTTP preview/inspect/execute/cancel/recovery
+for qualified body edit and local POSIX move/rename, using that same production kernel/owner path
+and existing journal. Discovery lists only those installed kinds. Semantic approval, scoped
+creation/proposal, broader batch families and complete cross-surface parity remain unavailable or
+separately gated. The [batch owner specification](DELIVER_SAFE_BATCH_EXECUTION_AND_RECOVERY.md#dormant-implementation-and-supported-boundary)
+records exact inputs, original-authority fences and retained recovery limits.
+
+This source installation does not establish deployment or parent capability acceptance. #5339 owns
+the Companion consumer; #5340 owns MCP v2 and terminal conformance under accepted ADR-0069. The
+unchanged MCP v1 five-operation profile retains its own contract.
 
 ## Execution Order
 
@@ -78,4 +92,5 @@ directory owns stable target behavior and verification shape.
 
 Only the terminal parity task may hand the parent to capability acceptance. Once its current-SHA
 evidence is accepted, update current-state owner docs and this directory's State line in one
-post-acceptance docs change. Until then, all language here is target state.
+post-acceptance docs change. Until then, capability-level acceptance language remains target state;
+the qualified installation section above records only implemented production source boundaries.

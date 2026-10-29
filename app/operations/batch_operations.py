@@ -1,8 +1,9 @@
-"""Dormant, bounded AUTOOPS-08 sequencing over existing single-operation owners.
+"""Bounded AUTOOPS-08 sequencing over existing single-operation owners.
 
 Batch snapshots are a bounded extension of the kernel's JSON receipt journal.
-They record intent/progress, never source, semantic or GOV authority. No route,
-singleton, scheduler, operation registry or production installation is added.
+They record intent/progress, never source, semantic or GOV authority. The trusted
+production HTTP composition lives in app.api; no route, singleton, scheduler
+or operation registry is installed by this domain module.
 """
 
 from __future__ import annotations
@@ -184,6 +185,11 @@ class BatchOperationCoordinator:
             if reservation == "conflict":
                 raise ValueError("batch identity is already bound to another frozen intent")
             return self._result(self._load(batch_id)).preview
+
+    def frozen_intent(self, batch_id: str, *, expected_digest: str) -> Mapping[str, Any]:
+        """Read a detached original plan for trusted host owner reconstruction."""
+        with self.store.batch_window(batch_id):
+            return json.loads(_json(self._load(batch_id, expected_digest)["frozen"]))
 
     def inspect(self, batch_id: str, *, expected_digest: str) -> BatchResult:
         with self.store.batch_window(batch_id):

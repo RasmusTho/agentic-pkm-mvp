@@ -23,10 +23,40 @@ resume, and recovery for supported operation kinds. Reuse the single-operation k
 
 ## Dormant implementation and supported boundary
 
-`app/operations/batch_operations.py::BatchOperationCoordinator` provides direct composition over
-an explicitly supplied `OperationExecutionKernel` and its existing `JsonReceiptStore`. It installs
-no HTTP/GUI/MCP entrypoint, runtime singleton, scheduler, or authenticated production writer.
-#5352 retains installation and #5329 retains capability acceptance and owner-doc promotion.
+`app/operations/batch_operations.py::BatchOperationCoordinator` provides finite composition over
+an explicitly supplied `OperationExecutionKernel` and its existing `JsonReceiptStore`. #5337
+delivered this initially dormant coordinator. #6456 installs its authenticated HTTP lifecycle through
+`app.api.batch_operation_runtime.build_production_batch_runtime`, reusing #5352's canonical
+`build_production_operation_runtime`, scoped owners and the same host-owned journal object.
+#5329 retains complete capability acceptance and owner-doc promotion; #5339 and #5340 retain their
+GUI and MCP v2 implementation/proof. No singleton, scheduler, supervisor or new receipt store is added.
+
+The installed kind set is the finite set below intersected with production-qualified handlers:
+body-only `artifact.update` and, on qualified local POSIX filesystems, `artifact.move` and
+`artifact.rename`. Semantic classification/tags/order remain unavailable because their human
+approval producer is absent. Discovery reports `operation.batch` with `supported_kinds`,
+`max_targets: 100` and `partial_success_policy: independent`; it cannot activate a missing owner.
+
+The shared HTTP lifecycle is:
+
+| Method and path | Bounded input / result |
+| --- | --- |
+| `POST /api/operations/batches/preview` | `batch_id`, `operation_id`, original `active_context_ref` / `vault_generation`, one selected `target_binding_id`, 1..100 `items` (`request_id`, stable `artifact_id`, `expected_version`, owner `arguments`), optional `limit` and `partial_success_policy: independent`. Freezes the exact host-admitted plan without source effects. |
+| `GET /api/operations/batches/{batch_id}?expected_digest=...` | Authenticated, scoped retained inspection of the original confirmation digest and per-item truth. |
+| `POST /api/operations/batches/{batch_id}/execute` | Only `expected_digest`. The existing coordinator executes pending items or reconciles uncertain original items; this is also the retained recovery entrypoint. |
+| `POST /api/operations/batches/{batch_id}/cancel` | Only `expected_digest`. Persists cancellation before suppressing pending starts; started effects retain reconciliation. |
+
+All responses carry preview/candidate/selector/argument/delegation digests, cardinality, original
+policy ceiling, aggregate `status` / `counts`, `cancel_requested` and exact item outcomes. The
+response's `current_admission: original` means the request still matches the original frozen
+selection/context; each effect separately rechecks current GOV, versions and native fences.
+`current_admission: refused` can accompany retained committed/unknown evidence. Neither readback
+nor a journaled grant can authorize a new effect. Unknown native results remain recovery-required;
+source commitment and Store/index/link lag stay separate. Missing/corrupt/foreign or insufficiently
+host-admitted state returns `batch_state_unavailable` (or a scoped unavailable response) before
+source effects. Clients cannot submit selector reconstruction, delegations, policy, tokens, paths,
+keys, readers or receipts. Exact preview retries return the existing token identities and deadline;
+changed intent under that batch identity refuses.
 
 The finite supported kinds are `artifact.update` with body-only arguments, `artifact.move`,
 `artifact.rename`, `artifact.classify`, `artifact.tags.add`, `artifact.tags.remove`, and
@@ -129,6 +159,7 @@ Batch autonomy is useful only when partial completion is inspectable and replay 
 ## How to Verify (Pre-Merge)
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/operations/test_batch_operations.py tests/operations/test_batch_operations_restart.py`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/operations/test_production_batch_runtime.py tests/api/test_operation_batches_api.py tests/api/test_operation_batches_api_restart.py tests/architecture/test_autonomous_operations_boundaries.py`
 - `ruff check app tests`
 
 ## Out of Scope
@@ -139,6 +170,18 @@ Batch autonomy is useful only when partial completion is inspectable and replay 
 
 Preview identity, candidate digest, item states, receipts, cancellation, and recovery cursor are durable.
 After restart, the user sees exact completed and unresolved work rather than a reset progress bar.
+A rebuilt runtime/coordinator can resume only while the original WSP record/context, original GOV
+kernel decision identity and deadline remain current. The host reconstructs an owner from its
+journaled original locator/token only after exact comparison with current host authority; it never
+looks up a later locator as replacement authority. Resolution precedes the captured-record window,
+which is held per native effect rather than over the complete batch run.
+
+A full WSP process reset invalidates the old bearer. A new authenticated selection with proper
+current read scope may inspect/cancel retained work and read exact durable body/native/GOV evidence,
+but cannot rebind an old batch, extend its expiry or start its pending/uncertain effects. A native
+receipt readback can enrich evidence while `recovery_required` and refused admission remain visible.
+An admitted cancellation persists concurrently with a started owner; a queued executor rechecks it
+after the existing run-fence wait. No background consumer is installed.
 Missing or corrupt frozen state raises `BatchStateUnavailable` before any new effect. It is never
 reconstructed from a selector, progress counter, diagnostic, or projection.
 
@@ -150,6 +193,6 @@ reconstructed from a selector, progress counter, diagnostic, or projection.
 ## Related GitHub Issues
 
 AUTOOPS-03 through AUTOOPS-07 are verified-delivered prerequisites. #5337 delivers this dormant
-bounded composition; #5352 and parent #5329 retain installation and final acceptance respectively.
+bounded composition; #6456 owns production HTTP installation and parent #5329 retains final acceptance.
 Execution uses a fresh Issue owner with configured provider-neutral capability selected for the
 durability, concurrency, and state-machine risk.
