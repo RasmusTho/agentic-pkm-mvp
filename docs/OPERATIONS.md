@@ -1064,6 +1064,20 @@ The pre-existing `/readyz` HTTP 200 and `/api/health.required_ok=false` signal p
 down alert followed by two duplicate suppressions, with no observed delivery or iteration errors.
 This is normal production monitoring, not a controlled outage, source-health repair or TEST proof.
 
+The [subsequent production upgrade](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6457#issuecomment-6502803665)
+changed only `prod_probe.py` to SHA-256
+`0172b37565a067c26acd37afed8d650be7a56117ad1962860446fd18353058ac` from source
+`0d064c012296589e92987c1f374fa18b05104f7b`, retaining the other 59 files from the initial source above.
+Its mixed 60-file manifest is `3ae600b78abefb751ef8fd73e7639b75a41b09f30d44fd4d06b1bb77101ae861`,
+with unchanged configuration/unit and a qualified interpreter/private normal-child binding.
+Read-only verification observed the same active/enabled invocation over 43 completed suppression
+cycles, zero restarts and the unchanged existing incident. The original executor remains `UNKNOWN`
+at `start_intent/main_process_boundary`, with its helper/cgroup reaped and immutable original
+request/program/result/handle still followable through preserved pinned tooling. The linked actual
+postcondition receipt does not adopt lifecycle ownership or relabel the executor. Its original
+resource guard remains intact and fences later #6457 apply requests; no guard clearance or further
+host compensation was performed. The separate #4076 controlled TEST acceptance remains open.
+
 **Two distinct Makefile targets — do not confuse them:**
 
 | Target | What it does |
