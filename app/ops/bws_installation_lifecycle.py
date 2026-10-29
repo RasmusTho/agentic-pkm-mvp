@@ -208,7 +208,8 @@ def require_no_cleanup_callers(channel: str, *, caller_pid: int | None = None) -
 
 
 def _discovered_control_projection(
-    launcher: bytes, environment: list[str], environment_files: list[list[Any]],
+    launcher: bytes, environment: list[str], environment_files: list[list[Any]], *,
+    expected_empty_control_root: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify the fixed control root, using a public hint when one is present.
 
@@ -218,11 +219,16 @@ def _discovered_control_projection(
     No environment file contents, credentials, journal or private source is read.
     Each candidate is confined to the fixed control subtree; missing paths may
     ascend to their existing anchor, but symlink/foreign/ambiguous roots refuse.
+    A transaction-captured empty source root may use the fixed root itself only
+    while its identity is unchanged and both loader packages remain absent.
     """
     descriptors = []
     try:
         discovery = launcher.decode('utf-8') + '\n' + '\n'.join(environment)
         discovery += '\n' + '\n'.join(row[0] for row in environment_files)
+        direct_control_root_reference = re.search(
+            re.escape(CONTROL_DIRECTORY) + r"/*(?![A-Za-z0-9._/-])", discovery,
+        ) is not None
         candidates = sorted(set(re.findall(re.escape(CONTROL_DIRECTORY) + r'/[A-Za-z0-9._/-]+', discovery)))
         if not candidates:
             candidates = [CONTROL_DIRECTORY + '/app/ops/postgres_deploy_linux.py']
@@ -265,6 +271,13 @@ def _discovered_control_projection(
                 _refuse()
             return True
 
+        def projection(fd: int, path: str = CONTROL_DIRECTORY) -> dict[str, Any]:
+            info = os.fstat(fd)
+            if not stat.S_ISDIR(info.st_mode):
+                _refuse()
+            return dict(path=path, device=info.st_dev, inode=info.st_ino,
+                        uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode))
+
         root = directory('/')
         control_parts = Path(CONTROL_DIRECTORY).parts[1:]
         for index, name in enumerate(control_parts):
@@ -292,9 +305,37 @@ def _discovered_control_projection(
                     info = os.fstat(fd)
                     if stat.S_IMODE(info.st_mode) not in {0o700, 0o755}:
                         _refuse()
-                    roots[path] = dict(path=path, device=info.st_dev, inode=info.st_ino,
-                                      uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode))
+                    roots[path] = projection(fd, path)
                     break
+        if expected_empty_control_root is not None:
+            expected = _application_projection(expected_empty_control_root)
+            actual = projection(root)
+            if (actual != expected or roots or direct_control_root_reference or any(
+                candidate[len(CONTROL_DIRECTORY) + 1:].rstrip('/').split('/')[0]
+                not in {'app', 'scripts'} for candidate in candidates
+            )):
+                _refuse()
+            # The exception is only for first install before either public
+            # loader package exists. Any entry in either slot, including a
+            # symlink or a non-directory, is inventory drift.
+            for name in ('app', 'scripts'):
+                try:
+                    os.stat(name, dir_fd=root, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                _refuse()
+
+            # Reopen the fixed path without following links so the returned
+            # identity still names the directory currently installed there.
+            current_root = directory('/')
+            for index, name in enumerate(control_parts):
+                current_root = directory(
+                    name, current_root,
+                    allow_0750_ancestor=index < len(control_parts) - 1,
+                )
+            if projection(current_root) != actual:
+                _refuse()
+            return actual
         if len(roots) != 1:
             _refuse()
         return next(iter(roots.values()))
@@ -406,6 +447,7 @@ class FixedBwsService:
         self.application: dict[str, Any] | None = None
         self.runtime_version: tuple[int, ...] | None = None
         self.control: dict[str, Any] | None = None
+        self.control_inventory_empty = False
         self.launcher_before: bytes | None = None
         self.launcher_after: bytes | None = None
         self.new_pid: int | None = None
@@ -575,8 +617,14 @@ class FixedBwsService:
         # an installation whose final root-first launcher loses this topology.
         if self.launcher_after is None or self.control is None:
             _refuse()
+        expected_empty_control_root = (
+            self.control if self.control_inventory_empty else None
+        )
         for raw in (launcher, self.launcher_after):
-            if _discovered_control_projection(raw, environment, files) != self.control:
+            if _discovered_control_projection(
+                raw, environment, files,
+                expected_empty_control_root=expected_empty_control_root,
+            ) != self.control:
                 _refuse()
         hints = hashlib.sha256(json.dumps([environment, files], separators=(',', ':')).encode()).hexdigest()
         return start[:3], cleanup[:3], hints
@@ -607,10 +655,12 @@ class FixedBwsService:
     def qualify_old(
         self, expected_service_identity: str | None = None, *, application_root: dict[str, Any],
         control_root: dict[str, Any], launcher_content: dict[str, Any],
+        control_inventory_empty: bool = False,
     ) -> None:
         if (self.phase != 'unqualified' or (expected_service_identity is not None
                 and (type(expected_service_identity) is not str
-                     or re.fullmatch('[0-9a-f]{64}', expected_service_identity) is None))):
+                     or re.fullmatch('[0-9a-f]{64}', expected_service_identity) is None))
+                or type(control_inventory_empty) is not bool):
             _refuse()
         self._held_runtime()
         self.phase = 'qualifying'
@@ -618,9 +668,12 @@ class FixedBwsService:
         control = _application_projection(control_root)
         self.application = application
         self.control = control
+        self.control_inventory_empty = control_inventory_empty
         if (control['path'] == application['path']
                 or not (control['path'] == CONTROL_DIRECTORY
                         or control['path'].startswith(CONTROL_DIRECTORY + '/'))):
+            _refuse()
+        if control_inventory_empty and control['path'] != CONTROL_DIRECTORY:
             _refuse()
         try:
             if (type(launcher_content) is not dict or set(launcher_content) != {'sha256', 'base64'}
@@ -651,6 +704,12 @@ class FixedBwsService:
             _refuse()
         self.cleanup = self._exec('ExecStopPost', 'cleanup')
         self.phase = 'qualified'
+
+    def revalidate_empty_control_configuration(self) -> None:
+        """Recheck the captured first-install control root at the backup boundary."""
+        if (self.phase != 'qualified' or not self.control_inventory_empty
+                or self.contract is None or self._config() != self.contract):
+            _refuse()
 
     def stop_old(self) -> None:
         if (self.phase != 'qualified' or self.launcher_after is None
