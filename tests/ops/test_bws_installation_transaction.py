@@ -522,6 +522,95 @@ def _owned_dir(path: Path) -> Path:
     return path
 
 
+def _empty_control_manifest_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
+    monkeypatch.setattr(transaction, "_OWNER_UID", os.geteuid())
+    monkeypatch.setattr(transaction, "_OWNER_GID", os.getegid())
+    app_root = _owned_dir(tmp_path / "target" / "application")
+    control_root = _owned_dir(tmp_path / "target" / "control")
+    launcher_root = _owned_dir(tmp_path / "target" / "launcher")
+    backup_root = _owned_dir(tmp_path / "target" / "backup")
+    monkeypatch.setattr(transaction, "_CONTROL_DIRECTORY", control_root)
+    monkeypatch.setattr(transaction, "_BACKUP_DIRECTORY", backup_root)
+    monkeypatch.setattr(transaction, "_LAUNCHER", launcher_root / "yggdrasil-bws-deploy")
+
+    old_sources = {
+        "app/__init__.py": b"",
+        "app/ops/postgres_deploy_linux.py": b"OLD_DEPLOYMENT = True\n",
+        "app/ops/bws_installation_admission.py": b"OLD_ADMISSION = True\n",
+        "scripts/__init__.py": b"",
+        "scripts/postgres_deploy_service.py": _SOURCE_ONLY_LAUNCHER,
+    }
+    candidate_sources = {
+        **old_sources,
+        "app/ops/postgres_deploy_linux.py": b"raise RuntimeError('candidate deployment')\n",
+        "app/ops/bws_installation_admission.py": b"raise RuntimeError('candidate admission')\n",
+    }
+    for relative, raw in old_sources.items():
+        target = app_root / relative
+        _owned_dir(target.parent)
+        target.write_bytes(raw)
+        target.chmod(0o755 if relative == "scripts/postgres_deploy_service.py" else 0o644)
+
+    old_contract = (Path(__file__).parent / "fixtures" / "host_secret_contract_legacy.json").read_bytes()
+    candidate_contract = (Path(__file__).resolve().parents[2]
+                          / "config/secrets/host_secret_contract.json").read_bytes()
+    contract_path = app_root / "config/secrets/host_secret_contract.json"
+    _owned_dir(contract_path.parent)
+    contract_path.write_bytes(old_contract)
+    contract_path.chmod(0o644)
+
+    old_launcher = b"legacy launcher bytes\n"
+    monkeypatch.setattr(bws_installation_lifecycle, "_public_launcher_bytes", lambda: old_launcher)
+    monkeypatch.setattr(transaction, "_require_source_only_launcher", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(transaction, "_require_launcher_imports", lambda *_args: None)
+    monkeypatch.setattr(transaction, "_require_cleanup_shared_reservation", lambda *_args: None)
+    monkeypatch.setattr(transaction, "_require_startup_reservation_release", lambda *_args: None)
+    monkeypatch.setattr(transaction, "_cleanup_skip_closure", lambda *_args: "bounded")
+
+    def open_root(path, opened):
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(transaction, "_open_absolute_directory", open_root)
+    config = SimpleNamespace(channel="dev", root=app_root)
+    request = {"operation_id": str(uuid.uuid4()), "channel": "dev", "candidate_sha": "c" * 40,
+               "image_digest": "sha256:" + "b" * 64}
+    profile = transaction._old_disk_state(config, request)
+    roots, backup = transaction._roots(config, profile)
+    revision = request["candidate_sha"]
+    candidate_tree = {
+        path: (raw, 0o755 if path == "scripts/postgres_deploy_service.py" else 0o644)
+        for path, raw in candidate_sources.items()
+    }
+
+    def git_show(_revision: str, relative: str) -> bytes:
+        if relative == "config/secrets/host_secret_contract.json":
+            return candidate_contract
+        if relative == "scripts/postgres_deploy_service.py":
+            return candidate_sources[relative]
+        raise AssertionError(f"unexpected candidate path: {relative}")
+
+    def git_file_mode(_revision: str, relative: str) -> int:
+        if relative == "config/secrets/host_secret_contract.json":
+            return 0o644
+        if relative == "scripts/postgres_deploy_service.py":
+            return 0o755
+        raise AssertionError(f"unexpected candidate path: {relative}")
+
+    def invoke(selected_roots=roots):
+        return transaction.candidate_manifest(
+            profile, revision=revision, roots=selected_roots, backup_root=backup,
+            git_show=git_show, git_source_files=lambda _revision: candidate_tree,
+            git_file_mode=git_file_mode,
+        )
+
+    return SimpleNamespace(
+        app_root=app_root, control_root=control_root, config=config, profile=profile,
+        roots=roots, invoke=invoke,
+    )
+
+
 def _loaded_module(path: Path) -> SimpleNamespace:
     filename = str(path)
     source = path.read_bytes() if path.exists() else b""
@@ -864,6 +953,39 @@ assert loaded != hashlib.sha256((root / 'app/probe.py').read_bytes()).hexdigest(
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_first_install_manifest_accepts_empty_control_source_root(monkeypatch, tmp_path):
+    case = _empty_control_manifest_case(monkeypatch, tmp_path)
+
+    assert case.profile["source_packages"] == {"application": ["app", "scripts"], "control": []}
+    assert not any(row["root"] == "control" for row in case.profile["source_files"])
+    assert set(case.roots) == {"application", "control", "launcher"}
+
+    changes, payloads, proof = case.invoke()
+
+    assert changes
+    assert "control" not in proof["changed_roots"]
+    assert all(change.root != "control" for change in changes)
+    assert all(root_name != "control" for root_name, _path in payloads)
+
+
+def test_first_install_manifest_refuses_control_source_drift(monkeypatch, tmp_path):
+    case = _empty_control_manifest_case(monkeypatch, tmp_path)
+    replacement_control_root = _owned_dir(tmp_path / "target" / "replacement-control")
+    monkeypatch.setattr(transaction, "_CONTROL_DIRECTORY", replacement_control_root)
+    drifted_roots, _backup = transaction._roots(case.config, case.profile)
+
+    with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+        case.invoke(drifted_roots)
+
+    monkeypatch.setattr(transaction, "_CONTROL_DIRECTORY", case.control_root)
+    new_control_source = case.control_root / "app/ops/new_control_source.py"
+    _owned_dir(new_control_source.parent)
+    new_control_source.write_text("CONTROL_SOURCE = True\n")
+
+    with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
+        case.invoke()
 
 
 def test_source_payload_inventory_is_exact_and_independent_json(monkeypatch, tmp_path):
