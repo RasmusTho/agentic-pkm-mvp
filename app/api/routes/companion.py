@@ -5961,12 +5961,19 @@ def post_calibration_revisit_dismiss(
 def read_companion_episode_debriefs() -> EpisodeDebriefListResponse | VaultSelectionRequiredResponse:
     """Read-only projection of fresh debriefs from the durable debrief notes."""
 
-    from app.episode_debrief.review import list_fresh_debriefs
+    from app.episode_debrief.review import DebriefReviewError, list_fresh_debriefs
 
     vault_root = _active_companion_vault_root_or_picker()
     if isinstance(vault_root, VaultSelectionRequiredResponse):
         return vault_root
-    return EpisodeDebriefListResponse(fresh=list_fresh_debriefs(vault_root))
+    try:
+        fresh = list_fresh_debriefs(vault_root)
+    except DebriefReviewError as exc:
+        # Unknown, not empty: an unreadable debrief location is never "no debriefs".
+        raise HTTPException(
+            status_code=409, detail={"error": "episode_debriefs_unreadable", "message": str(exc)},
+        ) from exc
+    return EpisodeDebriefListResponse(fresh=fresh)
 
 
 @router.post(
@@ -5980,7 +5987,6 @@ def post_companion_episode_debrief_review(
     """Flip review_state (accept -> reviewed, dismiss -> archived); never deletes."""
 
     from app.episode_debrief.review import (
-        WRITE_ACTION as DEBRIEF_REVIEW_WRITE_ACTION,
         DebriefDispositionConflictError,
         DebriefNotFoundError,
         DebriefReviewError,
@@ -5991,7 +5997,7 @@ def post_companion_episode_debrief_review(
     if isinstance(vault_root, VaultSelectionRequiredResponse):
         return vault_root
     try:
-        DEFAULT_WRITE_GUARD.assert_writes_allowed(DEBRIEF_REVIEW_WRITE_ACTION)
+        # review_debrief asserts the guard before any path resolution or effect.
         result = review_debrief(debrief_id, req.disposition, vault_root=vault_root)
     except WritesBlockedError as exc:
         raise HTTPException(

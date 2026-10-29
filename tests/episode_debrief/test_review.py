@@ -153,16 +153,16 @@ def test_review_actions_never_advance_authority_state(vault: Path, disposition: 
     assert "accepted_by" not in fields and "evidence_role" not in fields
 
 
-def test_no_acceptance_by_silence_for_debriefs(vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_acceptance_by_silence_for_debriefs(vault: Path) -> None:
     debrief_id, draft, _ = _publish_debrief(vault)
     before = draft.read_bytes()
     far_future = datetime.now(timezone.utc) + timedelta(days=3650)
-    monkeypatch.setattr(create, "_now", lambda: far_future)
 
-    for _ in range(2):
-        listed = review.list_fresh_debriefs(vault)
+    # The only time-driven Create mechanism (draft expiry) never touches a debrief.
+    create.sweep_expired_drafts(vault_root=vault, outbox_path=draft.parent / "outbox.jsonl", now=far_future)
+    listed = review.list_fresh_debriefs(vault)
 
-    assert [item["review_state"] for item in listed] == ["draft"]
+    assert [(item["debrief_id"], item["review_state"]) for item in listed] == [(debrief_id, "draft")]
     assert draft.read_bytes() == before
     assert "expires" not in load_frontmatter(before.decode("utf-8"))[0]
     assert _receipts(draft, review.REVIEWED_EVENT) == _receipts(draft, review.DISMISSED_EVENT) == []
@@ -220,3 +220,27 @@ def test_review_refusals_leave_debrief_unchanged(vault: Path) -> None:
     assert draft.read_bytes() == before
     assert TestClient(app).post(f"/api/companion/episode-debriefs/{debrief_id}/review",
                                 json={"disposition": "deleted"}).status_code == 422
+
+
+def test_one_malformed_debrief_does_not_hide_healthy_ones(vault: Path) -> None:
+    healthy_id, _, _ = _publish_debrief(vault)
+    broken_id, broken, _ = _publish_debrief(vault)
+    broken.write_text("---\nreview_state: [draft\n---\nbody\n", encoding="utf-8")
+
+    assert [item["debrief_id"] for item in review.list_fresh_debriefs(vault)] == [healthy_id]
+    with pytest.raises(review.DebriefNotFoundError):
+        review.review_debrief(broken_id, "accepted", vault_root=vault, write_guard=HEALTHY)
+
+
+def test_aliased_debrief_location_is_refused_not_listed(vault: Path, tmp_path_factory: pytest.TempPathFactory) -> None:
+    foreign = tmp_path_factory.mktemp("foreign-vault")
+    debrief_id, _, _ = _publish_debrief(foreign)
+    (vault / "_system").mkdir(exist_ok=True)
+    (vault / review.DEBRIEF_DIR).symlink_to(foreign / review.DEBRIEF_DIR)
+    client = TestClient(app)
+
+    listed = client.get("/api/companion/episode-debriefs")
+    assert listed.status_code == 409 and listed.json()["detail"]["error"] == "episode_debriefs_unreadable"
+    reviewed = client.post(f"/api/companion/episode-debriefs/{debrief_id}/review", json={"disposition": "dismissed"})
+    assert reviewed.status_code == 409
+    assert load_frontmatter((foreign / review.DEBRIEF_DIR / f"{debrief_id}.md").read_text())[0]["review_state"] == "draft"

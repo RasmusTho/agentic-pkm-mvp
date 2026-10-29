@@ -18,6 +18,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import yaml
 
 from app.agents.panel.filters import strip_ai_panels
+from app.episode_debrief.trigger import DebriefReconciliationError, _assert_selected_vault_owns_path
 from app.expansion import create
 from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
 from app.services.outbox import (
@@ -49,6 +50,10 @@ class DebriefDispositionConflictError(DebriefReviewError):
     """The debrief was already disposed differently; dispositions never overwrite."""
 
 
+class DebriefIntegrityError(DebriefReviewError):
+    """Durable debrief state (location or receipt) is inconsistent; nothing is changed."""
+
+
 def _review_state_span(raw: str) -> tuple[int, int, str]:
     """Locate the plain ``review_state`` scalar inside the leading frontmatter."""
     match = re.match(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|$)", raw, re.S)
@@ -77,17 +82,41 @@ def _with_review_state(raw: str, value: str) -> str:
     return patched
 
 
-def _debrief_path(root: Path, debrief_id: str) -> Path:
-    if not _DEBRIEF_ID.match(debrief_id):
-        raise DebriefNotFoundError("unknown debrief identity")
-    path = root / DEBRIEF_DIR / f"{debrief_id}.md"
-    # A same-vault leaf alias must not redirect the flip to another note.
-    if path.is_symlink() or not path.resolve().is_relative_to(root.resolve() / DEBRIEF_DIR):
-        raise DebriefReviewError("debrief path is not owned by the selected vault")
+def _owned(root: Path, path: Path, subject: str) -> Path:
+    """Same ownership rule as DEBRIEF-01/02: inside the selected vault, never a nested one."""
+    if path.is_symlink():
+        raise DebriefIntegrityError(f"{subject} must not be an alias")
+    try:
+        _assert_selected_vault_owns_path(root, path.resolve(), subject)
+    except DebriefReconciliationError as exc:
+        raise DebriefIntegrityError(str(exc)) from exc
     return path
 
 
-def published_debrief(path: Path) -> tuple[str, str, dict[str, Any], str] | None:
+def _debrief_dir(root: Path) -> Path:
+    return _owned(root, root / DEBRIEF_DIR, "debrief directory")
+
+
+def _debrief_path(root: Path, debrief_id: str) -> Path:
+    if not _DEBRIEF_ID.match(debrief_id):
+        raise DebriefNotFoundError("unknown debrief identity")
+    path = _debrief_dir(root) / f"{debrief_id}.md"
+    # A same-vault leaf alias must not redirect the flip to another note.
+    if path.resolve().parent != (root / DEBRIEF_DIR).resolve():
+        raise DebriefIntegrityError("debrief path is not owned by the selected vault")
+    return _owned(root, path, "debrief note")
+
+
+def _proposed_draft_ids(directory: Path) -> set[str]:
+    return {str(record["payload"]["draft_id"])
+            for record in read_jsonl_outbox_records(directory / "outbox.jsonl", read_only=True)
+            if record.get("event") == create.CREATE_PROPOSED_EVENT
+            and isinstance(record.get("payload"), dict) and record["payload"].get("draft_id")}
+
+
+def published_debrief(
+    path: Path, *, proposed_ids: set[str] | None = None,
+) -> tuple[str, str, dict[str, Any], str] | None:
     """Return (raw, version, frontmatter, body) for a fully published debrief.
 
     Publication is Create's contract: a matching integrity record over the
@@ -97,7 +126,7 @@ def published_debrief(path: Path) -> tuple[str, str, dict[str, Any], str] | None
     try:
         raw, version = read_note_text_with_version(path)
         fields, body = load_frontmatter(raw)
-    except (OSError, UnicodeError, ValueError):
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
         return None
     debrief_id = path.stem
     if (fields.get("uuid") != debrief_id or fields.get("create_kind") != create.OutputKind.EPISODE_DEBRIEF.value
@@ -107,15 +136,13 @@ def published_debrief(path: Path) -> tuple[str, str, dict[str, Any], str] | None
     try:
         published = _with_review_state(raw, FRESH_STATE).encode("utf-8")
         integrity = json.loads(create._draft_integrity_path(path).read_text(encoding="utf-8"))
-    except (DebriefReviewError, OSError, UnicodeError, ValueError):
+    except (DebriefReviewError, OSError, UnicodeError, ValueError, yaml.YAMLError):
+        # One malformed debrief is unreviewable; it never hides healthy ones.
         return None
     if not isinstance(integrity, dict) or integrity.get("draft_id") != debrief_id or (
             integrity.get("draft_sha256") != hashlib.sha256(published).hexdigest()):
         return None
-    outbox = path.parent / "outbox.jsonl"
-    if not any(record.get("event") == create.CREATE_PROPOSED_EVENT
-               and (record.get("payload") or {}).get("draft_id") == debrief_id
-               for record in read_jsonl_outbox_records(outbox, read_only=True)):
+    if debrief_id not in (proposed_ids if proposed_ids is not None else _proposed_draft_ids(path.parent)):
         return None
     return raw, version, fields, body
 
@@ -132,7 +159,10 @@ def replay_published_metadata(path: Path, *, request_fingerprint: str, draft_id:
         retained = create._replay_draft_metadata(path, request_fingerprint=request_fingerprint, draft_id=draft_id)
         assert retained is not None
         return retained
-    published = _with_review_state(raw, FRESH_STATE)
+    try:
+        published = _with_review_state(raw, FRESH_STATE)
+    except (DebriefReviewError, yaml.YAMLError) as exc:
+        raise create.CreateIdempotencyConflictError(f"reviewed debrief cannot be restored: {path}") from exc
     if published_debrief(path) is None:
         raise create.CreateIdempotencyConflictError(f"reviewed debrief integrity does not match publication: {path}")
     metadata, _ = load_frontmatter(published)
@@ -155,14 +185,15 @@ def _summary(fields: dict[str, Any], body: str, path: Path, root: Path) -> dict[
 def list_fresh_debriefs(vault_root: Path | str) -> list[dict[str, Any]]:
     """Read-only projection of durable debrief notes still awaiting review."""
     root = Path(vault_root).expanduser().resolve(strict=True)
-    directory = root / DEBRIEF_DIR
-    if not directory.is_dir():
+    if not (root / DEBRIEF_DIR).exists():
         return []
+    directory = _debrief_dir(root)
+    proposed = _proposed_draft_ids(directory)
     fresh = []
     for path in sorted(directory.glob("*.md")):
         if not _DEBRIEF_ID.match(path.stem) or path.is_symlink():
             continue
-        loaded = published_debrief(path)
+        loaded = published_debrief(path, proposed_ids=proposed)
         if loaded is not None and loaded[2].get("review_state") == FRESH_STATE:
             fresh.append(_summary(loaded[2], loaded[3], path, root))
     return sorted(fresh, key=lambda item: (str(item["created"] or ""), item["debrief_id"]), reverse=True)
@@ -183,7 +214,7 @@ def _ensure_receipt(outbox: Path, event: str, receipt_id: str, payload: dict[str
                 "source": REVIEW_EVENT_SOURCE, "timestamp": create._iso(create._now()), "payload": payload,
             }, default_source=REVIEW_EVENT_SOURCE, _lock_held=True)
         elif existing.get("payload") != payload:
-            raise DebriefDispositionConflictError("existing review receipt does not match this disposition")
+            raise DebriefIntegrityError("existing review receipt does not match this disposition")
     return f"{event}:{receipt_id}"
 
 
