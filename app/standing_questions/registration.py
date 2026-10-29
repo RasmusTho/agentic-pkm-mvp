@@ -242,8 +242,15 @@ def propose_question_registration(
             label=label,
         )
     from app.instance.context_bound_write import require_effect_locator
-    require_effect_locator(resolved_root, capture_path.relative_to(resolved_root).as_posix())
-    capture_path.write_text(updated, encoding="utf-8")
+    resource = capture_path.relative_to(resolved_root).as_posix()
+    require_effect_locator(resolved_root, resource)
+    # Opening an existing note must not truncate it before final admission.
+    # Once admitted, retain the owner's existing overwrite/truncate completion.
+    with capture_path.open("r+", encoding="utf-8") as handle:
+        handle.seek(0)
+        require_effect_locator(resolved_root, resource)
+        handle.write(updated)
+        handle.truncate()
     return RegistrationProposalResult(
         classification=classification,
         proposal_id=proposal_id,

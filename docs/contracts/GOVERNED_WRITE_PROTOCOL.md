@@ -102,6 +102,25 @@ copy can retain previously observed native/GOV evidence across a weaker kernel r
 authorizing another effect or acknowledging success. A shared original-request execution window
 covers initial and recovery invocations; current admission follows that wait.
 
+The production autonomous-operation composition also freezes the chosen selected binding into
+its kernel intent. Its current-selection/GOV/expiry guard is explicitly carried through native
+capture's inner write window, raw archive publication and generation-authority checkpoints, and
+restore's gated plaintext/receipt producers. An outer request check does not replace those final
+state-owner checks after waits. These optional native ports narrow the existing admitted window;
+they never mint delegation, key/reader authority or a replacement receipt. Existing non-operation
+producers keep their native authority paths. A refused optional capture effect preserves the
+already-durable main capture and its AuthorityReceipt.
+Policy/health and reader work precede the final captured-record/token/context/expiry checks.
+Append and optional proposal guards run after path/open preparation, placement checks follow its
+last parent probes, and raw representation checks follow verification and each activation SQL
+wait. Receipt finalization and ownership-proved cleanup preserve earlier source truth rather than
+requesting new forward authority.
+
+HTTP precondition observations reuse the same server-resolved selection and native version
+readers. They issue no effect receipt or kernel reservation and return no DecisionToken or policy
+authority. A later execute request obtains current MVR-05C/GOV admission and compares its supplied
+owner-native versions; observing a newer version never silently changes an admitted intent.
+
 ## Commands
 
 - Evaluate policy.

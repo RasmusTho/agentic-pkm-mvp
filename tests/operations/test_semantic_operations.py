@@ -463,7 +463,8 @@ def test_semantic_handlers_preserve_canvas_policy_and_dormant_activation_seal(bo
     before_routes = tuple(app.routes)
     build_semantic_operation_handlers(bound.config)
     assert tuple(app.routes) == before_routes
-    assert not any("operations" in str(getattr(route, "path", "")) for route in app.routes)
+    # #5352 owns the production route. Constructing this direct map cannot
+    # install or change any route, including that separately governed runtime.
     original = bound.note.read_bytes()
     request = bound.request(CLASSIFY, {"artifact_class": "evergreen_note"})
     assert bound.run(request).status is OperationStatus.REJECTED

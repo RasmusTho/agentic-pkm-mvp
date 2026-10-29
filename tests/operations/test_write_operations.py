@@ -395,7 +395,8 @@ def test_dormant_autonomous_edit_preserves_canvas_policy_and_installation_seal(b
     routes = tuple(app.routes)
     writes.build_write_operation_handlers(bound)
     assert tuple(app.routes) == routes
-    assert not any("operations" in str(getattr(route, "path", "")) for route in routes)
+    # #5352 owns authenticated installation. Building a direct handler map
+    # must preserve the complete existing route set and Canvas policy below.
     autonomous = _run(
         bound,
         _request(bound, writes.UPDATE_OPERATION_ID, arguments={"body": "Autonomous under GOV."}),

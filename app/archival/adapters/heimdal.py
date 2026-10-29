@@ -125,6 +125,7 @@ class HeimdalRawMediaAdapter:
         read_key: bytes | None = None,
         restore_operation_id: str | None = None,
         restore_representation_id: str | None = None,
+        effect_check: Callable[[], None] | None = None,
     ) -> None:
         self.record = record
         self.artifact = describe_raw_media(record, generation=generation)
@@ -133,6 +134,7 @@ class HeimdalRawMediaAdapter:
         self._read_key = read_key
         self._restore_operation_id = restore_operation_id
         self._restore_representation_id = restore_representation_id
+        self._effect_check = effect_check
         self._binding: OperationBinding | None = None
         self._archive_result: object | None = None
         self._validated_owner_archive_receipt: object | None = None
@@ -428,6 +430,7 @@ class HeimdalRawMediaAdapter:
                 "archival_generation": artifact.generation.value,
                 "archival_representation_id": _representation_id(representation),
             },
+            **({"effect_check": self._effect_check} if self._effect_check is not None else {}),
         )
         self._restored_storage_kind = restored.storage_kind
         if restored.representation_id != _representation_id(representation):

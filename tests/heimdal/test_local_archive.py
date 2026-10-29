@@ -462,10 +462,10 @@ def test_verify_before_hot_representation_retire_and_fail_closed(
     archive_root.mkdir()
     original_write = local_archive._durable_write
 
-    def corrupt_first_write(path: Path, payload: bytes) -> None:
+    def corrupt_first_write(path: Path, payload: bytes, **kwargs) -> None:
         if path.suffix == ".bin":
-            return original_write(path, b"tampered")
-        return original_write(path, payload)
+            return original_write(path, b"tampered", **kwargs)
+        return original_write(path, payload, **kwargs)
 
     monkeypatch.setattr(local_archive, "_durable_write", corrupt_first_write)
     with pytest.raises(local_archive.ArchiveDegradedError) as error:
@@ -574,8 +574,8 @@ def test_verified_manifest_post_effect_failure_preserves_retryable_object(
     archive_root.mkdir()
     original_write = local_archive._durable_write
 
-    def write_then_lose_ack(path: Path, payload: bytes) -> None:
-        original_write(path, payload)
+    def write_then_lose_ack(path: Path, payload: bytes, **kwargs) -> None:
+        original_write(path, payload, **kwargs)
         if path.suffix == ".json" and b'"ownership_state":"verified"' in payload:
             raise RuntimeError("verified manifest acknowledgement lost")
 
@@ -873,10 +873,10 @@ def test_archive_requires_verified_mount_and_redacts_failure(tmp_path: Path) -> 
 
     original_write = local_archive._durable_write
 
-    def fail_manifest(path: Path, payload: bytes) -> None:
+    def fail_manifest(path: Path, payload: bytes, **kwargs) -> None:
         if path.suffix == ".json":
             raise OSError(f"sensitive path: {path}")
-        original_write(path, payload)
+        original_write(path, payload, **kwargs)
 
     # The returned error is redacted and the pre-receipt object is cleaned up.
     with pytest.raises(local_archive.ArchiveDegradedError) as error:

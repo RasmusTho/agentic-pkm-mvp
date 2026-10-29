@@ -1,8 +1,8 @@
-"""Dormant AUTOOPS-04 composition over the enumerated write owners.
+"""AUTOOPS-04 composition over the enumerated write owners.
 
 No route, MCP tool, singleton, context bearer, policy authority, or receipt store
 is installed here. A server composes these handlers with the execution kernel;
-authenticated installation remains #5352 / MVR-05C work.
+the production API composition installs only the context-bound owners.
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ from app.services.outbox import append_jsonl_outbox_event
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.text.helpers import body_contains_frontmatter, split_frontmatter
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
+from app.vault.active_context_v1 import ActiveContextSetV1
 
 from .contracts import (
     ConvergenceState,
@@ -89,6 +90,8 @@ class WriteOperationServerConfig:
     capture_request: Request | None = None
     confirmation_service: PanelConfirmationService | None = None
     capture_owner: Callable[[Mapping[str, Any], Request], Any] | None = None
+    active_context: ActiveContextSetV1 | None = None
+    target_binding_id: str | None = None
 
 
 def build_write_operation_handlers(
@@ -319,6 +322,9 @@ def _update_body(
         "resource": resource,
     }
     grant = gov.issue_decision_token(write_guard=DEFAULT_WRITE_GUARD, **binding)
+    if config.active_context is not None:
+        grant = gov.bind_context(grant, context=config.active_context,
+                                 target_binding_id=config.target_binding_id or "")
     gov.validate_decision_token(decision_token=grant.decision_token, **binding)
     try:
         source = write_note_from_absolute(

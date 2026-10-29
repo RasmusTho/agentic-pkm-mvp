@@ -84,6 +84,7 @@ from tests.architecture.durable_table_classification import (
     discover_runtime_ddl_seams,
     foreign_key_target_candidates,
     load_manifest,
+    production_kernel_execute_call_count,
     stale_classifications,
     stale_producer_entries,
     unclassified_mutation_paths,
@@ -1140,6 +1141,98 @@ def test_batch_kernel_call_cannot_hide_nested_or_resolved_sql(
         sites = durable_sql_inventory.unresolvable_statement_sites()
         assert len(sites) == 2
         assert "app/operations/batch_operations.py:3 execute(statement)" in sites
+        assert statement in {sql.text for sql in _resolver(module_path).sql_statements()}
+    finally:
+        durable_sql_inventory._statement_sites.cache_clear()
+
+
+def test_production_kernel_execute_is_not_classified_as_sql() -> None:
+    assert production_kernel_execute_call_count() == 1
+    assert not any(
+        site.startswith("app/api/operation_runtime.py:")
+        for site in unresolvable_statement_sites()
+    )
+
+
+@pytest.mark.parametrize("call", [
+    "self.kernel.execute(statement, delegation, bind_owner_delegation=True)",
+    "self.connection.execute(request, delegation, bind_owner_delegation=True)",
+    "self.kernel.execute(request, delegation)",
+    "self.kernel.execute(delegation, request, bind_owner_delegation=True)",
+    "self.kernel.execute(request, delegation, bind_owner_delegation=False)",
+])
+def test_production_kernel_binding_cannot_hide_neighboring_unresolved_sql(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, call: str,
+) -> None:
+    module_path = tmp_path / "app" / "api" / "operation_runtime.py"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        "class ProductionOperationRuntime:\n"
+        "    def invoke(self, request, delegation, statement):\n"
+        "        self.kernel.execute(request, delegation, bind_owner_delegation=True)\n"
+        f"        {call}\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(durable_sql_inventory, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(durable_sql_inventory, "APP_ROOT", tmp_path / "app")
+    monkeypatch.setattr(durable_sql_inventory, "_app_modules", lambda: iter((module_path,)))
+    durable_sql_inventory._statement_sites.cache_clear()
+    try:
+        sites = durable_sql_inventory.unresolvable_statement_sites()
+        assert len(sites) == 1
+        assert sites[0].startswith("app/api/operation_runtime.py:4 execute(")
+    finally:
+        durable_sql_inventory._statement_sites.cache_clear()
+
+
+@pytest.mark.parametrize(("path", "class_name", "method"), [
+    ("app/api/other.py", "ProductionOperationRuntime", "invoke"),
+    ("app/api/operation_runtime.py", "SqlWriter", "invoke"),
+    ("app/api/operation_runtime.py", "ProductionOperationRuntime", "persist"),
+])
+def test_production_kernel_non_sql_binding_is_scoped_to_its_actual_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    path: str, class_name: str, method: str,
+) -> None:
+    module_path = tmp_path / path
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        f"class {class_name}:\n"
+        f"    def {method}(self, request, delegation):\n"
+        "        self.kernel.execute(request, delegation, bind_owner_delegation=True)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(durable_sql_inventory, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(durable_sql_inventory, "APP_ROOT", tmp_path / "app")
+    monkeypatch.setattr(durable_sql_inventory, "_app_modules", lambda: iter((module_path,)))
+    durable_sql_inventory._statement_sites.cache_clear()
+    try:
+        assert durable_sql_inventory.unresolvable_statement_sites() == (
+            f"{path}:3 execute(request, delegation)",
+        )
+    finally:
+        durable_sql_inventory._statement_sites.cache_clear()
+
+
+def test_production_kernel_call_cannot_hide_nested_or_resolved_sql(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_path = tmp_path / "app" / "api" / "operation_runtime.py"
+    module_path.parent.mkdir(parents=True)
+    statement = "INSERT INTO store_objects (uuid) VALUES ('fixture')"
+    module_path.write_text(
+        "class ProductionOperationRuntime:\n"
+        "    def invoke(self, request, delegation, statement):\n"
+        "        self.kernel.execute(request, delegation, bind_owner_delegation=self.connection.execute(statement))\n"
+        f"        self.connection.execute({statement!r})\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(durable_sql_inventory, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(durable_sql_inventory, "APP_ROOT", tmp_path / "app")
+    monkeypatch.setattr(durable_sql_inventory, "_app_modules", lambda: iter((module_path,)))
+    durable_sql_inventory._statement_sites.cache_clear()
+    try:
+        sites = durable_sql_inventory.unresolvable_statement_sites()
+        assert len(sites) == 2
+        assert "app/api/operation_runtime.py:3 execute(statement)" in sites
         assert statement in {sql.text for sql in _resolver(module_path).sql_statements()}
     finally:
         durable_sql_inventory._statement_sites.cache_clear()
