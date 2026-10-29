@@ -24,7 +24,8 @@ def test_workspace_rail_renders_client_loaded_debrief_review_card() -> None:
     assert "Debriefs unavailable" in html
     # Loaded only when opened: a plain page load issues no runtime request.
     controller = html.split("episode-debrief-review-controller")[1].split("</script>")[0]
-    assert "root.addEventListener('toggle'" in controller
+    assert "opener.addEventListener('click'" in controller
+    assert 'id="episode-debrief-review-body" hidden' in html and "<details" not in html.split('data-testid="episode-debrief-review"')[1].split("</section>")[0]
     assert not controller.rstrip().rstrip("})();").rstrip().endswith("load();")
 
 

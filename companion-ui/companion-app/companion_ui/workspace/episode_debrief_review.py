@@ -15,21 +15,25 @@ EPISODE_DEBRIEFS_ENDPOINT = "/api/companion/episode-debriefs"
 
 def episode_debrief_review_markup() -> str:
     return f"""
-        <details class="debrief-review-card" data-testid="episode-debrief-review"
-          data-endpoint="{EPISODE_DEBRIEFS_ENDPOINT}">
-          <summary id="episode-debrief-review-heading" class="debrief-review-eyebrow">Episode debriefs to review</summary>
-          <p class="debrief-review-state" data-testid="episode-debrief-review-state" aria-live="polite"></p>
-          <div class="debrief-review-list" data-testid="episode-debrief-review-list">
-            <p class="debrief-review-loading">Loading debriefs…</p>
+        <section class="debrief-review-card" data-testid="episode-debrief-review"
+          data-endpoint="{EPISODE_DEBRIEFS_ENDPOINT}" aria-label="Episode debrief review">
+          <button type="button" class="debrief-review-open" data-testid="episode-debrief-review-open"
+            aria-expanded="false" aria-controls="episode-debrief-review-body">Review episode debriefs</button>
+          <div id="episode-debrief-review-body" hidden>
+            <p class="debrief-review-state" data-testid="episode-debrief-review-state" aria-live="polite"></p>
+            <div class="debrief-review-list" data-testid="episode-debrief-review-list">
+              <p class="debrief-review-loading">Loading debriefs…</p>
+            </div>
           </div>
-        </details>"""
+        </section>"""
 
 
 def episode_debrief_review_style() -> str:
     return """
     /* ---- DEBRIEF-03 episode debrief review card ---- */
-    .debrief-review-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; }
-    .debrief-review-eyebrow { color: var(--fg-2); cursor: pointer; font-size: var(--text-xs); }
+    .debrief-review-card { font-size: var(--text-sm); }
+    .debrief-review-open { background: none; border: 0; color: var(--fg-2); cursor: pointer; font: inherit; padding: 0; }
+    .debrief-review-card [hidden] { display: none !important; }
     .debrief-review-item { border-top: 1px solid var(--border); padding: 10px 0; }
     .debrief-review-item h4 { color: var(--fg-1); font-size: var(--text-md); margin: 0 0 6px; }
     .debrief-review-body { color: var(--fg-1); font-size: var(--text-sm); max-height: 14em; overflow: auto; white-space: pre-wrap; }
@@ -114,6 +118,13 @@ def episode_debrief_review_script() -> str:
       }}).then(function(result) {{ setState('Debrief ' + result.review_state + '.'); return load(); }})
         .catch(function(error) {{ setState(error.message, 'danger'); return load(); }});
     }});
-    root.addEventListener('toggle', function() {{ if (root.open) {{ load(); }} }});
+    var opener = root.querySelector('[data-testid="episode-debrief-review-open"]');
+    var body = root.querySelector('#episode-debrief-review-body');
+    opener.addEventListener('click', function() {{
+      var open = opener.getAttribute('aria-expanded') !== 'true';
+      opener.setAttribute('aria-expanded', open ? 'true' : 'false');
+      body.hidden = !open;
+      if (open) {{ load(); }}
+    }});
   }})();
   </script>"""
