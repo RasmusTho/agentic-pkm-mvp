@@ -180,3 +180,4 @@ def test_route_recognition_uses_context_without_execution_authority():
     assert "execution readiness" in DECISION_INSTRUCTIONS
     assert "indirect" in DECISION_INSTRUCTIONS.lower()
     assert "does not authorize" in DECISION_INSTRUCTIONS
+    assert "meaningful statement" in DECISION_INSTRUCTIONS

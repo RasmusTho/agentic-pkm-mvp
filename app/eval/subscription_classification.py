@@ -20,7 +20,7 @@ from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 
 MODELS = ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
 EFFORT = "low"
-DECISION_PROTOCOL = "subscription_intent_decision.v4"
+DECISION_PROTOCOL = "subscription_intent_decision.v5"
 DECISIONS: dict[str, tuple[str, str | None] | None] = {
     "abstain": None,
     "co_authoring": ("co_authoring", None),
@@ -41,6 +41,10 @@ DECISION_INSTRUCTIONS = (
     "Indirect requests, suggestions, hedges, statements of desired state and rhetorical "
     "questions can request change without an imperative. Determine whether the speaker "
     "wants a change considered, rather than requiring explicit execution permission. "
+    "Separate uncertainty about whether a meaningful statement requests action from "
+    "uncertainty about what the statement means. If a coherent observation does not "
+    "establish a change request, classify it as exploratory; disagreement about whether "
+    "to act on that observation does not make its meaning unresolved. "
     "Choose abstain when the desired operation itself is unresolvable from text/context, "
     "or requested states are mutually incompatible without clarification. Do not invent "
     "an operation from a missing antecedent or select one side of a contradiction. "

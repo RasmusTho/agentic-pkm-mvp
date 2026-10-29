@@ -300,13 +300,14 @@ labels, then validates exact coverage and scores each answer through the legacy 
 This is a batched subscription comparison; its timing is per batch, and it is not the independent
 API-call protocol above. No Product classifier route or default changes.
 
-The subscription decision protocol is `subscription_intent_decision.v4` (#6437, following #6422).
+The subscription decision protocol is `subscription_intent_decision.v5` (#6437, following #6422).
 It transmits each case's declared surface and note state alongside the intent. It recognizes the
 requested route separately from execution readiness: indirect requests and missing execution
 parameters do not erase a resolvable operation. A current-note reference can use open-canvas
 context, while a named other note does not have to be open. Classification only identifies a gate;
-it does not authorize mutation, supply missing arguments, or invent missing antecedents. Truly
-unresolved operations and mutually incompatible requested states still require abstention. The closed decision tag `abstain` maps locally to the unchanged comparator's
+it does not authorize mutation, supply missing arguments, or invent missing antecedents. A coherent observation that does not establish a change request remains exploratory; uncertainty
+about whether to act is not unresolved meaning. Truly unresolved operations and mutually
+incompatible requested states still require abstention. The closed decision tag `abstain` maps locally to the unchanged comparator's
 UNKNOWN safe-fail. Concrete tags bind a fixed class/action pair: body editing and exploratory
 reasoning have no action; each of the four governance subtypes binds its corresponding action.
 There are no independent model-supplied class/action fields that could contradict each other.
