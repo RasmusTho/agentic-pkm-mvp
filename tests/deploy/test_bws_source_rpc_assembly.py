@@ -12,6 +12,8 @@ import runpy
 import shutil
 import subprocess
 import sys
+import tempfile
+import traceback
 from types import SimpleNamespace
 
 import pytest
@@ -19,8 +21,11 @@ import pytest
 from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
 
-def _exercise(base: Path, repository: Path, channel: str, fault: str) -> None:
+def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path) -> None:
     """Run in a disposable interpreter; no native configuration is consulted."""
+    # Secure public-source fixtures can live inside the checkout on CI. Model
+    # that ancestry on every platform; private durable journals must stay outside.
+    (base / ".git").mkdir(mode=0o700)
     checkout = base / "candidate"
     checkout.mkdir(mode=0o755)
     for package in ("app", "scripts"):
@@ -62,7 +67,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str) -> None:
         from tests.ops.test_bws_installation_transaction import _ordinary_terminal_installation_fixture
 
         patch = pytest.MonkeyPatch()
-        _ordinary_terminal_installation_fixture(base, patch, channel)
+        _ordinary_terminal_installation_fixture(base, patch, channel, journal_root=journal_root)
         config = linux.LinuxConfig.load(channel)
         installed = config.root
         state.update(config=config, installed=installed, transaction=transaction, control=control)
@@ -212,7 +217,19 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str) -> None:
         state.update(backups=backups, receipts=receipts)
         return finder
 
-    namespace["_install_source_loader"] = bind_effects
+    def guarded_bind_effects(root):
+        try:
+            return bind_effects(root)
+        except Exception as exc:
+            # Launcher refusals are deliberately value-free. Keep test failure
+            # diagnosis value-free too: no exception message, paths or inputs.
+            state["bootstrap_failure"] = (
+                type(exc).__name__,
+                [(Path(frame.filename).name, frame.name, frame.lineno)
+                 for frame in traceback.extract_tb(exc.__traceback__)[-6:]],
+            )
+            raise
+    namespace["_install_source_loader"] = guarded_bind_effects
     request = {"action": "source-installation", "operation_id": "65752d22-1a9b-48df-a0cc-5e1087595b22",
                "candidate_sha": revision, "image_digest": "sha256:" + "b" * 64, "bundle_name": "assembled"}
     # run() still reads its root-owned configuration boundary, sets cwd, ignores
@@ -246,7 +263,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str) -> None:
     sys.stdin, output = io.StringIO(json.dumps(request)), io.StringIO()
     sys.stdout = output
     status = namespace["run"]()
-    assert status == 0, (status, output.getvalue())
+    assert status == 0, (status, output.getvalue(), state.get("bootstrap_failure"))
     result = json.loads(output.getvalue())["source_installation"]
     assert resource.getrlimit(resource.RLIMIT_NOFILE) == state["original_limits"]
     assert not hasattr(sys, "_yggdrasil_bws_source_rpc_process")
@@ -271,11 +288,12 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str) -> None:
 @pytest.mark.parametrize("channel", ["dev", "test"])
 @pytest.mark.parametrize("fault", ["none", "hard", "unknown", "partial", "prepare-interrupt"])
 def test_assembled_source_rpc_uses_real_descriptor_envelope(secure_tmp_path, channel, fault):
-    completed = subprocess.run(
-        [sys.executable, "-m", "tests.deploy.test_bws_source_rpc_assembly", str(secure_tmp_path),
-         str(Path(__file__).resolve().parents[2]), channel, fault],
-        cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
-    )
+    with tempfile.TemporaryDirectory(prefix="pkm-source-journal-") as directory:
+        completed = subprocess.run(
+            [sys.executable, "-m", "tests.deploy.test_bws_source_rpc_assembly", str(secure_tmp_path),
+             str(Path(__file__).resolve().parents[2]), channel, fault, str(Path(directory).resolve())],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
+        )
     if fault == "prepare-interrupt":
         assert completed.returncode == 78, completed.stderr
         assert completed.stdout == ""
@@ -286,4 +304,4 @@ def test_assembled_source_rpc_uses_real_descriptor_envelope(secure_tmp_path, cha
 
 
 if __name__ == "__main__":
-    _exercise(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4])
+    _exercise(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4], Path(sys.argv[5]))

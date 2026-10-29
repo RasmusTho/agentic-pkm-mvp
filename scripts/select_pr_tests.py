@@ -426,6 +426,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "app/instance/settings_rebind.py",
         "app/instance/settings_rebind_runtime_capability.json",
         "app/ops/__init__.py",
+        "app/ops/bws_control_installation.py",
         "app/ops/bws_secret_reader.py",
         "app/ops/heavy_acceptance.py",
         "app/ops/heavy_acceptance_runner.py",

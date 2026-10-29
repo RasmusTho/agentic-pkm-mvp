@@ -2360,7 +2360,9 @@ def test_empty_control_root_refuses_identity_or_inventory_drift_before_backup(
     assert not {"prepare", "apply_launcher", "stop_old", "apply_source"} & set(events)
 
 
-def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, terminal=True, legacy=False):
+def _ordinary_terminal_installation_fixture(
+    tmp_path, monkeypatch, channel, *, terminal=True, legacy=False, journal_root=None,
+):
     """Keep native config, terminal readers and the real Docker census in the transaction."""
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import DeployJournal, DeployPlan
@@ -2397,7 +2399,7 @@ def _ordinary_terminal_installation_fixture(tmp_path, monkeypatch, channel, *, t
         return dict(native_config)
 
     monkeypatch.setattr(linux, "_private_json", private_config)
-    journal = DeployJournal(tmp_path.resolve() / "journal", channel)
+    journal = DeployJournal((journal_root or tmp_path).resolve() / "journal", channel)
     monkeypatch.setattr(linux.LinuxConfig, "journal", property(lambda _self: journal))
     config = linux.LinuxConfig.load(channel)
     plan = DeployPlan(channel, "c" * 40, ("db",), ("postgres-db",),
