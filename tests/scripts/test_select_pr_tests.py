@@ -3484,7 +3484,7 @@ def test_bws_existing_neutral_test_cochange(monkeypatch):
 
 
 @pytest.mark.parametrize('failure', [
-    'no-base', 'moving-ref', 'bad-base', 'new-test', 'base-symlink', 'base-directory',
+    'no-base', 'moving-ref', 'bad-base', 'tree-base', 'new-test', 'base-symlink', 'base-directory',
     'git-error', 'missing-test', 'symlink-test', 'helpers', 'fixtures', 'conftest',
     'config', 'dormant', 'unknown-prod', 'no-source', 'partial', 'self-enrollment',
 ])
@@ -3497,6 +3497,8 @@ def test_bws_neutral_cochange_refusals(failure, monkeypatch):
         base = 'HEAD'
     elif failure == 'bad-base':
         base = '0' * 40
+    elif failure == 'tree-base':
+        base = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
     elif failure == 'no-source':
         changed.remove('app/ops/bws_installation_transaction.py')
     elif failure in {'new-test', 'helpers', 'fixtures', 'conftest', 'config', 'dormant', 'unknown-prod', 'self-enrollment'}:

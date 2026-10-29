@@ -2369,7 +2369,7 @@ def _bws_neutral_test_selection(selection: Selection, paths: tuple[str, ...], ba
         if len(baseline) != 40 or any(char not in "0123456789abcdef" for char in baseline):
             return selection
         entries = subprocess.run(
-            ["git", "--literal-pathspecs", "ls-tree", "-z", baseline, "--", *extra],
+            ["git", "--literal-pathspecs", "ls-tree", "-z", f"{baseline}^{{commit}}", "--", *extra],
             check=True, capture_output=True, text=True,
         ).stdout.split("\0")
         regular = {
