@@ -115,7 +115,7 @@ _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
 # any context" -- the anti-laundering keystone). Kept as a plain tuple of
 # literal strings (not imported from app.expansion) so app.ingest never takes
 # an import dependency on app.expansion for a two-token exclusion list.
-_UNINDEXED_SYSTEM_SUBFOLDERS: tuple[str, ...] = ("companions", "drafts")
+_UNINDEXED_SYSTEM_SUBFOLDERS: tuple[str, ...] = ("companions", "drafts", "episode-debriefs")
 
 
 def _is_locked_error(exc: Exception) -> bool:

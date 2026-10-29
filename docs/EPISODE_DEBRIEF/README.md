@@ -1,5 +1,5 @@
 State: Active specification directory. DEBRIEF-01 (#3334) has repository implementation;
-DEBRIEF-02 synthesis and DEBRIEF-03 review remain separate work. Parent #3331 is the
+DEBRIEF-02 has repository synthesis support; DEBRIEF-03 review remains separate work. Parent #3331 is the
 capability acceptance hub.
 System-level source of truth for the Episode Debrief capability: when the Episode Resolution Engine
 closes an episode, synthesize a provenance-cited debrief note — decisions made, commitments taken, open
@@ -201,3 +201,12 @@ emits — not specified or built here).
 - `docs/DECISION_RECEIPT_LOG/README.md`, `docs/COMMITMENT_SURFACING/README.md` (debrief inputs)
 - `docs/CONCEPTS/STATE_AXES_CONTRACT.md` (`review_state` canonical vocabulary)
 - `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification`
+
+## DEBRIEF-02 repository support
+
+The durable trigger dispatches through the existing Create engine as `create.episode_debrief`.
+The candidate is retained under `_system/episode-debriefs/`, excluded from ingest indexing and
+Create expiry, with `derived_by: synthesis`, `authority_state: proposal`, `review_state: draft`.
+Its only Episode mutation is the guarded additive `debrief_ref`; a failed append is recoverable
+without regenerating the retained candidate. Human review/disposition is DEBRIEF-03, not implied
+by this repository support.

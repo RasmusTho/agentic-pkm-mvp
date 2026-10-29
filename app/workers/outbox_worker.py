@@ -576,6 +576,16 @@ def _dispatch_topic(
             trace_id=trace_id,
             event_id=event_id,
         )
+    elif topic == "debrief.trigger.created":
+        from app.episode_debrief.synthesis import DebriefSynthesisError, synthesize_debrief
+
+        debrief_root = _resolve_optional_vault_root(vault_root)
+        if debrief_root is None:
+            raise DebriefSynthesisError("debrief requires a selected vault")
+        report = synthesize_debrief(payload, vault_root=debrief_root,
+                                    vault_binding_id=source_vault_binding_id)
+        if report["status"] == "blocked":
+            raise DebriefSynthesisError("debrief activation blocked: " + ", ".join(report["reasons"]))
     elif topic == NOTE_MOVE_WORKBENCH:
         handle_note_move_workbench(payload, trace_id=trace_id)
     elif topic == INDEX_EMBEDDING_REQUESTED:

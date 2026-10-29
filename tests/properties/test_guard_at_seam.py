@@ -393,6 +393,9 @@ def test_every_candidate_create_once_seam_has_port_coverage() -> None:
     # filesystem-dependent (APFS and ext4 disagree), so the closed census
     # compares as a sorted list to stay deterministic across hosts (#4609).
     assert sorted(call_sites) == [
+        # Episode Debrief (#3333): immutable proposal creation through the
+        # guarded create-once knowledge seam; no new filesystem write port.
+        ("app/expansion/create.py", "run_create_pass"),
         # Meeting finalization (CDLM-08, #4388): create-once Sources-zone
         # artifacts written atomically through the same O_EXCL primitive.
         ("app/heimdal/meeting_finalization.py", "finalize_session"),

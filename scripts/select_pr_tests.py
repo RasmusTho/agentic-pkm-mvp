@@ -1079,6 +1079,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/episodes/",
             "app/episode_debrief/",
+            "app/cli/episode_debrief.py",
             "app/jobs/episodes_projection.py",
             # CrossScopeFlow is an Episodes contract even though its shared
             # definition and owner documentation live outside app/episodes.

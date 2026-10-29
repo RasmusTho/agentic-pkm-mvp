@@ -1036,10 +1036,15 @@ environment; only a short-lived mode-0600 runtime file carries the declared webh
 The service has no Docker startup dependency and reads the worker heartbeat from the host volume.
 The prior Mac LaunchAgent and plist remain legacy templates. The installer
 `scripts/install_host_probe.py` prints a plan by default; host writes require `--apply` from a clean
-checkout at the exact `origin/main` head. As checked on 2026-10-12, no Linux probe unit is installed
-on `ygg-prod`; live installation and the TEST outage/recovery drill remain tracked by #4076.
-The prod `/readyz` check returned HTTP 200 while `/api/health.required_ok` was false, so an active
-probe should report prod down until the underlying health issue is repaired.
+checkout at the exact `origin/main` head. On 2026-10-29, production installation from source
+`777726d3139fc82cd69097dcd3bccc4d1c6c167a` was
+[verified on `ygg-prod`](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6444#issuecomment-6490667131):
+all 60 package files, configuration and effective unit matched; the same active/enabled invocation
+remained stable across two normal 60-second intervals with zero restarts. The declared BWS launch
+and private runtime binding metadata were verified without exposing credentials.
+The pre-existing `/readyz` HTTP 200 and `/api/health.required_ok=false` signal produced one confirmed
+down alert followed by two duplicate suppressions, with no observed delivery or iteration errors.
+This is normal production monitoring, not a controlled outage, source-health repair or TEST proof.
 
 **Two distinct Makefile targets — do not confuse them:**
 
@@ -1060,8 +1065,15 @@ intentionally re-arming notifications; the installed Linux state path is under
 `--apply` writes the host from the exact merged `origin/main` checkout. Production installation
 uses `--channel prod`. The installer is deliberately separate from the TEST outage/recovery drill;
 the parent Issue #4076 owns both live host operations and disabling the legacy Mac LaunchAgent after
-the Linux production service is active. On 2026-10-12, the Mac job was loaded with last observed
-exit status 1, while no Linux probe unit was installed.
+the Linux production service is active. Linux activation is verified by the receipt above.
+After a fresh check of the same active Linux invocation, the exact legacy
+`com.yggdrasil.prod-probe` job was
+[disabled and unloaded on 2026-10-29](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6449#issuecomment-6491766335)
+in the qualified current user's GUI domain. Readback confirmed the disabled override, absent job
+and preserved original plist metadata/selected identity. No legacy program was invoked and no
+physical-asset identity is claimed. The separately qualified isolated TEST
+down/repeat/recovery/restoration drill remains open under #4076. Existing catalog acceptance and
+the #6347 shared webhook import must not be requested or repeated again.
 
 ## Prod backup watcher (stale or failed nightly dump)
 
