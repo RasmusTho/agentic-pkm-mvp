@@ -1562,6 +1562,8 @@ def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
                 continue
             if _is_bounded_batch_kernel_execute(relative, resolver, func, node):
                 continue
+            if _is_bounded_production_kernel_execute(relative, resolver, func, node):
+                continue
             if _reaches_durable_database(relative, resolver, func) is not durable_source:
                 continue
             resolved = False
@@ -1663,6 +1665,42 @@ def batch_kernel_execute_call_count() -> int:
         if isinstance(node, ast.Call)
         and _is_bounded_batch_kernel_execute(
             _BATCH_KERNEL_EXECUTE_PATH, resolver, resolver.enclosing_function(node), node
+        )
+    )
+
+
+_PRODUCTION_KERNEL_EXECUTE_PATH = "app/api/operation_runtime.py"
+_PRODUCTION_KERNEL_EXECUTE_CALL = ast.dump(ast.parse(
+    "self.kernel.execute(request, delegation, bind_owner_delegation=True)", mode="eval"
+).body, include_attributes=False)
+
+
+def _is_bounded_production_kernel_execute(
+    relative_path: str,
+    resolver: _ModuleResolver,
+    func: ast.FunctionDef | ast.AsyncFunctionDef | None,
+    node: ast.Call,
+) -> bool:
+    """Recognize the sole typed HTTP-runtime operation call, never SQL."""
+    enclosing_class = resolver._parent.get(func) if func is not None else None
+    return (
+        relative_path == _PRODUCTION_KERNEL_EXECUTE_PATH
+        and func is not None
+        and func.name == "invoke"
+        and isinstance(enclosing_class, ast.ClassDef)
+        and enclosing_class.name == "ProductionOperationRuntime"
+        and ast.dump(node, include_attributes=False) == _PRODUCTION_KERNEL_EXECUTE_CALL
+    )
+
+
+def production_kernel_execute_call_count() -> int:
+    """Measured population of the precisely bound production operation call."""
+    resolver = _resolver(REPO_ROOT / _PRODUCTION_KERNEL_EXECUTE_PATH)
+    return sum(
+        1 for node in ast.walk(resolver.tree)
+        if isinstance(node, ast.Call)
+        and _is_bounded_production_kernel_execute(
+            _PRODUCTION_KERNEL_EXECUTE_PATH, resolver, resolver.enclosing_function(node), node
         )
     )
 
