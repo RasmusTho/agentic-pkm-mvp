@@ -13,13 +13,15 @@ from typing import Any
 
 from app.eval.classification import (
     CLASSIFICATION_GOLDEN_PATH, INTENT_CLASSIFICATION_SCHEMA_REF,
-    evaluate_classification_golden_set, load_classification_cases,
+    classify_cases, evaluate_classification, evaluate_classification_golden_set, load_classification_cases,
 )
 from app.components.llm.constrained import validate_payload
 from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 
 MODELS = ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
 EFFORT = "low"
+HOLDOUT_PATH = Path("docs/eval/classification_holdout.yaml")
+CORPORA = {"golden": CLASSIFICATION_GOLDEN_PATH, "holdout": HOLDOUT_PATH}
 DECISION_PROTOCOL = "subscription_intent_decision.v7"
 DECISIONS: dict[str, tuple[str, str | None] | None] = {
     "abstain": None,
@@ -113,25 +115,35 @@ def preflight_targets(executor: CodexCliExecutor, models: tuple[str, ...]) -> li
     return catalog
 
 
-def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS) -> dict[str, Any]:
-    catalog = preflight_targets(executor, models)
-    cases = load_classification_cases()
-    # No labels, acceptable alternatives, or expected action types leave this process.
-    shuffled = list(cases)
-    random.Random(3429).shuffle(shuffled)
-    opaque_to_local = {f"case-{i:03d}": c.id for i, c in enumerate(shuffled)}
-    inputs = [{"case_id": opaque, "intent": c.utterance,
-               "context": {"surface": c.surface, "note_state": c.note_state}}
-              for opaque, c in zip(opaque_to_local, shuffled)]
-    expected_ids = set(opaque_to_local)
+def _decision_schema() -> dict[str, Any]:
     answer_schema = {"type": "object", "properties": {
         "case_id": {"type": "string"},
         "decision": {"type": "string", "enum": list(DECISIONS)},
         "rationale": {"type": ["string", "null"]}},
         "required": ["case_id", "decision", "rationale"], "additionalProperties": False}
-    schema = {"type": "object", "properties": {"answers": {
+    return {"type": "object", "properties": {"answers": {
         "type": "array", "items": answer_schema}}, "required": ["answers"],
         "additionalProperties": False}
+
+
+def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS, *,
+                   cases_path: Path = CLASSIFICATION_GOLDEN_PATH,
+                   shuffle_seed: int = 3429) -> dict[str, Any]:
+    allowed = [path for path in CORPORA.values() if path.resolve() == cases_path.resolve()]
+    if len(allowed) != 1 or type(shuffle_seed) is not int or not 0 <= shuffle_seed < 2**32:
+        raise ValueError("invalid corpus or shuffle seed")
+    cases_path = allowed[0]
+    cases = load_classification_cases(cases_path)
+    catalog = preflight_targets(executor, models)
+    # No labels, acceptable alternatives, or expected action types leave this process.
+    shuffled = list(cases)
+    random.Random(shuffle_seed).shuffle(shuffled)
+    opaque_to_local = {f"case-{i:03d}": c.id for i, c in enumerate(shuffled)}
+    inputs = [{"case_id": opaque, "intent": c.utterance,
+               "context": {"surface": c.surface, "note_state": c.note_state}}
+              for opaque, c in zip(opaque_to_local, shuffled)]
+    expected_ids = set(opaque_to_local)
+    schema = _decision_schema()
     developer = DECISION_INSTRUCTIONS
     runs: list[dict[str, Any]] = []
     for model in models:
@@ -165,7 +177,13 @@ def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS)
                     raise ValueError("unknown trace")
                 return indexed[trace_id.removeprefix("eval-cls-")]
 
-            metrics = evaluate_classification_golden_set(live=True, live_completion=complete)
+            if cases_path == CLASSIFICATION_GOLDEN_PATH:
+                metrics = evaluate_classification_golden_set(live=True, live_completion=complete)
+            else:
+                predictions = classify_cases(cases, None, live_completion=complete)
+                metrics = evaluate_classification(cases, predictions)
+                metrics.update(dataset=str(cases_path), replay=None, mode="live",
+                               target="legacy_completion_comparator")
             run.update(complete=True, completed_cases=len(indexed), metrics=metrics,
                        hard_gate_passed=not metrics["mutation_side_confusions"],
                        cli_version=result.cli_version, safe_profile_ref=result.safe_profile_ref,
@@ -196,8 +214,10 @@ def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS)
         "instruction_sha256": hashlib.sha256(developer.encode()).hexdigest(),
         "schema_sha256": hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(),
         "complete": len(runs) == len(models) and all(r["complete"] for r in runs),
-        "dataset": {"path": str(CLASSIFICATION_GOLDEN_PATH), "cases": len(cases),
-                    "sha256": hashlib.sha256(CLASSIFICATION_GOLDEN_PATH.read_bytes()).hexdigest()},
+        "dataset": {"path": str(cases_path), "cases": len(cases),
+                    "sha256": hashlib.sha256(cases_path.read_bytes()).hexdigest()},
+        "shuffle_seed": shuffle_seed,
+        "input_sha256": hashlib.sha256(json.dumps(inputs, ensure_ascii=False).encode()).hexdigest(),
         "requested_models": list(models),
         "baseline": {"model": "gpt-5.4-mini", "available": any(
             c["model"] == "gpt-5.4-mini" and not c["hidden"] for c in catalog),
@@ -212,6 +232,8 @@ def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS)
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", help="authorize bounded subscription inference")
+    parser.add_argument("--dataset", choices=tuple(CORPORA), default="golden")
+    parser.add_argument("--shuffle-seed", type=int, default=3429)
     args = parser.parse_args()
     if not args.run:
         parser.error("explicit --run is required")
@@ -221,7 +243,7 @@ def main() -> int:
             raise ValueError("absolute profile required")
         executor = CodexCliExecutor(safe_profile_path=profile, preflight_timeout_seconds=30,
                                     execution_timeout_seconds=300)
-        receipt = run_comparison(executor)
+        receipt = run_comparison(executor, cases_path=CORPORA[args.dataset], shuffle_seed=args.shuffle_seed)
     except Exception:
         print(json.dumps({"schema_version": "gpt56-classification-eval.v1", "complete": False,
                           "failure": "subscription_preflight_unavailable", "cost": None}))
