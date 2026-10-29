@@ -3288,3 +3288,15 @@ def test_ops_only_shared_configuration_keeps_broad_execution():
     assert selection.full_suite
     assert selector.scoped_deploy_partitions(selection) == ()
     assert selector.scoped_deploy_execution_units(selection) == ()
+
+
+
+def test_episode_debrief_cli_selects_existing_episodes_coverage() -> None:
+    selection = select_tests(["app/cli/episode_debrief.py"])
+    assert selection.full_suite is False
+    assert selection.subsystems == ("episodes",)
+    assert selection.unowned_paths == ()
+    assert "tests/episodes" in selection.targets
+    assert "tests/episode_debrief" in selection.targets
+    assert "tests/invariants" in selection.targets
+    assert select_tests(["app/cli/unknown_episode_command.py"]).unowned_paths == ("app/cli/unknown_episode_command.py",)
