@@ -85,7 +85,7 @@ def test_subscription_receipt_is_content_free_and_billing_unavailable():
         assert run["cost"] is None and run["usage"] is None and run["served_model"] is None
         assert run["model"] == call["model"]
         assert call["reasoning_effort"] == "low"
-        assert all(set(c) == {"case_id", "intent"} for c in json.loads(call["user_prompt"]))
+        assert all(set(c) == {"case_id", "intent", "context"} for c in json.loads(call["user_prompt"]))
         assert "expected_intent" not in call["user_prompt"]
         source_ids = {c.id for c in load_classification_cases()}
         assert not (source_ids & {item["case_id"] for item in json.loads(call["user_prompt"])})
@@ -159,3 +159,24 @@ def test_abstention_protocol_does_not_weaken_quality_scoring():
         assert run["abstained_cases"] == 68
         assert run["metrics"]["safe_fail"]["answer_rate"] == 0.0
         assert run["metrics"]["pass_rate"] == 8 / 68
+
+
+def test_route_recognition_uses_context_without_execution_authority():
+    from app.eval.subscription_classification import DECISION_INSTRUCTIONS
+
+    executor = FakeExecutor()
+    result = run_comparison(executor)
+    cases = {c.utterance: c for c in load_classification_cases()}
+    for call in executor.calls:
+        for item in json.loads(call["user_prompt"]):
+            case = cases[item["intent"]]
+            assert set(item) == {"case_id", "intent", "context"}
+            assert item["context"] == {"surface": case.surface, "note_state": case.note_state}
+            assert set(item["context"]) == {"surface", "note_state"}
+        assert call["developer_instructions"] == DECISION_INSTRUCTIONS
+    assert result["complete"] is True
+    # These are prompt-wiring checks. Semantic correctness is measured by the
+    # unchanged full live golden comparison, not by a fake executor's answers.
+    assert "execution readiness" in DECISION_INSTRUCTIONS
+    assert "indirect" in DECISION_INSTRUCTIONS.lower()
+    assert "does not authorize" in DECISION_INSTRUCTIONS

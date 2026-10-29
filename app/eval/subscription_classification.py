@@ -20,7 +20,7 @@ from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 
 MODELS = ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
 EFFORT = "low"
-DECISION_PROTOCOL = "subscription_intent_decision.v3"
+DECISION_PROTOCOL = "subscription_intent_decision.v4"
 DECISIONS: dict[str, tuple[str, str | None] | None] = {
     "abstain": None,
     "co_authoring": ("co_authoring", None),
@@ -30,10 +30,20 @@ DECISIONS: dict[str, tuple[str, str | None] | None] = {
 }
 DECISION_INSTRUCTIONS = (
     "Classify each user intent in an active note/canvas session. Return one decision per case. "
-    "First decide whether the intent can be resolved coherently from the supplied text alone. "
-    "If required context or referents are missing, or the requested states are mutually "
-    "incompatible without clarification, choose decision=abstain. "
-    "Do not invent an interpretation or select one side of an unresolved contradiction. "
+    "Recognize the requested route, separately from execution readiness. Classification "
+    "does not authorize a mutation or supply its execution arguments. The supplied context "
+    "describes the current surface and note state; use it with the intent. A reference to the "
+    "current note on an open canvas is grounded, and a named other note can identify the "
+    "requested route even when it is not open. Do not invent a target when neither text "
+    "nor context supplies one. Missing parameters needed to carry out a recognizable "
+    "request (such as a property value or the exact disposition of an unwanted note) "
+    "are for a later clarification at that route, not grounds to abstain from classification. "
+    "Indirect requests, suggestions, hedges, statements of desired state and rhetorical "
+    "questions can request change without an imperative. Determine whether the speaker "
+    "wants a change considered, rather than requiring explicit execution permission. "
+    "Choose abstain when the desired operation itself is unresolvable from text/context, "
+    "or requested states are mutually incompatible without clarification. Do not invent "
+    "an operation from a missing antecedent or select one side of a contradiction. "
     "Otherwise choose exactly one of these concrete decisions:\n"
     "- co_authoring: edits to the current note body.\n"
     "- exploratory: questions, reasoning, comparison, planning or discussion without a "
@@ -99,7 +109,8 @@ def run_comparison(executor: CodexCliExecutor, models: tuple[str, ...] = MODELS)
     shuffled = list(cases)
     random.Random(3429).shuffle(shuffled)
     opaque_to_local = {f"case-{i:03d}": c.id for i, c in enumerate(shuffled)}
-    inputs = [{"case_id": opaque, "intent": c.utterance}
+    inputs = [{"case_id": opaque, "intent": c.utterance,
+               "context": {"surface": c.surface, "note_state": c.note_state}}
               for opaque, c in zip(opaque_to_local, shuffled)]
     expected_ids = set(opaque_to_local)
     answer_schema = {"type": "object", "properties": {
