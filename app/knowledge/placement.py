@@ -738,13 +738,13 @@ class KnowledgePlacementOwner:
         }
 
     def _authority(self, intent: PlacementIntent) -> None:
+        self.write_guard.assert_writes_allowed(f"operation.{intent.operation}")
         if not self.authority_is_current(intent):
             raise WritesBlockedError(
                 "rejected",
                 "the bound placement delegation/policy is no longer current",
                 f"operation.{intent.operation}",
             )
-        self.write_guard.assert_writes_allowed(f"operation.{intent.operation}")
 
     @contextmanager
     def _parents(
@@ -776,11 +776,6 @@ class KnowledgePlacementOwner:
         self._live(root, state)
         self._path(intent.source)
         self._path(intent.destination)
-        self._authority(intent)
-        GovernedWriteAdapter().validate_decision_token(
-            decision_token=self._token(record),
-            **self._grant_binding(intent),
-        )
         with self._parents(
             root, PurePosixPath(intent.source), PurePosixPath(intent.destination)
         ) as (current_src, current_dst):
@@ -790,6 +785,11 @@ class KnowledgePlacementOwner:
                 _inode(os.fstat(dst)),
             ]:
                 raise KnowledgeWriteConflict("placement parent generation changed")
+        self._authority(intent)
+        GovernedWriteAdapter().validate_decision_token(
+            decision_token=self._token(record),
+            **self._grant_binding(intent),
+        )
         self._unexpired()
         require_authority_deadline(admission_deadline)
 

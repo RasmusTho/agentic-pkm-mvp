@@ -28,6 +28,7 @@ def archived_host(tmp_path, monkeypatch):
     _write_retention_window(host.root, days=30)
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
+    host.archive_root = archive_root
     metadata = SimpleNamespace(archive_id=_ARCHIVE_REF, mountpoint=archive_root)
 
     def qualify(*args, **kwargs):
@@ -144,3 +145,195 @@ def test_archive_qualifies_explicit_member_of_multi_binding_selection(archived_h
         json={**_command(host, "artifact.restore", "other-restore"), "target_binding_id": other})
     assert result.status_code == 200 and result.json()["status"] == "not_supported", result.text
     assert Path(host.runtime.registry.load().registrations[other].path).is_dir()
+
+
+@pytest.mark.parametrize("method", ["register_cold_representation", "_activate_representation_locked"])
+def test_raw_memory_final_verification_cannot_stale_authority(archived_host, monkeypatch, method):
+    host = archived_host
+    native = getattr(raw_store._MemoryRawStore, method)
+    verify = raw_store.decrypt_and_verify_raw_bytes
+    state = {"cleared": False}
+
+    def waited(*args, **kwargs):
+        result = verify(*args, **kwargs)
+        if not state["cleared"]:
+            state["cleared"] = True
+            host.clear_selection()
+        return result
+
+    def owner(self, *args, **kwargs):
+        with monkeypatch.context() as patch:
+            patch.setattr(raw_store, "decrypt_and_verify_raw_bytes", waited)
+            return native(self, *args, **kwargs)
+
+    monkeypatch.setattr(raw_store._MemoryRawStore, method, owner)
+    result = host.client.post("/api/operations", headers=host.headers, json=_command(host))
+    assert state["cleared"] and result.status_code == 200, result.text
+    assert result.json()["status"] == "recovery_required", result.text
+    active = [row for row in raw_store.all_raw_representations(host.raw_record.id) if row.active]
+    assert len(active) == 1 and active[0].storage_kind == "postgres_hot"
+    if method == "register_cold_representation":
+        assert len(raw_store.all_raw_representations(host.raw_record.id)) == 1
+
+
+@pytest.mark.parametrize("transition", ["clear", "expiry"])
+def test_archive_policy_tail_refuses_post_fsync_publication(archived_host, monkeypatch, transition):
+    host = archived_host
+    from app.write_guard import DEFAULT_WRITE_GUARD
+    import app.api.operation_runtime as runtime
+    checked = DEFAULT_WRITE_GUARD.assert_writes_allowed
+    state = {"armed": False, "calls": 0, "changed": False}
+
+    def stage(current):
+        if current == "after_archive_lock":
+            state["armed"] = True
+
+    def health(action):
+        result = checked(action)
+        if state["armed"]:
+            state["calls"] += 1
+            if state["calls"] == 2:
+                state["changed"] = True
+                if transition == "clear":
+                    host.clear_selection()
+                else:
+                    monkeypatch.setattr(runtime, "time", lambda: 4102444800)
+        return result
+
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", stage)
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "assert_writes_allowed", health)
+    result = host.client.post("/api/operations", headers=host.headers, json=_command(host))
+    assert state["changed"] and result.status_code == 200, result.text
+    assert result.json()["status"] == "recovery_required", result.text
+    assert not list(host.archive_root.glob("manifests/*.json"))
+    assert all(not row.active or row.storage_kind == "postgres_hot"
+               for row in raw_store.all_raw_representations(host.raw_record.id))
+
+
+@pytest.mark.parametrize("boundary", ["verify", "set_config", "first_update"])
+def test_pg_activation_checks_between_actual_statement_boundaries(archived_host, monkeypatch, boundary):
+    """Use real native authority/verification; substitute only the DB cursor port."""
+    host = archived_host
+    from app.governance.governed_write import InvalidDecisionTokenError
+    record = host.raw_record
+    representation = raw_store.all_raw_representations(record.id)[0]
+    state = {"admitted": True, "updates": []}
+    verify = raw_store.decrypt_and_verify_raw_bytes
+
+    def waited(*args, **kwargs):
+        result = verify(*args, **kwargs)
+        if boundary == "verify":
+            state["admitted"] = False
+        return result
+
+    def require_current():
+        if not state["admitted"]:
+            raise InvalidDecisionTokenError("authority changed at the DB wait port")
+
+    class Cursor:
+        query = ""
+
+        def execute(self, query, args):
+            self.query = query
+            if "set_config" in query and boundary == "set_config":
+                state["admitted"] = False
+            if query.startswith("UPDATE"):
+                state["updates"].append(query)
+                if boundary == "first_update":
+                    state["admitted"] = False
+
+        def fetchone(self):
+            if "SELECT content_identity" in self.query:
+                return (record.content_identity,)
+            return (representation.storage_kind, representation.location_ref,
+                    representation.ciphertext, representation.nonce,
+                    representation.raw_generation, representation.archive_token,
+                    representation.archive_generation)
+
+    monkeypatch.setattr(raw_store, "decrypt_and_verify_raw_bytes", waited)
+    with raw_liveness.raw_relocation_fence(record_id=record.id,
+        content_identity=record.content_identity, effect_check=require_current) as authority:
+        with pytest.raises(InvalidDecisionTokenError):
+            raw_store._PgRawStore._activate_with_cursor(Cursor(), record.id,
+                representation.id, key=_KEY, authority=authority)
+    assert len(state["updates"]) == (1 if boundary == "first_update" else 0)
+    assert raw_store.all_raw_representations(record.id)[0].active
+
+
+def test_memory_hot_registration_checks_after_verification(archived_host, monkeypatch):
+    host = archived_host
+    from app.governance.governed_write import InvalidDecisionTokenError
+    from uuid import uuid4
+    verify = raw_store.decrypt_and_verify_raw_bytes
+    state = {"admitted": True}
+    record = host.raw_record
+
+    def waited(*args, **kwargs):
+        result = verify(*args, **kwargs)
+        state["admitted"] = False
+        return result
+
+    def require_current():
+        if not state["admitted"]:
+            raise InvalidDecisionTokenError("authority changed during hot verification")
+
+    monkeypatch.setattr(raw_store, "decrypt_and_verify_raw_bytes", waited)
+    with raw_liveness.raw_relocation_fence(record_id=record.id,
+        content_identity=record.content_identity, effect_check=require_current) as authority:
+        with pytest.raises(InvalidDecisionTokenError):
+            raw_store.register_raw_representation(record_id=record.id,
+                ciphertext=record.ciphertext, nonce=record.nonce, key_ref=record.key_ref,
+                key=_KEY, representation_id=str(uuid4()), _authority=authority)
+    assert len(raw_store.all_raw_representations(record.id)) == 1
+
+
+def test_cold_location_rechecks_after_owner_lookup_wait(archived_host, monkeypatch):
+    host = archived_host
+    lookup = raw_liveness.cold_cleanup_location_is_pending
+    state = {"cleared": False}
+
+    def waited(location):
+        result = lookup(location)
+        if not state["cleared"]:
+            state["cleared"] = True
+            host.clear_selection()
+        return result
+
+    monkeypatch.setattr(raw_liveness, "cold_cleanup_location_is_pending", waited)
+    result = host.client.post("/api/operations", headers=host.headers, json=_command(host))
+    assert state["cleared"] and result.status_code == 200, result.text
+    assert result.json()["status"] == "recovery_required", result.text
+    assert not raw_store._cold_location_paths
+    assert all(not row.active or row.storage_kind == "postgres_hot"
+               for row in raw_store.all_raw_representations(host.raw_record.id))
+
+
+def test_restore_receipt_mutex_wait_rechecks_before_append(archived_host, monkeypatch):
+    host = archived_host
+    assert host.client.post("/api/operations", headers=host.headers,
+                            json=_command(host)).json()["status"] == "succeeded"
+    command = _command(host, "artifact.restore", "receipt-lock-refusal")
+    native_append = raw_read_gate._MemoryReceiptStore.append
+    state = {"cleared": False}
+
+    def append(self, receipt, **kwargs):
+        native_lock = self._lock
+
+        class Lock:
+            def __enter__(self):
+                native_lock.acquire()
+                state["cleared"] = True
+                host.clear_selection()
+
+            def __exit__(self, *args):
+                native_lock.release()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(self, "_lock", Lock())
+            return native_append(self, receipt, **kwargs)
+
+    monkeypatch.setattr(raw_read_gate._MemoryReceiptStore, "append", append)
+    result = host.client.post("/api/operations", headers=host.headers, json=command)
+    assert state["cleared"] and result.status_code == 200, result.text
+    assert result.json()["status"] == "recovery_required", result.text
+    assert not raw_read_gate.all_raw_read_receipts()

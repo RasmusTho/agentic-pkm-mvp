@@ -258,19 +258,21 @@ def build_production_operation_runtime(
                                  context=context, target_binding_id=target_binding_id)
 
         def validate_token(*_: Any) -> bool:
-            if runtime.selection_check is None:
-                return False
-            runtime.selection_check()
-            if context.expires_at is None or context.expires_at <= time():
-                raise InvalidDecisionTokenError("operation authority expired at native effect")
-            gov.validate_decision_token(decision_token=grant.decision_token, **binding)
-            gov.validate_context(grant.decision_token, context=context, target_binding_id=target_binding_id)
+            # Policy/health ports can wait or reenter. End with only the
+            # captured record, immutable token/context and deadline checks.
             DEFAULT_WRITE_GUARD.assert_writes_allowed(action)
             if operation_id in {"artifact.archive", "artifact.restore"}:
                 from app.heimdal.raw_read_gate import resolve_read_allowlist
                 from app.heimdal.local_archive import OPERATION_RESTORE_SERVICE
                 if OPERATION_RESTORE_SERVICE not in resolve_read_allowlist():
                     raise InvalidDecisionTokenError("fixed archive reader no longer admitted")
+            if runtime.selection_check is None:
+                return False
+            runtime.selection_check()
+            gov.validate_decision_token(decision_token=grant.decision_token, **binding)
+            gov.validate_context(grant.decision_token, context=context, target_binding_id=target_binding_id)
+            if context.expires_at is None or context.expires_at <= time():
+                raise InvalidDecisionTokenError("operation authority expired at native effect")
             return True
 
         def require_effect() -> None:
@@ -317,7 +319,7 @@ def build_production_operation_runtime(
             # MVR-05C window through native source and authority receipts.
             with context_bound_write_window(context, target_binding_id=target_binding_id,
                 token=grant.decision_token, registry_store=registry,
-                effect_check=runtime.selection_check, **binding):
+                effect_check=require_effect, **binding):
                 return canonical[operation_id](item)
 
         handlers = {name: invoke_owner for name in EFFECTS if name not in unavailable}

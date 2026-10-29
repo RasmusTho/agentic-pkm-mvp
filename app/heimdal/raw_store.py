@@ -399,6 +399,7 @@ def register_cold_location(
     verified_volume: object,
     raw_generation: int,
     representation_id: str,
+    effect_check: Callable[[], None] | None = None,
 ) -> None:
     """Bind one exact cold owner under a verified-volume capability."""
     parsed = _parse_cold_location_ref(location_ref)
@@ -455,6 +456,8 @@ def register_cold_location(
             raise RawRepresentationDeletionError(
                 "cold location is already bound to a different raw generation"
             )
+        if effect_check is not None:
+            effect_check()
         _cold_location_paths[location_ref] = object_path
         _cold_location_ownership[location_ref] = ownership
 
@@ -1756,7 +1759,7 @@ class _MemoryRawStore:
                     raise ValueError("representation id replay does not match registered bytes")
                 if activate:
                     existing = self._activate_representation_locked(
-                        record_id, representation_id, key=key
+                        record_id, representation_id, key=key, authority=authority
                     )
                 return existing, False
             representation = RawRepresentation(
@@ -1772,11 +1775,14 @@ class _MemoryRawStore:
                 sequence=len(self._representation_ids_by_record.get(record_id, [])),
                 raw_generation=mutation_authority.generation,
             )
+            raw_liveness.require_raw_mutation_authority(
+                authority, record_id=record_id, content_identity=identity.content_identity,
+            )
             self._representations[representation.id] = representation
             self._representation_ids_by_record.setdefault(record_id, []).append(representation.id)
             if activate:
                 representation = self._activate_representation_locked(
-                    record_id, representation.id, key=key
+                    record_id, representation.id, key=key, authority=authority
                 )
             return representation, True
 
@@ -1848,12 +1854,15 @@ class _MemoryRawStore:
                 archive_token=archive_token,
                 archive_generation=archive_generation,
             )
+            raw_liveness.require_raw_mutation_authority(
+                authority, record_id=record_id, content_identity=identity.content_identity,
+            )
             self._representations[representation.id] = representation
             self._representation_ids_by_record.setdefault(record_id, []).append(representation.id)
             return representation, True
 
     def _activate_representation_locked(
-        self, record_id: str, representation_id: str, *, key: bytes
+        self, record_id: str, representation_id: str, *, key: bytes, authority: object
     ) -> RawRepresentation:
         target = self._representations.get(representation_id)
         if target is None or target.record_id != record_id:
@@ -1868,6 +1877,11 @@ class _MemoryRawStore:
             _representation_ciphertext(target),
             target.nonce,
             key=key,
+        )
+        from app.heimdal import raw_liveness
+
+        raw_liveness.require_raw_mutation_authority(
+            authority, record_id=record_id, content_identity=identity.content_identity,
         )
         for current_id in self._representation_ids_by_record.get(record_id, []):
             current = self._representations[current_id]
@@ -1895,7 +1909,7 @@ class _MemoryRawStore:
                 record_id=record_id,
                 content_identity=identity.content_identity,
             )
-            return self._activate_representation_locked(record_id, representation_id, key=key)
+            return self._activate_representation_locked(record_id, representation_id, key=key, authority=authority)
 
     def all_representations(self, record_id: str) -> List[RawRepresentation]:
         with self._lock:
@@ -3152,6 +3166,9 @@ class _PgRawStore:
             nonce,
             key=key,
         )
+        raw_liveness.require_raw_mutation_authority(
+            authority, record_id=record_id, content_identity=str(identity_row[0]),
+        )
         cur.execute(
             f"""
             INSERT INTO {_REPRESENTATION_TABLE} (
@@ -3199,7 +3216,7 @@ class _PgRawStore:
             ):
                 raise ValueError("representation id replay does not match registered bytes")
         if activate:
-            self._activate_with_cursor(cur, record_id, representation_id, key=key)
+            self._activate_with_cursor(cur, record_id, representation_id, key=key, authority=authority)
             cur.execute(
                 f"SELECT {_REPRESENTATION_SELECT_COLUMNS} "
                 f"FROM {_REPRESENTATION_TABLE} WHERE id = %s",
@@ -3238,6 +3255,9 @@ class _PgRawStore:
             content_identity=str(identity_row[0]),
         )
         decrypt_and_verify_raw_bytes(str(identity_row[0]), ciphertext, nonce, key=key)
+        raw_liveness.require_raw_mutation_authority(
+            authority, record_id=record_id, content_identity=str(identity_row[0]),
+        )
         cur.execute(
             f"""
             INSERT INTO {_REPRESENTATION_TABLE} (
@@ -3297,6 +3317,7 @@ class _PgRawStore:
         representation_id: str,
         *,
         key: bytes,
+        authority: object,
     ) -> None:
         cur.execute(
             f"SELECT content_identity FROM {_TABLE} WHERE id = %s FOR UPDATE",
@@ -3340,14 +3361,24 @@ class _PgRawStore:
             bytes(target_row[3]),
             key=key,
         )
+        from app.heimdal import raw_liveness
+
+        def require_current() -> None:
+            raw_liveness.require_raw_mutation_authority(
+                authority, record_id=record_id, content_identity=str(identity_row[0]),
+            )
+
+        require_current()
         cur.execute(
             "SELECT set_config(%s, 'true', true)",
             (_REPRESENTATION_ACTIVATION_GUARD_SETTING,),
         )
+        require_current()
         cur.execute(
             f"UPDATE {_REPRESENTATION_TABLE} SET active = false " "WHERE record_id = %s AND active",
             (record_id,),
         )
+        require_current()
         cur.execute(
             f"UPDATE {_REPRESENTATION_TABLE} SET active = true WHERE id = %s",
             (representation_id,),
@@ -3364,7 +3395,7 @@ class _PgRawStore:
         from app.heimdal import raw_liveness
 
         cur = raw_liveness.pg_cursor_for_raw_mutation(authority, record_id=record_id)
-        self._activate_with_cursor(cur, record_id, representation_id, key=key)
+        self._activate_with_cursor(cur, record_id, representation_id, key=key, authority=authority)
         cur.execute(
             f"SELECT {_REPRESENTATION_SELECT_COLUMNS} "
             f"FROM {_REPRESENTATION_TABLE} WHERE id = %s",

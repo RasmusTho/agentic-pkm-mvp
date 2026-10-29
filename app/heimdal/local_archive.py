@@ -720,6 +720,7 @@ def _relocate_raw_record_owner_native(
                     verified_volume=volume_proof,
                     raw_generation=mutation_authority.generation,
                     representation_id=representation_id,
+                    effect_check=effect_check,
                 )
                 try:
                     cold, _ = raw_store.register_cold_raw_representation(

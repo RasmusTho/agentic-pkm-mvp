@@ -110,6 +110,11 @@ state-owner checks after waits. These optional native ports narrow the existing 
 they never mint delegation, key/reader authority or a replacement receipt. Existing non-operation
 producers keep their native authority paths. A refused optional capture effect preserves the
 already-durable main capture and its AuthorityReceipt.
+Policy/health and reader work precede the final captured-record/token/context/expiry checks.
+Append and optional proposal guards run after path/open preparation, placement checks follow its
+last parent probes, and raw representation checks follow verification and each activation SQL
+wait. Receipt finalization and ownership-proved cleanup preserve earlier source truth rather than
+requesting new forward authority.
 
 ## Commands
 

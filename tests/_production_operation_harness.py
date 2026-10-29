@@ -23,6 +23,13 @@ class OperationHost:
     selection: dict
     headers: dict
 
+    def clear_selection(self):
+        from app.api.routes.active_context_selection import build_selection_service, get_selection_store
+        service = build_selection_service(get_selection_store())
+        derived = service.derive("trusted_loopback")
+        service.selection_store.clear(self.selection["context_selection_id"],
+            principal=derived.principal, instance_identity=derived.instance_identity)
+
     def command(self, operation_id="artifact.update", request_id="update-1", **updates):
         data = dict(operation_id=operation_id, request_id=request_id,
             active_context_ref=self.selection["context"]["context_id"],
