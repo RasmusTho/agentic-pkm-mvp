@@ -1,6 +1,6 @@
-State: Active specification directory. DEBRIEF-01 (#3334) has repository implementation;
-DEBRIEF-02 has repository synthesis support; DEBRIEF-03 review remains separate work. Parent #3331 is the
-capability acceptance hub.
+State: Active specification directory. DEBRIEF-01 (#3334), DEBRIEF-02 (#3333) and DEBRIEF-03 (#3332)
+have repository implementation; the composed fixture loop is covered. Parent #3331 is the capability
+acceptance hub and still owes the authorized test-channel receipt.
 System-level source of truth for the Episode Debrief capability: when the Episode Resolution Engine
 closes an episode, synthesize a provenance-cited debrief note — decisions made, commitments taken, open
 loops, key captures — the retro the owner never has time to run. Grounded in
@@ -48,9 +48,11 @@ obsolete closure event cannot trigger an open note or substitute a scope. Emissi
 cursor advancement; retry derives the same identity and the canonical outbox key suppresses a
 duplicate. A missing event or a cursor already past it does not prevent reconciliation.
 
-DEBRIEF-02/#3333 and DEBRIEF-03/#3332, composed capability acceptance and the authorized test-channel
-receipt remain outstanding. Repository fixtures do not establish live synthesis, review,
-deployment or operator acceptance.
+DEBRIEF-02/#3333 and DEBRIEF-03/#3332 are delivered in the repository, and
+`tests/episode_debrief/test_capability_end_to_end.py::test_fixture_closure_full_loop` composes
+closure, trigger, synthesis, companion review and redelivery on migrated PostgreSQL. The authorized
+test-channel receipt remains outstanding. Repository fixtures do not establish live synthesis,
+review, deployment or operator acceptance.
 
 ## What this capability consumes from ERE (read-only; nothing here re-decides ERE's contracts)
 
@@ -151,7 +153,7 @@ each remaining child's own dependencies; parent acceptance remains open.
   trigger, one synthesized candidate debrief (four sourced sections) linked from the Episode note via
   `debrief_ref`, surfaced in the companion UI, and dispositioned (accept or dismiss) with a receipt and
   no deletion. Verify: `tests/episode_debrief/test_capability_end_to_end.py::test_fixture_closure_full_loop`
-  (lands with DEBRIEF-03)
+  (landed with DEBRIEF-03, #3332)
 - [ ] Episode bounds and human-owned Episode note content are never mutated by any task in this
   capability. Verify: `tests/episode_debrief/test_synthesis.py::test_synthesis_never_mutates_episode_note_content`
 - [ ] Exactly one debrief per closure, idempotent under at-least-once redelivery and repeated
@@ -167,7 +169,7 @@ each remaining child's own dependencies; parent acceptance remains open.
 
 **Filed 2026-07-07.** Parent feature issue **#3331** is the separate live-validation hub (see
 [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). DEBRIEF-01 → **#3334** has repository
-implementation; DEBRIEF-02 → **#3333** depends on it; DEBRIEF-03 → **#3332** depends on DEBRIEF-02.
+implementation; DEBRIEF-02 → **#3333** and DEBRIEF-03 → **#3332** have repository implementation.
 The original ERE prerequisite block is historical. GitHub Issues own execution state; this directory
 owns the capability contract and distinguishes partial repository delivery from full acceptance.
 
