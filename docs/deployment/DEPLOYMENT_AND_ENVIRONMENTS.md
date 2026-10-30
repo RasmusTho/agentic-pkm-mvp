@@ -1312,6 +1312,17 @@ application/runtime loaded-source provenance remains mandatory. Source support d
 not qualify any actual private input or grant a later native read, reload, installation
 or parent acceptance; those still require the separate whole-operation admission.
 
+At the initial `Unit_DropInPaths` selector, the first failed predicate is reported
+only as one finite category: `cardinality`, `allowed_parent`, `basename_length`, or
+`basename_grammar`. Classification uses the original already-read property and keeps
+cardinality before element shape, then checks parent, basename length, and basename
+grammar in the existing order. Empty selection and valid singleton behavior do not
+change. The diagnostic exposes no actual count, path, property value, exception,
+digest, or other private input. Accepted selections and prebackup refusal/effect
+boundaries remain unchanged. Legacy absent, coarse, value, and `selection` receipts
+remain valid. Source26 does not identify the actual failed predicate and establishes
+neither a source defect nor native acceptance.
+
 The production `FixedBwsService._config` qualifies each selected control PATH slot
 using retained no-follow directory handles and metadata only. An absent slot needs
 an unchanged existing ancestor and absent edge. An existing directory admits at
