@@ -399,7 +399,7 @@ def test_dev_probe_isolates_saved_incident_environment(tmp_path, monkeypatch, sa
     {"PROBE_BASE_URL": "http://:18000"}, {"PROBE_BASE_URL": "http://127.0.0.1:bogus"},
     {"PROBE_BASE_URL": "http://127.0.0.1:99999"}, {"PROBE_BASE_URL": "http://127.0.0.1:0"},
     {"PROBE_BASE_URL": "http://bad host"}, {"PROBE_BASE_URL": "http://synthetic/path\nsegment"},
-    {"PROBE_BASE_URL": "http://synthetic/\x00"},
+    {"PROBE_BASE_URL": "http://synthetic/\x7f"},
     {"WORKER_HEARTBEAT_PATH": ""}, {"WORKER_HEARTBEAT_PATH": "relative.json"},
     {"PROBE_STATE_FILE": None}, {"PROBE_STATE_FILE": "relative.state"},
     {"PROBE_ALERT_CHANNEL": ""}, {"PROBE_ALERT_CHANNEL": "invalid"},
