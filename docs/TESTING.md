@@ -408,6 +408,8 @@ content and body, and admission retains its original hash. This exact passive-na
 adds no source effect or permission; unrelated Markdown remains unqualified.
 The existing layout owner must also resolve a valid configuration note inside that vault; admission
 hash-binds only that selected layout note rather than permitting other Markdown in its directory.
+The common native guard rechecks these exact passive path identities and bytes before effects and
+native observations. The first freeze also rejects intervening file or link inventory changes.
 An unavailable archive environment blocks qualification; it is not an unsupported operation family.
 Neither the producer nor the runner initializes a vault, provisions a principal, grants consent,
 changes configuration or repairs projections.

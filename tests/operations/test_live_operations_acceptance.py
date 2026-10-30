@@ -20,6 +20,59 @@ from tests.operations._surface_harness import runtime_http
 pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 
+@pytest.mark.parametrize("case", ["note", "directory-link"])
+def test_added_source_between_preparation_and_freeze_is_refused(tmp_path, monkeypatch, case):
+    instance = host(tmp_path, monkeypatch, freeze=False)
+    if case == "note":
+        (instance.root / "Notes/intervening.md").write_text("Unqualified intervening source.\n")
+    else:
+        (instance.root / "intervening-alias").symlink_to(instance.root / "Notes", target_is_directory=True)
+    def snapshot():
+        return {str(path): "link:" + str(path.readlink()) if path.is_symlink() else file_hash(path)
+                for path in instance.root.rglob("*") if path.is_file() or path.is_symlink()}
+    before = snapshot()
+    frozen = instance.client.post("/api/operations/acceptance/admission", json={}, headers=instance.headers)
+    assert frozen.status_code == 409 and frozen.json()["detail"] == "fixture_changed_before_freeze"
+    original = read_private(instance.runtime.registry.path.parent / CONTEXT_FILE)
+    assert original["selection"] is None and original["slots"] is None
+    assert before == snapshot()
+
+
+@pytest.mark.parametrize("case", ["layout", "briefing", "layout-selection"])
+def test_frozen_passive_facts_are_rechecked_before_effect_and_probe(tmp_path, monkeypatch, case):
+    from app.briefing.compose import briefing_note_path
+    from app.briefing.trigger import _local_now
+    from app.vault.layout import load_layout
+    from app.vault.manager import VaultContext
+    from app.operations.execution_kernel import JsonReceiptStore
+    instance = host(tmp_path, monkeypatch)
+    original = read_private(instance.runtime.registry.path.parent / CONTEXT_FILE)
+    layout = load_layout(instance.root).note_path
+    briefing = briefing_note_path(
+        vault_context=VaultContext(status="selected", active_vault_path=str(instance.root)),
+        for_date=_local_now(None).date())
+    if case == "layout-selection":
+        alternate = layout.parent / "alternate-layout.md"
+        alternate.write_bytes(layout.read_bytes())
+        monkeypatch.setenv("VAULT_LAYOUT_NOTE_REL", alternate.relative_to(instance.root).as_posix())
+    else:
+        target = layout if case == "layout" else briefing
+        target.write_text(target.read_text() + "Changed frozen passive prestate.\n")
+    before = {str(path): file_hash(path) for path in instance.root.rglob("*") if path.is_file()}
+    slot = next(row for row in original["slots"] if row["id"] == "edit")
+    command = {**slot["intent"], "request_id": "post-freeze-passive-" + case,
+        "active_context_ref": instance.selection["context"]["context_id"],
+        "vault_generation": str(instance.selection["context"]["generation"]),
+        "target_binding_id": instance.binding_id}
+    response = instance.client.post("/api/operations", json=command, headers=instance.headers)
+    assert response.status_code == 200 and response.json()["status"] == "rejected", response.text
+    store = JsonReceiptStore(instance.runtime.registry.path.parent / "operation-receipts.json")
+    assert store.lookup("ygg.acceptance:" + OPERATION + ":edit") is None
+    with pytest.raises(OperationsAcceptanceRefusal, match="frozen_source_configuration_changed"):
+        native_probe(instance.runtime.registry.path)
+    assert before == {str(path): file_hash(path) for path in instance.root.rglob("*") if path.is_file()}
+
+
 @pytest.mark.parametrize("case", ["missing", "malformed", "undeclared", "layout-missing", "layout-malformed"])
 def test_native_preparation_requires_owner_validated_passive_navigation(tmp_path, monkeypatch, case):
     from app.api.native_operations_acceptance import prepare_native_context

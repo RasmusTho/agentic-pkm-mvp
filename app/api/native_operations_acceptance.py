@@ -148,9 +148,11 @@ def prepare_native_context(identity: dict[str, Any], *, registry_path: Path) -> 
         layout_path = load_layout(root).note_path
         if layout_path.is_symlink() or not layout_path.is_file() or not layout_path.resolve(strict=True).is_relative_to(root):
             raise ValueError("unqualified native layout path")
-        native_configuration = {layout_path.resolve(strict=True).relative_to(root).as_posix()}
+        layout_relative = layout_path.resolve(strict=True).relative_to(root).as_posix()
+        native_configuration = {layout_relative}
     except Exception:
         raise OperationsAcceptanceRefusal("canonical_fixture_layout_unqualified") from None
+    passive_paths = {"layout": layout_relative}
     from app.briefing.trigger import BRIEFING_ENABLED, _local_now
     from app.briefing.compose import briefing_note_path, load_briefing
     from app.vault.manager import VaultContext
@@ -168,6 +170,7 @@ def prepare_native_context(identity: dict[str, Any], *, registry_path: Path) -> 
         if original_briefing is None:
             raise OperationsAcceptanceRefusal("native_navigation_first_contact_not_passive")
         passive_derived.add(briefing.relative_to(root).as_posix())
+        passive_paths["briefing"] = briefing.relative_to(root).as_posix()
     previous = load_context(registry_path, observation_only=True)
     if previous is not None:
         if (previous["identity"] != identity
@@ -227,7 +230,8 @@ def prepare_native_context(identity: dict[str, Any], *, registry_path: Path) -> 
             "principal_record_sha256": file_hash(local_operator_principal_path(registry_path)),
             "registry_sha256": file_hash(registry_path),
             "instance_identity": snapshot.app_install_id, "registry_revision": snapshot.revision,
-            "sources": sources, "raw_source": raw_source, "files": files}, "selection": None, "slots": None}
+            "sources": sources, "raw_source": raw_source, "files": files,
+            "passive_paths": passive_paths}, "selection": None, "slots": None}
     write_private(registry_path.parent / CONTEXT_FILE, context, create=True)
     return public_binding(context)
 
@@ -285,9 +289,18 @@ def freeze_admission(body: FixedAdmission, request: Request, api_key: str | None
                             raise OperationsAcceptanceRefusal("required_native_archive_environment_unqualified")
                     if context["fixture"].get("raw_source") is None:
                         raise OperationsAcceptanceRefusal("canonical_raw_fixture_missing")
-                for relative, expected in context["fixture"]["files"].items():
-                    if file_hash(Path(context["fixture"]["root"]) / relative) != expected:
-                        raise OperationsAcceptanceRefusal("fixture_changed_before_freeze")
+                root = Path(context["fixture"]["root"])
+                try:
+                    observed_files = {}
+                    for path in sorted(root.rglob("*")):
+                        if path.is_symlink():
+                            raise ValueError("changed fixture path")
+                        if path.is_file():
+                            observed_files[path.relative_to(root).as_posix()] = file_hash(path)
+                except Exception:
+                    raise OperationsAcceptanceRefusal("fixture_changed_before_freeze") from None
+                if observed_files != context["fixture"]["files"]:
+                    raise OperationsAcceptanceRefusal("fixture_changed_before_freeze")
                 slots = []
                 for template in fixed_intents(context):
                     operation = OperationRequest(template["operation_id"], "freeze:" + template["id"], runtime.context,

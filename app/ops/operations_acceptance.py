@@ -197,6 +197,31 @@ def require_native_fixture(context: dict[str, Any], registry: Any) -> None:
         current_settings["_heimdal/settings.md"] = file_hash(heimdal)
     if current_settings != {name: value for name, value in fixture["files"].items() if name.startswith("settings/") or name == "_heimdal/settings.md"}:
         raise OperationsAcceptanceRefusal("frozen_source_configuration_changed")
+    # Derive the same fixed passive facts from their current native owners;
+    # the private context records original identity/bytes, never permission.
+    try:
+        from app.vault.layout import load_layout
+        from app.vault.manager import VaultContext
+        from app.briefing.compose import briefing_note_path
+        from app.briefing.trigger import BRIEFING_ENABLED, _local_now
+        root = Path(fixture["root"])
+        current_passive = {"layout": load_layout(root).note_path}
+        if BRIEFING_ENABLED:
+            current_passive["briefing"] = briefing_note_path(
+                vault_context=VaultContext(status="selected", active_vault_path=str(root)),
+                for_date=_local_now(None).date())
+        observed_paths = {}
+        for kind, target in current_passive.items():
+            if any(path.is_symlink() for path in (target, *target.parents) if path.is_relative_to(root)):
+                raise ValueError("aliased passive path")
+            relative = target.resolve(strict=True).relative_to(root).as_posix()
+            if file_hash(target) != fixture["files"].get(relative):
+                raise ValueError("changed passive prestate")
+            observed_paths[kind] = relative
+        if observed_paths != fixture.get("passive_paths"):
+            raise ValueError("changed native passive selection")
+    except Exception:
+        raise OperationsAcceptanceRefusal("frozen_source_configuration_changed") from None
 
 
 def require_runtime(context: dict[str, Any], runtime: Any, *, frozen: bool = True) -> None:
