@@ -402,6 +402,10 @@ binding, restore/rollback/lock state and exact known synthetic Markdown seeds mu
 the existing configured capture path is used. There may be no extra human notes, links or symlinked
 sources. TEST also needs its known encrypted raw fixture, active consent bound to the same existing
 principal/instance/binding, retention policy, qualified archive volume and fixed restore reader/key.
+The native registry must retain the selected vault as its last-active restore target. With briefing
+enabled, today's canonical derived briefing must already exist: its owner validates the structured
+content and body, and admission retains its original hash. This exact passive-navigation artifact
+adds no source effect or permission; unrelated Markdown remains unqualified.
 An unavailable archive environment blocks qualification; it is not an unsupported operation family.
 Neither the producer nor the runner initializes a vault, provisions a principal, grants consent,
 changes configuration or repairs projections.

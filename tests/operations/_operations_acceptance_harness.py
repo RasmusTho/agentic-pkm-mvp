@@ -93,6 +93,14 @@ def host(tmp_path, monkeypatch, *, channel="test", freeze=True, prepare=True):
         qualify_raw_fixture(runtime, root, registration.vault_binding_id, tmp_path, monkeypatch)
     else:
         monkeypatch.delenv("PKM_CONFIG_ROOT", raising=False)
+    # Construct the ordinary derived first-contact prestate before native
+    # qualification. The runner must only observe it, never generate it.
+    from app.briefing.compose import compose_briefing
+    from app.briefing.trigger import BRIEFING_ENABLED, _local_now
+    from app.write_guard import WriteGuard
+    if BRIEFING_ENABLED:
+        compose_briefing(vault_context=selected_context, for_date=_local_now(None).date(),
+                        write_guard=WriteGuard(lambda: {"state": "healthy"}))
     active_context_selection.reset_selection_store_for_tests()
     client = TestClient(app)
     selected = client.post("/api/companion/active-context/selection", json={"vault_binding_ids": [registration.vault_binding_id]})

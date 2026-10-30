@@ -20,6 +20,34 @@ from tests.operations._surface_harness import runtime_http
 pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 
+@pytest.mark.parametrize("case", ["missing", "malformed", "undeclared"])
+def test_native_preparation_requires_owner_validated_passive_navigation(tmp_path, monkeypatch, case):
+    from app.api.native_operations_acceptance import prepare_native_context
+    from app.briefing.compose import briefing_note_path, load_briefing
+    from app.briefing.trigger import BRIEFING_ENABLED, _local_now
+    from app.vault.manager import VaultContext
+    assert BRIEFING_ENABLED
+    instance = host(tmp_path, monkeypatch, freeze=False, prepare=False)
+    context = VaultContext(status="selected", active_vault_path=str(instance.root))
+    today = _local_now(None).date()
+    target = briefing_note_path(vault_context=context, for_date=today)
+    assert load_briefing(vault_context=context, for_date=today) is not None
+    if case == "missing":
+        target.unlink()
+        reason = "native_navigation_first_contact_not_passive"
+    elif case == "malformed":
+        target.write_text(target.read_text() + "Unstructured extra body.\n")
+        reason = "native_navigation_briefing_unqualified"
+    else:
+        (instance.root / "Notes/undeclared.md").write_text("Undeclared human source.\n")
+        reason = "undeclared_fixture_source"
+    before = {str(path): file_hash(path) for path in instance.root.rglob("*") if path.is_file()}
+    with pytest.raises(OperationsAcceptanceRefusal, match=reason):
+        prepare_native_context(instance.identity, registry_path=instance.runtime.registry.path)
+    assert before == {str(path): file_hash(path) for path in instance.root.rglob("*") if path.is_file()}
+    assert not (instance.runtime.registry.path.parent / CONTEXT_FILE).exists()
+
+
 @pytest.mark.parametrize("channel", ["test", "dev"])
 def test_channel_entrypoints_enforce_native_operations_admission(tmp_path, monkeypatch, capsys, channel):
     from tests.operations.live_operations_acceptance import main
@@ -45,6 +73,14 @@ def test_channel_entrypoints_enforce_native_operations_admission(tmp_path, monke
     assert all("expected_version" in slot["intent"] for slot in frozen.json()["slots"])
     native = instance.runtime.registry.path.parent / CONTEXT_FILE
     original = read_private(native)
+    from app.briefing.compose import briefing_note_path
+    from app.briefing.trigger import _local_now
+    from app.vault.manager import VaultContext
+    briefing = briefing_note_path(
+        vault_context=VaultContext(status="selected", active_vault_path=str(instance.root)),
+        for_date=_local_now(None).date())
+    assert original["fixture"]["files"][briefing.relative_to(instance.root).as_posix()] == file_hash(briefing)
+    assert len(original["slots"]) == (15 if channel == "test" else 1)
     for mutate in (lambda x: x["identity"].update(channel="prod"),
                    lambda x: x["identity"]["sidecar"].update(source_sha="0" * 40),
                    lambda x: x.update(expires_at=0)):

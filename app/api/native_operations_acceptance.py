@@ -144,13 +144,22 @@ def prepare_native_context(identity: dict[str, Any], *, registry_path: Path) -> 
         or local_identity.get("localInstanceId") != registration.local_instance_id):
         raise OperationsAcceptanceRefusal("canonical_fixture_instance_identity_mismatch")
     from app.briefing.trigger import BRIEFING_ENABLED, _local_now
-    from app.briefing.compose import briefing_note_path
+    from app.briefing.compose import briefing_note_path, load_briefing
     from app.vault.manager import VaultContext
+    passive_derived = set()
     if BRIEFING_ENABLED:
-        briefing = briefing_note_path(vault_context=VaultContext(status="selected", active_vault_path=str(root)),
-                                     for_date=_local_now(None).date())
+        briefing_context = VaultContext(status="selected", active_vault_path=str(root))
+        briefing_date = _local_now(None).date()
+        briefing = briefing_note_path(vault_context=briefing_context, for_date=briefing_date)
         if briefing.is_symlink() or not briefing.is_file() or not briefing.resolve(strict=True).is_relative_to(root):
             raise OperationsAcceptanceRefusal("native_navigation_first_contact_not_passive")
+        try:
+            original_briefing = load_briefing(vault_context=briefing_context, for_date=briefing_date)
+        except Exception:
+            raise OperationsAcceptanceRefusal("native_navigation_briefing_unqualified") from None
+        if original_briefing is None:
+            raise OperationsAcceptanceRefusal("native_navigation_first_contact_not_passive")
+        passive_derived.add(briefing.relative_to(root).as_posix())
     previous = load_context(registry_path, observation_only=True)
     if previous is not None:
         if (previous["identity"] != identity
@@ -178,6 +187,7 @@ def prepare_native_context(identity: dict[str, Any], *, registry_path: Path) -> 
         if target.is_file():
             relative = target.relative_to(root).as_posix()
             if (target.suffix == ".md" and relative not in {s["path"] for s in sources.values()}
+                and relative not in passive_derived
                 and not relative.startswith("settings/") and relative != "_heimdal/settings.md"):
                 raise OperationsAcceptanceRefusal("undeclared_fixture_source")
             files[relative] = file_hash(target)
