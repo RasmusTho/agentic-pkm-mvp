@@ -406,6 +406,8 @@ The native registry must retain the selected vault as its last-active restore ta
 enabled, today's canonical derived briefing must already exist: its owner validates the structured
 content and body, and admission retains its original hash. This exact passive-navigation artifact
 adds no source effect or permission; unrelated Markdown remains unqualified.
+The existing layout owner must also resolve a valid configuration note inside that vault; admission
+hash-binds only that selected layout note rather than permitting other Markdown in its directory.
 An unavailable archive environment blocks qualification; it is not an unsupported operation family.
 Neither the producer nor the runner initializes a vault, provisions a principal, grants consent,
 changes configuration or repairs projections.

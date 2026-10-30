@@ -19,7 +19,7 @@ from app.api.routes import active_context_selection, capture
 from app.instance.local_operator_principal import AuthPosture
 from app.instance.runtime import open_default_vault_service
 from app.instance.vault_registry import AppLocalSettingsStore
-from app.ops.operations_acceptance import PROFILE, SELECTION_HASH, file_hash
+from app.ops.operations_acceptance import PROFILE, SELECTION_HASH, OperationsAcceptanceRefusal, file_hash
 from tests._mvr_default_vault_harness import new_runtime, activate
 from tests._mvr03_principal_harness import run_principal_cutover
 from tests.api._vault_test_helpers import bind_initialized_vault
@@ -108,10 +108,19 @@ def host(tmp_path, monkeypatch, *, channel="test", freeze=True, prepare=True):
     selection = selected.json()
     headers = {"X-Active-Context-Session": selection["context_selection_id"]}
     facts = identity(channel)
-    public = prepare_native_context(facts, registry_path=runtime.registry.path) if prepare else None
+    fixture_files = {path.relative_to(root).as_posix(): file_hash(path)
+                     for path in sorted(root.rglob("*")) if path.is_file()}
+    try:
+        public = prepare_native_context(facts, registry_path=runtime.registry.path) if prepare else None
+    except OperationsAcceptanceRefusal as exc:
+        # Retain actual temporary prestate in original failure evidence:
+        # synthetic relative paths and hashes only, never contents/carriers.
+        exc.add_note("Temporary fixture file inventory: " + json.dumps(fixture_files, sort_keys=True))
+        raise
     result = SimpleNamespace(runtime=runtime, root=root, binding_id=registration.vault_binding_id,
         artifact_id=sources["read"]["artifact_id"], note=root / sources["read"]["path"],
-        client=client, selection=selection, headers=headers, sources=sources, identity=facts, initial=public)
+        client=client, selection=selection, headers=headers, sources=sources, identity=facts, initial=public,
+        fixture_files=fixture_files)
     if freeze:
         frozen = client.post("/api/operations/acceptance/admission", json={}, headers=headers)
         assert frozen.status_code == 200, frozen.text

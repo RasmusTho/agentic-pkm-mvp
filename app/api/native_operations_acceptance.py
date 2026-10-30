@@ -143,6 +143,14 @@ def prepare_native_context(identity: dict[str, Any], *, registry_path: Path) -> 
     if (vault_identity.get("vaultId") != registration.vault_id
         or local_identity.get("localInstanceId") != registration.local_instance_id):
         raise OperationsAcceptanceRefusal("canonical_fixture_instance_identity_mismatch")
+    from app.vault.layout import load_layout
+    try:
+        layout_path = load_layout(root).note_path
+        if layout_path.is_symlink() or not layout_path.is_file() or not layout_path.resolve(strict=True).is_relative_to(root):
+            raise ValueError("unqualified native layout path")
+        native_configuration = {layout_path.resolve(strict=True).relative_to(root).as_posix()}
+    except Exception:
+        raise OperationsAcceptanceRefusal("canonical_fixture_layout_unqualified") from None
     from app.briefing.trigger import BRIEFING_ENABLED, _local_now
     from app.briefing.compose import briefing_note_path, load_briefing
     from app.vault.manager import VaultContext
@@ -187,6 +195,7 @@ def prepare_native_context(identity: dict[str, Any], *, registry_path: Path) -> 
         if target.is_file():
             relative = target.relative_to(root).as_posix()
             if (target.suffix == ".md" and relative not in {s["path"] for s in sources.values()}
+                and relative not in native_configuration
                 and relative not in passive_derived
                 and not relative.startswith("settings/") and relative != "_heimdal/settings.md"):
                 raise OperationsAcceptanceRefusal("undeclared_fixture_source")

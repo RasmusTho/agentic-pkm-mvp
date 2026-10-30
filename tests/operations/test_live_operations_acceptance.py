@@ -20,11 +20,12 @@ from tests.operations._surface_harness import runtime_http
 pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 
-@pytest.mark.parametrize("case", ["missing", "malformed", "undeclared"])
+@pytest.mark.parametrize("case", ["missing", "malformed", "undeclared", "layout-missing", "layout-malformed"])
 def test_native_preparation_requires_owner_validated_passive_navigation(tmp_path, monkeypatch, case):
     from app.api.native_operations_acceptance import prepare_native_context
     from app.briefing.compose import briefing_note_path, load_briefing
     from app.briefing.trigger import BRIEFING_ENABLED, _local_now
+    from app.vault.layout import load_layout
     from app.vault.manager import VaultContext
     assert BRIEFING_ENABLED
     instance = host(tmp_path, monkeypatch, freeze=False, prepare=False)
@@ -38,9 +39,16 @@ def test_native_preparation_requires_owner_validated_passive_navigation(tmp_path
     elif case == "malformed":
         target.write_text(target.read_text() + "Unstructured extra body.\n")
         reason = "native_navigation_briefing_unqualified"
-    else:
+    elif case == "undeclared":
         (instance.root / "Notes/undeclared.md").write_text("Undeclared human source.\n")
         reason = "undeclared_fixture_source"
+    else:
+        layout = load_layout(instance.root).note_path
+        if case == "layout-missing":
+            layout.unlink()
+        else:
+            layout.write_bytes(b"\xffMalformed native layout encoding.\n")
+        reason = "canonical_fixture_layout_unqualified"
     before = {str(path): file_hash(path) for path in instance.root.rglob("*") if path.is_file()}
     with pytest.raises(OperationsAcceptanceRefusal, match=reason):
         prepare_native_context(instance.identity, registry_path=instance.runtime.registry.path)
@@ -73,6 +81,7 @@ def test_channel_entrypoints_enforce_native_operations_admission(tmp_path, monke
     assert all("expected_version" in slot["intent"] for slot in frozen.json()["slots"])
     native = instance.runtime.registry.path.parent / CONTEXT_FILE
     original = read_private(native)
+    assert original["fixture"]["files"] == instance.fixture_files
     from app.briefing.compose import briefing_note_path
     from app.briefing.trigger import _local_now
     from app.vault.manager import VaultContext
@@ -80,6 +89,9 @@ def test_channel_entrypoints_enforce_native_operations_admission(tmp_path, monke
         vault_context=VaultContext(status="selected", active_vault_path=str(instance.root)),
         for_date=_local_now(None).date())
     assert original["fixture"]["files"][briefing.relative_to(instance.root).as_posix()] == file_hash(briefing)
+    from app.vault.layout import load_layout
+    layout = load_layout(instance.root).note_path
+    assert original["fixture"]["files"][layout.relative_to(instance.root).as_posix()] == file_hash(layout)
     assert len(original["slots"]) == (15 if channel == "test" else 1)
     for mutate in (lambda x: x["identity"].update(channel="prod"),
                    lambda x: x["identity"]["sidecar"].update(source_sha="0" * 40),
