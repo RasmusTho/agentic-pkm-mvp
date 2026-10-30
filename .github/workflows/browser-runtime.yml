@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           proof="$RUNNER_TEMP/operations-acceptance.xml"
-          pytest -q --junitxml="$proof" \
+          pytest -q --junitxml="$proof" --basetemp="$RUNNER_TEMP/operations-acceptance-tmp" \
             tests/companion_ui/test_live_operations_acceptance.py::test_served_companion_journeys_use_same_native_receipts \
             tests/operations/test_cross_surface_conformance.py::test_human_and_agent_flows_share_authority_and_recovery_semantics
           python - "$proof" <<'PY'
@@ -100,7 +100,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: operations-source-proof-${{ github.sha }}
-          path: ${{ runner.temp }}/operations-acceptance.xml
+          path: |
+            ${{ runner.temp }}/operations-acceptance.xml
+            ${{ runner.temp }}/operations-acceptance-tmp/**/browser-actions.json
+            ${{ runner.temp }}/operations-acceptance-tmp/**/browser-actions.failure.json
           if-no-files-found: error
 
       # #5958: adds missing/skip detection for the required five-case proof.

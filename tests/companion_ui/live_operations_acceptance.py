@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import importlib.metadata
+import json
 from pathlib import Path
+from time import monotonic
 from urllib.parse import parse_qs, urlparse
 
 from app.ops.operations_acceptance import OperationsAcceptanceRefusal, file_hash, write_private
+from app.operations.contracts import OperationStatus
 
 
 def browser_journeys(journey):
@@ -13,6 +16,8 @@ def browser_journeys(journey):
     rows = []
     errors = []
     external = []
+    started = monotonic()
+    primary_error = None
     with sync_playwright() as playwright:
         admitted_browser = journey.binding["identity"]["sidecar"].get("browser")
         executable = Path(admitted_browser["executable"] if admitted_browser else playwright.chromium.executable_path)
@@ -40,9 +45,21 @@ def browser_journeys(journey):
         def observe_response(response):
             path = urlparse(response.url).path
             if path.startswith("/api/operations"):
+                try:
+                    body = response.json()
+                except Exception as response_error:
+                    reason = "original_response_body_unavailable:" + type(response_error).__name__
+                    errors.append(reason)
+                    body = {"observation_error": reason}
                 rows.append({"method": response.request.method, "path": path,
                     "request": response.request.post_data_json if response.request.method == "POST" else None,
-                    "http_status": response.status, "response": response.json()})
+                    "http_status": response.status, "response": body,
+                    "observed_after_seconds": monotonic() - started})
+
+        def retain_original(path, trace):
+            if journey.bearer in json.dumps(trace):
+                raise OperationsAcceptanceRefusal("browser_trace_contains_selection_carrier")
+            write_private(path, trace, create=True)
 
         page.route("**/*", guard)
         page.on("response", observe_response)
@@ -168,12 +185,49 @@ def browser_journeys(journey):
             trace = {"kind": "original_served_browser_actions", "responses": rows,
                      "page_errors": errors, "external_requests": external, "browser_runtime": observed_browser}
             path = journey.directory / "browser-actions.json"
-            write_private(path, trace, create=True)
+            retain_original(path, trace)
             for name in ("browser_discovery", "browser_selected_preflight", "browser_confirmation_progress",
                          "browser_cancel", "browser_receipt_recovery", "browser_conflict"):
                 journey.observations[name]["artifacts"][path.name] = file_hash(path)
                 write_private(journey.directory / (name + ".observation.json"), journey.observations[name])
             page.screenshot(path=str(journey.directory / "browser-final.png"))
+        except BaseException as exc:
+            primary_error = exc
+            try:
+                # Retain the original response, including a legitimate refusal
+                # without a journal receipt. Never collect headers, cookies,
+                # arbitrary DOM, URLs or a HAR to diagnose an ownership race.
+                allowed = {str(value) for value in OperationStatus} | {
+                    "pending", "partial", "not_completed", "cancelled"}
+                statuses = []
+                visible_error = None
+                try:
+                    visible = page.locator("#operations-progress > p").all_text_contents()
+                    statuses = [text.removeprefix("Runtime status: ") for text in visible
+                        if text.startswith("Runtime status: ")
+                        and text.removeprefix("Runtime status: ") in allowed]
+                except Exception as observation_error:
+                    visible_error = type(observation_error).__name__
+                trace = {"kind": "original_served_browser_failure", "complete": False,
+                    "responses": rows, "page_errors": errors, "external_requests": external,
+                    "browser_runtime": observed_browser, "visible_runtime_statuses": statuses,
+                    "visible_status_observation_error": visible_error,
+                    "captured_after_seconds": monotonic() - started,
+                    "last_completed_scenario": next(reversed(journey.observations), None)}
+                retain_original(journey.directory / "browser-actions.failure.json", trace)
+                exc.add_note("Original browser failure evidence: browser-actions.failure.json")
+            except BaseException as capture_error:
+                exc.add_note("Original browser failure evidence unavailable: " + type(capture_error).__name__)
+            raise
         finally:
-            context.close()
-            browser.close()
+            cleanup_errors = []
+            for close in (context.close, browser.close):
+                try:
+                    close()
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+            if primary_error is not None:
+                for cleanup_error in cleanup_errors:
+                    primary_error.add_note("Browser cleanup failed: " + type(cleanup_error).__name__)
+            elif cleanup_errors:
+                raise cleanup_errors[0]
