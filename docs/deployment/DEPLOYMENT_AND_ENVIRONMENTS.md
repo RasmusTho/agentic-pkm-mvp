@@ -1270,11 +1270,47 @@ supported format is exactly one byte-preserved typed `PATH=` assignment with at
 most 16 distinct canonical absolute components (at most 32 components per path),
 including the fixed control root or its descendants. Empty, relative, traversing,
 duplicate or unsupported hints refuse. EnvironmentFiles, ambient environment
-imports, unit drop-ins and unsupported mount/root/namespace overrides must be
-absent. Both OLD and proposed launchers remain free of control hints; the absolute
+imports and unsupported mount/root/namespace overrides must be absent. Unit
+drop-ins are absent except for the finite preserved-input profile below. Both OLD and proposed launchers remain free of control hints; the absolute
 launcher/interpreter, loaded-source provenance and writer/quiescence gates remain
 independently mandatory. Complete Environment bytes and ordering are bound into
 the private lifecycle/generation projection; child runtime-bin prepending is unchanged.
+
+The captured-empty PATH branch also accepts exactly one selected `.conf` file in
+`/etc/systemd/system/yggdrasil-bws-deploy@<dev|test>.service.d/` or the corresponding
+`yggdrasil-bws-deploy@.service.d/` template directory. Its non-hidden ASCII basename
+is selected by grammar (at most 80 characters), with no guessed name or historical
+author requirement. The protected root-owned no-follow chain must end in a regular,
+singly linked, non-executable file of at most 4096 bytes. Its entire syntax is two
+newline-terminated lines: `[Service]` and `Environment=PATH=<value>`, optionally with
+one pair of double quotes around the complete assignment. PATH retains the above
+component bounds and admits only ASCII letters, digits, underscore, dot, slash,
+colon, plus and hyphen; whitespace, expansion, escaping, continuation, resets,
+extra directives and sections refuse. Only this selected file is read; no other
+configuration content or directory content census is needed. Its bytes are preserved.
+
+The parsed assignment must exactly equal the sole typed loaded Environment PATH
+value. The existing namespace, exec, environment-import, root and trigger guards
+remain mandatory. Additional typed evidence must show `NeedDaemonReload=false`,
+`StandardOutput=StandardError=null`, `UMask=0077`, empty `LoadCredential`, and the
+canonical encrypted-credential metadata pair `bws-machine-account-token` to
+`/var/lib/yggdrasil/bws-tokens/<channel>/current`. Credential payloads, SetCredential
+properties and credential files are never read. The file version/content projection,
+PATH and these effective settings join the private service/generation contract and
+all existing qualification, prebackup, prestop, candidate, closing and restoration
+checks. Unsupported, missing or wrongly typed evidence refuses without value-bearing
+diagnostics. The additional retained file/ancestors and fresh verification walk are
+included in descriptor admission; preparation subtracts already retained demand.
+
+This is finite invariant-relevant loaded semantic proof, not historical loaded-unit
+raw-byte identity. `NeedDaemonReload=false` is only a supplementary pending-change
+guard; matching timestamps or disk hashes cannot establish loaded semantics. The
+existing trusted-root/systemd assumption and separately admitted operational window
+remain prerequisites. The BWS caller reservation does not exclude arbitrary root
+writers or manager reloads (including `install_host_probe.py::_install`). Independent
+application/runtime loaded-source provenance remains mandatory. Source support does
+not qualify any actual private input or grant a later native read, reload, installation
+or parent acceptance; those still require the separate whole-operation admission.
 
 The production `FixedBwsService._config` qualifies each selected control PATH slot
 using retained no-follow directory handles and metadata only. An absent slot needs

@@ -374,23 +374,24 @@ def _source_descriptor_peak(roots: Mapping[str, Root], changes: tuple[Change, ..
         _refuse("descriptor_capacity_unknown")
     try:
         from app.ops.bws_installation_lifecycle import (
-            _control_projection_descriptor_bound, _CONTROL_PATH_MAX_DIRECTORIES,
+            _control_projection_descriptor_bound, _control_path_descriptor_bound,
         )
         control_projection_fd_peak = _control_projection_descriptor_bound()
+        control_path_fd_peak = _control_path_descriptor_bound()
     except Exception:
         _refuse("descriptor_capacity_unknown")
     if type(control_projection_fd_peak) is not int or control_projection_fd_peak < 0:
         _refuse("descriptor_capacity_unknown")
     if (type(control_path_fds_already_open) is not int
-            or not 0 <= control_path_fds_already_open <= _CONTROL_PATH_MAX_DIRECTORIES
+            or not 0 <= control_path_fds_already_open <= control_path_fd_peak
             or (control_path_fds_already_open and not runtime_fd_already_open)):
         _refuse("descriptor_capacity_unknown")
     runtime_fd = 0 if runtime_fd_already_open else 1
     lifecycle_transients = _SOURCE_DESCRIPTOR_TRANSIENT_RESERVE - runtime_fd
     handle_peak = max(prepared, applied, compensated)
     return max(
-        handle_peak + lifecycle_transients + _CONTROL_PATH_MAX_DIRECTORIES,
-        handle_peak + runtime_fd + source_inventory_fd_peak + _CONTROL_PATH_MAX_DIRECTORIES,
+        handle_peak + lifecycle_transients + control_path_fd_peak,
+        handle_peak + runtime_fd + source_inventory_fd_peak + control_path_fd_peak,
         # FixedBwsService._config retains this bounded source-only projection
         # while the prepared handle and runtime reader remain held.
         handle_peak + runtime_fd + control_projection_fd_peak,

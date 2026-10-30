@@ -157,6 +157,28 @@ coarse gate remain readable and immutable. A classified refusal still has null o
 new and backup hashes and cannot reach prepare, backup, stop or apply. All original
 guards, their invocation order and retained-runtime cleanup remain binding.
 
+The captured-empty control-PATH configuration supports the finite preserved PATH-only
+drop-in profile documented in [Native source preflight and recovery](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery):
+one protected selected `.conf` file in the fixed instance/template `/etc` unit
+directory, bounded two-line syntax and exact agreement with the sole typed loaded
+PATH assignment. Complete Environment bytes/order remain bound. Null output streams,
+UMask 0077, canonical encrypted-credential metadata and empty plain credentials are
+checked without credential payload/file reads; pending reload refuses. These added
+checks use existing coarse/family diagnostics and disclose no selected path, content,
+metadata, effective value, digest or backend exception.
+
+The preserved file/ancestor/mount projection is disjoint from application, control,
+launcher, backup and all staging/restoration effect parents, remains bound through
+same-handle compensation, and never authorizes configuration/control writes. Changed
+selection, content, lookup/mount edges or named effective settings refuse or retain
+phase-appropriate uncertainty. Legacy OLD still remains `compensated_stopped` without
+independent loaded-source restart proof. This proves named effective invariants under
+the existing trusted root/systemd and externally admitted window; it does not prove
+historical loaded-unit bytes. `NeedDaemonReload=false` is supplementary, and BWS caller
+reservation does not exclude arbitrary root writers or external manager reloads.
+Repository support does not qualify actual private input or authorize native/parent
+acceptance. Unsupported formats retain their refusal boundary.
+
 Initial unit-property diagnostics additionally use
 `old_kernel_initial_unit_properties__<site>__<kind>` from the **original** read or
 predicate. Kinds are `backend` (unavailable/failed bounded transport), `decode`
@@ -177,8 +199,8 @@ and `value` (an existing required-value predicate). Sites are the fixed
 last cleanup read after process qualification. Only baseline and PATH required
 configuration predicates admit `value`; launcher, cleanup, process and root
 semantic refusals keep their existing families. These are source symbols, never
-observed property values. Read order/count, compound-read ordering, accepted
-shapes and exact Environment/PATH bytes remain unchanged. Backend/typing labels
+observed property values. Existing read ordering, compound-read ordering and exact Environment/PATH bytes
+remain unchanged; the preserved-input branch adds its finite typed reads. Backend/typing labels
 do not establish the native cause; value mismatch grants no configuration repair
 authority. Exact supported exception type and complete allowlisted combinations
 are required; invalid metadata falls back to the existing family/coarse result.
