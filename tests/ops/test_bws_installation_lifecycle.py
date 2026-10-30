@@ -1758,12 +1758,50 @@ def install_unit_property_transport(module, patch, state, properties, fault=None
                 data = [[['PRIVATE_CANARY']]]
             if kind == 'value':
                 data = fault.get('data', 'PRIVATE_CANARY')
+            if kind == 'selection':
+                data = ['/PRIVATE_CANARY.conf']
+            if kind == 'nested':
+                data = [['PRIVATE_CANARY']]
         return SimpleNamespace(returncode=0, stdout=json.dumps(dict(type=signature, data=data)).encode(), stderr=b'')
     patch.setattr(module, '_run', real_run or _REAL_LIFECYCLE_RUN)
     # Isolate the Linux/root prerequisites to this lifecycle's OS port.
     patch.setattr(module, 'os', SimpleNamespace(**{**vars(module.os), 'geteuid': lambda: 0}))
     patch.setattr(module, 'sys', SimpleNamespace(**{**vars(module.sys), 'platform': 'linux'}))
     patch.setattr(module, 'subprocess', SimpleNamespace(**{**vars(module.subprocess), 'run': run}))
+
+
+@pytest.mark.parametrize('kind,expected', [
+    ('backend', 'backend'), ('decode', 'decode'), ('signature', 'signature'),
+    ('shape', 'shape'), ('nested', 'shape'), ('value', 'selection'),
+    ('unsupported', 'unsupported'),
+])
+def test_dropin_selection_and_read_refusals_are_distinct_and_finite(
+    monkeypatch, secure_tmp_path, capsys, kind, expected,
+):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    fault = dict(site='Unit_DropInPaths', kind='value' if kind == 'nested' else kind)
+    if kind == 'nested':
+        fault['data'] = [['PRIVATE_CANARY']]
+    elif kind == 'value':
+        fault['data'] = ['/PRIVATE_CANARY.conf']
+    install_unit_property_transport(lifecycle, monkeypatch, fixture.state, fixture.properties, fault)
+    if kind == 'unsupported':
+        typed = lifecycle._typed
+        def unclassified(argv, signature):
+            value = typed(argv, signature)
+            if argv[-1] == 'DropInPaths':
+                lifecycle._refuse('unit_properties')
+            return value
+        monkeypatch.setattr(lifecycle, '_typed', unclassified)
+    with fixture.service.retained_runtime():
+        with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+            fixture.service.qualify_old(**fixture.arguments)
+    assert caught.value.subgate == 'unit_properties'
+    assert caught.value.unit_property == ('Unit_DropInPaths', expected)
+    assert fixture.state['unit_trace'] == _UNIT_INITIAL_TRACE[:44]
+    assert fixture.service.runtime_close_completed and not fixture.state['events']
+    assert 'PRIVATE_CANARY' not in str(caught.value) + repr(caught.value.unit_property)
+    assert 'PRIVATE_CANARY' not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('site,kind', [
@@ -1782,6 +1820,8 @@ def test_initial_unit_property_sites_and_failure_kinds(monkeypatch, secure_tmp_p
         'Manager_GetUnit', 'Manager_GetUnitProcesses', 'Service_Environment', 'Service_EnvironmentFiles',
     } else kind)
     expected_kind = {'exception': 'backend', 'duplicate': 'decode', 'object': 'shape'}.get(kind, expected_kind)
+    if site == 'Unit_DropInPaths' and kind == 'value':
+        expected_kind = 'shape'
     expected_family = ('unit_properties' if kind != 'value' or site in _UNIT_VALUE_SITES
                        or expected_kind == 'shape' else semantic)
     if kind == 'rows':
