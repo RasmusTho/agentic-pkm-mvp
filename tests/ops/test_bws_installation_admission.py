@@ -483,6 +483,7 @@ def test_initial_unit_property_receipts_match_finite_contract(monkeypatch, tmp_p
                 for kind in ('backend', 'decode', 'signature', 'shape')}
     expected |= {(site, 'value') for site in _UNIT_VALUE_SITES}
     expected |= {('Unit_DropInPaths', 'selection'), ('Unit_DropInPaths', 'unsupported')}
+    expected |= {('Unit_DropInPaths', kind) for kind in lifecycle._DROPIN_SELECTOR_CATEGORIES}
     assert admission._UNIT_PROPERTY_REFINEMENTS == transaction._UNIT_PROPERTY_REFINEMENTS == expected
     assert lifecycle._UNIT_PROPERTY_REFINEMENTS == expected
     assert admission._PREBACKUP_REFUSAL_GATES == transaction._PREBACKUP_REFUSAL_GATES
@@ -514,9 +515,10 @@ def test_initial_unit_property_receipts_match_finite_contract(monkeypatch, tmp_p
         lease.complete(legacy)
 
 
-def test_dropin_diagnostic_contract_is_closed_and_legacy_compatible(monkeypatch, tmp_path):
+def test_dropin_selector_diagnostics_are_allowlisted_and_legacy_compatible(monkeypatch, tmp_path):
     from app.ops import bws_installation_lifecycle as lifecycle
     additions = {('Unit_DropInPaths', 'selection'), ('Unit_DropInPaths', 'unsupported')}
+    additions |= {('Unit_DropInPaths', kind) for kind in lifecycle._DROPIN_SELECTOR_CATEGORIES}
     assert additions <= lifecycle._UNIT_PROPERTY_REFINEMENTS
     assert admission._UNIT_PROPERTY_REFINEMENTS == transaction._UNIT_PROPERTY_REFINEMENTS
     assert admission._UNIT_PROPERTY_REFINEMENTS == lifecycle._UNIT_PROPERTY_REFINEMENTS
@@ -526,7 +528,8 @@ def test_dropin_diagnostic_contract_is_closed_and_legacy_compatible(monkeypatch,
     legacy = _receipt(request, status='refused_before_backup')
     prefix = 'old_kernel_initial_unit_properties__Unit_DropInPaths__'
     with admission.installation_admission(**request) as lease:
-        for kind in ('backend', 'decode', 'signature', 'shape', 'value', 'selection', 'unsupported'):
+        for kind in ('backend', 'decode', 'signature', 'shape', 'value', 'selection', 'unsupported',
+                     *sorted(lifecycle._DROPIN_SELECTOR_CATEGORIES)):
             for suffix in ('', '__provenance_unavailable'):
                 gate = prefix + kind + suffix
                 receipt = {**legacy, 'prebackup_gate': gate}

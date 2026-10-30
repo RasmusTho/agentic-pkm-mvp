@@ -670,7 +670,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     elif fault.startswith('unit-') and not fault.endswith(':valid'):
         _, site, kind = fault.split(':')
         expected_kind = ('shape' if kind == 'nested' or kind == 'value'
-                         and site in {'Service_Environment', 'Unit_DropInPaths'} else kind)
+                         and site in {'Service_Environment', 'Unit_DropInPaths'} else
+                         'allowed_parent' if site == 'Unit_DropInPaths' and kind == 'selection' else kind)
         unavailable = fault.partition(':')[0] in {'unit-missing', 'unit-mismatch', 'unit-origin', 'unit-candidate'}
         assert result['status'] == 'refused_before_backup', result
         assert result['prebackup_gate'] == ('old_kernel_initial_unit_properties__' + site + '__' + expected_kind
@@ -849,6 +850,37 @@ def test_initial_unit_property_diagnostics_cross_real_source_rpc(secure_tmp_path
     assert result['restored'] and result['source_only']
     assert result['status'] == ('installed' if kind == 'valid' else 'refused_before_backup')
     assert 'PRIVATE_CANARY' not in completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize(('fault', 'expected_gate', 'expected_status'), [
+    ('unit-:Unit_DropInPaths:cardinality',
+     'old_kernel_initial_unit_properties__Unit_DropInPaths__cardinality', 'refused_before_backup'),
+    ('unit-:Unit_DropInPaths:allowed_parent',
+     'old_kernel_initial_unit_properties__Unit_DropInPaths__allowed_parent', 'refused_before_backup'),
+    ('unit-:Unit_DropInPaths:basename_length',
+     'old_kernel_initial_unit_properties__Unit_DropInPaths__basename_length', 'refused_before_backup'),
+    ('unit-:Unit_DropInPaths:basename_grammar',
+     'old_kernel_initial_unit_properties__Unit_DropInPaths__basename_grammar', 'refused_before_backup'),
+    ('unit-:Unit_DropInPaths:valid', None, 'installed'),
+    ('path-preserved-valid', None, 'installed'),
+])
+def test_dropin_selector_diagnostics_cross_real_source_rpc(
+    secure_tmp_path, channel, fault, expected_gate, expected_status,
+):
+    with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
+        completed = subprocess.run(
+            [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(secure_tmp_path),
+             str(Path(__file__).resolve().parents[2]), channel, fault, str(Path(directory).resolve())],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
+        )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result['restored'] and result['source_only']
+    assert result['status'] == expected_status
+    assert result.get('prebackup_gate') == expected_gate
+    assert 'PRIVATE_CANARY' not in completed.stdout + completed.stderr
+    assert 'arbitrary-PATH-private-canary.conf' not in completed.stdout + completed.stderr
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
