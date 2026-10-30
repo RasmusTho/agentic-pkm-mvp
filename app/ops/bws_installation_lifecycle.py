@@ -141,8 +141,10 @@ class _ControlPathBinding:
     """
 
     def __init__(self, control: dict[str, Any], slots: tuple[str, ...],
-                 footprint: tuple[dict[str, Any], ...]) -> None:
+                 footprint: tuple[dict[str, Any], ...], effect_parents: tuple[str, ...]) -> None:
         self.control, self.slots, self.footprint = control, slots, footprint
+        self.effect_parents = effect_parents
+        self.close_uncertain = False
         self.fds: dict[str, tuple[int, tuple[int, ...]]] = {}
         self.closed = False
         self.snapshot: tuple[Any, ...] | None = None
@@ -157,8 +159,7 @@ class _ControlPathBinding:
         return (value.st_dev, value.st_ino, value.st_uid, value.st_gid,
                 stat.S_IMODE(value.st_mode), _control_path_mount(fd))
 
-    @staticmethod
-    def _close(fds: dict[str, tuple[int, tuple[int, ...]]]) -> bool:
+    def _close(self, fds: dict[str, tuple[int, tuple[int, ...]]]) -> bool:
         unknown = False
         for fd, identity in reversed(tuple(fds.values())):
             try:
@@ -170,7 +171,8 @@ class _ControlPathBinding:
             except Exception:
                 unknown = True
         fds.clear()
-        return not unknown
+        self.close_uncertain |= unknown
+        return not self.close_uncertain
 
     def close(self) -> None:
         self.closed = True
@@ -181,6 +183,8 @@ class _ControlPathBinding:
         opened: dict[str, tuple[int, tuple[int, ...]]] = {}
         keep = False
         try:
+            if self.close_uncertain:
+                _refuse('retained_runtime')
             for fd, identity in self.fds.values():
                 if self._identity(fd) != identity:
                     _refuse('root_control')
@@ -206,6 +210,7 @@ class _ControlPathBinding:
                     try:
                         os.close(fd)
                     except OSError:
+                        self.close_uncertain = True
                         _refuse('retained_runtime')
                     raise
                 opened[path] = (fd, identity)
@@ -226,6 +231,18 @@ class _ControlPathBinding:
                 fd = directory(path)
                 if opened[path][1][:5] != tuple(root[key] for key in ('device', 'inode', 'uid', 'gid', 'mode')):
                     _refuse('root_control')
+            if (type(self.effect_parents) is not tuple or not self.effect_parents
+                    or len(self.effect_parents) > _CONTROL_PATH_MAX_DIRECTORIES
+                    or any(type(path) is not str for path in self.effect_parents)
+                    or len(set(self.effect_parents)) != len(self.effect_parents)):
+                _refuse('root_control')
+            for path in self.effect_parents:
+                if not any(path == root['path'] or path.startswith(root['path'] + '/')
+                           for root in self.footprint[:2]):
+                    _refuse('root_control')
+                # Every admitted target's staging/replacement/restore parent,
+                # not just the top-level roots, must have this lookup view.
+                directory(path)
             control_fd = opened[self.control['path']][0]
             for name in ('app', 'scripts'):
                 try:
@@ -298,6 +315,7 @@ class _ControlPathBinding:
                     try:
                         os.close(current_fd)
                     except OSError:
+                        self.close_uncertain = True
                         _refuse('retained_runtime')
             snapshot = (tuple((p, identity) for p, (_fd, identity) in sorted(opened.items())),
                         tuple(observations))
@@ -814,6 +832,7 @@ class FixedBwsService:
         self.control_inventory_empty = False
         self.control_path_binding: _ControlPathBinding | None = None
         self.installation_footprint: tuple[dict[str, Any], ...] = ()
+        self.installation_effect_parents: tuple[str, ...] = ()
         self.launcher_before: bytes | None = None
         self.launcher_after: bytes | None = None
         self.new_pid: int | None = None
@@ -1023,7 +1042,9 @@ class FixedBwsService:
                     or self.installation_footprint[1]['path'] != str(Path(LAUNCHER).parent)):
                 _refuse('root_control')
             if self.control_path_binding is None:
-                self.control_path_binding = _ControlPathBinding(self.control, slots, self.installation_footprint)
+                self.control_path_binding = _ControlPathBinding(
+                    self.control, slots, self.installation_footprint, self.installation_effect_parents,
+                )
             elif self.control_path_binding.slots != slots:
                 _refuse('root_control')
             projection = self.control_path_binding.revalidate()
@@ -1071,6 +1092,7 @@ class FixedBwsService:
         control_root: dict[str, Any], launcher_content: dict[str, Any],
         control_inventory_empty: bool = False,
         installation_footprint: tuple[dict[str, Any], ...] = (),
+        installation_effect_parents: tuple[str, ...] = (),
     ) -> None:
         if (self.phase != 'unqualified' or (expected_service_identity is not None
                 and (type(expected_service_identity) is not str
@@ -1086,6 +1108,7 @@ class FixedBwsService:
         self.control = control
         self.control_inventory_empty = control_inventory_empty
         self.installation_footprint = installation_footprint
+        self.installation_effect_parents = installation_effect_parents
         if control['path'] == application['path']:
             _root_control_refuse('separation', mode=mode, role='roots')
         if not (control['path'] == CONTROL_DIRECTORY

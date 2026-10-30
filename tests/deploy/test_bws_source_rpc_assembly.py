@@ -241,17 +241,29 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 assert json.loads(permit.read_text())['operation_id'] == request['operation_id']
                 permit.unlink()
             state['consume_start'] = consume_start
-            if fault == 'path-close':
+            if fault in {'path-close', 'path-transient-initial', 'path-transient-prebackup'}:
                 original_close = lifecycle.os.close
                 def uncertain_close(fd):
                     binding = getattr(state.get('service'), 'control_path_binding', None)
-                    owned = binding is not None and binding.closed and any(
-                        record[0] == fd for record in binding.fds.values())
+                    owned = binding is not None and (
+                        (fault == 'path-close' and binding.closed and any(
+                            record[0] == fd for record in binding.fds.values()))
+                        or (fault == 'path-transient-initial' and binding.snapshot is None)
+                        or (fault == 'path-transient-prebackup' and binding.snapshot is not None and not binding.closed)
+                    )
                     original_close(fd)
                     if owned and not state.get('close_failed'):
                         state['close_failed'] = True
                         raise OSError('synthetic original close uncertainty')
                 patch.setattr(lifecycle.os, 'close', uncertain_close)
+            if fault == 'path-effect-alias':
+                target_info = (installed / 'app/ops').stat()
+                original_mount = lifecycle._control_path_mount
+                def mounted_target(fd):
+                    info = lifecycle.os.fstat(fd)
+                    mount = original_mount(fd)
+                    return mount + 1 if (info.st_dev, info.st_ino) == (target_info.st_dev, target_info.st_ino) else mount
+                patch.setattr(lifecycle, '_control_path_mount', mounted_target)
             real_service = transaction._NativePorts.service
             def service(ports, selected_channel):
                 value = real_service(ports, selected_channel)
@@ -457,6 +469,13 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                                              else "descriptor_capacity_unknown")
         assert not {"service", "stop", "start"} & set(state["events"])
         assert list(state["backups"].iterdir()) == []
+    elif fault == 'path-effect-alias':
+        assert result['status'] == 'refused_before_backup'
+        assert result['prebackup_gate'] == 'old_kernel_initial_root_control'
+        assert state['events'].count('stop') == state['events'].count('start') == 0
+        assert not list(state['backups'].iterdir())
+        assert state['service'].runtime_close_completed
+        assert not state['service'].control_path_binding.fds
     elif fault.startswith('path-'):
         service = state['service']
         assert result['status'] == ('compensated_stopped' if fault == 'path-partial' else 'installed'), (result, state.get('prepare_failure'))
@@ -544,7 +563,7 @@ def exercise_control_path_transaction(base, channel, slot):
              str(Path(__file__).resolve().parents[2]), channel, 'path-' + slot, str(Path(directory).resolve())],
             cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
         )
-    if slot == 'close':
+    if slot in {'close', 'transient-initial', 'transient-prebackup'}:
         assert completed.returncode == 78 and completed.stdout == '', completed.stderr
         owner = json.loads((base / 'receipts' / (channel + '.source-installation.lock')).read_text())
         assert owner['operation_id']

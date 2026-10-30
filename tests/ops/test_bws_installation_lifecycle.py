@@ -1429,7 +1429,9 @@ def control_path_fixture(monkeypatch, secure_tmp_path, *, channel='dev', slot='d
     service = lifecycle.FixedBwsService(unit=f'yggdrasil-bws-deploy@{channel}.service', channel=channel)
     payload = launcher.read_bytes()
     arguments = dict(application_root=identity(roots['application']), control_root=identity(control),
-                     control_inventory_empty=True, installation_footprint=tuple(identity(roots[n])
+                     control_inventory_empty=True,
+                     installation_effect_parents=(str(roots['application']), str(roots['launcher'])),
+                     installation_footprint=tuple(identity(roots[n])
                          for n in ('application', 'launcher', 'backup')),
                      launcher_content=dict(sha256=hashlib.sha256(payload).hexdigest(),
                                            base64=base64.b64encode(payload).decode()))

@@ -938,7 +938,8 @@ def test_all_matching_invalid_backup_is_transaction_refusal(case, fault):
         assert bundle.exists()
 
 
-def test_control_path_slot_descriptor_envelope_and_close_uncertainty(monkeypatch, secure_tmp_path):
+@pytest.mark.parametrize('close_site', ['retained', 'current', 'first_identity'])
+def test_control_path_slot_descriptor_envelope_and_close_uncertainty(monkeypatch, secure_tmp_path, close_site):
     from tests.ops.test_bws_installation_lifecycle import control_path_fixture
     from app.ops import bws_installation_lifecycle as lifecycle
     module = importlib.import_module('app.ops.bws_control_installation')
@@ -947,14 +948,18 @@ def test_control_path_slot_descriptor_envelope_and_close_uncertainty(monkeypatch
     original_open, original_close = lifecycle.os.open, lifecycle.os.close
     close_calls = []
     failed_fd = None
+    armed = False
     def tracked_open(*args, **kwargs):
         fd = original_open(*args, **kwargs)
         owned.add(fd)
         return fd
     def tracked_close(fd):
+        nonlocal failed_fd
         close_calls.append(fd)
         owned.discard(fd)
         original_close(fd)
+        if armed and failed_fd is None:
+            failed_fd = fd
         if fd == failed_fd:
             raise OSError('synthetic close uncertainty')
     monkeypatch.setattr(lifecycle.os, 'open', tracked_open)
@@ -974,8 +979,20 @@ def test_control_path_slot_descriptor_envelope_and_close_uncertainty(monkeypatch
             monkeypatch.setattr(module, '_source_descriptor_capacity_snapshot', lambda: (0, peak - 1, peak - 1))
             with pytest.raises(module.InstallationRefused, match='descriptor_capacity_insufficient'):
                 module._require_source_descriptor_capacity(roots, changes, backup, 1)
-            failed_fd = next(iter(fixture.service.control_path_binding.fds.values()))[0]
+            if close_site == 'retained':
+                failed_fd = next(iter(fixture.service.control_path_binding.fds.values()))[0]
             close_calls.clear()
+            armed = True
+            if close_site == 'first_identity':
+                retained = {record[0] for record in fixture.service.control_path_binding.fds.values()}
+                original_mount = lifecycle._control_path_mount
+                def mount(fd):
+                    if fd not in retained:
+                        raise OSError('synthetic metadata unavailable before retention')
+                    return original_mount(fd)
+                monkeypatch.setattr(lifecycle, '_control_path_mount', mount)
+            if close_site != 'retained':
+                fixture.service.control_path_binding.revalidate()
     assert not owned and not fixture.service.runtime_close_completed
     assert close_calls.count(failed_fd) == 1
     assert not fixture.service.control_path_binding.fds

@@ -3675,8 +3675,13 @@ def test_root_control_defensive_projection_rows_have_real_producer_invariants(mo
     })) == {'operation_id', 'candidate_sha', 'image_digest', 'bundle_name'}
 
 
-def test_control_path_slots_bind_complete_effect_footprint(monkeypatch, secure_tmp_path):
+@pytest.mark.parametrize('mode', ['manifest', 'effect-alias'])
+def test_control_path_slots_bind_complete_effect_footprint(monkeypatch, secure_tmp_path, mode):
     import base64
+    if mode == 'effect-alias':
+        from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
+        assert exercise_control_path_transaction(secure_tmp_path, 'dev', mode)['status'] == 'refused_before_backup'
+        return
     from tests.ops.test_bws_installation_lifecycle import configure_control_path_service
     case = _empty_control_manifest_case(monkeypatch, secure_tmp_path)
     unrelated = case.control_root / 'unrelated'
@@ -3704,6 +3709,7 @@ def test_control_path_slots_bind_complete_effect_footprint(monkeypatch, secure_t
             arguments = dict(application_root=dict(path=str(case.app_root), **case.profile['roots']['application']),
                 control_root=dict(path=str(case.control_root), **case.profile['roots']['control']),
                 control_inventory_empty=True, installation_footprint=selected,
+                installation_effect_parents=proof['control_path_effect_parents'],
                 launcher_content=dict(sha256=transaction._sha(raw), base64=base64.b64encode(raw).decode()))
             if selected == footprint:
                 service.qualify_old(**arguments)
@@ -3717,7 +3723,7 @@ def test_control_path_slots_bind_complete_effect_footprint(monkeypatch, secure_t
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
-@pytest.mark.parametrize('fault', ['partial', 'close'])
+@pytest.mark.parametrize('fault', ['partial', 'close', 'transient-initial', 'transient-prebackup'])
 def test_control_path_slots_restore_original_generation(secure_tmp_path, channel, fault):
     from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
     result = exercise_control_path_transaction(secure_tmp_path, channel, fault)

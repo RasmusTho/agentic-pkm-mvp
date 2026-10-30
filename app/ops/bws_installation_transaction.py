@@ -1683,6 +1683,7 @@ def candidate_manifest(
             _refuse()
         candidate_files.sort(key=lambda row: (str(row["root"]), str(row["path"])))
         control_path_footprint: tuple[dict[str, Any], ...] = ()
+        control_path_effect_parents: tuple[str, ...] = ()
         if _captured_control_inventory_is_empty(profile):
             # Every lower effect (including random staging/restore names and the
             # entire backup bundle) stays inside these roots. No control write
@@ -1694,8 +1695,13 @@ def candidate_manifest(
                  "uid": root.uid, "gid": root.gid, "mode": root.mode}
                 for root in (roots["application"], roots["launcher"], backup_root)
             )
+            control_path_effect_parents = tuple(sorted({
+                str(PurePosixPath(roots[change.root].path) / PurePosixPath(change.path).parent)
+                for change in changes
+            }))
         return tuple(changes), payloads, {
             "backup_root": backup_root,
+            "control_path_effect_parents": control_path_effect_parents,
             "control_path_footprint": control_path_footprint,
             "changed_roots": sorted(changed_roots),
             "candidate_files": candidate_files,
@@ -2380,7 +2386,9 @@ class _NativePorts:
             return (not self._descriptor_prepare_uncertain
                     and (handle is None or (handle.state == "closed" and not handle._fds))
                     and (service is None or not service.runtime_context_started
-                         or service.runtime_close_completed is True))
+                         or (service.runtime_close_completed is True
+                             and not getattr(getattr(service, "control_path_binding", None),
+                                             "close_uncertain", False))))
         except Exception:
             return False
 
@@ -2531,9 +2539,13 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                     handle.close()
                 except Exception:
                     handle_close_uncertain = True
-            if start_revocation_uncertain or handle_close_uncertain:
-                # Preserve the channel owner if either the one-use start grant
-                # or same-process backup handle has unknown lifetime.
+            path_close_uncertain = bool(getattr(
+                getattr(service, "control_path_binding", None), "close_uncertain", False,
+            ))
+            if start_revocation_uncertain or handle_close_uncertain or path_close_uncertain:
+                # Preserve ownership even before backup: a later successful
+                # runtime close cannot turn uncertain PATH metadata closes into
+                # a terminal refusal. Never retry the uncertain original FD.
                 return False
             if phase == "before_backup" and receipt is None:
                 refusal_gate = (failure.gate if isinstance(failure, _PrebackupGateRefusal)
@@ -2654,6 +2666,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                             launcher_content=launcher_content,
                             control_inventory_empty=_captured_control_inventory_is_empty(old_state),
                             installation_footprint=manifest_proof.get("control_path_footprint", ()),
+                            installation_effect_parents=manifest_proof.get("control_path_effect_parents", ()),
                         )
                         prebackup_gate = "qualified_writer_snapshot"
                         current = _require_writer_snapshot(ports.preflight(effects, request), request)

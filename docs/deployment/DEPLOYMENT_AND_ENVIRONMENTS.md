@@ -1288,14 +1288,18 @@ inspection, recursive census or PATH/unit rewriting occurs. Linux mount identiti
 come from `statx` on held directories; unavailable mount metadata refuses.
 
 The actual candidate manifest binds the control projection to application,
-launcher and backup roots and requires zero control writes. These disjoint roots
-contain every admitted target, random staging/restore file and backup-bundle effect;
-retained and current namespace bindings are checked together. Qualification repeats
+launcher and backup roots and requires zero control writes. Every actual target
+parent is included in the retained/current mount projection, so a mount below an
+otherwise disjoint root cannot redirect staging, replacement or restoration into
+a control slot. These bounded directories contain every admitted target, random
+staging/restore file and backup-bundle effect; retained and current namespace
+bindings are checked together. Qualification repeats
 before backup, before stop, after apply/start, at closing boundaries and after
 same-handle compensation. The descriptor envelope includes retained directories,
 fresh verification walks and bounded enumeration alongside the installation handle;
 prepare charges only remaining demand. Every owned close is attempted once and
-uncertainty overrides a successful/refusal receipt. Compensation restores exact OLD
+uncertainty is sticky across transient and retained cleanup and overrides a
+successful/refusal receipt. Compensation restores exact OLD
 bytes and rechecks configuration/slots, retaining `compensated_stopped` when legacy
 OLD loaded-source provenance cannot authorize restart. Drift retains failure/UNKNOWN
 and never permits replay. Existing anchored roots keep their strict anchor checks.
