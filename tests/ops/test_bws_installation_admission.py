@@ -482,6 +482,7 @@ def test_initial_unit_property_receipts_match_finite_contract(monkeypatch, tmp_p
     expected = {(site, kind) for site in _UNIT_INITIAL_TRACE
                 for kind in ('backend', 'decode', 'signature', 'shape')}
     expected |= {(site, 'value') for site in _UNIT_VALUE_SITES}
+    expected |= {('Unit_DropInPaths', 'selection'), ('Unit_DropInPaths', 'unsupported')}
     assert admission._UNIT_PROPERTY_REFINEMENTS == transaction._UNIT_PROPERTY_REFINEMENTS == expected
     assert lifecycle._UNIT_PROPERTY_REFINEMENTS == expected
     assert admission._PREBACKUP_REFUSAL_GATES == transaction._PREBACKUP_REFUSAL_GATES
@@ -510,4 +511,33 @@ def test_initial_unit_property_receipts_match_finite_contract(monkeypatch, tmp_p
         for status in ('installed', 'compensated_restored', 'compensated_stopped', 'unknown', 'refused_before_stop'):
             with pytest.raises(admission.InstallationAdmissionRefused):
                 lease._validate_receipt({**_receipt(request, status=status), 'prebackup_gate': valid})
+        lease.complete(legacy)
+
+
+def test_dropin_diagnostic_contract_is_closed_and_legacy_compatible(monkeypatch, tmp_path):
+    from app.ops import bws_installation_lifecycle as lifecycle
+    additions = {('Unit_DropInPaths', 'selection'), ('Unit_DropInPaths', 'unsupported')}
+    assert additions <= lifecycle._UNIT_PROPERTY_REFINEMENTS
+    assert admission._UNIT_PROPERTY_REFINEMENTS == transaction._UNIT_PROPERTY_REFINEMENTS
+    assert admission._UNIT_PROPERTY_REFINEMENTS == lifecycle._UNIT_PROPERTY_REFINEMENTS
+    assert admission._PREBACKUP_REFUSAL_GATES == transaction._PREBACKUP_REFUSAL_GATES
+    _patch_directories(monkeypatch, tmp_path)
+    request = _request()
+    legacy = _receipt(request, status='refused_before_backup')
+    prefix = 'old_kernel_initial_unit_properties__Unit_DropInPaths__'
+    with admission.installation_admission(**request) as lease:
+        for kind in ('backend', 'decode', 'signature', 'shape', 'value', 'selection', 'unsupported'):
+            for suffix in ('', '__provenance_unavailable'):
+                gate = prefix + kind + suffix
+                receipt = {**legacy, 'prebackup_gate': gate}
+                assert lease._validate_receipt(receipt) == receipt
+                assert transaction._receipt(request, status='refused_before_backup', old_generation=None,
+                    new_generation=None, backup_manifest=None, prebackup_gate=gate) == receipt
+        assert lease._validate_receipt(legacy) == legacy
+        for gate in (prefix + 'PRIVATE_CANARY', prefix + 'selection__verified',
+                     prefix + 'selection__provenance_unavailable__PRIVATE_CANARY',
+                     prefix.replace('DropInPaths', 'JoinsNamespaceOf') + 'selection',
+                     prefix.replace('initial', 'empty_control') + 'selection'):
+            with pytest.raises(admission.InstallationAdmissionRefused):
+                lease._validate_receipt({**legacy, 'prebackup_gate': gate})
         lease.complete(legacy)

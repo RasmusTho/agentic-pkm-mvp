@@ -211,6 +211,26 @@ its inner cause UNKNOWN. This source-only change requires a newly matched image
 for any separately authorized later operation; it grants no native retry,
 installation, DEV-heavy, TEST or parent acceptance.
 
+For the captured-empty PATH branch, `Unit_DropInPaths__selection` means the
+original selector rejected the existing selection grammar. `shape` also covers
+the original list/element representation checks; `unsupported` means the original
+property read refused without a supported read classification. Transport,
+decode and signature failures retain their existing kinds. No selected path,
+entry count, property value or exception text is exported. The historical
+`Unit_DropInPaths__value` spelling remains readable; Source25's recorded value
+classification leaves its actual private cause UNKNOWN.
+
+An initial OLD diagnostic uses the existing source-loader origins and executed-byte
+hashes compared with the already computed verified-candidate manifest. This check
+adds no native read and does not move the later full caller-source verification.
+If that early binding is unavailable, the finite initial gate keeps its cause and
+adds `__provenance_unavailable`; its source-specific attribution is unverified.
+Missing or mismatched loader metadata and a missing candidate binding cannot claim
+verified source provenance. Legacy diagnostics without the suffix remain readable
+and do not retrospectively prove that this comparison ran. All later source,
+resource-close, first-failure and effect gates remain mandatory. This source-only
+support grants no native retry, installation or DEV/TEST acceptance.
+
 Root/control refinements use the existing field, with the complete closed spelling
 `old_kernel_<stage>_root_control__<mode>__<side>__<role>__<guard>`. Stage is
 `initial` or `empty_control`. Mode is `captured_empty`, `anchored_discovery`, or
