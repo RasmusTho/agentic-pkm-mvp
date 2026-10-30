@@ -78,8 +78,9 @@ it:
   vault-bound row resolved through a live binding runtime also carries `binding_authority`,
   `binding_authorization_epoch`, `binding_revision`, and `vault_root`. Binding facts copied from a
   re-emitted source event are discarded and re-derived; they never survive into a new row.
-- `meta.producer_context` — the captured producer context identity, immutable producer
-  provenance: `{kind, context_id, context_generation}`. `active_context` carries the request
+- `meta.producer_context` — the producer context identity captured at emission:
+  `{kind, context_id, context_generation}`. A stored row never changes it; a worker re-emission
+  (retry, dead-letter, consumer signal) is a new emission and records the worker's own context. `active_context` carries the request
   `ActiveContextSet` id and generation for an emission inside a governed write window
   (`app/instance/context_bound_write.py::context_bound_write_window`); such an emission may only
   route to that window's one target binding and otherwise fails before insert.

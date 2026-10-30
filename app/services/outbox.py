@@ -947,10 +947,21 @@ def _binding_context_envelope_meta(
             "routing_class": routing_class,
             "outbox_producer": producer,
             "producer_context": context,
-            "idempotency": {"legacy_key": legacy_key, "binding_scoped_key": scoped_key},
+            "idempotency": {
+                "legacy_key": _canonical_uuid_text(legacy_key),
+                "binding_scoped_key": scoped_key,
+            },
         }
     )
     return stamped
+
+
+def _canonical_uuid_text(value: str) -> str:
+    """The ``legacy_key::text`` form PostgreSQL compares the envelope against."""
+    try:
+        return str(uuid_module.UUID(value))
+    except ValueError:
+        return value
 
 
 def binding_envelope_is_dispatchable(message: Mapping[str, Any]) -> bool:
@@ -1324,7 +1335,9 @@ def _coerce_event_from_db(raw_payload: Any, topic: str) -> Event:
 _COMPLETE_ENVELOPE_SQL = (
     "payload #>> '{meta,outbox_envelope}' = %s "
     "and payload #>> '{meta,routing_class}' = %s "
-    "and payload #>> '{meta,producer_context,kind}' in (%s, %s) "
+    "and payload #>> '{meta,producer_context,kind}' in ("
+    + ", ".join("%s" for _ in DISPATCHABLE_VAULT_BOUND_CONTEXT_KINDS)
+    + ") "
     "and payload #>> '{meta,idempotency,binding_scoped_key}' = id::text "
     "and payload #>> '{meta,idempotency,legacy_key}' = legacy_key::text"
 )
