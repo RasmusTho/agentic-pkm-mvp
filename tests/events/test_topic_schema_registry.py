@@ -179,7 +179,9 @@ def test_write_stamps_payload_schema_meta_on_valid_event() -> None:
     finally:
         Event.model_dump_json = original_model_dump_json  # type: ignore[assignment]
 
-    assert captured["meta"] == {"payload_schema": current_schema_ref("index.embedding.requested")}
+    assert captured["meta"]["payload_schema"] == current_schema_ref("index.embedding.requested")
+    # MVR-05D: the schema tag rides alongside the versioned binding/context envelope.
+    assert captured["meta"]["outbox_envelope"] == "mvr05.outbox-envelope.v1"
     # The caller's original event object is not mutated in place.
     assert event.meta is None
 
