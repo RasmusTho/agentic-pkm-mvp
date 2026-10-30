@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
 from app.components.embeddings import get_embedding_identity
 from app.search.service import ingest_object
 from app.stores import get_vector_index, reset_store_backends
+
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 
 def _query_vector(dim: int = 1536) -> list[float]:
