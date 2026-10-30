@@ -118,7 +118,10 @@ def browser_journeys(journey):
                 "progress": page.locator("#operations-progress").text_content(), "observed": list(rows), "native_parity": batch_parity})
 
             reset()
-            choose(["collision", "read"])
+            # Preview uses existing finite admission too. Cancel two allowed,
+            # still-unconsumed intents; later SDK recovery uses these slots.
+            choose(["partial-a", "lost-ack"])
+            before_cancel = journey.observe()
 
             def delay_only_client_submission(route):
                 values = parse_qs(urlparse(page.url).query)
@@ -134,7 +137,13 @@ def browser_journeys(journey):
             page.locator("#operations-cancel:visible").wait_for()
             page.locator("#operations-cancel").click()
             page.get_by_text("Runtime status: cancelled", exact=True).wait_for()
-            journey._record("browser_cancel", {"observed": list(rows), "progress": page.locator("#operations-progress").text_content()})
+            after_cancel = journey.observe()
+            if (before_cancel["receipts"] != after_cancel["receipts"]
+                or {role: before_cancel["sources"][role]["source_sha256"] for role in ("partial-a", "lost-ack")}
+                != {role: after_cancel["sources"][role]["source_sha256"] for role in ("partial-a", "lost-ack")}):
+                raise OperationsAcceptanceRefusal("browser_cancel_consumed_or_changed_source")
+            journey._record("browser_cancel", {"observed": list(rows), "progress": page.locator("#operations-progress").text_content(),
+                "source_replays": 0, "native_receipts_unchanged": True})
             page.unroute("**/api/operations/batches/*/execute", delay_only_client_submission)
 
             reset()
