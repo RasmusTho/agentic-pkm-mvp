@@ -10,6 +10,8 @@ from app.agents.citation_checker.agent import run as citation_run
 from app.agents.reviewer.agent import run as review_run
 from app.components.reasoning.facade import ReviewResult
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 
 def test_reviewer_returns_structure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "mock")

@@ -1630,22 +1630,58 @@ def test_embedding_router_identity_change_selects_complete_llm_coverage() -> Non
     assert "tests/index/test_identity_migration.py" in selection.targets
 
 
-@pytest.mark.parametrize(
-    ("source_path", "subsystem", "target"),
-    (
+def test_product_embedding_adapters_select_their_regression_coverage() -> None:
+    for source_path, subsystem, target in (
         ("app/cli/embed_probe.py", "llm_eval", "tests/cli/test_embed_probe.py"),
         ("app/components/retrieval.py", "memory_retrieval", "tests/retrieval"),
-    ),
-)
-def test_product_embedding_adapters_select_their_regression_coverage(
-    source_path: str, subsystem: str, target: str
-) -> None:
-    selection = select_tests([source_path])
+    ):
+        selection = select_tests([source_path])
 
-    assert selection.full_suite is False
-    assert selection.subsystems == (subsystem,)
-    assert selection.unowned_paths == ()
-    assert target in selection.targets
+        assert selection.full_suite is False
+        assert selection.subsystems == (subsystem,)
+        assert selection.unowned_paths == ()
+        assert target in selection.targets
+
+    module_owners = (
+        ("tests/agents/test_reviewer.py", "vault", "app/agents/reviewer/agent.py"),
+        ("tests/agents/test_reviewer_single_note.py", "vault", "app/agents/reviewer/agent.py"),
+        ("tests/agents/test_set_evaluator.py", "llm_eval", "app/components/reasoning/facade.py"),
+        (
+            "tests/boundaries/test_domain_separation_defaults.py",
+            "memory_retrieval",
+            "app/components/retrieval.py",
+        ),
+        (
+            "tests/boundaries/test_panel_text_not_indexed.py",
+            "memory_retrieval",
+            "app/components/retrieval.py",
+        ),
+    )
+    for module, owner, runtime_trigger in module_owners:
+        module_selection = select_tests([module])
+        runtime_selection = select_tests([runtime_trigger])
+
+        assert module_selection.full_suite is False
+        assert module_selection.subsystems == (owner,)
+        assert module_selection.reason == "test modules and their static consumers"
+        assert module_selection.unowned_paths == ()
+        assert module in module_selection.targets
+        assert set(selector.CI_INTEGRITY_TARGETS) <= set(module_selection.targets)
+        assert module in runtime_selection.targets
+
+    mixed_paths = [
+        "scripts/select_pr_tests.py",
+        "tests/scripts/test_select_pr_tests.py",
+        "docs/development/TEST_STRATEGY_HOT_PATH.md",
+        *(module for module, _, _ in module_owners),
+    ]
+    mixed = select_tests(mixed_paths)
+    assert mixed.full_suite is False
+    assert mixed.subsystems == ("governance", "vault", "memory_retrieval", "llm_eval")
+    assert mixed.unowned_paths == ()
+    assert set(selector.CI_INTEGRITY_TARGETS) <= set(mixed.targets)
+    assert {module for module, _, _ in module_owners} <= set(mixed.targets)
+    assert selector.requires_runtime_checks(mixed_paths) is True
 
 
 def test_voice_contract_and_runtime_change_selects_voice_coverage() -> None:
@@ -1915,9 +1951,13 @@ def test_cli_standing_questions_migration_file_resolves_to_full_suite() -> None:
     assert "reason=database migration or schema surface changed" in result.stdout
 
 
-def test_cli_rejects_an_unowned_path() -> None:
+@pytest.mark.parametrize(
+    "path",
+    ("app/new_surface/example.py", "tests/agents/test_normalizer.py"),
+)
+def test_cli_rejects_an_unowned_path(path: str) -> None:
     result = subprocess.run(
-        [sys.executable, "scripts/select_pr_tests.py", "--changed-file", "app/new_surface/example.py"],
+        [sys.executable, "scripts/select_pr_tests.py", "--changed-file", path],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -1925,7 +1965,7 @@ def test_cli_rejects_an_unowned_path() -> None:
 
     assert result.returncode == 2
     assert "subsystems=unowned" in result.stdout
-    assert "unowned_paths=app/new_surface/example.py" in result.stdout
+    assert f"unowned_paths={path}" in result.stdout
 
 
 def test_agent_surface_combinations_never_resolve_unowned() -> None:
