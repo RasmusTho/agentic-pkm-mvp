@@ -66,11 +66,46 @@ def test_systemd_template_and_channel_config_are_targeted() -> None:
     assert "ExecStart=" in unit
 
 
-def test_channel_config_renderer_rejects_implicit_or_unknown_channel() -> None:
-    import pytest
-
+@pytest.mark.parametrize("channel", ["", "dev", "staging"])
+def test_channel_config_renderer_rejects_implicit_or_unknown_channel(channel) -> None:
     with pytest.raises(ValueError, match="probe channel is invalid"):
-        render_probe_environment("dev")
+        render_probe_environment(channel)
+
+
+@pytest.mark.parametrize("channel,project", [("dev", "non-prod"), ("test", "non-prod"), ("prod", "prod")])
+def test_dev_launcher_uses_non_prod_fixed_probe_consumer(
+    tmp_path, monkeypatch, channel, project
+) -> None:
+    import stat
+    from app.ops import host_secret_bootstrap
+
+    config = tmp_path / f"{channel}.json"
+    config.write_text('{"project_id":"selected-project","organization_id":"selected-org"}')
+    config.chmod(0o600)
+    read_identifiers = host_probe_launcher._read_deploy_identifiers
+    monkeypatch.setattr(
+        host_probe_launcher, "_read_deploy_identifiers",
+        lambda selected: read_identifiers(selected, tmp_path),
+    )
+    monkeypatch.setattr(
+        host_probe_launcher.os, "fstat",
+        lambda _descriptor: SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0, st_nlink=1),
+    )
+    for name in ("BWS_READER_PROJECT", "BWS_PROJECT_ID", "BWS_ORGANIZATION_ID"):
+        monkeypatch.setenv(name, "stale-ambient-value")
+    calls = []
+
+    def bootstrap(arguments):
+        calls.append(arguments)
+        assert host_probe_launcher.os.environ["BWS_READER_PROJECT"] == project
+        assert host_probe_launcher.os.environ["BWS_PROJECT_ID"] == "selected-project"
+        assert host_probe_launcher.os.environ["BWS_ORGANIZATION_ID"] == "selected-org"
+        return 0
+
+    monkeypatch.setattr(host_secret_bootstrap, "main", bootstrap)
+    assert host_probe_launcher.main(["--channel", channel]) == 0
+    assert calls == [["--provider", "bws", "--channel", channel,
+                      "--consumer", "heimdal-external-alerts", "--run-probe"]]
 
 
 def test_plan_uses_the_shared_protected_secret_controller_state() -> None:

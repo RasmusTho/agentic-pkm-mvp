@@ -474,3 +474,40 @@ def test_root_control_leaf_receipts_preserve_closed_allowlist_parity(monkeypatch
             with pytest.raises(admission.InstallationAdmissionRefused):
                 lease._validate_receipt({**_receipt(request, status=status), 'prebackup_gate': valid})
         lease.complete(legacy)
+
+
+def test_initial_unit_property_receipts_match_finite_contract(monkeypatch, tmp_path):
+    from app.ops import bws_installation_lifecycle as lifecycle
+    from tests.ops.test_bws_installation_lifecycle import _UNIT_INITIAL_TRACE, _UNIT_VALUE_SITES
+    expected = {(site, kind) for site in _UNIT_INITIAL_TRACE
+                for kind in ('backend', 'decode', 'signature', 'shape')}
+    expected |= {(site, 'value') for site in _UNIT_VALUE_SITES}
+    assert admission._UNIT_PROPERTY_REFINEMENTS == transaction._UNIT_PROPERTY_REFINEMENTS == expected
+    assert lifecycle._UNIT_PROPERTY_REFINEMENTS == expected
+    assert admission._PREBACKUP_REFUSAL_GATES == transaction._PREBACKUP_REFUSAL_GATES
+    _patch_directories(monkeypatch, tmp_path)
+    request = _request()
+    legacy = _receipt(request, status='refused_before_backup')
+    with admission.installation_admission(**request) as lease:
+        for site, kind in sorted(expected):
+            gate = 'old_kernel_initial_unit_properties__' + site + '__' + kind
+            receipt = {**legacy, 'prebackup_gate': gate}
+            assert lease._validate_receipt(receipt) == receipt
+            generated = transaction._receipt(request, status='refused_before_backup', old_generation=None,
+                new_generation=None, backup_manifest=None, prebackup_gate=gate)
+            assert generated['prebackup_gate'] == gate
+        for gate in (None, 'old_kernel_qualification', 'old_kernel_initial_unit_properties',
+                     'old_kernel_empty_control_unit_properties', 'old_kernel_initial_root_control',
+                     'old_kernel_initial_root_control__captured_empty__old__hints__launcher_hint'):
+            receipt = legacy if gate is None else {**legacy, 'prebackup_gate': gate}
+            assert lease._validate_receipt(receipt) == receipt
+        valid = 'old_kernel_initial_unit_properties__Service_Type__value'
+        for bad in (valid + 'PRIVATE_CANARY', valid.replace('initial', 'empty_control'),
+                    valid.replace('Service_Type', 'Unit_ActiveState'),
+                    valid.replace('value', 'PRIVATE_CANARY'), [], {}, 7):
+            with pytest.raises(admission.InstallationAdmissionRefused):
+                lease._validate_receipt({**legacy, 'prebackup_gate': bad})
+        for status in ('installed', 'compensated_restored', 'compensated_stopped', 'unknown', 'refused_before_stop'):
+            with pytest.raises(admission.InstallationAdmissionRefused):
+                lease._validate_receipt({**_receipt(request, status=status), 'prebackup_gate': valid})
+        lease.complete(legacy)

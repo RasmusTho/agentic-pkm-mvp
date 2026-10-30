@@ -169,6 +169,60 @@ coarse gate remain readable and immutable. A classified refusal still has null o
 new and backup hashes and cannot reach prepare, backup, stop or apply. All original
 guards, their invocation order and retained-runtime cleanup remain binding.
 
+The captured-empty control-PATH configuration supports the finite preserved PATH-only
+drop-in profile documented in [Native source preflight and recovery](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery):
+one protected selected `.conf` file in the fixed instance/template `/etc` unit
+directory, bounded two-line syntax and exact agreement with the sole typed loaded
+PATH assignment. Complete Environment bytes/order remain bound. Null output streams,
+UMask 0077, canonical encrypted-credential metadata and empty plain credentials are
+checked without credential payload/file reads; pending reload refuses. These added
+checks use existing coarse/family diagnostics and disclose no selected path, content,
+metadata, effective value, digest or backend exception.
+
+The preserved file/ancestor/mount projection is disjoint from application, control,
+launcher, backup and all staging/restoration effect parents, remains bound through
+same-handle compensation, and never authorizes configuration/control writes. Changed
+selection, content, lookup/mount edges or named effective settings refuse or retain
+phase-appropriate uncertainty. Legacy OLD still remains `compensated_stopped` without
+independent loaded-source restart proof. This proves named effective invariants under
+the existing trusted root/systemd and externally admitted window; it does not prove
+historical loaded-unit bytes. `NeedDaemonReload=false` is supplementary, and BWS caller
+reservation does not exclude arbitrary root writers or external manager reloads.
+Repository support does not qualify actual private input or authorize native/parent
+acceptance. Unsupported formats retain their refusal boundary.
+
+Initial unit-property diagnostics additionally use
+`old_kernel_initial_unit_properties__<site>__<kind>` from the **original** read or
+predicate. Kinds are `backend` (unavailable/failed bounded transport), `decode`
+(invalid JSON, including duplicate keys), `signature` (unexpected bus type),
+`shape` (existing envelope/method/object/Environment/EnvironmentFiles shape check),
+and `value` (an existing required-value predicate). Sites are the fixed
+`Manager_GetUnit` and `Manager_GetUnitProcesses`; `Unit_` plus `Id`, `LoadState`,
+`OnFailure`, `OnSuccess`, `TriggeredBy`, `ActiveState`, `SubState`, `Job`,
+`DropInPaths`, or `JoinsNamespaceOf`; and `Service_` plus `Type`, `User`, `Group`,
+`KillMode`, `Restart`, `ExecCondition`, `ExecStartPre`, `ExecStartPost`, `ExecStop`,
+`ExecReload`, `ExecStart`, `ExecStopPost`, `Environment`, `EnvironmentFiles`,
+`ControlPID`, `MainPID`, `RootDirectory`, `RootImage`, `WorkingDirectory`,
+`BindPaths`, `BindReadOnlyPaths`, `TemporaryFileSystem`, `ReadOnlyPaths`,
+`ReadWritePaths`, `InaccessiblePaths`, `PassEnvironment`, `ExtensionDirectories`,
+`MountImages`, `ExtensionImages`, `PAMName`, `UnsetEnvironment`, `ExecSearchPath`,
+`PrivateMounts`, `PrivateTmp`, `PrivateDevices`, `PrivateUsers`, `DynamicUser`,
+`ProtectHome`, or `ProtectSystem`. `Service_ExecStopPost_final` identifies the
+last cleanup read after process qualification. Only baseline and PATH required
+configuration predicates admit `value`; launcher, cleanup, process and root
+semantic refusals keep their existing families. These are source symbols, never
+observed property values. Existing read ordering, compound-read ordering and exact Environment/PATH bytes
+remain unchanged; the preserved-input branch adds its finite typed reads. Backend/typing labels
+do not establish the native cause; value mismatch grants no configuration repair
+authority. Exact supported exception type and complete allowlisted combinations
+are required; invalid metadata falls back to the existing family/coarse result.
+Final empty-control diagnostics, legacy absent/coarse/family/root-control receipts,
+and sticky close uncertainty retain their contracts, including no uncertain-close
+retry. Source23 remains historically `old_kernel_initial_unit_properties` with
+its inner cause UNKNOWN. This source-only change requires a newly matched image
+for any separately authorized later operation; it grants no native retry,
+installation, DEV-heavy, TEST or parent acceptance.
+
 Root/control refinements use the existing field, with the complete closed spelling
 `old_kernel_<stage>_root_control__<mode>__<side>__<role>__<guard>`. Stage is
 `initial` or `empty_control`. Mode is `captured_empty`, `anchored_discovery`, or
@@ -1152,7 +1206,7 @@ down alert on the first outage transition and one recovery signal on the first h
 messages carry the same correlation ID. Alerts include source system, environment, severity, UTC
 timestamp, and remediation URL.
 
-The source template leads with `PROD hälsoproblem` (or `TEST hälsoproblem`), not a
+The source template leads with `DEV hälsoproblem`, `TEST hälsoproblem`, or `PROD hälsoproblem`, not a
 claim of total outage. It names failed required checks from the finite health-producer mapping
 and mandatory runtime database, worker and model components. Optional failures are excluded;
 watcher requirement is producer-local and is not inferred from a failed watcher observation.
@@ -1176,6 +1230,14 @@ incident continued suppressing duplicate alerts; controlled TEST acceptance rema
 The Linux service uses the `heimdal-external-alerts` BWS consumer and the `discord.webhook`
 binding. The BWS token is read through systemd credentials and is removed from the probe child's
 environment; only a short-lived mode-0600 runtime file carries the declared webhook binding.
+The fixed Linux launcher and shared probe source accept explicit `dev`, `test`, and `prod`;
+DEV and TEST bind this consumer to `non-prod` and `shared/discord.webhook`, while PROD uses `prod`.
+Endpoint, heartbeat, state, and alert-channel inputs remain explicit. The existing
+`scripts/install_host_probe.py` installer remains TEST/PROD-only; its shared
+`/opt/yggdrasil/host-probe` package is not a DEV installation plan. Native DEV configuration,
+installation, baseline, and drill qualification remain pending with the Product keeper. DEV
+source support does not upgrade the dated production installation below or satisfy #4076's
+pending live TEST AC4.
 The service has no Docker startup dependency and reads the worker heartbeat from the host volume.
 The prior Mac LaunchAgent and plist remain legacy templates. The installer
 `scripts/install_host_probe.py` prints a plan by default; host writes require `--apply` from a clean

@@ -126,6 +126,33 @@ _ROOT_CONTROL_REFINEMENT_GATES = frozenset(
     "old_kernel_" + stage + "_root_control__" + "__".join(context)
     for stage in ("initial", "empty_control") for context in _ROOT_CONTROL_REFINEMENTS
 )
+# Source symbols only. Value cases are existing unit-property predicates;
+# launcher/process/cleanup/root semantic refusals retain their own families.
+_UNIT_PROPERTY_VALUE_SITES = frozenset(
+    ('Unit_Id Unit_LoadState Unit_OnFailure Unit_OnSuccess Unit_TriggeredBy '
+     'Service_Type Service_User Service_Group Service_KillMode Service_Restart '
+     'Service_RootDirectory Service_RootImage Service_WorkingDirectory Service_BindPaths '
+     'Service_BindReadOnlyPaths Service_TemporaryFileSystem Service_ReadOnlyPaths '
+     'Service_ReadWritePaths Service_InaccessiblePaths Service_PassEnvironment '
+     'Service_ExtensionDirectories Service_MountImages Service_ExtensionImages Service_PAMName '
+     'Service_UnsetEnvironment Service_ExecSearchPath Service_PrivateMounts Service_PrivateTmp '
+     'Service_PrivateDevices Service_PrivateUsers Service_DynamicUser Service_ProtectHome '
+     'Service_ProtectSystem Unit_DropInPaths Unit_JoinsNamespaceOf').split()
+)
+_UNIT_PROPERTY_READ_SITES = _UNIT_PROPERTY_VALUE_SITES | frozenset(
+    ('Manager_GetUnit Manager_GetUnitProcesses Service_ExecCondition Service_ExecStartPre '
+     'Service_ExecStartPost Service_ExecStop Service_ExecReload Service_ExecStart '
+     'Service_ExecStopPost Service_ExecStopPost_final Service_Environment Service_EnvironmentFiles '
+     'Unit_ActiveState Unit_SubState Unit_Job Service_ControlPID Service_MainPID').split()
+)
+_UNIT_PROPERTY_REFINEMENTS = frozenset(
+    (site, kind) for site in _UNIT_PROPERTY_READ_SITES
+    for kind in ('backend', 'decode', 'signature', 'shape')
+) | frozenset((site, 'value') for site in _UNIT_PROPERTY_VALUE_SITES)
+_UNIT_PROPERTY_REFINEMENT_GATES = frozenset(
+    'old_kernel_initial_unit_properties__' + '__'.join(context)
+    for context in _UNIT_PROPERTY_REFINEMENTS
+)
 _PREBACKUP_REFUSAL_GATES = frozenset({
     "channel_lock_entry",
     "channel_owner_check",
@@ -158,7 +185,7 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "old_kernel_empty_control_cleanup_contract",
     "qualified_writer_snapshot",
     "generation_qualification",
-}) | _ROOT_CONTROL_REFINEMENT_GATES
+}) | _ROOT_CONTROL_REFINEMENT_GATES | _UNIT_PROPERTY_REFINEMENT_GATES
 _LOCAL_SOURCE_REFERENCE = re.compile(
     rb"(?<![A-Za-z0-9_])c?(?:app|scripts|llm_contract|mimer_runtime|companion_ui)"
     rb"(?:(?:\.[A-Za-z_][A-Za-z_0-9]*)|(?:/[A-Za-z_][A-Za-z_0-9]*))*(?![A-Za-z0-9_])",
@@ -1455,6 +1482,7 @@ def candidate_manifest(
 ) -> tuple[tuple[Any, ...], dict[tuple[str, str], bytes], dict[str, Any]]:
     """Build an exact candidate delta from an old disk snapshot and Git tree."""
     from app.ops.bws_control_installation import Change
+    from app.ops.bws_installation_lifecycle import _LifecycleCloseUncertain
     from app.ops.host_secret_contract import load_host_secret_contract_bytes
 
     required = {
@@ -1682,8 +1710,27 @@ def candidate_manifest(
         if not changed_roots <= set(roots):
             _refuse()
         candidate_files.sort(key=lambda row: (str(row["root"]), str(row["path"])))
+        control_path_footprint: tuple[dict[str, Any], ...] = ()
+        control_path_effect_parents: tuple[str, ...] = ()
+        if _captured_control_inventory_is_empty(profile):
+            # Every lower effect (including random staging/restore names and the
+            # entire backup bundle) stays inside these roots. No control write
+            # may be introduced by the actual manifest in this topology.
+            if changed_roots != {"application", "launcher"}:
+                _refuse()
+            control_path_footprint = tuple(
+                {"path": root.path, "device": root.device, "inode": root.inode,
+                 "uid": root.uid, "gid": root.gid, "mode": root.mode}
+                for root in (roots["application"], roots["launcher"], backup_root)
+            )
+            control_path_effect_parents = tuple(sorted({
+                str(PurePosixPath(roots[change.root].path) / PurePosixPath(change.path).parent)
+                for change in changes
+            }))
         return tuple(changes), payloads, {
             "backup_root": backup_root,
+            "control_path_effect_parents": control_path_effect_parents,
+            "control_path_footprint": control_path_footprint,
             "changed_roots": sorted(changed_roots),
             "candidate_files": candidate_files,
             "candidate_modules": [],
@@ -1695,15 +1742,20 @@ def candidate_manifest(
                 separators=(",", ":"),
             ).encode("ascii")),
         }
+    except _LifecycleCloseUncertain:
+        raise
     except Exception:
         _refuse()
     finally:
+        close_uncertain = False
         for _name, (_root_fd, opened) in reversed(tuple(root_fds.items())):
             for descriptor in reversed(opened):
                 try:
                     os.close(descriptor)
                 except OSError:
-                    _refuse()
+                    close_uncertain = True
+        if close_uncertain:
+            raise _LifecycleCloseUncertain("bws_lifecycle_unproven") from None
 
 def _validate_request(channel: str, request: object) -> dict[str, str]:
     fields = {"action", "operation_id", "candidate_sha", "image_digest", "bundle_name"}
@@ -2218,6 +2270,9 @@ def _restore_from_handle(
         except Exception as exc:
             raise _HandleCloseUncertain("installation handle close failed") from exc
         return "unknown", None
+    binding = getattr(service, "control_path_binding", None)
+    if binding is not None:
+        service.revalidate_restored_control_configuration()
     # The legacy service supplied no loaded-source profile, so its runtime
     # cannot be qualified for restart even after its disk bytes are restored.
     try:
@@ -2237,6 +2292,7 @@ class _NativePorts:
         self._descriptor_service: Any = None
         self._descriptor_handle: Any = None
         self._descriptor_prepare_uncertain = False
+        self.lifecycle_close_uncertain = False
         self._caller_profile_sent = False
         self._caller_source_modules: list[dict[str, object]] | None = None
         caller_root = getattr(sys, "_yggdrasil_bws_candidate_checkout", None)
@@ -2335,7 +2391,8 @@ class _NativePorts:
     def prepare(self, roots: dict[str, Any], changes: tuple[Any, ...],
                 payloads: dict[tuple[str, str], bytes], backup_root: Any, bundle_name: str, *,
                 source_inventory_fd_peak: int = 0,
-                runtime_fd_already_open: bool = False) -> Any:
+                runtime_fd_already_open: bool = False,
+                control_path_fds_already_open: int = 0) -> Any:
         from app.ops.bws_control_installation import InstallationRefused, _prepare_full_source_files
         self._descriptor_prepare_uncertain = True
         try:
@@ -2344,6 +2401,7 @@ class _NativePorts:
                 backup_root=backup_root, bundle_name=bundle_name,
                 source_inventory_fd_peak=source_inventory_fd_peak,
                 runtime_fd_already_open=runtime_fd_already_open,
+                control_path_fds_already_open=control_path_fds_already_open,
             )
             self._descriptor_prepare_uncertain = False
             return self._descriptor_handle
@@ -2359,10 +2417,13 @@ class _NativePorts:
     def source_resources_closed(self) -> bool:
         handle, service = self._descriptor_handle, self._descriptor_service
         try:
-            return (not self._descriptor_prepare_uncertain
+            return (not self._descriptor_prepare_uncertain and not self.lifecycle_close_uncertain
                     and (handle is None or (handle.state == "closed" and not handle._fds))
                     and (service is None or not service.runtime_context_started
-                         or service.runtime_close_completed is True))
+                         or (service.runtime_close_completed is True
+                             and not getattr(service, "lifecycle_close_uncertain", False)
+                             and not getattr(getattr(service, "control_path_binding", None),
+                                             "close_uncertain", False))))
         except Exception:
             return False
 
@@ -2446,6 +2507,9 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
             nonlocal phase, receipt, terminal_safe, handle, recovery_attempted
             nonlocal handle_close_uncertain
             recovery_attempted = True
+            from app.ops.bws_installation_lifecycle import _LifecycleCloseUncertain
+            if isinstance(failure, _LifecycleCloseUncertain):
+                ports.lifecycle_close_uncertain = True
             start_revocation_uncertain = False
             try:
                 admission.revoke_service_start()
@@ -2513,9 +2577,16 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                     handle.close()
                 except Exception:
                     handle_close_uncertain = True
-            if start_revocation_uncertain or handle_close_uncertain:
-                # Preserve the channel owner if either the one-use start grant
-                # or same-process backup handle has unknown lifetime.
+            path_close_uncertain = bool(getattr(
+                getattr(service, "control_path_binding", None), "close_uncertain", False,
+            ))
+            reader_close_uncertain = (getattr(ports, "lifecycle_close_uncertain", False)
+                                      or getattr(service, "lifecycle_close_uncertain", False))
+            if (start_revocation_uncertain or handle_close_uncertain or path_close_uncertain
+                    or reader_close_uncertain):
+                # Preserve ownership even before backup: a later successful
+                # runtime close cannot turn uncertain PATH metadata closes into
+                # a terminal refusal. Never retry the uncertain original FD.
                 return False
             if phase == "before_backup" and receipt is None:
                 refusal_gate = (failure.gate if isinstance(failure, _PrebackupGateRefusal)
@@ -2538,6 +2609,12 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                                 refined = classified + "__" + "__".join(refinement)
                                 if refined in _PREBACKUP_REFUSAL_GATES:
                                     refusal_gate = refined
+                            unit_property = getattr(failure, "unit_property", None)
+                            if (subgate == "unit_properties" and old_qualification_stage == "initial"
+                                    and type(unit_property) is tuple and len(unit_property) == 2
+                                    and all(type(value) is str for value in unit_property)
+                                    and unit_property in _UNIT_PROPERTY_REFINEMENTS):
+                                refusal_gate = classified + "__" + "__".join(unit_property)
                 receipt = _receipt(request, status="refused_before_backup", old_generation=None,
                                    new_generation=None, backup_manifest=None,
                                    prebackup_gate=refusal_gate)
@@ -2635,6 +2712,8 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                             control_root={"path": str(_CONTROL_DIRECTORY), **control_identity},
                             launcher_content=launcher_content,
                             control_inventory_empty=_captured_control_inventory_is_empty(old_state),
+                            installation_footprint=manifest_proof.get("control_path_footprint", ()),
+                            installation_effect_parents=manifest_proof.get("control_path_effect_parents", ()),
                         )
                         prebackup_gate = "qualified_writer_snapshot"
                         current = _require_writer_snapshot(ports.preflight(effects, request), request)
@@ -2658,6 +2737,9 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                                 roots, changes, payloads, backup_root, request["bundle_name"],
                                 source_inventory_fd_peak=source_inventory_fd_peak,
                                 runtime_fd_already_open=True,
+                                control_path_fds_already_open=len(getattr(
+                                    getattr(service, "control_path_binding", None), "fds", {},
+                                )),
                             )
                         except Exception as exc:
                             handle = getattr(exc, "installation", None)

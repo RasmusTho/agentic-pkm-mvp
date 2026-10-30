@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
 _REAL_LIFECYCLE_RUN = lifecycle._run
 _REAL_LIFECYCLE_PID_TOKEN = lifecycle._pid_token
+_REAL_LIFECYCLE_PUBLIC_LAUNCHER = lifecycle._public_launcher_bytes
 
 
 def _root(path: str, inode: int) -> dict[str, int | str]:
@@ -1234,8 +1236,10 @@ def root_control_rpc_cases(control, *, anchored=False):
                                   expected=('captured_empty', 'old', slot + '_slot', 'present'),
                                   stage='initial' if configuration == 1 else 'empty_control'))
         cases.append(dict(decode_failure=True, expected=('unknown', 'old', 'discovery', 'decode_unknown'), stage='initial'))
-        cases.append(dict(properties={('Service', 'Environment'): [7]}, expected_gate='old_kernel_initial_unit_properties'))
-        cases.append(dict(properties={('Service', 'EnvironmentFiles'): [[7, False]]}, expected_gate='old_kernel_initial_unit_properties'))
+        cases.append(dict(properties={('Service', 'Environment'): [7]},
+                          expected_gate='old_kernel_initial_unit_properties__Service_Environment__shape'))
+        cases.append(dict(properties={('Service', 'EnvironmentFiles'): [[7, False]]},
+                          expected_gate='old_kernel_initial_unit_properties__Service_EnvironmentFiles__shape'))
         cases.append(dict(launcher_hint=True, expected=('captured_empty', 'old', 'hints', 'launcher_hint'), stage='initial'))
         cases.append(dict(anchor_drift=True, expected=('captured_empty', 'old', 'empty_root', 'anchored_root_present'),
                           stage='initial'))
@@ -1302,3 +1306,537 @@ def root_control_golden_trace(control, *, anchored):
         walk()
         trace.append(('fstat', root))
     return trace
+
+
+def configure_control_path_service(module, patch, state, control, application, runtime,
+                                   public_launcher, channel, environment):
+    """Real typed producer/lifecycle; replace only external kernel/service metadata."""
+    import copy
+    import json
+    import time
+    import shutil
+    from types import SimpleNamespace
+    patch.setattr(module, 'CONTROL_DIRECTORY', str(control))
+    patch.setattr(module, '_CONTROL_OWNER_UID', os.geteuid())
+    patch.setattr(module, '_CONTROL_OWNER_GID', os.getegid())
+    patch.setattr(module, 'RUNTIME', str(runtime))
+    patch.setattr(module, 'LAUNCHER', str(public_launcher))
+    proc = runtime.parent / 'synthetic-proc'
+    proc.mkdir(mode=0o755, exist_ok=True)
+    patch.setattr(module, 'PROC', proc)
+    patch.setattr(module, '_pid_token', _REAL_LIFECYCLE_PID_TOKEN)
+    patch.setattr(module, '_public_launcher_bytes', _REAL_LIFECYCLE_PUBLIC_LAUNCHER)
+    process_inodes = set()
+    def create_process(pid):
+        process = proc / str(pid)
+        process.mkdir(mode=0o755)
+        (process / 'stat').write_text(f'{pid} (synthetic) S ' + '0 ' * 18 + str(pid * 10) + '\n')
+        (process / 'status').write_bytes(b'Uid:\t0\t0\t0\t0\n')
+        (process / 'cmdline').write_bytes(b'\0'.join(os.fsencode(value) for value in (
+            str(runtime), str(public_launcher), 'serve', channel)) + b'\0')
+        (process / 'cwd').symlink_to(application)
+        (process / 'exe').symlink_to(runtime)
+        (process / 'task').mkdir(mode=0o755)
+        (process / 'task' / str(pid)).mkdir(mode=0o755)
+        for path in (process, process / 'stat', process / 'status', process / 'cmdline', process / 'task'):
+            info = path.stat()
+            process_inodes.add((info.st_dev, info.st_ino))
+    create_process(123)
+    real_os = module.os
+    def observed(info):
+        public_identities = {(value.st_dev, value.st_ino) for value in (
+            real_os.stat(runtime), real_os.stat(public_launcher),
+        )}
+        if (info.st_dev, info.st_ino) not in public_identities | process_inodes:
+            return info
+        return SimpleNamespace(**{**{name: getattr(info, name) for name in dir(info)
+                                     if name.startswith('st_')}, 'st_uid': 0, 'st_gid': 0})
+    patch.setattr(module, 'os', SimpleNamespace(**{
+        **vars(real_os), 'fstat': lambda fd: observed(real_os.fstat(fd)),
+        'stat': lambda *a, **kw: observed(real_os.stat(*a, **kw)),
+    }))
+    if sys.platform != 'linux':
+        # macOS has no Linux statx. Replace only that OS metadata port; Linux CI
+        # exercises the actual syscall, including mount IDs on held directories.
+        patch.setattr(module, '_control_path_mount', lambda fd: real_os.fstat(fd).st_dev)
+    properties = {
+        ('Unit', 'Id'): f'yggdrasil-bws-deploy@{channel}.service',
+        ('Unit', 'LoadState'): 'loaded', ('Service', 'Type'): 'simple',
+        ('Service', 'User'): 'root', ('Service', 'Group'): 'root',
+        ('Service', 'KillMode'): 'control-group', ('Service', 'Restart'): 'on-failure',
+        ('Unit', 'ActiveState'): 'active', ('Unit', 'SubState'): 'running',
+        ('Unit', 'Job'): [0, '/'], ('Service', 'ControlPID'): 0, ('Service', 'MainPID'): 123,
+        ('Service', 'Environment'): list(environment), ('Service', 'EnvironmentFiles'): [],
+        ('Service', 'Result'): 'success',
+    }
+    for name in ('OnFailure', 'OnSuccess', 'TriggeredBy', 'DropInPaths', 'JoinsNamespaceOf'):
+        properties['Unit', name] = []
+    for name in ('ExecCondition', 'ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecReload',
+                 'BindPaths', 'BindReadOnlyPaths', 'TemporaryFileSystem', 'ReadOnlyPaths',
+                 'ReadWritePaths', 'InaccessiblePaths', 'PassEnvironment', 'UnsetEnvironment', 'ExecSearchPath',
+                 'ExtensionDirectories', 'MountImages', 'ExtensionImages'):
+        properties['Service', name] = []
+    for name in ('RootDirectory', 'RootImage', 'WorkingDirectory', 'PAMName'):
+        properties['Service', name] = ''
+    for name in ('PrivateMounts', 'PrivateTmp', 'PrivateDevices', 'PrivateUsers', 'DynamicUser'):
+        properties['Service', name] = False
+    for name in ('ProtectHome', 'ProtectSystem'):
+        properties['Service', name] = 'no'
+    for name, action in (('ExecStart', 'serve'), ('ExecStopPost', 'cleanup')):
+        properties['Service', name] = [[module.LAUNCHER, [module.LAUNCHER, action, channel],
+                                        False, 1, 2, 3, 4, 5, 1, 0]]
+    def transport(argv):
+        if argv[0] == 'systemctl':
+            action = argv[-2]
+            state['events'].append(action)
+            if action == 'stop':
+                shutil.rmtree(proc / str(properties['Service', 'MainPID']))
+                properties['Unit', 'ActiveState'], properties['Unit', 'SubState'] = 'inactive', 'dead'
+                properties['Service', 'MainPID'] = 0
+                now = time.monotonic_ns() // 1000
+                row = properties['Service', 'ExecStopPost'][0]
+                row[3:] = [1, now, 2, now, 900, 1, 0]
+            else:
+                create_process(456)
+                properties['Unit', 'ActiveState'], properties['Unit', 'SubState'] = 'active', 'running'
+                properties['Service', 'MainPID'] = 456
+                if state.get('consume_start'):
+                    state['consume_start']()
+            return b''
+        if argv[7] == 'call':
+            method = argv[11]
+            signature = 'o' if method == 'GetUnit' else 'a(sus)'
+            pid = properties['Service', 'MainPID']
+            data = ['/org/freedesktop/systemd1/unit/synthetic'] if method == 'GetUnit' else [
+                [['synthetic', pid, 'synthetic']] if pid else [],
+            ]
+        else:
+            interface, name = argv[-2].rsplit('.', 1)[-1], argv[-1]
+            value = properties[interface, name]
+            signature = (module.EXEC_TYPE if name.startswith('Exec') and name != 'ExecSearchPath' else
+                         'a(sb)' if name == 'EnvironmentFiles' else 'a(ssbt)' if name in {'BindPaths', 'BindReadOnlyPaths'} else
+                         'a(ss)' if name in {'TemporaryFileSystem', 'LoadCredentialEncrypted', 'LoadCredential'} else
+                         'a(ssba(ss))' if name == 'MountImages' else
+                         'a(sba(ss))' if name == 'ExtensionImages' else '(uo)' if name == 'Job' else
+                         'b' if type(value) is bool else 'u' if type(value) is int else
+                         'as' if type(value) is list else 's')
+            data = copy.deepcopy(value)
+        return json.dumps(dict(type=signature, data=data)).encode()
+    patch.setattr(module, '_run', transport)
+    return properties
+
+
+def control_path_fixture(monkeypatch, secure_tmp_path, *, channel='dev', slot='descendant'):
+    from types import SimpleNamespace
+    base = secure_tmp_path.resolve()
+    roots = {}
+    for name in ('control', 'application', 'launcher', 'backup'):
+        path = base / name
+        path.mkdir(mode=0o755)
+        roots[name] = path
+    runtime = base / 'runtime'
+    runtime.write_bytes(b'runtime')
+    runtime.chmod(0o755)
+    launcher = roots['launcher'] / 'yggdrasil-bws-deploy'
+    launcher.write_bytes(b'old launcher')
+    launcher.chmod(0o755)
+    control = roots['control']
+    if slot == 'descendant':
+        (control / 'lookup').mkdir(mode=0o755)
+    path = control if slot == 'root' else control / ('lookup' if slot == 'descendant' else 'absent/deeper')
+    environment = ['LLM_PROVIDER=mock', f'PATH=/usr/bin:{path}:/bin', 'UNCHANGED=exact value']
+    state = {'events': []}
+    properties = configure_control_path_service(lifecycle, monkeypatch, state, control,
+        roots['application'], runtime, launcher, channel, environment)
+    def identity(path):
+        info = path.stat()
+        return dict(path=str(path), device=info.st_dev, inode=info.st_ino,
+                    uid=info.st_uid, gid=info.st_gid, mode=info.st_mode & 0o777)
+    service = lifecycle.FixedBwsService(unit=f'yggdrasil-bws-deploy@{channel}.service', channel=channel)
+    payload = launcher.read_bytes()
+    arguments = dict(application_root=identity(roots['application']), control_root=identity(control),
+                     control_inventory_empty=True,
+                     installation_effect_parents=(str(roots['application']), str(roots['launcher'])),
+                     installation_footprint=tuple(identity(roots[n])
+                         for n in ('application', 'launcher', 'backup')),
+                     launcher_content=dict(sha256=hashlib.sha256(payload).hexdigest(),
+                                           base64=base64.b64encode(payload).decode()))
+    return SimpleNamespace(service=service, arguments=arguments, properties=properties,
+                           state=state, roots=roots, slot=path, environment=environment)
+
+
+
+def configure_preserved_dropin(module, patch, base, properties, channel, *, quoted=False, template=False):
+    """Independent temporary disk and loaded manager state; no native input."""
+    directory = base / 'systemd'
+    unit_directory = directory / f"yggdrasil-bws-deploy@{'' if template else channel}.service.d"
+    unit_directory.mkdir(mode=0o755, parents=True)
+    patch.setattr(module, '_SYSTEMD_DIRECTORY', str(directory))
+    selected = unit_directory / 'arbitrary-PATH-private-canary.conf'
+    assignment = next(value for value in properties['Service', 'Environment'] if value.startswith('PATH='))
+    line = '"' + assignment + '"' if quoted else assignment
+    selected.write_bytes(('[Service]\nEnvironment=' + line + '\n').encode())
+    selected.chmod(0o644)
+    properties.update({
+        ('Unit', 'DropInPaths'): [str(selected)], ('Unit', 'NeedDaemonReload'): False,
+        ('Service', 'StandardOutput'): 'null', ('Service', 'StandardError'): 'null',
+        ('Service', 'UMask'): 0o077,
+        ('Service', 'LoadCredentialEncrypted'): [
+            ['bws-machine-account-token', f'/var/lib/yggdrasil/bws-tokens/{channel}/current']],
+        ('Service', 'LoadCredential'): [],
+    })
+    return selected
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('fault', [
+    'valid', 'quoted-template', 'two', 'wrong-directory', 'hidden', 'long-name', 'traversal',
+    'extra-directive', 'extra-section', 'multiple', 'reset', 'expansion', 'escape', 'encoding',
+    'oversize', 'no-newline', 'whitespace', 'empty-component', 'duplicate-component',
+    'executable', 'writable', 'hardlink', 'symlink', 'foreign', 'directory',
+    'PATH', 'Environment-order', 'namespace', 'exec', 'stdout', 'stderr', 'umask',
+    'credential', 'plain-credential', 'reload', 'reload-type', 'missing', 'backend', 'signature',
+    'equal-mtime', 'older-mtime',
+])
+def test_preserved_dropin_profile_semantic_matrix(monkeypatch, secure_tmp_path, channel, fault):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path, channel=channel)
+    selected = configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(),
+        fixture.properties, channel, quoted=fault == 'quoted-template', template=fault == 'quoted-template')
+    original = selected.read_bytes()
+    properties = fixture.properties
+    if fault == 'two':
+        properties['Unit', 'DropInPaths'] *= 2
+    elif fault == 'wrong-directory':
+        properties['Unit', 'DropInPaths'] = ['/run/systemd/system/unit.service.d/path.conf']
+    elif fault in {'hidden', 'long-name', 'traversal'}:
+        name = {'hidden': '.hidden.conf', 'long-name': 'x' * 81 + '.conf', 'traversal': '../path.conf'}[fault]
+        properties['Unit', 'DropInPaths'] = [str(selected.parent) + '/' + name]
+    elif fault in {'extra-directive', 'extra-section', 'multiple', 'reset', 'expansion', 'escape',
+                   'encoding', 'oversize', 'no-newline', 'whitespace', 'empty-component', 'duplicate-component'}:
+        malformed = {
+            'extra-directive': original + b'ExecStart=/bin/false\n',
+            'extra-section': original + b'[Unit]\n', 'multiple': original + original,
+            'reset': b'[Service]\nEnvironment=\n', 'expansion': original.replace(b'/usr/bin', b'$HOME'),
+            'escape': original.replace(b'/usr/bin', b'/usr/\\bin'), 'encoding': original + b'\xff',
+            'oversize': b'x' * 4097, 'no-newline': original[:-1],
+            'whitespace': original.replace(b'/usr/bin', b'/usr/ bin'),
+            'empty-component': original.replace(b'/usr/bin:', b'/usr/bin::'),
+            'duplicate-component': original.replace(b'/usr/bin:', b'/usr/bin:/usr/bin:'),
+        }
+        selected.write_bytes(malformed[fault])
+    elif fault in {'executable', 'writable'}:
+        selected.chmod(0o755 if fault == 'executable' else 0o666)
+    elif fault == 'hardlink':
+        os.link(selected, selected.with_name('second.conf'))
+    elif fault == 'symlink':
+        other = selected.with_name('other.conf')
+        selected.rename(other)
+        selected.symlink_to(other)
+    elif fault == 'directory':
+        selected.unlink()
+        selected.mkdir()
+    elif fault == 'foreign':
+        from types import SimpleNamespace
+        real = lifecycle.os.fstat
+        inode = selected.stat().st_ino
+        def foreign(fd):
+            value = real(fd)
+            return (SimpleNamespace(**{**{n: getattr(value, n) for n in dir(value) if n.startswith('st_')},
+                                      'st_uid': value.st_uid + 1}) if value.st_ino == inode else value)
+        monkeypatch.setattr(lifecycle.os, 'fstat', foreign)
+    elif fault in {'PATH', 'equal-mtime', 'older-mtime'}:
+        before = selected.stat()
+        selected.write_bytes(original.replace(b'/usr/bin', b'/opt/bin'))
+        if fault != 'PATH':
+            os.utime(selected, ns=(before.st_atime_ns, before.st_mtime_ns - (0 if fault == 'equal-mtime' else 100000)))
+        assert properties['Unit', 'NeedDaemonReload'] is False
+    elif fault in {'namespace', 'exec', 'stdout', 'stderr', 'umask', 'credential', 'plain-credential', 'reload', 'reload-type'}:
+        key, value = {
+            'namespace': (('Service', 'PrivateMounts'), True),
+            'exec': (('Service', 'ExecStartPre'), properties['Service', 'ExecStart']),
+            'stdout': (('Service', 'StandardOutput'), 'journal'),
+            'stderr': (('Service', 'StandardError'), 'inherit'),
+            'umask': (('Service', 'UMask'), 0o022),
+            'credential': (('Service', 'LoadCredentialEncrypted'), [['bws-machine-account-token', '/private-canary']]),
+            'plain-credential': (('Service', 'LoadCredential'), [['secret', '/private-canary']]),
+            'reload': (('Unit', 'NeedDaemonReload'), True),
+            'reload-type': (('Unit', 'NeedDaemonReload'), 0),
+        }[fault]
+        properties[key] = value
+    transport = lifecycle._run
+    reads = []
+    def manager(argv):
+        import json
+        reads.append(argv[-1])
+        assert argv[-1] not in {'SetCredential', 'SetCredentialEncrypted'}
+        if argv[-1] == 'NeedDaemonReload':
+            if fault in {'missing', 'backend'}:
+                raise OSError('PRIVATE_CANARY manager failure')
+            if fault == 'signature':
+                return json.dumps(dict(type='s', data=False)).encode()
+        return transport(argv)
+    monkeypatch.setattr(lifecycle, '_run', manager)
+    if fault in {'valid', 'quoted-template', 'Environment-order'}:
+        with fixture.service.retained_runtime():
+            fixture.service.qualify_old(**fixture.arguments)
+            contract = fixture.service.contract
+            assert contract[2] == tuple(fixture.environment)
+            assert fixture.service._config() == contract
+            assert selected.read_bytes() == original
+            if fault == 'Environment-order':
+                properties['Service', 'Environment'].reverse()
+                with pytest.raises(RuntimeError):
+                    fixture.service.revalidate_empty_control_configuration()
+        assert not fixture.service.control_path_binding.fds
+    else:
+        with pytest.raises(RuntimeError) as failure:
+            with fixture.service.retained_runtime():
+                fixture.service.qualify_old(**fixture.arguments)
+        assert str(failure.value) == 'bws_lifecycle_unproven'
+        assert fixture.state['events'] == []
+        if fixture.service.control_path_binding:
+            assert not fixture.service.control_path_binding.fds
+    assert not any('SetCredential' in name for name in reads)
+
+@pytest.mark.parametrize('slot', ['root', 'descendant', 'absent'])
+def test_control_path_projection_preserves_typed_environment(monkeypatch, secure_tmp_path, slot):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path, slot=slot)
+    with fixture.service.retained_runtime():
+        fixture.service.qualify_old(**fixture.arguments)
+        contract = fixture.service.contract
+        assert contract[2] == tuple(fixture.environment)
+        assert fixture.service._config() == contract
+        fixture.service.revalidate_empty_control_configuration()
+        assert fixture.service.control_path_binding.fds
+    assert fixture.service.runtime_close_completed
+    assert not fixture.service.control_path_binding.fds
+    assert not fixture.state['events']
+
+
+@pytest.mark.parametrize('fault', ['executable', 'symlink', 'fifo', 'hardlink', 'writable',
+    'foreign', 'relative', 'duplicate', 'empty', 'unknown_hint', 'environment_file', 'loader',
+    'namespace', 'changed_environment', 'changed_lookup', 'changed_mount', 'overlap'])
+def test_control_path_slot_refusal_matrix(monkeypatch, secure_tmp_path, fault):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    slot, properties = fixture.slot, fixture.properties
+    if fault in {'executable', 'hardlink', 'writable'}:
+        item = slot / 'candidate'
+        item.write_bytes(b'unread PRIVATE_CANARY')
+        item.chmod(0o755 if fault == 'executable' else 0o666 if fault == 'writable' else 0o644)
+        if fault == 'hardlink':
+            os.link(item, slot / 'second')
+    if fault == 'symlink':
+        (slot / 'candidate').symlink_to('/outside/PRIVATE_CANARY')
+    if fault == 'fifo':
+        os.mkfifo(slot / 'candidate')
+    if fault == 'foreign':
+        monkeypatch.setattr(lifecycle, '_CONTROL_OWNER_UID', os.geteuid() + 1)
+    if fault == 'relative':
+        properties['Service', 'Environment'][1] += ':relative'
+    if fault == 'duplicate':
+        properties['Service', 'Environment'].append('PATH=/usr/bin')
+    if fault == 'empty':
+        properties['Service', 'Environment'][1] += ':'
+    if fault == 'unknown_hint':
+        properties['Service', 'Environment'].append('PYTHONPATH=' + str(slot))
+    if fault == 'environment_file':
+        properties['Service', 'EnvironmentFiles'] = [['/private/PRIVATE_CANARY', False]]
+    if fault == 'loader':
+        (fixture.roots['control'] / 'app').mkdir()
+    if fault == 'namespace':
+        properties['Service', 'RootDirectory'] = '/private/PRIVATE_CANARY'
+    if fault == 'overlap':
+        fixture.arguments['installation_footprint'] = (fixture.arguments['control_root'],) * 3
+    with fixture.service.retained_runtime():
+        if fault.startswith('changed_'):
+            fixture.service.qualify_old(**fixture.arguments)
+            if fault == 'changed_environment':
+                properties['Service', 'Environment'].reverse()
+            elif fault == 'changed_lookup':
+                slot.rename(slot.with_name('old'))
+                slot.mkdir(mode=0o755)
+            else:
+                original = lifecycle._control_path_mount
+                monkeypatch.setattr(lifecycle, '_control_path_mount', lambda fd: original(fd) + 1)
+            with pytest.raises(RuntimeError):
+                fixture.service.revalidate_empty_control_configuration()
+        else:
+            with pytest.raises(RuntimeError):
+                fixture.service.qualify_old(**fixture.arguments)
+    assert not fixture.state['events']
+    assert fixture.service.runtime_close_completed
+    if fixture.service.control_path_binding:
+        assert not fixture.service.control_path_binding.fds
+
+
+# Independent bus protocol inventory: no production classification table or
+# inferred Python value type supplies a successful signature or an expectation.
+_UNIT_SIGNATURES = {
+    **dict.fromkeys(('Unit_Id', 'Unit_LoadState', 'Service_Type', 'Service_User',
+                    'Service_Group', 'Service_KillMode', 'Service_Restart',
+                    'Unit_ActiveState', 'Unit_SubState', 'Service_Result',
+                    'Service_RootDirectory', 'Service_RootImage', 'Service_WorkingDirectory',
+                    'Service_PAMName', 'Service_ProtectHome', 'Service_ProtectSystem'), 's'),
+    **dict.fromkeys(('Unit_OnFailure', 'Unit_OnSuccess', 'Unit_TriggeredBy',
+                    'Unit_DropInPaths', 'Unit_JoinsNamespaceOf', 'Service_Environment',
+                    'Service_ReadOnlyPaths', 'Service_ReadWritePaths', 'Service_InaccessiblePaths',
+                    'Service_PassEnvironment', 'Service_ExtensionDirectories',
+                    'Service_UnsetEnvironment', 'Service_ExecSearchPath'), 'as'),
+    **dict.fromkeys(('Service_ExecCondition', 'Service_ExecStartPre', 'Service_ExecStartPost',
+                    'Service_ExecStop', 'Service_ExecReload', 'Service_ExecStart',
+                    'Service_ExecStopPost'), 'a(sasbttttuii)'),
+    **dict.fromkeys(('Service_PrivateMounts', 'Service_PrivateTmp', 'Service_PrivateDevices',
+                    'Service_PrivateUsers', 'Service_DynamicUser'), 'b'),
+    'Service_BindPaths': 'a(ssbt)', 'Service_BindReadOnlyPaths': 'a(ssbt)',
+    'Service_TemporaryFileSystem': 'a(ss)', 'Service_MountImages': 'a(ssba(ss))',
+    'Service_ExtensionImages': 'a(sba(ss))', 'Service_EnvironmentFiles': 'a(sb)',
+    'Unit_Job': '(uo)', 'Service_ControlPID': 'u', 'Service_MainPID': 'u',
+    'Manager_GetUnit': 'o', 'Manager_GetUnitProcesses': 'a(sus)',
+}
+_UNIT_INITIAL_TRACE = (
+    'Manager_GetUnit Unit_Id Unit_LoadState Service_Type Service_User Service_Group '
+    'Service_KillMode Service_Restart Unit_OnFailure Unit_OnSuccess Unit_TriggeredBy '
+    'Service_ExecCondition Service_ExecStartPre Service_ExecStartPost Service_ExecStop '
+    'Service_ExecReload Service_ExecStart Service_ExecStopPost Service_Environment '
+    'Service_EnvironmentFiles Service_RootDirectory Service_RootImage Service_WorkingDirectory '
+    'Service_BindPaths Service_BindReadOnlyPaths Service_TemporaryFileSystem Service_ReadOnlyPaths '
+    'Service_ReadWritePaths Service_InaccessiblePaths Service_PassEnvironment Service_ExtensionDirectories '
+    'Service_MountImages Service_ExtensionImages Service_PAMName Service_UnsetEnvironment '
+    'Service_ExecSearchPath Service_PrivateMounts Service_PrivateTmp Service_PrivateDevices '
+    'Service_PrivateUsers Service_DynamicUser Service_ProtectHome Service_ProtectSystem '
+    'Unit_DropInPaths Unit_JoinsNamespaceOf Unit_ActiveState Unit_SubState Unit_Job '
+    'Service_ControlPID Service_MainPID Manager_GetUnitProcesses Service_ExecStopPost_final'
+).split()
+_UNIT_VALUE_SITES = _UNIT_INITIAL_TRACE[1:11] + _UNIT_INITIAL_TRACE[20:45]
+
+
+def install_unit_property_transport(module, patch, state, properties, fault=None, *, real_run=None):
+    """Real _run with independently authored responses at the subprocess port."""
+    import json
+    from types import SimpleNamespace
+    simulated_actions = module._run
+    state['unit_trace'] = []
+    state['unit_fault_fired'] = False
+    def run(argv, **kwargs):
+        assert kwargs == dict(stdin=module.subprocess.DEVNULL, env=module.ENV,
+                              capture_output=True, check=False, timeout=60)
+        if argv[0] == 'systemctl':
+            return SimpleNamespace(returncode=0, stdout=simulated_actions(argv), stderr=b'')
+        assert argv[:7] == ['busctl', '--system', '--no-pager', '--json=short', '--auto-start=no',
+                            '--allow-interactive-authorization=no', '--timeout=30s']
+        if argv[7] == 'call':
+            site = 'Manager_' + argv[11]
+            data = (['/org/freedesktop/systemd1/unit/synthetic'] if site == 'Manager_GetUnit' else
+                    [[['PRIVATE_CANARY', properties['Service', 'MainPID'], 'PRIVATE_CANARY']]
+                     if properties['Service', 'MainPID'] else []])
+        else:
+            interface, name = argv[-2].rsplit('.', 1)[-1], argv[-1]
+            site = interface + '_' + name
+            data = properties[interface, name]
+        signature = _UNIT_SIGNATURES[site]
+        if site == 'Service_ExecStopPost' and state['unit_trace'].count(site) == 1:
+            site += '_final'
+        state['unit_trace'].append(site)
+        if fault and site == fault['site'] and not state['unit_fault_fired']:
+            state['unit_fault_fired'] = True
+            kind = fault['kind']
+            if kind == 'backend':
+                return SimpleNamespace(returncode=1, stdout=b'PRIVATE_CANARY', stderr=b'PRIVATE_CANARY')
+            if kind == 'exception':
+                raise OSError('PRIVATE_CANARY')
+            if kind == 'decode':
+                return SimpleNamespace(returncode=0, stdout=b'{PRIVATE_CANARY', stderr=b'')
+            if kind == 'duplicate':
+                return SimpleNamespace(returncode=0, stdout=b'{"type":"s","type":"PRIVATE_CANARY","data":0}', stderr=b'')
+            if kind == 'signature':
+                signature = 'PRIVATE_CANARY'
+            if kind == 'shape':
+                return SimpleNamespace(returncode=0, stdout=b'{"PRIVATE_CANARY":[]}', stderr=b'')
+            if kind == 'object':
+                data = ['PRIVATE_CANARY']
+            if kind == 'rows':
+                data = [[['PRIVATE_CANARY']]]
+            if kind == 'value':
+                data = fault.get('data', 'PRIVATE_CANARY')
+        return SimpleNamespace(returncode=0, stdout=json.dumps(dict(type=signature, data=data)).encode(), stderr=b'')
+    patch.setattr(module, '_run', real_run or _REAL_LIFECYCLE_RUN)
+    # Isolate the Linux/root prerequisites to this lifecycle's OS port.
+    patch.setattr(module, 'os', SimpleNamespace(**{**vars(module.os), 'geteuid': lambda: 0}))
+    patch.setattr(module, 'sys', SimpleNamespace(**{**vars(module.sys), 'platform': 'linux'}))
+    patch.setattr(module, 'subprocess', SimpleNamespace(**{**vars(module.subprocess), 'run': run}))
+
+
+@pytest.mark.parametrize('site,kind', [
+    (site, kind) for site in _UNIT_INITIAL_TRACE
+    for kind in ('backend', 'decode', 'signature', 'shape', 'value')
+] + [('Manager_GetUnit', 'object'), ('Manager_GetUnitProcesses', 'rows'),
+     ('Service_Type', 'exception'), ('Service_PrivateTmp', 'duplicate'), ('Unit_Job', 'exception')])
+def test_initial_unit_property_sites_and_failure_kinds(monkeypatch, secure_tmp_path, capsys, site, kind):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    install_unit_property_transport(lifecycle, monkeypatch, fixture.state, fixture.properties,
+                                    dict(site=site, kind=kind))
+    semantic = ('service_process' if site in _UNIT_INITIAL_TRACE[45:51] else
+                'cleanup_contract' if site in {'Service_ExecStopPost', 'Service_ExecStopPost_final'} else
+                'launcher')
+    expected_kind = ('shape' if kind == 'value' and site in {
+        'Manager_GetUnit', 'Manager_GetUnitProcesses', 'Service_Environment', 'Service_EnvironmentFiles',
+    } else kind)
+    expected_kind = {'exception': 'backend', 'duplicate': 'decode', 'object': 'shape'}.get(kind, expected_kind)
+    expected_family = ('unit_properties' if kind != 'value' or site in _UNIT_VALUE_SITES
+                       or expected_kind == 'shape' else semantic)
+    if kind == 'rows':
+        expected_family = 'service_process'
+    with fixture.service.retained_runtime():
+        with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+            fixture.service.qualify_old(**fixture.arguments)
+    assert type(caught.value) is lifecycle._OldQualificationRefusal
+    assert caught.value.subgate == expected_family
+    assert caught.value.unit_property == ((site, expected_kind) if expected_family == 'unit_properties' else None)
+    trace = fixture.state['unit_trace']
+    end = _UNIT_INITIAL_TRACE.index(site) + 1
+    # Original compound reads complete before required-value predicates.
+    if kind == 'value' and site in {'Service_Environment', 'Unit_ActiveState', 'Service_ControlPID'}:
+        end += 1
+    assert trace == _UNIT_INITIAL_TRACE[:end]
+    assert fixture.state['unit_fault_fired'] and not fixture.state['events']
+    assert fixture.service.runtime_close_completed
+    assert 'PRIVATE_CANARY' not in str(caught.value) + repr(capsys.readouterr())
+
+
+def test_preserved_dropin_descriptor_saturation_refuses_before_file_open(monkeypatch, secure_tmp_path):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    selected = configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(),
+                                         fixture.properties, 'dev')
+    # Independent finite fixture topology: qualification opens these root and
+    # effect-parent ancestors before selecting the file. Leave exactly no slot.
+    directories = set()
+    for path in (*fixture.roots.values(), selected.parent):
+        directories.update((path, *path.parents))
+    limit = len(directories)
+    monkeypatch.setattr(lifecycle, '_control_path_descriptor_bound', lambda: limit)
+    real_open, real_close = lifecycle.os.open, lifecycle.os.close
+    owned = set()
+    selected_opens = []
+    maximum = 0
+    def open_fd(path, flags, *args, **kwargs):
+        nonlocal maximum
+        if str(path) == selected.name:
+            selected_opens.append(path)
+        fd = real_open(path, flags, *args, **kwargs)
+        assert fd not in owned
+        owned.add(fd)
+        maximum = max(maximum, len(owned))
+        return fd
+    def close_fd(fd):
+        assert fd in owned  # exactly one close per original open, including reuse
+        owned.remove(fd)
+        real_close(fd)
+    monkeypatch.setattr(lifecycle.os, 'open', open_fd)
+    monkeypatch.setattr(lifecycle.os, 'close', close_fd)
+    with pytest.raises(RuntimeError, match='bws_lifecycle_unproven'):
+        with fixture.service.retained_runtime():
+            fixture.service.qualify_old(**fixture.arguments)
+    assert selected_opens == []
+    assert not owned and not fixture.service.control_path_binding.fds
+    assert maximum <= limit + 1  # existing separately budgeted runtime reader
+    assert fixture.state['events'] == []

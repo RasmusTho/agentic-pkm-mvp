@@ -3350,7 +3350,7 @@ def _old_qualification_case(monkeypatch, secure_tmp_path, channel="dev"):
 def _assert_old_refusal(result, events, expected):
     receipt = result["source_installation"]
     assert receipt["status"] == "refused_before_backup"
-    if expected.endswith('_root_control'):
+    if expected.endswith(('_root_control', '_initial_unit_properties')):
         assert (receipt['prebackup_gate'] == expected
                 or receipt['prebackup_gate'].startswith(expected + '__'))
     else:
@@ -3673,3 +3673,229 @@ def test_root_control_defensive_projection_rows_have_real_producer_invariants(mo
         'action': 'source-installation', 'operation_id': str(uuid.uuid4()),
         'candidate_sha': 'a' * 40, 'image_digest': 'sha256:' + 'b' * 64, 'bundle_name': 'fixed',
     })) == {'operation_id', 'candidate_sha', 'image_digest', 'bundle_name'}
+
+
+@pytest.mark.parametrize('mode', ['manifest', 'effect-alias', 'process-cwd'])
+def test_control_path_slots_bind_complete_effect_footprint(monkeypatch, secure_tmp_path, mode):
+    import base64
+    if mode in {'effect-alias', 'process-cwd'}:
+        from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
+        assert exercise_control_path_transaction(secure_tmp_path, 'dev', mode)['status'] == 'refused_before_backup'
+        return
+    from tests.ops.test_bws_installation_lifecycle import configure_control_path_service
+    case = _empty_control_manifest_case(monkeypatch, secure_tmp_path)
+    unrelated = case.control_root / 'unrelated'
+    unrelated.write_bytes(b'untouched synthetic data')
+    unrelated.chmod(0o644)
+    changes, payloads, proof = case.invoke()
+    assert {c.root for c in changes} == {'application', 'launcher'}
+    footprint = proof['control_path_footprint']
+    assert tuple(r['path'] for r in footprint) == (
+        case.roots['application'].path, case.roots['launcher'].path, proof['backup_root'].path,
+    )
+    runtime = secure_tmp_path / 'runtime'
+    runtime.write_bytes(b'synthetic runtime')
+    runtime.chmod(0o755)
+    launcher = Path(case.roots['launcher'].path) / 'yggdrasil-bws-deploy'
+    launcher.write_bytes(b'legacy launcher bytes\n')
+    launcher.chmod(0o755)
+    state = {'events': []}
+    configure_control_path_service(bws_installation_lifecycle, monkeypatch, state, case.control_root,
+        case.app_root, runtime, launcher, 'dev', ['PATH=/usr/bin:' + str(case.control_root)])
+    raw = payloads['launcher', 'yggdrasil-bws-deploy']
+    for selected in (footprint, (footprint[0], footprint[1], dict(footprint[2], path=str(case.control_root)))):
+        service = bws_installation_lifecycle.FixedBwsService(unit='yggdrasil-bws-deploy@dev.service', channel='dev')
+        with service.retained_runtime():
+            arguments = dict(application_root=dict(path=str(case.app_root), **case.profile['roots']['application']),
+                control_root=dict(path=str(case.control_root), **case.profile['roots']['control']),
+                control_inventory_empty=True, installation_footprint=selected,
+                installation_effect_parents=proof['control_path_effect_parents'],
+                launcher_content=dict(sha256=transaction._sha(raw), base64=base64.b64encode(raw).decode()))
+            if selected == footprint:
+                service.qualify_old(**arguments)
+                service.revalidate_empty_control_configuration()
+            else:
+                with pytest.raises(RuntimeError):
+                    service.qualify_old(**arguments)
+    assert not state['events']
+    assert unrelated.read_bytes() == b'untouched synthetic data'
+    assert not list(Path(proof['backup_root'].path).iterdir())
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('fault', ['partial', 'close', 'transient-initial', 'transient-prebackup',
+                                   'proc-close', 'launcher-close'])
+def test_control_path_slots_restore_original_generation(secure_tmp_path, channel, fault):
+    from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
+    result = exercise_control_path_transaction(secure_tmp_path, channel, fault)
+    assert result['status'] == ('compensated_stopped' if fault == 'partial' else 'unknown')
+
+
+def test_control_path_projection_privacy_and_legacy_refusals(monkeypatch, secure_tmp_path):
+    from tests.ops.test_bws_installation_lifecycle import control_path_fixture
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    fixture.properties['Service', 'Environment'].append('PYTHONPATH=' + str(fixture.slot) + '/PRIVATE_CANARY')
+    with fixture.service.retained_runtime():
+        with pytest.raises(bws_installation_lifecycle._OldQualificationRefusal) as caught:
+            fixture.service.qualify_old(**fixture.arguments)
+    assert str(caught.value) == 'bws_lifecycle_unproven'
+    assert caught.value.subgate == 'root_control'
+    assert caught.value.root_control == ('captured_empty', 'old', 'hints', 'environment_hint')
+    assert 'PRIVATE_CANARY' not in repr((str(caught.value), caught.value.root_control))
+    assert not fixture.state['events']
+
+
+@pytest.mark.parametrize('scenario', ['positive', 'environment-order', 'short-circuit', 'retained', 'path-close', 'transient'])
+def test_initial_unit_property_refinement_preserves_order_and_close_uncertainty(
+    monkeypatch, secure_tmp_path, scenario,
+):
+    from tests.ops.test_bws_installation_lifecycle import (
+        control_path_fixture, install_unit_property_transport, _UNIT_INITIAL_TRACE,
+    )
+    if scenario in {'retained', 'path-close'}:
+        from tests.deploy.test_bws_source_rpc_assembly import exercise_unit_property_close
+        assert exercise_unit_property_close(secure_tmp_path,
+            'runtime-close' if scenario == 'retained' else 'close')['status'] == 'unknown'
+        return
+    if scenario == 'transient':
+        from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
+        result = exercise_control_path_transaction(secure_tmp_path, 'dev',
+            'close' if scenario == 'retained' else 'transient-initial')
+        assert result['status'] == 'unknown'
+        return
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    fault = None if scenario == 'positive' else dict(
+        site='Service_Environment' if scenario == 'environment-order' else 'Service_Type', kind='value')
+    install_unit_property_transport(bws_installation_lifecycle, monkeypatch, fixture.state,
+                                    fixture.properties, fault)
+    with fixture.service.retained_runtime():
+        if fault:
+            with pytest.raises(bws_installation_lifecycle._OldQualificationRefusal) as caught:
+                fixture.service.qualify_old(**fixture.arguments)
+            assert caught.value.unit_property == (fault['site'], 'shape' if scenario == 'environment-order' else 'value')
+        else:
+            fixture.service.qualify_old(**fixture.arguments)
+            assert fixture.service.contract[2] == tuple(fixture.environment)
+            assert fixture.properties['Service', 'Environment'] == fixture.environment
+            assert fixture.service.phase == 'qualified'
+    trace = fixture.state['unit_trace']
+    assert trace == (_UNIT_INITIAL_TRACE if scenario == 'positive' else
+                     _UNIT_INITIAL_TRACE[:20] if scenario == 'environment-order' else _UNIT_INITIAL_TRACE[:4])
+    assert fixture.service.runtime_close_completed and not fixture.state['events']
+
+
+@pytest.mark.parametrize('kind', ['supported', 'absent', 'foreign', 'subclass', 'unknown-site',
+                                'unknown-kind', 'list', 'member-type', 'extra', 'missing', 'final'])
+def test_initial_unit_property_refinement_preserves_privacy_and_legacy_fallback(kind):
+    request, ports, _admission, service, events, *_ = _transaction_fixture()
+    cls = bws_installation_lifecycle._OldQualificationRefusal
+    class Foreign(cls):
+        pass
+    def refuse(**_kwargs):
+        refinement = ('Service_Type', 'value')
+        failure = (RuntimeError('PRIVATE_CANARY') if kind == 'foreign' else
+                   Foreign('unit_properties') if kind == 'subclass' else cls('unit_properties'))
+        failure.subgate = 'unit_properties'
+        failure.unit_property = {
+            'absent': None, 'unknown-site': ('PRIVATE_CANARY', 'value'),
+            'unknown-kind': ('Service_Type', 'PRIVATE_CANARY'), 'list': ['Service_Type', 'value'],
+            'member-type': ('Service_Type', []), 'extra': ('Service_Type', 'value', 'PRIVATE_CANARY'),
+        }.get(kind, refinement)
+        if kind == 'missing':
+            del failure.unit_property
+        raise failure
+    if kind == 'final':
+        # A supported-looking metadata tuple cannot move final-stage semantics.
+        service.control_inventory_empty = True
+        service.revalidate_empty_control_configuration = refuse
+    else:
+        service.qualify_old = refuse
+    result = transaction._execute_source_installation('dev', request, ports)
+    gate = ('old_kernel_qualification' if kind in {'foreign', 'subclass'} else
+            'old_kernel_empty_control_unit_properties' if kind == 'final' else
+            'old_kernel_initial_unit_properties__Service_Type__value' if kind == 'supported' else
+            'old_kernel_initial_unit_properties')
+    _assert_old_refusal(result, events, gate)
+    assert events.count('runtime_close') == 1
+
+
+@pytest.mark.parametrize('mode', ['manifest', 'selection', 'content', 'ancestor', 'lookup', 'mount',
+                                  'effect-mount', 'application-overlap', 'backup-overlap',
+                                  'prebackup', 'prestop', 'after-start', 'closing'])
+def test_preserved_dropin_profile_binds_effects_and_revalidation(monkeypatch, secure_tmp_path, mode):
+    import base64
+    from tests.ops.test_bws_installation_lifecycle import configure_control_path_service, configure_preserved_dropin
+    if mode in {'prebackup', 'prestop', 'after-start', 'closing'}:
+        from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
+        result = exercise_control_path_transaction(secure_tmp_path, 'dev', 'preserved-' + mode)
+        assert result['status'] == ('refused_before_backup' if mode == 'prebackup' else 'unknown')
+        return
+    case = _empty_control_manifest_case(monkeypatch, secure_tmp_path)
+    changes, payloads, proof = case.invoke()
+    assert {c.root for c in changes} == {'application', 'launcher'}
+    runtime = secure_tmp_path / 'runtime'
+    runtime.write_bytes(b'synthetic runtime')
+    runtime.chmod(0o755)
+    launcher = Path(case.roots['launcher'].path) / 'yggdrasil-bws-deploy'
+    launcher.write_bytes(b'legacy launcher bytes\n')
+    launcher.chmod(0o755)
+    state = {'events': []}
+    module = bws_installation_lifecycle
+    properties = configure_control_path_service(module, monkeypatch, state, case.control_root,
+        case.app_root, runtime, launcher, 'dev', ['PATH=/usr/bin:' + str(case.control_root)])
+    directory = (case.app_root if mode == 'application-overlap' else Path(proof['backup_root'].path)
+                 if mode == 'backup-overlap' else secure_tmp_path.resolve())
+    selected = configure_preserved_dropin(module, monkeypatch, directory, properties, 'dev')
+    raw = payloads['launcher', 'yggdrasil-bws-deploy']
+    service = module.FixedBwsService(unit='yggdrasil-bws-deploy@dev.service', channel='dev')
+    arguments = dict(application_root=dict(path=str(case.app_root), **case.profile['roots']['application']),
+        control_root=dict(path=str(case.control_root), **case.profile['roots']['control']),
+        control_inventory_empty=True, installation_footprint=proof['control_path_footprint'],
+        installation_effect_parents=proof['control_path_effect_parents'],
+        launcher_content=dict(sha256=transaction._sha(raw), base64=base64.b64encode(raw).decode()))
+    with service.retained_runtime():
+        if mode.endswith('overlap'):
+            with pytest.raises(RuntimeError):
+                service.qualify_old(**arguments)
+        else:
+            service.qualify_old(**arguments)
+            contract = service.contract
+            held = service.control_path_binding.fds
+            assert str(selected) in held
+            assert all(path in held for path in proof['control_path_effect_parents'])
+            assert all(root['path'] in held for root in proof['control_path_footprint'])
+            if mode == 'manifest':
+                assert service._config() == contract
+                assert transaction._generation_sha(case.profile, 'a' * 64, contract) != transaction._generation_sha(
+                    case.profile, 'a' * 64, contract[:-1])
+            else:
+                if mode == 'selection':
+                    properties['Unit', 'DropInPaths'] = []
+                elif mode == 'content':
+                    selected.write_bytes(selected.read_bytes().replace(b'/usr/bin', b'/opt/bin'))
+                elif mode == 'ancestor':
+                    selected.parent.chmod(0o777)
+                elif mode == 'lookup':
+                    data = selected.read_bytes()
+                    selected.rename(selected.with_name('retained.conf'))
+                    selected.write_bytes(data)
+                elif mode in {'mount', 'effect-mount'}:
+                    target = selected if mode == 'mount' else case.app_root / 'app/ops'
+                    identity = target.stat()
+                    original = module._control_path_mount
+                    def mount(fd):
+                        info = module.os.fstat(fd)
+                        return original(fd) + int((info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino))
+                    monkeypatch.setattr(module, '_control_path_mount', mount)
+                with pytest.raises(RuntimeError):
+                    service.revalidate_empty_control_configuration()
+    assert not state['events']
+    assert not service.control_path_binding.fds
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('mode', ['partial', 'restored-drift'])
+def test_preserved_dropin_profile_preserves_compensation_boundaries(secure_tmp_path, channel, mode):
+    from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
+    result = exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode)
+    assert result['status'] == ('compensated_stopped' if mode == 'partial' else 'unknown')

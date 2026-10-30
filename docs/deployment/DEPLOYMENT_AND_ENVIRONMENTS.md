@@ -1265,12 +1265,82 @@ inventory is empty; a changed root or a newly appearing control source refuses.
 After caller-source validation and immediately before backup, old-kernel lifecycle
 qualification also accepts this shape only when the fixed control-root identity
 still matches and both loader packages remain absent at every repeated configuration
-check, and the fixed launcher, unit environment, and EnvironmentFiles paths contain
-no control-root reference. This matches the installed unit/launcher topology; any
-hint is refused until its format is explicitly supported. Existing anchored roots keep
-their strict anchor checks. This support-topology proof does not establish
-loaded-code provenance or operation ownership, and the application inventory remains
-required and non-empty. It does not establish DEV or TEST acceptance.
+check. With no control hint, the existing checks are unchanged. The additional
+supported format is exactly one byte-preserved typed `PATH=` assignment with at
+most 16 distinct canonical absolute components (at most 32 components per path),
+including the fixed control root or its descendants. Empty, relative, traversing,
+duplicate or unsupported hints refuse. EnvironmentFiles, ambient environment
+imports and unsupported mount/root/namespace overrides must be absent. Unit
+drop-ins are absent except for the finite preserved-input profile below. Both OLD and proposed launchers remain free of control hints; the absolute
+launcher/interpreter, loaded-source provenance and writer/quiescence gates remain
+independently mandatory. Complete Environment bytes and ordering are bound into
+the private lifecycle/generation projection; child runtime-bin prepending is unchanged.
+
+The captured-empty PATH branch also accepts exactly one selected `.conf` file in
+`/etc/systemd/system/yggdrasil-bws-deploy@<dev|test>.service.d/` or the corresponding
+`yggdrasil-bws-deploy@.service.d/` template directory. Its non-hidden ASCII basename
+is selected by grammar (at most 80 characters), with no guessed name or historical
+author requirement. The protected root-owned no-follow chain must end in a regular,
+singly linked, non-executable file of at most 4096 bytes. Its entire syntax is two
+newline-terminated lines: `[Service]` and `Environment=PATH=<value>`, optionally with
+one pair of double quotes around the complete assignment. PATH retains the above
+component bounds and admits only ASCII letters, digits, underscore, dot, slash,
+colon, plus and hyphen; whitespace, expansion, escaping, continuation, resets,
+extra directives and sections refuse. Only this selected file is read; no other
+configuration content or directory content census is needed. Its bytes are preserved.
+
+The parsed assignment must exactly equal the sole typed loaded Environment PATH
+value. The existing namespace, exec, environment-import, root and trigger guards
+remain mandatory. Additional typed evidence must show `NeedDaemonReload=false`,
+`StandardOutput=StandardError=null`, `UMask=0077`, empty `LoadCredential`, and the
+canonical encrypted-credential metadata pair `bws-machine-account-token` to
+`/var/lib/yggdrasil/bws-tokens/<channel>/current`. Credential payloads, SetCredential
+properties and credential files are never read. The file version/content projection,
+PATH and these effective settings join the private service/generation contract and
+all existing qualification, prebackup, prestop, candidate, closing and restoration
+checks. Unsupported, missing or wrongly typed evidence refuses without value-bearing
+diagnostics. The additional retained file/ancestors and fresh verification walk are
+included in descriptor admission; preparation subtracts already retained demand.
+
+This is finite invariant-relevant loaded semantic proof, not historical loaded-unit
+raw-byte identity. `NeedDaemonReload=false` is only a supplementary pending-change
+guard; matching timestamps or disk hashes cannot establish loaded semantics. The
+existing trusted-root/systemd assumption and separately admitted operational window
+remain prerequisites. The BWS caller reservation does not exclude arbitrary root
+writers or manager reloads (including `install_host_probe.py::_install`). Independent
+application/runtime loaded-source provenance remains mandatory. Source support does
+not qualify any actual private input or grant a later native read, reload, installation
+or parent acceptance; those still require the separate whole-operation admission.
+
+The production `FixedBwsService._config` qualifies each selected control PATH slot
+using retained no-follow directory handles and metadata only. An absent slot needs
+an unchanged existing ancestor and absent edge. An existing directory admits at
+most 128 direct entries: protected same-owner regular files must be non-executable
+and singly linked; protected direct subdirectories are not commands and their
+contents are not read. Links, special entries, writable/foreign entries, mount
+crossings (including same-device bind mounts), changed current lookup roots or
+ancestor bindings, and unprovable metadata refuse. No executable search, content
+inspection, recursive census or PATH/unit rewriting occurs. Linux mount identities
+come from `statx` on held directories; unavailable mount metadata refuses.
+
+The actual candidate manifest binds the control projection to application,
+launcher and backup roots and requires zero control writes. Every actual target
+parent is included in the retained/current mount projection, so a mount below an
+otherwise disjoint root cannot redirect staging, replacement or restoration into
+a control slot. These bounded directories contain every admitted target, random
+staging/restore file and backup-bundle effect; retained and current namespace
+bindings are checked together. Qualification repeats
+before backup, before stop, after apply/start, at closing boundaries and after
+same-handle compensation. The descriptor envelope includes retained directories,
+fresh verification walks and bounded enumeration alongside the installation handle;
+prepare charges only remaining demand. Every owned close is attempted once and
+uncertainty is sticky across transient and retained cleanup and overrides a
+successful/refusal receipt. Compensation restores exact OLD
+bytes and rechecks configuration/slots, retaining `compensated_stopped` when legacy
+OLD loaded-source provenance cannot authorize restart. Drift retains failure/UNKNOWN
+and never permits replay. Existing anchored roots keep their strict anchor checks.
+This source support does not qualify the actual private PATH slot, authorize native
+installation or establish DEV-heavy, DEV/TEST or parent acceptance.
 
 OLD-kernel refusals retain the coarse `old_kernel_qualification` fallback. Supported
 new refusals use `old_kernel_initial_<family>` for service setup, retained-runtime
@@ -1316,6 +1386,24 @@ owned close is attempted once. Unsupported or malformed claims keep the existing
 family/coarse fallback; old absent-field, family and non-prebackup receipts retain
 their compatibility rules. A first failure does not disclose later latent defects
 or grant repair authority.
+
+Initial unit-property failures can refine the same field to
+`old_kernel_initial_unit_properties__<site>__<kind>`; the closed method/property
+sites and allowed `backend`, `decode`, `signature`, `shape`, and `value` kinds are
+defined in [BWS source-installation refusal diagnostics](../OPERATIONS.md#bws-source-installation-refusal-diagnostics).
+They annotate the original initial OLD call, including the PATH preconditions,
+post-config reads and distinct final cleanup read, without another bus call,
+observer, predicate, value export or accepted-input change. Existing launcher,
+cleanup, service-process and root-control semantic families remain intact.
+Backend/typing is not a native-cause diagnosis; a required-value mismatch names an
+existing precondition and authorizes no configuration repair. Unsupported metadata
+retains family/coarse fallback; final empty-control and legacy receipts remain
+compatible. Compound reads, byte order, cleanup precedence and sticky uncertainty
+remain unchanged, and an uncertain close is never retried. Source23's original
+`refused_before_backup / old_kernel_initial_unit_properties` remains coarse and
+UNKNOWN. Source delivery neither replays it nor establishes native installation,
+DEV-heavy, TEST or parent acceptance; changed source needs a newly matched image
+and the native owner's separate whole-operation decision.
 
 Historical Source20 remains `refused_before_backup / old_kernel_qualification`.
 Source21 remains `refused_before_backup / old_kernel_initial_root_control`; its
