@@ -78,6 +78,14 @@ UNIT_KEYS = (
     "KillMode",
     "Restart",
     "TimeoutStopUSec",
+    "Type",
+    "NotifyAccess",
+    "ExecStop",
+    "ExecStopPost",
+    "SendSIGKILL",
+    "KillSignal",
+    "FinalKillSignal",
+    "TimeoutStopFailureMode",
     "RuntimeDirectory",
     "StateDirectory",
     "LoadCredentialEncrypted",
@@ -102,6 +110,8 @@ VOLATILE = {
     "InactiveEnterTimestampMonotonic",
     "NRestarts",
 }
+RESTORATION_RESERVE = 65
+MAX_PROBE_STOP_SECONDS = 30
 JOURNAL_FIELDS = "MESSAGE,_BOOT_ID,_SYSTEMD_UNIT,_SYSTEMD_INVOCATION_ID,_SYSTEMD_CGROUP,_TRANSPORT,_STREAM_ID,_PID,__MONOTONIC_TIMESTAMP,__CURSOR"
 LOG_FORMAT = re.compile(
     r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} \[prod-probe\] (INFO|WARNING|ERROR) (.*)"
@@ -723,6 +733,89 @@ def systemd(action: str) -> tuple[str, ...]:
     raise Refusal("outside_fixed_test_service_operations")
 
 
+def configured_exec(raw: str) -> tuple[tuple[tuple[str, str], ...], ...]:
+    """Keep the complete configured command, excluding execution observations.
+
+    systemctl's ExecStart includes timestamps/PID/exit status which change on
+    every invocation. Unknown fields and ambiguous command syntax fail closed.
+    """
+    if not raw:
+        return ()
+    execution = {"start_time", "stop_time", "pid", "code", "status"}
+    commands, position = [], 0
+    for match in re.finditer(r"\{([^{}]*)\}", raw):
+        if raw[position : match.start()].strip():
+            raise Refusal("configured_exec_shape")
+        fields = {}
+        for item in re.split(r"\s+;\s*", match.group(1).strip()):
+            if not item.strip():
+                continue
+            key, separator, value = item.strip().partition("=")
+            if (
+                not separator
+                or key in fields
+                or key not in execution | {"path", "argv[]", "ignore_errors", "flags"}
+            ):
+                raise Refusal("configured_exec_fields")
+            fields[key] = value
+        if not {"path", "argv[]", "ignore_errors"} <= fields.keys():
+            raise Refusal("configured_exec_incomplete")
+        commands.append(
+            tuple(sorted((key, value) for key, value in fields.items() if key not in execution))
+        )
+        position = match.end()
+    if not commands or raw[position:].strip():
+        raise Refusal("configured_exec_shape")
+    return tuple(commands)
+
+
+def unit_profile(unit: dict[str, str], *, cleanup: bool = False) -> dict[str, Any]:
+    return {
+        key: configured_exec(unit[key])
+        if key in {"ExecStart", "ExecStop", "ExecStopPost"}
+        else unit[key]
+        for key in UNIT_KEYS
+        if key not in VOLATILE | ({"Job"} if cleanup else set())
+    }
+
+
+def test_cgroup(path: str) -> bool:
+    # Instantiated services normally live below a per-template subslice.
+    parts = PurePosixPath(path).parts
+    return (
+        len(parts) >= 3
+        and parts[:2] == ("/", "system.slice")
+        and parts[-1] == UNIT
+        and all(re.fullmatch(r"[A-Za-z0-9_.\\-]+\.slice", part) for part in parts[2:-1])
+        and str(PurePosixPath(path)) == path
+    )
+
+
+def finite_stop_seconds(unit: dict[str, str]) -> float:
+    raw = unit["TimeoutStopUSec"]
+    pieces = re.findall(r"(\d+(?:\.\d+)?)(us|ms|s|min|h)", raw)
+    if not pieces or "".join(number + suffix for number, suffix in pieces) != raw.replace(" ", ""):
+        raise Refusal("normal_stop_timeout_not_finite_supported")
+    seconds = sum(
+        float(number) * {"us": 1e-6, "ms": 1e-3, "s": 1, "min": 60, "h": 3600}[suffix]
+        for number, suffix in pieces
+    )
+    if not 0 < seconds <= MAX_PROBE_STOP_SECONDS:
+        raise Refusal("normal_stop_timeout_exceeds_restoration_budget")
+    if (
+        unit["Type"] not in {"simple", "exec"}
+        or unit["NotifyAccess"] != "none"
+        or configured_exec(unit["ExecStop"])
+        or configured_exec(unit["ExecStopPost"])
+        or unit["SendSIGKILL"] != "yes"
+        or unit["KillSignal"] != "15"
+        or unit["FinalKillSignal"] != "9"
+        or unit["TimeoutStopFailureMode"] not in {"terminate", "kill"}
+    ):
+        raise Refusal("normal_stop_kill_behavior_unqualified")
+    return seconds
+
+
 def parse_unit(
     raw: bytes,
     *,
@@ -792,7 +885,7 @@ def parse_unit(
             or re.fullmatch(r"[a-z][a-z-]{0,63}", fields["SubState"]) is None
             or len(fields["Job"]) > 4096
             or (int(fields["MainPID"]) > 0 and not identifier(fields["InvocationID"]))
-            or (fields["ControlGroup"] and fields["ControlGroup"] != "/system.slice/" + UNIT)
+            or (fields["ControlGroup"] and not test_cgroup(fields["ControlGroup"]))
         ):
             raise Unknown("guard_unit_lifecycle_metadata_unqualified")
         return fields
@@ -802,7 +895,7 @@ def parse_unit(
             or int(fields["MainPID"]) < 1
             or int(fields["ExecMainStartTimestampMonotonic"]) < 1
             or not identifier(fields["InvocationID"])
-            or not fields["ControlGroup"].endswith("/" + UNIT)
+            or not test_cgroup(fields["ControlGroup"])
         ):
             raise Unknown("active_test_incarnation_unqualified")
     elif (
@@ -816,14 +909,17 @@ def parse_unit(
 
 def normal_unit(unit: dict[str, str], binding: Binding) -> None:
     expected_exec = binding.sdk + " " + binding.package + "/" + LAUNCHER + " --channel test"
+    commands = configured_exec(unit["ExecStart"])
+    configured = dict(commands[0]) if len(commands) == 1 else {}
     if (
         unit["User"] != "root"
         or unit["Group"] != "root"
         or unit["WorkingDirectory"] != binding.package
         or unit["EnvironmentFiles"].replace(" ", "") != binding.config + "(ignore_errors=no)"
-        or unit["ExecStart"].count("argv[]=") != 1
-        or "argv[]=" + expected_exec + " ;" not in unit["ExecStart"]
-        or "path=" + binding.sdk + " ;" not in unit["ExecStart"]
+        or configured.get("argv[]") != expected_exec
+        or configured.get("path") != binding.sdk
+        or configured.get("ignore_errors") != "no"
+        or configured.get("flags", "") not in {"", "0"}
     ):
         raise Refusal("effective_unit_not_normal_fixed_test_entry")
     environment = unit["Environment"].split()
@@ -849,6 +945,7 @@ def normal_unit(unit: dict[str, str], binding: Binding) -> None:
             raise Refusal("normal_runtime_state_hardening_or_stream_unqualified")
     if not unit["LoadCredentialEncrypted"].endswith("/test/current"):
         raise Refusal("normal_test_systemd_credential_unqualified")
+    finite_stop_seconds(unit)
 
 
 def parse_config(raw: bytes) -> dict[str, str]:
@@ -1500,8 +1597,8 @@ class TestProbeAdapter:
             active=active,
             health=health,
         )
-        if self.original_unit is not None and any(
-            unit[key] != self.original_unit[key] for key in UNIT_KEYS if key not in VOLATILE
+        if self.original_unit is not None and unit_profile(unit) != unit_profile(
+            self.original_unit
         ):
             raise Unknown("effective_unit_enablement_hardening_or_credential_drift")
         return unit, runtime
@@ -1947,6 +2044,7 @@ class InstallationQualification:
                 or original["DropInPaths"]
             ):
                 raise Refusal("foreign_or_custom_inactive_test_unit_profile")
+            finite_stop_seconds(original)
 
 
 class TemporaryTestInstallation:
@@ -2298,8 +2396,8 @@ class TemporaryTestInstallation:
         config = self.files.read("config")
         assert config is not None
         unit = parse_unit(self.caller.run(systemd("show")))
-        if unit["ActiveState"] != "inactive" or any(
-            unit[key] != self.installed_unit[key] for key in UNIT_KEYS if key not in VOLATILE
+        if unit["ActiveState"] != "inactive" or unit_profile(unit) != unit_profile(
+            self.installed_unit
         ):
             raise Unknown("temporary_unit_profile_changed_before_start")
         normal_unit(unit, self.selected)
@@ -2421,7 +2519,7 @@ class TemporaryTestInstallation:
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
         restored = parse_unit(self.caller.run(systemd("show")), allow_absent=True)
         if (
-            any(restored[key] != self.original[key] for key in UNIT_KEYS if key not in VOLATILE)
+            unit_profile(restored) != unit_profile(self.original)
             or restored["ActiveState"] != "inactive"
             or restored["MainPID"] != "0"
         ):
@@ -2680,6 +2778,10 @@ class NativeCommand:
             and not effect
             or argv == watchdog_stop(self.scope)
             and effect
+            or argv == supervisor_show(self.scope.handle.operation)
+            and not effect
+            or argv == supervisor_stop(self.scope)
+            and effect
         ):
             return
         raise Refusal("native_command_outside_fixed_test_invocation")
@@ -2740,7 +2842,13 @@ class LinuxIO:
         }
         exact.update(
             scope.root + "/" + name
-            for name in ("watchdog.json", "watchdog-result.json", "native-input.json")
+            for name in (
+                "watchdog.json",
+                "watchdog-ready.json",
+                "watchdog-result.json",
+                "native-input.json",
+                "supervisor-start.json",
+            )
         )
         exact |= {row[1] for row in scope.protected_files}
         exact.add(scope.root + "/source/test-private.env")
@@ -3031,6 +3139,66 @@ class LinuxIO:
         if identity() != (parent, ticks):
             raise Unknown("native_pid_reused_during_observation")
         return process, values
+
+    def guard_process_identity(self, pid: str, boot: str) -> tuple[str, str] | None:
+        """Minimal exit-tolerant observation; never admission evidence."""
+        if not pid.isascii() or not pid.isdigit() or int(pid) < 1:
+            raise Refusal("guard_proc_pid")
+        self.pids.add(pid)
+        try:
+            raw = self.read("/proc/" + pid + "/stat", limit=4096, proc=True).data.decode("ascii")
+        except (FileNotFoundError, ProcessLookupError):
+            return None
+        prefix, separator, tail = raw.rpartition(") ")
+        fields = tail.split()
+        if (
+            not separator
+            or not prefix.startswith(pid + " (")
+            or len(fields) < 20
+            or not fields[19].isdigit()
+        ):
+            return None
+        return sha((boot + ":" + pid + ":" + fields[19]).encode()), fields[0]
+
+    def guard_creator(self, pid: str, boot: str) -> dict[str, Any] | None:
+        """A complete stable snapshot can veto slot custody as foreign.
+
+        An exiting/zombie/pre-exec process is not proof of a foreign writer.
+        Emergency cancellation needs neither journal FDs nor a live netns.
+        The stricter process() reader remains the admission boundary.
+        """
+        try:
+            before = self.guard_process_identity(pid, boot)
+            if before is None or before[1] in {"Z", "X", "x"}:
+                return None
+            base = "/proc/" + pid
+            raw = self.read(base + "/cmdline", proc=True).data
+            if not raw or not raw.endswith(b"\0"):
+                return None
+            argv = tuple(item.decode("utf-8") for item in raw[:-1].split(b"\0"))
+            names, environment = self.environment(pid)
+            if not names:
+                return None
+            groups = (
+                self.read(base + "/cgroup", limit=4096, proc=True).data.decode("ascii").splitlines()
+            )
+            if len(groups) != 1 or not groups[0].startswith("0::/"):
+                return None
+            value = {
+                "identity": before[0],
+                "argv": argv,
+                "environment": environment,
+                "cgroup": groups[0][3:],
+                "uid": self.os.stat(base, follow_symlinks=False).st_uid,
+                "exe": self.link(base + "/exe"),
+                "cwd": self.link(base + "/cwd"),
+            }
+            after = self.guard_process_identity(pid, boot)
+            if after is None or after[0] != before[0] or after[1] in {"Z", "X", "x"}:
+                return None
+            return value
+        except (FileNotFoundError, ProcessLookupError):
+            return None
 
     def cgroup(self, path: str) -> tuple[str, ...]:
         suffixes = (
@@ -3622,7 +3790,9 @@ class LinuxRuntimeReader:
             ready_status, _ = self.http.get(binding.api_base + "/readyz", binding)
             health_status, health = self.http.get(binding.api_base + "/api/health", binding)
         again = parse_unit(self.caller.run(systemd("show")), allow_absent=True)
-        if any(again[key] != unit[key] for key in UNIT_KEYS):
+        if unit_profile(again) != unit_profile(unit) or any(
+            again[key] != unit[key] for key in VOLATILE
+        ):
             raise Unknown("test_unit_changed_during_full_runtime_read")
         return Runtime(
             original_handle,
@@ -4278,6 +4448,118 @@ def watchdog_stop(scope: FrozenNativeScope) -> tuple[str, ...]:
     return ("/usr/bin/systemctl", "stop", watchdog_unit(scope), "--no-pager")
 
 
+SUPERVISOR_PROFILE_KEYS = (
+    "ExecStart",
+    "WorkingDirectory",
+    "KillMode",
+    "Restart",
+    "TimeoutStopUSec",
+    "Type",
+    "NotifyAccess",
+    "ExecStop",
+    "ExecStopPost",
+    "SendSIGKILL",
+    "KillSignal",
+    "FinalKillSignal",
+    "TimeoutStopFailureMode",
+)
+
+
+def supervisor_show(operation: str) -> tuple[str, ...]:
+    return (
+        "/usr/bin/systemctl",
+        "show",
+        "yggdrasil-test-probe-" + operation + ".service",
+        "--property="
+        + ",".join(
+            (
+                "Id",
+                "ActiveState",
+                "SubState",
+                "MainPID",
+                "InvocationID",
+                "ControlGroup",
+                "Job",
+                *SUPERVISOR_PROFILE_KEYS,
+            )
+        ),
+        "--no-pager",
+    )
+
+
+def supervisor_stop(scope: FrozenNativeScope) -> tuple[str, ...]:
+    return (
+        "/usr/bin/systemctl",
+        "stop",
+        "yggdrasil-test-probe-" + scope.handle.operation + ".service",
+        "--no-pager",
+    )
+
+
+def supervisor_profile(unit: dict[str, str]) -> dict[str, Any]:
+    return {
+        key: configured_exec(unit[key])
+        if key in {"ExecStart", "ExecStop", "ExecStopPost"}
+        else unit[key]
+        for key in SUPERVISOR_PROFILE_KEYS
+    }
+
+
+def original_supervisor(assembly: NativeAssembly, record: dict[str, Any]) -> dict[str, Any]:
+    scope, io_port = assembly.scope, assembly.io
+    raw = io_port.read(scope.root + "/supervisor-start.json", limit=16384, mode=0o600).data
+    saved = json.loads(raw, object_pairs_hook=unique)
+    unit_name = "yggdrasil-test-probe-" + scope.handle.operation + ".service"
+    if (
+        sha(raw) != record.get("supervisor_start_sha256")
+        or saved.get("unit") != unit_name
+        or saved.get("operation") != scope.handle.operation
+        or saved.get("program_sha256") != scope.program_sha256
+        or saved.get("boot_id") != scope.binding.boot_id
+        or saved.get("pid") != record.get("helper_pid")
+        or saved.get("cgroup") != "/system.slice/" + unit_name
+        or not identifier(saved.get("invocation", ""))
+    ):
+        raise Unknown("guard_original_supervisor_evidence_unqualified")
+    if (
+        saved["profile"]["KillMode"] != "control-group"
+        or saved["profile"]["Restart"] != "no"
+        or finite_stop_seconds(saved["profile"]) > 5
+    ):
+        raise Unknown("guard_original_supervisor_stop_unqualified")
+    supervisor_profile(saved["profile"])
+    return saved
+
+
+def quiesce_original_supervisor(assembly: NativeAssembly, record: dict[str, Any]) -> None:
+    """Stop the last possible command producer before canceling the probe job."""
+    scope, caller, io_port = assembly.scope, assembly.caller, assembly.io
+    saved = original_supervisor(assembly, record)
+    unit_name = saved["unit"]
+    group = saved["cgroup"]
+    if io_port.cgroup(group):
+        current = dict(
+            line.split("=", 1)
+            for line in caller.run(supervisor_show(scope.handle.operation)).decode().splitlines()
+        )
+        if (
+            current.get("Id") != unit_name
+            or current.get("InvocationID") != saved["invocation"]
+            or current.get("MainPID") not in {"0", saved["pid"]}
+            or current.get("ControlGroup") != group
+            or supervisor_profile(current) != supervisor_profile(saved["profile"])
+            or current["KillMode"] != "control-group"
+            or current["Restart"] != "no"
+            or finite_stop_seconds(current) > 5
+        ):
+            raise Unknown("guard_refuses_foreign_supervisor")
+        caller.run(supervisor_stop(scope), effect=True)
+    # The manager may unload this transient unit immediately after stop.
+    # The original saved cgroup, not a new show/PID lookup, proves reaping.
+    if io_port.cgroup(group):
+        raise Unknown("guard_supervisor_cgroup_not_empty")
+
+
 class NativeFaultGuard:
     """One independent finite watchdog for the separately managed TEST unit."""
 
@@ -4334,7 +4616,8 @@ class NativeFaultGuard:
             raise Refusal("linux_pidfd_watchdog_required_before_fault")
         if self.scope.binding.window_end - self.caller.clock() < 3 * self.adapter.cadence + 90:
             raise Refusal("accepted_window_cannot_cover_normal_cycles_and_cleanup")
-        self.caller.work_deadline = self.scope.binding.window_end - 65
+        finite_stop_seconds(self.adapter.unit)
+        self.caller.work_deadline = self.scope.binding.window_end - RESTORATION_RESERVE
         self.before_unit = dict(self.adapter.unit)
         saved = self.assembly.files.read("config")
         parent = self.io.directory("/run/systemd/system")
@@ -4425,6 +4708,11 @@ class NativeFaultGuard:
             "marker": self.marker,
             "marker_identity": list(self.marker_identity),
             "parent_created": self.parent_created,
+            "supervisor_start_sha256": sha(
+                self.io.read(
+                    self.scope.root + "/supervisor-start.json", limit=16384, mode=0o600
+                ).data
+            ),
         }
         self.write_record()
         self.caller.run(watchdog_command(self.scope), effect=True)
@@ -4444,6 +4732,35 @@ class NativeFaultGuard:
             or "argv[]=" + expected + " ;" not in self.guardian.get("ExecStart", "")
         ):
             raise Unknown("independent_watchdog_not_positively_running")
+        # Type=exec proves execve, not that the watcher has attached its pidfd
+        # and selector. No managed probe start/fault may precede this ack.
+        until = min(self.caller.clock() + 5, self.caller.work_deadline)
+        while True:
+            try:
+                raw = self.io.read(
+                    self.scope.root + "/watchdog-ready.json", limit=16384, mode=0o600
+                ).data
+                ready = json.loads(raw, object_pairs_hook=unique)
+                break
+            except FileNotFoundError:
+                if self.caller.clock() >= until:
+                    raise Unknown("independent_watchdog_initialization_unconfirmed")
+                self.assembly.runtime.clock.api.sleep(min(0.05, until - self.caller.clock()))
+        identity = self.io.guard_process_identity(
+            self.guardian["MainPID"], self.scope.binding.boot_id
+        )
+        if (
+            ready.get("operation") != self.scope.handle.operation
+            or ready.get("program_sha256") != self.scope.program_sha256
+            or ready.get("boot_id") != self.scope.binding.boot_id
+            or ready.get("helper_pid") != pid
+            or ready.get("helper_start") != self.record["helper_start"]
+            or ready.get("guardian_pid") != self.guardian["MainPID"]
+            or identity is None
+            or identity[1] in {"Z", "X", "x"}
+            or ready.get("guardian_start") != identity[0]
+        ):
+            raise Unknown("independent_watchdog_ready_identity_unqualified")
 
     def fault_intent(self, url: str) -> None:
         import base64
@@ -4494,7 +4811,7 @@ class NativeFaultGuard:
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
 
         restored = parse_unit(self.caller.run(systemd("show")))
-        if any(restored[key] != self.before_unit[key] for key in UNIT_KEYS if key not in VOLATILE):
+        if unit_profile(restored) != unit_profile(self.before_unit):
             raise Unknown("original_unit_profile_not_restored_after_owned_marker")
 
     def disarm(self) -> None:
@@ -4511,8 +4828,9 @@ class NativeFaultGuard:
                 "MainPID",
                 "ControlGroup",
                 "ExecMainStartTimestampMonotonic",
-                "ExecStart",
             )
+        ) or configured_exec(current.get("ExecStart", "")) != configured_exec(
+            self.guardian.get("ExecStart", "")
         ):
             raise Unknown("watchdog_incarnation_changed_no_stop")
         self.caller.run(watchdog_stop(self.scope), effect=True)
@@ -4535,8 +4853,15 @@ def cleanup_owned_test_fault(assembly: NativeAssembly, record: dict[str, Any]) -
 
     def observe() -> dict[str, str]:
         value = parse_unit(caller.run(systemd("show")), allow_restarts=True, cleanup_states=True)
-        if any(value[key] != guarded[key] for key in UNIT_KEYS if key not in VOLATILE | {"Job"}):
+        if unit_profile(value, cleanup=True) != unit_profile(guarded, cleanup=True):
             raise Unknown("guard_refuses_foreign_test_profile")
+        normal_unit(value, binding)
+        if (
+            guarded["ControlGroup"]
+            and value["ControlGroup"]
+            and guarded["ControlGroup"] != value["ControlGroup"]
+        ):
+            raise Unknown("guard_refuses_changed_test_cgroup")
         return value
 
     # A queued restart has no live creator PID. Its ownership comes from the
@@ -4597,41 +4922,44 @@ def cleanup_owned_test_fault(assembly: NativeAssembly, record: dict[str, Any]) -
     assembly.runtime._sources(binding)
 
     keys = ("InvocationID", "MainPID", "ControlGroup", "ExecMainStartTimestampMonotonic")
-    # One ordinary exit can race the observation while systemd schedules its
-    # 60-second retry. Re-read that bounded transition; never adopt a live
-    # foreign incarnation, and never wait for the next automatic start.
-    for _ in range(5):
-        unit = observe()
-        if unit["MainPID"] == "0":
-            again = observe()
-            if again["MainPID"] == "0":
-                unit = again
-                break
-            continue
-        try:
-            producer, values = io_port.process(unit["MainPID"], binding.boot_id)
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        actual = [unit[key] for key in keys]
-        owned_marker = values.get("YGG_TEST_OPERATION") == assembly.scope.handle.operation
-        if not owned_marker and actual != record["preexisting_identity"]:
-            raise Unknown("guard_refuses_foreign_incarnation")
-        if (
-            producer.uid != 0
-            or producer.executable != binding.sdk_realpath
-            or producer.argv != (binding.sdk, binding.package + "/" + LAUNCHER, "--channel", "test")
-            or producer.cgroup != unit["ControlGroup"]
-        ):
-            raise Unknown("guard_refuses_foreign_creator")
-        again = observe()
-        if all(again[key] == unit[key] for key in keys):
-            unit = again
-            break
-    else:
-        raise Unknown("guard_owned_lifecycle_observation_unstable")
+    # Slot authority survives an ordinary exit or pre-exec observation. A
+    # complete stable foreign launcher is a veto, not an absence requirement.
+    unit = observe()
+    producer = (
+        io_port.guard_creator(unit["MainPID"], binding.boot_id) if unit["MainPID"] != "0" else None
+    )
+    again = observe()
+    if producer is not None and all(again[key] == unit[key] for key in keys):
+        preexec = unit["ActiveState"] == "activating" and producer["exe"] in {
+            "/usr/lib/systemd/systemd",
+            "/lib/systemd/systemd",
+        }
+        if not preexec:
+            actual = [unit[key] for key in keys]
+            marker_value = producer["environment"].get("YGG_TEST_OPERATION")
+            if (
+                marker_value != assembly.scope.handle.operation
+                and actual != record["preexisting_identity"]
+            ):
+                raise Unknown("guard_refuses_foreign_incarnation")
+            if (
+                producer["uid"] != 0
+                or producer["exe"] != binding.sdk_realpath
+                or producer["cwd"] != binding.package
+                or producer["argv"]
+                != (binding.sdk, binding.package + "/" + LAUNCHER, "--channel", "test")
+                or producer["cgroup"] != unit["ControlGroup"]
+            ):
+                raise Unknown("guard_refuses_foreign_creator")
+    retained_groups = {
+        value
+        for value in (guarded["ControlGroup"], unit["ControlGroup"], again["ControlGroup"])
+        if value
+    }
+    unit = again
     members = io_port.cgroup(unit["ControlGroup"]) if unit["ControlGroup"] else ()
     stopped = (
-        unit["ActiveState"] != "inactive"
+        unit["ActiveState"] not in {"inactive", "failed"}
         or unit["MainPID"] != "0"
         or unit["Job"] not in {"", "0"}
         or bool(members)
@@ -4641,10 +4969,14 @@ def cleanup_owned_test_fault(assembly: NativeAssembly, record: dict[str, Any]) -
         caller.run(systemd("stop"), effect=True)
     after = observe()
     if (
-        after["ActiveState"] != "inactive"
+        after["ActiveState"] not in {"inactive", "failed"}
         or after["MainPID"] != "0"
         or after["Job"] not in {"", "0"}
-        or (unit["ControlGroup"] and io_port.cgroup(unit["ControlGroup"]))
+        or any(
+            io_port.cgroup(group)
+            for group in retained_groups
+            | ({after["ControlGroup"]} if after["ControlGroup"] else set())
+        )
     ):
         raise Unknown("guard_owned_test_reap_unconfirmed")
     if current.data != original.data:
@@ -4668,42 +5000,71 @@ def watch_test_operation(root_path: str, dependencies: LinuxDependencies) -> dic
     finally:
         dependencies.os.close(descriptor)
     scope, config, custody = _decode_scope(json.dumps(record["scope_input"]).encode())
+    if root_path != scope.root:
+        raise Refusal("watchdog_scope_root_mismatch")
     assembly = assemble_native(scope, dependencies, custody)
     assembly.caller.phase_seconds = scope.binding.window_end - assembly.caller.clock()
     selector = pidfd = None
     try:
-        try:
-            assembly.io.pids.add(record["helper_pid"])
-            raw = assembly.io.read(
-                "/proc/" + record["helper_pid"] + "/stat", limit=4096, proc=True
-            ).data.decode()
-            fields = raw[raw.rfind(") ") + 2 :].split()
-            if (
-                len(fields) < 20
-                or sha(
-                    (scope.binding.boot_id + ":" + record["helper_pid"] + ":" + fields[19]).encode()
-                )
-                != record["helper_start"]
-            ):
-                raise ProcessLookupError("original helper identity already gone")
-            pidfd = dependencies.os.pidfd_open(int(record["helper_pid"]), 0)
-        except (FileNotFoundError, ProcessLookupError):
-            pidfd = None
-        if pidfd is not None:
-            selector = dependencies.selectors.DefaultSelector()
-            selector.register(pidfd, dependencies.selectors.EVENT_READ, "original_helper_exit")
-            selector.select(max(0, scope.binding.window_end - 65 - assembly.caller.clock()))
-        # Reread after event/deadline: the worker may have positively disarmed.
-        latest = assembly.io.read(root_path + "/watchdog.json", limit=1048576, mode=0o600)
-        record = json.loads(latest.data, object_pairs_hook=unique)
-        result = cleanup_owned_test_fault(assembly, record)
         budget = BootstrapBudget(
             {
                 "_start_epoch": dependencies.time.time() - 1,
-                "_end_epoch": dependencies.time.time() + max(2.2, assembly.caller.check()),
+                "_end_epoch": dependencies.time.time() + assembly.caller.check(),
             },
             dependencies,
         )
+        try:
+            original_supervisor(assembly, record)
+            before = assembly.io.guard_process_identity(record["helper_pid"], scope.binding.boot_id)
+            if (
+                before is None
+                or before[0] != record["helper_start"]
+                or before[1] in {"Z", "X", "x"}
+            ):
+                raise ProcessLookupError("original helper identity already gone")
+            pidfd = dependencies.os.pidfd_open(int(record["helper_pid"]), 0)
+            after = assembly.io.guard_process_identity(record["helper_pid"], scope.binding.boot_id)
+            if after is None or after[0] != before[0] or after[1] in {"Z", "X", "x"}:
+                raise ProcessLookupError("original helper changed during pidfd attach")
+            selector = dependencies.selectors.DefaultSelector()
+            selector.register(pidfd, dependencies.selectors.EVENT_READ, "original_helper_exit")
+            guardian_pid = str(dependencies.os.getpid())
+            guardian = assembly.io.guard_process_identity(guardian_pid, scope.binding.boot_id)
+            if guardian is None or guardian[1] in {"Z", "X", "x"}:
+                raise Unknown("watchdog_own_process_unqualified")
+            _write_bootstrap_file(
+                assembly.files.fd,
+                "watchdog-ready.json",
+                json.dumps(
+                    {
+                        "operation": scope.handle.operation,
+                        "program_sha256": scope.program_sha256,
+                        "boot_id": scope.binding.boot_id,
+                        "helper_pid": record["helper_pid"],
+                        "helper_start": record["helper_start"],
+                        "guardian_pid": guardian_pid,
+                        "guardian_start": guardian[0],
+                    },
+                    sort_keys=True,
+                ).encode(),
+                dependencies,
+                budget,
+            )
+            selector.select(
+                max(0, scope.binding.window_end - RESTORATION_RESERVE - assembly.caller.clock())
+            )
+        except Exception:
+            # No ready ack on attach/setup failure, hence no first probe start.
+            # A wait failure after readiness follows the same bounded cleanup.
+            pass
+        # Main-PID death is not command-child death. Reconcile the original
+        # supervisor cgroup before the final probe cancellation; this also
+        # prevents a late systemctl-start child from undoing containment.
+        quiesce_original_supervisor(assembly, record)
+        # Only after every helper writer is gone is the final phase authoritative.
+        latest = assembly.io.read(root_path + "/watchdog.json", limit=1048576, mode=0o600)
+        record = json.loads(latest.data, object_pairs_hook=unique)
+        result = cleanup_owned_test_fault(assembly, record)
         root = assembly.files.fd
         _write_bootstrap_file(
             root,
@@ -5261,7 +5622,8 @@ class FixedTestTransport:
 
 LOCAL_TEST_WORKTREE = "/Users/rasmus/.codex/worktrees/probe-test-acceptance/agentic-pkm-mvp"
 LOCAL_TEST_BRANCH = "codex/issue-6493-test-probe-acceptance"
-LOCAL_TEST_HOLDER = "codex-probe-test-6493"
+LOCAL_TEST_HOLDER = "codex-probe-test-6493-astra"
+LOCAL_TEST_SESSION = "codex-6493-astra-owner-20261030"
 LOCAL_TEST_TASK = "github-RasmusTho--agentic-pkm-mvp-issue-6493"
 
 
@@ -5503,7 +5865,7 @@ def run_claimed_local_caller(
     archive: bytes,
     manifest: bytes,
 ) -> bytes:
-    """Root's exact #6493 source/claim-bound caller; no writes to GitHub."""
+    """The exact #6493 source/claim-bound caller; no writes to GitHub."""
     import base64
 
     packet = carrier_packet(packet_raw)
@@ -5592,30 +5954,73 @@ def run_claimed_local_caller(
         + ");runpy.run_module('app.dispatcher',run_name='__main__')"
     )
     task = command(
-        (packet["caller_interpreter"], "-c", dispatcher_code, "show", LOCAL_TEST_TASK, "--json")
+        (
+            packet["caller_interpreter"],
+            "-c",
+            dispatcher_code,
+            "show",
+            LOCAL_TEST_TASK,
+            "--events",
+            "--json",
+        )
+    )
+    registry_code = (
+        "import json;from pathlib import Path;from scripts.agent_worktree import load_lifecycle_authority;"
+        + "print(json.dumps(load_lifecycle_authority(Path("
+        + repr(LOCAL_TEST_WORKTREE)
+        + "),candidate_branch="
+        + repr(LOCAL_TEST_BRANCH)
+        + ")))"
+    )
+    registry = json.loads(
+        command((packet["caller_interpreter"], "-c", registry_code)), object_pairs_hook=unique
     )
     issue_value = json.loads(issue, object_pairs_hook=unique)
     if sha(issue_value.get("body", "").encode()) != packet["issue_body_sha256"]:
         raise Refusal("reviewed_issue_contract_changed")
     # A minimal post-discovery scope is not fabricated locally. Validate the
     # exact existing claim fields here using the same normal output grammar.
-    task_value = json.loads(task, object_pairs_hook=unique).get("task", {})
+    task_response = json.loads(task, object_pairs_hook=unique)
+    task_value = task_response.get("task", {})
+    lease = task_response.get("lease", {})
     from datetime import datetime
 
     expiry = datetime.fromisoformat(
         task_value.get("lease_expires_at", "").replace("Z", "+00:00")
     ).timestamp()
+    lease_expiry = datetime.fromisoformat(
+        lease.get("expires_at", "").replace("Z", "+00:00")
+    ).timestamp()
+    active = [row for row in registry.values() if row.get("status") == "active"]
+    owner = active[0] if len(active) == 1 else {}
     labels = {
         item["name"] if isinstance(item, dict) else item for item in issue_value.get("labels", [])
     }
     if (
-        issue_value.get("state") != "open"
-        or "agent:in-progress" not in labels
-        or "agent:ready" in labels
+        issue_value.get("number") != 6493
+        or issue_value.get("state") != "open"
+        or {label for label in labels if label.startswith("agent:")} != {"agent:in-progress"}
+        or task_response.get("ok") is not True
+        or task_value.get("task_id") != LOCAL_TEST_TASK
+        or task_value.get("repo") != "RasmusTho/agentic-pkm-mvp"
+        or task_value.get("issue_number") != 6493
         or task_value.get("status") != "claimed"
         or task_value.get("claimed_by") != LOCAL_TEST_HOLDER
         or task_value.get("lease_id") != packet["lease_id"]
         or expiry <= dependencies.time.time()
+        or lease.get("lease_id") != packet["lease_id"]
+        or lease.get("resource") != "issue:6493"
+        or lease.get("holder") != LOCAL_TEST_HOLDER
+        or "released_at" not in lease
+        or lease["released_at"] is not None
+        or lease_expiry != expiry
+        or owner.get("path") != LOCAL_TEST_WORKTREE
+        or owner.get("branch") != LOCAL_TEST_BRANCH
+        or owner.get("owner") != LOCAL_TEST_SESSION
+        or not identifier(owner.get("generation", ""))
+        or type(owner.get("expires_at")) not in {int, float}
+        or not math.isfinite(owner["expires_at"])
+        or owner["expires_at"] <= dependencies.time.time()
         or status.strip()
     ):
         raise Refusal("current_normal_6493_claim_or_clean_source_missing")
@@ -5907,13 +6312,7 @@ def _supervisor_start(
     unit = "yggdrasil-test-probe-" + packet["operation"] + ".service"
     command = _bootstrap_commands(dependencies, envelope["custody_source"])["_safe_command"]
     raw = command(
-        [
-            "/usr/bin/systemctl",
-            "show",
-            unit,
-            "--property=Id,ActiveState,SubState,MainPID,InvocationID,ControlGroup,ExecStart,WorkingDirectory,KillMode,Restart",
-            "--no-pager",
-        ],
+        list(supervisor_show(packet["operation"])),
         timeout=min(5.0, budget.check() - 2.1),
         limit=16384,
     )
@@ -5936,7 +6335,15 @@ def _supervisor_start(
         or fields.get("WorkingDirectory") != root
         or fields.get("KillMode") != "control-group"
         or fields.get("Restart") != "no"
-        or ("argv[]=" + expected + " ;") not in fields.get("ExecStart", "")
+        or configured_exec(fields.get("ExecStart", ""))
+        != configured_exec(
+            "{ path="
+            + packet["bootstrap_interpreter"]
+            + " ; argv[]="
+            + expected
+            + " ; ignore_errors=no ; }"
+        )
+        or finite_stop_seconds(fields) > 5
     ):
         raise Refusal("original_hard_supervisor_identity_unqualified")
     identity = _bootstrap_guest(dependencies, budget)
@@ -5950,6 +6357,7 @@ def _supervisor_start(
         "pid": fields["MainPID"],
         "cgroup": fields["ControlGroup"],
         "boot_id": identity["boot_id"],
+        "profile": {key: fields[key] for key in SUPERVISOR_PROFILE_KEYS},
     }
 
 

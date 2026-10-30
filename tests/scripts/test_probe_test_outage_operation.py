@@ -255,7 +255,7 @@ def unit_metadata(binding, clock):
         UnitFileState="enabled",
         MainPID="4141",
         InvocationID="1" * 32,
-        ControlGroup="/system.slice/" + target.UNIT,
+        ControlGroup="/system.slice/system-yggdrasil\\x2dhost\\x2dprobe.slice/" + target.UNIT,
         ExecMainStartTimestampMonotonic="900000000",
         InactiveEnterTimestampMonotonic="0",
         NRestarts="0",
@@ -282,6 +282,14 @@ def unit_metadata(binding, clock):
         KillMode="control-group",
         Restart="on-failure",
         TimeoutStopUSec="30s",
+        Type="simple",
+        NotifyAccess="none",
+        ExecStop="",
+        ExecStopPost="",
+        SendSIGKILL="yes",
+        KillSignal="15",
+        FinalKillSignal="9",
+        TimeoutStopFailureMode="terminate",
         RuntimeDirectory="yggdrasil-host-probe-test",
         StateDirectory="yggdrasil-host-probe-test",
         LoadCredentialEncrypted="bws-machine-account-token:/qualified/synthetic-token/test/current",
@@ -372,7 +380,8 @@ class Command:
                 MainPID=str(4140 + self.owner.incarnation),
                 InvocationID=identity,
                 ExecMainStartTimestampMonotonic=str(int(self.owner.clock.value * 1_000_000)),
-                ControlGroup="/system.slice/" + target.UNIT,
+                ControlGroup="/system.slice/system-yggdrasil\\x2dhost\\x2dprobe.slice/"
+                + target.UNIT,
             )
             if self.on_start:
                 self.on_start()
@@ -1430,7 +1439,7 @@ class MemoryLinuxOS:
         return 0
 
     def pidfd_open(self, pid, flags):
-        return 88888
+        return self.open("/proc/" + str(pid) + "/stat", self.O_RDONLY)
 
     def mkdir(self, path, mode=0o777, *, dir_fd=None):
         path = self.full(path, dir_fd)
@@ -1517,9 +1526,8 @@ class NativeSelector:
         self.registered, self.closed = {}, False
 
     def register(self, stream, events, kind):
-        self.registered[stream.fileno()] = SimpleNamespace(
-            fd=stream.fileno(), fileobj=stream, data=kind
-        )
+        fd = stream if isinstance(stream, int) else stream.fileno()
+        self.registered[fd] = SimpleNamespace(fd=fd, fileobj=stream, data=kind)
 
     def unregister(self, stream):
         self.registered.pop(stream.fileno())
@@ -1671,6 +1679,45 @@ class NativeKernel:
         self.os.links["/proc/self/ns/net"] = binding.net_namespace
         self.os.links["/proc/self/exe"] = binding.sdk_realpath
         self._processes()
+        supervisor_unit = "yggdrasil-test-probe-" + self.scope.handle.operation + ".service"
+        self.supervisor = unit_metadata(binding, self.clock)
+        self.supervisor.update(
+            Id=supervisor_unit,
+            MainPID="999",
+            InvocationID="b" * 32,
+            ControlGroup="/system.slice/" + supervisor_unit,
+            WorkingDirectory=self.scope.root,
+            Restart="no",
+            TimeoutStopUSec="5s",
+            Type="exec",
+            ExecStart="{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -I "
+            + self.scope.root
+            + "/program.py --supervised-first-preflight "
+            + self.scope.handle.operation
+            + " ; ignore_errors=no ; }",
+        )
+        self.os.add(
+            self.scope.root + "/supervisor-start.json",
+            json.dumps(
+                {
+                    "operation": self.scope.handle.operation,
+                    "program_sha256": self.scope.program_sha256,
+                    "boot_id": binding.boot_id,
+                    "unit": supervisor_unit,
+                    "pid": "999",
+                    "invocation": self.supervisor["InvocationID"],
+                    "cgroup": self.supervisor["ControlGroup"],
+                    "profile": {
+                        key: self.supervisor[key] for key in target.SUPERVISOR_PROFILE_KEYS
+                    },
+                }
+            ).encode(),
+        )
+        self.os.add(
+            "/sys/fs/cgroup" + self.supervisor["ControlGroup"] + "/cgroup.procs",
+            b"999\n",
+            mode=0o444,
+        )
         time_api = SimpleNamespace(
             monotonic=self.clock, time=lambda: self.clock.epoch, sleep=self.sleep
         )
@@ -1730,7 +1777,7 @@ class NativeKernel:
         )
 
     def _processes(self):
-        binding, group = self.scope.binding, "/system.slice/" + target.UNIT
+        binding, group = self.scope.binding, self.unit["ControlGroup"]
         creator, child = (
             self.unit["MainPID"],
             str(int(self.unit["MainPID"]) + 100) if self.unit["MainPID"] != "0" else "0",
@@ -1879,6 +1926,41 @@ class NativeKernel:
             return b""
         if argv == target.watchdog_command(self.scope):
             self.guardian_active = True
+            self._proc(
+                "9888",
+                "1",
+                (self.scope.binding.sdk, "-I", self.scope.root + "/program.py"),
+                {},
+                9888,
+                "/system.slice/" + target.watchdog_unit(self.scope),
+            )
+            record = json.loads(self.os.files[self.scope.root + "/watchdog.json"])
+            self.os.add(
+                self.scope.root + "/watchdog-ready.json",
+                json.dumps(
+                    {
+                        "operation": self.scope.handle.operation,
+                        "program_sha256": self.scope.program_sha256,
+                        "boot_id": self.scope.binding.boot_id,
+                        "helper_pid": record["helper_pid"],
+                        "helper_start": record["helper_start"],
+                        "guardian_pid": "9888",
+                        "guardian_start": target.sha(
+                            (self.scope.binding.boot_id + ":9888:9888").encode()
+                        ),
+                    }
+                ).encode(),
+            )
+            return b""
+        if argv == target.supervisor_show(self.scope.handle.operation):
+            return "".join(
+                key + "=" + value + "\n" for key, value in self.supervisor.items()
+            ).encode()
+        if argv == target.supervisor_stop(self.scope):
+            self.supervisor.update(ActiveState="inactive", MainPID="0", Job="")
+            self.os.files["/sys/fs/cgroup" + self.supervisor["ControlGroup"] + "/cgroup.procs"] = (
+                b""
+            )
             return b""
         if argv == target.watchdog_stop(self.scope):
             self.guardian_active = False
@@ -1904,13 +1986,15 @@ class NativeKernel:
                 "ControlGroup": group,
                 "ExecMainStartTimestampMonotonic": "1000000000",
                 "Job": "0",
-                "ExecStart": "{ argv[]="
+                "ExecStart": "{ path="
+                + self.scope.binding.sdk
+                + " ; argv[]="
                 + self.scope.binding.sdk
                 + " -I "
                 + self.scope.root
                 + "/program.py --watch-test-operation "
                 + self.scope.handle.operation
-                + " ; }",
+                + " ; ignore_errors=no ; }",
             }
             return "".join(key + "=" + value + "\n" for key, value in fields.items()).encode()
         if argv == target.systemd("show"):
@@ -2451,6 +2535,35 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
         kernel.os.add(path, b"qualified existing local tool", mode=0o755)
     original = kernel.response
     executed = []
+    authority = {
+        "ok": True,
+        "task": {
+            "task_id": target.LOCAL_TEST_TASK,
+            "repo": "RasmusTho/agentic-pkm-mvp",
+            "issue_number": 6493,
+            "status": "claimed",
+            "claimed_by": target.LOCAL_TEST_HOLDER,
+            "lease_id": packet["lease_id"],
+            "lease_expires_at": "2100-01-01T00:00:00Z",
+        },
+        "lease": {
+            "lease_id": packet["lease_id"],
+            "resource": "issue:6493",
+            "holder": target.LOCAL_TEST_HOLDER,
+            "expires_at": "2100-01-01T00:00:00Z",
+            "released_at": None,
+        },
+    }
+    registry = {
+        target.LOCAL_TEST_WORKTREE: {
+            "status": "active",
+            "path": target.LOCAL_TEST_WORKTREE,
+            "branch": target.LOCAL_TEST_BRANCH,
+            "owner": target.LOCAL_TEST_SESSION,
+            "generation": "7" * 32,
+            "expires_at": kernel.clock.epoch + 7200,
+        }
+    }
 
     def response(argv, payload):
         if argv[:3] == ("/usr/bin/git", "-C", target.LOCAL_TEST_WORKTREE):
@@ -2473,16 +2586,7 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
             ).encode()
         if argv[0] == packet["caller_interpreter"]:
             return json.dumps(
-                {
-                    "ok": True,
-                    "task": {
-                        "issue_number": 6493,
-                        "status": "claimed",
-                        "claimed_by": target.LOCAL_TEST_HOLDER,
-                        "lease_id": packet["lease_id"],
-                        "lease_expires_at": "2100-01-01T00:00:00Z",
-                    },
-                }
+                registry if "load_lifecycle_authority" in argv[2] else authority
             ).encode()
         if argv[0] == "/usr/bin/ssh":
             self.assertIn(b"sys.modules[m.__name__]=m", payload)
@@ -2512,6 +2616,32 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
     ssh = [process for process in kernel.processes if process.argv[0] == "/usr/bin/ssh"]
     self.assertEqual(1, len(ssh))
     self.assertNotIn("GH_TOKEN", ssh[0].environment)
+    for surface, key, value in (
+        (authority["task"], "claimed_by", "former-holder"),
+        (authority["task"], "task_id", "github-foreign-issue-6493"),
+        (authority["lease"], "resource", "issue:1"),
+        (authority["lease"], "released_at", "2026-10-30T00:00:00Z"),
+        (authority["lease"], "expires_at", "2000-01-01T00:00:00Z"),
+        (registry[target.LOCAL_TEST_WORKTREE], "owner", "former-session"),
+        (registry[target.LOCAL_TEST_WORKTREE], "status", "released"),
+        (registry[target.LOCAL_TEST_WORKTREE], "generation", ""),
+        (registry[target.LOCAL_TEST_WORKTREE], "expires_at", 1),
+    ):
+        with self.subTest(authority_key=key, value=value):
+            previous, surface[key] = surface[key], value
+            with self.assertRaises(target.Refusal):
+                target.run_claimed_local_caller(
+                    json.dumps(packet).encode(),
+                    kernel.dependencies,
+                    (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
+                    archive,
+                    manifest,
+                )
+            surface[key] = previous
+            self.assertEqual(
+                1,
+                len([process for process in kernel.processes if process.argv[0] == "/usr/bin/ssh"]),
+            )
     sys.modules.pop("fixed_test_program", None)
 
 
@@ -2565,7 +2695,7 @@ def test_guard_contains_the_owned_systemd_lifecycle_and_cancels_queued_restarts(
             before = sum(process.argv == target.systemd("stop") for process in kernel.processes)
             result = target.cleanup_owned_test_fault(assembly, guard.record)
             self.assertEqual(
-                ("unknown", "inactive", "0", ""),
+                ("unknown", "failed" if state == "failed" else "inactive", "0", ""),
                 (
                     result["status"],
                     kernel.unit["ActiveState"],
@@ -2574,7 +2704,7 @@ def test_guard_contains_the_owned_systemd_lifecycle_and_cancels_queued_restarts(
                 ),
             )
             self.assertEqual(
-                before + int(state != "inactive"),
+                before + int(state not in {"inactive", "failed"}),
                 sum(process.argv == target.systemd("stop") for process in kernel.processes),
             )
             self.assertEqual(saved_incident, (self.root / "native-incident.json").read_bytes())
@@ -2743,14 +2873,23 @@ def _remote_boundary(outcome, *, guest="ygg-test"):
                 "MainPID": "999",
                 "InvocationID": started["invocation"],
                 "ControlGroup": started["cgroup"],
-                "ExecStart": "{ argv[]=/usr/bin/python3 -I "
+                "ExecStart": "{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -I "
                 + root
                 + "/program.py --supervised-first-preflight "
                 + packet["operation"]
-                + " ; }",
+                + " ; ignore_errors=no ; }",
                 "WorkingDirectory": root,
                 "KillMode": "control-group",
                 "Restart": "no",
+                "TimeoutStopUSec": "5s",
+                "Type": "exec",
+                "NotifyAccess": "none",
+                "ExecStop": "",
+                "ExecStopPost": "",
+                "SendSIGKILL": "yes",
+                "KillSignal": "15",
+                "FinalKillSignal": "9",
+                "TimeoutStopFailureMode": "terminate",
             }
             return "".join(key + "=" + value + "\n" for key, value in fields.items()).encode()
         if argv[0] == "/usr/bin/docker":
@@ -2873,6 +3012,433 @@ def test_live_archive_pins_remain_independent_of_generated_portable_fixtures(sel
         with self.assertRaisesRegex(target.Refusal, "source_digest"):
             target.exact_source(archive, manifest, self.h.caller)
     self.assertEqual([], self.h.command.effects)
+
+
+def test_actual_native_lifecycle_ignores_only_exec_execution_metadata(self):
+    kernel, assembly = _native(self)
+    response, serial = kernel.response, [0]
+
+    def changing_exec_metadata(argv, payload):
+        raw = response(argv, payload)
+        if argv in {target.systemd("show"), target.watchdog_show(kernel.scope)}:
+            serial[0] += 1
+            raw = raw.replace(
+                b" ; ignore_errors=no ; }",
+                (
+                    " ; ignore_errors=no ; start_time=[Fri 2026-10-30 20:00:00 UTC] ; stop_time=[n/a] ; pid="
+                    + str(serial[0])
+                    + " ; code=exited ; status="
+                    + str(serial[0] % 2)
+                    + " }"
+                ).encode(),
+            )
+        return raw
+
+    kernel.response = changing_exec_metadata
+    result = target.run_fixed_test_worker(assembly, b"unused-active", b"unused-active")
+    self.assertEqual((1, 1), (result["down"], result["recovery"]))
+    self.assertTrue(result["independent_guard_disarmed"])
+    self.assertGreater(serial[0], 10)
+    self.assertIn(".slice/", kernel.unit["ControlGroup"].removeprefix("/system.slice/"))
+
+
+def test_guard_refuses_configured_exec_marker_inode_source_and_stable_foreign_drift(self):
+    for index, change in enumerate(
+        ("path", "argv", "command", "flag", "inode", "source", "foreign_marker", "foreign_creator")
+    ):
+        with self.subTest(change=change):
+            if index:
+                self.fresh()
+            kernel, assembly, guard = _armed_native_fault(self)
+            before = sum(p.argv == target.systemd("stop") for p in kernel.processes)
+            fault = assembly.files.read("config").data
+            if change == "path":
+                kernel.unit["ExecStart"] = kernel.unit["ExecStart"].replace(
+                    "path=", "path=/foreign"
+                )
+            elif change == "argv":
+                kernel.unit["ExecStart"] = kernel.unit["ExecStart"].replace(
+                    "--channel test", "--channel prod"
+                )
+            elif change == "command":
+                kernel.unit["ExecStart"] += " " + kernel.unit["ExecStart"]
+            elif change == "flag":
+                kernel.unit["ExecStart"] = kernel.unit["ExecStart"].replace(
+                    "ignore_errors=no", "ignore_errors=yes"
+                )
+            elif change == "inode":
+                kernel.os.meta[guard.parent_path + "/" + guard.marker].st_ino += 1
+            elif change == "source":
+                path = kernel.scope.binding.package + "/" + target.LAUNCHER
+                kernel.os.add(path, kernel.os.files[path] + b"\n# foreign edit\n", mode=0o664)
+            elif change == "foreign_marker":
+                kernel.os.files["/proc/" + kernel.unit["MainPID"] + "/environ"] = (
+                    b"YGG_TEST_OPERATION=foreign\0"
+                )
+            else:
+                kernel.os.links["/proc/" + kernel.unit["MainPID"] + "/cwd"] = "/foreign"
+            with self.assertRaises((target.Refusal, target.Unknown)):
+                target.cleanup_owned_test_fault(assembly, guard.record)
+            self.assertEqual(
+                before, sum(p.argv == target.systemd("stop") for p in kernel.processes)
+            )
+            self.assertEqual(fault, assembly.files.read("config").data)
+
+
+def test_temporary_activation_and_restoration_compare_configured_exec_across_invocations(self):
+    for index, absent in enumerate((False, True)):
+        with self.subTest(absent=absent):
+            if index:
+                self.fresh()
+            envelope, archive, manifest = self.installation(absent=absent)
+            command, serial = self.h.command.run, [0]
+
+            def read_with_execution_status(argv, **kwargs):
+                result = command(argv, **kwargs)
+                if argv == target.systemd("show"):
+                    serial[0] += 1
+                    result = replace(
+                        result,
+                        data=result.data.replace(
+                            b" ; ignore_errors=no ; }",
+                            (
+                                " ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid="
+                                + str(serial[0])
+                                + " ; code=exited ; status=0 }"
+                            ).encode(),
+                        ),
+                    )
+                return result
+
+            self.h.command.run = read_with_execution_status
+            envelope.prepare(archive, manifest, self.h.healthy)
+            result = self.run_installed_sequence(envelope)
+            self.assertTrue(result["original_effective_unit_and_enablement_restored"])
+            self.assertEqual([], os.listdir(self.root / "volatile-systemd"))
+
+
+def test_actual_cleanup_tolerates_exiting_proc_boundaries_without_weakening_admission(self):
+    changes = (
+        "empty_cmdline",
+        "empty_environment",
+        "zombie",
+        "missing_stat",
+        "missing_cgroup",
+        "missing_cmdline",
+        "missing_environ",
+        "missing_exe",
+        "missing_cwd",
+        "missing_fd",
+        "preexec",
+    )
+    for index, change in enumerate(changes):
+        with self.subTest(change=change):
+            if index:
+                self.fresh()
+            kernel, assembly, guard = _armed_native_fault(self)
+            base = "/proc/" + kernel.unit["MainPID"]
+            incident = (self.root / "native-incident.json").read_bytes()
+            if change == "empty_cmdline":
+                kernel.os.files[base + "/cmdline"] = b""
+                with self.assertRaisesRegex(target.Unknown, "native_proc_argv_incomplete"):
+                    assembly.io.process(kernel.unit["MainPID"], kernel.scope.binding.boot_id)
+            elif change == "empty_environment":
+                kernel.os.files[base + "/environ"] = b""
+            elif change == "zombie":
+                kernel.os.files[base + "/stat"] = kernel.os.files[base + "/stat"].replace(
+                    b") S ", b") Z "
+                )
+            elif change == "preexec":
+                kernel.unit.update(
+                    ActiveState="activating",
+                    SubState="start",
+                    Job="41 /org/freedesktop/systemd1/job/41",
+                )
+                kernel.os.files[base + "/cmdline"] = b"/usr/lib/systemd/systemd\0"
+                kernel.os.links[base + "/exe"] = "/usr/lib/systemd/systemd"
+            elif change in {"missing_exe", "missing_cwd", "missing_fd"}:
+                leaf = {"missing_exe": "exe", "missing_cwd": "cwd", "missing_fd": "fd/2"}[change]
+                original = kernel.os.readlink
+
+                def missing_link(path, *, dir_fd=None, original=original, leaf=leaf, base=base):
+                    if path == base + "/" + leaf:
+                        raise FileNotFoundError(path)
+                    return original(path, dir_fd=dir_fd)
+
+                kernel.os.readlink = missing_link
+            else:
+                leaf = change.removeprefix("missing_")
+                kernel.os.files.pop(base + "/" + leaf)
+                kernel.os.meta.pop(base + "/" + leaf)
+            result = target.cleanup_owned_test_fault(assembly, guard.record)
+            self.assertEqual("unknown", result["status"])
+            self.assertTrue(result["healthy_config_restored"])
+            self.assertEqual(
+                ("inactive", "0", ""),
+                (kernel.unit["ActiveState"], kernel.unit["MainPID"], kernel.unit["Job"]),
+            )
+            self.assertEqual(incident, (self.root / "native-incident.json").read_bytes())
+
+
+def _actual_watch(kernel):
+    path = kernel.scope.root + "/watchdog-ready.json"
+    kernel.os.files.pop(path, None)
+    kernel.os.meta.pop(path, None)
+    kernel.os.getpid = lambda: 9888
+    return target.watch_test_operation(kernel.scope.root, kernel.dependencies)
+
+
+def test_watchdog_initialization_ack_requires_pidfd_recheck_and_registered_selector(self):
+    for index, failure in enumerate(
+        (
+            "pidfd",
+            "selector_create",
+            "selector_register",
+            "helper_exit",
+            "pid_reuse",
+            "wait_after_ready",
+        )
+    ):
+        with self.subTest(failure=failure):
+            if index:
+                self.fresh()
+            kernel, assembly = _native(self)
+            adapter = target.TestProbeAdapter(kernel.scope.binding, assembly.caller, assembly.files)
+            adapter.admit()
+            guard = target.NativeFaultGuard(assembly, adapter)
+            guard.arm()
+            pidfd_open = kernel.os.pidfd_open
+
+            def attach(pid, flags):
+                if failure == "pidfd":
+                    raise OSError("synthetic pidfd setup failure")
+                fd = pidfd_open(pid, flags)
+                path = "/proc/" + str(pid) + "/stat"
+                if failure == "helper_exit":
+                    kernel.os.files.pop(path)
+                    kernel.os.meta.pop(path)
+                elif failure == "pid_reuse":
+                    kernel.os.files[path] = kernel.os.files[path].replace(b" 999 ", b" 1999 ")
+                return fd
+
+            kernel.os.pidfd_open = attach
+            factory, calls = kernel.selector, [0]
+
+            def selector_factory():
+                calls[0] += 1
+                if calls[0] != 1 or failure in {"pidfd", "helper_exit", "pid_reuse"}:
+                    return factory()
+                if failure == "selector_create":
+                    raise OSError("synthetic selector setup failure")
+                selected = factory()
+                register, select = selected.register, selected.select
+
+                def register_helper(stream, events, kind):
+                    if kind == "original_helper_exit" and failure == "selector_register":
+                        raise OSError("synthetic pidfd registration failure")
+                    return register(stream, events, kind)
+
+                def wait(timeout):
+                    self.assertIn(kernel.scope.root + "/watchdog-ready.json", kernel.os.files)
+                    self.assertTrue(
+                        any(
+                            key.data == "original_helper_exit"
+                            for key in selected.registered.values()
+                        )
+                    )
+                    if failure == "wait_after_ready":
+                        raise OSError("synthetic wait failure after readiness")
+                    return select(timeout)
+
+                selected.register, selected.select = register_helper, wait
+                return selected
+
+            kernel.dependencies = replace(
+                kernel.dependencies,
+                selectors=SimpleNamespace(
+                    DefaultSelector=selector_factory, EVENT_READ=1, EVENT_WRITE=2
+                ),
+            )
+            result = _actual_watch(kernel)
+            self.assertEqual("unknown", result["status"])
+            self.assertEqual(
+                failure == "wait_after_ready",
+                kernel.scope.root + "/watchdog-ready.json" in kernel.os.files,
+            )
+            self.assertFalse(any(p.argv == target.systemd("start") for p in kernel.processes))
+            self.assertTrue(all(selector.closed for selector in kernel.selectors))
+
+
+def test_parent_waits_for_initialized_guard_before_any_first_start(self):
+    kernel, assembly = _native(self)
+    response = kernel.response
+
+    def without_ack(argv, payload):
+        raw = response(argv, payload)
+        if argv == target.watchdog_command(kernel.scope):
+            path = kernel.scope.root + "/watchdog-ready.json"
+            kernel.os.files.pop(path)
+            kernel.os.meta.pop(path)
+        return raw
+
+    kernel.response = without_ack
+    with self.assertRaisesRegex(target.Unknown, "initialization_unconfirmed"):
+        target.run_fixed_test_worker(assembly, b"unused", b"unused")
+    self.assertFalse(
+        any(p.argv in {target.systemd("start"), target.systemd("stop")} for p in kernel.processes)
+    )
+    self.assertNotIn("http://127.0.0.1:", kernel.os.files[kernel.scope.binding.config].decode())
+
+
+def test_watchdog_refuses_a_foreign_supervisor_before_probe_effects(self):
+    for index, field in enumerate(("InvocationID", "ExecStart", "KillMode")):
+        with self.subTest(field=field):
+            if index:
+                self.fresh()
+            kernel, assembly, guard = _armed_native_fault(self)
+            before = len(kernel.processes)
+            kernel.supervisor[field] = (
+                "foreign"
+                if field != "ExecStart"
+                else kernel.supervisor[field].replace("--supervised-first-preflight", "--foreign")
+            )
+            with self.assertRaises(target.Unknown):
+                _actual_watch(kernel)
+            self.assertFalse(
+                any(
+                    p.argv in {target.supervisor_stop(kernel.scope), target.systemd("stop")}
+                    for p in kernel.processes[before:]
+                )
+            )
+
+
+def test_watchdog_quiesces_pending_start_children_before_final_probe_cancel_and_rereads_disarm(
+    self,
+):
+    for index, case in enumerate(
+        ("helper_gone", "deadline", "disarmed_during_teardown", "nonempty_supervisor")
+    ):
+        with self.subTest(case=case):
+            if index:
+                self.fresh()
+            kernel, assembly, guard = _armed_native_fault(self)
+            fault = assembly.files.read("config").data
+            group = "/sys/fs/cgroup" + kernel.supervisor["ControlGroup"] + "/cgroup.procs"
+            kernel.os.files[group] = b"999\n9123\n"
+            if case == "helper_gone":
+                path = "/proc/999/stat"
+                kernel.os.files.pop(path)
+                kernel.os.meta.pop(path)
+                kernel.supervisor["MainPID"] = "0"
+            if case == "deadline":
+                kernel.clock.advance(
+                    kernel.scope.binding.window_end - target.RESTORATION_RESERVE - kernel.clock()
+                )
+            response, order = kernel.response, []
+
+            def tracked(argv, payload):
+                if argv == target.systemd("stop"):
+                    self.assertEqual(b"", kernel.os.files[group])
+                    order.append("probe")
+                raw = response(argv, payload)
+                if argv == target.supervisor_stop(kernel.scope):
+                    order.append("helper")
+                    if case == "nonempty_supervisor":
+                        kernel.os.files[group] = b"9123\n"
+                    elif case == "disarmed_during_teardown":
+                        guard.record["disarmed"] = True
+                        guard.write_record()
+                return raw
+
+            kernel.response = tracked
+            if case == "nonempty_supervisor":
+                with self.assertRaisesRegex(target.Unknown, "supervisor_cgroup_not_empty"):
+                    _actual_watch(kernel)
+                self.assertEqual(["helper"], order)
+                self.assertEqual(fault, assembly.files.read("config").data)
+            else:
+                result = _actual_watch(kernel)
+                self.assertEqual(
+                    ["helper"] if case == "disarmed_during_teardown" else ["helper", "probe"], order
+                )
+                self.assertEqual(
+                    "disarmed" if case == "disarmed_during_teardown" else "unknown",
+                    result["status"],
+                )
+
+
+def test_stop_is_bounded_before_effects_and_ambiguous_containment_never_restores_or_restarts(self):
+    bad = (
+        ("TimeoutStopUSec", "infinity"),
+        ("TimeoutStopUSec", "1min 30s"),
+        ("SendSIGKILL", "no"),
+        ("FinalKillSignal", "6"),
+        ("TimeoutStopFailureMode", "abort"),
+        ("NotifyAccess", "all"),
+        ("ExecStopPost", "{ path=/bin/sleep ; argv[]=/bin/sleep 999 ; ignore_errors=no ; }"),
+    )
+    for index, (key, value) in enumerate(bad):
+        with self.subTest(key=key, value=value):
+            if index:
+                self.fresh()
+            kernel, assembly = _native(self)
+            kernel.unit[key] = value
+            with self.assertRaises(target.Refusal):
+                target.run_fixed_test_worker(assembly, b"unused", b"unused")
+            self.assertFalse(
+                any(
+                    p.argv
+                    in {
+                        target.systemd("start"),
+                        target.systemd("stop"),
+                        target.watchdog_command(kernel.scope),
+                    }
+                    for p in kernel.processes
+                )
+            )
+    for kind in ("lost_ack", "remaining_process", "failed_after_stop", "restart_becomes_live"):
+        with self.subTest(kind=kind):
+            self.fresh()
+            kernel, assembly, guard = _armed_native_fault(self)
+            fault = assembly.files.read("config").data
+            before = len(kernel.processes)
+            response = kernel.response
+            if kind == "restart_becomes_live":
+                kernel.unit.update(
+                    ActiveState="activating",
+                    SubState="auto-restart",
+                    MainPID="0",
+                    Job="41 /org/freedesktop/systemd1/job/41",
+                )
+                kernel._processes()
+
+            def stopping(argv, payload):
+                if argv == target.systemd("stop") and kind == "restart_becomes_live":
+                    kernel.unit.update(ActiveState="active", SubState="running", MainPID="7777")
+                    kernel._processes()
+                raw = response(argv, payload)
+                if argv == target.systemd("stop"):
+                    if kind == "lost_ack":
+                        kernel.forced_returncodes = {argv: 1}
+                    elif kind == "remaining_process":
+                        kernel.os.files[
+                            "/sys/fs/cgroup" + kernel.unit["ControlGroup"] + "/cgroup.procs"
+                        ] = b"7777\n"
+                    elif kind == "failed_after_stop":
+                        kernel.unit.update(ActiveState="failed", SubState="failed")
+                return raw
+
+            kernel.response = stopping
+            if kind in {"lost_ack", "remaining_process"}:
+                with self.assertRaises(target.Unknown):
+                    target.cleanup_owned_test_fault(assembly, guard.record)
+                self.assertEqual(fault, kernel.os.files[kernel.scope.binding.config])
+            else:
+                result = target.cleanup_owned_test_fault(assembly, guard.record)
+                self.assertTrue(result["healthy_config_restored"])
+            self.assertFalse(
+                any(p.argv == target.systemd("start") for p in kernel.processes[before:])
+            )
 
 
 for _name, _value in list(globals().items()):
