@@ -3350,7 +3350,7 @@ def _old_qualification_case(monkeypatch, secure_tmp_path, channel="dev"):
 def _assert_old_refusal(result, events, expected):
     receipt = result["source_installation"]
     assert receipt["status"] == "refused_before_backup"
-    if expected.endswith('_root_control'):
+    if expected.endswith(('_root_control', '_initial_unit_properties')):
         assert (receipt['prebackup_gate'] == expected
                 or receipt['prebackup_gate'].startswith(expected + '__'))
     else:
@@ -3743,3 +3743,77 @@ def test_control_path_projection_privacy_and_legacy_refusals(monkeypatch, secure
     assert caught.value.root_control == ('captured_empty', 'old', 'hints', 'environment_hint')
     assert 'PRIVATE_CANARY' not in repr((str(caught.value), caught.value.root_control))
     assert not fixture.state['events']
+
+
+@pytest.mark.parametrize('scenario', ['positive', 'environment-order', 'short-circuit', 'retained', 'path-close', 'transient'])
+def test_initial_unit_property_refinement_preserves_order_and_close_uncertainty(
+    monkeypatch, secure_tmp_path, scenario,
+):
+    from tests.ops.test_bws_installation_lifecycle import (
+        control_path_fixture, install_unit_property_transport, _UNIT_INITIAL_TRACE,
+    )
+    if scenario in {'retained', 'path-close'}:
+        from tests.deploy.test_bws_source_rpc_assembly import exercise_unit_property_close
+        assert exercise_unit_property_close(secure_tmp_path,
+            'runtime-close' if scenario == 'retained' else 'close')['status'] == 'unknown'
+        return
+    if scenario == 'transient':
+        from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
+        result = exercise_control_path_transaction(secure_tmp_path, 'dev',
+            'close' if scenario == 'retained' else 'transient-initial')
+        assert result['status'] == 'unknown'
+        return
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    fault = None if scenario == 'positive' else dict(
+        site='Service_Environment' if scenario == 'environment-order' else 'Service_Type', kind='value')
+    install_unit_property_transport(bws_installation_lifecycle, monkeypatch, fixture.state,
+                                    fixture.properties, fault)
+    with fixture.service.retained_runtime():
+        if fault:
+            with pytest.raises(bws_installation_lifecycle._OldQualificationRefusal) as caught:
+                fixture.service.qualify_old(**fixture.arguments)
+            assert caught.value.unit_property == (fault['site'], 'shape' if scenario == 'environment-order' else 'value')
+        else:
+            fixture.service.qualify_old(**fixture.arguments)
+            assert fixture.service.contract[2] == tuple(fixture.environment)
+            assert fixture.properties['Service', 'Environment'] == fixture.environment
+            assert fixture.service.phase == 'qualified'
+    trace = fixture.state['unit_trace']
+    assert trace == (_UNIT_INITIAL_TRACE if scenario == 'positive' else
+                     _UNIT_INITIAL_TRACE[:20] if scenario == 'environment-order' else _UNIT_INITIAL_TRACE[:4])
+    assert fixture.service.runtime_close_completed and not fixture.state['events']
+
+
+@pytest.mark.parametrize('kind', ['supported', 'absent', 'foreign', 'subclass', 'unknown-site',
+                                'unknown-kind', 'list', 'member-type', 'extra', 'missing', 'final'])
+def test_initial_unit_property_refinement_preserves_privacy_and_legacy_fallback(kind):
+    request, ports, _admission, service, events, *_ = _transaction_fixture()
+    cls = bws_installation_lifecycle._OldQualificationRefusal
+    class Foreign(cls):
+        pass
+    def refuse(**_kwargs):
+        refinement = ('Service_Type', 'value')
+        failure = (RuntimeError('PRIVATE_CANARY') if kind == 'foreign' else
+                   Foreign('unit_properties') if kind == 'subclass' else cls('unit_properties'))
+        failure.subgate = 'unit_properties'
+        failure.unit_property = {
+            'absent': None, 'unknown-site': ('PRIVATE_CANARY', 'value'),
+            'unknown-kind': ('Service_Type', 'PRIVATE_CANARY'), 'list': ['Service_Type', 'value'],
+            'member-type': ('Service_Type', []), 'extra': ('Service_Type', 'value', 'PRIVATE_CANARY'),
+        }.get(kind, refinement)
+        if kind == 'missing':
+            del failure.unit_property
+        raise failure
+    if kind == 'final':
+        # A supported-looking metadata tuple cannot move final-stage semantics.
+        service.control_inventory_empty = True
+        service.revalidate_empty_control_configuration = refuse
+    else:
+        service.qualify_old = refuse
+    result = transaction._execute_source_installation('dev', request, ports)
+    gate = ('old_kernel_qualification' if kind in {'foreign', 'subclass'} else
+            'old_kernel_empty_control_unit_properties' if kind == 'final' else
+            'old_kernel_initial_unit_properties__Service_Type__value' if kind == 'supported' else
+            'old_kernel_initial_unit_properties')
+    _assert_old_refusal(result, events, gate)
+    assert events.count('runtime_close') == 1

@@ -50,15 +50,48 @@ _OLD_QUALIFICATION_SUBGATES = frozenset({
 })
 
 
+# Source symbols only. Value cases are existing unit-property predicates;
+# launcher/process/cleanup/root semantic refusals retain their own families.
+_UNIT_PROPERTY_VALUE_SITES = frozenset(
+    ('Unit_Id Unit_LoadState Unit_OnFailure Unit_OnSuccess Unit_TriggeredBy '
+     'Service_Type Service_User Service_Group Service_KillMode Service_Restart '
+     'Service_RootDirectory Service_RootImage Service_WorkingDirectory Service_BindPaths '
+     'Service_BindReadOnlyPaths Service_TemporaryFileSystem Service_ReadOnlyPaths '
+     'Service_ReadWritePaths Service_InaccessiblePaths Service_PassEnvironment '
+     'Service_ExtensionDirectories Service_MountImages Service_ExtensionImages Service_PAMName '
+     'Service_UnsetEnvironment Service_ExecSearchPath Service_PrivateMounts Service_PrivateTmp '
+     'Service_PrivateDevices Service_PrivateUsers Service_DynamicUser Service_ProtectHome '
+     'Service_ProtectSystem Unit_DropInPaths Unit_JoinsNamespaceOf').split()
+)
+_UNIT_PROPERTY_READ_SITES = _UNIT_PROPERTY_VALUE_SITES | frozenset(
+    ('Manager_GetUnit Manager_GetUnitProcesses Service_ExecCondition Service_ExecStartPre '
+     'Service_ExecStartPost Service_ExecStop Service_ExecReload Service_ExecStart '
+     'Service_ExecStopPost Service_ExecStopPost_final Service_Environment Service_EnvironmentFiles '
+     'Unit_ActiveState Unit_SubState Unit_Job Service_ControlPID Service_MainPID').split()
+)
+_UNIT_PROPERTY_REFINEMENTS = frozenset(
+    (site, kind) for site in _UNIT_PROPERTY_READ_SITES
+    for kind in ('backend', 'decode', 'signature', 'shape')
+) | frozenset((site, 'value') for site in _UNIT_PROPERTY_VALUE_SITES)
+
+
 class _OldQualificationRefusal(RuntimeError):
     def __init__(
         self, subgate: str | None = None, *,
         root_control: tuple[str, str, str, str] | None = None,
+        unit_property: tuple[str, str] | None = None,
+        read_kind: str | None = None,
     ) -> None:
         # Receipt consumers separately check the complete closed combination.
         self.root_control = (root_control if type(root_control) is tuple
                              and len(root_control) == 4
                              and all(type(value) is str for value in root_control) else None)
+        self.unit_property = (unit_property if type(unit_property) is tuple
+                              and len(unit_property) == 2
+                              and all(type(value) is str for value in unit_property)
+                              and unit_property in _UNIT_PROPERTY_REFINEMENTS else None)
+        self.read_kind = (read_kind if type(read_kind) is str
+                          and read_kind in {'backend', 'decode', 'signature', 'shape'} else None)
         self.subgate = (subgate if type(subgate) is str
                         and subgate in _OLD_QUALIFICATION_SUBGATES else None)
         super().__init__('bws_lifecycle_unproven')
@@ -354,31 +387,39 @@ def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return value
 
 
+def _unit_read_refuse(kind: str) -> NoReturn:
+    raise _OldQualificationRefusal('unit_properties', read_kind=kind) from None
+
+
 def _run(argv: list[str]) -> bytes:
     # No caller environment, credential, shell, stdin, pager or remote bus.
     if os.geteuid() != 0 or sys.platform != 'linux':
-        _refuse('unit_properties')
+        _unit_read_refuse('backend')
     try:
         completed = subprocess.run(argv, stdin=subprocess.DEVNULL, env=ENV,
             capture_output=True, check=False, timeout=60)
         if (completed.returncode != 0 or completed.stderr
                 or type(completed.stdout) is not bytes or len(completed.stdout) > 131072):
-            _refuse('unit_properties')
+            _unit_read_refuse('backend')
         return completed.stdout
     except Exception:
         # No exception's argv/stdout/stderr/private value becomes a diagnostic.
         # A timeout or unknown action return is never translated into stopped.
-        _refuse('unit_properties')
+        _unit_read_refuse('backend')
 
 
 def _typed(argv: list[str], signature: str) -> Any:
+    # Keep transport provenance from this original read; never re-run a call.
+    raw = _run(argv)
     try:
-        value = json.loads(_run(argv), object_pairs_hook=_unique)
-        if type(value) is not dict or set(value) != {'type', 'data'} or value['type'] != signature:
-            _refuse('unit_properties')
-        return value['data']
+        value = json.loads(raw, object_pairs_hook=_unique)
     except Exception:
-        _refuse('unit_properties')
+        _unit_read_refuse('decode')
+    if type(value) is not dict or set(value) != {'type', 'data'}:
+        _unit_read_refuse('shape')
+    if value['type'] != signature:
+        _unit_read_refuse('signature')
+    return value['data']
 
 
 def _runtime_identity(value: os.stat_result) -> tuple[int, ...]:
@@ -962,23 +1003,44 @@ class FixedBwsService:
                 _refuse('retained_runtime')
             self.runtime_close_completed = fd is not None
 
+    def _unit_property_refuse(self, site: str, kind: str) -> NoReturn:
+        # Only initial qualification may export the added source-site detail.
+        raise _OldQualificationRefusal(
+            'unit_properties',
+            unit_property=(site, kind) if self.phase == 'qualifying' else None,
+        ) from None
+
+    def _unit_read(self, argv: list[str], signature: str, site: str) -> Any:
+        try:
+            return _typed(argv, signature)
+        except Exception as failure:
+            if type(failure) is _OldQualificationRefusal:
+                kind = getattr(failure, 'read_kind', None)
+                if type(kind) is str and kind in {'backend', 'decode', 'signature', 'shape'}:
+                    self._unit_property_refuse(site, kind)
+            _refuse('unit_properties')
+
     def _call(self, method: str, signature: str) -> Any:
         # Only these two read-only Manager methods are constructed here.
         if method not in {'GetUnit', 'GetUnitProcesses'}:
             _refuse('unit_properties')
-        value = _typed(['busctl', '--system', '--no-pager', '--json=short',
+        site = 'Manager_' + method
+        value = self._unit_read(['busctl', '--system', '--no-pager', '--json=short',
             '--auto-start=no', '--allow-interactive-authorization=no', '--timeout=30s',
-            'call', BUS, MANAGER, BUS + '.Manager', method, 's', self.unit], signature)
+            'call', BUS, MANAGER, BUS + '.Manager', method, 's', self.unit], signature, site)
         if type(value) is not list or len(value) != 1:
-            _refuse('unit_properties')
+            self._unit_property_refuse(site, 'shape')
         return value[0]
 
     def _get(self, interface: str, name: str, signature: str) -> Any:
+        site = interface + '_' + name
+        if name == 'ExecStopPost' and self.phase == 'qualifying' and self.contract is not None:
+            site = 'Service_ExecStopPost_final'
         if self.object is None:
-            _refuse('unit_properties')
-        return _typed(['busctl', '--system', '--no-pager', '--json=short',
+            self._unit_property_refuse(site, 'shape')
+        return self._unit_read(['busctl', '--system', '--no-pager', '--json=short',
             '--auto-start=no', '--allow-interactive-authorization=no', '--timeout=30s',
-            'get-property', BUS, self.object, BUS + '.' + interface, name], signature)
+            'get-property', BUS, self.object, BUS + '.' + interface, name], signature, site)
 
     def _exec(self, name: str, action: str | None = None) -> list[Any]:
         rows = self._get('Service', name, EXEC_TYPE)
@@ -1005,10 +1067,10 @@ class FixedBwsService:
         ):
             for key, expected in values.items():
                 if self._get(interface, key, 's') != expected:
-                    _refuse('unit_properties')
+                    self._unit_property_refuse(interface + '_' + key, 'value')
         for name in ('OnFailure', 'OnSuccess', 'TriggeredBy'):
             if self._get('Unit', name, 'as') != []:
-                _refuse('unit_properties')
+                self._unit_property_refuse('Unit_' + name, 'value')
         for name in ('ExecCondition', 'ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecReload'):
             self._exec(name)
         start = self._exec('ExecStart', 'serve')
@@ -1016,11 +1078,12 @@ class FixedBwsService:
         environment = self._get('Service', 'Environment', 'as')
         files = self._get('Service', 'EnvironmentFiles', 'a(sb)')
         if (type(environment) is not list or len(environment) > 128
-                or any(type(value) is not str or '\0' in value or len(value) > 16384 for value in environment)
-                or type(files) is not list or len(files) > 32
+                or any(type(value) is not str or '\0' in value or len(value) > 16384 for value in environment)):
+            self._unit_property_refuse('Service_Environment', 'shape')
+        if (type(files) is not list or len(files) > 32
                 or any(type(row) is not list or len(row) != 2 or type(row[0]) is not str
                        or '\0' in row[0] or len(row[0]) > 4096 or type(row[1]) is not bool for row in files)):
-            _refuse('unit_properties')
+            self._unit_property_refuse('Service_EnvironmentFiles', 'shape')
         launcher = self._launcher_bytes()
         allowed = (
             (self.launcher_before,) if self.phase in {
@@ -1071,9 +1134,11 @@ class FixedBwsService:
             ):
                 namespace_value = self._get('Service', name, signature)
                 if type(namespace_value) is not type(namespace_expected) or namespace_value != namespace_expected:
-                    _refuse('unit_properties')
-            if self._get('Unit', 'DropInPaths', 'as') != [] or self._get('Unit', 'JoinsNamespaceOf', 'as') != []:
-                _refuse('unit_properties')
+                    self._unit_property_refuse('Service_' + name, 'value')
+            if self._get('Unit', 'DropInPaths', 'as') != []:
+                self._unit_property_refuse('Unit_DropInPaths', 'value')
+            if self._get('Unit', 'JoinsNamespaceOf', 'as') != []:
+                self._unit_property_refuse('Unit_JoinsNamespaceOf', 'value')
             if (len(self.installation_footprint) != 3 or self.installation_footprint[0] != self.application
                     or self.installation_footprint[1]['path'] != str(Path(LAUNCHER).parent)):
                 _refuse('root_control')
@@ -1167,7 +1232,7 @@ class FixedBwsService:
         self.object = self._call('GetUnit', 'o')
         if (type(self.object) is not str
                 or re.fullmatch(r'/org/freedesktop/systemd1/unit/[A-Za-z0-9_]+', self.object) is None):
-            _refuse('unit_properties')
+            self._unit_property_refuse('Manager_GetUnit', 'shape')
         self.contract = self._config()
         old_pid = self._state(True)
         runtime_version = self.runtime_version

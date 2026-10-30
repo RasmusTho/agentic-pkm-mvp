@@ -75,7 +75,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     namespace.update(__name__="__main__", _OWNER_UID=os.geteuid(), _OWNER_GID=os.getegid())
     binding, _source = namespace["_candidate_launcher_binding"](checkout, revision)
     setattr(sys, namespace["_VERIFIED_CANDIDATE_ENTRYPOINT"], binding)
-    if not fault.startswith('root-'):
+    if not fault.startswith(('root-', 'unit-')):
         namespace["_candidate_checkout_root"] = lambda _sha: checkout
     namespace["_preimport_reservation"] = lambda *_args: namespace["_PreimportReservation"](None)
     real_loader = namespace["_install_source_loader"]
@@ -121,6 +121,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         admission._OWNER_UID, admission._OWNER_GID = os.geteuid(), os.getegid()
         admission._RUNTIME_DIRECTORY = admission._RECEIPT_DIRECTORY = receipts
         admission._FIXED_RUNTIME, admission._FIXED_LAUNCHER = runtime, public_launcher
+        original_lifecycle_run = lifecycle._run
         original_public_launcher_bytes = lifecycle._public_launcher_bytes
         lifecycle._public_launcher_bytes = public_launcher.read_bytes
         def private_target_directory(path):
@@ -223,7 +224,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 lifecycle, transaction, state, control_root, installed, runtime, public_launcher,
                 channel, anchored=anchored,
             )
-        elif fault.startswith('path-'):
+        elif fault.startswith(('path-', 'unit-')):
             from tests.ops.test_bws_installation_lifecycle import configure_control_path_service
             slot_kind = fault.removeprefix('path-')
             slot = control_root if slot_kind == 'root' else control_root / (
@@ -236,6 +237,12 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             state['path_properties'] = configure_control_path_service(
                 lifecycle, patch, state, control_root, installed, runtime, public_launcher, channel, environment,
             )
+            if fault.startswith('unit-'):
+                from tests.ops.test_bws_installation_lifecycle import install_unit_property_transport
+                _, site, kind = fault.split(':')
+                selected = None if kind == 'valid' else dict(site=site, kind=kind)
+                install_unit_property_transport(lifecycle, patch, state, state['path_properties'], selected,
+                                                real_run=original_lifecycle_run)
             patch.setattr(lifecycle, '_public_launcher_bytes', original_public_launcher_bytes)
             assert lifecycle._public_launcher_bytes is original_public_launcher_bytes
             assert lifecycle._public_launcher_bytes.__name__ == '_public_launcher_bytes'
@@ -251,17 +258,22 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 permit.unlink()
             state['consume_start'] = consume_start
             if fault in {'path-close', 'path-transient-initial', 'path-transient-prebackup',
-                         'path-proc-close', 'path-launcher-close'}:
+                         'path-proc-close', 'path-launcher-close'} or fault.startswith(('unit-close:', 'unit-runtime-close:')):
                 original_close = lifecycle.os.close
                 def uncertain_close(fd):
+                    state.setdefault('close_attempts', []).append(fd)
                     binding = getattr(state.get('service'), 'control_path_binding', None)
                     owned = binding is not None and (
-                        (fault == 'path-close' and binding.closed and any(
+                        ((fault == 'path-close' or fault.startswith('unit-close:')) and binding.closed and any(
                             record[0] == fd for record in binding.fds.values()))
                         or (fault == 'path-transient-initial' and binding.snapshot is None)
                         or (fault == 'path-transient-prebackup' and binding.snapshot is not None and not binding.closed
                             and state['service'].phase == 'qualified')
                     )
+                    if fault.startswith('unit-runtime-close:'):
+                        owned = fd == getattr(state.get('service'), 'runtime_fd', None)
+                    if owned:
+                        state['uncertain_owned_close_calls'] = state.get('uncertain_owned_close_calls', 0) + 1
                     if fault == 'path-proc-close':
                         info = lifecycle.os.fstat(fd)
                         target = (lifecycle.PROC / '123/stat').stat()
@@ -273,6 +285,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                     original_close(fd)
                     if owned and not state.get('close_failed'):
                         state['close_failed'] = True
+                        state['failed_close_fd'] = fd
                         raise OSError('synthetic original close uncertainty')
                 patch.setattr(lifecycle.os, 'close', uncertain_close)
             if fault == 'path-effect-alias':
@@ -292,6 +305,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             patch.setattr(transaction._NativePorts, 'service', service)
             original_prepare = transaction._NativePorts.prepare
             def prepare(ports, *args, **kwargs):
+                state['events'].append('prepare')
                 try:
                     return original_prepare(ports, *args, **kwargs)
                 except Exception as failure:
@@ -479,7 +493,12 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         return
     status = namespace["run"]()
     if fault in {'path-close', 'path-transient-initial', 'path-transient-prebackup',
-                 'path-proc-close', 'path-launcher-close'}:
+                 'path-proc-close', 'path-launcher-close'} or fault.startswith(('unit-close:', 'unit-runtime-close:')):
+        if fault.startswith('unit-'):
+            assert state['unit_fault_fired']
+            assert state['uncertain_owned_close_calls'] >= 1
+            assert state['close_attempts'].count(state['failed_close_fd']) == 1
+            assert not {'prepare', 'stop', 'start'} & set(state['events'])
         assert status == 78 and output.getvalue() == '' and state['close_failed']
         raise SystemExit(status)
     assert status == 0, (status, output.getvalue(), state.get("bootstrap_failure"))
@@ -492,6 +511,17 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                                              else "descriptor_capacity_unknown")
         assert not {"service", "stop", "start"} & set(state["events"])
         assert list(state["backups"].iterdir()) == []
+    elif fault.startswith('unit-') and not fault.endswith(':valid'):
+        _, site, kind = fault.split(':')
+        expected_kind = 'shape' if kind == 'value' and site == 'Service_Environment' else kind
+        assert result['status'] == 'refused_before_backup', result
+        assert result['prebackup_gate'] == 'old_kernel_initial_unit_properties__' + site + '__' + expected_kind
+        assert all(result[key] is None for key in (
+            'old_generation_sha256', 'new_generation_sha256', 'backup_manifest_sha256'))
+        assert not {'prepare', 'stop', 'start'} & set(state['events'])
+        assert not list(state['backups'].iterdir())
+        assert state['unit_fault_fired'] and state['service'].runtime_close_completed
+        assert 'PRIVATE_CANARY' not in output.getvalue()
     elif fault in {'path-effect-alias', 'path-process-cwd'}:
         assert result['status'] == 'refused_before_backup'
         assert result['prebackup_gate'] == ('old_kernel_initial_root_control' if fault == 'path-effect-alias'
@@ -500,7 +530,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         assert not list(state['backups'].iterdir())
         assert state['service'].runtime_close_completed
         assert not state['service'].control_path_binding.fds
-    elif fault.startswith('path-'):
+    elif fault.startswith(('path-', 'unit-')):
         service = state['service']
         assert result['status'] == ('compensated_stopped' if fault == 'path-partial' else 'installed'), (result, state.get('prepare_failure'))
         assert service.runtime_close_completed and service.control_path_binding.closed
@@ -529,7 +559,9 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     receipt = json.loads((state["receipts"] / receipt_name).read_text())
     assert receipt == result
     sys.stdout = sys.__stdout__
-    print(json.dumps({"status": result["status"], "restored": True, "source_only": sys.pycache_prefix == "/dev/null"}))
+    print(json.dumps({"status": result["status"], "restored": True,
+                      "prebackup_gate": result.get("prebackup_gate"),
+                      "source_only": sys.pycache_prefix == "/dev/null"}))
 
 
 @pytest.mark.parametrize("channel", ["dev", "test"])
@@ -597,6 +629,54 @@ def exercise_control_path_transaction(base, channel, slot):
     result = json.loads(completed.stdout)
     assert result['restored'] and result['source_only']
     return result
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('site', ['Service_Environment', 'Service_PrivateTmp', 'Unit_ActiveState'])
+@pytest.mark.parametrize('kind', ['backend', 'decode', 'signature', 'shape', 'value', 'valid'])
+def test_initial_unit_property_diagnostics_cross_real_source_rpc(secure_tmp_path, channel, site, kind):
+    # Required-value semantic checks after config remain service_process. The
+    # post-config value row uses the original property backend instead.
+    if site == 'Unit_ActiveState' and kind == 'value':
+        site = 'Service_Type'
+    with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
+        completed = subprocess.run(
+            [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(secure_tmp_path),
+             str(Path(__file__).resolve().parents[2]), channel, 'unit-:' + site + ':' + kind,
+             str(Path(directory).resolve())],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
+        )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result['restored'] and result['source_only']
+    assert result['status'] == ('installed' if kind == 'valid' else 'refused_before_backup')
+    assert 'PRIVATE_CANARY' not in completed.stdout + completed.stderr
+
+
+def exercise_unit_property_close(base, mode):
+    with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
+        completed = subprocess.run(
+            [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(base),
+             str(Path(__file__).resolve().parents[2]), 'dev', 'unit-' + mode + ':Unit_ActiveState:backend',
+             str(Path(directory).resolve())],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
+        )
+    assert completed.returncode == 78 and completed.stdout == '', completed.stderr
+    owner = json.loads((base / 'receipts/dev.source-installation.lock').read_text())
+    assert owner['operation_id']
+    receipts = list((base / 'receipts').glob('*.receipt.json'))
+    if mode == 'runtime-close':
+        # Existing inner refusal is persisted, but outer close stays fatal and
+        # the owner remains retained; it is not a completed operation.
+        assert len(receipts) == 1
+        receipt = json.loads(receipts[0].read_text())
+        assert receipt['prebackup_gate'] == 'old_kernel_initial_retained_runtime'
+        assert all(receipt[key] is None for key in (
+            'old_generation_sha256', 'new_generation_sha256', 'backup_manifest_sha256'))
+    else:
+        assert not receipts
+    assert 'PRIVATE_CANARY' not in completed.stdout + completed.stderr
+    return {'status': 'unknown'}
 
 
 if __name__ == "__main__":

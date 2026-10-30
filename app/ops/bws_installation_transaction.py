@@ -126,6 +126,33 @@ _ROOT_CONTROL_REFINEMENT_GATES = frozenset(
     "old_kernel_" + stage + "_root_control__" + "__".join(context)
     for stage in ("initial", "empty_control") for context in _ROOT_CONTROL_REFINEMENTS
 )
+# Source symbols only. Value cases are existing unit-property predicates;
+# launcher/process/cleanup/root semantic refusals retain their own families.
+_UNIT_PROPERTY_VALUE_SITES = frozenset(
+    ('Unit_Id Unit_LoadState Unit_OnFailure Unit_OnSuccess Unit_TriggeredBy '
+     'Service_Type Service_User Service_Group Service_KillMode Service_Restart '
+     'Service_RootDirectory Service_RootImage Service_WorkingDirectory Service_BindPaths '
+     'Service_BindReadOnlyPaths Service_TemporaryFileSystem Service_ReadOnlyPaths '
+     'Service_ReadWritePaths Service_InaccessiblePaths Service_PassEnvironment '
+     'Service_ExtensionDirectories Service_MountImages Service_ExtensionImages Service_PAMName '
+     'Service_UnsetEnvironment Service_ExecSearchPath Service_PrivateMounts Service_PrivateTmp '
+     'Service_PrivateDevices Service_PrivateUsers Service_DynamicUser Service_ProtectHome '
+     'Service_ProtectSystem Unit_DropInPaths Unit_JoinsNamespaceOf').split()
+)
+_UNIT_PROPERTY_READ_SITES = _UNIT_PROPERTY_VALUE_SITES | frozenset(
+    ('Manager_GetUnit Manager_GetUnitProcesses Service_ExecCondition Service_ExecStartPre '
+     'Service_ExecStartPost Service_ExecStop Service_ExecReload Service_ExecStart '
+     'Service_ExecStopPost Service_ExecStopPost_final Service_Environment Service_EnvironmentFiles '
+     'Unit_ActiveState Unit_SubState Unit_Job Service_ControlPID Service_MainPID').split()
+)
+_UNIT_PROPERTY_REFINEMENTS = frozenset(
+    (site, kind) for site in _UNIT_PROPERTY_READ_SITES
+    for kind in ('backend', 'decode', 'signature', 'shape')
+) | frozenset((site, 'value') for site in _UNIT_PROPERTY_VALUE_SITES)
+_UNIT_PROPERTY_REFINEMENT_GATES = frozenset(
+    'old_kernel_initial_unit_properties__' + '__'.join(context)
+    for context in _UNIT_PROPERTY_REFINEMENTS
+)
 _PREBACKUP_REFUSAL_GATES = frozenset({
     "channel_lock_entry",
     "channel_owner_check",
@@ -158,7 +185,7 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "old_kernel_empty_control_cleanup_contract",
     "qualified_writer_snapshot",
     "generation_qualification",
-}) | _ROOT_CONTROL_REFINEMENT_GATES
+}) | _ROOT_CONTROL_REFINEMENT_GATES | _UNIT_PROPERTY_REFINEMENT_GATES
 _LOCAL_SOURCE_REFERENCE = re.compile(
     rb"(?<![A-Za-z0-9_])c?(?:app|scripts|llm_contract|mimer_runtime|companion_ui)"
     rb"(?:(?:\.[A-Za-z_][A-Za-z_0-9]*)|(?:/[A-Za-z_][A-Za-z_0-9]*))*(?![A-Za-z0-9_])",
@@ -2582,6 +2609,12 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                                 refined = classified + "__" + "__".join(refinement)
                                 if refined in _PREBACKUP_REFUSAL_GATES:
                                     refusal_gate = refined
+                            unit_property = getattr(failure, "unit_property", None)
+                            if (subgate == "unit_properties" and old_qualification_stage == "initial"
+                                    and type(unit_property) is tuple and len(unit_property) == 2
+                                    and all(type(value) is str for value in unit_property)
+                                    and unit_property in _UNIT_PROPERTY_REFINEMENTS):
+                                refusal_gate = classified + "__" + "__".join(unit_property)
                 receipt = _receipt(request, status="refused_before_backup", old_generation=None,
                                    new_generation=None, backup_manifest=None,
                                    prebackup_gate=refusal_gate)

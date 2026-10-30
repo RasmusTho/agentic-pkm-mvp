@@ -1351,6 +1351,24 @@ family/coarse fallback; old absent-field, family and non-prebackup receipts reta
 their compatibility rules. A first failure does not disclose later latent defects
 or grant repair authority.
 
+Initial unit-property failures can refine the same field to
+`old_kernel_initial_unit_properties__<site>__<kind>`; the closed method/property
+sites and allowed `backend`, `decode`, `signature`, `shape`, and `value` kinds are
+defined in [BWS source-installation refusal diagnostics](../OPERATIONS.md#bws-source-installation-refusal-diagnostics).
+They annotate the original initial OLD call, including the PATH preconditions,
+post-config reads and distinct final cleanup read, without another bus call,
+observer, predicate, value export or accepted-input change. Existing launcher,
+cleanup, service-process and root-control semantic families remain intact.
+Backend/typing is not a native-cause diagnosis; a required-value mismatch names an
+existing precondition and authorizes no configuration repair. Unsupported metadata
+retains family/coarse fallback; final empty-control and legacy receipts remain
+compatible. Compound reads, byte order, cleanup precedence and sticky uncertainty
+remain unchanged, and an uncertain close is never retried. Source23's original
+`refused_before_backup / old_kernel_initial_unit_properties` remains coarse and
+UNKNOWN. Source delivery neither replays it nor establishes native installation,
+DEV-heavy, TEST or parent acceptance; changed source needs a newly matched image
+and the native owner's separate whole-operation decision.
+
 Historical Source20 remains `refused_before_backup / old_kernel_qualification`.
 Source21 remains `refused_before_backup / old_kernel_initial_root_control`; its
 exact predicate, native values and selected mode remain UNKNOWN. New diagnostics

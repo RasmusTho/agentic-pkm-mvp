@@ -1532,3 +1532,137 @@ def test_control_path_slot_refusal_matrix(monkeypatch, secure_tmp_path, fault):
     assert fixture.service.runtime_close_completed
     if fixture.service.control_path_binding:
         assert not fixture.service.control_path_binding.fds
+
+
+# Independent bus protocol inventory: no production classification table or
+# inferred Python value type supplies a successful signature or an expectation.
+_UNIT_SIGNATURES = {
+    **dict.fromkeys(('Unit_Id', 'Unit_LoadState', 'Service_Type', 'Service_User',
+                    'Service_Group', 'Service_KillMode', 'Service_Restart',
+                    'Unit_ActiveState', 'Unit_SubState', 'Service_Result',
+                    'Service_RootDirectory', 'Service_RootImage', 'Service_WorkingDirectory',
+                    'Service_PAMName', 'Service_ProtectHome', 'Service_ProtectSystem'), 's'),
+    **dict.fromkeys(('Unit_OnFailure', 'Unit_OnSuccess', 'Unit_TriggeredBy',
+                    'Unit_DropInPaths', 'Unit_JoinsNamespaceOf', 'Service_Environment',
+                    'Service_ReadOnlyPaths', 'Service_ReadWritePaths', 'Service_InaccessiblePaths',
+                    'Service_PassEnvironment', 'Service_ExtensionDirectories',
+                    'Service_UnsetEnvironment', 'Service_ExecSearchPath'), 'as'),
+    **dict.fromkeys(('Service_ExecCondition', 'Service_ExecStartPre', 'Service_ExecStartPost',
+                    'Service_ExecStop', 'Service_ExecReload', 'Service_ExecStart',
+                    'Service_ExecStopPost'), 'a(sasbttttuii)'),
+    **dict.fromkeys(('Service_PrivateMounts', 'Service_PrivateTmp', 'Service_PrivateDevices',
+                    'Service_PrivateUsers', 'Service_DynamicUser'), 'b'),
+    'Service_BindPaths': 'a(ssbt)', 'Service_BindReadOnlyPaths': 'a(ssbt)',
+    'Service_TemporaryFileSystem': 'a(ss)', 'Service_MountImages': 'a(ssba(ss))',
+    'Service_ExtensionImages': 'a(sba(ss))', 'Service_EnvironmentFiles': 'a(sb)',
+    'Unit_Job': '(uo)', 'Service_ControlPID': 'u', 'Service_MainPID': 'u',
+    'Manager_GetUnit': 'o', 'Manager_GetUnitProcesses': 'a(sus)',
+}
+_UNIT_INITIAL_TRACE = (
+    'Manager_GetUnit Unit_Id Unit_LoadState Service_Type Service_User Service_Group '
+    'Service_KillMode Service_Restart Unit_OnFailure Unit_OnSuccess Unit_TriggeredBy '
+    'Service_ExecCondition Service_ExecStartPre Service_ExecStartPost Service_ExecStop '
+    'Service_ExecReload Service_ExecStart Service_ExecStopPost Service_Environment '
+    'Service_EnvironmentFiles Service_RootDirectory Service_RootImage Service_WorkingDirectory '
+    'Service_BindPaths Service_BindReadOnlyPaths Service_TemporaryFileSystem Service_ReadOnlyPaths '
+    'Service_ReadWritePaths Service_InaccessiblePaths Service_PassEnvironment Service_ExtensionDirectories '
+    'Service_MountImages Service_ExtensionImages Service_PAMName Service_UnsetEnvironment '
+    'Service_ExecSearchPath Service_PrivateMounts Service_PrivateTmp Service_PrivateDevices '
+    'Service_PrivateUsers Service_DynamicUser Service_ProtectHome Service_ProtectSystem '
+    'Unit_DropInPaths Unit_JoinsNamespaceOf Unit_ActiveState Unit_SubState Unit_Job '
+    'Service_ControlPID Service_MainPID Manager_GetUnitProcesses Service_ExecStopPost_final'
+).split()
+_UNIT_VALUE_SITES = _UNIT_INITIAL_TRACE[1:11] + _UNIT_INITIAL_TRACE[20:45]
+
+
+def install_unit_property_transport(module, patch, state, properties, fault=None, *, real_run=None):
+    """Real _run with independently authored responses at the subprocess port."""
+    import json
+    from types import SimpleNamespace
+    simulated_actions = module._run
+    state['unit_trace'] = []
+    state['unit_fault_fired'] = False
+    def run(argv, **kwargs):
+        assert kwargs == dict(stdin=module.subprocess.DEVNULL, env=module.ENV,
+                              capture_output=True, check=False, timeout=60)
+        if argv[0] == 'systemctl':
+            return SimpleNamespace(returncode=0, stdout=simulated_actions(argv), stderr=b'')
+        assert argv[:7] == ['busctl', '--system', '--no-pager', '--json=short', '--auto-start=no',
+                            '--allow-interactive-authorization=no', '--timeout=30s']
+        if argv[7] == 'call':
+            site = 'Manager_' + argv[11]
+            data = (['/org/freedesktop/systemd1/unit/synthetic'] if site == 'Manager_GetUnit' else
+                    [[['PRIVATE_CANARY', properties['Service', 'MainPID'], 'PRIVATE_CANARY']]
+                     if properties['Service', 'MainPID'] else []])
+        else:
+            interface, name = argv[-2].rsplit('.', 1)[-1], argv[-1]
+            site = interface + '_' + name
+            data = properties[interface, name]
+        signature = _UNIT_SIGNATURES[site]
+        if site == 'Service_ExecStopPost' and state['unit_trace'].count(site) == 1:
+            site += '_final'
+        state['unit_trace'].append(site)
+        if fault and site == fault['site'] and not state['unit_fault_fired']:
+            state['unit_fault_fired'] = True
+            kind = fault['kind']
+            if kind == 'backend':
+                return SimpleNamespace(returncode=1, stdout=b'PRIVATE_CANARY', stderr=b'PRIVATE_CANARY')
+            if kind == 'exception':
+                raise OSError('PRIVATE_CANARY')
+            if kind == 'decode':
+                return SimpleNamespace(returncode=0, stdout=b'{PRIVATE_CANARY', stderr=b'')
+            if kind == 'duplicate':
+                return SimpleNamespace(returncode=0, stdout=b'{"type":"s","type":"PRIVATE_CANARY","data":0}', stderr=b'')
+            if kind == 'signature':
+                signature = 'PRIVATE_CANARY'
+            if kind == 'shape':
+                return SimpleNamespace(returncode=0, stdout=b'{"PRIVATE_CANARY":[]}', stderr=b'')
+            if kind == 'object':
+                data = ['PRIVATE_CANARY']
+            if kind == 'rows':
+                data = [[['PRIVATE_CANARY']]]
+            if kind == 'value':
+                data = fault.get('data', 'PRIVATE_CANARY')
+        return SimpleNamespace(returncode=0, stdout=json.dumps(dict(type=signature, data=data)).encode(), stderr=b'')
+    patch.setattr(module, '_run', real_run or _REAL_LIFECYCLE_RUN)
+    # Isolate the Linux/root prerequisites to this lifecycle's OS port.
+    patch.setattr(module, 'os', SimpleNamespace(**{**vars(module.os), 'geteuid': lambda: 0}))
+    patch.setattr(module, 'sys', SimpleNamespace(**{**vars(module.sys), 'platform': 'linux'}))
+    patch.setattr(module, 'subprocess', SimpleNamespace(**{**vars(module.subprocess), 'run': run}))
+
+
+@pytest.mark.parametrize('site,kind', [
+    (site, kind) for site in _UNIT_INITIAL_TRACE
+    for kind in ('backend', 'decode', 'signature', 'shape', 'value')
+] + [('Manager_GetUnit', 'object'), ('Manager_GetUnitProcesses', 'rows'),
+     ('Service_Type', 'exception'), ('Service_PrivateTmp', 'duplicate'), ('Unit_Job', 'exception')])
+def test_initial_unit_property_sites_and_failure_kinds(monkeypatch, secure_tmp_path, capsys, site, kind):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    install_unit_property_transport(lifecycle, monkeypatch, fixture.state, fixture.properties,
+                                    dict(site=site, kind=kind))
+    semantic = ('service_process' if site in _UNIT_INITIAL_TRACE[45:51] else
+                'cleanup_contract' if site in {'Service_ExecStopPost', 'Service_ExecStopPost_final'} else
+                'launcher')
+    expected_kind = ('shape' if kind == 'value' and site in {
+        'Manager_GetUnit', 'Manager_GetUnitProcesses', 'Service_Environment', 'Service_EnvironmentFiles',
+    } else kind)
+    expected_kind = {'exception': 'backend', 'duplicate': 'decode', 'object': 'shape'}.get(kind, expected_kind)
+    expected_family = ('unit_properties' if kind != 'value' or site in _UNIT_VALUE_SITES
+                       or expected_kind == 'shape' else semantic)
+    if kind == 'rows':
+        expected_family = 'service_process'
+    with fixture.service.retained_runtime():
+        with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+            fixture.service.qualify_old(**fixture.arguments)
+    assert type(caught.value) is lifecycle._OldQualificationRefusal
+    assert caught.value.subgate == expected_family
+    assert caught.value.unit_property == ((site, expected_kind) if expected_family == 'unit_properties' else None)
+    trace = fixture.state['unit_trace']
+    end = _UNIT_INITIAL_TRACE.index(site) + 1
+    # Original compound reads complete before required-value predicates.
+    if kind == 'value' and site in {'Service_Environment', 'Unit_ActiveState', 'Service_ControlPID'}:
+        end += 1
+    assert trace == _UNIT_INITIAL_TRACE[:end]
+    assert fixture.state['unit_fault_fired'] and not fixture.state['events']
+    assert fixture.service.runtime_close_completed
+    assert 'PRIVATE_CANARY' not in str(caught.value) + repr(capsys.readouterr())

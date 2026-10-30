@@ -157,6 +157,38 @@ coarse gate remain readable and immutable. A classified refusal still has null o
 new and backup hashes and cannot reach prepare, backup, stop or apply. All original
 guards, their invocation order and retained-runtime cleanup remain binding.
 
+Initial unit-property diagnostics additionally use
+`old_kernel_initial_unit_properties__<site>__<kind>` from the **original** read or
+predicate. Kinds are `backend` (unavailable/failed bounded transport), `decode`
+(invalid JSON, including duplicate keys), `signature` (unexpected bus type),
+`shape` (existing envelope/method/object/Environment/EnvironmentFiles shape check),
+and `value` (an existing required-value predicate). Sites are the fixed
+`Manager_GetUnit` and `Manager_GetUnitProcesses`; `Unit_` plus `Id`, `LoadState`,
+`OnFailure`, `OnSuccess`, `TriggeredBy`, `ActiveState`, `SubState`, `Job`,
+`DropInPaths`, or `JoinsNamespaceOf`; and `Service_` plus `Type`, `User`, `Group`,
+`KillMode`, `Restart`, `ExecCondition`, `ExecStartPre`, `ExecStartPost`, `ExecStop`,
+`ExecReload`, `ExecStart`, `ExecStopPost`, `Environment`, `EnvironmentFiles`,
+`ControlPID`, `MainPID`, `RootDirectory`, `RootImage`, `WorkingDirectory`,
+`BindPaths`, `BindReadOnlyPaths`, `TemporaryFileSystem`, `ReadOnlyPaths`,
+`ReadWritePaths`, `InaccessiblePaths`, `PassEnvironment`, `ExtensionDirectories`,
+`MountImages`, `ExtensionImages`, `PAMName`, `UnsetEnvironment`, `ExecSearchPath`,
+`PrivateMounts`, `PrivateTmp`, `PrivateDevices`, `PrivateUsers`, `DynamicUser`,
+`ProtectHome`, or `ProtectSystem`. `Service_ExecStopPost_final` identifies the
+last cleanup read after process qualification. Only baseline and PATH required
+configuration predicates admit `value`; launcher, cleanup, process and root
+semantic refusals keep their existing families. These are source symbols, never
+observed property values. Read order/count, compound-read ordering, accepted
+shapes and exact Environment/PATH bytes remain unchanged. Backend/typing labels
+do not establish the native cause; value mismatch grants no configuration repair
+authority. Exact supported exception type and complete allowlisted combinations
+are required; invalid metadata falls back to the existing family/coarse result.
+Final empty-control diagnostics, legacy absent/coarse/family/root-control receipts,
+and sticky close uncertainty retain their contracts, including no uncertain-close
+retry. Source23 remains historically `old_kernel_initial_unit_properties` with
+its inner cause UNKNOWN. This source-only change requires a newly matched image
+for any separately authorized later operation; it grants no native retry,
+installation, DEV-heavy, TEST or parent acceptance.
+
 Root/control refinements use the existing field, with the complete closed spelling
 `old_kernel_<stage>_root_control__<mode>__<side>__<role>__<guard>`. Stage is
 `initial` or `empty_control`. Mode is `captured_empty`, `anchored_discovery`, or
