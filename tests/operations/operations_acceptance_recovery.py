@@ -151,7 +151,7 @@ def run_recovery_and_refusals(journey):
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda index: journey.request("POST", "/api/operations",
             payload=journey.command("partial-b", suffix=":race" + str(index))).json(), (0, 1)))
-    if sum(row.get("convergence", {}).get("source_effect") == "committed" for row in results) != 1:
+    if sum((row.get("convergence") or {}).get("source_effect") == "committed" for row in results) != 1:
         raise OperationsAcceptanceRefusal("concurrent_effect_count_not_one")
     journey._record("concurrent_refusal", {"outcomes": results, "committed_count": 1})
     reference = {"batch_id": preview["batch_id"], "expected_digest": preview["digest"]}

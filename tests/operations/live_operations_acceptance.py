@@ -218,7 +218,7 @@ class OperationsJourney:
                        if operation_id in {"artifact.read", "artifact.related"} else []}
 
     def parity(self, client: Any, command: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
-        if result.get("status") not in {"succeeded", "convergence_pending"} or result.get("receipt", {}).get("status") != "committed":
+        if result.get("status") not in {"succeeded", "convergence_pending"} or (result.get("receipt") or {}).get("status") != "committed":
             raise OperationsAcceptanceRefusal("successful_native_operation_receipt_missing")
         reference = {"request_id": command["request_id"]}
         sdk = client.payload("mimer.v2.operation.receipt", reference)

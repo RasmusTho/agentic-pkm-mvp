@@ -150,7 +150,7 @@ def browser_journeys(journey):
             choose(["concurrent"])
             command = journey.command("concurrent")
             changed = journey.request("POST", "/api/operations", payload=command)
-            if changed.status_code != 200 or changed.json().get("convergence", {}).get("source_effect") != "committed":
+            if changed.status_code != 200 or (changed.json().get("convergence") or {}).get("source_effect") != "committed":
                 raise OperationsAcceptanceRefusal("native_browser_conflict_race_not_observed")
             before = journey.observe()["sources"]["concurrent"]["source_sha256"]
             page.locator("#operations-confirm").click()

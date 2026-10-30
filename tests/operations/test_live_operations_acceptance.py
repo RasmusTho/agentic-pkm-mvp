@@ -417,6 +417,9 @@ def test_recovery_preserves_original_receipts_without_replay(tmp_path, monkeypat
         store._records[raw] = replace(store._records[raw], expires_at=0)
         run.expired_bearer, run.expired_selection = raw, {"expires_at": 0, "observed_at": time()}
         run.recovery_and_refusals()
+        raced = run.observations["concurrent_refusal"]["proof"]["outcomes"]
+        assert len(raced) == 2 and sum(row["convergence"] is None for row in raced) == 1
+        assert run.observations["concurrent_refusal"]["proof"]["committed_count"] == 1
         assert run.observations["dropped_acknowledgement"]["proof"]["source_posts"] == 1
         assert run.observations["client_restart"]["proof"]["source_replays"] == 0
         assert run.observations["partial_batch"]["proof"]["partial"]["counts"]["completed"] == 1

@@ -27,10 +27,13 @@ def test_real_sdk_absence_fails_original_client_startup_and_terminates(tmp_path)
 
     # Preserve the actual core dependencies, without installing or mocking an SDK.
     views = []
-    for index, directory in enumerate(dict.fromkeys(site.getsitepackages())):
+    site_roots = {Path(directory).resolve() for directory in (*site.getsitepackages(), site.getusersitepackages())}
+    directories = dict.fromkeys(Path(directory).resolve() for directory in sys.path
+                                if Path(directory).is_dir() and Path(directory).resolve() in site_roots)
+    for index, directory in enumerate(directories):
         view = tmp_path / f"site-{index}"
         view.mkdir()
-        for entry in Path(directory).iterdir():
+        for entry in directory.iterdir():
             if entry.name == "mcp" or entry.name.startswith(("mcp-", "mcp.")):
                 continue
             (view / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
