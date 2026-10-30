@@ -3739,5 +3739,7 @@ def test_control_path_projection_privacy_and_legacy_refusals(monkeypatch, secure
         with pytest.raises(bws_installation_lifecycle._OldQualificationRefusal) as caught:
             fixture.service.qualify_old(**fixture.arguments)
     assert str(caught.value) == 'bws_lifecycle_unproven'
-    assert caught.value.subgate == 'root_control' and caught.value.root_control is None
+    assert caught.value.subgate == 'root_control'
+    assert caught.value.root_control == ('captured_empty', 'old', 'hints', 'environment_hint')
+    assert 'PRIVATE_CANARY' not in repr((str(caught.value), caught.value.root_control))
     assert not fixture.state['events']

@@ -1047,7 +1047,10 @@ class FixedBwsService:
         expected_empty_control_root = (
             self.control if self.control_inventory_empty else None
         )
-        if self.control_inventory_empty and any(CONTROL_DIRECTORY in value for value in environment):
+        if (self.control_inventory_empty
+                and any(value.startswith('PATH=') and CONTROL_DIRECTORY in value for value in environment)
+                and not any(not value.startswith('PATH=') and CONTROL_DIRECTORY in value
+                            for value in environment)):
             slots = _control_path_slots(environment)
             if files or any(CONTROL_DIRECTORY.encode() in raw for raw in (launcher, self.launcher_after)):
                 _refuse('root_control')
