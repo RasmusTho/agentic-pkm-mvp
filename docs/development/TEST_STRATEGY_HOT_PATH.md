@@ -75,7 +75,7 @@ prefix or text-only runtime exception is introduced. The regression is
 The fixed operations-acceptance API producer and three exact `app/ops/` producer/guard/probe
 modules also select the operations suite. This keeps their official SDK, admission, refusal,
 receipt and assembled TEST/DEV checks attached to later source changes. The blocking browser
-workflow installs the separate sidecar distribution and executes the exact served-operations and
+workflow installs the complete Product requirements and the separate sidecar distribution, then executes the exact served-operations and
 composed human/agent recovery targets with a two-case, zero-skip JUnit check. This source proof
 does not qualify a deployed channel; `docs/TESTING.md :: Automated Technical Acceptance` owns that
 separate same-candidate outcome.
