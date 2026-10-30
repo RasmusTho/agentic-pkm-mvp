@@ -1236,8 +1236,10 @@ def root_control_rpc_cases(control, *, anchored=False):
                                   expected=('captured_empty', 'old', slot + '_slot', 'present'),
                                   stage='initial' if configuration == 1 else 'empty_control'))
         cases.append(dict(decode_failure=True, expected=('unknown', 'old', 'discovery', 'decode_unknown'), stage='initial'))
-        cases.append(dict(properties={('Service', 'Environment'): [7]}, expected_gate='old_kernel_initial_unit_properties'))
-        cases.append(dict(properties={('Service', 'EnvironmentFiles'): [[7, False]]}, expected_gate='old_kernel_initial_unit_properties'))
+        cases.append(dict(properties={('Service', 'Environment'): [7]},
+                          expected_gate='old_kernel_initial_unit_properties__Service_Environment__shape'))
+        cases.append(dict(properties={('Service', 'EnvironmentFiles'): [[7, False]]},
+                          expected_gate='old_kernel_initial_unit_properties__Service_EnvironmentFiles__shape'))
         cases.append(dict(launcher_hint=True, expected=('captured_empty', 'old', 'hints', 'launcher_hint'), stage='initial'))
         cases.append(dict(anchor_drift=True, expected=('captured_empty', 'old', 'empty_root', 'anchored_root_present'),
                           stage='initial'))
