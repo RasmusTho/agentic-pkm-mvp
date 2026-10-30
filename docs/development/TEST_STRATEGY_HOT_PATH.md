@@ -72,6 +72,14 @@ coverage. Unknown sibling config paths remain unowned and refuse; no config
 prefix or text-only runtime exception is introduced. The regression is
 `tests/scripts/test_select_pr_tests.py::test_activation_scope_helper_selects_api_and_native_deploy_coverage`.
 
+The fixed operations-acceptance API producer and three exact `app/ops/` producer/guard/probe
+modules also select the operations suite. This keeps their official SDK, admission, refusal,
+receipt and assembled TEST/DEV checks attached to later source changes. The blocking browser
+workflow installs the separate sidecar distribution and executes the exact served-operations and
+composed human/agent recovery targets with a two-case, zero-skip JUnit check. This source proof
+does not qualify a deployed channel; `docs/TESTING.md :: Automated Technical Acceptance` owns that
+separate same-candidate outcome.
+
 ### Exact PR intake and publication source scope
 
 The bounded route is available only when a change includes one of these exact source paths or one
