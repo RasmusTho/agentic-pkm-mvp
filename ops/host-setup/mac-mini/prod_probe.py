@@ -648,10 +648,17 @@ def _runtime_config() -> tuple[str, int, float]:
     if environment not in {"dev", "test", "prod"}:
         raise ValueError("PROBE_ENVIRONMENT must be dev, test or prod")
     base_url = PROBE_BASE_URL.strip().rstrip("/")
-    parsed_url = urlsplit(base_url)
+    try:
+        parsed_url = urlsplit(base_url)
+        hostname = parsed_url.hostname
+        port = parsed_url.port
+    except ValueError:
+        raise ValueError("PROBE_BASE_URL is invalid") from None
     if (
         parsed_url.scheme not in {"http", "https"}
-        or not parsed_url.netloc
+        or not hostname
+        or port == 0
+        or any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in base_url)
         or parsed_url.username is not None
         or parsed_url.password is not None
     ):

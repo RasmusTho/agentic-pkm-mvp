@@ -396,6 +396,10 @@ def test_dev_probe_isolates_saved_incident_environment(tmp_path, monkeypatch, sa
 @pytest.mark.parametrize("override", [
     {}, {"PROBE_ENVIRONMENT": ""}, {"PROBE_ENVIRONMENT": "staging"},
     {"PROBE_BASE_URL": ""}, {"PROBE_BASE_URL": "https://user:pass@synthetic"},
+    {"PROBE_BASE_URL": "http://:18000"}, {"PROBE_BASE_URL": "http://127.0.0.1:bogus"},
+    {"PROBE_BASE_URL": "http://127.0.0.1:99999"}, {"PROBE_BASE_URL": "http://127.0.0.1:0"},
+    {"PROBE_BASE_URL": "http://bad host"}, {"PROBE_BASE_URL": "http://synthetic/path\nsegment"},
+    {"PROBE_BASE_URL": "http://synthetic/\x00"},
     {"WORKER_HEARTBEAT_PATH": ""}, {"WORKER_HEARTBEAT_PATH": "relative.json"},
     {"PROBE_STATE_FILE": None}, {"PROBE_STATE_FILE": "relative.state"},
     {"PROBE_ALERT_CHANNEL": ""}, {"PROBE_ALERT_CHANNEL": "invalid"},
@@ -429,6 +433,7 @@ def test_dev_probe_main_requires_explicit_target_and_state(tmp_path, monkeypatch
     if override:
         http_get.assert_not_called()
         build_channel.assert_not_called()
+        assert not (tmp_path / "dev.state").exists()
     else:
         assert [call.args[0] for call in http_get.call_args_list] == [
             "http://synthetic/readyz", "http://synthetic/api/health",
