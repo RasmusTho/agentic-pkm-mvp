@@ -1157,9 +1157,9 @@ correlation metadata below the human text. The finite template fits Discord's 2,
 content limit including its bold subject wrapper; the sender itself does not truncate. The next
 step points to the fixed incident runbook URL rather than echoing runtime URL configuration.
 Use the raw health surface separately for investigation; the alert does not reproduce diagnostics.
-This source change does not upgrade an already installed probe. The #4076 owner retains deployed
-upgrade and controlled TEST acceptance; the dated installation receipts below remain historical
-facts for their exact source versions.
+The template's production installation is recorded in the 2026-10-30 receipt below. The existing
+incident continued suppressing duplicate alerts; controlled TEST acceptance remains open under
+#4076. The dated receipts retain their exact source and observation scope.
 
 The Linux service uses the `heimdal-external-alerts` BWS consumer and the `discord.webhook`
 binding. The BWS token is read through systemd credentials and is removed from the probe child's
@@ -1191,17 +1191,31 @@ postcondition receipt does not adopt lifecycle ownership or relabel the executor
 resource guard remains intact and fences later #6457 apply requests; no guard clearance or further
 host compensation was performed. The separate #4076 controlled TEST acceptance remains open.
 
-The fixed successor protocol delivered under
-[#6475](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6475) supports only that installed
-`0172…` script plus retained59 to rendering source `7436ca29b863fca98faeb8e729d00e9832a71c22`,
-script SHA-256 `17c2dced67a7830e453f4bf5d18e1e330086dab186501b80b259f569936c8e90` (28,710 bytes).
-Its after-manifest is `317f99b147d23dcf20c3e59be2d542cd9f3f74aeca98d519ba2393a9eab3a635`.
-Source support does not change the installed mapping or the 43-cycle historical proof above;
-actual installation is the separate scope of
-[#6476](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6476). The existing Mac job remains retired.
+The [2026-10-30 readable-rendering installation](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6476#issuecomment-6512944547)
+changed only the probe script to renderer source `7436ca29b863fca98faeb8e729d00e9832a71c22`, SHA-256
+`17c2dced67a7830e453f4bf5d18e1e330086dab186501b80b259f569936c8e90` (28,710 bytes), retaining the same
+59 package files from `777726d3139fc82cd69097dcd3bccc4d1c6c167a`. Its mixed 60-file manifest is
+`317f99b147d23dcf20c3e59be2d542cd9f3f74aeca98d519ba2393a9eab3a635`.
+Read-only qualification observed the same active/enabled normal invocation across 59 completed
+cycles, zero restarts and continued suppression of the unchanged existing incident/acknowledgment/
+correlation state. Configuration/effective unit, normal BWS launcher/SDK child/interpreter and
+source/cache compatibility matched. No down/recovery send was forced or repeated.
+
+The new operation `32967742602847edb920cab7a1023faf` remains `UNKNOWN` at
+`start_intent/main_process_boundary`, with its finite helper/cgroup reaped. The linked receipt accepts
+actual observed postconditions without adopting lifecycle ownership or relabeling the executor.
+Both original5b47 and successor request/program/phase/handle/result bytes and resource fences remain
+intact, including the original pinned follow tooling. The actual read-only qualification made no
+lifecycle/metadata/incident/cache write; no additional compensation was indicated by its verified
+postconditions. The original installation, subsequent 43-cycle proof and Mac retirement remain
+historical facts above and below. #4076's separate controlled TEST acceptance stays open.
+
+The fixed successor source support came from
+[#6475](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6475), merge
+`f3372e5fe88146266825cfa595f667f7d974ceee`.
 
 The carrier's `--rendering-successor` path is fixed to #6476 and contract-body SHA-256
-`7ef11ac405db559eec87c507c11eab13bf794a8421d6cd13e0aec98bcaa8ae1c`. Before a later operation,
+`7ef11ac405db559eec87c507c11eab13bf794a8421d6cd13e0aec98bcaa8ae1c`. Before an installation operation,
 its normal Issue claim must be open/in-progress with the exact unexpired dispatcher lease.
 For this fixed installation, the normal pickup uses the actual `CODEX_THREAD_ID` as both
 `--agent` and `--session`; the dispatcher holder must equal that native owner identity.
@@ -1211,7 +1225,7 @@ an inherited session label, a different runtime cwd or another owned worktree ca
 binding. The clean checkout's current committed carrier/core/helper bytes and head are bound into
 the frozen request.
 Names, a new operation ID, source CI, a historical receipt or the closed #6475 lease supply none of
-this authority. The later owner must retain the reviewed source/program binding and original
+this authority. The installation owner retains the reviewed source/program binding and original
 new-operation handle for follow/reconciliation.
 
 Inside the existing physical resource lock, admission pins original5b47's request/programs,
@@ -1228,8 +1242,8 @@ a new operation. Unqualified or partial evidence, foreign ownership and concurre
 admission. A lost response follows the same successor handle; unresolved start ownership
 stays UNKNOWN. Existing finite helper limits, descriptor custody and code-only compensation apply,
 retaining current incident acknowledgments, correlation/history and qualified caches.
-The later actual receipt must verify installation and completed normal cycles before these docs
-claim a new deployed version. This source prerequisite does not gate #4076's accepted TEST lane.
+The linked actual receipt verifies installation and completed normal cycles while preserving the
+executor's UNKNOWN status. The source prerequisite does not gate #4076's accepted TEST lane.
 
 **Two distinct Makefile targets — do not confuse them:**
 
