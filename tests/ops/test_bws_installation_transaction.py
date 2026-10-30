@@ -2047,6 +2047,10 @@ def _transaction_fixture(
     current = {"profile": actual_candidate}
 
     class Ports:
+        # This effect-port fixture models an already bound synthetic caller.
+        # Real loader/candidate binding is covered by the source-RPC assembly.
+        early_refusal_sources_bound = True
+
         def verify_caller_checkout(self, _request):
             events.append("verify_caller_checkout")
 
@@ -2827,6 +2831,29 @@ def test_legacy_first_call_uses_old_boundary_without_profile_rpc():
     assert qualified_preflight < events.index("verify_caller_sources") < events.index("prepare")
     assert events.index("prepare") < events.index("apply_launcher") < events.index("stop_old")
     assert events.index("stop_old") < events.index("apply_source")
+
+
+@pytest.mark.parametrize('bound', [True, False, None, 1, 'PRIVATE_CANARY'])
+def test_early_refusal_provenance_preserves_prebackup_order(bound):
+    request, ports, admission, service, events, *_ = _transaction_fixture()
+    ports.early_refusal_sources_bound = bound
+    def refuse(**_kwargs):
+        events.append('qualify_old_refusal')
+        raise bws_installation_lifecycle._OldQualificationRefusal(
+            'unit_properties', unit_property=('Unit_DropInPaths', 'selection'),
+        )
+    service.qualify_old = refuse
+    result = transaction._execute_source_installation('dev', request, ports)
+    gate = 'old_kernel_initial_unit_properties__Unit_DropInPaths__selection'
+    if bound is not True:
+        gate += '__provenance_unavailable'
+    _assert_old_refusal(result, events, gate)
+    assert admission.receipt == result['source_installation']
+    assert events.index('verify_candidate') < events.index('source_manifest')
+    assert events.index('source_manifest') < events.index('runtime_enter') < events.index('qualify_old_refusal')
+    assert events.count('preflight') == events.count('runtime_close') == 1
+    assert 'verify_caller_sources' not in events
+    assert not {'prepare', 'apply_launcher', 'stop_old', 'apply_source', 'start_new'} & set(events)
 
 
 def test_candidate_launcher_is_staged_before_stop_under_same_handle():

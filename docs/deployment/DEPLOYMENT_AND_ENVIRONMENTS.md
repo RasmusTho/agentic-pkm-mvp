@@ -1405,6 +1405,26 @@ UNKNOWN. Source delivery neither replays it nor establishes native installation,
 DEV-heavy, TEST or parent acceptance; changed source needs a newly matched image
 and the native owner's separate whole-operation decision.
 
+The captured-empty PATH `Unit_DropInPaths` diagnostic distinguishes the original
+selector's `selection` refusal from read `backend`, `decode`, `signature`, `shape`
+and `unsupported` classification. `shape` includes the existing list/element
+representation checks; `unsupported` identifies a read refusal with no supported
+classification. These are closed, value-free kinds in the existing optional field;
+the legacy `value` spelling remains readable. No path, count, property value,
+exception text or private artifact is disclosed, and Source25's actual cause
+remains UNKNOWN.
+
+Before attributing an initial OLD guard to the candidate, the transaction compares
+the existing loader's executed-byte hashes and origins with the already computed
+verified-candidate manifest. It performs no additional native read and preserves
+the original call order. An unavailable binding retains the finite cause with
+`__provenance_unavailable`, explicitly withholding verified source attribution.
+The later full caller-source verification remains in its original position before
+backup; the early comparison changes no refusal decision, success rule, close
+contract or effect gate. Legacy absent-field, coarse, family and refined receipts
+remain valid without retroactive provenance claims. This source-only support
+establishes no native installation, replay or DEV/TEST acceptance result.
+
 Historical Source20 remains `refused_before_backup / old_kernel_qualification`.
 Source21 remains `refused_before_backup / old_kernel_initial_root_control`; its
 exact predicate, native values and selected mode remain UNKNOWN. New diagnostics
